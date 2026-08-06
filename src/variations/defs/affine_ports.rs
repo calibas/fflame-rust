@@ -15,7 +15,7 @@ use crate::variations::{
 
 // =============================================================================
 // popcorn: Scott Draves's popcorn variation
-//   dx = tan(3·y)    (zeroed if NaN — happens near tan asymptotes)
+//   dx = tan(3·y)    (zeroed if non-finite — see the guard in the body)
 //   dy = tan(3·x)
 //   x' = x + COEFF_20 · sin(dx)
 //   y' = y + COEFF_21 · sin(dy)
@@ -44,10 +44,19 @@ pub static POPCORN: VariationDef = VariationDef {
     wgsl_2d: r#"
 fn variation_popcorn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
+    // Non-finite guard. NOT `dx != dx`: Metal compiles shaders with
+    // fast-math on (wgpu never clears `fastMathEnabled`, which defaults
+    // to true), so the compiler may assume no NaNs exist and fold a
+    // self-compare to a constant false — measured on an M2, where
+    // `x != x` returns 0 for a verified NaN. `!(abs(x) <= C)` survives,
+    // and is the same idiom main_template.wgsl uses for bad-value
+    // recovery. Catches NaN and +/-Inf; tan() cannot reach 1e32 in f32,
+    // so finite results are untouched and the behaviour on backends
+    // without fast-math is unchanged.
     var dx = tan(3.0 * p.y);
-    if (dx != dx) { dx = 0.0; }   // NaN guard
+    if (!(abs(dx) <= 1e32)) { dx = 0.0; }
     var dy = tan(3.0 * p.x);
-    if (dy != dy) { dy = 0.0; }
+    if (!(abs(dy) <= 1e32)) { dy = 0.0; }
     return vec2<f32>(
         p.x + xf.e * sin(dx),
         p.y + xf.f * sin(dy),
@@ -57,10 +66,11 @@ fn variation_popcorn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
     wgsl_3d: r#"
 fn variation_popcorn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xf = transforms[xform_id];
+    // See the 2D body: `dx != dx` is folded away by Metal's fast-math.
     var dx = tan(3.0 * p.y);
-    if (dx != dx) { dx = 0.0; }
+    if (!(abs(dx) <= 1e32)) { dx = 0.0; }
     var dy = tan(3.0 * p.x);
-    if (dy != dy) { dy = 0.0; }
+    if (!(abs(dy) <= 1e32)) { dy = 0.0; }
     return vec3<f32>(
         p.x + xf.e * sin(dx),
         p.y + xf.f * sin(dy),

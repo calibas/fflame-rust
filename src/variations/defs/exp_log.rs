@@ -10,6 +10,38 @@
 //! Apophysis-style formula (`log(x²+y²) · 0.5/log(base)`). Upstream's
 //! `log_apo` is functionally identical — the `log_apo` port was dropped
 //! before merge to avoid a redundant entry.
+//!
+//! # The `1.1754944e-38` guards
+//!
+//! That is `f32::MIN_POSITIVE`, the smallest NORMAL float, and it is
+//! chosen for exactly that property.
+//!
+//! These sites were ported as `1e-40`, which is what the JWildfire /
+//! Apophysis source uses. There it is fine: those run in f64, where the
+//! smallest normal is ~2.2e-308, so `log(0 + 1e-40)` is a perfectly
+//! ordinary -92.103.
+//!
+//! In f32 the smallest normal is 1.1754944e-38, so `1e-40` is SUBNORMAL —
+//! and GPUs flush subnormals to zero. NVIDIA/Vulkan and Apple/Metal both
+//! do. So the guard evaluated to `max(r2, 0)` / `log(x + 0)` and did
+//! nothing, and a zero argument produced -Inf where the reference
+//! implementation produces a finite number. -Inf is not a near miss: it
+//! trips the bad-value recovery in `main_template.wgsl` and respawns the
+//! point, where Apophysis carries on.
+//!
+//! This is a straight f64 -> f32 porting hazard, NOT a platform
+//! difference — it was equally broken on both. It is fixed here rather
+//! than kept "consistent" because the reference behaviour is the one we
+//! are trying to match.
+//!
+//! The smallest normal is used rather than the `1e-30` common elsewhere
+//! in this codebase because it is the closest we can get to the source's
+//! intent while surviving the flush: it lands at -87.337 against
+//! JWildfire's -92.103, in the same class, where `1e-30` would give
+//! -69.078.
+//!
+//! Found by the variation math probe; see
+//! `docs/projects/variation-math-probe.md`.
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -118,8 +150,9 @@ fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     }
     fix_atan_period = fix_atan_period * fixpe;
 
-    let r2 = max(p.x * p.x + p.y * p.y, 1e-40);
-    return vec2<f32>(denom * log(r2), atan2(p.x, p.y) + fix_atan_period);
+    let r2 = max(p.x * p.x + p.y * p.y, 1.1754944e-38);
+    // ff_atan2: the origin is reachable (every fuse starts there); see utilities.wgsl.
+    return vec2<f32>(denom * log(r2), ff_atan2(p.x, p.y) + fix_atan_period);
 }
 "#,
     wgsl_3d: r#"
@@ -137,8 +170,9 @@ fn variation_log_db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     }
     fix_atan_period = fix_atan_period * fixpe;
 
-    let r2 = max(p.x * p.x + p.y * p.y, 1e-40);
-    return vec3<f32>(denom * log(r2), atan2(p.x, p.y) + fix_atan_period, p.z);
+    let r2 = max(p.x * p.x + p.y * p.y, 1.1754944e-38);
+    // ff_atan2: the origin is reachable (every fuse starts there); see utilities.wgsl.
+    return vec3<f32>(denom * log(r2), ff_atan2(p.x, p.y) + fix_atan_period, p.z);
 }
 "#,
 };

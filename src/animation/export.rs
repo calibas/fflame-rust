@@ -1000,28 +1000,99 @@ fn apply_flame_value(
 // FFmpeg Pipe-Based Video Export
 // ============================================================================
 
-/// Cached FFmpeg availability check (spawning process every frame is expensive)
+/// Where ffmpeg actually is — cached (spawning a probe process every
+/// frame is expensive).
+///
+/// `Command::new("ffmpeg")` alone breaks on macOS the moment the app is
+/// launched from Finder: a bundled GUI app inherits launchd's PATH
+/// (`/usr/sbin:/usr/bin:/bin:/sbin`), not the shell's, so a Homebrew
+/// ffmpeg in /opt/homebrew/bin is invisible even though `ffmpeg` works
+/// fine in every terminal. Probe PATH first (terminal launches, Windows,
+/// Linux), then the conventional install locations.
 #[cfg(not(target_arch = "wasm32"))]
-static FFMPEG_AVAILABLE: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-});
+static FFMPEG_PATH: once_cell::sync::Lazy<Option<std::path::PathBuf>> =
+    once_cell::sync::Lazy::new(|| {
+        let candidates = [
+            "ffmpeg", // PATH — covers terminals, Windows, most Linux
+            "/opt/homebrew/bin/ffmpeg", // Homebrew, Apple Silicon
+            "/usr/local/bin/ffmpeg",    // Homebrew Intel / manual installs
+            "/opt/local/bin/ffmpeg",    // MacPorts
+        ];
+        for c in candidates {
+            let mut probe = std::process::Command::new(c);
+            hide_console_window(&mut probe);
+            let ok = probe
+                .arg("-version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok {
+                log::info!("ffmpeg found: {c}");
+                return Some(std::path::PathBuf::from(c));
+            }
+        }
+        log::warn!(
+            "ffmpeg not found — probed PATH and {:?}",
+            &candidates[1..]
+        );
+        None
+    });
+
+/// Keep Windows from opening a console window for a child process.
+///
+/// The app is GUI-subsystem (see the console handling in `main.rs`), and
+/// when a GUI process spawns a console-subsystem child, Windows gives
+/// the child its OWN console — so every video export flashed up an empty
+/// black ffmpeg window beside the app. `CREATE_NO_WINDOW` suppresses it;
+/// stdout/stderr are piped and read by the caller either way, so nothing
+/// is lost by having no console attached.
+///
+/// No-op everywhere else: on macOS and Linux a spawned child has no
+/// window to begin with.
+///
+/// Verified on Windows 10 (2026-08-05): a full video export, no console.
+#[cfg(not(target_arch = "wasm32"))]
+fn hide_console_window(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
+/// The command to invoke ffmpeg with, wherever it was found.
+///
+/// Every ffmpeg spawn goes through here, which is what makes the
+/// no-console-window flag a single line rather than four call sites to
+/// keep in step.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ffmpeg_command() -> std::process::Command {
+    let mut cmd = std::process::Command::new(
+        FFMPEG_PATH
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("ffmpeg")),
+    );
+    hide_console_window(&mut cmd);
+    cmd
+}
 
 /// Check if ffmpeg is available on the system (cached after first call)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_ffmpeg_available() -> bool {
-    *FFMPEG_AVAILABLE
+    FFMPEG_PATH.is_some()
 }
 
 /// Get ffmpeg version string (if available)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn get_ffmpeg_version() -> Option<String> {
-    let output = std::process::Command::new("ffmpeg")
+    let output = ffmpeg_command()
         .arg("-version")
         .output()
         .ok()?;
@@ -1038,7 +1109,7 @@ pub fn get_ffmpeg_version() -> Option<String> {
 /// Check if a specific encoder is available in FFmpeg
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_encoder_available(encoder: &str) -> bool {
-    let output = std::process::Command::new("ffmpeg")
+    let output = ffmpeg_command()
         .args(["-hide_banner", "-encoders"])
         .output()
         .ok();
@@ -1160,6 +1231,39 @@ pub fn print_available_encoders() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl AnimationExportConfig {
+    /// Round the frame size down to even numbers, returning the sizes
+    /// actually used.
+    ///
+    /// H.264/H.265 in yuv420p — the pixel format every path here emits,
+    /// because it is what players actually support — subsamples chroma
+    /// 2x2 and therefore CANNOT encode an odd dimension. libx264 and
+    /// libx265 do not warn and adapt; they refuse to open the encoder
+    /// and ffmpeg exits, which downstream looks like the pipe dying a
+    /// few frames in (the frame channel buffers a few first).
+    ///
+    /// Rounding down rather than rejecting: an odd size is almost always
+    /// an incidental consequence of a window size or a typed number, not
+    /// a deliberate request, and losing one pixel column is a far better
+    /// outcome than a failed export. It is logged, not silent.
+    fn force_even_dimensions(&mut self) {
+        let (w, h) = (self.width & !1, self.height & !1);
+        if (w, h) != (self.width, self.height) {
+            log::warn!(
+                "Video export: {}x{} is not encodable in yuv420p (odd dimension); \
+                 using {}x{}",
+                self.width, self.height, w, h
+            );
+            self.width = w;
+            self.height = h;
+        }
+        // A zero dimension cannot be rounded into validity.
+        self.width = self.width.max(2);
+        self.height = self.height.max(2);
+    }
+}
+
 /// Export animation directly to video via FFmpeg pipe (desktop only)
 ///
 /// This pipes raw RGBA pixel data directly to FFmpeg's stdin, avoiding:
@@ -1169,11 +1273,12 @@ pub fn print_available_encoders() {
 /// - Disk space (no temp files)
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation(
-    export_config: AnimationExportConfig,
+    mut export_config: AnimationExportConfig,
     reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
+    export_config.force_even_dimensions();
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::Instant;
 
     let total_start = Instant::now();
@@ -1241,7 +1346,7 @@ pub async fn export_animation(
     let has_signals = !export_config.signals.is_empty();
 
     // Build FFmpeg command for piped raw video input
-    let mut ffmpeg = Command::new("ffmpeg");
+    let mut ffmpeg = ffmpeg_command();
 
     // Overwrite output without asking
     ffmpeg.arg("-y");
@@ -1633,9 +1738,10 @@ impl ExportTimingStats {
 /// This keeps the GPU saturated while we process completed frames.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation_fast(
-    export_config: AnimationExportConfig,
+    mut export_config: AnimationExportConfig,
     reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
+    export_config.force_even_dimensions();
     use crate::renderer::compute_kernel::FlameRenderer;
     use egui_wgpu::wgpu::{
         self, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
@@ -1644,7 +1750,7 @@ pub async fn export_animation_fast(
         COPY_BYTES_PER_ROW_ALIGNMENT,
     };
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc;
     use std::time::Instant;
 
@@ -1737,7 +1843,7 @@ pub async fn export_animation_fast(
     let output_path = export_config.output_path.clone();
 
     let writer_handle = std::thread::spawn(move || -> Result<(), String> {
-        let mut ffmpeg = Command::new("ffmpeg");
+        let mut ffmpeg = ffmpeg_command();
         for arg in &ffmpeg_args {
             ffmpeg.arg(arg);
         }
@@ -2003,9 +2109,20 @@ pub async fn export_animation_fast(
 
         // Send to FFmpeg writer thread
         let send_start = Instant::now();
-        frame_tx
-            .send(rgba_data)
-            .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread died".to_string()))?;
+        if frame_tx.send(rgba_data).is_err() {
+            // The receiver is gone, so the writer thread has already
+            // returned — and it holds the ONLY copy of ffmpeg's stderr,
+            // which is the thing that actually explains the failure.
+            // Reporting "writer thread died" here and dropping the
+            // handle threw that away and sent people looking at the
+            // pipe instead of at the encoder's complaint.
+            let reason = match writer_handle.join() {
+                Ok(Err(e)) => e,
+                Ok(Ok(())) => "ffmpeg exited before all frames were written".to_string(),
+                Err(_) => "writer thread panicked".to_string(),
+            };
+            return Err(AnimationExportError::FfmpegFailed(reason));
+        }
         timing_stats.channel_send_time_ms += send_start.elapsed().as_secs_f64() * 1000.0;
 
         let frame_secs = frame_start.elapsed().as_secs_f64();

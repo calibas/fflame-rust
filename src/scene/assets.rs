@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn test_load_palettes() {
         // This test will only pass if assets/palettes exists
-        let palettes = load_palettes_from_dir(Path::new("assets/palettes"));
+        let palettes = load_palettes_from_dir(&crate::resources::resource_path("assets/palettes"));
         // Should have at least the default palettes
         assert!(palettes.is_empty() || !palettes.is_empty()); // Always passes, just exercising the code
     }
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn test_load_presets() {
         // This test will only pass if assets/presets exists
-        let presets = load_configs_from_dir(Path::new("assets/presets"));
+        let presets = load_configs_from_dir(&crate::resources::resource_path("assets/presets"));
         // Should have at least the default presets
         assert!(presets.is_empty() || !presets.is_empty()); // Always passes, just exercising the code
     }

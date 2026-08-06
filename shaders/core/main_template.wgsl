@@ -1026,3 +1026,128 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
     }
 }
+{{#if PROBE}}
+// PROBE-BLOCK-BEGIN
+// Everything below this line is emitted only under the PROBE flag, and
+// `probe_off_is_byte_identical` splits on this exact marker to prove that
+// what precedes it is untouched. Do not reword it.
+// ===========================================================================
+// Numerical probe entry point — see src/probe/.
+//
+// Evaluates `apply_variations` at a fixed grid of inputs and writes the raw
+// results out, so the shader's arithmetic can be compared across GPUs
+// without going through the accumulate and tonemap passes. It exists to
+// catch the class of bug `npolar` hit on Metal, where fast-math made
+// `atan2(0, 0)` return pi/4 and silently relocated every point.
+//
+// It lives HERE, beside the real call sites, rather than in a harness of
+// its own. The call shape depends on HAS_DC, HAS_RGB and HAS_ANALYTIC_BLUR,
+// and a separate copy of that logic would drift — at which point the probe
+// would be testing something the renderer does not do. Gated by PROBE, so a
+// normal build is byte-identical to one without any of this.
+//
+// I/O rides on the histogram binding rather than a new one, which keeps the
+// bind group layout identical to the render path:
+//
+//   [0]                     point count N
+//   [1]                     transform count M
+//   [2 + i*4 .. +3]         input point i as x, y, z bits (4th unused)
+//   [2 + N*4 + s*4 .. +3]   output for slot s = xform*N + point,
+//                           as x, y, z bits (4th unused in 2D)
+//
+// Reads and writes go through atomicLoad/atomicStore because the binding is
+// declared atomic for the render path. There is no contention: every slot is
+// written by exactly one invocation.
+//
+// NOT captured here: the colour registers (`vc`, `vrc`) that WritesColor and
+// WritesRgb variations drive, and the `should_hide` flag of the CanHide
+// family. Those are real outputs and a later pass should cover them; today
+// the probe reports position only, and the report says so.
+// ===========================================================================
+@compute @workgroup_size(64, 1, 1)
+fn probe_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let point_count = atomicLoad(&histogram[0]);
+    let xform_count = atomicLoad(&histogram[1]);
+    if (point_count == 0u || xform_count == 0u) {
+        return;
+    }
+
+    let slot = global_id.x;
+    if (slot >= point_count * xform_count) {
+        return;
+    }
+    let xform_idx = slot / point_count;
+    let point_idx = slot % point_count;
+
+    let in_base = 2u + point_idx * 4u;
+    let px = bitcast<f32>(atomicLoad(&histogram[in_base]));
+    let py = bitcast<f32>(atomicLoad(&histogram[in_base + 1u]));
+    let pz = bitcast<f32>(atomicLoad(&histogram[in_base + 2u]));
+
+    let xform = transforms[xform_idx];
+
+    // Seeded from the slot, not from a thread id, so a variation with
+    // Feature::NeedsRng draws the same sequence on every platform and every
+    // run. PCG is integer arithmetic throughout, which fast-math cannot
+    // touch — so an RNG-driven variation that diverges has diverged in its
+    // own math, not in its randomness.
+    var rng = rng_init(slot, 0x9E3779B9u);
+
+    var should_hide = false;
+{{#if HAS_VOLUME_SIDE}}
+    volume_side_flag = false;
+{{/if}}
+{{#if HAS_PLOT_EMIT}}
+    plot_emit_count = 0u;
+    plot_emit_relative = 0u;
+    plot_emit_suppress = false;
+{{/if}}
+{{#if HAS_ANALYTIC_BLUR}}
+{{#if RENDER_3D}}
+    var blur_contribution = vec3<f32>(0.0, 0.0, 0.0);
+{{else}}
+    var blur_contribution = vec2<f32>(0.0, 0.0);
+{{/if}}
+{{/if}}
+{{#if HAS_DC}}
+    var vc: f32 = 0.5;
+{{/if}}
+{{#if HAS_RGB}}
+    var vrc: vec3<f32> = vec3<f32>(-1.0e30);
+{{/if}}
+
+    // The affine is deliberately NOT applied: the probe wants the variation
+    // evaluated at exactly the grid point it recorded, and `apply_affine`
+    // would move it. The transform's coefficients still matter, and are
+    // still read, by the 123 variations that declare NeedsTransform.
+{{#if RENDER_3D}}
+    let p = vec3<f32>(px, py, pz);
+{{else}}
+    let p = vec2<f32>(px, py);
+{{/if}}
+
+{{#if HAS_DC}}
+{{#if HAS_RGB}}
+    let result = apply_variations(xform, xform_idx, p, &rng, &vc, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{else}}
+    let result = apply_variations(xform, xform_idx, p, &rng, &vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{/if}}
+{{else}}
+{{#if HAS_RGB}}
+    let result = apply_variations(xform, xform_idx, p, &rng, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{else}}
+    let result = apply_variations(xform, xform_idx, p, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{/if}}
+{{/if}}
+
+    let out_base = 2u + point_count * 4u + slot * 4u;
+    atomicStore(&histogram[out_base], bitcast<u32>(result.x));
+    atomicStore(&histogram[out_base + 1u], bitcast<u32>(result.y));
+{{#if RENDER_3D}}
+    atomicStore(&histogram[out_base + 2u], bitcast<u32>(result.z));
+{{else}}
+    atomicStore(&histogram[out_base + 2u], 0u);
+{{/if}}
+    atomicStore(&histogram[out_base + 3u], 0u);
+}
+{{/if}}

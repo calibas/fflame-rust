@@ -15,7 +15,7 @@ const NOTO_SANS_PATH: &str = "assets/fonts/NotoSans-Regular.otf";
 pub fn initialize_default_fonts(ctx: &Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Ok(font_data) = std::fs::read(NOTO_SANS_PATH) {
+        if let Ok(font_data) = std::fs::read(crate::resources::resource_path(NOTO_SANS_PATH)) {
             let mut fonts = egui::FontDefinitions::default();
 
             // Add Noto Sans
@@ -69,7 +69,7 @@ pub fn ensure_font_for_locale(ctx: &Context, locale: &str) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Desktop: Load from filesystem
-            if let Ok(font_data) = std::fs::read(&config.path) {
+            if let Ok(font_data) = std::fs::read(crate::resources::resource_path(&config.path)) {
                 apply_font(ctx, &config.name, font_data);
                 log::info!("Loaded font for locale '{}': {}", locale, config.path);
                 return true;

@@ -143,8 +143,12 @@ cargo run --release
 cargo run --release -- export --input tests/visual/configs --output tests/visual/current
 # See CLI Export section below for details
 
-# WASM (Web)
-wasm-pack build --target web --release
+# WASM (Web app) — the scripts, not wasm-pack: they build `--profile dist`
+# (18% smaller than release, see docs/RELEASE.md §4c) and run wasm-bindgen.
+./build-wasm.sh          # or build-wasm.bat on Windows
+
+# WASM (gallery modules only — these DO use wasm-pack)
+wasm-pack build --target web --release   # in wasm/render, wasm/script
 
 # iOS / Android (experimental, not fully functional — see Mobile section)
 cargo build --target aarch64-apple-ios
@@ -201,6 +205,23 @@ python scripts/run_benchmarks.py --quick  # Quick mode (skip WASM)
 
 **What's tested:** transform math, variations, palette interpolation, XML round-trips (camera, variation-param unit conversions), camera-matrix/rotation math (fly-mode `to_euler_near` round-trips and pole handling), config storage keys, version info
 
+**Variation math probe** (`cargo run --release --bin variation_probe`):
+evaluates every shipped variation's shader arithmetic at a fixed
+adversarial input grid (all four signed zeros, values straddling the
+`1e32` bad-value threshold, subnormals) in 2D and 3D, and writes
+`docs/generated/variation-probe.txt`, plus a `-sweep.txt` companion that
+moves each parameter one at a time (both arms of every boolean, every
+enum choice, numeric extremes) — that sweep reaches NaN/Inf in 386 places
+the defaults never do. Diff two of them —
+`variation_probe -- compare OLD NEW` — to find cross-platform
+divergence; it is the tool for the fast-math class of bug that cost
+`npolar` 73% of its pixels on Metal. Compares **classes** (zero / finite
+/ NaN / inf / past-threshold), which no rounding difference can perturb,
+separately from quantised magnitudes; only a class change exits
+non-zero. The first run on a machine pays cold driver compiles (~4 min);
+subsequent runs are seconds. See
+[docs/projects/variation-math-probe.md](docs/projects/variation-math-probe.md).
+
 ### CLI Export Mode
 
 The main app supports headless batch PNG export for testing and automation:
@@ -253,6 +274,14 @@ const pngData = await api.export_png(800, 600, 256, false); // w, h, iters/threa
 ### GPU Code
 - All shaders use **WGSL**; follow std140/std430 layout rules for buffers
 - **WASM Compatibility**: `textureSample()` only from uniform control flow; use `textureLoad()` inside conditionals (desktop drivers are lenient, browsers fail silently with black output)
+- **Metal runs shaders with fast-math ON, so IEEE NaN/Inf rules do not hold there.** wgpu never clears `MTLCompileOptions.fastMathEnabled`, which defaults to true. Measured on an M2: `x != x` returns **false** for a real NaN, and `Inf/Inf` returns **1.0** instead of NaN — so a bad value can pass a guard *and* survive as a plausible finite number.
+  - Never detect non-finite values with a self-compare (`x != x`) or by expecting `Inf` arithmetic to poison a result. Use `!(abs(x) <= 1e32)`, the idiom `main_template.wgsl`'s bad-value recovery uses — it is negated-comparison based, so NaN fails the comparison and the negation fires. Verified to survive the optimizer.
+  - Never write a bare self-division (`x / x`) either: it is 1.0 except at 0/0 and Inf/Inf, and fast-math folds those to **1.0 too** — a plausible finite value no later guard can catch. Write the intended value explicitly and reproduce the reference's zero-case behaviour (worked example: `cut_btree` in `defs/cut_simple.rs`). **Both idioms are enforced**: the `shader_lint` tests (`src/variations/mod.rs`) reject self-compares and self-divisions in every registered variation's WGSL and all `shaders/*.wgsl` files, alongside the subnormal-literal lint.
+  - **Metal's `atan2` is broken at zero pairs in both ways** (measured): same-sign zeros give **π/4** — a plausible finite value that silently relocates the point (cost `apo-misc7` 73% of its lit pixels via `npolar`) — and *mixed*-sign zeros give **NaN**, which kills the point in bad-value recovery (cost `circular`/`circular2`/`ex`/`flower_db` their origin behaviour and `hypercrop` its n-gon corners). Away from zero pairs it agrees to ≤1 ulp. The guard is `ff_atan2` in `shaders/core/utilities.wgsl` — always in scope, IEEE-exact for all four sign pairs; adopted wherever a zero pair is reachable (npolar, ho, log_db, circular, circular2, ex, flower_db, hypercrop). Sign-of-zero **laundering** matters too: affine sums and FTZ can turn any zero into either sign, so "same-sign only" is not a safe assumption at any reachable origin.
+    - When guarding it, reproduce IEEE rather than returning 0: `atan2(+0,-0)` is `+π` and `atan2(-0,-0)` is `-π`. Flattening all four sign cases to 0 changes the render on Vulkan — measured, it moved the image. Read the sign via `bitcast<u32>` (`x < 0.0` is false for `-0.0`, and integer ops are immune to fast-math).
+    - **616 `atan2` call sites across 86 variation files are unaudited.** Only those that can reach exactly (0,0) are affected; `npolar` was found by bisection, not by audit.
+  - **Trig of huge arguments is garbage everywhere, differently.** Measured at `sin/cos(1e20·π)`: Metal fast-math gives `(+0, +0)`, NVIDIA gives `(0, garbage)`, f64 IEEE gives a scattered finite pair — three mutually-incompatible answers, because past ~2²⁴ adjacent f32s differ by more than the whole period. Do not guard these (there is no reference class to guard toward — see the third clause in `docs/accepted-divergences.txt`); do flag ports whose *reachable* inputs feed trig unbounded arguments.
+  - This is a real rendering difference, not just rounding. Disabling fast-math globally is not the answer — measured **1.4x slower** typical, **5.2x** worst case, and it merely traded which tests failed. Fix at the shader level and verify the guard is bit-identical under IEEE so Windows is unaffected.
 - **Trust the shader compiler for optimization**: modern GPU compilers perform aggressive CSE — write clear code, don't hand-hoist (see [docs/SHADER_COMPILER_CSE_ANALYSIS.md](docs/archive/optimization-attempt-2025-11-02/SHADER_COMPILER_CSE_ANALYSIS.md))
 
 ### Rust Code

@@ -278,7 +278,17 @@ fn variation_popcorn2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f3
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
-    return vec2<f32>(p.x + x_p * sin(tan(p.y * c)), p.y + y_p * sin(tan(p.x * c)));
+    // Metal's fast tan goes Inf/NaN where its cos flushes to zero at a
+    // pole, and at arguments past f32 resolution; sin(that) then poisons
+    // the point where NVIDIA — whose f32 tan is bounded ~2e7 by argument
+    // granularity — stays finite. Same guard as popcorn (c338d988):
+    // Inf/NaN fails abs(t) <= 1e32 and falls to 0; every finite tan
+    // passes through, so Windows is bit-identical.
+    var tan_y = tan(p.y * c);
+    tan_y = select(0.0, tan_y, abs(tan_y) <= 1e32);
+    var tan_x = tan(p.x * c);
+    tan_x = select(0.0, tan_x, abs(tan_x) <= 1e32);
+    return vec2<f32>(p.x + x_p * sin(tan_y), p.y + y_p * sin(tan_x));
 }
 "#,
     wgsl_3d: r#"
@@ -286,7 +296,17 @@ fn variation_popcorn2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f3
     let x_p = get_param(xform_id, variation_id, 0u);
     let y_p = get_param(xform_id, variation_id, 1u);
     let c = get_param(xform_id, variation_id, 2u);
-    return vec3<f32>(p.x + x_p * sin(tan(p.y * c)), p.y + y_p * sin(tan(p.x * c)), p.z);
+    // Metal's fast tan goes Inf/NaN where its cos flushes to zero at a
+    // pole, and at arguments past f32 resolution; sin(that) then poisons
+    // the point where NVIDIA — whose f32 tan is bounded ~2e7 by argument
+    // granularity — stays finite. Same guard as popcorn (c338d988):
+    // Inf/NaN fails abs(t) <= 1e32 and falls to 0; every finite tan
+    // passes through, so Windows is bit-identical.
+    var tan_y = tan(p.y * c);
+    tan_y = select(0.0, tan_y, abs(tan_y) <= 1e32);
+    var tan_x = tan(p.x * c);
+    tan_x = select(0.0, tan_x, abs(tan_x) <= 1e32);
+    return vec3<f32>(p.x + x_p * sin(tan_y), p.y + y_p * sin(tan_x), p.z);
 }
 "#,
 };
@@ -629,11 +649,25 @@ pub static JULIAC: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
+    // `re` and `im` follow JuliaCFunc's own defaults, not zero.
+    //
+    // JWF randomizes: `re = genRandomPower() + 0.5`, which can only land
+    // on {3,4,5,6,7,8} or {-2,…,-7}, and `im = 0.5`. We pick
+    // deterministically — the same convention julian and juliascope
+    // already use — taking the smallest positive value JWF can produce.
+    //
+    // `re = 0` is not merely a different look, it is outside JWF's whole
+    // range and makes the variation unable to render: `re_recip` becomes
+    // 1/1e-30 = 1e30, so `mod2 = exp(lnmod · 1e30)` is +inf for every
+    // point outside the unit circle and 0 for every point inside it.
+    // Found by the numerical probe (docs/projects/variation-math-probe.md),
+    // which flagged juliac returning inf/NaN at all four diagonals and
+    // exactly (0,0) at ordinary inputs.
     parameters: &[
         VariationParamDef { name: "re", display_name: "Re", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Real part of the complex power.") },
+                            default_value: 3.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Real part of the complex power.") },
         VariationParamDef { name: "im", display_name: "Im", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Imaginary part of the complex power.") },
+                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Imaginary part of the complex power.") },
         VariationParamDef { name: "dist", display_name: "Dist", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Distance scaling on the log-of-radius term — affects how rapidly the spiral grows outward.") },
     ],

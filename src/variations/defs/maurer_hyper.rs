@@ -134,7 +134,10 @@ fn variation_maurer_rose(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
     let point_thickness = get_param(xform_id, variation_id, 19u);
     let curve_thickness = get_param(xform_id, variation_id, 20u);
 
-    let tin = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let tin = ff_atan2(p.y, p.x);
     let t = cycles * tin;
     let step = floor(t / safe_step);
     let theta1 = step * step_size;
@@ -215,7 +218,10 @@ fn variation_maurer_rose(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: pt
     let point_thickness = get_param(xform_id, variation_id, 19u);
     let curve_thickness = get_param(xform_id, variation_id, 20u);
 
-    let tin = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let tin = ff_atan2(p.y, p.x);
     let t = cycles * tin;
     let step = floor(t / safe_step);
     let theta1 = step * step_size;
@@ -346,7 +352,12 @@ fn variation_hypercrop(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     let len = get_param(xform_id, variation_id, 5u);
     let d = get_param(xform_id, variation_id, 6u);
 
-    var angle = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    var angle = ff_atan2(p.y, p.x);
     angle = floor(angle * coef) / coef + a0;
     let x0 = cos(angle) * len;
     let y0 = sin(angle) * len;
@@ -360,7 +371,7 @@ fn variation_hypercrop(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
         if (zero > 0.5) {
             return vec2<f32>(0.0, 0.0);
         }
-        let rang = atan2(dy, dx);
+        let rang = ff_atan2(dy, dx);
         return vec2<f32>(x0 + cos(rang) * d, y0 + sin(rang) * d);
     }
     return p;
@@ -374,7 +385,12 @@ fn variation_hypercrop(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let len = get_param(xform_id, variation_id, 5u);
     let d = get_param(xform_id, variation_id, 6u);
 
-    var angle = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    var angle = ff_atan2(p.y, p.x);
     angle = floor(angle * coef) / coef + a0;
     let x0 = cos(angle) * len;
     let y0 = sin(angle) * len;
@@ -388,7 +404,7 @@ fn variation_hypercrop(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
         if (zero > 0.5) {
             return vec3<f32>(0.0, 0.0, 0.0);
         }
-        let rang = atan2(dy, dx);
+        let rang = ff_atan2(dy, dx);
         return vec3<f32>(x0 + cos(rang) * d, y0 + sin(rang) * d, 0.0);
     }
     return p;

@@ -149,6 +149,8 @@ def cmd_check(args):
     print(f"{DIM}Not covered here — they need a GPU and a few minutes:{RESET}")
     print(f"{DIM}  cargo build --release && python tests/visual/run_tests.py{RESET}")
     print(f"{DIM}  python scripts/run_benchmarks.py --quick{RESET}")
+    print(f"{DIM}  cargo run --release --bin variation_probe   "
+          f"(regenerate if variation math changed){RESET}")
     return 0
 
 
@@ -270,14 +272,29 @@ BUILDS = [
     ("python wheel", ["maturin", "build", "--release"], "in python/"),
 ]
 
+# Host-specific packaging. Separate from BUILDS because each CONSUMES
+# the desktop build rather than being one, and neither can run on the
+# other's platform. Ordering matters — they package whatever dist binary
+# exists, so a stale one is silently shippable if they run first.
+PACKAGE = {
+    "darwin": ("macOS bundle", [sys.executable, "scripts/make_macos_app.py", "--zip"],
+               "-> target/macos/*.app + .zip"),
+    "win32": ("Windows zip", [sys.executable, "scripts/make_windows_zip.py"],
+              "-> target/windows/*.zip"),
+}
+
 
 def cmd_build(args):
     print(f"{BOLD}Building every shipping surface{RESET}\n")
     cwds = {"gallery: render": "wasm/render",
             "gallery: script": "wasm/script",
             "python wheel": "python"}
+    builds = list(BUILDS)
+    if sys.platform in PACKAGE:
+        # After the desktop build, which it packages.
+        builds.insert(1, PACKAGE[sys.platform])
     failed = []
-    for name, cmd, note in BUILDS:
+    for name, cmd, note in builds:
         if args.only and args.only not in name:
             continue
         sub = cwds.get(name)
@@ -299,7 +316,7 @@ def cmd_build(args):
         return 1
     print(f"{GREEN}{BOLD}All surfaces built.{RESET}")
     print(f"{DIM}Building is not shipping — smoke-test each one "
-          f"(docs/RELEASE.md §4 step 6).{RESET}")
+          f"(docs/RELEASE.md §4.5).{RESET}")
     return 0
 
 

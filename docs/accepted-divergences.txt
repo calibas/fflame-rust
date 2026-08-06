@@ -1,0 +1,107 @@
+# Accepted cross-platform divergences
+#
+# HAND-CURATED — not generated. Each line records a probe divergence
+# that was investigated and deliberately not fixed, with the reason and
+# the commit that carries the evidence. `variation_probe rank` reads
+# this file and subtracts matching sites from its worklist, so the top
+# of the list is always something nobody has looked at yet.
+#
+# An entry is not an exemption forever: it asserts the divergence is
+# understood and consequence-acceptable AS MEASURED. If a variation's
+# math changes, its entries deserve re-examination — the evidence
+# commit is the anchor for that.
+#
+# Format, whitespace-separated:
+#   <variation>  <dims>       comma-list: 2d, 3d
+#   <inputs>     comma-list of probe input labels, or *
+#   <reason...>  free text to end of line, citing the evidence commit
+#
+# The bar for adding a line: the mechanism is NAMED and MEASURED (not
+# guessed), and the consequence is one of
+#   - identical on both platforms (e.g. both reach bad-value recovery),
+#   - a finite value difference too small to move a pixel,
+#   - or the computation exceeds f32 argument resolution and ALL
+#     implementations — including the f64 reference — produce mutually
+#     different results, so no target class exists to guard toward.
+#     (First case: trig of arguments past ~2^24, where adjacent f32s
+#     differ by more than the whole period.)
+# "Probably fine" does not clear the bar; that is what the worklist is
+# for.
+
+# exp overflow at |x| beyond ~88 makes Inf/NaN mixes that differ per
+# platform, but every mix trips bad-value recovery, and the f64
+# reference overflows exp at these magnitudes too: all three
+# implementations respawn the point. Consequence-identical. (5317d46c)
+exp2         2d,3d  big,large,near_threshold,past_threshold,lopsided  exp-overflow Inf/NaN mix; recovery respawns on both platforms and in the reference (5317d46c)
+exponential  2d,3d  big,large,near_threshold,past_threshold,lopsided  exp-overflow Inf/NaN mix; recovery respawns on both platforms and in the reference (5317d46c)
+
+# Metal's fast tanh/FTZ flushes magnitudes around 1e-30 to zero where
+# NVIDIA keeps a denormal-adjacent value; the positional difference is
+# ~1e-30 units. (5317d46c)
+funnel       2d,3d  tiny,normal_min,lopsided  tanh/FTZ flush texture at 1e-30 magnitudes; value-invisible (5317d46c)
+
+# 1-ulp atan2 differences at exact quadrant/axis points, amplified
+# through cos/sin zero crossings into finite sign flips of ~1e-7
+# magnitude components. Sub-pixel at any reachable zoom, and not
+# guardable without replacing the platform's trig. (942c9246)
+circular     2d,3d  q1,q3,pi_e,neg0y_x     1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+circular2    2d,3d  q1,q3,unit,neg0y_x     1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+ex           2d,3d  q2,q3,half_unit,neg0y_x  1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+flower_db    2d,3d  q1,q3,half_unit,neg0y_x  1-ulp atan2 -> cos/sin sign texture, ~1e-7; sub-pixel (942c9246)
+
+# At its exact n-gon corners hypercrop's dx/dy are zeros vs ~1e-7
+# depending on platform trig rounding; both finite, both land the
+# point on the corner to sub-pixel precision. (942c9246)
+hypercrop    2d,3d  -x,-y,q2,q3  corner-exact zero vs ~1e-7 finite texture; sub-pixel (942c9246)
+
+# Batch 3 (blob, julian, maurer_rose, butterfly_fay, cannabiscurve_wf,
+# rhodonea): after their ff_atan2 adoptions eliminated the zero-pair
+# NaNs, what remains is finite<->zero/sign texture at ~1e-7 component
+# magnitudes — trig-ULP at exact axis/quadrant angles, and Metal's
+# sign handling of single-signed-zero atan2 arguments. Sub-pixel.
+blob             2d,3d  y_neg0x                    single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+julian           2d,3d  -x,neg0y_x                 single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+maurer_rose      2d,3d  neg0y_x                    single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+butterfly_fay    2d,3d  neg0y_x                    single-signed-zero atan2 sign texture, ~1e-7 (batch 3)
+cannabiscurve_wf 2d,3d  +0-0,-y,subnormal,y_neg0x  sin(pi)-ULP and FTZ flush texture, finite, ~1e-7 (batch 3)
+rhodonea         2d,3d  -0+0,-0-0,-x,+y,-y,q1,q2,q3,normal_min,neg0y_x  trig-ULP zero/sign texture at exact angles, finite, ~1e-7 (batch 3)
+
+# Trig of unresolvable arguments: at |x*pi| beyond f32 resolution,
+# measured sin/cos(1e20*pi): Metal fast (+0,+0) — point collapses to
+# origin; NVIDIA (0, garbage) — point pins to the y-axis; IEEE/f64
+# (-0.607, 0.794) — point scatters at radius |1+y|. Three
+# implementations, three mutually-incompatible answers; a guard could
+# only fake agreement with nothing. The tiny row is the reverse-
+# direction flush: WINDOWS zeroes sin(3e-20) where Metal keeps it,
+# ~1e-20 offset. (invpolar disposition)
+invpolar     2d,3d  tiny,large,near_threshold,past_threshold,lopsided  trig past f32 argument resolution: no reference class exists (see header, third clause)
+
+# Batch 4 residuals: after julia3Dz's ff_atan2 adoption and the
+# popcorn-family tan guards, a single component sign at one mixed
+# signed-zero input remains — the single-signed-zero atan2 texture.
+julia3Dz     3d  neg0y_x  single-signed-zero atan2 sign texture, one component (batch 4)
+popcorn2_3D  3d  neg0y_x  single-signed-zero atan2 sign texture, one component (batch 4)
+
+# Final REACHABLE sweep — every entry below was individually examined
+# (glyphs decoded; npolar and waves2b micro-probed on the M2). Common
+# thread: single-component finite<->zero or sign differences at exact
+# special points, from three measured micro-mechanisms: (a) fast-math
+# dropping the sign of finite*(+0), (b) NVIDIA flushing sin of tiny
+# arguments to zero where Metal/IEEE keep them (Metal is the
+# reference-correct side there), (c) trig past f32 argument resolution
+# (header, third clause). No NaN, no point-death, no consequence
+# asymmetry anywhere in this batch.
+#
+# npolar, measured end to end: at parity=0 every point's cosa/sina are
+# signed zeros; fast-math turns sin(tiny_negative)*(+0) into +0 instead
+# of -0, flipping ff_atan2's IEEE branch — fy 1.0 (NVIDIA) vs 0.0
+# (Metal). Confined to angle ~ 0, i.e. points within ~1e-7 of exactly
+# |p| = 1 — a measure-zero ring, which is why apo-misc7 sits at mean
+# 0.007 despite the O(1) per-point stake.
+npolar       2d,3d  -0+0,half_unit  fast-math sign-of-zero fold flips ff_atan2 branch; measure-zero ring (micro-probed)
+anamorphcyl  2d,3d  -0+0,-0-0,pi_e,tiny,large,near_threshold,past_threshold,lopsided,neg0y_x  signed-zero/reverse-flush texture at exact points; large family is third-clause trig
+intersection 2d,3d  big,large,near_threshold  single-component finite<->zero at exact points; third-clause trig at large
+plusrecip    2d,3d  -x,+y,-y,neg0y_x  axis-exact single-component reciprocal/signed-zero texture
+jac_asn      2d,3d  +0+0,+0-0,-0+0,-0-0,+x,-x,+y,-y,unit,tiny,normal_min,subnormal,y_neg0x,neg0y_x  elliptic-series sign/flush texture, small magnitudes (the old sparse-pixel visual case)
+lazyjess     2d,3d  q2,q3,q4  quadrant sign texture
+waves2b      2d,3d  +0+0,+0-0,-0+0,-0-0,tiny,normal_min,subnormal  NVIDIA flushes sin(2e-10-scale) to 0, Metal/IEEE keep it — Metal matches the reference; diff <= 1e-9 (micro-probed)

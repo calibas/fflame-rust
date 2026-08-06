@@ -29,6 +29,8 @@ pub mod effects;
 pub mod audio;
 pub mod api;
 pub mod script;
+pub mod probe;
+pub mod census;
 #[cfg(not(target_arch = "wasm32"))]
 pub use script::cli::generate_mode;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
@@ -139,7 +141,18 @@ pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option
     // uses either drops it silently, since a missing variation is a
     // weight contributing zero rather than an error.
     report_installed_resources();
-    pollster::block_on(export_async(input, output, width, height, category, iterations_per_thread, transparent, premultiplied, engine, supersample)).expect("Export failed");
+    // A missing input file, an unwritable output path or a malformed
+    // .fflame is a USER mistake, not a bug: report it and exit non-zero.
+    // `expect` here aborted instead — and the dist profile sets
+    // `panic = "abort"`, so a typo'd path produced SIGABRT and a macOS
+    // crash report rather than a message. See export_animation_mode.
+    if let Err(e) = pollster::block_on(export_async(
+        input, output, width, height, category, iterations_per_thread,
+        transparent, premultiplied, engine, supersample,
+    )) {
+        eprintln!("Export failed: {e}");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -160,7 +173,17 @@ pub fn export_animation_mode(
     // Same reason as `export_mode`: an animation is a long batch of
     // renders, so a silently dropped plugin costs every frame of it.
     report_installed_resources();
-    pollster::block_on(export_animation_async(config_path, animation_path, output_path, width, height, fps, iterations_per_thread, video_settings, audio)).expect("Animation export failed");
+    // See export_mode: user-input failures print and exit, they do not
+    // abort. This exact line generated a crash report for a mistyped
+    // --animation path, which is a terrible way to learn a file is
+    // missing.
+    if let Err(e) = pollster::block_on(export_animation_async(
+        config_path, animation_path, output_path, width, height, fps,
+        iterations_per_thread, video_settings, audio,
+    )) {
+        eprintln!("Animation export failed: {e}");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

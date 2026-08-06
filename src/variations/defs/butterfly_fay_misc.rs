@@ -91,7 +91,10 @@ fn variation_butterfly_fay(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
     let fill = get_param(xform_id, variation_id, 10u);
     let n_cycles = get_param(xform_id, variation_id, 11u);
 
-    let theta = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let theta = ff_atan2(p.y, p.x);
     let t = n_cycles * theta;
     let rin = spread_split * sqrt(p.x * p.x + p.y * p.y);
     let s = sin(t / 12.0);
@@ -162,7 +165,10 @@ fn variation_butterfly_fay(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
     let fill = get_param(xform_id, variation_id, 10u);
     let n_cycles = get_param(xform_id, variation_id, 11u);
 
-    let theta = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    let theta = ff_atan2(p.y, p.x);
     let t = n_cycles * theta;
     let rin = spread_split * sqrt(p.x * p.x + p.y * p.y);
     let s = sin(t / 12.0);

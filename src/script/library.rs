@@ -249,7 +249,7 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
 
     #[cfg(not(target_arch = "wasm32"))]
     for sub in ["generators", "modifiers"] {
-        collect_dir(&PathBuf::from("assets/scripts").join(sub), &mut found);
+        collect_dir(&crate::resources::resource_path("assets/scripts").join(sub), &mut found);
     }
 
     // The user's own, from the cross-platform store. This is the half

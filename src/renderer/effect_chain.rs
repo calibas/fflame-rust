@@ -26,7 +26,7 @@ use egui_wgpu::wgpu;
 /// failed with a WGSL error naming a function the reader never wrote.
 fn load_blend_modes() -> String {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(from_disk) = std::fs::read_to_string("shaders/effects/common/blend_modes.wgsl") {
+    if let Ok(from_disk) = std::fs::read_to_string(crate::resources::resource_path("shaders/effects/common/blend_modes.wgsl")) {
         return from_disk;
     }
     crate::effects::embedded_shaders::BLEND_MODES.to_string()

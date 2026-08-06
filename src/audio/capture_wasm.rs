@@ -172,9 +172,34 @@ impl AudioCapture {
                     CaptureError::StreamError("Failed to request display media".to_string())
                 })?
         } else {
-            // Use getUserMedia for microphone capture
+            // Use getUserMedia for microphone capture.
+            //
+            // `audio: true` accepts the browser's voice-call defaults:
+            // automatic gain control, noise suppression and echo
+            // cancellation are all ON. For a visualiser that is exactly
+            // wrong — AGC continuously renormalises the level, so a
+            // sustained loud passage fades and silence creeps upward, and
+            // the fractal responds to the compressor rather than to the
+            // music. Ask for the raw signal instead, and let the in-app
+            // gain be the only thing scaling it.
+            //
+            // These are requests, not guarantees: a browser or OS that
+            // will not honour one simply ignores it, which is why the
+            // in-app gain still has to exist.
+            let audio_constraints = js_sys::Object::new();
+            for (key, value) in [
+                ("autoGainControl", false),
+                ("noiseSuppression", false),
+                ("echoCancellation", false),
+            ] {
+                let _ = js_sys::Reflect::set(
+                    &audio_constraints,
+                    &JsValue::from_str(key),
+                    &JsValue::from_bool(value),
+                );
+            }
             let mut constraints = web_sys::MediaStreamConstraints::new();
-            constraints.audio(&JsValue::TRUE);
+            constraints.audio(&audio_constraints);
             constraints.video(&JsValue::FALSE);
 
             media_devices

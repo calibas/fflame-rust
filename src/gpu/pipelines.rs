@@ -652,8 +652,12 @@ impl FlamePipelines {
         device: &Device,
         config: &crate::config::FractalConfig,
         path_features_enabled: bool,
+        census: bool,
     ) -> bool {
-        let constants = crate::shader_cache::ShaderCache::constants_from_config(config);
+        // Census is renderer state, not config state — a .fflame cannot
+        // ask to be instrumented. Threaded from FlameRenderer::census.
+        let mut constants = crate::shader_cache::ShaderCache::constants_from_config(config);
+        constants.census = census;
         self.shader_cache.ensure_current_full(
             device,
             &self.compute_bind_group_layout,

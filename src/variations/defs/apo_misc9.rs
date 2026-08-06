@@ -295,7 +295,12 @@ fn variation_flower_db(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
 
     var r = w * sqrt(p.x * p.x + p.y * p.y);
-    let t = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    let t = ff_atan2(p.y, p.x);
     r = r * abs((petal_spread + sin(petals * t)) * cos(petal_split * petals * t));
     let fx = sin(t) * r;
     let fy = cos(t) * r;
@@ -315,7 +320,12 @@ fn variation_flower_db(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
     let inv_w = 1.0 / select(w, 1e-30, abs(w) < 1e-30);
 
     var r = w * sqrt(p.x * p.x + p.y * p.y);
-    let t = atan2(p.y, p.x);
+    // ff_atan2: Metal's fast atan2 is pi/4 at SAME-sign zero pairs and
+    // NaN at MIXED-sign ones (measured; IEEE is finite for all four).
+    // This variation reaches zero pairs in real renders — the probe
+    // showed NaN output at the origin classes on Metal only. See
+    // utilities.wgsl.
+    let t = ff_atan2(p.y, p.x);
     r = r * abs((petal_spread + sin(petals * t)) * cos(petal_split * petals * t));
     let safe_r = select(r, 1e-30, abs(r) < 1e-30);
     let fx = sin(t) * r;

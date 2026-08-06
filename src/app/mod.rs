@@ -271,17 +271,25 @@ use std::sync::{Arc, Mutex};
 /// `Surface::get_current_texture` returns the `CurrentSurfaceTexture`
 /// enum instead of a `Result`, with finer-grained non-success states
 /// (Suboptimal counts as usable; Validation/Timeout are new).
-/// We collapse them to the recovery / fatal pattern the caller cares
-/// about: Lost or Outdated → recreate surface; anything else → log
-/// and recover.
+/// These are NOT all the same severity, and collapsing them was a real
+/// bug: `Occluded` and `Timeout` used to share an `Other` variant with
+/// `Validation`, so all three tore down and rebuilt the entire GPU
+/// device. An occluded surface only means the window is not visible —
+/// routine while a window is first being composited, or minimised — and
+/// the correct response is to skip the frame.
 #[derive(Debug)]
 pub enum RenderError {
     /// Surface dropped/invalidated — needs full recreate.
     Lost,
     /// Surface configuration outdated — needs reconfigure.
     Outdated,
-    /// Acquisition timed out or a validation error fired — recover.
-    Other,
+    /// The window is not visible, so there is nothing to present to.
+    /// Routine, and not a device problem: skip the frame.
+    Occluded,
+    /// Acquisition timed out. Transient — skip the frame and try again.
+    Timeout,
+    /// The surface reported a validation error. Genuine trouble.
+    Validation,
 }
 
 /// Tracks which flame/animation is currently loaded from the API.
@@ -409,6 +417,11 @@ pub struct App {
     // budget and back up when there is headroom. 1.0 = full batch.
     pub(super) iter_scale: f64,
     pub(super) last_iter_frame: Option<web_time::Instant>,
+    // Display refresh in millihertz, and a counter that re-queries it every
+    // 120 iterating frames. Under vsync this — not `target_fps` — is the
+    // governor's budget; see `frame_budget`.
+    pub(super) display_refresh_mhz: Option<u32>,
+    pub(super) display_refresh_age: u32,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
     // Overwrite mode timing (100ms window after parameter changes)
@@ -695,6 +708,8 @@ impl App {
             last_frame_time: None,
             iter_scale: 1.0,
             last_iter_frame: None,
+            display_refresh_mhz: None,
+            display_refresh_age: 0,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
             use_overwrite_next_frame: false,
@@ -974,6 +989,16 @@ impl App {
                                     #[cfg(target_arch = "wasm32")]
                                     { app.gpu.resize(app.gpu.size); }
                                 }
+                                Err(e @ (RenderError::Occluded | RenderError::Timeout)) => {
+                                    // Not a device fault. The window is hidden
+                                    // or the swapchain was busy; there is
+                                    // nothing to fix and nothing to present
+                                    // to. Rebuilding the GPU here cost two
+                                    // full reinitialisations on every macOS
+                                    // launch, purely because the window had
+                                    // not finished appearing yet.
+                                    log::debug!("Surface not presentable ({e:?}); skipping frame");
+                                }
                                 Err(e) => {
                                     log::error!("Surface error: {:?}, scheduling recovery...", e);
                                     #[cfg(not(target_arch = "wasm32"))]
@@ -1160,9 +1185,9 @@ impl App {
             CurrentSurfaceTexture::Suboptimal(f) => f,
             CurrentSurfaceTexture::Outdated => return Err(RenderError::Outdated),
             CurrentSurfaceTexture::Lost => return Err(RenderError::Lost),
-            CurrentSurfaceTexture::Timeout
-            | CurrentSurfaceTexture::Occluded
-            | CurrentSurfaceTexture::Validation => return Err(RenderError::Other),
+            CurrentSurfaceTexture::Occluded => return Err(RenderError::Occluded),
+            CurrentSurfaceTexture::Timeout => return Err(RenderError::Timeout),
+            CurrentSurfaceTexture::Validation => return Err(RenderError::Validation),
         };
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
@@ -2145,9 +2170,35 @@ impl App {
                 // so ipt IS the trajectory depth — a user-visible quality
                 // setting for long-memory fractals — while the workgroup
                 // count is pure throughput.
+                // Under vsync the compositor blocks until the next refresh, so
+                // this delta cannot go below the refresh interval however
+                // little work we submit — landing exactly ON the target is the
+                // healthy steady state, not a warning sign. `adjust_iter_scale`
+                // grows the batch there for that reason; requiring the frame to
+                // beat the target made the increase branch unreachable on every
+                // vsync-locked platform, and the batch ratcheted to its
+                // 1-workgroup floor on the first hitch and stayed. macOS and
+                // WASM are both pinned to Fifo (WASM has no other option);
+                // Windows with vsync off escaped it because Immediate lets the
+                // delta track real GPU time.
                 let now = web_time::Instant::now();
                 if let Some(prev) = self.last_iter_frame {
-                    let target = 1.0 / self.config_manager.system_settings().target_fps.max(1.0) as f64;
+                    // Re-ask the platform every so often rather than every
+                    // frame: the answer only changes when the window moves to
+                    // a different display, and `current_monitor` is a syscall.
+                    if self.display_refresh_age == 0 {
+                        self.display_refresh_mhz = window
+                            .current_monitor()
+                            .and_then(|m| m.refresh_rate_millihertz());
+                    }
+                    self.display_refresh_age = (self.display_refresh_age + 1) % 120;
+
+                    let settings = self.config_manager.system_settings();
+                    let target = crate::app::frame_budget(
+                        settings.vsync_enabled,
+                        settings.target_fps,
+                        self.display_refresh_mhz,
+                    );
                     let ratio = prev.elapsed().as_secs_f64() / target;
                     self.iter_scale = crate::app::adjust_iter_scale(self.iter_scale, ratio);
                 }
@@ -2552,11 +2603,45 @@ impl App {
 /// catastrophic frame doesn't collapse the batch). Comfortably under
 /// budget -> recover gently toward full batches. The dead zone between
 /// avoids oscillation around the target.
+/// The frame time the governor is trying to hit, in seconds.
+///
+/// With vsync ON the compositor only ever hands back whole refresh
+/// intervals, so the display's rate IS the budget — and `target_fps` is
+/// documented as vsync-off-only anyway. Asking for more than the panel
+/// can give (144 on a 60Hz screen) is unreachable by construction, and
+/// budgeting against it would shed work forever chasing a frame time
+/// that will never arrive.
+///
+/// `refresh_mhz` is winit's millihertz — 60000 for 60Hz. `None` (WASM,
+/// or a platform that will not say) falls back to 60Hz rather than to
+/// `target_fps`, because under vsync the target is the thing we already
+/// know to be wrong.
+pub(crate) fn frame_budget(vsync: bool, target_fps: f32, refresh_mhz: Option<u32>) -> f64 {
+    if vsync {
+        match refresh_mhz {
+            Some(mhz) if mhz > 0 => 1000.0 / mhz as f64,
+            _ => 1.0 / 60.0,
+        }
+    } else {
+        1.0 / target_fps.max(1.0) as f64
+    }
+}
+
+/// Additive-increase / multiplicative-decrease on the batch size, driven
+/// by how the last frame compared to its budget (see the dispatch site).
+///
+/// Growth triggers at MEETING the budget, not beating it. A frame that
+/// lands exactly on budget — `ratio == 1.0` — is the healthy steady state
+/// under vsync, because the compositor hands back the refresh interval
+/// however little work was submitted. The old threshold of 0.9 asked the
+/// frame to come in 10% under a floor it could not go below, so the
+/// increase branch was dead code on every vsync-locked platform and the
+/// governor could only ever shed.
 pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
     let mut s = scale;
     if ratio > 1.3 {
         s /= ratio.min(4.0);
-    } else if ratio < 0.9 {
+    } else if ratio < 1.05 {
         s *= 1.15;
     }
     // 1/256 lets the dispatch reach its 1-workgroup floor (128/256 -> 1
@@ -2566,7 +2651,40 @@ pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
 
 #[cfg(test)]
 mod governor_tests {
-    use super::adjust_iter_scale;
+    use super::{adjust_iter_scale, frame_budget};
+
+    /// `target_fps` is documented as vsync-off-only. Honour that: under
+    /// vsync the budget is the panel's, and a target it cannot reach must
+    /// not turn into a permanent shed.
+    #[test]
+    fn vsync_budget_comes_from_the_display_not_target_fps() {
+        // 144fps asked for on a 60Hz panel: budget stays 60Hz.
+        let b = frame_budget(true, 144.0, Some(60_000));
+        assert!((b - 1.0 / 60.0).abs() < 1e-9, "{b}");
+        // A 120Hz panel is believed.
+        assert!((frame_budget(true, 60.0, Some(120_000)) - 1.0 / 120.0).abs() < 1e-9);
+        // Unknown refresh (WASM) falls back to 60Hz, NOT to target_fps.
+        assert!((frame_budget(true, 144.0, None) - 1.0 / 60.0).abs() < 1e-9);
+        assert!((frame_budget(true, 144.0, Some(0)) - 1.0 / 60.0).abs() < 1e-9);
+        // With vsync off, target_fps is exactly what it claims to be.
+        assert!((frame_budget(false, 144.0, Some(60_000)) - 1.0 / 144.0).abs() < 1e-9);
+        // ...and cannot divide by zero.
+        assert!(frame_budget(false, 0.0, None).is_finite());
+    }
+
+    /// The unreachable-target case end to end: a 144fps target on a 60Hz
+    /// panel used to make every frame look 2.4x over budget, so the batch
+    /// shed forever. With the display supplying the budget it does not.
+    #[test]
+    fn unreachable_target_fps_does_not_starve_the_batch() {
+        const REFRESH: f64 = 1.0 / 60.0;
+        let budget = frame_budget(true, 144.0, Some(60_000));
+        let mut s = 1.0;
+        for _ in 0..200 {
+            s = adjust_iter_scale(s, REFRESH / budget);
+        }
+        assert!((s - 1.0).abs() < 1e-9, "starved to {s}");
+    }
 
     #[test]
     fn governor_converges_and_recovers() {
@@ -2588,8 +2706,59 @@ mod governor_tests {
             worst = adjust_iter_scale(worst, 100.0);
         }
         assert!(worst >= 1.0 / 256.0);
-        // Dead zone: near-target frames leave the batch alone.
-        assert_eq!(adjust_iter_scale(0.5, 1.0), 0.5);
+        // Dead zone: over budget but not by enough to shed.
+        assert_eq!(adjust_iter_scale(0.5, 1.10), 0.5);
         assert_eq!(adjust_iter_scale(0.5, 1.25), 0.5);
+        // On budget is HEALTHY and must grow — under vsync this is the
+        // steady state, and treating it as "leave alone" is what let the
+        // governor ratchet to the floor.
+        assert!(adjust_iter_scale(0.5, 1.0) > 0.5);
+    }
+
+    /// The macOS/WASM collapse. Under vsync the compositor blocks until the
+    /// next refresh, so the frame delta is QUANTIZED to whole refresh
+    /// intervals: light work does not buy a fast frame, it buys a 16.7ms
+    /// frame like everything else. The ratio therefore sits at exactly 1.0
+    /// in the healthy case — never below 0.9 to grow, and one hitch away
+    /// from shedding — so the old governor walked to its 1-workgroup floor
+    /// and stayed there, at roughly 1/128th throughput.
+    ///
+    /// Modelling the quantization is the whole point: the pre-existing test
+    /// assumed frame cost was proportional to batch size, which is true
+    /// only with vsync off, and so could not express this failure.
+    #[test]
+    fn vsync_quantized_frames_do_not_ratchet_the_batch_away() {
+        const REFRESH: f64 = 1.0 / 60.0;
+        let target = REFRESH;
+        // Work scales with the batch; the compositor then rounds UP to the
+        // next refresh boundary.
+        let present = |s: f64, fixed: f64, per_batch: f64| {
+            ((fixed + per_batch * s) / REFRESH).ceil().max(1.0) * REFRESH
+        };
+
+        // A flame that comfortably fits the frame must keep its full batch,
+        // INCLUDING across the occasional hitch — a panel repaint, the
+        // compositor stealing a slice — that costs one extra refresh. The
+        // hitch is what made this a ratchet: each one halved the batch, and
+        // the steady 1.0 ratio in between could never earn it back.
+        let mut s = 1.0;
+        for i in 0..400 {
+            let mut delta = present(s, 0.004, 0.012);
+            if i % 20 == 0 {
+                delta += REFRESH;
+            }
+            s = adjust_iter_scale(s, delta / target);
+        }
+        assert!(s > 0.5, "vsync-locked frames collapsed the batch to {s}");
+
+        // ...and one that genuinely does not fit must still shed, or the
+        // governor is useless in the case it exists for. This is the case
+        // that caught a floor-tracking heuristic which latched onto the
+        // first (already slow) frame and then never shed at all.
+        let mut h = 1.0;
+        for _ in 0..400 {
+            h = adjust_iter_scale(h, present(h, 0.004, 0.400) / target);
+        }
+        assert!(h < 0.25, "overloaded flame failed to shed work: {h}");
     }
 }

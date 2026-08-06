@@ -288,6 +288,24 @@ fn render_live_capture_section(
                             .clicked()
                         {
                             panel_state.selected_device_index = i;
+                            // Switching while live has to actually switch.
+                            // The selection alone changes nothing in the
+                            // capture thread, so the old device kept
+                            // streaming while the UI claimed the new one was
+                            // selected — the control silently lied. Restart
+                            // on the new device; if it will not open, stay
+                            // stopped so the button reflects reality rather
+                            // than leaving the previous device running under
+                            // a label that names a different one.
+                            if audio_capture.is_capturing() {
+                                audio_capture.stop();
+                                match audio_capture.start_device(Some(device.as_str())) {
+                                    Ok(()) => log::info!("Audio capture switched to '{device}'"),
+                                    Err(e) => log::error!(
+                                        "Could not switch audio capture to '{device}': {e}"
+                                    ),
+                                }
+                            }
                         }
                     }
                 });

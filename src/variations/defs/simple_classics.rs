@@ -190,8 +190,25 @@ fn variation_funnel(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     let cy = cos(p.y);
     let safe_cx = select(cx, 1e-30, abs(cx) < 1e-30);
     let safe_cy = select(cy, 1e-30, abs(cy) < 1e-30);
-    let fx = tanh(p.x) * (1.0 / safe_cx + effect * pi);
-    let fy = tanh(p.y) * (1.0 / safe_cy + effect * pi);
+    // Metal's fast tanh is exp-based and goes NaN once exp(2x)
+    // overflows — measured on an M2: tanh(1e20) = NaN while
+    // tanh(-1e20) = -1 (the negative side underflows cleanly, hence
+    // the asymmetric probe glyphs that first pointed at cos, wrongly:
+    // cos(±1e20) is a clean +0 there). JWF's f64 and NVIDIA saturate
+    // to ±1 and the point SURVIVES; the NaN sent it into bad-value
+    // recovery instead, at a frequency the census measured as `common`
+    // on a real flame — macOS-only (·,nan) out-rows against zero on
+    // Windows. sign(x) IS the saturation value, so the fallback is the
+    // reference answer, not an approximation. The kept-branch condition
+    // must fail for NaN under fast-math, hence the abs<=1e32 shape; for
+    // every finite tanh it is a pass-through, which keeps Windows
+    // bit-identical.
+    let tx_raw = tanh(p.x);
+    let ty_raw = tanh(p.y);
+    let tx = select(sign(p.x), tx_raw, abs(tx_raw) <= 1e32);
+    let ty = select(sign(p.y), ty_raw, abs(ty_raw) <= 1e32);
+    let fx = tx * (1.0 / safe_cx + effect * pi);
+    let fy = ty * (1.0 / safe_cy + effect * pi);
     return vec2<f32>(fx, fy);
 }
 "#,
@@ -203,8 +220,25 @@ fn variation_funnel(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
     let cy = cos(p.y);
     let safe_cx = select(cx, 1e-30, abs(cx) < 1e-30);
     let safe_cy = select(cy, 1e-30, abs(cy) < 1e-30);
-    let fx = tanh(p.x) * (1.0 / safe_cx + effect * pi);
-    let fy = tanh(p.y) * (1.0 / safe_cy + effect * pi);
+    // Metal's fast tanh is exp-based and goes NaN once exp(2x)
+    // overflows — measured on an M2: tanh(1e20) = NaN while
+    // tanh(-1e20) = -1 (the negative side underflows cleanly, hence
+    // the asymmetric probe glyphs that first pointed at cos, wrongly:
+    // cos(±1e20) is a clean +0 there). JWF's f64 and NVIDIA saturate
+    // to ±1 and the point SURVIVES; the NaN sent it into bad-value
+    // recovery instead, at a frequency the census measured as `common`
+    // on a real flame — macOS-only (·,nan) out-rows against zero on
+    // Windows. sign(x) IS the saturation value, so the fallback is the
+    // reference answer, not an approximation. The kept-branch condition
+    // must fail for NaN under fast-math, hence the abs<=1e32 shape; for
+    // every finite tanh it is a pass-through, which keeps Windows
+    // bit-identical.
+    let tx_raw = tanh(p.x);
+    let ty_raw = tanh(p.y);
+    let tx = select(sign(p.x), tx_raw, abs(tx_raw) <= 1e32);
+    let ty = select(sign(p.y), ty_raw, abs(ty_raw) <= 1e32);
+    let fx = tx * (1.0 / safe_cx + effect * pi);
+    let fy = ty * (1.0 / safe_cy + effect * pi);
     return vec3<f32>(fx, fy, p.z);
 }
 "#,

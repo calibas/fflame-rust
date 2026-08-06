@@ -6,7 +6,7 @@ echo "Building for WASM..."
 # Build the WASM module
 echo "Building WASM module..."
 export RUSTFLAGS=--cfg=web_sys_unstable_apis
-cargo build --lib --target wasm32-unknown-unknown --release
+cargo build --lib --target wasm32-unknown-unknown --profile dist
 
 if [ $? -ne 0 ]; then
     echo "❌ Cargo build failed"
@@ -15,7 +15,7 @@ fi
 
 # Generate bindings with wasm-bindgen
 echo "Generating JavaScript bindings..."
-wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/release/fractal_flame_wgpu.wasm
+wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/dist/fractal_flame_wgpu.wasm
 
 if [ $? -ne 0 ]; then
     echo "❌ wasm-bindgen failed"

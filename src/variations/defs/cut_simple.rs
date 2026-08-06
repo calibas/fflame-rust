@@ -426,7 +426,17 @@ fn variation_cut_btree(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     var y: f32;
     if (mode == 0) { x = p.x; y = p.y; } else { x = 2.0 * rng_nextf(rng) - 1.0; y = 2.0 * rng_nextf(rng) - 1.0; }
     var w = vec2<f32>(x * zoom, y * zoom);
-    var tv = (w / w) * fract(time);
+    // JWF computes `tv = (w/w) * fract(time)` — and for nonzero
+    // components w/w is exactly 1, so this is vec2(fract(time)). It is
+    // written that way because Metal's fast-math folds w/w to 1.0 even
+    // at w == 0, where the reference (f64, IEEE) gets 0/0 = NaN. That
+    // NaN reaches `color` only through the y lane, and NaN comparisons
+    // are false, so the reference behaviour at w.y == 0 (the y = 0
+    // line — or EVERY point when zoom = 0) is: never hide. `ref_nan_y`
+    // reproduces that consequence portably. The x lane's NaN never
+    // influences `color` and needs nothing.
+    var tv = vec2<f32>(fract(time), fract(time));
+    let ref_nan_y = (w.y == 0.0);
     let l = w * w * 5.0 - tv;
     tv = tv + 1.0;
     let m = exp2(ceil(l)) * tv;
@@ -438,9 +448,9 @@ fn variation_cut_btree(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     var hidden = false;
     if (invert == 0) {
-        if (color > 0.5) { x = 0.0; y = 0.0; hidden = true; }
+        if (color > 0.5 && !ref_nan_y) { x = 0.0; y = 0.0; hidden = true; }
     } else {
-        if (color <= 0.5) { x = 0.0; y = 0.0; hidden = true; }
+        if (color <= 0.5 && !ref_nan_y) { x = 0.0; y = 0.0; hidden = true; }
     }
     *hide = hidden;
     return vec2<f32>(x, y);
@@ -458,7 +468,17 @@ fn variation_cut_btree(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     var y: f32;
     if (mode == 0) { x = p.x; y = p.y; } else { x = 2.0 * rng_nextf(rng) - 1.0; y = 2.0 * rng_nextf(rng) - 1.0; }
     var w = vec2<f32>(x * zoom, y * zoom);
-    var tv = (w / w) * fract(time);
+    // JWF computes `tv = (w/w) * fract(time)` — and for nonzero
+    // components w/w is exactly 1, so this is vec2(fract(time)). It is
+    // written that way because Metal's fast-math folds w/w to 1.0 even
+    // at w == 0, where the reference (f64, IEEE) gets 0/0 = NaN. That
+    // NaN reaches `color` only through the y lane, and NaN comparisons
+    // are false, so the reference behaviour at w.y == 0 (the y = 0
+    // line — or EVERY point when zoom = 0) is: never hide. `ref_nan_y`
+    // reproduces that consequence portably. The x lane's NaN never
+    // influences `color` and needs nothing.
+    var tv = vec2<f32>(fract(time), fract(time));
+    let ref_nan_y = (w.y == 0.0);
     let l = w * w * 5.0 - tv;
     tv = tv + 1.0;
     let m = exp2(ceil(l)) * tv;
@@ -470,9 +490,9 @@ fn variation_cut_btree(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     var hidden = false;
     if (invert == 0) {
-        if (color > 0.5) { x = 0.0; y = 0.0; hidden = true; }
+        if (color > 0.5 && !ref_nan_y) { x = 0.0; y = 0.0; hidden = true; }
     } else {
-        if (color <= 0.5) { x = 0.0; y = 0.0; hidden = true; }
+        if (color <= 0.5 && !ref_nan_y) { x = 0.0; y = 0.0; hidden = true; }
     }
     *hide = hidden;
     return vec3<f32>(x, y, p.z);

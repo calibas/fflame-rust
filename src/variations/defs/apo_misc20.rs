@@ -53,7 +53,10 @@ pub static CANNABISCURVE_WF: VariationDef = VariationDef {
     wgsl_2d: r#"
 fn variation_cannabiscurve_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let filled = i32(get_param(xform_id, variation_id, 0u));
-    var a = atan2(p.x, p.y);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    var a = ff_atan2(p.x, p.y);
     var r = (1.0 + 0.9 * cos(8.0 * a))
           * (1.0 + 0.1 * cos(24.0 * a))
           * (0.9 + 0.1 * cos(200.0 * a))
@@ -68,7 +71,10 @@ fn variation_cannabiscurve_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rn
     wgsl_3d: r#"
 fn variation_cannabiscurve_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let filled = i32(get_param(xform_id, variation_id, 0u));
-    var a = atan2(p.x, p.y);
+    // ff_atan2: Metal's fast atan2 is pi/4 at same-sign zero pairs and
+    // NaN at mixed-sign ones; the origin is reachable (respawn/fuse,
+    // and the probe showed NaN there on Metal only). See utilities.wgsl.
+    var a = ff_atan2(p.x, p.y);
     var r = (1.0 + 0.9 * cos(8.0 * a))
           * (1.0 + 0.1 * cos(24.0 * a))
           * (0.9 + 0.1 * cos(200.0 * a))
