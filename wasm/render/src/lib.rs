@@ -6,21 +6,77 @@
 //! `canvas.putImageData`. Internally this is the main crate's unified
 //! headless render path, unchanged.
 //!
-//! Device lifecycle: a device is created per render and destroyed
-//! afterwards — the pattern the app's own WASM export uses, because on
-//! WebGPU dropping Rust buffer handles only defers reclamation to the
-//! JS garbage collector; a long scroll of tiles would otherwise
-//! accumulate GPU memory until renders start failing black.
-//! `device.destroy()` frees synchronously. The cost (adapter + device
-//! request, one shader compile per tile) is milliseconds against a
-//! multi-hundred-ms render. The full version's optimization door:
-//! a persistent FlameRenderer + shader cache, with explicit buffer
-//! destruction — consecutive seeds of one generator usually share a
-//! variation set, so the compile would amortize across the hallway.
+//! Device lifecycle: **one device and one renderer, reused across
+//! tiles.** This was per-render once, destroying the device each time,
+//! and that is what a real gallery scroll exhausted — reported as
+//! `requestDevice` itself failing with "Not enough memory left".
+//!
+//! The reason is specific to WebGPU: wgpu implements `Drop` for
+//! `WebBuffer` and `WebTexture` as a **no-op**, so a finished renderer's
+//! GPU memory survives until the JS garbage collector collects the
+//! wrappers. `device.destroy()` is the only synchronous reclamation, and
+//! it can only sweep a whole device — so a device per tile made
+//! reclamation a race against the scroll, and the scroll won.
+//!
+//! Reuse removes the garbage rather than sweeping it faster.
+//! `load_config` is a full reset point (transforms, variation params,
+//! palette size, accumulation), so a new config needs no new renderer;
+//! only a size change does, and that branch destroys the old one
+//! explicitly. The shader cache surviving is a real bonus: consecutive
+//! seeds of one generator usually share a variation set, so the compile
+//! amortizes across the hallway.
+//!
+//! Renders are serial. A second call while one is in flight gets an
+//! error rather than sharing the renderer — see `render_impl`. `release()`
+//! frees everything for a page that is done.
 
 use egui_wgpu::wgpu;
 use fractal_flame_wgpu::config::FractalConfig;
-use fractal_flame_wgpu::renderer::render::{render as unified_render, NoProgress, RenderJob};
+use fractal_flame_wgpu::renderer::compute_kernel::FlameRenderer;
+use fractal_flame_wgpu::renderer::render::{render_with, NoProgress, RenderJob};
+use std::cell::RefCell;
+
+/// The device, queue and renderer, kept alive across tiles.
+///
+/// Single-threaded by construction: wasm has one thread, and the render
+/// entry point is `async` but not re-entrant — a second call while one is
+/// in flight would find the `RefCell` already borrowed and error rather
+/// than corrupt anything. The gallery renders in series.
+struct Live {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    max_dim: u32,
+    /// `None` until the first render; carries the size it was built for,
+    /// because a dimension change needs `resize`, not just `load_config`.
+    renderer: Option<(FlameRenderer, u32, u32)>,
+}
+
+/// Wrapper whose `Drop` deliberately **leaks** the device.
+///
+/// Dropping a wgpu `Device` reaches into other thread-locals. At thread
+/// exit those may already have been destroyed, and the access panics —
+/// inside a destructor, which Rust turns into an abort
+/// (`STATUS_STACK_BUFFER_OVERRUN`). The native smoke test hit exactly
+/// that the moment the device outlived a single call.
+///
+/// Leaking is the right answer rather than a dodge: this only runs when
+/// the thread is ending, which on wasm means the page is being torn down
+/// and the whole linear memory plus every GPU resource goes with it.
+/// Callers wanting deterministic cleanup have `release()`, which runs
+/// while the thread is alive and can drop safely.
+struct LiveCell(RefCell<Option<Live>>);
+
+impl Drop for LiveCell {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.0.try_borrow_mut() {
+            std::mem::forget(slot.take());
+        }
+    }
+}
+
+thread_local! {
+    static LIVE: LiveCell = const { LiveCell(RefCell::new(None)) };
+}
 
 pub struct RenderedTile {
     pub pixels: Vec<u8>,
@@ -129,34 +185,98 @@ pub async fn render_impl(
     let mut config = FractalConfig::from_json(config_json)
         .map_err(|e| format!("config did not parse: {e}"))?;
 
-    let (device, queue, max_dim) = create_device().await?;
+    // Create the device once and keep it. Creating one per tile is what
+    // exhausted the GPU: wgpu's WebGPU backend implements `Drop` for
+    // buffers and textures as a NO-OP, so a finished renderer's memory
+    // lives until the JS garbage collector runs, and `device.destroy()`
+    // — the only synchronous reclamation — can just sweep a whole
+    // device. A scroll of tiles created devices faster than the browser
+    // reclaimed them, and eventually `requestDevice` itself failed with
+    // "Not enough memory left".
+    //
+    // Reuse removes the garbage instead of sweeping it faster, and keeps
+    // the shader cache warm: consecutive seeds of one generator usually
+    // share a variation set, so the per-tile compile amortizes.
+    if LIVE.with(|l| l.0.borrow().is_none()) {
+        let (device, queue, max_dim) = create_device().await?;
+        LIVE.with(|l| {
+            *l.0.borrow_mut() = Some(Live { device, queue, max_dim, renderer: None });
+        });
+    }
 
-    // Check dimensions against what the adapter actually allows, BEFORE
-    // any texture is created. Unchecked, an oversized request reached
-    // wgpu's validation and panicked (`Dimension X value 8193 exceeds
-    // the limit of 8192`) instead of returning this error.
-    if width > max_dim || height > max_dim {
-        device.destroy();
+    config.max_iterations = config.max_iterations.min(MAX_RENDER_ITERATIONS);
+    let iters = target_iterations.map(|i| i.min(MAX_RENDER_ITERATIONS));
+
+    // Take the whole `Live` out for the duration, put it back on every
+    // path. That is also the re-entrancy guard — a second concurrent
+    // call finds the slot empty and gets a clear error instead of two
+    // renders sharing one renderer. The borrow is released before the
+    // `await`, because holding a `RefCell` borrow across a yield point
+    // is how a single-threaded async runtime deadlocks itself.
+    let mut live = LIVE
+        .with(|l| l.0.borrow_mut().take())
+        .ok_or_else(|| {
+            "a render is already in flight — this module renders one tile at              a time; await the previous call"
+                .to_string()
+        })?;
+
+    let outcome = render_with_live(&mut live, &config, width, height, iters).await;
+
+    LIVE.with(|l| *l.0.borrow_mut() = Some(live));
+    outcome
+}
+
+async fn render_with_live(
+    live: &mut Live,
+    config: &FractalConfig,
+    width: u32,
+    height: u32,
+    target_iterations: Option<u64>,
+) -> Result<RenderedTile, String> {
+    // Build the renderer on first use, or resize it if the tile geometry
+    // changed. `load_config` is a full reset for everything else —
+    // transforms, variation params, palette size, accumulation — so the
+    // renderer does not need to have been built for THIS config, only
+    // for this size.
+    if width > live.max_dim || height > live.max_dim {
         return Err(format!(
-            "{width}x{height} exceeds this device's maximum texture dimension of {max_dim}"
+            "{width}x{height} exceeds this device's maximum texture dimension of {}",
+            live.max_dim
         ));
     }
 
-    // Clamp the chaos-game budget from BOTH sources: the caller's
-    // argument and the config's own `max_iterations`, either of which
-    // can be hostile.
-    config.max_iterations = config.max_iterations.min(MAX_RENDER_ITERATIONS);
-    let mut job = RenderJob::new(&config, width, height);
-    if let Some(iters) = target_iterations {
-        job = job.with_iterations(iters.min(MAX_RENDER_ITERATIONS));
+    let needs_new = match &live.renderer {
+        None => true,
+        Some((_, w, h)) => *w != width || *h != height,
+    };
+    if needs_new {
+        if let Some((old, _, _)) = live.renderer.take() {
+            // Explicit, because dropping frees nothing on WebGPU.
+            old.destroy();
+        }
+        let renderer = FlameRenderer::with_palette_size(
+            &live.device,
+            &live.queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            width,
+            height,
+            &config.flame,
+            config.palette_size,
+        );
+        live.renderer = Some((renderer, width, height));
     }
-    let result = unified_render(&device, &queue, job, &mut NoProgress).await;
 
-    // Free the device's memory synchronously — see the module docs.
-    // The pixels are already on the CPU; runs on both paths.
-    device.destroy();
+    let (renderer, _, _) = live.renderer.as_mut().expect("built above");
 
-    let out = result.map_err(|e| e.to_string())?;
+    let mut job = RenderJob::new(config, width, height);
+    if let Some(iters) = target_iterations {
+        job = job.with_iterations(iters);
+    }
+
+    let out = render_with(renderer, &live.device, &live.queue, job, &mut NoProgress)
+        .await
+        .map_err(|e| e.to_string())?;
+
     Ok(RenderedTile {
         pixels: out.rgba_data,
         width: out.width,
@@ -164,6 +284,23 @@ pub async fn render_impl(
         iterations: out.total_iterations,
         ms: out.render_time_ms,
     })
+}
+
+/// Release the device and everything on it.
+///
+/// Optional — the module works without it — but a page that is done
+/// rendering (navigating away, closing the gallery) can free the GPU
+/// memory immediately rather than waiting for the JS garbage collector
+/// to notice the wrappers.
+pub fn release_impl() {
+    LIVE.with(|l| {
+        if let Some(live) = l.0.borrow_mut().take() {
+            if let Some((renderer, _, _)) = live.renderer {
+                renderer.destroy();
+            }
+            live.device.destroy();
+        }
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -230,5 +367,18 @@ mod wasm {
         .await
         .map_err(|e| JsValue::from_str(&e))?;
         Ok(RenderResult { inner: tile })
+    }
+
+    /// Release the GPU device and everything on it.
+    ///
+    /// Optional. The module holds one device across tiles, which is what
+    /// keeps GPU memory flat during a long scroll; call this when the
+    /// page is done rendering (navigating away, closing the gallery) to
+    /// free it immediately instead of waiting for the JS garbage
+    /// collector to notice. The next `render` transparently builds a new
+    /// device, so calling it early costs a device request, not a bug.
+    #[wasm_bindgen]
+    pub fn release() {
+        crate::release_impl();
     }
 }
