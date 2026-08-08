@@ -396,21 +396,54 @@ fn random_transform_with_settings<R: Rng>(
         // Fallback to linear if no variations enabled
         transform.set_variation("linear", 1.0);
     } else {
-        // Add random variations
+        // Add random variations.
+        //
+        // Draws stay exactly as they were — same count, same index and
+        // weight sequence — so `script + seed` picks the same variations
+        // at the same weights it always did. What changed is EMISSION:
+        // picks are collected and applied in canonical (alphabetical)
+        // order instead of pick order, so `variation_order` — and with it
+        // the local index map and the generated shader — is identical
+        // for every flame drawing the same subset from a pool. That is
+        // what lets a batch of random flames share one compiled pipeline
+        // (docs/projects/sticky-shader-compilation.md); with pick-order
+        // emission, two flames with the SAME variations still compiled
+        // two shaders.
+        //
+        // Dispatch-order note: the pool is normal-phase, where map order
+        // only affects f32 summation order — a different trajectory
+        // through the same attractor, the ULP class. This is a one-time
+        // re-baseline of generated-flame bytes (script fixtures, census
+        // random rows), taken deliberately before any seed is published.
         let num_variations = rng.random_range(
             settings.variations_per_transform_min..=settings.variations_per_transform_max
         );
 
+        let mut picks: Vec<(&str, f32)> = Vec::new();
         for _ in 0..num_variations {
             let var_idx = rng.random_range(0..enabled.len());
             let var_name = enabled[var_idx];
             let weight = rng.random_range(settings.variation_weight_min..=settings.variation_weight_max);
-            transform.set_variation(var_name, weight);
+            // A repeated pick overwrites the weight, matching what
+            // consecutive `set_variation` calls did.
+            match picks.iter_mut().find(|(n, _)| *n == var_name) {
+                Some((_, w)) => *w = weight,
+                None => picks.push((var_name, weight)),
+            }
         }
 
-        // Ensure first transform has linear if requested
-        if index == 0 && settings.always_include_linear && transform.get_variation("linear") == 0.0 {
-            transform.set_variation("linear", rng.random_range(0.3..0.7));
+        // Ensure first transform has linear if requested — the draw stays
+        // in its original stream position, after the variation loop.
+        if index == 0
+            && settings.always_include_linear
+            && !picks.iter().any(|(n, w)| *n == "linear" && *w != 0.0)
+        {
+            picks.push(("linear", rng.random_range(0.3..0.7)));
+        }
+
+        picks.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, weight) in picks {
+            transform.set_variation(name, weight);
         }
     }
 
