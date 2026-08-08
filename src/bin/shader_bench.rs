@@ -138,14 +138,14 @@ fn run_batch(
         }
     }
     let total = started.elapsed().as_secs_f64() * 1000.0;
-    let (rebuilds, compile_ms) = renderer.shader_rebuild_stats();
+    let (rebuilds, hits, compile_ms) = renderer.shader_rebuild_stats();
     renderer.destroy();
 
     per_seed.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = per_seed[per_seed.len() / 2];
     println!("--- {label} ---");
     println!(
-        "  total {total:7.0} ms   median/seed {median:6.1} ms   shader rebuilds {rebuilds:2}   compile {compile_ms:7.1} ms ({:.0}% of total)",
+        "  total {total:7.0} ms   median/seed {median:6.1} ms   rebuilds {rebuilds:2}   lru hits {hits:2}   compile {compile_ms:7.1} ms ({:.0}% of total)",
         100.0 * compile_ms / total
     );
     println!();
@@ -202,7 +202,7 @@ fn dead_cost_curve(device: &wgpu::Device, queue: &wgpu::Queue) {
         // First render pays the compile; the second is pure throughput.
         let job = RenderJob::new(&config, SIZE, SIZE).with_iterations(CURVE_ITERS);
         let _ = pollster::block_on(render_with(&mut renderer, device, queue, job, &mut NoProgress));
-        let (_, compile_ms) = renderer.shader_rebuild_stats();
+        let (_, _, compile_ms) = renderer.shader_rebuild_stats();
 
         let job = RenderJob::new(&config, SIZE, SIZE).with_iterations(CURVE_ITERS);
         let t = std::time::Instant::now();
