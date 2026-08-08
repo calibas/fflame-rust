@@ -2039,11 +2039,12 @@ impl FlameRenderer {
         self.buffers.update_tonemap_params(queue, &params);
     }
 
-    /// (rebuilds, total ms) spent compiling flame shaders since this
-    /// renderer was created. The sticky-superset work exists to make the
-    /// first number stop growing across a batch — see
+    /// (rebuilds, cache hits, total compile ms) since this renderer was
+    /// created. A hit is a shader change served from the pipeline LRU
+    /// without compiling; the sticky-superset work exists to make
+    /// rebuilds stop growing across a batch — see
     /// docs/projects/sticky-shader-compilation.md.
-    pub fn shader_rebuild_stats(&self) -> (u64, f64) {
+    pub fn shader_rebuild_stats(&self) -> (u64, u64, f64) {
         self.pipelines.shader_rebuild_stats()
     }
 

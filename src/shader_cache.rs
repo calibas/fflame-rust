@@ -96,12 +96,62 @@ pub struct ShaderCache {
     /// it has to be observable. Includes the initial build in `new`.
     rebuilds: u64,
     rebuild_ms_total: f64,
+
+    /// Shader changes served from `lru` without compiling.
+    cache_hits: u64,
+
+    /// Recently compiled pipelines, most-recent first. See
+    /// [`CachedPipelines`] and `PIPELINE_CACHE_CAP`.
+    lru: Vec<CachedPipelines>,
 }
 
+/// One compiled pipeline set, keyed by the WGSL that produced it.
+///
+/// Layer A of docs/projects/sticky-shader-compilation.md. The key is the
+/// generated source itself (main + init), which subsumes every change
+/// detector `ensure_current_full` performs and any added later — codegen
+/// is a pure function of (flame, flags, constants), so identical text IS
+/// an identical pipeline. The init shader must be part of the key: two
+/// flames with identical main WGSL can bake different (xform, variation)
+/// init pairs when an init-bearing variation sits on a different
+/// transform, and a hit that swapped in the wrong init pipeline would
+/// zero that transform's derived params.
+///
+/// The u64 is a prefilter; a candidate must also match the full sources,
+/// so a hash collision degrades to a miss rather than binding the wrong
+/// pipeline to a flame.
+struct CachedPipelines {
+    key: u64,
+    source: String,
+    pipeline: ComputePipeline,
+    init_source: Option<String>,
+    init_pipeline: Option<ComputePipeline>,
+    init_pair_count: u32,
+}
+
+/// LRU capacity. Sized for the residual axes the sticky superset cannot
+/// collapse (transform count, color mode, occasional flags) — measured
+/// joint cardinality in a random batch is small. Each entry holds its
+/// WGSL (~150-350 KB) plus compiled pipeline objects, so 8 is a few MB.
+const PIPELINE_CACHE_CAP: usize = 8;
+
 impl ShaderCache {
-    /// (rebuilds, total ms) — see the field docs.
-    pub fn rebuild_stats(&self) -> (u64, f64) {
-        (self.rebuilds, self.rebuild_ms_total)
+    /// (rebuilds, cache hits, total compile ms) — see the field docs.
+    /// A hit is a shader *change* served from the LRU without compiling;
+    /// renders where nothing changed at all take the early-out and count
+    /// as neither.
+    pub fn rebuild_stats(&self) -> (u64, u64, f64) {
+        (self.rebuilds, self.cache_hits, self.rebuild_ms_total)
+    }
+
+    /// Everything that decides pipeline identity, hashed. See
+    /// [`CachedPipelines`] for why source text is the right key.
+    fn cache_key(source: &str, init_source: Option<&str>) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut h);
+        init_source.hash(&mut h);
+        h.finish()
     }
 
     /// Create a new shader cache with initial flame configuration
@@ -184,13 +234,23 @@ impl ShaderCache {
         // Build init pipeline alongside the main pipeline. Returns None /
         // None / 0 when no active variation in this flame has `wgsl_init`.
         let init_bind_group_layout = Self::create_init_bind_group_layout(device);
-        let (init_shader_source, init_pipeline, init_pair_count) = Self::build_init_resources(
+        let init_shader_source = builder.build_init_shader(flame, &active_variations);
+        let (init_pipeline, init_pair_count) = Self::build_init_resources(
             device,
             &init_bind_group_layout,
-            &builder,
-            flame,
-            &active_variations,
+            init_shader_source.as_deref(),
         );
+
+        // Seed the pipeline LRU with the initial build, so returning to
+        // the startup flame after visiting others is a hit like any other.
+        let lru = vec![CachedPipelines {
+            key: Self::cache_key(&shader_source_2d, init_shader_source.as_deref()),
+            source: shader_source_2d.clone(),
+            pipeline: compute_pipeline_2d.clone(),
+            init_source: init_shader_source.clone(),
+            init_pipeline: init_pipeline.clone(),
+            init_pair_count,
+        }];
 
         let specialization_key = Self::compute_specialization_key(flame, &active_variations);
         let init_signature = Self::compute_init_signature(flame);
@@ -216,6 +276,8 @@ impl ShaderCache {
             variation_order_signature,
             rebuilds: 1,
             rebuild_ms_total: new_started.elapsed().as_secs_f64() * 1000.0,
+            cache_hits: 0,
+            lru,
         }
     }
 
@@ -493,49 +555,87 @@ impl ShaderCache {
             );
         }
 
-        // Only rebuild the shader for the current render mode
+        // Something changed. Build the WGSL once — it is both the cache
+        // key and, on a miss, the thing to compile.
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         let is_3d = render_mode == RenderMode::ThreeD;
 
         // Interactive renderer always uses the direct-histogram output
         // strategy — sample-emit is reserved for HighResExporter.
         let output_histogram_direct = true;
-        if is_3d {
-            self.shader_source_3d = builder.build_from_template(flame, &needed, true, path_features_enabled, xaos_enabled, output_histogram_direct, &constants);
-            self.compute_pipeline_3d = Self::create_compute_pipeline(
-                device,
-                bind_group_layout,
-                &self.shader_source_3d,
-                if path_features_enabled { "Trajectory 3D (Path)" } else { "Trajectory 3D (Simple)" }
-            );
-            // Copy to 2D slot (unused but must be valid)
-            self.shader_source_2d = self.shader_source_3d.clone();
-            self.compute_pipeline_2d = self.compute_pipeline_3d.clone();
-        } else {
-            self.shader_source_2d = builder.build_from_template(flame, &needed, false, path_features_enabled, xaos_enabled, output_histogram_direct, &constants);
-            self.compute_pipeline_2d = Self::create_compute_pipeline(
-                device,
-                bind_group_layout,
-                &self.shader_source_2d,
-                if path_features_enabled { "Trajectory 2D (Path)" } else { "Trajectory 2D (Simple)" }
-            );
-            // Copy to 3D slot (unused but must be valid)
-            self.shader_source_3d = self.shader_source_2d.clone();
-            self.compute_pipeline_3d = self.compute_pipeline_2d.clone();
-        }
-
-        // Rebuild init pipeline. Cheap when there's nothing to do (returns
-        // None immediately if no active variation has `wgsl_init`).
-        let (init_src, init_pipeline, init_pair_count) = Self::build_init_resources(
-            device,
-            &self.init_bind_group_layout,
-            &builder,
+        let source = builder.build_from_template(
             flame,
             &needed,
+            is_3d,
+            path_features_enabled,
+            xaos_enabled,
+            output_histogram_direct,
+            &constants,
         );
-        self.init_shader_source = init_src;
-        self.init_pipeline = init_pipeline;
-        self.init_pair_count = init_pair_count;
+        let init_source = builder.build_init_shader(flame, &needed);
+        let key = Self::cache_key(&source, init_source.as_deref());
+
+        let hit_pos = self.lru.iter().position(|e| {
+            e.key == key && e.source == source && e.init_source == init_source
+        });
+
+        if let Some(pos) = hit_pos {
+            // Layer A hit: the pipelines for this exact WGSL already
+            // exist — install them and skip the compile entirely.
+            let entry = self.lru.remove(pos);
+            self.shader_source_2d = entry.source.clone();
+            self.shader_source_3d = entry.source.clone();
+            self.compute_pipeline_2d = entry.pipeline.clone();
+            self.compute_pipeline_3d = entry.pipeline.clone();
+            self.init_shader_source = entry.init_source.clone();
+            self.init_pipeline = entry.init_pipeline.clone();
+            self.init_pair_count = entry.init_pair_count;
+            self.lru.insert(0, entry);
+            self.cache_hits += 1;
+            log::info!("Shader change served from pipeline cache (no compile)");
+        } else {
+            let pipeline = Self::create_compute_pipeline(
+                device,
+                bind_group_layout,
+                &source,
+                match (is_3d, path_features_enabled) {
+                    (true, true) => "Trajectory 3D (Path)",
+                    (true, false) => "Trajectory 3D (Simple)",
+                    (false, true) => "Trajectory 2D (Path)",
+                    (false, false) => "Trajectory 2D (Simple)",
+                },
+            );
+            let (init_pipeline, init_pair_count) = Self::build_init_resources(
+                device,
+                &self.init_bind_group_layout,
+                init_source.as_deref(),
+            );
+
+            // Both mode slots get the same pipeline, as always — only the
+            // active mode's shader is real; the other slot must be valid.
+            self.shader_source_2d = source.clone();
+            self.shader_source_3d = source.clone();
+            self.compute_pipeline_2d = pipeline.clone();
+            self.compute_pipeline_3d = pipeline.clone();
+            self.init_shader_source = init_source.clone();
+            self.init_pipeline = init_pipeline.clone();
+            self.init_pair_count = init_pair_count;
+
+            self.lru.insert(
+                0,
+                CachedPipelines {
+                    key,
+                    source,
+                    pipeline,
+                    init_source,
+                    init_pipeline,
+                    init_pair_count,
+                },
+            );
+            self.lru.truncate(PIPELINE_CACHE_CAP);
+            self.rebuilds += 1;
+            self.rebuild_ms_total += rebuild_started.elapsed().as_secs_f64() * 1000.0;
+        }
 
         self.active_variations = needed;
         self.path_features_enabled = path_features_enabled;
@@ -546,10 +646,8 @@ impl ShaderCache {
         self.specialization_key = new_specialization_key;
         self.init_signature = new_init_signature;
         self.variation_order_signature = new_variation_order;
-        self.rebuilds += 1;
-        self.rebuild_ms_total += rebuild_started.elapsed().as_secs_f64() * 1000.0;
 
-        true // Rebuilt
+        true // Shader changed (compiled or served from cache)
     }
 
     /// Get current path_features_enabled state
@@ -704,16 +802,18 @@ impl ShaderCache {
     /// active variation has `wgsl_init`. Returns `(source, pipeline, pair_count)`
     /// where `pair_count` is the number of (xform, init-bearing-variation)
     /// pairs the dispatch will cover.
+    /// Compile the init pipeline from an already-built init shader.
+    ///
+    /// The source is built by the caller (`builder.build_init_shader`)
+    /// because it is part of the pipeline cache key — the caller needs it
+    /// before deciding whether to compile at all.
     fn build_init_resources(
         device: &Device,
         init_bind_group_layout: &BindGroupLayout,
-        builder: &ShaderBuilder,
-        flame: &Flame,
-        active_variations: &HashMap<String, f32>,
-    ) -> (Option<String>, Option<ComputePipeline>, u32) {
-        let source = match builder.build_init_shader(flame, active_variations) {
-            Some(s) => s,
-            None => return (None, None, 0),
+        source: Option<&str>,
+    ) -> (Option<ComputePipeline>, u32) {
+        let Some(source) = source else {
+            return (None, 0);
         };
 
         // Count "case Nu: {" lines to determine pair count for dispatch sizing.
@@ -727,7 +827,7 @@ impl ShaderCache {
 
         let module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Variation Init"),
-            source: ShaderSource::Wgsl(source.clone().into()),
+            source: ShaderSource::Wgsl(source.to_string().into()),
         });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Variation Init Layout"),
@@ -742,7 +842,227 @@ impl ShaderCache {
             compilation_options: Default::default(),
             cache: None,
         });
-        (Some(source), Some(pipeline), pair_count)
+        (Some(pipeline), pair_count)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod pipeline_lru_tests {
+    //! Layer A of docs/projects/sticky-shader-compilation.md, tested
+    //! through the real path: a FlameRenderer on a real device, configs
+    //! loaded the way the app loads them. Skip cleanly without a GPU.
+
+    use crate::config::FractalConfig;
+    use crate::renderer::compute_kernel::FlameRenderer;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let al = adapter.limits();
+            let mut limits = wgpu::Limits::default();
+            limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+            limits.max_buffer_size = al.max_buffer_size;
+            limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("lru test"),
+                    required_features: wgpu::Features::CLEAR_TEXTURE,
+                    required_limits: limits,
+                    memory_hints: wgpu::MemoryHints::Performance,
+                    experimental_features: Default::default(),
+                    trace: Default::default(),
+                })
+                .await
+                .ok()
+        })
+    }
+
+    /// One transform per name, weight 1, mild affine.
+    fn config_with(names: &[&str]) -> FractalConfig {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut flame = Flame::new();
+        flame.transforms.clear();
+        for name in names {
+            let mut t = Transform::new();
+            t.a = 0.5;
+            t.e = 0.5;
+            t.weight = 1.0;
+            t.set_variation(name, 1.0);
+            flame.transforms.push(t);
+        }
+        let mut config = FractalConfig::default();
+        config.flame = flame;
+        config
+    }
+
+    fn load(
+        renderer: &mut FlameRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &FractalConfig,
+    ) {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("lru test load"),
+        });
+        renderer.load_config(device, &mut enc, queue, config, &config.palette, 1, 0);
+        queue.submit(Some(enc.finish()));
+    }
+
+    fn renderer_for(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &FractalConfig,
+    ) -> FlameRenderer {
+        FlameRenderer::with_palette_size(
+            device,
+            queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            64,
+            64,
+            &config.flame,
+            config.palette_size,
+        )
+    }
+
+    /// The Layer A contract: revisiting a flame is a hit, not a rebuild.
+    /// A, then B, then A again used to compile three times; the third is
+    /// now served from the LRU.
+    #[test]
+    fn revisiting_a_flame_is_a_hit_not_a_rebuild() {
+        let Some((device, queue)) = device() else {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        };
+        let a = config_with(&["linear", "spherical"]);
+        let b = config_with(&["swirl", "horseshoe"]);
+
+        let mut r = renderer_for(&device, &queue, &a);
+        load(&mut r, &device, &queue, &a); // no change: early-out
+        let (rebuilds0, hits0, _) = r.shader_rebuild_stats();
+        assert_eq!(
+            (rebuilds0, hits0),
+            (1, 0),
+            "creation compiled once; loading A again is an early-out, not a hit"
+        );
+
+        load(&mut r, &device, &queue, &b);
+        let (rebuilds1, hits1, _) = r.shader_rebuild_stats();
+        assert_eq!((rebuilds1, hits1), (2, 0), "B is new: a rebuild");
+
+        load(&mut r, &device, &queue, &a);
+        let (rebuilds2, hits2, _) = r.shader_rebuild_stats();
+        assert_eq!(
+            (rebuilds2, hits2),
+            (2, 1),
+            "returning to A must be a hit, not a third compile"
+        );
+        r.destroy();
+    }
+
+    /// Two flames with IDENTICAL main WGSL but the init-bearing variation
+    /// on a different transform must be different cache entries: the init
+    /// shader bakes (xform, variation) pairs, and serving one flame's
+    /// init pipeline for the other would write derived params at the
+    /// wrong slot — zeroing the moved transform's params, the
+    /// collapse-to-line bug the init signature exists to prevent. This is
+    /// why the init source is part of the key.
+    #[test]
+    fn init_variation_placement_forks_the_cache_key() {
+        let Some((device, queue)) = device() else {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        };
+        use crate::scene::transforms::{Flame, Transform};
+
+        // Same variation SET and the same union ORDER (linear first,
+        // ripple second) on both, same transform count — identical main
+        // WGSL. Only the ripple placement differs: t0 vs t1.
+        let make = |ripple_on: usize| {
+            let mut flame = Flame::new();
+            flame.transforms.clear();
+            for i in 0..2usize {
+                let mut t = Transform::new();
+                t.a = 0.5;
+                t.e = 0.5;
+                t.weight = 1.0;
+                t.set_variation("linear", 1.0);
+                if i == ripple_on {
+                    t.set_variation("ripple", 0.5);
+                }
+                flame.transforms.push(t);
+            }
+            let mut config = FractalConfig::default();
+            config.flame = flame;
+            config
+        };
+        let x = make(0);
+        let y = make(1);
+
+        let mut r = renderer_for(&device, &queue, &x);
+        load(&mut r, &device, &queue, &y);
+        let (rebuilds, hits, _) = r.shader_rebuild_stats();
+        assert_eq!(
+            (rebuilds, hits),
+            (2, 0),
+            "moving the init variation to another transform must compile, not hit"
+        );
+
+        load(&mut r, &device, &queue, &x);
+        let (rebuilds, hits, _) = r.shader_rebuild_stats();
+        assert_eq!((rebuilds, hits), (2, 1), "returning to the first is a legitimate hit");
+        r.destroy();
+    }
+
+    /// Beyond the cap the least-recently-used entry is gone and costs a
+    /// rebuild again — while recent entries are still resident.
+    #[test]
+    fn eviction_beyond_the_cap_forces_a_rebuild() {
+        let Some((device, queue)) = device() else {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        };
+        let names = [
+            "linear",
+            "sinusoidal",
+            "spherical",
+            "swirl",
+            "horseshoe",
+            "polar",
+            "disc",
+            "heart",
+            "diamond",
+        ];
+        assert_eq!(names.len(), super::PIPELINE_CACHE_CAP + 1);
+
+        let first = config_with(&[names[0]]);
+        let mut r = renderer_for(&device, &queue, &first);
+        for name in &names[1..] {
+            load(&mut r, &device, &queue, &config_with(&[name]));
+        }
+        let (rebuilds, hits, _) = r.shader_rebuild_stats();
+        assert_eq!((rebuilds, hits), (9, 0), "nine distinct flames, nine compiles");
+
+        // names[0] was pushed out by the ninth entry.
+        load(&mut r, &device, &queue, &first);
+        let (rebuilds, hits, _) = r.shader_rebuild_stats();
+        assert_eq!(
+            (rebuilds, hits),
+            (10, 0),
+            "the evicted flame must compile again, not hit a ghost entry"
+        );
+
+        // ...and a recent entry is still resident.
+        load(&mut r, &device, &queue, &config_with(&[names[8]]));
+        let (rebuilds, hits, _) = r.shader_rebuild_stats();
+        assert_eq!((rebuilds, hits), (10, 1), "a recent entry is still a hit");
+        r.destroy();
     }
 }
 

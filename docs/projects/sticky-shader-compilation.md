@@ -33,14 +33,29 @@ the huge axis (which variations are compiled in), and the pipeline LRU
 absorbs the residual small-cardinality axes that still fork the shader
 (see "What still forks the shader" below).
 
-### Layer A — pipeline LRU cache
+### Layer A — pipeline LRU cache *(landed)*
 
-`ShaderCache` keeps a small LRU (~8 entries) of compiled pipelines keyed
-by exactly the things `ensure_current` already compares: the local index
-map, `ShaderConstants`, render mode, path/xaos flags, and the
-specialization key. Transparent, bit-identical by definition, and it
-already fixes the editor cases (undo/redo across a variation change,
-A/B comparisons) on its own.
+`ShaderCache` keeps an LRU of 8 compiled pipeline sets. The key is the
+**generated WGSL itself** (main + init source), not a structured key:
+codegen is a pure function of (flame, flags, constants), so identical
+text is an identical pipeline, and every change detector — including
+ones added later — is subsumed automatically. A u64 hash prefilters;
+candidates must match the full sources, so a collision degrades to a
+miss rather than binding the wrong pipeline.
+
+The init shader must be part of the key: two flames with identical main
+WGSL can bake different (xform, variation) init pairs when an
+init-bearing variation sits on a different transform, and serving the
+wrong init pipeline zeroes that transform's derived params (the
+collapse-to-line class). A test constructs exactly this pair and asserts
+they fork the key.
+
+Measured honestly: **the LRU shows zero hits in random-batch benches**,
+by design — batch seeds never revisit a key, and repeats of the current
+flame take the pre-existing early-out. Layer A serves *revisit*
+patterns: undo/redo across a variation change, A/B toggling, returning
+to the startup flame. Tests cover revisit-hit, the init-placement fork,
+and eviction at the cap. Batches are Layer B's job.
 
 ### Layer B — sticky variation superset (the core)
 
@@ -190,11 +205,21 @@ ones inflate code size faster per entry, so real-world cost per dead
 variation is likely somewhat higher — an argument for the conservative
 cap, revisitable with a finer curve.
 
+**Warm-cache note.** The table above is a cold NVIDIA driver cache — the
+honest cold-start story. A warm re-run (after Layer A landed) shows the
+same structure at lower absolutes: baseline 426 ms total, 21.9 ms/seed,
+compile share 54%; superset proxy 225 ms, 10.3 ms/seed, 2 rebuilds.
+Even fully warm, half of a random batch is still compilation, and the
+browser's shader cache behavior is its own (Tint + driver, different
+eviction), so the cold numbers are the right planning basis for the
+gallery.
+
 ## Order of work
 
 1. **Phase 0**: shader-cache rebuild counters + timing; the benchmark;
    the three measurements above. *(done — results above)*
-2. **Layer A**: pipeline LRU.
+2. **Layer A**: pipeline LRU. *(done — keyed by generated WGSL,
+   init source included; revisit/init-fork/eviction under test)*
 3. Generator canonical-order emission (tiny, independent).
 4. **Layer B**: the map-parameter refactor + sticky policy + tests
    (byte-identity, convergence, caps).

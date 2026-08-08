@@ -622,9 +622,9 @@ impl FlamePipelines {
 
     /// Ensure shaders are up-to-date with current flame configuration
     /// Returns true if shaders were recompiled
-    /// (rebuilds, total ms) from the flame shader cache — Phase 0 of
-    /// docs/projects/sticky-shader-compilation.md.
-    pub fn shader_rebuild_stats(&self) -> (u64, f64) {
+    /// (rebuilds, cache hits, total compile ms) from the flame shader
+    /// cache — docs/projects/sticky-shader-compilation.md.
+    pub fn shader_rebuild_stats(&self) -> (u64, u64, f64) {
         self.shader_cache.rebuild_stats()
     }
 
