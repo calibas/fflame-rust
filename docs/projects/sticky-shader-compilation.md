@@ -135,27 +135,65 @@ batches, thumbnails, and the gallery.
 
 - **Default-on in the app.** It also removes the recompile when a user
   toggles a variation off and back on while designing.
-- **Cap**: set by measurement; expected in 15–100.
+- **Cap**: 32, from the dead-cost curve (free to ~15 dead, −8% at 30,
+  −40% at 60). Configurable; the measurement is in Phase 0 below.
 - **No clear triggers** — LRU eviction under the cap self-manages (see
   above).
 - This document is the working plan and lives in the repo.
 
 ## Phase 0 measurements
 
-*(pending — filled in by the Phase 0 commit)*
+Measured 2026-08-08, GTX 1660 SUPER / Vulkan, 512², 20 seeds x 10M
+iterations, `cargo run --release --bin shader_bench`:
 
-- 20-seed random batch, per-seed time and compile count, today's path.
-- Same 20 seeds with every flame augmented to the pool union at weight 0
-  and a fixed transform count — the superset proxy, measuring the payoff
-  before any Layer B code exists (weight-0 variations enter the compiled
-  set; the runtime gate keeps them dead).
-- Dead-variation cost curve: one flame's sustained throughput with
-  N ∈ {0, 15, 30, 60, 99} dead variations compiled in. Decides the cap.
+| configuration | total | median/seed | rebuilds | compile share |
+|---|---|---|---|---|
+| baseline, natural flames | 1632 ms | 84.5 ms | 20 | **91%** |
+| baseline, pinned transform count | 1345 ms | 89.2 ms | 20 | 78% |
+| superset proxy (pinned + pool at w=0) | 467 ms | **12.0 ms** | **2** | 24% |
+
+The diagnosis is confirmed brutally: **91% of a random batch's wall time
+is shader compilation.** The superset proxy — Layer B emulated with
+weight-0 augmentation and zero new machinery — cuts the median per-seed
+time **7x** and collapses 20 rebuilds to 2 (renderer creation + the
+first superset build; every later seed is a hit). The natural-vs-pinned
+delta shows `NUM_TRANSFORMS` churn alone is worth ~450 ms of compile
+across 20 seeds, which is Layer A's residual to absorb.
+
+**Dead-variation cost curve** (50M iterations, second render of each,
+4-transform flame with 4 live variations; dead entries drawn from
+small-parameter registry variations):
+
+| dead compiled in | throughput | compile |
+|---|---|---|
+| 0 | 1951 Miter/s | 11 ms |
+| 15 | 2100 Miter/s (noise; free) | 116 ms |
+| 30 | 1798 Miter/s (−8%) | 142 ms |
+| 60 | 1175 Miter/s (**−40%**) | 279 ms |
+| 95 | 740 Miter/s (**−62%**) | 425 ms |
+
+**Dead variations are NOT free at scale.** The cost is flat to ~15,
+mild at 30, and steep past that — consistent with the dispatcher being
+inlined at its three call sites, so code size hits instruction cache and
+occupancy even when every dead branch is skipped. Two consequences:
+
+- **The cap defaults to 32** (compiled set = flame ∪ sticky). That holds
+  the converged default pool (15) with room, keeps worst-case throughput
+  cost under ~10%, and stays far out of the cliff. In range of the
+  expected 15–100, at the bottom of it, and the measurement is the
+  reason.
+- **Eviction is a throughput guardrail, not just hygiene.** A sticky set
+  allowed to grow unbounded would silently halve render speed.
+
+Curve caveat: the dead entries are small-bodied variations; heavyweight
+ones inflate code size faster per entry, so real-world cost per dead
+variation is likely somewhat higher — an argument for the conservative
+cap, revisitable with a finer curve.
 
 ## Order of work
 
 1. **Phase 0**: shader-cache rebuild counters + timing; the benchmark;
-   the three measurements above. *(this phase)*
+   the three measurements above. *(done — results above)*
 2. **Layer A**: pipeline LRU.
 3. Generator canonical-order emission (tiny, independent).
 4. **Layer B**: the map-parameter refactor + sticky policy + tests

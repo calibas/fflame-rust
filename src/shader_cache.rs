@@ -88,13 +88,27 @@ pub struct ShaderCache {
     /// rebuild — leaving the shader reading each variation's params at the
     /// other's old offset (params appear swapped). Comparing this catches it.
     variation_order_signature: Vec<String>,
+
+    /// How many times the pipelines have been rebuilt, and the wall time
+    /// spent doing it (WGSL generation + module + pipeline creation).
+    /// Phase 0 of docs/projects/sticky-shader-compilation.md: the point
+    /// of the sticky superset is driving this counter to a constant, so
+    /// it has to be observable. Includes the initial build in `new`.
+    rebuilds: u64,
+    rebuild_ms_total: f64,
 }
 
 impl ShaderCache {
+    /// (rebuilds, total ms) — see the field docs.
+    pub fn rebuild_stats(&self) -> (u64, f64) {
+        (self.rebuilds, self.rebuild_ms_total)
+    }
+
     /// Create a new shader cache with initial flame configuration
     /// Initially uses simplified shaders (path_features_enabled = false, xaos_enabled = false)
     /// Only builds the shader for the flame's render mode (2D or 3D)
     pub fn new(device: &Device, flame: &Flame, bind_group_layout: &BindGroupLayout) -> Self {
+        let new_started = web_time::Instant::now();
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         let active_variations = flame.extract_active_variations();
         let path_features_enabled = false;  // Start with simplified shaders
@@ -200,6 +214,8 @@ impl ShaderCache {
             specialization_key,
             init_signature,
             variation_order_signature,
+            rebuilds: 1,
+            rebuild_ms_total: new_started.elapsed().as_secs_f64() * 1000.0,
         }
     }
 
@@ -427,6 +443,7 @@ impl ShaderCache {
         {
             return false; // No rebuild needed
         }
+        let rebuild_started = web_time::Instant::now();
 
         if variations_changed {
             log::info!(
@@ -529,6 +546,8 @@ impl ShaderCache {
         self.specialization_key = new_specialization_key;
         self.init_signature = new_init_signature;
         self.variation_order_signature = new_variation_order;
+        self.rebuilds += 1;
+        self.rebuild_ms_total += rebuild_started.elapsed().as_secs_f64() * 1000.0;
 
         true // Rebuilt
     }
