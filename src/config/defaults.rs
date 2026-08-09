@@ -55,12 +55,20 @@ pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
 /// trajectory depth (trajectories don't survive across dispatches), and
 /// an export has no frame budget to protect. The total iteration budget
 /// is unchanged — deeper trajectories reach it in fewer dispatches, so
-/// less restart/burn-in overhead AND deeper attractor convergence for
-/// long-memory fractals. The visual-regression harness pins 256
-/// explicitly (its baselines were recorded there, and ipt changes
-/// rendered pixels); the benchmark harnesses pin 1024 explicitly (true
-/// shader throughput) — so changing this constant only changes what end
-/// users get.
+/// less restart/burn-in overhead, unconditionally.
+///
+/// The sampling effect is a TRADE-OFF, not a quality win: depth vs
+/// breadth. Deep orbits reach structure that only emerges many
+/// iterations in; but an orbit that sinks toward a fixed point, wanders
+/// off-frame, or gets absorbed by an xaos subchain wastes 4x more of
+/// the budget before a restart frees it, where restarts resample the
+/// whole space. Which side wins is flame-dependent —
+/// `--iterations-per-thread` exists for the flames where breadth does.
+///
+/// The visual-regression harness pins 256 explicitly (its baselines
+/// were recorded there, and ipt changes rendered pixels); the benchmark
+/// harnesses pin 1024 explicitly (true shader throughput) — so changing
+/// this constant only changes what end users get.
 pub const DEFAULT_EXPORT_ITERATIONS_PER_THREAD: u32 = 1024;
 
 // Depth of Field

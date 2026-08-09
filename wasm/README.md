@@ -191,10 +191,14 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
   and a 2× larger edge wants ~4× the iterations for the same look.
 - `iterationsPerThread` (optional, default 256, clamped to 64–4096) is
   the trajectory depth per dispatch: trajectories don't survive across
-  dispatches, so this is a quality knob for long-memory fractals, at
-  the cost of longer individual dispatches. It does not change the
-  total budget — `iterations` does that. The CLI export defaults to
-  1024; pass 1024 here for parity with it.
+  dispatches. It does not change the total budget — `iterations` does
+  that — but it does change how the budget is spent: depth vs breadth.
+  Deeper orbits reach structure that only emerges many iterations in
+  and carry less restart overhead; orbits that sink to a point or
+  wander off-frame waste more budget before a restart resamples the
+  space. Flame-dependent, not monotonically better — and it changes
+  rendered pixels either way. The CLI export defaults to 1024; pass
+  1024 here for parity with it.
 - **Inputs are treated as hostile**, because a config and a URL are both
   shareable artifacts:
   - dimensions are checked against the device's
