@@ -259,7 +259,12 @@ transform-count switches (37 hits) while identical revisits early-out.
    the three measurements above. *(done — results above)*
 2. **Layer A**: pipeline LRU. *(done — keyed by generated WGSL,
    init source included; revisit/init-fork/eviction under test)*
-3. Generator canonical-order emission (tiny, independent).
+3. Generator canonical-order emission (tiny, independent). *(done —
+   the RNG draw sequence is untouched; only the order names are
+   inserted into `variation_order` changed, so the same seed yields the
+   same variation set at the same weights. It reshuffles two
+   bottom-band rows of the Windows census, which is corpus noise, not
+   a math change.)*
 4. **Layer B**: sticky policy + tests. *(done — shipped as flame
    augmentation inside `load_config`/`update_flame` rather than a map
    parameter refactor: shadowing the config with an augmented clone
@@ -278,6 +283,9 @@ transform-count switches (37 hits) while identical revisits early-out.
   union is ULP-class for normal-phase flames and a hard fallback for
   chained phases.
 - Convergence: a 20-seed run asserts compile count stops growing.
-- Throughput: the dead-cost curve; `run_benchmarks.py --quick` unchanged
-  (export path untouched).
+- Throughput: the dead-cost curve; `run_benchmarks.py --quick`
+  unchanged by the sticky work itself, which never reaches the export
+  path. (The benchmark harness later moved to `--iterations-per-thread
+  1024` for unrelated reasons — see that commit; it shifts the absolute
+  numbers, not anything sticky does.)
 - Visual suite 148/148 (it renders through the export path).
