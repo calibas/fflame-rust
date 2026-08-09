@@ -128,6 +128,7 @@ help:
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
+  play_pause_animation: "  Space    - Play/pause animation"
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
@@ -1175,9 +1176,9 @@ animation_panel:
   duration_format: "(%{duration}s)"
 
   # Playback controls
-  pause: "⏸ Pause"
+  pause: "⏸ Pause (Space)"
   resume: "▶ Resume"
-  play: "▶ Play"
+  play: "▶ Play (Space)"
   stop: "⏹ Stop"
   go_to_start: "Go to start"
   go_to_end: "Go to end"
