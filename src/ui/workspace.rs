@@ -216,12 +216,16 @@ impl Workspace {
             let is_portrait = screen.height() > screen.width();
 
             if is_portrait {
+                // 0.55, not 0.67: at 0.67 a phone panel got the bottom
+                // third minus the tab bar — Transforms and Variations
+                // were unusable strips. Just under half leaves the
+                // viewport dominant while giving controls real room.
                 self.dock_state.main_surface_mut().split_below(
-                    viewport_node, 0.67, vec![panel_type],
+                    viewport_node, 0.55, vec![panel_type],
                 );
             } else {
                 self.dock_state.main_surface_mut().split_right(
-                    viewport_node, 0.67, vec![panel_type],
+                    viewport_node, 0.60, vec![panel_type],
                 );
             }
         } else {

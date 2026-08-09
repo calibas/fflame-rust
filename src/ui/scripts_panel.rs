@@ -698,6 +698,7 @@ impl ScriptsPanel {
                             .hint_text("search…")
                             .desired_width(160.0),
                     );
+                    super::vkb_sync(ui, &entry, &self.browse_query);
                     let go = ui.add_enabled(!cloud.busy, egui::Button::new("Search")).clicked();
                     if go || (entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
@@ -1193,6 +1194,13 @@ impl ScriptsPanel {
                         .desired_rows(16)
                         .desired_width(f32::INFINITY),
                 );
+                // Touch devices edit the script through the overlay's
+                // textarea, seeded with the WHOLE source (the submit
+                // path is select-all-and-replace, which is exactly
+                // right when the overlay started from the full text —
+                // and was exactly wrong before this sync existed, when
+                // the fallback seeded it empty and wiped the script).
+                super::vkb_sync_opts(ui, &editor, &self.text, "multiline");
                 // Take keyboard focus when the section opens. Without it the
                 // editor holds no focus, egui reports it doesn't want
                 // keyboard input, and keystrokes fall through to the app's
