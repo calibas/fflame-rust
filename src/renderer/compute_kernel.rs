@@ -421,6 +421,12 @@ impl FlameRenderer {
 
     /// Resize the accumulation buffer
     pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32) {
+        // Sticky superset: FlameBuffers::with_palette_size below repacks
+        // transforms and variation params from this flame, and the
+        // compiled shader still holds the last adopt's canonical map —
+        // repack against that same map or every weight offset misaligns
+        // after a window resize.
+        let flame = &self.sticky.augmented(flame);
         self.width = width;
         self.height = height;
 
@@ -2750,6 +2756,13 @@ impl FlameRenderer {
     /// Call this when color_mode or path_filters change
     /// Returns true if bind groups or shaders were rebuilt
     pub fn update_path_features(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
+        // Sticky superset: this refresh may rebuild the shader, and it
+        // must rebuild against the SAME map the buffers are packed with —
+        // the last adopt's. `augmented` (not `adopt`) re-applies exactly
+        // that map; with the raw flame this forked the shader back to the
+        // specialized map on every app flame change, misaligning every
+        // weight and param offset — the single-pixel collapse.
+        let flame = &self.sticky.augmented(flame);
         let needs_path = self.needs_path_features();
         let has_path = self.buffers.path_features_enabled();
         let mut changed = false;
