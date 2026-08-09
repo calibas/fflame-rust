@@ -36,6 +36,14 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/hilbert3d.rhai"),
     ),
     (
+        "mandala.rhai",
+        include_str!("../../assets/scripts/generators/mandala.rhai"),
+    ),
+    (
+        "gnarl.rhai",
+        include_str!("../../assets/scripts/generators/gnarl.rhai"),
+    ),
+    (
         "iq_palette.rhai",
         include_str!("../../assets/scripts/modifiers/iq_palette.rhai"),
     ),
@@ -58,6 +66,14 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
     (
         "decompose_group.rhai",
         include_str!("../../assets/scripts/modifiers/decompose_group.rhai"),
+    ),
+    (
+        "kaleidoscope.rhai",
+        include_str!("../../assets/scripts/modifiers/kaleidoscope.rhai"),
+    ),
+    (
+        "zoom_dive.rhai",
+        include_str!("../../assets/scripts/modifiers/zoom_dive.rhai"),
     ),
 ];
 
