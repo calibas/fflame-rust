@@ -42,6 +42,19 @@
 //! **byte-identical** with any number of dead extras compiled in — dead
 //! entries are branch-skipped, never summed.
 //!
+//! # Who must stay wired
+//!
+//! Every renderer path that compiles a shader or packs a buffer from a
+//! caller-supplied flame must go through this module, or the compiled
+//! map and the packed offsets disagree — which renders as a single lit
+//! pixel (all weights read ~0). The full set, audited: `load_config`
+//! and `update_flame` call `adopt` (they define the map);
+//! `update_path_features`, `resize` and `set_variation_params` call
+//! `augmented` (they must match the map already compiled). The
+//! single-pixel bug shipped once because `update_path_features` was
+//! missed — and the pipeline LRU made it worse, serving the stale
+//! specialized pipeline back without even a compile.
+//!
 //! # Who opts out
 //!
 //! One-shot paths get no benefit and must not pay the reorder: the
@@ -446,9 +459,18 @@ mod sticky_tests {
         config: &FractalConfig,
     ) -> Vec<u8> {
         let job = RenderJob::new(config, 64, 64).with_iterations(500_000);
-        pollster::block_on(render_with(renderer, device, queue, job, &mut NoProgress))
+        let px = pollster::block_on(render_with(renderer, device, queue, job, &mut NoProgress))
             .expect("render failed")
-            .rgba_data
+            .rgba_data;
+        // Guard every caller against the collapse failure mode: a
+        // map/buffer mismatch renders as a single lit pixel, which the
+        // convergence test's rebuild-count assertions alone would pass.
+        let lit = px.chunks(4).filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0).count();
+        assert!(
+            lit > 10,
+            "render is (near-)blank: {lit} lit pixels — the single-pixel collapse"
+        );
+        px
     }
 
     fn renderer_for(
@@ -508,6 +530,71 @@ mod sticky_tests {
             reference, sticky_px,
             "dead extras changed pixels — the branch-skip guarantee is broken"
         );
+    }
+
+    /// The app-path regression: `update_path_features` and `resize` take
+    /// a flame from the caller and rebuild shaders / repack buffers with
+    /// it. If they use the RAW flame while the compiled pipeline holds
+    /// the sticky canonical map, the shader's `get_param`/weight offsets
+    /// no longer match the packed buffers — every weight reads ~0 and
+    /// the render collapses to a single pixel at the origin. That is
+    /// exactly what the app did on every flame change: load_config
+    /// compiled the canonical map, then the app's update batch called
+    /// update_path_features with the raw flame and forked the shader
+    /// back to the specialized map without repacking.
+    ///
+    /// The invariant: refreshing path features or resizing with the SAME
+    /// flame must not rebuild anything — the augmented flame reproduces
+    /// the compiled map, so the shader cache early-outs.
+    #[test]
+    fn app_refresh_paths_do_not_fork_the_compiled_map() {
+        let Some((device, queue)) = device() else {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        };
+        // Multi-transform flame whose raw union order differs from
+        // canonical: raw = [swirl, linear, polar], sorted = [linear,
+        // polar, swirl]. A raw-flame rebuild is therefore detectable.
+        let mut config = FractalConfig::default();
+        config.flame = flame_of(&[&["swirl", "linear"], &["polar"]]);
+        config.deterministic_rng = true;
+
+        let mut r = renderer_for(&device, &queue, &config);
+        {
+            let mut enc = device.create_command_encoder(&Default::default());
+            r.load_config(&device, &mut enc, &queue, &config, &config.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        }
+        let baseline = r.shader_rebuild_stats();
+
+        // The app's update batch, as gpu_updates drives it: the RAW flame.
+        let changed = r.update_path_features(&device, &queue, &config.flame);
+        let after = r.shader_rebuild_stats();
+        assert!(
+            !changed && after == baseline,
+            "update_path_features with an unchanged flame forked the shader \
+             (rebuilds {baseline:?} -> {after:?}) — the compiled map and the \
+             packed buffers now disagree, which renders as a single pixel"
+        );
+
+        // Resize repacks buffers from the flame it is given; a follow-up
+        // path-features refresh must still find nothing to rebuild.
+        {
+            let mut enc = device.create_command_encoder(&Default::default());
+            r.resize(
+                &device, &mut enc, &queue, 96, 96, &config.flame, 1, 1.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            );
+            queue.submit(Some(enc.finish()));
+        }
+        let changed = r.update_path_features(&device, &queue, &config.flame);
+        let after = r.shader_rebuild_stats();
+        assert!(
+            !changed && after == baseline,
+            "after resize, the raw-flame refresh forked the shader \
+             (rebuilds {baseline:?} -> {after:?})"
+        );
+        r.destroy();
     }
 
     /// The convergence claim, end to end: a batch drawing from one pool
