@@ -361,10 +361,13 @@ class UnifiedBenchmarkRunner:
                         "-o", str(output_path),
                         "--width", "800",
                         "--height", "600",
-                        # Pinned: history rows record IterationsPerThread=256;
-                        # letting the CLI default move would silently break
-                        # throughput comparability across the CSV.
-                        "--iterations-per-thread", "256"
+                        # Pinned explicitly so the CSV doesn't silently follow
+                        # the CLI default. 1024 measures true shader throughput
+                        # (at 256, per-dispatch overhead and the burn-in
+                        # fraction dilute regressions). Deliberate break:
+                        # rows before 2026-08-09 ran at 256, so the first
+                        # 1024 run reads as a one-time apparent speedup.
+                        "--iterations-per-thread", "1024"
                     ]
 
                     is_warmup = (i == 0)

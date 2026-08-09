@@ -48,15 +48,19 @@ pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 �
 // Performance
 pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
 
-/// The CLI export's default when `--iterations_per_thread` is not given.
+/// The CLI exports' default (PNG and video) when
+/// `--iterations-per-thread` is not given.
 ///
 /// Deliberately higher than the interactive default above: ipt is
 /// trajectory depth (trajectories don't survive across dispatches), and
-/// an export has no frame budget to protect — deeper trajectories buy
-/// long-memory fractals convergence quality at zero cost to anyone's
-/// frame rate. The visual-regression and benchmark harnesses pin 256
-/// explicitly (their baselines and history rows were recorded at 256),
-/// so changing this constant only changes what end users get.
+/// an export has no frame budget to protect. The total iteration budget
+/// is unchanged — deeper trajectories reach it in fewer dispatches, so
+/// less restart/burn-in overhead AND deeper attractor convergence for
+/// long-memory fractals. The visual-regression harness pins 256
+/// explicitly (its baselines were recorded there, and ipt changes
+/// rendered pixels); the benchmark harnesses pin 1024 explicitly (true
+/// shader throughput) — so changing this constant only changes what end
+/// users get.
 pub const DEFAULT_EXPORT_ITERATIONS_PER_THREAD: u32 = 1024;
 
 // Depth of Field
