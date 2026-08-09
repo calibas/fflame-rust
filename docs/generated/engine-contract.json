@@ -198,6 +198,10 @@
       },
       {
         "kind": "generator",
+        "name": "gnarl"
+      },
+      {
+        "kind": "generator",
         "name": "hilbert3d"
       },
       {
@@ -209,12 +213,20 @@
         "name": "jitter"
       },
       {
+        "kind": "modifier",
+        "name": "kaleidoscope"
+      },
+      {
         "kind": "generator",
         "name": "lsystem"
       },
       {
         "kind": "generator",
         "name": "lsystem_plant"
+      },
+      {
+        "kind": "generator",
+        "name": "mandala"
       },
       {
         "kind": "modifier",
@@ -227,6 +239,10 @@
       {
         "kind": "modifier",
         "name": "turntable"
+      },
+      {
+        "kind": "modifier",
+        "name": "zoom_dive"
       }
     ],
     "flags": {
