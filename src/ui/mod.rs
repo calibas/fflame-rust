@@ -1443,6 +1443,7 @@ impl EguiLayer {
             api_flame_id: api_state.flame_id.clone(),
             api_flame_is_public: api_state.flame_is_public,
             has_animation_tracks,
+            animation_playing: animation_controller.is_playing(),
             api_animation_id: api_state.animation_id.clone(),
             animation_count: api_state.animation_count,
             flame_owned: api_state.flame_owned_by(current_user_id),
@@ -2205,6 +2206,25 @@ impl EguiLayer {
         // Combine undo/redo from both menu and panels (OR to not override panel buttons)
         undo_requested |= menu_actions.edit.undo;
         redo_requested |= menu_actions.edit.redo;
+
+        // Handle animation transport actions (compact menu). Same
+        // semantics as the Space shortcut: pause keeps position, play
+        // needs tracks, stop rewinds (the FSM handles the exit +
+        // seek-to-start on its next update).
+        if menu_actions.animation.play_pause {
+            let has_tracks = animation_controller
+                .animation
+                .as_ref()
+                .is_some_and(|a| !a.tracks.is_empty());
+            if animation_controller.is_playing() {
+                animation_controller.pause();
+            } else if has_tracks {
+                animation_controller.play();
+            }
+        }
+        if menu_actions.animation.stop {
+            animation_controller.stop();
+        }
 
         // Handle Rendering menu actions
         if menu_actions.rendering.pause_toggle {
