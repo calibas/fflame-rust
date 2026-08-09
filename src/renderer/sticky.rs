@@ -141,30 +141,116 @@ impl StickyVariations {
         self.current_extra_count
     }
 
-    /// Canonical reordering is only safe when no transform carries a
-    /// chained-phase sequence whose order the reorder could change:
-    /// pre/post variations chain (each transforms the previous output),
-    /// and `fx_priority` overrides move Any-phase variations into those
-    /// chains. Conservative: two-or-more same-chained-phase variations
-    /// on one transform, or any priority override, means fall back.
-    fn chain_order_safe(flame: &Flame) -> bool {
-        use crate::variations::VariationPhase;
-        let registry = crate::variations::global_registry();
-        for t in &flame.transforms {
-            if !t.variation_priorities.is_empty() {
-                return false;
+    /// Is this ONE transform's dispatch order insensitive to the
+    /// canonical reorder?
+    ///
+    /// Local index order is not merely a rounding detail. Three
+    /// mechanisms in `shader_builder_v2::resolve_phase_buckets` and the
+    /// normal-phase dispatch make it semantics, and each one gets a
+    /// conservative guard here:
+    ///
+    /// * **Chained phases.** Pre and Post variations chain — each
+    ///   transforms the previous one's output — and both buckets sort
+    ///   purely by local index. `fx_priority` overrides move Any-phase
+    ///   variations into those chains, so any override at all is a
+    ///   fallback.
+    /// * **Replace.** `normal.sort_by_key(|p| (Replace, p.idx))` puts
+    ///   replaces last, but *among* replaces the highest index wins,
+    ///   because each clobbers the running sum.
+    /// * **Shared iteration registers.** `NeedsAccum` variations are
+    ///   handed the running `result`, and `WritesColor` / `WritesRgb`
+    ///   variations all receive the same `vc` / `vrc` pointer, so the
+    ///   last writer decides the colour.
+    ///
+    /// `compute_local_index_map`'s own contract states the first two
+    /// ("callers pass a flame-ordered list … which matters for
+    /// NeedsAccum / Replace"), so a canonical map must not be applied
+    /// where they bite.
+    fn transform_order_safe(
+        t: &crate::scene::transforms::Transform,
+        registry: &crate::variations::VariationRegistry,
+    ) -> bool {
+        use crate::variations::{Feature, VariationPhase};
+        if !t.variation_priorities.is_empty() {
+            return false;
+        }
+        let (mut pre, mut post) = (0usize, 0usize);
+        let (mut normal, mut replace, mut accum, mut color, mut rgb) = (0usize, 0, 0, 0, 0);
+        for (name, w) in &t.variations {
+            // Weight-0 entries are branch-skipped by the dispatcher and
+            // cannot observe or affect order.
+            if *w == 0.0 {
+                continue;
             }
-            let mut pre = 0usize;
-            let mut post = 0usize;
-            for name in t.variations.keys() {
-                match registry.get(name).map(|i| i.phase.clone()) {
-                    Some(VariationPhase::Pre) => pre += 1,
-                    Some(VariationPhase::Post) => post += 1,
-                    _ => {}
+            let Some(info) = registry.get(name) else { continue };
+            match info.phase {
+                VariationPhase::Pre => pre += 1,
+                VariationPhase::Post => post += 1,
+                _ => {
+                    normal += 1;
+                    if info.has_feature(Feature::Replace) {
+                        replace += 1;
+                    }
+                    if info.has_feature(Feature::NeedsAccum) {
+                        accum += 1;
+                    }
+                    if info.has_feature(Feature::WritesColor) {
+                        color += 1;
+                    }
+                    if info.has_feature(Feature::WritesRgb) {
+                        rgb += 1;
+                    }
                 }
             }
-            if pre >= 2 || post >= 2 {
+        }
+        if pre >= 2 || post >= 2 {
+            return false;
+        }
+        // Two writers to one register, or an accumulator reader with
+        // anything ahead of it to read.
+        if replace >= 2 || color >= 2 || rgb >= 2 {
+            return false;
+        }
+        if accum >= 1 && normal >= 2 {
+            return false;
+        }
+        true
+    }
+
+    /// Canonical reordering is only safe when EVERY transform the map
+    /// covers is order-insensitive — see [`Self::transform_order_safe`].
+    ///
+    /// The map comes from `Flame::active_variation_names_ordered`, which
+    /// absorbs the normal pool, `linked_transforms`, `final_transforms`
+    /// **and every subflame**, and `apply_variations` is shared by all of
+    /// them. Checking only `flame.transforms` (as this did) left a
+    /// chained pair on a final — `flatten` + `post_rotate_x` on a 3D JWF
+    /// import is the everyday shape — reordered with no fallback, which
+    /// is a visibly different render, not a ULP difference.
+    fn chain_order_safe(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+    ) -> bool {
+        let pools = flame
+            .transforms
+            .iter()
+            .chain(flame.linked_transforms.iter())
+            .chain(flame.final_transforms.iter());
+        for t in pools {
+            if !Self::transform_order_safe(t, registry) {
                 return false;
+            }
+        }
+        for sf in &flame.subflames {
+            for t in sf
+                .transforms
+                .iter()
+                .chain(sf.linked_transforms.iter())
+                .chain(sf.final_transforms.iter())
+            {
+                if !Self::transform_order_safe(t, registry) {
+                    return false;
+                }
             }
         }
         true
@@ -188,7 +274,11 @@ impl StickyVariations {
             self.last_live.insert(name.clone(), self.generation);
         }
 
-        if !Self::chain_order_safe(flame) {
+        // `registry` is already held here; passing it down rather than
+        // re-acquiring avoids taking a second read guard on the same
+        // thread, which std's RwLock documents as deadlock-prone if a
+        // writer (the API variation fetch) queues between the two.
+        if !Self::chain_order_safe(flame, &registry) {
             // Chained-phase order could change under the canonical map:
             // compile this flame specialized. Retention still updated
             // above — its variations stay warm for later flames.
@@ -309,6 +399,153 @@ mod sticky_tests {
     fn union_of(flame: &Flame) -> Vec<String> {
         let reg = crate::variations::global_registry();
         flame.active_variation_names_ordered(&reg)
+    }
+
+    /// Two registered variation names carrying `feature`, for building
+    /// an order-sensitive transform.
+    fn two_with(feature: crate::variations::Feature) -> Vec<String> {
+        let reg = crate::variations::global_registry();
+        let out: Vec<String> = reg
+            .names()
+            .iter()
+            .filter(|n| reg.get(n).map(|i| i.has_feature(feature)).unwrap_or(false))
+            .filter(|n| {
+                // Normal phase only — pre/post are caught by the older rule.
+                reg.get(n)
+                    .map(|i| {
+                        !matches!(
+                            i.phase,
+                            crate::variations::VariationPhase::Pre
+                                | crate::variations::VariationPhase::Post
+                        )
+                    })
+                    .unwrap_or(false)
+            })
+            .take(2)
+            .cloned()
+            .collect();
+        out
+    }
+
+    /// The map covers `linked_transforms`, `final_transforms` and every
+    /// subflame — `active_variation_names_ordered` absorbs all of them —
+    /// so the fallback detector has to look there too.
+    ///
+    /// It did not: it walked `flame.transforms` alone, which left a
+    /// chained pre/post pair on a FINAL transform silently reordered by
+    /// the canonical sort. `flatten` + a post rotate on a final is an
+    /// everyday 3D JWildfire import, and the result is a visibly
+    /// different render, not a rounding difference.
+    #[test]
+    fn chained_phases_on_a_final_or_subflame_also_fall_back() {
+        let reg = crate::variations::global_registry();
+        let pres: Vec<String> = reg
+            .names()
+            .iter()
+            .filter(|n| {
+                reg.get(n)
+                    .map(|i| i.phase == crate::variations::VariationPhase::Pre)
+                    .unwrap_or(false)
+            })
+            .take(2)
+            .cloned()
+            .collect();
+        drop(reg);
+        assert_eq!(pres.len(), 2);
+
+        let hazard_transform = || {
+            let mut t = Transform::new();
+            t.a = 0.5;
+            t.e = 0.5;
+            t.weight = 1.0;
+            t.set_variation(&pres[0], 1.0);
+            t.set_variation(&pres[1], 1.0);
+            t
+        };
+
+        // One case per pool the map absorbs.
+        for (label, build) in [
+            ("final", 0usize),
+            ("linked", 1),
+            ("subflame", 2),
+        ] {
+            let mut sticky = StickyVariations::new();
+            sticky.adopt(&flame_of(&[&["swirl"]]));
+
+            let mut hazard = flame_of(&[&["linear"]]);
+            match build {
+                0 => hazard.final_transforms.push(hazard_transform()),
+                1 => hazard.linked_transforms.push(hazard_transform()),
+                _ => {
+                    let mut sf = flame_of(&[&["linear"]]);
+                    sf.final_transforms.push(hazard_transform());
+                    hazard.subflames.push(sf);
+                }
+            }
+
+            sticky.adopt(&hazard);
+            assert_eq!(
+                sticky.extras(),
+                0,
+                "a chained pre/post pair on a {label} transform must force the specialized compile"
+            );
+        }
+    }
+
+    /// Normal-phase order is not only summation order.
+    ///
+    /// `resolve_phase_buckets` sorts replaces last but breaks ties by
+    /// local index, and every `WritesColor` / `WritesRgb` variation on a
+    /// transform writes through the SAME `vc` / `vrc` pointer — so among
+    /// two of either, the one the map puts last decides the result.
+    /// `NeedsAccum` variations read the running sum, so what precedes
+    /// them is their input. Reordering any of these changes the image.
+    #[test]
+    fn order_sensitive_normal_variations_fall_back() {
+        use crate::variations::Feature;
+        for feature in [Feature::Replace, Feature::WritesColor, Feature::WritesRgb] {
+            let pair = two_with(feature);
+            if pair.len() < 2 {
+                continue; // registry has fewer than two; nothing to prove
+            }
+            let mut sticky = StickyVariations::new();
+            sticky.adopt(&flame_of(&[&["swirl"]]));
+
+            let hazard = flame_of(&[&[pair[0].as_str(), pair[1].as_str()]]);
+            sticky.adopt(&hazard);
+            assert_eq!(
+                sticky.extras(),
+                0,
+                "two {feature:?} variations on one transform must force the specialized compile"
+            );
+        }
+
+        // NeedsAccum reads whatever the map placed before it.
+        let accum = two_with(Feature::NeedsAccum);
+        if !accum.is_empty() {
+            let mut sticky = StickyVariations::new();
+            sticky.adopt(&flame_of(&[&["swirl"]]));
+            let hazard = flame_of(&[&[accum[0].as_str(), "linear"]]);
+            sticky.adopt(&hazard);
+            assert_eq!(
+                sticky.extras(), 0,
+                "a NeedsAccum variation with another normal variation must force the specialized compile"
+            );
+        }
+    }
+
+    /// The guards above must not fire on ordinary flames, or stickiness
+    /// is off in practice and the whole feature is dead weight. A plain
+    /// multi-variation flame still adopts extras.
+    #[test]
+    fn ordinary_flames_still_get_the_canonical_map() {
+        let mut sticky = StickyVariations::new();
+        sticky.adopt(&flame_of(&[&["swirl"], &["spherical"]]));
+        sticky.adopt(&flame_of(&[&["sinusoidal"]]));
+        assert!(
+            sticky.extras() > 0,
+            "a plain normal-phase flame must still receive the retained extras"
+        );
     }
 
     /// THE convergence property: two flames with the same variation set
