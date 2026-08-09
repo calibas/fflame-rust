@@ -81,6 +81,19 @@ impl<'a> ConfigSlider<'a> {
 
         let response = ui.add(egui::Slider::new(&mut self.current_value, self.range.clone()).text(&self.label));
 
+        // Publish for the virtual keyboard overlay: this slider is the
+        // workhorse of every parameter panel, and without the sync a
+        // touch user tapping its value box got no keyboard (formerly
+        // worse: a destructive empty one).
+        crate::ui::vkb_sync_full(
+            ui,
+            &response,
+            &crate::config::precision::fmt_f32(self.current_value),
+            "decimal",
+            Some(*self.range.start() as f64),
+            Some(*self.range.end() as f64),
+        );
+
         // Apply tooltip if set
         if let Some(ref tooltip) = self.tooltip {
             response.clone().on_hover_text(tooltip);
@@ -247,6 +260,14 @@ impl ConfigSliderUi for egui::Ui {
             })
             .inner
         };
+
+        // Virtual keyboard sync — same reasoning as ConfigSlider::show.
+        crate::ui::vkb_sync_opts(
+            self,
+            &response,
+            &crate::config::precision::fmt_f32(current_value),
+            "decimal",
+        );
 
         let changed = response.changed();
         let mut should_capture = false;
