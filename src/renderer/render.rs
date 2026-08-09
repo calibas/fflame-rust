@@ -169,6 +169,13 @@ pub async fn render(
         &job.config.flame,
         job.config.palette_size,
     );
+    // One-shot path: the sticky superset canonically reorders the local
+    // index map, which is an ULP-class trajectory change — meaningless
+    // for a persistent renderer, but exports and the visual suite must
+    // render exactly the specialized shaders their baselines and
+    // reproducibility contracts were made with. A throwaway renderer
+    // gains nothing from stickiness anyway.
+    renderer.set_sticky_enabled(false);
 
     let out = render_with(&mut renderer, device, queue, job, progress).await;
 

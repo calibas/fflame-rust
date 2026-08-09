@@ -456,7 +456,11 @@ impl App {
             let export_start = Instant::now();
 
             // Create exporter (creates its own GPU context)
-            let mut exporter = match pollster::block_on(HighResExporter::new(&config, width, height, None)) {
+            // `Some(...)`, not `None`: the metadata below records this
+            // value, and the exporter silently used its own 256 default
+            // instead — so raising Iterations/Thread in Settings had no
+            // effect on a high-res export while the PNG claimed it did.
+            let mut exporter = match pollster::block_on(HighResExporter::new(&config, width, height, Some(iterations_per_thread))) {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("Failed to create high-res exporter: {}", e);

@@ -48,6 +48,29 @@ pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 �
 // Performance
 pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
 
+/// The CLI exports' default (PNG and video) when
+/// `--iterations-per-thread` is not given.
+///
+/// Deliberately higher than the interactive default above: ipt is
+/// trajectory depth (trajectories don't survive across dispatches), and
+/// an export has no frame budget to protect. The total iteration budget
+/// is unchanged — deeper trajectories reach it in fewer dispatches, so
+/// less restart/burn-in overhead, unconditionally.
+///
+/// The sampling effect is a TRADE-OFF, not a quality win: depth vs
+/// breadth. Deep orbits reach structure that only emerges many
+/// iterations in; but an orbit that sinks toward a fixed point, wanders
+/// off-frame, or gets absorbed by an xaos subchain wastes 4x more of
+/// the budget before a restart frees it, where restarts resample the
+/// whole space. Which side wins is flame-dependent —
+/// `--iterations-per-thread` exists for the flames where breadth does.
+///
+/// The visual-regression harness pins 256 explicitly (its baselines
+/// were recorded there, and ipt changes rendered pixels); the benchmark
+/// harnesses pin 1024 explicitly (true shader throughput) — so changing
+/// this constant only changes what end users get.
+pub const DEFAULT_EXPORT_ITERATIONS_PER_THREAD: u32 = 1024;
+
 // Depth of Field
 pub const DEFAULT_DOF_FOCUS_DISTANCE: f32 = 0.0; // Apophysis hardcodes 0.0 (focal plane at origin)
 pub const DEFAULT_DOF_BLUR_STRENGTH: f32 = 0.0; // 0.0 = disabled, up to ~10.0 for strong blur

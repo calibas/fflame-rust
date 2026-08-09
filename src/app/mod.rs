@@ -2200,7 +2200,14 @@ impl App {
                         self.display_refresh_mhz,
                     );
                     let ratio = prev.elapsed().as_secs_f64() / target;
-                    self.iter_scale = crate::app::adjust_iter_scale(self.iter_scale, ratio);
+                    // Playback swaps in the slew-limited rule: the batch
+                    // is the displayed frame there, and the AIMD sawtooth
+                    // reads as flicker — see adjust_iter_scale_playback.
+                    self.iter_scale = if is_controller_playing {
+                        crate::app::adjust_iter_scale_playback(self.iter_scale, ratio)
+                    } else {
+                        crate::app::adjust_iter_scale(self.iter_scale, ratio)
+                    };
                 }
                 self.last_iter_frame = Some(now);
                 // Floor of ONE workgroup: at extreme depth x emit x solid
@@ -2649,9 +2656,35 @@ pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
     s.clamp(1.0 / 256.0, 1.0)
 }
 
+/// The governor for animation playback: same signal, slew-limited.
+///
+/// During playback every displayed frame IS one compute batch (overwrite
+/// mode), so the batch size is the image's grain level. The AIMD rule
+/// above saw-tooths on any flame whose equilibrium batch is mid-range —
+/// under vsync the frame delta quantizes to whole refresh intervals, so
+/// `ratio` alternates ~1.0 / ~2.0 and never lands in the dead band: grow
+/// 1.15×/frame for ~6 frames, then slash ÷2–÷4 in one. Accumulation
+/// hides that completely in normal rendering; in an animation it is a
+/// visible ~8 Hz cycle of the image "converging" and snapping back —
+/// field-reported as flicker, and as normal rendering fighting animation
+/// mode. Bounding both steps near the sawtooth's grow rate caps the
+/// frame-to-frame grain change at ~15% (imperceptible) while still
+/// adapting: a real load spike sheds over several frames instead of one.
+/// The asymmetry (shed faster than grow) keeps the equilibrium biased
+/// toward meeting the budget.
+pub(crate) fn adjust_iter_scale_playback(scale: f64, ratio: f64) -> f64 {
+    let mut s = scale;
+    if ratio > 1.3 {
+        s /= 1.15;
+    } else if ratio < 1.05 {
+        s *= 1.05;
+    }
+    s.clamp(1.0 / 256.0, 1.0)
+}
+
 #[cfg(test)]
 mod governor_tests {
-    use super::{adjust_iter_scale, frame_budget};
+    use super::{adjust_iter_scale, adjust_iter_scale_playback, frame_budget};
 
     /// `target_fps` is documented as vsync-off-only. Honour that: under
     /// vsync the budget is the panel's, and a target it cannot reach must
@@ -2760,5 +2793,61 @@ mod governor_tests {
             h = adjust_iter_scale(h, present(h, 0.004, 0.400) / target);
         }
         assert!(h < 0.25, "overloaded flame failed to shed work: {h}");
+    }
+
+    /// The animation-flicker case. A flame whose equilibrium batch is
+    /// mid-range makes the AIMD rule saw-tooth under vsync quantization:
+    /// measured on `frangelic2.anim`, the per-frame batch ramped
+    /// 4.3M→8.7M samples over ~6 frames and snapped back ÷2–÷3 in one, an
+    /// ~8 Hz cycle. Displayed raw (playback = overwrite = one batch per
+    /// frame) that is visible flicker. The playback rule must bound the
+    /// frame-to-frame change; the sawtooth's existence under the classic
+    /// rule is asserted too, so if the classic rule ever stops
+    /// saw-toothing this split can be removed.
+    #[test]
+    fn playback_governor_does_not_sawtooth_on_a_mid_range_flame() {
+        const REFRESH: f64 = 1.0 / 60.0;
+        let target = REFRESH;
+        let present = |s: f64, fixed: f64, per_batch: f64| {
+            ((fixed + per_batch * s) / REFRESH).ceil().max(1.0) * REFRESH
+        };
+        // Costs chosen so the full batch takes ~1.5 refreshes: the
+        // equilibrium sits between quantization steps, the regime the
+        // sawtooth lives in.
+        let run = |rule: fn(f64, f64) -> f64| {
+            let mut s: f64 = 1.0;
+            let mut worst_jump: f64 = 1.0;
+            for i in 0..400 {
+                let prev = s;
+                s = rule(s, present(s, 0.004, 0.022) / target);
+                // Let both rules settle before judging steady state.
+                if i > 50 {
+                    worst_jump = worst_jump.max((s / prev).max(prev / s));
+                }
+            }
+            (s, worst_jump)
+        };
+
+        let (_, classic_jump) = run(adjust_iter_scale);
+        assert!(
+            classic_jump > 1.5,
+            "classic rule stopped saw-toothing (worst jump {classic_jump:.2}) — playback split may be removable"
+        );
+
+        let (s, playback_jump) = run(adjust_iter_scale_playback);
+        assert!(
+            playback_jump <= 1.16,
+            "playback batch jumped {playback_jump:.2}x between frames — that is visible grain flicker"
+        );
+        assert!(s > 0.25, "playback rule shed a flame that mostly fits: {s}");
+
+        // The governor still exists for a reason during playback: a flame
+        // that genuinely cannot fit the frame must shed within a second
+        // or two, just not within one frame.
+        let mut h: f64 = 1.0;
+        for _ in 0..120 {
+            h = adjust_iter_scale_playback(h, present(h, 0.004, 0.400) / target);
+        }
+        assert!(h < 0.25, "overloaded flame failed to shed under playback rule: {h}");
     }
 }

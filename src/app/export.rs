@@ -404,7 +404,14 @@ async fn export_headless_cpu(
     let export_start = Instant::now();
 
     // Create exporter
-    let mut exporter = HighResExporter::new(config, width, height, None).await?;
+    // Pass the caller's ipt through. This used to be `None`, so the
+    // HighRes route always rendered at its own 256 default while the
+    // PNG metadata below recorded whatever was *requested* — a file
+    // that misreports how it was made, against the "exact reproduction"
+    // contract. Harmless while both happened to be 256; the export
+    // default moving to 1024 made every large default export a lie.
+    let mut exporter =
+        HighResExporter::new(config, width, height, Some(iterations_per_thread)).await?;
 
     // Calculate total iterations
     let total_iterations = config.max_iterations;

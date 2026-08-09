@@ -97,9 +97,19 @@ def run_benchmark(commit_hash, commit_name, config_file, repeats, width, height,
         # Format: [name]_[commit]_[number].png
         output_file = results_dir / f"{fractal_name}_{short_hash}_{i}.png"
 
-        # Run export
-        cmd = f"cargo run --release -- export -i {config_file} -o {output_file} --width {width} --height {height}"
+        # Run export. ipt is pinned explicitly so rows are comparable
+        # across commits regardless of what each commit's CLI DEFAULT
+        # was (256 until 2026-08, 1024 after) — the CSV's
+        # IterationsPerThread column records what actually ran.
+        # Commits before 57dbc38d (2025-11-16) predate the flag, so
+        # fall back to flagless there; their rows record their own ipt.
+        cmd = (f"cargo run --release -- export -i {config_file} -o {output_file} "
+               f"--width {width} --height {height} --iterations-per-thread 1024")
         returncode, stdout, stderr = run_command(cmd)
+
+        if returncode != 0 and "unexpected argument" in (stdout + stderr):
+            cmd = f"cargo run --release -- export -i {config_file} -o {output_file} --width {width} --height {height}"
+            returncode, stdout, stderr = run_command(cmd)
 
         if returncode != 0:
             print("❌ (export failed)")

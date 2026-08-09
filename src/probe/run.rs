@@ -233,6 +233,11 @@ fn run_batch(
         &config.flame,
         config.palette_size,
     );
+    // The probe compiles its own shader from the RAW flame and packs
+    // params through the renderer: the sticky superset's canonical map
+    // would misalign those get_param offsets. Measure the flame as it
+    // is, always.
+    renderer.set_sticky_enabled(false);
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("probe config"),
@@ -352,6 +357,11 @@ fn sweep_batch(
         &config.flame,
         config.palette_size,
     );
+    // The probe compiles its own shader from the RAW flame and packs
+    // params through the renderer: the sticky superset's canonical map
+    // would misalign those get_param offsets. Measure the flame as it
+    // is, always.
+    renderer.set_sticky_enabled(false);
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("probe sweep config"),
     });
