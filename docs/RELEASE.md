@@ -563,17 +563,17 @@ own `wasm-opt`, so binaryen need not be on PATH. The
 `Cargo.toml` are load-bearing: the bundled wasm-opt 117 predates
 rustc's bulk-memory default and rejects the module without them.
 
-Verify before shipping:
+**Gated since 0.5.** `release.py check` runs both crates' test suites
+(`gallery script parity`, `gallery renderer smoke`) — the CLI-parity
+fixtures §6 names as the guard for `script + seed` reproducibility now
+run in every check. The renderer smoke tests skip cleanly on a machine
+with no GPU adapter. First run on a machine pays each crate's compile
+(~3 min each); cached after. To run one by hand:
 
 ```bash
 cd wasm/script && cargo test    # CLI-parity fixtures: byte-identical flames
 cd wasm/render && cargo test    # GPU smoke + device-reuse regression
 ```
-
-**Not gated.** `release.py check` runs `cargo test --lib` from the repo
-root — the main crate only — so neither crate's tests run in any release
-step, while §6 names the CLI-parity fixtures as the guard for
-`script + seed` reproducibility. Run them by hand until that is fixed.
 
 `pkg/` is gitignored, so each machine builds its own and nothing about
 these directories appears in a diff. Where the built modules are
