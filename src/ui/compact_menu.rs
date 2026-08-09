@@ -179,10 +179,26 @@ fn render_compact_menu_items(
 
     ui.separator();
 
-    // --- Rendering ---
-    let pause_text = if menu_state.is_paused { t!("menu.resume") } else { t!("menu.pause") };
-    if ui.button(pause_text).clicked() {
-        menu_actions.rendering.pause_toggle = true;
+    // --- Animation transport ---
+    // Play/pause/stop drive the ANIMATION, not the renderer. These used
+    // to toggle the render pause, which on a phone reads as "the app
+    // froze"; a transport row means the animation everywhere else in
+    // the app (animation panel, Space key), so it does here too.
+    let play_text = if menu_state.animation_playing {
+        t!("menu.pause_animation")
+    } else {
+        t!("menu.play_animation")
+    };
+    let can_play = menu_state.animation_playing || menu_state.has_animation_tracks;
+    if ui.add_enabled(can_play, egui::Button::new(play_text.as_ref())).clicked() {
+        menu_actions.animation.play_pause = true;
+        ui.close();
+    }
+    if ui
+        .add_enabled(menu_state.animation_playing, egui::Button::new(t!("menu.stop_animation").as_ref()))
+        .clicked()
+    {
+        menu_actions.animation.stop = true;
         ui.close();
     }
 
