@@ -147,6 +147,29 @@ impl App {
                 );
                 self.view_changed_by_keyboard = true;
             }
+            PhysicalKey::Code(KeyCode::Space) => {
+                // Toggle animation playback (video-editor convention).
+                // Only reachable when egui didn't consume the key, so a
+                // space typed into a text field never lands here.
+                //
+                // Gated on the animation having tracks: rendering the
+                // Animation panel once auto-creates an empty "New
+                // Animation", and playing THAT flips the renderer into
+                // animation mode (single-batch overwrite, grainy) with
+                // nothing moving — a mystery degradation from a global
+                // shortcut. The panel's own Play button stays permissive;
+                // there the user can see what they pressed play on.
+                let has_tracks = self
+                    .animation_controller
+                    .animation
+                    .as_ref()
+                    .is_some_and(|a| !a.tracks.is_empty());
+                if self.animation_controller.is_playing() {
+                    self.animation_controller.pause();
+                } else if has_tracks {
+                    self.animation_controller.play();
+                }
+            }
             PhysicalKey::Code(KeyCode::KeyF) => {
                 self.cycle_fullscreen();
             }
