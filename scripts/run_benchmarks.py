@@ -360,7 +360,11 @@ class UnifiedBenchmarkRunner:
                         "-i", str(config_path),
                         "-o", str(output_path),
                         "--width", "800",
-                        "--height", "600"
+                        "--height", "600",
+                        # Pinned: history rows record IterationsPerThread=256;
+                        # letting the CLI default move would silently break
+                        # throughput comparability across the CSV.
+                        "--iterations-per-thread", "256"
                     ]
 
                     is_warmup = (i == 0)

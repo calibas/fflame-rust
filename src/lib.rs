@@ -240,8 +240,10 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
             height.unwrap_or(1080),
         );
 
-        // Use CLI override or default (device-specific setting not in FractalConfig)
-        let ipt = iterations_per_thread.unwrap_or(crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD);
+        // Use CLI override or the export default (device-specific setting
+        // not in FractalConfig; exports default deeper than the app — see
+        // DEFAULT_EXPORT_ITERATIONS_PER_THREAD).
+        let ipt = iterations_per_thread.unwrap_or(crate::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD);
 
         // Call the existing PNG export logic from app
         // We'll need to add a headless export helper
