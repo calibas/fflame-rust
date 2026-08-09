@@ -3,13 +3,13 @@
 // Animates a zoom into the flame you have open — the "endless dive"
 // every fractal video wants. Only movement; the flame is untouched.
 //
-// The one non-obvious thing this script knows: animation keys
-// interpolate LINEARLY, but zoom is perceived as a RATE (each second
-// should multiply the zoom by the same factor). A straight line from 1
-// to 100 looks like slamming on the brakes — the first doubling takes a
-// fifth of a second, the last one takes half the video. So this lays
-// down a chain of keys along a geometric curve instead, and the dive
-// feels constant-speed.
+// The one non-obvious thing this script knows: zoom is perceived as a
+// RATE — each second should MULTIPLY the zoom by the same factor. A
+// linear track from 1 to 100 looks like slamming on the brakes: the
+// first doubling takes a fifth of a second, the last one takes half
+// the video. The track is therefore set to "exponential"
+// interpolation, which moves by equal ratio per unit time — and works
+// the same zooming out as in.
 //
 // Run it, then open the Animation panel and press play (or Space).
 
@@ -35,27 +35,17 @@ let target = if direction == "Dive in" { start * factor } else { start / factor 
 anim.name = "Zoom Dive";
 anim.duration = seconds;
 
-// The geometric chain. 16 segments per leg is enough that the
-// linear-between-keys error is invisible (under 1% per segment at
-// factor 1000).
-let segs = 16;
+// Equal ratio per unit time — see the header. Two keys per leg is all
+// the exponential track needs.
+anim.interpolation("zoom", "exponential");
+
 let leg = if and_back { seconds / 2.0 } else { seconds };
-
-for i in 0..(segs + 1) {
-    let frac = i.to_float() / segs;
-    // zoom_i = start * (target/start)^frac — equal RATIO per step.
-    let z = start * (target / start) ** frac;
-    anim.key("zoom", leg * frac, z, "linear");
-}
-
+anim.key("zoom", 0.0, start, "linear");
+anim.key("zoom", leg, target, "linear");
 if and_back {
-    // Mirror the chain for the return leg. The last outbound key and
-    // the first return key coincide at t = seconds/2.
-    for i in 1..(segs + 1) {
-        let frac = i.to_float() / segs;
-        let z = start * (target / start) ** (1.0 - frac);
-        anim.key("zoom", leg + leg * frac, z, "linear");
-    }
+    // The return leg: same curve run backward, landing exactly on the
+    // start value so the loop closes without a cut.
+    anim.key("zoom", seconds, start, "linear");
 }
 
 print("zoom " + start + " -> " + target + " over " + (if and_back { leg } else { seconds }) + "s"
