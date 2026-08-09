@@ -366,10 +366,12 @@ mod wasm {
 
     /// Render a config. `iterations` caps the chaos-game budget
     /// (defaults to the config's own `max_iterations`).
-    /// `iterations_per_thread` is trajectory depth per dispatch —
-    /// a quality knob for long-memory fractals (default 256, clamped
-    /// to 64–4096). Deeper trajectories converge further per iteration
-    /// at the cost of longer individual dispatches.
+    /// `iterations_per_thread` is trajectory depth per dispatch
+    /// (default 256, clamped to 64–4096). Depth-vs-breadth trade-off,
+    /// not a quality dial: deep orbits reach late-emerging structure
+    /// with less restart overhead, but orbits stuck in a sink or
+    /// off-frame waste more budget before a restart resamples. It
+    /// changes rendered pixels either way.
     #[wasm_bindgen]
     pub async fn render(
         config_json: &str,
