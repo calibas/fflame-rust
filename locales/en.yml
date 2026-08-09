@@ -82,6 +82,7 @@ menu:
   layout_beginner: "Beginner"
   layout_standard: "Standard"
   layout_animation: "Animation"
+  layout_scripting: "Scripting"
   layout_compact: "📱 Mobile View"
   layout_advanced: "Advanced"
   layout_export: "Export"

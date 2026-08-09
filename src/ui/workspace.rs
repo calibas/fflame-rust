@@ -108,6 +108,9 @@ pub enum WorkspaceLayout {
     Standard,
     /// Animation: Standard layout with Animation panel at bottom
     Animation,
+    /// Scripting: Scripts panel left, Fractal Browser right — write a
+    /// script, run it, browse what it generated.
+    Scripting,
     /// Compact: Full-screen viewport only (mobile / small screens)
     Compact,
 }
@@ -168,6 +171,7 @@ impl Workspace {
         self.dock_state = match layout {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Animation => Self::create_animation_layout(help_was_open),
+            WorkspaceLayout::Scripting => Self::create_scripting_layout(help_was_open),
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
         self.current_layout = layout;
@@ -420,10 +424,88 @@ impl Workspace {
         state
     }
 
+    /// Create Scripting layout: Scripts panel in the left dock, Fractal
+    /// Browser in the right — the write-run-browse loop side by side
+    /// with the viewport showing the current result.
+    fn create_scripting_layout(preserve_help: bool) -> DockState<PanelType> {
+        let mut state = DockState::new(vec![PanelType::FractalViewport]);
+
+        // Scripts panel wants real width (parameter sliders + source
+        // editor) — 30% rather than Standard's 25%.
+        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
+            egui_dock::NodeIndex::root(),
+            0.30,
+            vec![PanelType::Scripts],
+        );
+
+        // Fractal Browser right: generated flames land where the eye
+        // goes after pressing Run.
+        let [_center_node, _right_node] = state.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.70,
+            vec![PanelType::FractalBrowser],
+        );
+
+        if preserve_help {
+            state.add_window(vec![PanelType::Help]);
+        }
+
+        state
+    }
+
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// Every preset layout must contain the panels it is named for —
+    /// a layout that silently drops one renders as an empty dock area
+    /// with no error.
+    #[test]
+    fn preset_layouts_contain_their_panels() {
+        let cases: &[(WorkspaceLayout, &[PanelType])] = &[
+            (
+                WorkspaceLayout::Standard,
+                &[PanelType::FractalViewport, PanelType::Transforms, PanelType::Colors],
+            ),
+            (
+                WorkspaceLayout::Animation,
+                &[PanelType::FractalViewport, PanelType::Animation, PanelType::Transforms],
+            ),
+            (
+                WorkspaceLayout::Scripting,
+                &[PanelType::FractalViewport, PanelType::Scripts, PanelType::FractalBrowser],
+            ),
+            (WorkspaceLayout::Compact, &[PanelType::FractalViewport]),
+        ];
+        for (layout, panels) in cases {
+            let mut ws = Workspace::new();
+            ws.apply_layout(*layout);
+            for p in *panels {
+                assert!(ws.panel_exists(*p), "{p:?} missing from {layout:?} layout");
+            }
+        }
+    }
+
+    /// Help stays open across a layout switch — the two layouts that
+    /// preserve it re-add it as a floating window.
+    #[test]
+    fn help_survives_switching_to_animation_or_scripting() {
+        for layout in [WorkspaceLayout::Animation, WorkspaceLayout::Scripting] {
+            let mut ws = Workspace::new();
+            ws.dock_state.add_window(vec![PanelType::Help]);
+            ws.apply_layout(layout);
+            assert!(
+                ws.panel_exists(PanelType::Help),
+                "Help window lost switching to {layout:?}"
+            );
+        }
     }
 }
