@@ -106,6 +106,21 @@ GATES = [
          why="generated WGSL changed"),
     Gate("doc links", [sys.executable, "scripts/check_doc_links.py"],
          why="live docs pointing nowhere"),
+    # The gallery crates. wasm/script's CLI-parity fixtures are the
+    # guard for "script + seed reproduces a flame byte-for-byte" — the
+    # public determinism promise — and until now ran in no automated
+    # step (RELEASE.md §5 said "run them by hand until that is fixed";
+    # this is the fix). wasm/render's smoke tests skip cleanly on a
+    # machine with no GPU adapter. First run pays each crate's compile;
+    # cached after.
+    Gate("gallery script parity",
+         ["cargo", "test", "--release",
+          "--manifest-path", "wasm/script/Cargo.toml"],
+         why="script + seed is a shareable artifact; drift redefines every published seed"),
+    Gate("gallery renderer smoke",
+         ["cargo", "test", "--release",
+          "--manifest-path", "wasm/render/Cargo.toml"],
+         why="the device-reuse regression froze real galleries once already"),
 ]
 
 
