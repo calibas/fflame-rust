@@ -130,6 +130,10 @@ fn census_config(
         config.palette_size,
     );
     renderer.enable_census(device);
+    // Census attribution maps counters back to variations using the raw
+    // flame's local index map on the CPU; the sticky superset would
+    // reorder that map. Instrument the flame as it is.
+    renderer.set_sticky_enabled(false);
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Census Config"),

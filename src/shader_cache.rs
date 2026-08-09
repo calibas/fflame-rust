@@ -920,7 +920,7 @@ mod pipeline_lru_tests {
         queue: &wgpu::Queue,
         config: &FractalConfig,
     ) -> FlameRenderer {
-        FlameRenderer::with_palette_size(
+        let mut r = FlameRenderer::with_palette_size(
             device,
             queue,
             wgpu::TextureFormat::Rgba8Unorm,
@@ -928,7 +928,14 @@ mod pipeline_lru_tests {
             64,
             &config.flame,
             config.palette_size,
-        )
+        );
+        // These tests exercise the pipeline LRU in isolation. Under the
+        // (default-on) sticky superset the union GROWS across loads, so
+        // A -> B -> A produces one merged map and the third load is an
+        // early-out rather than the LRU revisit being tested. Layer B
+        // has its own tests in renderer::sticky.
+        r.set_sticky_enabled(false);
+        r
     }
 
     /// The Layer A contract: revisiting a flame is a hit, not a rebuild.

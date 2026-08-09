@@ -57,7 +57,7 @@ patterns: undo/redo across a variation change, A/B toggling, returning
 to the startup flame. Tests cover revisit-hit, the init-placement fork,
 and eviction at the cap. Batches are Layer B's job.
 
-### Layer B — sticky variation superset (the core)
+### Layer B — sticky variation superset (the core) *(landed)*
 
 The renderer keeps a `sticky` set of variation names — **renderer
 state, never serialized into a config**. The compiled shader's active
@@ -89,25 +89,34 @@ index map. Today each derives it internally from the flame; the refactor
 makes the map an explicit parameter computed once by the renderer. That
 single choke point is why the probe's superset flames work unmodified.
 
-**Map ordering (the correctness kernel).** The dispatcher emits each
-phase in map order, and pre/post variations *chain* — each transforms
-the previous output — so reordering two same-phase chained variations on
-one transform is a **different image**, not float noise. Rule:
+**Map ordering (the correctness kernel) — amended by measurement.**
+The plan first specified `flame order ++ extras`, preserving
+bit-identity with specialized compiles. The convergence test killed it:
+the union's order across transforms differs per flame (whichever
+transform introduces a name first places it), so two flames with the
+SAME variation set still compiled two shaders and Layer B never
+converged — the Phase 0 proxy converged precisely because it rewrote the
+whole map canonically. The shipped rule is therefore:
 
-    map = [flame's variations, in flame order] ++ [sticky extras, canonical order]
+    map = sorted(flame's variations ∪ extras)
 
-Live variations keep their relative order, so output is **bit-identical**
-to the specialized shader (dead variations are branch-skipped, never
-summed — `+0.0` never happens, the term simply doesn't exist).
-Verified by test with `deterministic_rng` + byte-compare.
+depending only on the *set*, which is what makes flames drawing from
+one pool share one shader. The price, stated precisely:
 
-The cost of flame-order-first maps: same union, different add order ⇒
-different map ⇒ different pipeline. Mitigation where it matters: the
-random generator emits each transform's variations in canonical
-(registry) order — it is our generator, one sort, and then every
-generated flame with the same union shares one map by construction.
-Arbitrary imported flames still benefit from stickiness, with at most
-one order-variant pipeline per distinct ordering, which Layer A absorbs.
+- **Normal-phase variations**: map order only changes f32 summation
+  order — a different trajectory through the same attractor, the ULP
+  class. Accepted.
+- **Chained phases**: pre/post variations chain, so order IS semantics.
+  Any flame where canonical order could disagree — a transform with two
+  or more Pre variations, two or more Post variations, or any
+  `fx_priority` override — **falls back to a specialized compile**,
+  detected cheaply and conservatively. Its variations still warm the
+  sticky set for later flames.
+
+What remains provable, and is proven by test: **extras alone never
+change pixels** — a flame whose own order already matches canonical
+renders byte-identical with any number of dead extras compiled in,
+because dead entries are branch-skipped, never summed.
 
 **Monotone flags.** `HAS_DC` / `HAS_RGB` become properties of the
 superset — once a color-writing variation enters, the flag stays on
@@ -139,12 +148,16 @@ job.
 
 ## Scoping — where sticky is NOT wanted
 
-CLI export and the visual regression suite keep the specialized +
-inlined-constants path: they want dead-code elimination, compile once
-per image, and their reproducibility contract is against the specialized
-shader. The 148 baselines are untouched by construction. The probe and
-census keep their own harnesses. Sticky serves the interactive app,
-batches, thumbnails, and the gallery.
+CLI export and the visual regression suite render through the unified
+`render()`, which **disables sticky on its throwaway renderer** — they
+compile exactly the specialized shaders their baselines and
+reproducibility contracts were made with (verified: 148/148 after
+Layer B landed default-on). The probe and census harnesses disable it
+explicitly: both compile their own shaders from the raw flame and pack
+buffers through the renderer, so an augmented map would misalign their
+`get_param` offsets. Sticky serves the persistent renderers: the
+interactive app (`load_config` and the incremental `update_flame`
+path), batches, thumbnails, and the gallery via `render_with`.
 
 ## Decisions (made)
 
@@ -214,6 +227,32 @@ browser's shader cache behavior is its own (Tint + driver, different
 eviction), so the cold numbers are the right planning basis for the
 gallery.
 
+## Layer B measured
+
+Same protocol as Phase 0 (512², 10M iterations/seed, GTX 1660 SUPER;
+cold-ish driver cache for the new canonical shader shapes):
+
+| 20 seeds | total | median/seed | rebuilds | LRU hits | compile share |
+|---|---|---|---|---|---|
+| baseline, natural | 1496 ms | 84.7 ms | 20 | 0 | 90% |
+| baseline, pinned count | 1079 ms | 77.8 ms | 20 | 0 | 86% |
+| sticky, pinned count | 597 ms | 14.2 ms | **6** | 0 | 51% |
+| sticky, natural | 1272 ms | 98.8 ms | 11 | 6 | 78% |
+
+Pinned-count sticky shows pure convergence: six compiles, then silence.
+Natural-count at 20 seeds is the honest convergence cost — the growing
+map multiplied by 2–5 transform counts keeps forking shaders early — so
+the steady state needs a longer run:
+
+| 60 seeds, natural | total | median/seed | rebuilds | LRU hits | compile share |
+|---|---|---|---|---|---|
+| baseline | 4015 ms | 81.8 ms | 60 | 0 | 79% |
+| **sticky** | **1004 ms** | **16.5 ms** | **12** | **37** | **14%** |
+
+**4x total, 5x median, compile share 79% → 14%** — and the two layers
+visibly compose: 12 compiles during convergence, then the LRU absorbs
+transform-count switches (37 hits) while identical revisits early-out.
+
 ## Order of work
 
 1. **Phase 0**: shader-cache rebuild counters + timing; the benchmark;
@@ -221,17 +260,23 @@ gallery.
 2. **Layer A**: pipeline LRU. *(done — keyed by generated WGSL,
    init source included; revisit/init-fork/eviction under test)*
 3. Generator canonical-order emission (tiny, independent).
-4. **Layer B**: the map-parameter refactor + sticky policy + tests
-   (byte-identity, convergence, caps).
-5. Flip default-on in-app once identity + throughput evidence is in.
+4. **Layer B**: sticky policy + tests. *(done — shipped as flame
+   augmentation inside `load_config`/`update_flame` rather than a map
+   parameter refactor: shadowing the config with an augmented clone
+   keeps every consumer — shader cache, constants, packers, subflame
+   map, init, state layout — consistent by construction, with zero
+   signature changes)*
+5. Default-on. *(done — sticky ships enabled; one-shot `render()`, the
+   probe and the census opt out)*
 6. **Layer C** if the gallery wants faster cold start.
 
 ## Verification
 
-- Byte-identity: same config, same `deterministic_rng`, specialized vs
-  sticky ⇒ identical pixels. Promised only for the preserved-order case,
-  which is every generated flame and every flame without multi-pre/post
-  transforms.
+- Byte-identity in its provable form: extras alone never change pixels
+  (tested — a canonical-order flame with real extras renders bytes
+  identical to specialized). Canonical reorder of a multi-transform
+  union is ULP-class for normal-phase flames and a hard fallback for
+  chained phases.
 - Convergence: a 20-seed run asserts compile count stops growing.
 - Throughput: the dead-cost curve; `run_benchmarks.py --quick` unchanged
   (export path untouched).

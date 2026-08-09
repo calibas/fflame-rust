@@ -185,6 +185,12 @@ pub struct FlameRenderer {
     last_batch_samples: u64,
     /// Attractor-bounds readback (shadow-map auto-fit).
     bounds_stats: crate::renderer::density_stats::BoundsTracker,
+
+    /// The sticky variation superset — Layer B of
+    /// docs/projects/sticky-shader-compilation.md. Renderer state, never
+    /// serialized. Default-on; `set_sticky_enabled(false)` restores
+    /// specialized-per-flame compilation.
+    sticky: crate::renderer::sticky::StickyVariations,
     /// Last decoded world AABB of plotted samples. Persists across
     /// resets as "last known" — the placement frozen at each reset uses
     /// it, and fresh measurements replace it as they arrive.
@@ -356,6 +362,7 @@ impl FlameRenderer {
             samples_in_buffer: 0,
             last_batch_samples: 0,
             bounds_stats: crate::renderer::density_stats::BoundsTracker::new(device),
+            sticky: crate::renderer::sticky::StickyVariations::new(),
             measured_bounds: None,
             bounds_dirty: false,
             frozen_shadow_fit: None,
@@ -1612,6 +1619,23 @@ impl FlameRenderer {
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
     pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32, burn_in: u32) {
+        // Sticky superset (Layer B): adopt this flame's variations and
+        // shadow `config` with a clone whose flame carries the retained
+        // extras at weight 0. Everything below — shader cache, constants,
+        // buffer packing, subflame map, init shader — reads the augmented
+        // flame, so the compiled map and the packed offsets cannot
+        // disagree. A fresh renderer has an empty sticky set, so one-shot
+        // paths (CLI export, visual tests, probe, census) see a plain
+        // clone and compile specialized, unchanged.
+        let sticky_config;
+        let config: &FractalConfig = if self.sticky.enabled() {
+            let mut c = config.clone();
+            c.flame = self.sticky.adopt(&config.flame);
+            sticky_config = c;
+            &sticky_config
+        } else {
+            config
+        };
         // 0. Check if shaders need to be recompiled (variations or constants changed)
         // Determine if path features are needed (PathMap mode or path filters active)
         let path_features_enabled = config.color_mode == ColorMode::PathMap
@@ -1835,6 +1859,17 @@ impl FlameRenderer {
 
     /// Update the flame being rendered
     pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
+        // Sticky superset (Layer B): same shadowing as load_config, for
+        // the editor's incremental path — this is what makes toggling a
+        // variation off and back on a cache hit instead of two rebuilds.
+        let sticky_flame;
+        let flame: &Flame = if self.sticky.enabled() {
+            sticky_flame = self.sticky.adopt(flame);
+            &sticky_flame
+        } else {
+            flame
+        };
+
         // Solid rendering state must be set BEFORE build_shader_constants
         // below (it feeds ShaderConstants::solid_enabled) and before the
         // histogram depth-region toggle.
@@ -2037,6 +2072,17 @@ impl FlameRenderer {
             _pad_levels: [0; 2],
         };
         self.buffers.update_tonemap_params(queue, &params);
+    }
+
+    /// Enable or disable the sticky variation superset (Layer B).
+    /// Disabling also forgets the retained set; see StickyVariations.
+    pub fn set_sticky_enabled(&mut self, on: bool) {
+        self.sticky.set_enabled(on);
+    }
+
+    /// (retained names, extras compiled into the current shader).
+    pub fn sticky_stats(&self) -> (usize, usize) {
+        (self.sticky.retained(), self.sticky.extras())
     }
 
     /// (rebuilds, cache hits, total compile ms) since this renderer was
@@ -3467,7 +3513,10 @@ impl FlameRenderer {
     /// [`Self::run_init_pass`] afterwards or they keep the previous
     /// step's values.
     pub fn set_variation_params(&mut self, queue: &Queue, flame: &crate::scene::transforms::Flame) {
-        self.buffers.update_variation_params(queue, flame);
+        // Must pack against the SAME map the compiled shader was built
+        // with — re-apply the last adopt's extras (a no-op when empty).
+        let flame = self.sticky.augmented(flame);
+        self.buffers.update_variation_params(queue, &flame);
         self.init_dirty = true;
     }
 

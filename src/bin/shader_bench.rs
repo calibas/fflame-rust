@@ -50,9 +50,16 @@ fn main() {
     println!("=== Phase 0: sticky shader compilation measurements ===");
     println!("device ready; {SEEDS} seeds at {SIZE}x{SIZE}, {ITERS_PER_SEED} iters each\n");
 
-    run_batch(&device, &queue, "baseline (natural flames)", false, false);
-    run_batch(&device, &queue, "baseline (pinned transform count)", true, false);
-    run_batch(&device, &queue, "superset proxy (pinned + pool at w=0)", true, true);
+    run_batch(&device, &queue, "baseline (natural flames, sticky off)", false, false, false, SEEDS);
+    run_batch(&device, &queue, "baseline (pinned count, sticky off)", true, false, false, SEEDS);
+    run_batch(&device, &queue, "superset proxy (pinned + pool at w=0)", true, true, false, SEEDS);
+    run_batch(&device, &queue, "STICKY (natural flames, Layer A+B)", false, false, true, SEEDS);
+    run_batch(&device, &queue, "STICKY (pinned count, Layer A+B)", true, false, true, SEEDS);
+    // The steady state: with varying transform counts the convergence
+    // phase multiplies (growing map x count), so 20 seeds understate the
+    // asymptote. 60 seeds shows where a long scroll actually settles.
+    run_batch(&device, &queue, "baseline 60 seeds (natural, sticky off)", false, false, false, 60);
+    run_batch(&device, &queue, "STICKY 60 seeds (natural, Layer A+B)", false, false, true, 60);
 
     dead_cost_curve(&device, &queue);
 }
@@ -103,6 +110,8 @@ fn run_batch(
     label: &str,
     pin_transforms: bool,
     superset: bool,
+    sticky: bool,
+    seeds: u64,
 ) {
     let pool = pool_in_canonical_order();
 
@@ -117,10 +126,11 @@ fn run_batch(
         &first.flame,
         first.palette_size,
     );
+    renderer.set_sticky_enabled(sticky);
 
     let mut per_seed = Vec::new();
     let started = std::time::Instant::now();
-    for seed in 1..=SEEDS {
+    for seed in 1..=seeds {
         let mut config = seed_config(seed, pin_transforms);
         if superset {
             supersetize(&mut config.flame, &pool);
