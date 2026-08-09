@@ -272,6 +272,10 @@ class VisualTestRunner:
             "-o", str(output_path),
             "--width", "800",
             "--height", "600",
+            # Pinned: ipt is trajectory depth, so it changes rendered
+            # pixels, and every baseline was recorded at 256. The CLI's
+            # own default is a user-facing quality knob, free to move.
+            "--iterations-per-thread", "256",
         ]
 
         # Run CLI export

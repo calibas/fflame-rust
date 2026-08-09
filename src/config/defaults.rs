@@ -48,6 +48,17 @@ pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 â†
 // Performance
 pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
 
+/// The CLI export's default when `--iterations_per_thread` is not given.
+///
+/// Deliberately higher than the interactive default above: ipt is
+/// trajectory depth (trajectories don't survive across dispatches), and
+/// an export has no frame budget to protect â€” deeper trajectories buy
+/// long-memory fractals convergence quality at zero cost to anyone's
+/// frame rate. The visual-regression and benchmark harnesses pin 256
+/// explicitly (their baselines and history rows were recorded at 256),
+/// so changing this constant only changes what end users get.
+pub const DEFAULT_EXPORT_ITERATIONS_PER_THREAD: u32 = 1024;
+
 // Depth of Field
 pub const DEFAULT_DOF_FOCUS_DISTANCE: f32 = 0.0; // Apophysis hardcodes 0.0 (focal plane at origin)
 pub const DEFAULT_DOF_BLUR_STRENGTH: f32 = 0.0; // 0.0 = disabled, up to ~10.0 for strong blur

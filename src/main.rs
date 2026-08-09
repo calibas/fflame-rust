@@ -101,7 +101,7 @@ enum Commands {
         #[arg(short, long)]
         category: Option<String>,
 
-        /// Iterations per thread (overrides config file value if provided, range: 64-4096)
+        /// Iterations per thread — trajectory depth per dispatch (default: 1024; the interactive app uses 256, range: 64-4096)
         #[arg(long)]
         iterations_per_thread: Option<u32>,
 
