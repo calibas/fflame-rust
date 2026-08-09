@@ -1,6 +1,6 @@
 [package]
 name = "fractal_flame_wgpu"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2021"
 # The shipped executable is named for the product. The PACKAGE keeps
 # its crate name — that is an internal identifier, and renaming it would
