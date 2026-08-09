@@ -1617,6 +1617,31 @@ pub async fn export_animation(
     })
 }
 
+/// How many workgroups to dispatch for the remaining budget.
+///
+/// The per-frame render loop runs whole dispatches, each worth
+/// `workgroups x 64 x iterations_per_thread` samples. Dispatching the
+/// full `max_workgroups` every time overshoots the frame's
+/// `max_iterations` by up to one whole dispatch — which was already
+/// wrong (a 500k-iteration frame rendered 2.1M at ipt 256) and got four
+/// times worse when the export default moved to ipt 1024, since the
+/// quantum scales with ipt. A per-frame budget tuned for fast video
+/// export would have quietly become a 4x longer render.
+///
+/// Workgroups are the right axis to trim: `iterations_per_thread` is
+/// trajectory depth, so shortening IT would shorten the orbits
+/// themselves; workgroup count is pure parallel breadth. Always at
+/// least one, so the loop cannot stall.
+#[cfg(not(target_arch = "wasm32"))]
+fn workgroups_for_remaining(remaining: u64, per_workgroup: u64, max_workgroups: u32) -> u32 {
+    if per_workgroup == 0 {
+        return max_workgroups;
+    }
+    remaining
+        .div_ceil(per_workgroup)
+        .clamp(1, max_workgroups as u64) as u32
+}
+
 /// Render a single frame to completion (until max_iterations reached)
 #[cfg(not(target_arch = "wasm32"))]
 async fn render_frame_to_completion(
@@ -1633,6 +1658,7 @@ async fn render_frame_to_completion(
     let mut total_rendered = 0u64;
     let target = config.max_iterations;
     let mut batch_frame_count = 0;
+    let mut batch_samples = 0u64;
 
     while total_rendered < target {
         let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
@@ -1643,11 +1669,15 @@ async fn render_frame_to_completion(
         // Clear paths only on very first batch of the entire export
         let clear_paths = total_rendered == 0 && clear_histogram;
 
+        let per_workgroup = THREADS_PER_WORKGROUP * iterations_per_thread as u64;
+        let workgroups =
+            workgroups_for_remaining(target - total_rendered, per_workgroup, NUM_WORKGROUPS);
+
         renderer.compute_pass(
             &mut encoder,
             queue,
             device,
-            NUM_WORKGROUPS,
+            workgroups,
             iterations_per_thread,
             20, // burn_in default
             config.zoom,
@@ -1668,15 +1698,20 @@ async fn render_frame_to_completion(
             clear_paths,
         );
 
-        let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
+        let samples_this_frame = workgroups as u64 * per_workgroup;
         total_rendered += samples_this_frame;
         batch_frame_count += 1;
+        // Summed, not `samples_this_frame * BATCH_SIZE`: the trimmed
+        // final dispatch makes the frames in a batch unequal, and the
+        // accumulate pass divides by this to recover mean colour — a
+        // wrong count is a wrong brightness for the frame.
+        batch_samples += samples_this_frame;
 
         let should_accumulate = batch_frame_count >= BATCH_SIZE;
         if should_accumulate {
-            let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
-            renderer.accumulate_pass(&mut encoder, queue, device, total_samples_in_batch);
+            renderer.accumulate_pass(&mut encoder, queue, device, batch_samples);
             batch_frame_count = 0;
+            batch_samples = 0;
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1687,8 +1722,7 @@ async fn render_frame_to_completion(
                 let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                     label: Some("Final Batch Accumulation"),
                 });
-                let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
-                renderer.accumulate_pass(&mut final_encoder, queue, device, total_samples_in_batch);
+                renderer.accumulate_pass(&mut final_encoder, queue, device, batch_samples);
                 queue.submit(std::iter::once(final_encoder.finish()));
             }
             break;
@@ -2449,6 +2483,60 @@ mod tests {
     use super::*;
     use crate::config::{ConfigPath, ConfigValue};
     use crate::scene::transforms::{Flame, Transform};
+
+    /// A video frame must not render meaningfully past the
+    /// `max_iterations` it was given.
+    ///
+    /// The loop dispatches whole quanta of `workgroups x 64 x ipt`, so
+    /// a fixed 128 workgroups overshot by up to one quantum — and the
+    /// quantum scales with ipt, so moving the export default from 256
+    /// to 1024 quadrupled the waste. Small per-frame budgets are the
+    /// normal case for video (they are what keeps an export finishing),
+    /// which is exactly where the overshoot was worst: at ipt 1024 a
+    /// 1M-iteration frame rendered 8.4M, an 8.4x overrun.
+    #[test]
+    fn a_frame_does_not_render_far_past_its_iteration_budget() {
+        const NW: u32 = 128;
+        const TPW: u64 = 64;
+
+        for ipt in [256u64, 1024, 4096] {
+            let per_workgroup = TPW * ipt;
+            for target in [500_000u64, 1_000_000, 5_000_000, 50_000_000, 1_000_000_000] {
+                // Walk the loop the way the renderer does.
+                let mut total = 0u64;
+                let mut dispatches = 0u32;
+                while total < target {
+                    let wg = workgroups_for_remaining(target - total, per_workgroup, NW);
+                    assert!(wg >= 1 && wg <= NW, "workgroups out of range: {wg}");
+                    total += wg as u64 * per_workgroup;
+                    dispatches += 1;
+                    assert!(dispatches < 100_000, "loop failed to terminate");
+                }
+
+                // Overshoot is bounded by ONE workgroup's worth — the
+                // finest grain the dispatch can express — never by a
+                // whole 128-workgroup quantum.
+                let overshoot = total - target;
+                assert!(
+                    overshoot < per_workgroup,
+                    "ipt {ipt}, target {target}: overshot by {overshoot}, \
+                     which is more than one workgroup ({per_workgroup})"
+                );
+            }
+        }
+    }
+
+    /// The trim must not cost throughput on the budgets that dominate:
+    /// anything comfortably larger than a quantum still runs full-width
+    /// dispatches, so the common case is untouched.
+    #[test]
+    fn large_budgets_still_dispatch_full_width() {
+        let per_workgroup = 64 * 1024;
+        assert_eq!(workgroups_for_remaining(1_000_000_000, per_workgroup, 128), 128);
+        // ...and a remainder smaller than one workgroup still runs one.
+        assert_eq!(workgroups_for_remaining(1, per_workgroup, 128), 1);
+        assert_eq!(workgroups_for_remaining(0, per_workgroup, 128), 1);
+    }
 
     /// Regression test for the colon-vs-dot variation-param key bug.
     /// `apply_config_value` was writing variation_params keys with `:`
