@@ -622,6 +622,12 @@ impl FlamePipelines {
 
     /// Ensure shaders are up-to-date with current flame configuration
     /// Returns true if shaders were recompiled
+    /// (rebuilds, cache hits, total compile ms) from the flame shader
+    /// cache — docs/projects/sticky-shader-compilation.md.
+    pub fn shader_rebuild_stats(&self) -> (u64, u64, f64) {
+        self.shader_cache.rebuild_stats()
+    }
+
     pub fn ensure_shaders_current(&mut self, device: &Device, flame: &Flame, render_mode: crate::scene::transforms::RenderMode) -> bool {
         self.shader_cache.ensure_current(device, &self.compute_bind_group_layout, flame, render_mode)
     }

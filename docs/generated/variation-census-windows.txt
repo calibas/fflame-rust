@@ -4,7 +4,7 @@
 # This file is generated. See src/census/ for what it means.
 # Regenerate: cargo run --release --bin variation_probe -- census --corpus
 #
-# build    0.4.4 (ec5fe45f)
+# build    0.4.4 (9b447ef6)
 # os       windows x86_64
 # adapter  NVIDIA GeForce GTX 1660 SUPER / Vulkan
 # corpus   presets + tests/visual/configs + random seed 1..100  (252 run, 5 skipped)
@@ -59,8 +59,8 @@ bSwirl                   use  (exercised)              common    tests/visual/co
 bTransform               out  (normal,+0)              trace     tests/visual/configs/variations/apo-misc7-smoke.fflame
 bTransform               use  (exercised)              dominant  tests/visual/configs/variations/apo-misc7-smoke.fflame
 barycentroid             use  (exercised)              dominant  tests/visual/configs/variations/bipolar-series-smoke.fflame
-bent                     in   (+0,normal)              trace     random:2
-bent                     in   (normal,+0)              trace     random:5
+bent                     in   (+0,normal)              trace     random:67
+bent                     in   (normal,+0)              trace     random:95
 bent                     in   (normal,large)           common    random:61
 bent                     in   (large,large)            common    random:61
 bent                     out  (+0,normal)              trace     random:22
@@ -230,8 +230,8 @@ deltaA                   use  (exercised)              dominant  tests/visual/co
 devil_warp               in   (normal,+0)              trace     tests/visual/configs/variations/misc-extras4-smoke.fflame
 devil_warp               out  (normal,+0)              trace     tests/visual/configs/variations/misc-extras4-smoke.fflame
 devil_warp               use  (exercised)              dominant  tests/visual/configs/variations/misc-extras4-smoke.fflame
-diamond                  in   (+0,normal)              trace     random:91
-diamond                  in   (normal,+0)              trace     random:9
+diamond                  in   (+0,normal)              trace     random:66
+diamond                  in   (normal,+0)              trace     random:29
 diamond                  in   (normal,large)           common    random:61
 diamond                  in   (large,large)            common    random:61
 diamond                  out  (+0,normal)              common    random:61
@@ -248,7 +248,6 @@ dinis_surface_wf         use  (exercised)              dominant  tests/visual/co
 disc                     in   (+0,normal)              trace     random:23
 disc                     in   (normal,+0)              trace     random:36
 disc                     out  (+0,+0)                  trace     random:88
-disc                     out  (+0,-0)                  trace     random:91
 disc                     out  (+0,normal)              rare      random:77
 disc                     out  (-0,normal)              rare      random:77
 disc                     out  (normal,+0)              rare      random:77
@@ -460,12 +459,12 @@ hadamard_js              in   (large,large)            trace     tests/visual/co
 hadamard_js              out  (large,normal)           trace     tests/visual/configs/variations/sosa_attractors4-smoke.fflame
 hadamard_js              out  (large,large)            trace     tests/visual/configs/variations/sosa_attractors4-smoke.fflame
 hadamard_js              use  (exercised)              dominant  tests/visual/configs/variations/sosa_attractors4-smoke.fflame
-handkerchief             in   (+0,normal)              trace     random:14
+handkerchief             in   (+0,normal)              trace     random:42
 handkerchief             in   (normal,+0)              trace     random:36
 handkerchief             out  (+0,+0)                  trace     random:77
 handkerchief             out  (+0,-0)                  rare      random:77
 handkerchief             out  (+0,normal)              rare      random:77
-handkerchief             out  (-0,+0)                  rare      random:77
+handkerchief             out  (-0,+0)                  trace     random:77
 handkerchief             out  (-0,-0)                  trace     random:77
 handkerchief             out  (-0,normal)              rare      random:77
 handkerchief             out  (normal,+0)              rare      random:77
@@ -527,22 +526,22 @@ holesq                   out  (normal,large)           rare      tests/visual/co
 holesq                   out  (large,normal)           rare      tests/visual/configs/variations/simple-classics-smoke.fflame
 holesq                   out  (large,large)            common    tests/visual/configs/variations/simple-classics-smoke.fflame
 holesq                   use  (exercised)              dominant  tests/visual/configs/variations/simple-classics-smoke.fflame
-horseshoe                in   (+0,normal)              trace     random:2
-horseshoe                in   (normal,+0)              trace     random:5
+horseshoe                in   (+0,normal)              trace     random:24
+horseshoe                in   (normal,+0)              trace     random:34
 horseshoe                out  (+0,normal)              rare      tests/visual/configs/variations/misc-variations2.fflame
 horseshoe                out  (-0,normal)              rare      tests/visual/configs/variations/misc-variations2.fflame
-horseshoe                out  (normal,+0)              trace     random:60
-horseshoe                out  (normal,-0)              trace     random:2
+horseshoe                out  (normal,+0)              trace     random:62
+horseshoe                out  (normal,-0)              trace     random:81
 horseshoe                use  (exercised)              dominant  random:98
-hyperbolic               in   (+0,normal)              trace     random:25
-hyperbolic               in   (normal,+0)              trace     random:81
+hyperbolic               in   (+0,normal)              trace     random:70
+hyperbolic               in   (normal,+0)              trace     random:12
 hyperbolic               in   (normal,large)           common    random:61
 hyperbolic               in   (large,normal)           rare      random:61
 hyperbolic               in   (large,large)            dominant  random:61
-hyperbolic               out  (+0,normal)              trace     random:25
+hyperbolic               out  (+0,normal)              trace     random:70
 hyperbolic               out  (-0,large)               common    random:61
 hyperbolic               out  (tiny,large)             common    random:61
-hyperbolic               out  (normal,+0)              trace     random:19
+hyperbolic               out  (normal,+0)              trace     random:12
 hyperbolic               out  (normal,large)           common    random:61
 hyperbolic               use  (exercised)              dominant  random:6
 hyperbolicellipse        in   (+0,normal)              trace     tests/visual/configs/variations/apo-misc8-smoke.fflame
@@ -632,10 +631,10 @@ jac_cn                   use  (exercised)              dominant  tests/visual/co
 jac_dn                   use  (exercised)              dominant  tests/visual/configs/variations/jacobi-elliptic-smoke.fflame
 jac_sn                   use  (exercised)              dominant  tests/visual/configs/variations/jacobi-elliptic-smoke.fflame
 jubiQ                    use  (exercised)              dominant  tests/visual/configs/variations/gridout3d-jubiq-smoke.fflame
-julia                    in   (+0,normal)              trace     random:67
+julia                    in   (+0,normal)              trace     random:42
 julia                    in   (normal,+0)              trace     random:82
-julia                    out  (+0,normal)              trace     random:91
-julia                    out  (-0,normal)              trace     random:91
+julia                    out  (+0,normal)              trace     random:81
+julia                    out  (-0,normal)              trace     random:82
 julia                    out  (normal,+0)              trace     random:89
 julia                    out  (normal,-0)              trace     random:42
 julia                    use  (exercised)              dominant  random:98
@@ -830,8 +829,8 @@ plusrecip                use  (exercised)              dominant  tests/visual/co
 poincare3D               use  (exercised)              dominant  tests/visual/configs/variations/apo-misc14-smoke.fflame
 pointgrid_wf             use  (exercised)              dominant  tests/visual/configs/variations/pointgrid_misc-smoke.fflame
 polar                    in   (+0,normal)              trace     random:87
-polar                    in   (normal,+0)              trace     random:81
-polar                    out  (+0,normal)              trace     random:25
+polar                    in   (normal,+0)              trace     random:53
+polar                    out  (+0,normal)              trace     random:58
 polar                    out  (normal,+0)              trace     random:23
 polar                    use  (exercised)              dominant  random:47
 popcorn2_3D              in   (+0,+0)                  trace     tests/visual/configs/variations/popcorn2_3d-smoke.fflame
@@ -989,8 +988,8 @@ sineblur                 out  (+0,normal)              trace     tests/visual/co
 sineblur                 out  (normal,+0)              trace     tests/visual/configs/variations/blur-extras-smoke.fflame
 sineblur                 use  (exercised)              dominant  tests/visual/configs/variations/blur-extras-smoke.fflame
 sintrange                use  (exercised)              dominant  tests/visual/configs/variations/inflate-z-smoke.fflame
-sinusoidal               in   (+0,normal)              trace     random:2
-sinusoidal               in   (normal,+0)              trace     random:20
+sinusoidal               in   (+0,normal)              trace     random:29
+sinusoidal               in   (normal,+0)              trace     random:14
 sinusoidal               out  (+0,+0)                  rare      random:53
 sinusoidal               out  (+0,-0)                  rare      random:53
 sinusoidal               out  (+0,normal)              rare      random:53
@@ -1014,8 +1013,8 @@ spherical                out  (normal,+0)              rare      tests/visual/co
 spherical                use  (exercised)              dominant  preset:Plastic
 spherical3D_wf           use  (exercised)              dominant  tests/visual/configs/variations/apo_misc20-smoke.fflame
 sphericalN               use  (exercised)              dominant  tests/visual/configs/variations/misc-2d-smoke.fflame
-spiral                   in   (+0,normal)              trace     random:2
-spiral                   in   (normal,+0)              trace     random:5
+spiral                   in   (+0,normal)              trace     random:29
+spiral                   in   (normal,+0)              trace     random:99
 spiral                   out  (+0,+0)                  trace     random:13
 spiral                   out  (+0,normal)              rare      random:30
 spiral                   out  (normal,+0)              rare      random:46
@@ -1100,7 +1099,7 @@ svensson_js              in   (normal,+0)              trace     tests/visual/co
 svensson_js              use  (exercised)              dominant  tests/visual/configs/variations/sosa_attractors-smoke.fflame
 svf                      out  (+0,-0)                  trace     tests/visual/configs/variations/misc-extras4-smoke.fflame
 svf                      use  (exercised)              dominant  tests/visual/configs/variations/misc-extras4-smoke.fflame
-swirl                    in   (+0,normal)              trace     random:16
+swirl                    in   (+0,normal)              trace     random:42
 swirl                    in   (normal,+0)              trace     random:93
 swirl                    use  (exercised)              dominant  tests/visual/configs/variations/misc-variations.fflame
 swirl3                   out  (-0,normal)              trace     tests/visual/configs/3d/swirl3-smoke.fflame
@@ -1219,7 +1218,7 @@ waveblur_wf              out  (-0,normal)              trace     tests/visual/co
 waveblur_wf              out  (normal,-0)              trace     tests/visual/configs/variations/waveblur_wf-smoke.fflame
 waveblur_wf              use  (exercised)              dominant  tests/visual/configs/variations/waveblur_wf-smoke.fflame
 waves                    in   (+0,normal)              trace     random:87
-waves                    in   (normal,+0)              trace     random:86
+waves                    in   (normal,+0)              trace     random:30
 waves                    in   (normal,large)           common    random:61
 waves                    in   (large,large)            common    random:61
 waves                    out  (normal,large)           common    random:61

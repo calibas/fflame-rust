@@ -101,7 +101,7 @@ enum Commands {
         #[arg(short, long)]
         category: Option<String>,
 
-        /// Iterations per thread (overrides config file value if provided, range: 64-4096)
+        /// Iterations per thread — trajectory depth per dispatch (default: 1024; the interactive app uses 256, range: 64-4096)
         #[arg(long)]
         iterations_per_thread: Option<u32>,
 
@@ -158,8 +158,8 @@ enum Commands {
         #[arg(long, default_value = "30")]
         fps: u32,
 
-        /// Iterations per thread (default: 256)
-        #[arg(long, default_value = "256")]
+        /// Iterations per thread — trajectory depth per dispatch (the interactive app uses 256)
+        #[arg(long, default_value_t = fractal_flame_wgpu::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD)]
         iterations_per_thread: u32,
 
         /// Video codec: h264, h265, or vp9 (default: h265)

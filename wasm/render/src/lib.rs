@@ -173,11 +173,19 @@ pub async fn probe_impl() -> Result<(), String> {
 /// while keeping a hostile file to seconds rather than forever.
 const MAX_RENDER_ITERATIONS: u64 = 8_000_000_000;
 
+/// Iterations-per-thread bounds. ipt is trajectory depth — one dispatch
+/// runs the whole trajectory, so an unbounded value turns a single
+/// dispatch into a browser-watchdog-length stall the same way an
+/// unbounded iteration budget would. Mirrors the CLI's documented range.
+const MIN_ITERATIONS_PER_THREAD: u32 = 64;
+const MAX_ITERATIONS_PER_THREAD: u32 = 4096;
+
 pub async fn render_impl(
     config_json: &str,
     width: u32,
     height: u32,
     target_iterations: Option<u64>,
+    iterations_per_thread: Option<u32>,
 ) -> Result<RenderedTile, String> {
     if width == 0 || height == 0 {
         return Err("width and height must be nonzero".into());
@@ -220,7 +228,10 @@ pub async fn render_impl(
                 .to_string()
         })?;
 
-    let outcome = render_with_live(&mut live, &config, width, height, iters).await;
+    let ipt = iterations_per_thread
+        .map(|v| v.clamp(MIN_ITERATIONS_PER_THREAD, MAX_ITERATIONS_PER_THREAD));
+
+    let outcome = render_with_live(&mut live, &config, width, height, iters, ipt).await;
 
     LIVE.with(|l| *l.0.borrow_mut() = Some(live));
     outcome
@@ -232,6 +243,7 @@ async fn render_with_live(
     width: u32,
     height: u32,
     target_iterations: Option<u64>,
+    iterations_per_thread: Option<u32>,
 ) -> Result<RenderedTile, String> {
     // Build the renderer on first use, or resize it if the tile geometry
     // changed. `load_config` is a full reset for everything else —
@@ -271,6 +283,9 @@ async fn render_with_live(
     let mut job = RenderJob::new(config, width, height);
     if let Some(iters) = target_iterations {
         job = job.with_iterations(iters);
+    }
+    if let Some(ipt) = iterations_per_thread {
+        job = job.with_iterations_per_thread(ipt);
     }
 
     let out = render_with(renderer, &live.device, &live.queue, job, &mut NoProgress)
@@ -351,18 +366,26 @@ mod wasm {
 
     /// Render a config. `iterations` caps the chaos-game budget
     /// (defaults to the config's own `max_iterations`).
+    /// `iterations_per_thread` is trajectory depth per dispatch
+    /// (default 256, clamped to 64–4096). Depth-vs-breadth trade-off,
+    /// not a quality dial: deep orbits reach late-emerging structure
+    /// with less restart overhead, but orbits stuck in a sink or
+    /// off-frame waste more budget before a restart resamples. It
+    /// changes rendered pixels either way.
     #[wasm_bindgen]
     pub async fn render(
         config_json: &str,
         width: u32,
         height: u32,
         iterations: Option<f64>,
+        iterations_per_thread: Option<u32>,
     ) -> Result<RenderResult, JsValue> {
         let tile = crate::render_impl(
             config_json,
             width,
             height,
             iterations.map(|i| i as u64),
+            iterations_per_thread,
         )
         .await
         .map_err(|e| JsValue::from_str(&e))?;

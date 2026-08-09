@@ -230,7 +230,8 @@ Host-specific packaging runs automatically as the second step — the
 `--profile dist`, never `--release`, for **desktop and web alike** — §4c
 says why, and has the measured numbers for each. The gallery modules are
 the exception: their own `[profile.release]` already sets everything
-`dist` would, plus `wasm-opt`.
+`dist` would, plus `wasm-opt`. §5 has the detail, including the two
+test suites no gate runs.
 
 ### 4.5 — Smoke-test each artifact
 
@@ -534,6 +535,49 @@ it as live-and-wrong: anyone who has it bookmarked is running February's
 build. Retiring it is a release step, not a cleanup task — a redirect to
 `fractalsforall.com/editor/` is better than a 404 for anyone holding the
 old link.
+
+### Gallery modules — two `pkg/` directories, built with wasm-pack
+
+The Endless Gallery's renderer and script engine. Separate crates, so
+they are the one surface that does **not** use `build-wasm.sh`:
+
+```bash
+cd wasm/render && wasm-pack build --target web --release   # -> wasm/render/pkg/
+cd wasm/script && wasm-pack build --target web --release   # -> wasm/script/pkg/
+```
+
+Roughly 1.5 minutes each. Each `pkg/` is a self-contained ES module
+(`.js` + `.wasm` + `.d.ts` + `package.json`); `wasm/README.md` has the
+JS API and an end-to-end example wiring script → render.
+
+**`--release`, not `--profile dist`** — the one exception to §4c, and
+not an oversight: each crate's own `[profile.release]` already sets
+`opt-level = "z"`, `lto = "fat"`, `codegen-units = 1`,
+`panic = "abort"` and `strip = true`, and wasm-pack adds a `wasm-opt
+-Oz` pass the app build never gets. `dist` would add nothing.
+
+**wasm-pack, not raw cargo + wasm-bindgen**, because that `wasm-opt`
+pass is where a large part of the size win is. wasm-pack downloads its
+own `wasm-opt`, so binaryen need not be on PATH. The
+`--enable-bulk-memory --enable-nontrapping-float-to-int` flags in each
+`Cargo.toml` are load-bearing: the bundled wasm-opt 117 predates
+rustc's bulk-memory default and rejects the module without them.
+
+Verify before shipping:
+
+```bash
+cd wasm/script && cargo test    # CLI-parity fixtures: byte-identical flames
+cd wasm/render && cargo test    # GPU smoke + device-reuse regression
+```
+
+**Not gated.** `release.py check` runs `cargo test --lib` from the repo
+root — the main crate only — so neither crate's tests run in any release
+step, while §6 names the CLI-parity fixtures as the guard for
+`script + seed` reproducibility. Run them by hand until that is fixed.
+
+`pkg/` is gitignored, so each machine builds its own and nothing about
+these directories appears in a diff. Where the built modules are
+*deployed* is not decided here — see §7.
 
 ### Linux — nothing decided
 
