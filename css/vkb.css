@@ -39,7 +39,11 @@
    that iOS auto-zooms the page on focus. Height is capped well short
    of the viewport so the on-screen keyboard never covers the text. */
 #vkb-overlay textarea {
-    flex: 1;
+    /* NOT `flex: 1` — that means flex-basis 0, and in the multiline
+       bar's COLUMN layout the basis is the height: the textarea
+       collapsed to its min-content (~3 lines) regardless of the height
+       below. `none` lets the explicit height rule win. */
+    flex: none;
     height: 38vh;
     max-height: 45vh;
     resize: none;

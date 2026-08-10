@@ -329,18 +329,21 @@ impl ScriptsPanel {
             self.adopt_opened("Opened".to_string(), text, ScriptOrigin::External, false);
         }
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            self.render_picker(ui, current);
-            ui.separator();
-            self.render_params(ui);
-            ui.separator();
-            self.render_run_controls(ui, current, &mut response);
-            self.render_editor(ui);
-            self.render_output(ui);
-            // Last: the local script is the primary object, and the
-            // online library is what you can do WITH it.
-            self.render_cloud(ui, cloud, signed_in, cloud_request);
-        });
+        // No ScrollArea of our own: the host already scrolls this panel
+        // (egui_dock's built-in scroll on desktop, the compact wrapper's
+        // AlwaysVisible ScrollArea on mobile), and a second one here
+        // rendered as a scrollbar inside a scrollbar with two competing
+        // drag targets.
+        self.render_picker(ui, current);
+        ui.separator();
+        self.render_params(ui);
+        ui.separator();
+        self.render_run_controls(ui, current, &mut response);
+        self.render_editor(ui);
+        self.render_output(ui);
+        // Last: the local script is the primary object, and the
+        // online library is what you can do WITH it.
+        self.render_cloud(ui, cloud, signed_in, cloud_request);
 
         // Land a fork: rescan so the new file is in the list, select it,
         // then restore the message (`load_selected` clears the status).
