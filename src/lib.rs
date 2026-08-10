@@ -734,6 +734,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
 
+            // Kick the sizing at startup — twice. Nothing fires the
+            // resize path on load (the listeners only react to change),
+            // so the canvas kept whatever initial size winit derived
+            // from the LAYOUT viewport — on iOS that includes the strip
+            // under the bottom toolbar, and the UI sat ~30px under it
+            // until the first real resize. Field-confirmed: opening and
+            // closing the virtual keyboard (which fires visualViewport
+            // resize) "fixed" the layout. The second, later kick
+            // catches iOS settling its toolbars after load; both are
+            // no-ops when the size already matches.
+            for delay in [50, 600] {
+                let _ = web_window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    fire_closure.as_ref().unchecked_ref(),
+                    delay,
+                );
+            }
+
             // Keep both closures alive for the lifetime of the page.
             fire_closure.forget();
             resize_closure.forget();

@@ -334,9 +334,14 @@ impl FractalConfigGallery {
     }
 
     fn render_toolbar(&mut self, ui: &mut egui::Ui) {
-        // Wrapped, and the search box yields width: an unwrappable row of
-        // toggle + 150px search + slider set this panel's MINIMUM width,
-        // and on a phone the panel then clipped instead of shrinking.
+        // Wrapped so a narrow panel folds this onto several lines
+        // instead of imposing a minimum width. Widget widths are sized
+        // against the PANEL width, read before the row starts — sizing
+        // them to "whatever is left on the current line" (the first
+        // attempt) made every widget fit-by-construction, so nothing
+        // ever wrapped and the last widget rendered crammed or clipped
+        // at the row's edge.
+        let panel_width = ui.available_width();
         ui.horizontal_wrapped(|ui| {
             // View mode toggle
             ui.selectable_value(&mut self.view_mode, GalleryViewMode::Grid, t!("fractal_gallery.view_grid"));
@@ -344,9 +349,10 @@ impl FractalConfigGallery {
 
             ui.separator();
 
-            // Search box
+            // Search box — fixed-ish width capped by the panel, so on a
+            // narrow panel it wraps to its own line and still fits there.
             ui.label(t!("fractal_gallery.search"));
-            let search_width = 150.0f32.min(ui.available_width().max(60.0));
+            let search_width = (panel_width - 20.0).clamp(60.0, 150.0);
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
                     .desired_width(search_width)
@@ -360,10 +366,10 @@ impl FractalConfigGallery {
 
             ui.separator();
 
-            // Thumbnail size slider (grid view only)
+            // Thumbnail size slider (grid view only) — same cap.
             if self.view_mode == GalleryViewMode::Grid {
                 ui.label(t!("fractal_gallery.size"));
-                ui.spacing_mut().slider_width = ui.spacing().slider_width.min(ui.available_width().max(60.0));
+                ui.spacing_mut().slider_width = (panel_width - 60.0).clamp(60.0, 100.0);
                 ui.add(super::VkbSlider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
             }
         });
@@ -390,9 +396,16 @@ impl FractalConfigGallery {
                 .collect()
         };
 
+        // Cap the card to the panel: on a panel narrower than the
+        // chosen thumbnail size, shrink the cards to fit rather than
+        // clipping their right edge (a wrapped row cannot wrap its
+        // FIRST item, so an oversized card clips silently). Read once,
+        // before the row starts, so every card this frame agrees.
+        let card_cap = (ui.available_width() - 12.0).max(64.0);
+
         ui.horizontal_wrapped(|ui| {
             for (_original_index, hash, name, config) in &filtered {
-                let card_response = self.render_grid_card(ui, hash, name);
+                let card_response = self.render_grid_card(ui, hash, name, card_cap);
                 if card_response.clicked() {
                     response.selected = Some(config.clone());
                 }
@@ -407,8 +420,10 @@ impl FractalConfigGallery {
         ui: &mut egui::Ui,
         hash: &str,
         name: &str,
+        card_cap: f32,
     ) -> egui::Response {
-        let card_size = Vec2::new(self.thumbnail_size, self.thumbnail_size + 24.0);
+        let side = self.thumbnail_size.min(card_cap);
+        let card_size = Vec2::new(side, side + 24.0);
 
         // Allocate space for the card
         let (rect, response) = ui.allocate_exact_size(card_size, Sense::click());
@@ -426,10 +441,11 @@ impl FractalConfigGallery {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
 
-            // Thumbnail area
+            // Thumbnail area (side, not thumbnail_size: the card may
+            // have been capped to fit a narrow panel)
             let img_rect = egui::Rect::from_min_size(
                 rect.min,
-                Vec2::new(self.thumbnail_size, self.thumbnail_size),
+                Vec2::new(side, side),
             );
 
             // Try to get texture, or load from disk cache
@@ -463,11 +479,11 @@ impl FractalConfigGallery {
             // Name below thumbnail
             let name_rect = egui::Rect::from_min_size(
                 img_rect.left_bottom() + Vec2::new(0.0, 4.0),
-                Vec2::new(self.thumbnail_size, 20.0),
+                Vec2::new(side, 20.0),
             );
 
             // Truncate name if too long
-            let max_chars = (self.thumbnail_size / 8.0) as usize;
+            let max_chars = (side / 8.0) as usize;
             let display_name = if name.len() > max_chars {
                 format!("{}...", &name[..max_chars.saturating_sub(3)])
             } else {
