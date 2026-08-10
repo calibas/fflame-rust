@@ -341,50 +341,62 @@ impl FractalConfigGallery {
         // attempt) made every widget fit-by-construction, so nothing
         // ever wrapped and the last widget rendered crammed or clipped
         // at the row's edge.
+        // Explicit narrow/wide layouts, decided from the measured panel
+        // width — NOT emergent wrapping. Two attempts at
+        // horizontal_wrapped both failed mechanically: bare label +
+        // widget siblings wrap independently (the slider was placed
+        // after its label without its own width ever joining the wrap
+        // decision), and nesting the pair in a child `horizontal` is
+        // worse — a child ui is placed at the cursor and only sized
+        // AFTER its contents run, so the wrapped parent cannot wrap it
+        // at all. Measuring once and choosing a layout is deterministic
+        // and immune to both.
         let panel_width = ui.available_width();
-        ui.horizontal_wrapped(|ui| {
-            // View mode toggle
-            ui.selectable_value(&mut self.view_mode, GalleryViewMode::Grid, t!("fractal_gallery.view_grid"));
-            ui.selectable_value(&mut self.view_mode, GalleryViewMode::List, t!("fractal_gallery.view_list"));
+        let narrow = panel_width < 480.0;
 
-            ui.separator();
+        let search_width = (panel_width - 90.0).clamp(60.0, 150.0);
+        let rail_width = (panel_width - 110.0).clamp(50.0, 100.0);
 
-            // Label + widget pairs are NESTED horizontals: the wrapped
-            // row treats each nested group as ONE item, so the wrap
-            // decision counts the pair's full width. As bare siblings,
-            // the label wrapped on its own and the widget after it was
-            // placed regardless — field-diagnosed on the size slider,
-            // whose rail extended the panel past the visible edge while
-            // only its label had been counted. Widths are capped so
-            // each pair also fits alone on a line of a narrow panel.
-            ui.horizontal(|ui| {
-                ui.label(t!("fractal_gallery.search"));
-                let search_width = (panel_width - 90.0).clamp(60.0, 150.0);
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut self.search_query)
-                        .desired_width(search_width)
-                        .hint_text(t!("fractal_gallery.search_hint")),
-                );
-                super::vkb_sync(ui, &r, &self.search_query);
-            });
-
-            if !self.search_query.is_empty() && ui.button(t!("fractal_gallery.clear_search")).clicked() {
-                self.search_query.clear();
+        let view_toggle = |ui: &mut egui::Ui, view_mode: &mut GalleryViewMode| {
+            ui.selectable_value(view_mode, GalleryViewMode::Grid, t!("fractal_gallery.view_grid"));
+            ui.selectable_value(view_mode, GalleryViewMode::List, t!("fractal_gallery.view_list"));
+        };
+        let search_row = |ui: &mut egui::Ui, search_query: &mut String| {
+            ui.label(t!("fractal_gallery.search"));
+            let r = ui.add(
+                egui::TextEdit::singleline(search_query)
+                    .desired_width(search_width)
+                    .hint_text(t!("fractal_gallery.search_hint")),
+            );
+            super::vkb_sync(ui, &r, search_query);
+            if !search_query.is_empty() && ui.button(t!("fractal_gallery.clear_search")).clicked() {
+                search_query.clear();
             }
+        };
+        let size_row = |ui: &mut egui::Ui, thumbnail_size: &mut f32| {
+            ui.label(t!("fractal_gallery.size"));
+            ui.spacing_mut().slider_width = rail_width;
+            ui.add(super::VkbSlider::new(thumbnail_size, 64.0..=256.0).show_value(false));
+        };
 
-            ui.separator();
-
-            // Thumbnail size slider (grid view only)
+        if narrow {
+            ui.horizontal(|ui| view_toggle(ui, &mut self.view_mode));
+            ui.horizontal(|ui| search_row(ui, &mut self.search_query));
             if self.view_mode == GalleryViewMode::Grid {
-                ui.horizontal(|ui| {
-                    ui.label(t!("fractal_gallery.size"));
-                    // The rail is slider_width plus handle padding —
-                    // the 110 margin covers label + handle + spacing.
-                    ui.spacing_mut().slider_width = (panel_width - 110.0).clamp(50.0, 100.0);
-                    ui.add(super::VkbSlider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
-                });
+                ui.horizontal(|ui| size_row(ui, &mut self.thumbnail_size));
             }
-        });
+        } else {
+            let show_size = self.view_mode == GalleryViewMode::Grid;
+            ui.horizontal(|ui| {
+                view_toggle(ui, &mut self.view_mode);
+                ui.separator();
+                search_row(ui, &mut self.search_query);
+                if show_size {
+                    ui.separator();
+                    size_row(ui, &mut self.thumbnail_size);
+                }
+            });
+        }
     }
 
     fn render_grid(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
