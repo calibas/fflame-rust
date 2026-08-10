@@ -31,7 +31,10 @@ pub fn render_config_dialog_content(
     egui::ScrollArea::vertical()
         .max_height(300.0)
         .show(ui, |ui| {
-            ui.text_edit_multiline(config_json_buffer);
+            let r = ui.text_edit_multiline(config_json_buffer);
+            // Touch devices edit through the overlay's textarea, seeded
+            // with the current buffer (submit is select-all-replace).
+            crate::ui::vkb_sync_opts(ui, &r, config_json_buffer, "multiline");
         });
 
     ui.horizontal(|ui| {

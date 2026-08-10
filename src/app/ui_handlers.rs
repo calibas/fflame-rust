@@ -1096,11 +1096,23 @@ impl App {
             use crate::ui::workspace::PanelType;
             use crate::ui::fractal_browser::BrowserTab;
             self.egui_layer.switch_fractal_browser_tab(BrowserTab::Presets);
-            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+            let ctx = &self.egui_layer.ctx;
+            // Compact docks it (bottom in portrait) like every other
+            // panel there; a floating window on a phone is unusable.
+            if self.workspace.is_compact() {
+                self.workspace.open_compact_panel(PanelType::FractalBrowser, ctx);
+            } else {
+                self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+            }
         }
         if ui_response.open_random_generator {
             use crate::ui::workspace::PanelType;
-            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::RandomGenerator, ctx);
+            let ctx = &self.egui_layer.ctx;
+            if self.workspace.is_compact() {
+                self.workspace.open_compact_panel(PanelType::RandomGenerator, ctx);
+            } else {
+                self.workspace.open_floating_panel(PanelType::RandomGenerator, ctx);
+            }
         }
     }
 
