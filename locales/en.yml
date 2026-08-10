@@ -133,6 +133,7 @@ help:
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
   play_pause_animation: "  Space    - Play/pause animation"
+  exit_fullscreen_hint: "Press F or Esc to exit fullscreen"
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"

@@ -847,6 +847,9 @@ pub struct EguiLayer {
     compact_mode: bool,
     /// Last time any input was received (for menu button fade)
     last_input_time: web_time::Instant,
+    /// When the current fullscreen (UI-hidden) session started, for
+    /// fading out the exit hint. `None` whenever not in that mode.
+    fullscreen_hint_since: Option<web_time::Instant>,
 
     /// Tab bar height of the FractalViewport leaf node (from previous frame).
     /// Used to inflate the fractal texture so it covers the tab bar seamlessly.
@@ -984,6 +987,7 @@ impl EguiLayer {
             touch_tracker: panel_viewer::TouchTracker::default(),
             compact_mode: false,
             last_input_time: web_time::Instant::now(),
+            fullscreen_hint_since: None,
             viewport_tab_bar_height: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
@@ -1463,6 +1467,21 @@ impl EguiLayer {
         // Capture animation time before closure to avoid borrow conflict with animation_controller
         let anim_current_time = animation_controller.current_time;
 
+        // Fullscreen exit-hint fade clock. Updated OUTSIDE the ctx.run
+        // closure: the closure only gets `&self` alongside the borrowed
+        // context, so the mutation lives here and the closure reads the
+        // precomputed age.
+        if fullscreen_mode {
+            if self.fullscreen_hint_since.is_none() {
+                self.fullscreen_hint_since = Some(web_time::Instant::now());
+            }
+        } else {
+            self.fullscreen_hint_since = None;
+        }
+        let fullscreen_hint_age = self
+            .fullscreen_hint_since
+            .map(|t| t.elapsed().as_secs_f32());
+
         // egui 0.34 deprecates `Context::run` + `CentralPanel::show` + `Panel::show` +
         // `DockArea::show(ctx, ...)` in favor of an eframe::App-based flow that hands
         // out a `&mut Ui` directly. We drive winit + wgpu ourselves, so the legacy
@@ -1494,17 +1513,39 @@ impl EguiLayer {
                         }
                     });
 
-                // Show exit hint at bottom
-                egui::Area::new(egui::Id::new("fullscreen_hint"))
-                    .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
-                    .interactable(false)
-                    .show(ctx, |ui| {
-                        ui.add(egui::Label::new(
-                            egui::RichText::new("Press F or Esc to exit fullscreen")
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180))
-                                .size(14.0)
-                        ).selectable(false));
-                    });
+                // Exit hint at the bottom: full strength for 3 s, fades
+                // over the next 1.5 s, then nothing — an overlay that
+                // never leaves defeats the point of hiding the UI.
+                const HOLD: f32 = 3.0;
+                const FADE: f32 = 1.5;
+                let age = fullscreen_hint_age.unwrap_or(0.0);
+                let strength = if age <= HOLD {
+                    1.0
+                } else {
+                    (1.0 - (age - HOLD) / FADE).max(0.0)
+                };
+                if strength > 0.0 {
+                    // Animate: egui only repaints on input, and a fade
+                    // with nobody touching anything would freeze
+                    // mid-fade on any frame the renderer happens to be
+                    // idle. Ask for the frames explicitly.
+                    if age > HOLD {
+                        ctx.request_repaint();
+                    } else {
+                        ctx.request_repaint_after(std::time::Duration::from_secs_f32(HOLD - age));
+                    }
+                    let alpha = (200.0 * strength) as u8;
+                    egui::Area::new(egui::Id::new("fullscreen_hint"))
+                        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
+                        .interactable(false)
+                        .show(ctx, |ui| {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(t!("help.exit_fullscreen_hint"))
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha))
+                                    .size(20.0)
+                            ).selectable(false));
+                        });
+                }
 
                 return;
             }
