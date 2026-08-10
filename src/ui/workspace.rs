@@ -182,6 +182,19 @@ impl Workspace {
         self.current_layout == WorkspaceLayout::Compact
     }
 
+    /// Open a panel the way the current mode wants it: docked into the
+    /// main surface in compact (a floating window on a phone is
+    /// unusable — it opens desktop-sized over the whole screen),
+    /// floating on desktop. App-level code that isn't deliberately
+    /// mode-specific should call this, not the mode-specific variants.
+    pub fn open_panel(&mut self, panel_type: PanelType, ctx: &egui::Context) {
+        if self.is_compact() {
+            self.open_compact_panel(panel_type, ctx);
+        } else {
+            self.open_floating_panel(panel_type, ctx);
+        }
+    }
+
     /// Open a panel docked into the main surface (compact mode).
     /// If a non-viewport panel node already exists, adds as a tab there.
     /// Otherwise splits from viewport (bottom in portrait, right in landscape).

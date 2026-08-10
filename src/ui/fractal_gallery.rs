@@ -334,7 +334,10 @@ impl FractalConfigGallery {
     }
 
     fn render_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        // Wrapped, and the search box yields width: an unwrappable row of
+        // toggle + 150px search + slider set this panel's MINIMUM width,
+        // and on a phone the panel then clipped instead of shrinking.
+        ui.horizontal_wrapped(|ui| {
             // View mode toggle
             ui.selectable_value(&mut self.view_mode, GalleryViewMode::Grid, t!("fractal_gallery.view_grid"));
             ui.selectable_value(&mut self.view_mode, GalleryViewMode::List, t!("fractal_gallery.view_list"));
@@ -343,9 +346,10 @@ impl FractalConfigGallery {
 
             // Search box
             ui.label(t!("fractal_gallery.search"));
+            let search_width = 150.0f32.min(ui.available_width().max(60.0));
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .desired_width(150.0)
+                    .desired_width(search_width)
                     .hint_text(t!("fractal_gallery.search_hint")),
             );
             super::vkb_sync(ui, &r, &self.search_query);
@@ -359,6 +363,7 @@ impl FractalConfigGallery {
             // Thumbnail size slider (grid view only)
             if self.view_mode == GalleryViewMode::Grid {
                 ui.label(t!("fractal_gallery.size"));
+                ui.spacing_mut().slider_width = ui.spacing().slider_width.min(ui.available_width().max(60.0));
                 ui.add(super::VkbSlider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
             }
         });

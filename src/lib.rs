@@ -654,13 +654,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // below the OS DPR (e.g., 1.5 < 2.0 on macOS retina) the
                 // inline style becomes ${CSS × 0.75}px and overrides our
                 // CSS `width: 100%` rule, shrinking the visible canvas.
-                // Restore CSS sizing in that case — drawing buffer stays
-                // at the capped resolution, browser upscales at composite.
+                // Restore explicit CSS sizing in that case — drawing
+                // buffer stays at the capped resolution, browser upscales
+                // at composite.
                 //
-                // Skip when no cap was applied (raw_dpr <= 1.5). On
-                // Windows DPR=1.0, setting style.width "100%" on a canvas
-                // that didn't need it has been observed to trip a reflow
-                // loop in Firefox that froze the renderer.
+                // EXPLICIT PIXELS, not "100%". The container spans the
+                // LAYOUT viewport (html/body are `position:fixed;
+                // inset:0`), and on iOS Safari with the bottom toolbar
+                // visible the layout viewport extends UNDER the toolbar —
+                // the classic 100vh problem. "100%" therefore stretched
+                // the canvas taller than the visual viewport we sized the
+                // surface for, and egui's bottom dock rendered under the
+                // toolbar: the reported ~30px cutoff, on every iPhone,
+                // regardless of safe-area insets. The css_width/height we
+                // computed above ARE the visible size; pin the element to
+                // them.
+                //
+                // Skip when no cap was applied (raw_dpr <= 1.5): winit's
+                // own inline style already equals these values, and
+                // touching style on Windows DPR=1.0 has been observed to
+                // trip a Firefox reflow loop that froze the renderer.
                 if raw_dpr > 1.5 {
                     if let Some(doc) = web_window.document() {
                         if let Some(canvas_el) = doc.get_element_by_id("canvas") {
@@ -669,10 +682,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 let _ = html_canvas
                                     .style()
-                                    .set_property("width", "100%");
+                                    .set_property("width", &format!("{css_width}px"));
                                 let _ = html_canvas
                                     .style()
-                                    .set_property("height", "100%");
+                                    .set_property("height", &format!("{css_height}px"));
                             }
                         }
                     }
@@ -707,6 +720,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     resize_closure.as_ref().unchecked_ref(),
                 )
                 .expect("Failed to register resize listener");
+
+            // ALSO listen on visualViewport. iOS Safari's toolbar
+            // collapsing/expanding (scroll, rotation settling) changes
+            // the VISIBLE height — which is what we size the surface
+            // from — while firing only visualViewport's own resize
+            // event, not window's. Without this, the canvas kept the
+            // stale height until something else nudged window.resize.
+            if let Some(vv) = web_window.visual_viewport() {
+                let _ = vv.add_event_listener_with_callback(
+                    "resize",
+                    resize_closure.as_ref().unchecked_ref(),
+                );
+            }
 
             // Keep both closures alive for the lifetime of the page.
             fire_closure.forget();
