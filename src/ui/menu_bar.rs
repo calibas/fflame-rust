@@ -14,36 +14,41 @@ pub fn render_menu_bar(
     #[allow(deprecated)]
     egui::Panel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            // File Menu
+            // File Menu — same row style as the Window menu (full-width
+            // selectable rows). Pure actions have no open/closed state,
+            // so their `selected` is always false; entries that open a
+            // panel show that panel's state like Window entries do.
             ui.menu_button(t!("menu.file"), |ui| {
-                if ui.button(t!("menu.new")).clicked() {
+                if ui.selectable_label(false, t!("menu.new").as_ref()).clicked() {
                     menu_actions.file.new_flame = true;
                 }
 
-                if ui.button(t!("menu.open")).clicked() {
+                if ui.selectable_label(false, t!("menu.open").as_ref()).clicked() {
                     menu_actions.file.load_config = true;
                 }
 
-                if ui.button(t!("menu.save_as")).clicked() {
+                if ui.selectable_label(false, t!("menu.save_as").as_ref()).clicked() {
                     menu_actions.file.save_config = true;
                 }
 
-                if ui.button(t!("menu.export_flame_xml")).clicked() {
+                if ui.selectable_label(false, t!("menu.export_flame_xml").as_ref()).clicked() {
                     menu_actions.file.export_flame_xml = true;
                 }
 
                 ui.separator();
 
                 // Fractal Browser (presets, batch results, files)
-                if ui.button(t!("menu.from_preset_library")).clicked() {
+                let browser_open = workspace.panel_exists(super::workspace::PanelType::FractalBrowser);
+                if ui.selectable_label(browser_open, t!("menu.from_preset_library").as_ref()).clicked() {
                     menu_actions.file.open_preset_library = true;
                 }
 
-                if ui.button(t!("menu.random_flame")).clicked() {
+                if ui.selectable_label(false, t!("menu.random_flame").as_ref()).clicked() {
                     menu_actions.file.random_flame = true;
                 }
 
-                if ui.button(t!("menu.random_batch")).clicked() {
+                let random_open = workspace.panel_exists(super::workspace::PanelType::RandomGenerator);
+                if ui.selectable_label(random_open, t!("menu.random_batch").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
                 }
 
@@ -52,7 +57,7 @@ pub fn render_menu_bar(
 
                     let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
 
-                    if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online"))).clicked() {
+                    if ui.add_enabled(api_available, egui::SelectableLabel::new(false, t!("menu.save_online").as_ref())).clicked() {
                         let api_flame_id = if menu_state.has_api_flame_id {
                             menu_state.api_flame_id.clone()
                         } else {
@@ -74,20 +79,22 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                if ui.button(t!("menu.export")).clicked() {
+                let export_open = workspace.panel_exists(super::workspace::PanelType::Export);
+                if ui.selectable_label(export_open, t!("menu.export").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Export, ctx);
                 }
 
                 ui.separator();
 
-                if ui.button(t!("menu.config_import_export")).clicked() {
+                let config_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
+                if ui.selectable_label(config_open, t!("menu.config_import_export").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog, ctx);
                 }
 
 
                 ui.separator();
 
-                if ui.button(t!("menu.quit")).clicked() {
+                if ui.selectable_label(false, t!("menu.quit").as_ref()).clicked() {
                     menu_actions.file.quit = true;
                 }
             });
@@ -244,11 +251,8 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser, ctx);
                 }
 
-                // Config Import/Export opens as floating window in docking system
-                let config_dialog_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
-                if ui.selectable_label(config_dialog_open, t!("menu.window_config_dialog").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog, ctx);
-                }
+                // Config Import/Export deliberately absent: it lives in
+                // the File menu, and this menu is long enough already.
 
                 // Undo/Redo History opens as floating window in docking system
                 let history_open = workspace.panel_exists(super::workspace::PanelType::History);
