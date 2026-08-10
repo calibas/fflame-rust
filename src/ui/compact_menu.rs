@@ -89,8 +89,9 @@ fn render_compact_menu_items(
             (PanelType::View, "menu.window_view"),
             (PanelType::Rendering, "menu.window_rendering"),
             (PanelType::SolidLighting, "menu.window_solid_lighting"),
-            (PanelType::PaletteEditor, "menu.window_palette_editor"),
-            (PanelType::PaletteLibrary, "menu.window_palette_library"),
+            // Palette Editor / Palette Library deliberately absent: both
+            // are reachable from the Colors panel, and on a phone this
+            // menu must fit on screen — it was scrolling off the bottom.
             (PanelType::FractalBrowser, "menu.window_fractal_browser"),
             (PanelType::Variations, "menu.window_variations"),
             (PanelType::Subflames, "menu.window_subflames"),

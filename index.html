@@ -15,7 +15,11 @@
          would need a new copy step in build-wasm.bat AND .sh, kept in
          step by hand. Regenerate with scripts/make_icons.py. -->
     <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAADxUlEQVR4nMVXP0srQRCfu2wSiEQLFRX/FIoQFCwsBNHGShFBsJAQC0VRtFDRb6CNH8BgJ0E7RbTSKliInYWopUFRC0EkGgUxibl9zLzsvrvzLne85D0Hlrmdm52d+83M7pwCABx+kJh4UBQFPB7PP99Q0zQacl/4aQRUVSWPent7YWpqip5RVmoSdk9PT2Fzc5OeCQnGGCLAZ2Zm+P+g3d1d2k/sqwoP0+k0fH19wefnJ3E3hHpudYXd9/d3+yRk7PcUeSKRoEUot4KzoqICmpqaaP76+goPDw+WoUPd8vJyaGhooCT/psPyUExMTBBE2WyWeEdHB8k9Hg9XFEUOoT88PCxh3d7eJpnX67XUHRwclLqxWMwQAuYEHX4B538KRZSQHTJudSUAUIBwoczWPOFcv8nf6Lp2gHMuh1lWjK6eVPhhYnYvMGOxGsyworyUxzaze/Hy8mJZ40KWSqVsjRZKOtcOrK+vQzKZ/JZIOM/lctDY2EjcCgmnuLtyYGhoyHExnp5IIkToDCK0tLQEx8fHcHl5KR1CZ/W6jg64Ib/fTzwQCBDHzX0+H6ysrEBNTQ1cXFyQ3Ov1SqTKysrcObC4uAg3Nze02Oy1wQBjcHt7K0MzMjICwWAQRkdHYXV1FT4+PuDs7AzGx8dJ5/r6mtZJm8zmKG5ubia526GqKvGTkxN57IbDYed1YEN42SBsAr5CQ6DU2dkJPT098Pj4SPOFhQVDSVtdRqqdAwin2yHgnJubow2mp6fh/Pwcuru7ySnUEYloDqcKRRLWPBqurq6GSCQC9/f3cHh4CPv7+/R+dna24Hq1WAdEdo+NjVE1bGxskFN7e3uQzWYhHA5TRaCTlgcUc+gHRHLZDbz3sQ9IJBI8lUrxyspK+W5nZ4dsLS8vG3oA/WDFfD0mFtZ+f38/tLS00MGEBxDKMdZVVVUyDNFolBApaQi0fELNz88Tf35+ptartrYW6uvrCXJs61pbW2FgYIASUbR9liHQNI1nMhniTiEQ8lAoxHO5HL+6uuLBYJD7/X7u8/l4IBCg57W1NQrD0dGRpT1VQqGq5DHWNHKnG03U8+TkJD1j8mHHizBnMhk6ATEksViM5n19fRAKhQg1wwXG8ghEIhGeTCb509MT8fb2dlsEMPGQ19XV0del02lKPpSjvmhKsaFFvXg8TnpbW1vfklERv2Z4iegvire3N3mDmQnRwXhivDEB7+7uIB6PS7keJfzitrY26OrqIpsHBwcGHaVU/4bmzd2SISX1cXdjTLRm+vveihAJ0diY9X4B0Tsq4D+57C8AAAAASUVORK5CYII=">
-    <link rel="stylesheet" href="css/vkb.css">
+    <!-- Query strings are cache-busters: WebKit clings to cached JS/CSS
+         through ordinary reloads, and a stale vkb.js silently downgrades
+         the keyboard (observed: the multiline textarea missing on iOS
+         while every wasm-side change landed). Bump with the version. -->
+    <link rel="stylesheet" href="css/vkb.css?v=0.5.0">
     <style>
         * {
             margin: 0;
@@ -329,7 +333,7 @@
         </div>
     </div>
 
-    <script src="js/vkb.js"></script>
+    <script src="js/vkb.js?v=0.5.0"></script>
     <script type="module">
         import init, { WasmApi } from './pkg/fractal_flame_wgpu.js';
 
