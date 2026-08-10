@@ -188,8 +188,9 @@ pub fn render_animation_content(
 fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, response: &mut AnimationPanelResponse) {
     let has_animation = controller.animation.is_some();
 
-    // Row 1: Play/Pause/Stop and Step buttons
-    ui.horizontal(|ui| {
+    // Row 1: Play/Pause/Stop and Step buttons. Wrapped for narrow
+    // panels — see Row 2.
+    ui.horizontal_wrapped(|ui| {
         // Play button
         let is_playing = controller.state == PlaybackState::Playing;
         if ui.add_enabled(has_animation && !is_playing, egui::Button::new("▶"))
@@ -258,8 +259,10 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, r
             });
     });
 
-    // Row 2: Duration and Loop Mode
-    ui.horizontal(|ui| {
+    // Row 2: Duration and Loop Mode. Wrapped, not clipped: on a phone
+    // this panel is narrower than the row, and the sync-audio toggle
+    // was pushed off the right edge with no way to scroll to it.
+    ui.horizontal_wrapped(|ui| {
         // Duration input
         ui.label(t!("animation_panel.duration"));
         if let Some(ref mut animation) = controller.animation {
@@ -468,9 +471,10 @@ pub fn render_timeline_scrubber(ui: &mut Ui, controller: &mut AnimationControlle
         ui.label(format!("({}%)", progress));
     });
 
-    // Timeline slider - ensure minimum width of 300px
-    let available_width = ui.available_width();
-    let slider_width = available_width.max(300.0);
+    // Timeline slider — fill whatever width the panel has. The old
+    // 300px floor overflowed the panel on phones, pushing everything
+    // to its right permanently out of reach (no horizontal scroll).
+    let slider_width = ui.available_width();
 
     let mut time = controller.current_time;
     let mut layout: Option<TimelineLayout> = None;

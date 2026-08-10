@@ -76,6 +76,9 @@ web-sys = { version = "0.3", features = [
     "VisualViewport",
     "Location",
     "Element",
+    # Safe-area sizing: getComputedStyle resolves the canvas container's
+    # env(safe-area-inset-*) padding so the render surface can subtract it
+    "CssStyleDeclaration",
     "HtmlCanvasElement",
     "Storage",
     "Blob",

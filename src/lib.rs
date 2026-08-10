@@ -594,6 +594,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if css_width <= 0.0 || css_height <= 0.0 {
                     return;
                 }
+                // Subtract the canvas container's safe-area padding.
+                // visualViewport spans the WHOLE screen, insets
+                // included, but the container pads the canvas inside
+                // them (`env(safe-area-inset-*)` in index.html) — and
+                // winit later overrides the canvas's CSS size to
+                // whatever we request here. Sizing to the full viewport
+                // therefore pushed the canvas past the padded box: on
+                // iPhones the bottom ~34px of UI sat under the home
+                // indicator, unreachable. getComputedStyle resolves the
+                // env() values to pixels; zero everywhere without a
+                // notch, so desktop is untouched.
+                let (pad_x, pad_y) = web_window
+                    .document()
+                    .and_then(|doc| doc.get_element_by_id("canvas-container"))
+                    .and_then(|el| web_window.get_computed_style(&el).ok().flatten())
+                    .map(|style| {
+                        let px = |prop: &str| {
+                            style
+                                .get_property_value(prop)
+                                .ok()
+                                .and_then(|v| v.trim_end_matches("px").parse::<f64>().ok())
+                                .unwrap_or(0.0)
+                        };
+                        (
+                            px("padding-left") + px("padding-right"),
+                            px("padding-top") + px("padding-bottom"),
+                        )
+                    })
+                    .unwrap_or((0.0, 0.0));
+                let css_width = (css_width - pad_x).max(1.0);
+                let css_height = (css_height - pad_y).max(1.0);
+
                 let raw_dpr = web_window.device_pixel_ratio();
                 let dpr = raw_dpr.min(1.5);
 
