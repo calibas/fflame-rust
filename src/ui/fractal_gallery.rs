@@ -349,16 +349,24 @@ impl FractalConfigGallery {
 
             ui.separator();
 
-            // Search box — fixed-ish width capped by the panel, so on a
-            // narrow panel it wraps to its own line and still fits there.
-            ui.label(t!("fractal_gallery.search"));
-            let search_width = (panel_width - 20.0).clamp(60.0, 150.0);
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut self.search_query)
-                    .desired_width(search_width)
-                    .hint_text(t!("fractal_gallery.search_hint")),
-            );
-            super::vkb_sync(ui, &r, &self.search_query);
+            // Label + widget pairs are NESTED horizontals: the wrapped
+            // row treats each nested group as ONE item, so the wrap
+            // decision counts the pair's full width. As bare siblings,
+            // the label wrapped on its own and the widget after it was
+            // placed regardless — field-diagnosed on the size slider,
+            // whose rail extended the panel past the visible edge while
+            // only its label had been counted. Widths are capped so
+            // each pair also fits alone on a line of a narrow panel.
+            ui.horizontal(|ui| {
+                ui.label(t!("fractal_gallery.search"));
+                let search_width = (panel_width - 90.0).clamp(60.0, 150.0);
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.search_query)
+                        .desired_width(search_width)
+                        .hint_text(t!("fractal_gallery.search_hint")),
+                );
+                super::vkb_sync(ui, &r, &self.search_query);
+            });
 
             if !self.search_query.is_empty() && ui.button(t!("fractal_gallery.clear_search")).clicked() {
                 self.search_query.clear();
@@ -366,11 +374,15 @@ impl FractalConfigGallery {
 
             ui.separator();
 
-            // Thumbnail size slider (grid view only) — same cap.
+            // Thumbnail size slider (grid view only)
             if self.view_mode == GalleryViewMode::Grid {
-                ui.label(t!("fractal_gallery.size"));
-                ui.spacing_mut().slider_width = (panel_width - 60.0).clamp(60.0, 100.0);
-                ui.add(super::VkbSlider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
+                ui.horizontal(|ui| {
+                    ui.label(t!("fractal_gallery.size"));
+                    // The rail is slider_width plus handle padding —
+                    // the 110 margin covers label + handle + spacing.
+                    ui.spacing_mut().slider_width = (panel_width - 110.0).clamp(50.0, 100.0);
+                    ui.add(super::VkbSlider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
+                });
             }
         });
     }
