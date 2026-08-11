@@ -1006,6 +1006,127 @@ fn register_transform(engine: &mut Engine) {
 
     engine.register_fn("index", |t: &mut TransformHandle| -> i64 { t.idx as i64 });
 
+    // ---- Attachments -------------------------------------------------
+    //
+    // A final or linked transform lives in a POOL and does nothing until
+    // some normal transform references it (`final_attachments` /
+    // `linked_attachments`). `add_final_transform()` fills the pool
+    // only, so without these a script could build a final and never see
+    // it — the shape of the classic Apophysis single global final is
+    // "one final, attached to every normal", which is what
+    // `attach_to_all()` writes.
+    //
+    // Attachment lists are ORDERED (chained finals apply in list order)
+    // and these append, so calling them in the order you want the chain
+    // is the whole story. Idempotent: attaching twice does not run the
+    // transform twice.
+    fn attach_indices(
+        t: &TransformHandle,
+        who: &str,
+    ) -> Result<Vec<usize>, Box<EvalAltResult>> {
+        match t.pool {
+            Pool::Normal => Err(err(format!(
+                "{who} is for final and linked transforms — a normal transform is what \
+                 they attach TO, not something you attach"
+            ))),
+            _ => {
+                let cfg = t.cfg.borrow();
+                Ok((0..cfg.flame.transforms.len()).collect())
+            }
+        }
+    }
+
+    /// Mutate the attachment list of normal transform `n` for `t`'s pool.
+    fn with_attachments<R>(
+        t: &TransformHandle,
+        n: usize,
+        f: impl FnOnce(&mut Vec<usize>) -> R,
+    ) -> Result<R, Box<EvalAltResult>> {
+        let mut cfg = t.cfg.borrow_mut();
+        let pool = t.pool;
+        let normal = cfg
+            .flame
+            .transforms
+            .get_mut(n)
+            .ok_or_else(|| err(format!("no normal transform at index {n}")))?;
+        let list = match pool {
+            Pool::Final => &mut normal.final_attachments,
+            Pool::Linked => &mut normal.linked_attachments,
+            Pool::Normal => unreachable!("guarded by attach_indices"),
+        };
+        Ok(f(list))
+    }
+
+    engine.register_fn(
+        "attach_to_all",
+        |t: &mut TransformHandle| -> Result<(), Box<EvalAltResult>> {
+            let targets = attach_indices(t, "attach_to_all")?;
+            let idx = t.idx;
+            for n in targets {
+                with_attachments(t, n, |list| {
+                    if !list.contains(&idx) {
+                        list.push(idx);
+                    }
+                })?;
+            }
+            Ok(())
+        },
+    );
+
+    engine.register_fn(
+        "attach_to",
+        |t: &mut TransformHandle, n: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            attach_indices(t, "attach_to")?;
+            let n = num(&n, "attach_to index")? as i64;
+            let n = usize::try_from(n).map_err(|_| err("transform index must be >= 0"))?;
+            let idx = t.idx;
+            with_attachments(t, n, |list| {
+                if !list.contains(&idx) {
+                    list.push(idx);
+                }
+            })
+        },
+    );
+
+    engine.register_fn(
+        "detach_from",
+        |t: &mut TransformHandle, n: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            attach_indices(t, "detach_from")?;
+            let n = num(&n, "detach_from index")? as i64;
+            let n = usize::try_from(n).map_err(|_| err("transform index must be >= 0"))?;
+            let idx = t.idx;
+            with_attachments(t, n, |list| {
+                if let Some(pos) = list.iter().position(|&a| a == idx) {
+                    list.remove(pos);
+                }
+            })
+        },
+    );
+
+    engine.register_fn(
+        "attached_to",
+        |t: &mut TransformHandle| -> Result<Array, Box<EvalAltResult>> {
+            attach_indices(t, "attached_to")?;
+            let cfg = t.cfg.borrow();
+            let idx = t.idx;
+            let pool = t.pool;
+            Ok(cfg
+                .flame
+                .transforms
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| {
+                    let list = match pool {
+                        Pool::Final => &n.final_attachments,
+                        _ => &n.linked_attachments,
+                    };
+                    list.contains(&idx)
+                })
+                .map(|(i, _)| Dynamic::from(i as i64))
+                .collect())
+        },
+    );
+
     // Reading what's already on a transform is what separates a MODIFIER
     // from an overwriter: a mutation has to nudge what it finds.
     engine.register_fn(

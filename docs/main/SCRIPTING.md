@@ -102,6 +102,39 @@ flame.clear_transforms();
 flame.name = "Aurora";                   // also read: flame.name
 ```
 
+### Final and linked transforms must be attached
+
+**This is the one that catches everyone.** `add_final_transform()` puts
+a transform in a *pool*; it does nothing until some normal transform
+references it. A final you build and never attach produces no error, no
+warning, and no visible difference — it simply never runs.
+
+```rhai
+let fin = flame.add_final_transform();
+fin.add_variation("spherical", 1.0);
+fin.attach_to_all();                 // ← the classic Apophysis "global final"
+```
+
+```rhai
+fin.attach_to(2);        // just normal transform 2
+fin.detach_from(0);      // take it back off
+fin.attached_to();       // array of normal indices it runs on
+```
+
+`attach_to_all()` attaches to the normals that exist **when it is
+called** — build your transforms first, or call it again afterwards.
+Attaching twice is a no-op, so a modifier can call it safely.
+
+Attachment lists are **ordered**, and these append: attach several
+finals in the order you want them chained. Linked transforms use the
+same four calls and their own list.
+
+**Final vs. linked** — finals are a *view filter*: they shape only what
+gets plotted, their colour writes are discarded, and their output does
+not feed the next iteration. Linked transforms are part of the
+*dynamics*: their output does feed forward. Reach for a final when you
+want to bend the picture, a linked when you want to change the attractor.
+
 ### Contractiveness — the one number that decides haze vs. structure
 
 ```rhai

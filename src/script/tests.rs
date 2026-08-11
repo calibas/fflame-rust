@@ -3786,3 +3786,133 @@ fn adopting_takes_a_free_stem_and_marks_provenance() {
     assert!(store::is_untrusted(&saved));
     store::delete(&saved).unwrap();
 }
+
+/// A final transform lives in a POOL and is inert until some normal
+/// transform references it. `add_final_transform()` fills the pool
+/// only — so before `attach_to_all()` existed, a script could build a
+/// perfectly good final and it would never run, with no error and no
+/// visible difference. This is the classic Apophysis shape: one final,
+/// attached to everything.
+#[test]
+fn a_final_attaches_to_every_normal_transform() {
+    let out = run(
+        r#"
+        script("Finals", "generator");
+        for i in 0..3 {
+            let t = flame.add_transform();
+            t.add_variation("linear", 1.0);
+        }
+        let fin = flame.add_final_transform();
+        fin.add_variation("spherical", 1.0);
+        fin.attach_to_all();
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    let flame = &out.config.flame;
+    assert_eq!(flame.transforms.len(), 3);
+    assert_eq!(flame.final_transforms.len(), 1);
+    for (i, t) in flame.transforms.iter().enumerate() {
+        assert_eq!(
+            t.final_attachments,
+            vec![0],
+            "normal transform {i} must reference the final, or it never runs"
+        );
+        assert!(t.linked_attachments.is_empty(), "finals must not land in the linked list");
+    }
+}
+
+/// Attaching is idempotent and individually addressable, and detaching
+/// is the inverse — a modifier has to be able to nudge what it finds
+/// without doubling it.
+#[test]
+fn attachments_are_idempotent_addressable_and_reversible() {
+    let out = run(
+        r#"
+        script("Attach", "generator");
+        for i in 0..3 { flame.add_transform().add_variation("linear", 1.0); }
+        let fin = flame.add_final_transform();
+        fin.add_variation("spherical", 1.0);
+
+        fin.attach_to_all();
+        fin.attach_to_all();          // twice must not double it
+        fin.attach_to(1);             // already attached
+        fin.detach_from(0);           // and one comes off
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    let flame = &out.config.flame;
+    assert!(flame.transforms[0].final_attachments.is_empty(), "detach_from(0) failed");
+    assert_eq!(flame.transforms[1].final_attachments, vec![0], "double-attached");
+    assert_eq!(flame.transforms[2].final_attachments, vec![0]);
+}
+
+/// `attached_to()` reads back what a modifier needs to reason about.
+#[test]
+fn attached_to_reports_the_normals_a_final_runs_on() {
+    let out = run(
+        r#"
+        script("Query", "generator");
+        for i in 0..3 { flame.add_transform().add_variation("linear", 1.0); }
+        let fin = flame.add_final_transform();
+        fin.add_variation("spherical", 1.0);
+        fin.attach_to(2);
+        fin.attach_to(0);
+        let seen = fin.attached_to();
+        // Record the answer where the test can see it.
+        flame.name = "" + seen.len() + ":" + seen[0] + "," + seen[1];
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    // Reported in normal-transform order, not attach order.
+    assert_eq!(out.config.flame.name, "2:0,2");
+}
+
+/// Linked transforms use the same mechanism and must not be confused
+/// with finals — they feed the next iteration, finals only filter what
+/// is plotted.
+#[test]
+fn linked_transforms_attach_to_their_own_list() {
+    let out = run(
+        r#"
+        script("Linked", "generator");
+        for i in 0..2 { flame.add_transform().add_variation("linear", 1.0); }
+        let l = flame.add_linked_transform();
+        l.add_variation("spherical", 1.0);
+        l.attach_to_all();
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    for t in &out.config.flame.transforms {
+        assert_eq!(t.linked_attachments, vec![0]);
+        assert!(t.final_attachments.is_empty());
+    }
+}
+
+/// A normal transform is what finals attach TO. Asking to attach one is
+/// a mistake worth naming rather than silently ignoring.
+#[test]
+fn attaching_a_normal_transform_is_refused() {
+    let err = run(
+        r#"
+        script("Bad", "generator");
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.attach_to_all();
+        "#,
+        1,
+    )
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("final and linked"),
+        "error should explain what attach_to_all is for, got: {msg}"
+    );
+}
