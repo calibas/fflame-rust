@@ -2577,3 +2577,96 @@ fn register_registry_queries(engine: &mut Engine) {
         crate::effects::global_effect_registry().get(name).is_some()
     });
 }
+
+#[cfg(test)]
+mod doc_coverage {
+    /// Every name a script can call must appear in the reference.
+    ///
+    /// The reference is prose (a bare signature dump is not a
+    /// reference), so it is hand-written — which means it rots the
+    /// moment someone registers a function and forgets. This reads the
+    /// registrations back out of THIS file and fails if one is missing
+    /// from the doc, which is the same staleness-gate shape the shader
+    /// dumps and the engine contract use.
+    ///
+    /// Enumerating from source rather than from `Engine::
+    /// gen_fn_signatures` is deliberate: that needs rhai's `metadata`
+    /// feature, which drags serde_json into the WASM build to serve a
+    /// docs-only purpose.
+    #[test]
+    fn every_script_api_name_is_documented() {
+        const API_SRC: &str = include_str!("api.rs");
+        const DOC: &str = include_str!("../../docs/main/SCRIPTING.md");
+
+        // Names that are Rhai plumbing or internal, not vocabulary a
+        // script author types.
+        const NOT_VOCABULARY: &[&str] = &[
+            // Type registrations (the type NAMES appear in error text,
+            // never in a script).
+            "Anim", "Color", "Config", "Flame", "Transform",
+            // Display plumbing.
+            "to_string",
+        ];
+
+        let mut names: Vec<String> = Vec::new();
+        let mut push = |n: &str| {
+            let n = n.to_string();
+            if !NOT_VOCABULARY.contains(&n.as_str()) && !names.contains(&n) {
+                names.push(n);
+            }
+        };
+
+        // `register_fn("name"`, `register_get("name"`, etc. — take the
+        // first string literal after the opening paren.
+        for (idx, _) in API_SRC.match_indices("register_") {
+            let tail = &API_SRC[idx..];
+            let Some(paren) = tail.find('(') else { continue };
+            // Guard against matching something that isn't a call.
+            if paren > 40 {
+                continue;
+            }
+            let after = &tail[paren + 1..];
+            let trimmed = after.trim_start();
+            if !trimmed.starts_with('"') {
+                continue;
+            }
+            if let Some(end) = trimmed[1..].find('"') {
+                push(&trimmed[1..1 + end]);
+            }
+        }
+
+        // The property macros: `prop_f32!("weight", weight);`
+        for (idx, _) in API_SRC.match_indices("prop_") {
+            let tail = &API_SRC[idx..];
+            let Some(bang) = tail.find("!(") else { continue };
+            if bang > 12 {
+                continue;
+            }
+            let after = &tail[bang + 2..];
+            if !after.starts_with('"') {
+                continue;
+            }
+            if let Some(end) = after[1..].find('"') {
+                push(&after[1..1 + end]);
+            }
+        }
+
+        assert!(
+            names.len() > 80,
+            "extractor found only {} names — it stopped matching the source, \
+             which would make this test pass vacuously",
+            names.len()
+        );
+
+        let missing: Vec<&String> = names.iter().filter(|n| !DOC.contains(*n)).collect();
+        assert!(
+            missing.is_empty(),
+            "{} script API name(s) are registered but absent from \
+             docs/main/SCRIPTING.md: {:?}\n\
+             Add them to the reference (or to NOT_VOCABULARY if a script \
+             author never types them).",
+            missing.len(),
+            missing
+        );
+    }
+}

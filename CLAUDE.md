@@ -16,6 +16,7 @@
   - [COLOR.md](docs/main/COLOR.md) - Color modes, palette, histogram
   - [CONFIG.md](docs/main/CONFIG.md) - FractalConfig, presets, undo/redo
   - [EXPORT.md](docs/main/EXPORT.md) - PNG export, metadata, CLI batch mode
+  - [SCRIPTING.md](docs/main/SCRIPTING.md) - Rhai script API reference (kept honest by a staleness test)
 - [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) - Unit tests, regression, benchmarks
 - [docs/WASM.md](docs/WASM.md) - WebAssembly build guide
 - [docs/projects/](docs/projects/) - Per-feature design docs and plans

@@ -12,6 +12,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
 - [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
 - [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode
+- [SCRIPTING.md](main/SCRIPTING.md) - Rhai script API reference (generators, modifiers, animation)
 - [PRESET-BROWSER.md](main/PRESET-BROWSER.md) - Gallery UI system for browsing fractals
 - [TESTING-GUIDE.md](TESTING-GUIDE.md) - Unit tests, regression tests, benchmarks, profiling
 
