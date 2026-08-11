@@ -537,6 +537,14 @@ pub struct App {
     /// Used to keep the current snapshot's "after" up to date with any api_state changes.
     pub(super) current_api_snapshot_idx: Option<usize>,
     // API save in-flight state
+    /// The name the in-flight online save was dispatched with.
+    ///
+    /// Held across the async round trip so the result reports what was
+    /// actually sent, and so the local flame adopts it on success —
+    /// the two names are one name. Reading the live config instead
+    /// (what the notification used to do) reports whatever the flame
+    /// was called BEFORE the save.
+    pub(super) api_pending_name: Option<String>,
     pub(super) api_pending_visibility: Option<bool>,
     /// True if the in-flight save is a SaveNew (creates a new flame ID).
     /// Used to clear flame_animations / animation_id on completion.
@@ -757,6 +765,7 @@ impl App {
             script_cloud_results: Default::default(),
             api_state_history: std::collections::HashMap::new(),
             current_api_snapshot_idx: None,
+            api_pending_name: None,
             api_pending_visibility: None,
             api_pending_is_new: false,
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
