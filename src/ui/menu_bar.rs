@@ -52,12 +52,19 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
                 }
 
-                if menu_state.online_mode && menu_state.auth_email.is_some() {
+                // Present whenever online mode is on, signed in or not —
+                // hiding it while signed out makes the feature look
+                // absent. Signed out it opens the login panel instead.
+                if menu_state.online_mode {
                     ui.separator();
 
+                    let signed_in = menu_state.auth_email.is_some();
                     let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
 
-                    if ui.add_enabled(api_available, egui::SelectableLabel::new(false, t!("menu.save_online").as_ref())).clicked() {
+                    if ui.add_enabled(!signed_in || api_available, egui::SelectableLabel::new(false, t!("menu.save_online").as_ref())).clicked() {
+                      if !signed_in {
+                        workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
+                      } else {
                         let api_flame_id = if menu_state.has_api_flame_id {
                             menu_state.api_flame_id.clone()
                         } else {
@@ -74,6 +81,7 @@ pub fn render_menu_bar(
                             menu_state.animation_owned,
                         );
                         workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
+                      }
                     }
                 }
 

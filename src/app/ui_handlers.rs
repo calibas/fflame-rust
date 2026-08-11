@@ -1588,7 +1588,18 @@ impl App {
                             self.api_state.flame_animations.clear();
                             self.api_state.animation_id = None;
                         }
-                        let name = self.config_manager.active_config().flame.name.clone();
+                        // The name that was SENT, not the flame's old
+                        // local name — and the flame adopts it, so the
+                        // local file, the online record and this
+                        // message all say the same thing from here on.
+                        // (Falls back to the local name only if some
+                        // path saved without going through the dialog.)
+                        let name = self
+                            .api_pending_name
+                            .take()
+                            .unwrap_or_else(|| self.config_manager.active_config().flame.name.clone());
+                        self.config_manager.rename_flame(name.clone());
+                        self.flame.name = name.clone();
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_success", name = name),
                             false,
@@ -1605,6 +1616,7 @@ impl App {
                         log::error!("Failed to save flame online: {}", e);
                         self.pending_animation_save = None;
                         self.api_pending_visibility = None;
+                        self.api_pending_name = None;
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_error", error = e),
                             true,
@@ -1657,6 +1669,7 @@ impl App {
 
                     self.api_pending_visibility = Some(make_public);
                     self.api_pending_is_new = true;
+                    self.api_pending_name = Some(name.clone());
 
                     let window = self.window.clone();
 
@@ -1711,6 +1724,7 @@ impl App {
 
                     self.api_pending_visibility = Some(make_public);
                     self.api_pending_is_new = false;
+                    self.api_pending_name = Some(name.clone());
 
                     if let Some(flame_id) = self.api_state.flame_id.clone() {
                         let window = self.window.clone();

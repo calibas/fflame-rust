@@ -149,16 +149,26 @@ fn render_compact_menu_items(
             ui.close();
         }
 
-        if menu_state.online_mode && menu_state.auth_email.is_some() {
+        // Shown whenever online mode is on, signed in or not: hiding it
+        // when signed out (the old gate) made the feature look absent —
+        // the reported "Save Online missing from the mobile File menu".
+        // Signed out, it routes to the login panel instead.
+        if menu_state.online_mode {
+            let signed_in = menu_state.auth_email.is_some();
             let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
 
             if ui
                 .add_enabled(
-                    api_available,
+                    !signed_in || api_available,
                     egui::SelectableLabel::new(false, t!("menu.save_online").as_ref()),
                 )
                 .clicked()
             {
+                if !signed_in {
+                    workspace.open_compact_panel(PanelType::LoginDialog, ctx);
+                    ui.close();
+                    return;
+                }
                 let api_flame_id = if menu_state.has_api_flame_id {
                     menu_state.api_flame_id.clone()
                 } else {
