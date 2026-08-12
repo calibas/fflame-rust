@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "25379405",
+  "git_hash": "724fce44",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -257,6 +257,10 @@
     "variations-crackle-distort-smoke.png": {
       "bytes": 6604,
       "sha256": "0834bfe3c0346296c50390e57913c1a3cc36d9f05430ae787acbe75e6d0a494d"
+    },
+    "variations-crackle-fast-smoke.png": {
+      "bytes": 9464,
+      "sha256": "0552eb843bf0b6e9f8850765b34d06225ff8f9d71afe229f5148954c5bc89dd4"
     },
     "variations-crackle-smoke.png": {
       "bytes": 6122,

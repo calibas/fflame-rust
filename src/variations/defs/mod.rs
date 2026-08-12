@@ -1272,4 +1272,5 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &MATRIX3D,
     &LSYSTEM_PATH_3D,
     &LSYSTEM_TREE,
+    &CRACKLE_FAST,
 ];

@@ -10,7 +10,11 @@
 //! `dc_crackle_wf` extends `crackle` with two direct-color params; the
 //! XY math is identical so the bodies share the helper call structure.
 //!
-//! Both variations rely on the noise + voronoi helpers from
+//! `crackle_fast` is the same algorithm with hashed cell offsets in
+//! place of the simplex pair — see its doc comment; distortion costs
+//! ~15 ALU per cell there instead of ~200.
+//!
+//! The original variations rely on the noise + voronoi helpers from
 //! [`shaders/core/noise.wgsl`](../../../shaders/core/noise.wgsl) and
 //! [`shaders/core/voronoi.wgsl`](../../../shaders/core/voronoi.wgsl).
 //! The shader builder injects both modules when any of the family is
@@ -91,12 +95,54 @@ pub static DC_CRACKLE_WF: VariationDef = VariationDef {
     wgsl_3d: DC_CRACKLE_WGSL_3D,
 };
 
+/// `crackle` rebuilt for speed. Same algorithm and parameters, one
+/// substitution: the per-cell offsets come from an integer hash
+/// (value-noise interpolated along `z`) instead of two
+/// `simplex_noise_3d` calls per cell — the lattice is only ever
+/// sampled at integer coordinates, where full simplex is ~15× more
+/// arithmetic for the same statistical effect. The cell LAYOUT
+/// therefore differs from `crackle`'s (this is deliberately a separate
+/// variation, not a change to it), but the character — irregular
+/// distorted Voronoi cells, flowing when `z` animates — is the same.
+///
+/// Distortion defaults ON (1.0): an undistorted crackle is just a
+/// square grid, and the distorted case is exactly where the original
+/// is at its slowest.
+///
+/// # Authors
+/// - slobo777
+/// - Andreas Maschke
+/// - Fractals for All
+/// - Claude Fable 5
+pub static CRACKLE_FAST: VariationDef = VariationDef {
+    name: "crackle_fast",
+    aliases: &[],
+    display_name: "Crackle Fast",
+    category: VariationCategory::Plugin,
+    phase: VariationPhase::Any,
+    features: &[Feature::NeedsRng],
+    init_param_count: 0,
+    wgsl_init: None,
+    state_count: 0,
+    wgsl_state_init: None,
+    parameters: &[
+        param!("cellsize", "Cell Size", unlimited_float, 1.0, 0.01, 10.0, "Side length of the underlying square Voronoi grid. See `crackle`."),
+        param!("power", "Power", unlimited_float, 0.2, -10.0, 10.0, "Exponent on cell inside-ness `L`. See `crackle`."),
+        param!("distort", "Distort", unlimited_float, 1.0, -10.0, 10.0, "Strength of the per-cell hash offset applied to cell centers. Defaults ON — this is what turns the grid into irregular cells. 0 = perfect square grid."),
+        param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplier after the `pow(L, power)` warp."),
+        param!("z", "Z", unlimited_float, 0.0, -100.0, 100.0, "Z-slice through the cell-offset field. Animating this gives a flowing 'living' effect, same as `crackle`."),
+    ],
+    wgsl_2d: CRACKLE_FAST_WGSL_2D,
+    wgsl_3d: CRACKLE_FAST_WGSL_3D,
+};
+
 // Shared body math (`crackle_body`) lives in
-// `shaders/core/voronoi.wgsl` — both crackle and dc_crackle_wf (in
-// both 2D and 3D modes) call into it. The shader builder reads only
-// `wgsl_2d` *or* `wgsl_3d` per call site, and its dedupe rule is
-// byte-identical, so keeping the body in one injected module avoids
-// drift between the four wrappers. Each variation's WGSL just reads
+// `shaders/core/voronoi.wgsl` — crackle, dc_crackle_wf and
+// crackle_fast (in both 2D and 3D modes) all call into it; the last
+// argument selects the cell-noise implementation. The shader builder
+// reads only `wgsl_2d` *or* `wgsl_3d` per call site, and its dedupe
+// rule is byte-identical, so keeping the body in one injected module
+// avoids drift between the wrappers. Each variation's WGSL just reads
 // its slot-indexed params and delegates.
 
 const CRACKLE_WGSL_2D: &str = r#"
@@ -108,6 +154,7 @@ fn variation_crackle(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
         get_param(xform_id, variation_id, 3u),
         get_param(xform_id, variation_id, 4u),
         rng,
+        false,
     );
     return vec2<f32>(r.x, r.y);
 }
@@ -124,6 +171,7 @@ fn variation_crackle(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
         get_param(xform_id, variation_id, 3u),
         get_param(xform_id, variation_id, 4u),
         rng,
+        false,
     );
     return vec3<f32>(r.x, r.y, p.z);
 }
@@ -141,6 +189,7 @@ fn variation_dc_crackle_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
         get_param(xform_id, variation_id, 3u),
         get_param(xform_id, variation_id, 4u),
         rng,
+        false,
     );
     let color_scale = get_param(xform_id, variation_id, 5u);
     let color_offset = get_param(xform_id, variation_id, 6u);
@@ -160,12 +209,43 @@ fn variation_dc_crackle_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
         get_param(xform_id, variation_id, 3u),
         get_param(xform_id, variation_id, 4u),
         rng,
+        false,
     );
     let color_scale = get_param(xform_id, variation_id, 5u);
     let color_offset = get_param(xform_id, variation_id, 6u);
     var col = r.z * color_scale + color_offset;
     col = col - floor(col);
     *vc = col;
+    return vec3<f32>(r.x, r.y, p.z);
+}
+"#;
+
+const CRACKLE_FAST_WGSL_2D: &str = r#"
+fn variation_crackle_fast(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    let r = crackle_body(
+        get_param(xform_id, variation_id, 0u),
+        get_param(xform_id, variation_id, 1u),
+        get_param(xform_id, variation_id, 2u),
+        get_param(xform_id, variation_id, 3u),
+        get_param(xform_id, variation_id, 4u),
+        rng,
+        true,
+    );
+    return vec2<f32>(r.x, r.y);
+}
+"#;
+
+const CRACKLE_FAST_WGSL_3D: &str = r#"
+fn variation_crackle_fast(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let r = crackle_body(
+        get_param(xform_id, variation_id, 0u),
+        get_param(xform_id, variation_id, 1u),
+        get_param(xform_id, variation_id, 2u),
+        get_param(xform_id, variation_id, 3u),
+        get_param(xform_id, variation_id, 4u),
+        rng,
+        true,
+    );
     return vec3<f32>(r.x, r.y, p.z);
 }
 "#;
