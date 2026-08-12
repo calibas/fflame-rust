@@ -1,0 +1,104 @@
+{
+ "deterministic_rng": true,
+ "flame": {
+  "name": "crackle-smoke",
+  "transforms": [
+   {
+    "a": 1.0,
+    "b": 0.0,
+    "c": 0.0,
+    "color": 0.4,
+    "color_speed": 0.0,
+    "d": 1.0,
+    "direct_color": 1.0,
+    "e": 0.0,
+    "f": 0.0,
+    "g": 0.0,
+    "opacity": 1.0,
+    "variation_order": [
+     "crackle"
+    ],
+    "variation_params": {
+     "crackle.distort": 0.0,
+     "crackle.power": 0.4
+    },
+    "variations": {
+     "crackle": 1.0
+    },
+    "weight": 1.0
+   },
+   {
+    "a": 0.5,
+    "b": 0.0,
+    "c": 0.0,
+    "color": 0.8,
+    "color_speed": 0.0,
+    "d": 0.5,
+    "direct_color": 1.0,
+    "e": 0.3,
+    "f": 0.2,
+    "g": 0.0,
+    "opacity": 1.0,
+    "variation_order": [
+     "linear"
+    ],
+    "variation_params": {},
+    "variations": {
+     "linear": 1.0
+    },
+    "weight": 0.5
+   }
+  ]
+ },
+ "levels_gamma": 0.5,
+ "max_iterations": 5000000,
+ "palette": {
+  "locked": false,
+  "name": "Fire",
+  "stops": [
+   {
+    "color": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "position": 0.0
+   },
+   {
+    "color": [
+     0.5,
+     0.0,
+     0.0
+    ],
+    "position": 0.25
+   },
+   {
+    "color": [
+     1.0,
+     0.3,
+     0.0
+    ],
+    "position": 0.5
+   },
+   {
+    "color": [
+     1.0,
+     0.8,
+     0.0
+    ],
+    "position": 0.75
+   },
+   {
+    "color": [
+     1.0,
+     1.0,
+     0.8
+    ],
+    "position": 1.0
+   }
+  ]
+ },
+ "preserve_z": false,
+ "render_mode": "2d",
+ "version": 3
+}
