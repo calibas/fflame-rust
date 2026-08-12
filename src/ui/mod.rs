@@ -16,6 +16,7 @@ mod compact_menu;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
+mod rhai_highlight;
 mod palette_library;
 mod panel_viewer;
 mod path_editor;

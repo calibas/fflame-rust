@@ -1185,6 +1185,17 @@ impl ScriptsPanel {
                     self.render_file_actions(ui);
                 });
 
+                // Syntax highlighting rides egui's own `layouter` hook:
+                // we hand back a LayoutJob of coloured runs and egui
+                // lays it out. The closure must outlive the builder, so
+                // it is bound here rather than inline.
+                let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let mut job = super::rhai_highlight::highlight(buf.as_str(), font_id.clone());
+                    job.wrap.max_width = wrap_width;
+                    ui.fonts_mut(|f| f.layout_job(job))
+                };
+
                 let editor = ui.add(
                     egui::TextEdit::multiline(&mut self.text)
                         // A stable id: without one the editor's id comes from
@@ -1195,7 +1206,8 @@ impl ScriptsPanel {
                         .id_salt("script_editor")
                         .code_editor()
                         .desired_rows(16)
-                        .desired_width(f32::INFINITY),
+                        .desired_width(f32::INFINITY)
+                        .layouter(&mut layouter),
                 );
                 // Touch devices edit the script through the overlay's
                 // textarea, seeded with the WHOLE source (the submit
