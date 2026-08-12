@@ -74,6 +74,15 @@ fn voronoi_inside(points: array<vec2<f32>, 9>, n: u32, q: u32, u: vec2<f32>) -> 
 // 2 passes, with the re-center step). That's the main TDR pressure for
 // the family.
 fn voronoi_crackle_position(x: i32, y: i32, z: f32, s: f32, d: f32) -> vec2<f32> {
+    // Fast path — and the DEFAULT (crackle ships distort = 0): with no
+    // distortion the noise contribution is `0.0 * noise`, exactly 0.0
+    // for the finite values simplex always returns, so skipping the
+    // two simplex calls is bit-identical and turns the whole family's
+    // dominant cost off. The branch is uniform (parameters are the
+    // same for every thread in the dispatch), so it does not diverge.
+    if (d == 0.0) {
+        return vec2<f32>(f32(x) * s, f32(y) * s);
+    }
     let fx = f32(x) * 2.5;
     let fy = f32(y) * 2.5;
     let fz = z * 2.5;
@@ -148,12 +157,32 @@ fn crackle_body(
     let q_dj = i32(q % 3u) - 1;
     xcv = xcv + q_di;
     ycv = ycv + q_dj;
-    i = 0u;
-    for (var di: i32 = -1; di <= 1; di = di + 1) {
-        for (var dj: i32 = -1; dj <= 1; dj = dj + 1) {
-            p_arr[i] = voronoi_crackle_position(xcv + di, ycv + dj, z, s, distort);
-            i = i + 1u;
+
+    // Second 3×3, REUSING the first pass. The new window is the old
+    // one shifted by (q_di, q_dj) ∈ [-1,1]², so at least 4 of its 9
+    // cells were already computed — and in the by-far-common case
+    // (u starts inside the closest cell, so q = 4 and the shift is
+    // zero) all 9 were. Positions are pure functions of the lattice
+    // coords, so a reused entry is bit-identical to a recomputed one;
+    // this only removes redundant simplex_noise_3d calls, which are
+    // the family's entire cost.
+    if (q != 4u) {
+        var p2: array<vec2<f32>, 9>;
+        i = 0u;
+        for (var di: i32 = -1; di <= 1; di = di + 1) {
+            for (var dj: i32 = -1; dj <= 1; dj = dj + 1) {
+                // This cell's coords relative to the OLD window center.
+                let odi = di + q_di;
+                let odj = dj + q_dj;
+                if (odi >= -1 && odi <= 1 && odj >= -1 && odj <= 1) {
+                    p2[i] = p_arr[u32((odi + 1) * 3 + (odj + 1))];
+                } else {
+                    p2[i] = voronoi_crackle_position(xcv + di, ycv + dj, z, s, distort);
+                }
+                i = i + 1u;
+            }
         }
+        p_arr = p2;
     }
 
     let l = voronoi_inside(p_arr, 9u, 4u, u);
