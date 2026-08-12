@@ -1692,8 +1692,13 @@ impl ShaderBuilder {
         let needs_noise = active.iter().any(|(name, _)| {
             matches!(name.as_str(), "dc_perlin" | "crackle" | "dc_crackle_wf")
         });
+        // crackle_fast needs voronoi.wgsl but NOT noise.wgsl — its cell
+        // offsets are hashed, never simplex. voronoi.wgsl's simplex
+        // path still references simplex_noise_3d though, so the noise
+        // module rides along whenever voronoi does. (The dead simplex
+        // path costs compile bytes, not runtime.)
         let needs_voronoi = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "crackle" | "dc_crackle_wf")
+            matches!(name.as_str(), "crackle" | "dc_crackle_wf" | "crackle_fast")
         });
         if needs_noise || needs_voronoi {
             shader.push_str(include_str!("../shaders/core/noise.wgsl"));
