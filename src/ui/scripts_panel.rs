@@ -303,6 +303,7 @@ impl ScriptsPanel {
         cloud: &crate::app::script_cloud::ScriptCloudState,
         signed_in: bool,
         cloud_request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
+        window: &winit::window::Window,
     ) -> ScriptsResponse {
         let mut response = ScriptsResponse::default();
         self.palettes = palettes;
@@ -339,7 +340,7 @@ impl ScriptsPanel {
         self.render_params(ui);
         ui.separator();
         self.render_run_controls(ui, current, &mut response);
-        self.render_editor(ui);
+        self.render_editor(ui, window);
         self.render_output(ui);
         // Last: the local script is the primary object, and the
         // online library is what you can do WITH it.
@@ -421,7 +422,13 @@ impl ScriptsPanel {
 
     /// Save / Revert / Open / Save As / Delete — everything that acts on
     /// the script file rather than on its text.
-    fn render_file_actions(&mut self, ui: &mut egui::Ui) {
+    fn render_file_actions(&mut self, ui: &mut egui::Ui, window: &winit::window::Window) {
+        // `window` parents the rfd dialogs below. Unparented, the modal
+        // can open BEHIND the main window while the main window is
+        // disabled waiting on it — the app looks frozen. Same fix every
+        // other rfd call site uses; wasm ignores it (browser picker).
+        #[cfg(target_arch = "wasm32")]
+        let _ = window;
         if ui
             .button("Save")
             .on_hover_text(
@@ -479,6 +486,7 @@ impl ScriptsPanel {
                 .clicked()
             {
                 let picked = rfd::FileDialog::new()
+                    .set_parent(window)
                     .add_filter("Flame script", &["rhai"])
                     .pick_file();
                 if let Some(path) = picked {
@@ -501,6 +509,7 @@ impl ScriptsPanel {
                 .clicked()
             {
                 let picked = rfd::FileDialog::new()
+                    .set_parent(window)
                     .add_filter("Flame script", &["rhai"])
                     .set_file_name(format!("{}.rhai", self.script_name()))
                     .save_file();
@@ -1171,7 +1180,7 @@ impl ScriptsPanel {
             .unwrap_or_else(|| "Script".to_string())
     }
 
-    fn render_editor(&mut self, ui: &mut egui::Ui) {
+    fn render_editor(&mut self, ui: &mut egui::Ui, window: &winit::window::Window) {
         ui.separator();
         let section = egui::CollapsingHeader::new("Edit script")
             .default_open(self.show_editor)
@@ -1182,7 +1191,7 @@ impl ScriptsPanel {
                 // script as a whole, and a row buried under sixteen rows
                 // of code is a row you have to go looking for.
                 ui.horizontal(|ui| {
-                    self.render_file_actions(ui);
+                    self.render_file_actions(ui, window);
                 });
 
                 // Syntax highlighting rides egui's own `layouter` hook:

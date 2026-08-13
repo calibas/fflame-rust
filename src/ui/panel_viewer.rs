@@ -1608,6 +1608,7 @@ impl<'a> PanelViewer<'a> {
                 self.context.script_cloud,
                 self.context.signed_in,
                 self.context.script_cloud_request,
+                self.context.window,
             );
             if let Some(config) = response.generated {
                 *self.context.script_generated = Some(config);
