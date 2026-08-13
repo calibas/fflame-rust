@@ -62,6 +62,7 @@ fn main() {
     run_batch(&device, &queue, "STICKY 60 seeds (natural, Layer A+B)", false, false, true, 60);
 
     dead_cost_curve(&device, &queue);
+    sticky_residue_cost(&device, &queue);
 }
 
 /// The generator's default pool, in registry (canonical) order — the
@@ -269,4 +270,57 @@ async fn create_device() -> (wgpu::Device, wgpu::Queue) {
         })
         .await
         .expect("device creation failed")
+}
+
+/// The reported regression shape: browse a batch (sticky set fills up),
+/// then sit on ONE simple flame. Its shader now carries the batch's
+/// union as dead weight. Measures that residue directly: the same
+/// flame's sustained throughput on a fresh specialized renderer vs. a
+/// renderer that just served a 20-seed random batch with sticky on.
+fn sticky_residue_cost(device: &wgpu::Device, queue: &wgpu::Queue) {
+    println!("--- sticky residue: one flame after a 20-seed batch ---");
+
+    // The single flame the user then views: deliberately light.
+    let mut victim = FractalConfig::default();
+    victim.deterministic_rng = true;
+    victim.max_iterations = CURVE_ITERS;
+
+    let throughput = |renderer: &mut FlameRenderer, label: &str, extras: usize| {
+        // Second render measures steady state, first eats the compile.
+        for pass in 0..2u32 {
+            let job = RenderJob::new(&victim, SIZE, SIZE).with_iterations(CURVE_ITERS);
+            let t = std::time::Instant::now();
+            let _ = pollster::block_on(render_with(renderer, device, queue, job, &mut NoProgress));
+            if pass == 1 {
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                let miter = CURVE_ITERS as f64 / ms / 1000.0;
+                println!("  {label:<34} {miter:7.1} Miter/s   ({ms:5.0} ms, {extras} extras)");
+            }
+        }
+    };
+
+    // Fresh, specialized.
+    let mut fresh = FlameRenderer::with_palette_size(
+        device, queue, wgpu::TextureFormat::Rgba8Unorm, SIZE, SIZE,
+        &victim.flame, victim.palette_size,
+    );
+    fresh.set_sticky_enabled(false);
+    throughput(&mut fresh, "fresh renderer (specialized)", 0);
+    fresh.destroy();
+
+    // Sticky, after a batch.
+    let mut used = FlameRenderer::with_palette_size(
+        device, queue, wgpu::TextureFormat::Rgba8Unorm, SIZE, SIZE,
+        &victim.flame, victim.palette_size,
+    );
+    used.set_sticky_enabled(true);
+    for seed in 1..=20u64 {
+        let config = seed_config(seed, false);
+        let job = RenderJob::new(&config, SIZE, SIZE).with_iterations(1_000_000);
+        let _ = pollster::block_on(render_with(&mut used, device, queue, job, &mut NoProgress));
+    }
+    let (_, extras) = used.sticky_stats();
+    throughput(&mut used, "sticky renderer, post-batch", extras);
+    used.destroy();
+    println!();
 }

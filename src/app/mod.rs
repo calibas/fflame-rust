@@ -417,6 +417,9 @@ pub struct App {
     // budget and back up when there is headroom. 1.0 = full batch.
     pub(super) iter_scale: f64,
     pub(super) last_iter_frame: Option<web_time::Instant>,
+    /// The previous two frames' budget ratios, for the governor's
+    /// median-of-3 outlier filter. Neutral (1.0) at rest.
+    pub(super) governor_ratio_prev: [f64; 2],
     // Display refresh in millihertz, and a counter that re-queries it every
     // 120 iterating frames. Under vsync this — not `target_fps` — is the
     // governor's budget; see `frame_budget`.
@@ -716,6 +719,7 @@ impl App {
             last_frame_time: None,
             iter_scale: 1.0,
             last_iter_frame: None,
+            governor_ratio_prev: [1.0, 1.0],
             display_refresh_mhz: None,
             display_refresh_age: 0,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
@@ -2209,14 +2213,24 @@ impl App {
                         self.display_refresh_mhz,
                     );
                     let ratio = prev.elapsed().as_secs_f64() / target;
-                    // Playback swaps in the slew-limited rule: the batch
-                    // is the displayed frame there, and the AIMD sawtooth
-                    // reads as flicker — see adjust_iter_scale_playback.
-                    self.iter_scale = if is_controller_playing {
-                        crate::app::adjust_iter_scale_playback(self.iter_scale, ratio)
-                    } else {
-                        crate::app::adjust_iter_scale(self.iter_scale, ratio)
+                    // Median-of-3 filters the trigger. Frame deltas on a
+                    // real desktop are NOISY — measured here: 5–12 ms
+                    // against an 8.33 ms budget, with 12.7% of idle-scene
+                    // frames poking past the old 1.3 shed threshold — and
+                    // the old rule answered every single outlier with a
+                    // ÷4 slash followed by a ten-frame ×1.15 regrow. That
+                    // asymmetry is the reported 50–500 Miter/s
+                    // fluctuation. The median makes an isolated hitch
+                    // invisible while a REAL overload (2+ consecutive
+                    // slow frames) still moves it in one extra frame.
+                    let median = {
+                        let [a, b] = self.governor_ratio_prev;
+                        let c = ratio;
+                        a.max(b).min(a.min(b).max(c)) // median of {a, b, c}
                     };
+                    self.governor_ratio_prev = [self.governor_ratio_prev[1], ratio];
+                    self.iter_scale =
+                        crate::app::adjust_iter_scale(self.iter_scale, median, ratio);
                 }
                 self.last_iter_frame = Some(now);
                 // Floor of ONE workgroup: at extreme depth x emit x solid
@@ -2271,6 +2285,14 @@ impl App {
             } else {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
+                // Not iterating: drop the governor's timing anchor and
+                // neutralize its history. Without this, the first frame
+                // after an idle stretch (max_iterations reached, pause,
+                // export) measured the whole idle gap as one "frame",
+                // hit the catastrophic clause, and resumed at a quarter
+                // batch for no reason.
+                self.last_iter_frame = None;
+                self.governor_ratio_prev = [1.0, 1.0];
             }
             
             let t_tonemap = Instant::now();
@@ -2441,6 +2463,16 @@ impl App {
                                 log::warn!("Failed to compute histogram: {}", e);
                             }
                         }
+                        // This readback BLOCKS for tens of milliseconds,
+                        // and the governor measures frame deltas — so
+                        // every 30th frame read as 4–8× over budget and
+                        // tripped the catastrophic shed (traced: a slash
+                        // to quarter batch every 30 frames like
+                        // clockwork, with a 15-frame regrow tail). The
+                        // stall is self-inflicted CPU waiting, not batch
+                        // cost; dropping the timing anchor makes the
+                        // governor skip the one delta that contains it.
+                        self.last_iter_frame = None;
                     }
 
                     // WASM: submit GPU copy synchronously, then spawn_local for async readback
@@ -2653,11 +2685,42 @@ pub(crate) fn frame_budget(vsync: bool, target_fps: f32, refresh_mhz: Option<u32
 /// frame to come in 10% under a floor it could not go below, so the
 /// increase branch was dead code on every vsync-locked platform and the
 /// governor could only ever shed.
-pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
+/// One governor rule for interactive rendering AND animation playback,
+/// with three regimes. `median_ratio` is the median of the last three
+/// frames' budget ratios (the caller maintains the window); `raw_ratio`
+/// is this frame's alone.
+///
+/// * **Catastrophic** (`raw >= 4`): shed proportionally, immediately.
+///   Scheduling jitter never quadruples a frame; only a genuinely
+///   monstrous batch does (the extreme depth × emit × solid flames the
+///   1-workgroup floor exists for). Waiting for a median here means
+///   multi-second freezes.
+/// * **Sustained overload** (median > 1.3): shed ÷1.15 per frame. The
+///   median makes an ISOLATED slow frame invisible — measured on an
+///   idle default scene, 12.7% of frames were outliers past 1.3, and
+///   the old per-frame ÷4 slash + ten-frame ×1.15 regrow turned that
+///   noise into a 10× throughput oscillation (field-reported as
+///   "erratic 50–500 Miter/s"). Two consecutive slow frames move the
+///   median, so real load still sheds with one frame of extra latency.
+/// * **Headroom** (median < 1.05): grow ×1.15 per frame. Growing at
+///   exactly-on-budget stays deliberate: under vsync the compositor
+///   pins ratio at 1.0 however light the work, and requiring
+///   under-budget frames there ratchets the batch to the floor (the
+///   original macOS/WASM collapse).
+///
+/// Slew-limiting both directions also serves playback, where each batch
+/// IS the displayed frame and a batch jump is visible grain flicker —
+/// the ≤1.15 per-frame change is at the edge of perception. Playback
+/// hitches big enough to trip the catastrophic clause were already
+/// dropped frames; a one-off grain correction alongside is acceptable,
+/// and it caps the slow-recovery tail the old playback-only rule had.
+pub(crate) fn adjust_iter_scale(scale: f64, median_ratio: f64, raw_ratio: f64) -> f64 {
     let mut s = scale;
-    if ratio > 1.3 {
-        s /= ratio.min(4.0);
-    } else if ratio < 1.05 {
+    if raw_ratio >= 4.0 {
+        s /= raw_ratio.min(4.0);
+    } else if median_ratio > 1.3 {
+        s /= 1.15;
+    } else if median_ratio < 1.05 {
         s *= 1.15;
     }
     // 1/256 lets the dispatch reach its 1-workgroup floor (128/256 -> 1
@@ -2665,198 +2728,170 @@ pub(crate) fn adjust_iter_scale(scale: f64, ratio: f64) -> f64 {
     s.clamp(1.0 / 256.0, 1.0)
 }
 
-/// The governor for animation playback: same signal, slew-limited.
-///
-/// During playback every displayed frame IS one compute batch (overwrite
-/// mode), so the batch size is the image's grain level. The AIMD rule
-/// above saw-tooths on any flame whose equilibrium batch is mid-range —
-/// under vsync the frame delta quantizes to whole refresh intervals, so
-/// `ratio` alternates ~1.0 / ~2.0 and never lands in the dead band: grow
-/// 1.15×/frame for ~6 frames, then slash ÷2–÷4 in one. Accumulation
-/// hides that completely in normal rendering; in an animation it is a
-/// visible ~8 Hz cycle of the image "converging" and snapping back —
-/// field-reported as flicker, and as normal rendering fighting animation
-/// mode. Bounding both steps near the sawtooth's grow rate caps the
-/// frame-to-frame grain change at ~15% (imperceptible) while still
-/// adapting: a real load spike sheds over several frames instead of one.
-/// The asymmetry (shed faster than grow) keeps the equilibrium biased
-/// toward meeting the budget.
-pub(crate) fn adjust_iter_scale_playback(scale: f64, ratio: f64) -> f64 {
-    let mut s = scale;
-    if ratio > 1.3 {
-        s /= 1.15;
-    } else if ratio < 1.05 {
-        s *= 1.05;
-    }
-    s.clamp(1.0 / 256.0, 1.0)
-}
-
 #[cfg(test)]
 mod governor_tests {
-    use super::{adjust_iter_scale, adjust_iter_scale_playback, frame_budget};
+    use super::{adjust_iter_scale, frame_budget};
+
+    /// Drive the governor the way the app does: a rolling median-of-3
+    /// window over the per-frame ratios.
+    struct Gov {
+        scale: f64,
+        prev: [f64; 2],
+    }
+    impl Gov {
+        fn new() -> Self {
+            Self { scale: 1.0, prev: [1.0, 1.0] }
+        }
+        fn step(&mut self, ratio: f64) -> f64 {
+            let [a, b] = self.prev;
+            let median = a.max(b).min(a.min(b).max(ratio));
+            self.prev = [self.prev[1], ratio];
+            self.scale = adjust_iter_scale(self.scale, median, ratio);
+            self.scale
+        }
+    }
 
     /// `target_fps` is documented as vsync-off-only. Honour that: under
     /// vsync the budget is the panel's, and a target it cannot reach must
     /// not turn into a permanent shed.
     #[test]
     fn vsync_budget_comes_from_the_display_not_target_fps() {
-        // 144fps asked for on a 60Hz panel: budget stays 60Hz.
         let b = frame_budget(true, 144.0, Some(60_000));
         assert!((b - 1.0 / 60.0).abs() < 1e-9, "{b}");
-        // A 120Hz panel is believed.
         assert!((frame_budget(true, 60.0, Some(120_000)) - 1.0 / 120.0).abs() < 1e-9);
-        // Unknown refresh (WASM) falls back to 60Hz, NOT to target_fps.
         assert!((frame_budget(true, 144.0, None) - 1.0 / 60.0).abs() < 1e-9);
         assert!((frame_budget(true, 144.0, Some(0)) - 1.0 / 60.0).abs() < 1e-9);
-        // With vsync off, target_fps is exactly what it claims to be.
         assert!((frame_budget(false, 144.0, Some(60_000)) - 1.0 / 144.0).abs() < 1e-9);
-        // ...and cannot divide by zero.
         assert!(frame_budget(false, 0.0, None).is_finite());
     }
 
-    /// The unreachable-target case end to end: a 144fps target on a 60Hz
-    /// panel used to make every frame look 2.4x over budget, so the batch
-    /// shed forever. With the display supplying the budget it does not.
+    /// THE reported regression: measured on an idle default scene,
+    /// 12.7% of frames were isolated outliers past the shed threshold
+    /// (desktop frame timing is just that noisy), and the old rule
+    /// answered each with a ÷4 slash + ten-frame regrow — a permanent
+    /// 10× throughput oscillation, field-reported as "erratic 50–500
+    /// Miter/s where it used to be a solid 500". Isolated outliers must
+    /// now be INVISIBLE: a light flame under realistic noise holds full
+    /// batch.
     #[test]
-    fn unreachable_target_fps_does_not_starve_the_batch() {
-        const REFRESH: f64 = 1.0 / 60.0;
-        let budget = frame_budget(true, 144.0, Some(60_000));
-        let mut s = 1.0;
-        for _ in 0..200 {
-            s = adjust_iter_scale(s, REFRESH / budget);
+    fn isolated_frame_spikes_do_not_move_the_batch()  {
+        let mut g = Gov::new();
+        let mut min_scale: f64 = 1.0;
+        for i in 0..600 {
+            // A comfortably light flame (ratio ~0.75) with a 2.4×
+            // outlier every 8th frame — the measured shape of the idle
+            // trace (one-frame hitches from the compositor, panel
+            // repaints, timer jitter).
+            let ratio = if i % 8 == 7 { 2.4 } else { 0.75 };
+            min_scale = min_scale.min(g.step(ratio));
         }
-        assert!((s - 1.0).abs() < 1e-9, "starved to {s}");
+        assert!(
+            (min_scale - 1.0).abs() < 1e-9,
+            "isolated spikes dented the batch to {min_scale} — the 50–500 oscillation is back"
+        );
     }
 
+    /// Sustained overload is not noise and must still shed — with one
+    /// frame of added latency (the median needs two slow frames), then
+    /// at the slewed ÷1.15 rate.
     #[test]
-    fn governor_converges_and_recovers() {
-        // A flame 4x over budget settles near quarter batches...
-        let mut s = 1.0;
-        for _ in 0..10 {
-            let ratio = 4.0 * s; // frame cost proportional to batch size
-            s = adjust_iter_scale(s, ratio);
+    fn sustained_overload_sheds_within_frames() {
+        let mut g = Gov::new();
+        // Steady 2× over budget.
+        let mut scales = Vec::new();
+        for _ in 0..60 {
+            scales.push(g.step(2.0));
         }
-        assert!(s < 0.34 && s > 0.15, "settled at {s}");
-        // ...and grows back to full batches on a light flame.
-        for _ in 0..30 {
-            s = adjust_iter_scale(s, 0.5 * s);
-        }
-        assert!((s - 1.0).abs() < 1e-9, "recovered to {s}");
-        // Bounded below even under absurd load.
-        let mut worst = 1.0;
-        for _ in 0..50 {
-            worst = adjust_iter_scale(worst, 100.0);
-        }
-        assert!(worst >= 1.0 / 256.0);
-        // Dead zone: over budget but not by enough to shed.
-        assert_eq!(adjust_iter_scale(0.5, 1.10), 0.5);
-        assert_eq!(adjust_iter_scale(0.5, 1.25), 0.5);
-        // On budget is HEALTHY and must grow — under vsync this is the
-        // steady state, and treating it as "leave alone" is what let the
-        // governor ratchet to the floor.
-        assert!(adjust_iter_scale(0.5, 1.0) > 0.5);
+        assert!(scales[0] > 0.99, "first slow frame alone must not shed yet");
+        assert!(scales[2] < 1.0, "by the third consecutive slow frame the median has moved");
+        assert!(*scales.last().unwrap() < 0.51, "sustained 2× must shed to ~half batch");
     }
 
-    /// The macOS/WASM collapse. Under vsync the compositor blocks until the
-    /// next refresh, so the frame delta is QUANTIZED to whole refresh
-    /// intervals: light work does not buy a fast frame, it buys a 16.7ms
-    /// frame like everything else. The ratio therefore sits at exactly 1.0
-    /// in the healthy case — never below 0.9 to grow, and one hitch away
-    /// from shedding — so the old governor walked to its 1-workgroup floor
-    /// and stayed there, at roughly 1/128th throughput.
-    ///
-    /// Modelling the quantization is the whole point: the pre-existing test
-    /// assumed frame cost was proportional to batch size, which is true
-    /// only with vsync off, and so could not express this failure.
+    /// A catastrophic frame (4×+ budget) is unambiguous — scheduling
+    /// jitter never quadruples a frame, only a monstrous batch does —
+    /// and waiting two frames for the median means multi-second freezes
+    /// on the flames the 1-workgroup floor exists for. Immediate
+    /// proportional shed, no filter.
+    #[test]
+    fn a_catastrophic_frame_sheds_immediately() {
+        let mut g = Gov::new();
+        let s = g.step(30.0);
+        assert!(s <= 0.25 + 1e-9, "4×+ frame must shed proportionally at once, got {s}");
+    }
+
+    /// The macOS/WASM collapse, carried forward: under vsync the
+    /// compositor pins the delta at whole refresh intervals, so the
+    /// healthy steady state is ratio EXACTLY 1.0 — which must grow, or
+    /// an occasional hitch ratchets the batch to the floor with nothing
+    /// to earn it back.
     #[test]
     fn vsync_quantized_frames_do_not_ratchet_the_batch_away() {
         const REFRESH: f64 = 1.0 / 60.0;
         let target = REFRESH;
-        // Work scales with the batch; the compositor then rounds UP to the
-        // next refresh boundary.
         let present = |s: f64, fixed: f64, per_batch: f64| {
             ((fixed + per_batch * s) / REFRESH).ceil().max(1.0) * REFRESH
         };
 
-        // A flame that comfortably fits the frame must keep its full batch,
-        // INCLUDING across the occasional hitch — a panel repaint, the
-        // compositor stealing a slice — that costs one extra refresh. The
-        // hitch is what made this a ratchet: each one halved the batch, and
-        // the steady 1.0 ratio in between could never earn it back.
-        let mut s = 1.0;
+        // A flame that comfortably fits, with a hitch every 20 frames.
+        let mut g = Gov::new();
         for i in 0..400 {
-            let mut delta = present(s, 0.004, 0.012);
+            let mut delta = present(g.scale, 0.004, 0.012);
             if i % 20 == 0 {
                 delta += REFRESH;
             }
-            s = adjust_iter_scale(s, delta / target);
+            g.step(delta / target);
         }
-        assert!(s > 0.5, "vsync-locked frames collapsed the batch to {s}");
+        assert!(g.scale > 0.99, "vsync-locked frames collapsed the batch to {}", g.scale);
 
-        // ...and one that genuinely does not fit must still shed, or the
-        // governor is useless in the case it exists for. This is the case
-        // that caught a floor-tracking heuristic which latched onto the
-        // first (already slow) frame and then never shed at all.
-        let mut h = 1.0;
+        // ...and one that genuinely does not fit must still shed.
+        let mut h = Gov::new();
         for _ in 0..400 {
-            h = adjust_iter_scale(h, present(h, 0.004, 0.400) / target);
+            let d = present(h.scale, 0.004, 0.400);
+            h.step(d / target);
         }
-        assert!(h < 0.25, "overloaded flame failed to shed work: {h}");
+        assert!(h.scale < 0.25, "overloaded flame failed to shed work: {}", h.scale);
     }
 
-    /// The animation-flicker case. A flame whose equilibrium batch is
-    /// mid-range makes the AIMD rule saw-tooth under vsync quantization:
-    /// measured on `frangelic2.anim`, the per-frame batch ramped
-    /// 4.3M→8.7M samples over ~6 frames and snapped back ÷2–÷3 in one, an
-    /// ~8 Hz cycle. Displayed raw (playback = overwrite = one batch per
-    /// frame) that is visible flicker. The playback rule must bound the
-    /// frame-to-frame change; the sawtooth's existence under the classic
-    /// rule is asserted too, so if the classic rule ever stops
-    /// saw-toothing this split can be removed.
+    /// The unreachable-target case end to end: a 144fps target on a 60Hz
+    /// panel must not read as permanently over budget.
     #[test]
-    fn playback_governor_does_not_sawtooth_on_a_mid_range_flame() {
+    fn unreachable_target_fps_does_not_starve_the_batch() {
+        const REFRESH: f64 = 1.0 / 60.0;
+        let budget = frame_budget(true, 144.0, Some(60_000));
+        let mut g = Gov::new();
+        for _ in 0..200 {
+            g.step(REFRESH / budget);
+        }
+        assert!(g.scale > 0.99, "unreachable target starved the batch to {}", g.scale);
+    }
+
+    /// Playback's anti-flicker property, now provided by the unified
+    /// rule: outside the catastrophic clause, consecutive-frame batch
+    /// changes stay within the ~15% a viewer cannot see as grain
+    /// flicker — including through the mid-range equilibrium where the
+    /// old unfiltered AIMD saw-toothed at ÷2–÷4 per cycle.
+    #[test]
+    fn batch_changes_stay_below_flicker_threshold_at_equilibrium() {
         const REFRESH: f64 = 1.0 / 60.0;
         let target = REFRESH;
         let present = |s: f64, fixed: f64, per_batch: f64| {
             ((fixed + per_batch * s) / REFRESH).ceil().max(1.0) * REFRESH
         };
-        // Costs chosen so the full batch takes ~1.5 refreshes: the
-        // equilibrium sits between quantization steps, the regime the
-        // sawtooth lives in.
-        let run = |rule: fn(f64, f64) -> f64| {
-            let mut s: f64 = 1.0;
-            let mut worst_jump: f64 = 1.0;
-            for i in 0..400 {
-                let prev = s;
-                s = rule(s, present(s, 0.004, 0.022) / target);
-                // Let both rules settle before judging steady state.
-                if i > 50 {
-                    worst_jump = worst_jump.max((s / prev).max(prev / s));
-                }
+        // Costs put the equilibrium mid-range — the sawtooth regime.
+        let mut g = Gov::new();
+        let mut worst_jump: f64 = 1.0;
+        let mut prev_scale = g.scale;
+        for i in 0..400 {
+            let d = present(g.scale, 0.004, 0.022);
+            g.step(d / target);
+            if i > 50 {
+                worst_jump = worst_jump.max((g.scale / prev_scale).max(prev_scale / g.scale));
             }
-            (s, worst_jump)
-        };
-
-        let (_, classic_jump) = run(adjust_iter_scale);
-        assert!(
-            classic_jump > 1.5,
-            "classic rule stopped saw-toothing (worst jump {classic_jump:.2}) — playback split may be removable"
-        );
-
-        let (s, playback_jump) = run(adjust_iter_scale_playback);
-        assert!(
-            playback_jump <= 1.16,
-            "playback batch jumped {playback_jump:.2}x between frames — that is visible grain flicker"
-        );
-        assert!(s > 0.25, "playback rule shed a flame that mostly fits: {s}");
-
-        // The governor still exists for a reason during playback: a flame
-        // that genuinely cannot fit the frame must shed within a second
-        // or two, just not within one frame.
-        let mut h: f64 = 1.0;
-        for _ in 0..120 {
-            h = adjust_iter_scale_playback(h, present(h, 0.004, 0.400) / target);
+            prev_scale = g.scale;
         }
-        assert!(h < 0.25, "overloaded flame failed to shed under playback rule: {h}");
+        assert!(
+            worst_jump <= 1.16,
+            "batch jumped {worst_jump:.2}× between frames — visible grain flicker in playback"
+        );
     }
 }
