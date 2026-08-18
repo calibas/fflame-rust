@@ -16,6 +16,11 @@ phase. Source conversations with the math worked out:
   field-mode fractals, the Hepting–Hart escape buffer, and the
   chaos-game bridges. Referenced throughout as *[ETI]*.
 
+Sibling plan: [flame-deep-zoom.md](flame-deep-zoom.md) — deep zoom
+for the *chaos game* via importance sampling. Independent feature,
+but §7 there names the two pieces built shared with this plan (the
+Lipschitz extension, the deep camera type).
+
 ---
 
 ## 1. The shape of the feature: one pipeline, three fragment modes
@@ -104,6 +109,11 @@ center. The fragment camera:
   the exponent, center fixed" — the orbit cache's cheap case, and the
   exponential track interpolation has exactly the right feel,
 - `rotation: f32`.
+
+This representation is deliberately **shared** with the flame
+deep-zoom plan ([flame-deep-zoom.md](flame-deep-zoom.md) §7) — a
+chaos-game deep-zoom camera hits the identical f32-center wall.
+Design the type once, not mode-private.
 
 Viewport input (drag, wheel-to-cursor, pinch) routes by render mode.
 **Not animatable in v1:** the center strings (see open questions).
@@ -219,7 +229,7 @@ default; PNG export; visual corpus; formula × coloring compile probe.
 **Phase 2 — catalog breadth and coloring depth.**
 Phoenix, Lambda, Newton/Nova + the root-finder scheme axis, Magnet,
 exponential family, the tetration family (§5.8), Feather, Collatz,
-Fractint legacy set, Littlewood parameter space, Ducks; damped/Mann
+Novaretti, Fractint legacy set, Littlewood parameter space, Ducks; damped/Mann
 iteration modifier; stripe-average, triangle-inequality, distance
 estimation (derivative orbit), interior/period coloring.
 
@@ -371,6 +381,28 @@ C), Frothy Basin, Volterra–Lotka, Unity, Cactus *[ETI]*. Each is a
 few lines of step body once the trait exists; big nostalgia coverage.
 Phase 2, batched. Perturbation: **none**.
 
+### 5.17 Novaretti — `z ← −6z(z³ + c) / (2z³ − c)²`
+Community formula credited to Elena Novaretti (ZoneXplorer author);
+circulated via a Reddit-era post and surviving reimplementations.
+Degree-6 rational map, worked dynamics:
+
+- **Nothing escapes**: numerator degree 4 < denominator degree 6, so
+  ∞ ↦ 0 — `NonEscaping`; classify by convergence/**period
+  detection**, never bailout.
+- z = 0 is a fixed point with multiplier −6/c: attracting iff
+  |c| > 6; other attracting cycles carry the |c| < 6 territory.
+- f(ωz) = ω·f(z) for ω³ = 1 → **3-fold symmetric Julia sets**.
+- **Closed-form critical points** for the parameter plane:
+  z³ = c·(−7 ± 3√5)/4 — two essentially distinct critical orbits
+  (the three cube roots are symmetry-equivalent); iterate both,
+  classify by cycle. The poles 2z³ = c feed ∞ ↦ 0.
+
+Colorings: orbit average (the circulating implementation colors by
+accumulated Σ log|z|² — already in the coloring catalog), period,
+traps. Guard the double poles like McMullen's. Perturbation: **none**
+(convergent rational; direct f32). Phase 2. Convention pinned against
+the reference images during implementation (Feather policy).
+
 ### Explicitly not in the catalog
 
 - **Fragment Buddhabrot** — a density technique; see bridge §7.2.
@@ -426,6 +458,10 @@ Scope and caveats, recorded honestly:
   (Lipschitz) per transform — the existing contractiveness machinery
   is determinant-flavored, so this is a small extension of it, and
   the number gates whether the mode is offered for a given flame.
+  **Second customer:** the flame deep-zoom plan
+  ([flame-deep-zoom.md](flame-deep-zoom.md) §7) consumes the same
+  extension three ways — build it as shared analysis, not
+  mode-C-private.
 - **Bounding disk** `T(D_R) ⊂ D_R` — conservative bound needed with
   nonlinear variations; same machinery.
 - **wgpu wrinkle**: bilinear sampling of the buffer wants
