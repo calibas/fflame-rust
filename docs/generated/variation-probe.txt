@@ -6,7 +6,7 @@
 # Compare two of these with:  cargo run --release --bin variation_probe \
 #                                 -- compare OLD NEW
 #
-# build    0.4.4 (ec5fe45f)
+# build    0.5.0 (bd04a882)
 # os       Windows x86_64
 # adapter  NVIDIA GeForce GTX 1660 SUPER
 # backend  Vulkan
@@ -234,6 +234,8 @@ cpow3_wf 2d p0p0pmppp0p0p0p0pppppppmpmpppmppp0p0pppmp0nnnnnnnnp0p0 adb8aec98d524
 cpow3_wf 3d p00p00pm0pp0p00p00p00p00pppppmppppmmpmpppppmpppmp00p00ppppmzp00nnpnnpnnHnnpp00p00 94735d47e9f64f4e
 crackle 2d mpppmmppmpmmpmmpmmpmppmmppmmmmmppmppmmpmmmpmmmmppmmppm 64ed9c159ccddccb
 crackle 3d mp0pp0mm0pp0mp0mm0pm0mp0mmppmmpppmmmpppmmpmmpmpmpm0pp0mmppmzmm0pmpmmpmpHpmpmp0pm0 2133cd57f3041a02
+crackle_fast 2d pmmmpmpppmppppmmppppmmmppmmmppppppnnppmmppmmpmpppppmpp 116e80ba084a6a66
+crackle_fast 3d pm0mm0pm0pp0pm0pp0pp0mm0pppppmmmpmpmpmpmmppppppmpp0nn0pppmmzpp0mmppmpppHppppm0pp0 e3139e654115f33f
 crop 2d 000oo0oop0m00p0mppmpmmpmpppmpmppp0pppmzz0opmpmpmpppoop 9b736fd981028d42
 crop 3d 0000o0o00oo0p00m000p00m0pppmpmmmppmmppppmppmpppmp00pp0pmpzzz0o0pmppmppmHppppo0op0 61a482efdbb1fdc3
 crop3D 2d 000oo0oop0m00p0mppmpmmpmpppmpmppp0pppmzz0opmpmpmpppoop 9b736fd981028d42
