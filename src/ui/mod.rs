@@ -2535,7 +2535,7 @@ fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) -
             (ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()),
             // Tone mapping settings
             (ConfigPath::Exposure, defaults::DEFAULT_EXPOSURE.into()),
-            (ConfigPath::Gamma, 2.2f32.into()),
+            (ConfigPath::Gamma, defaults::DEFAULT_GAMMA.into()),
             (ConfigPath::GammaThreshold, defaults::DEFAULT_GAMMA_THRESHOLD.into()),
             (ConfigPath::Brightness, defaults::DEFAULT_BRIGHTNESS.into()),
             (ConfigPath::Vibrancy, 1.0f32.into()),
@@ -2549,8 +2549,8 @@ fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) -
             (ConfigPath::TonemapCurve, ToneCurve::default().into()),
             // Levels
             (ConfigPath::LevelsLow, 0.0f32.into()),
-            (ConfigPath::LevelsHigh, 1000.0f32.into()),
-            (ConfigPath::LevelsGamma, 1.0f32.into()),
+            (ConfigPath::LevelsHigh, defaults::DEFAULT_LEVELS_HIGH.into()),
+            (ConfigPath::LevelsGamma, defaults::DEFAULT_LEVELS_GAMMA.into()),
             // Palette settings (not the palette itself or background)
             (ConfigPath::PaletteRotation, defaults::DEFAULT_PALETTE_ROTATION.into()),
             (ConfigPath::PaletteSqueeze, defaults::DEFAULT_PALETTE_SQUEEZE.into()),
