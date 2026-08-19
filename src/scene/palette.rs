@@ -872,10 +872,12 @@ impl PaletteLibrary {
             entries.sort();
             for path in entries {
                 let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                // builtin.json is already loaded from the embedded copy
-                // above; a stray manifest.json (pre-0.5 install layouts
-                // shipped one) is an index, not a pack.
-                if filename == "manifest.json" || filename == "builtin.json" {
+                // The embedded pack is already loaded above; a stray
+                // manifest.json (pre-0.5 install layouts shipped one)
+                // is an index, not a pack.
+                if filename == "manifest.json"
+                    || filename == crate::resources::palettes::BUILTIN_PACK_FILE
+                {
                     continue;
                 }
                 if path.extension().and_then(|s| s.to_str()) != Some("json") {
@@ -933,8 +935,11 @@ impl PaletteLibrary {
                 Ok(manifest) => {
                     log::info!("WASM: Loaded embedded manifest with {} packs", manifest.packs.len());
                     for pack_meta in manifest.packs {
-                        // Skip builtin - already loaded embedded version
-                        if pack_meta.id == "builtin" {
+                        // Skip the embedded pack — already loaded above.
+                        // Matched on `file`, not `id`: build.rs derives
+                        // ids from filename stems, so a hardcoded id
+                        // goes stale silently and the pack double-loads.
+                        if pack_meta.file == crate::resources::palettes::BUILTIN_PACK_FILE {
                             continue;
                         }
                         log::info!("  - {} ({} palettes, enabled: {})",
@@ -1446,6 +1451,41 @@ impl PaletteLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The embedded pack is also a file in the packs folder, so the
+    /// desktop scan has to skip it. When the embedded pack moved from
+    /// `builtin.json` to `starter_pack.json` and the skip did not, the
+    /// Palette Library showed "Starter Pack" twice.
+    #[test]
+    fn no_pack_is_discovered_twice() {
+        let library = PaletteLibrary::new();
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for info in &library.packs {
+            *seen.entry(info.name()).or_default() += 1;
+        }
+        let dupes: Vec<_> = seen.iter().filter(|(_, &n)| n > 1).collect();
+        assert!(
+            dupes.is_empty(),
+            "pack(s) discovered more than once: {dupes:?} — the embedded \
+             pack's filename and the discovery skip have drifted apart"
+        );
+    }
+
+    /// The offline fallback must be a pack the folder actually ships,
+    /// or the skip silently hides a pack instead of a duplicate.
+    #[test]
+    fn embedded_pack_is_one_of_the_shipped_packs() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/palettes/packs")
+            .join(crate::resources::palettes::BUILTIN_PACK_FILE);
+        assert!(path.exists(), "{} is embedded but not in the packs folder", path.display());
+
+        let on_disk: PalettePack =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let embedded = crate::resources::palettes::load_builtin_pack().unwrap();
+        assert_eq!(embedded.pack_name, on_disk.pack_name);
+        assert_eq!(embedded.palettes.len(), on_disk.palettes.len());
+    }
 
     #[test]
     fn test_palette_sampling() {
