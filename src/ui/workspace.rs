@@ -121,14 +121,73 @@ pub struct Workspace {
     pub dock_state: DockState<PanelType>,
     /// Active layout preset
     pub current_layout: WorkspaceLayout,
+    /// A layout was just built from fractions, without knowing the
+    /// window size — the first frame that does know it applies the
+    /// side-dock minimums (`apply_startup_dock_minimums`).
+    needs_startup_dock_widths: bool,
 }
 
 impl Workspace {
+    /// Minimum useful width, in points, for a side dock when a layout
+    /// first appears. Transforms — the widest of the default side
+    /// panels — clips its controls below this. Startup only: the user
+    /// can drag the separator below it freely afterwards.
+    const MIN_SIDE_DOCK_POINTS: f32 = 260.0;
+
     /// Create a new workspace with default Standard layout
     pub fn new() -> Self {
         Self {
             dock_state: Self::create_standard_layout(),
             current_layout: WorkspaceLayout::Standard,
+            needs_startup_dock_widths: true,
+        }
+    }
+
+    /// One-shot, called with the real dock width on the first frame
+    /// after a layout is created — layouts are built from fractions
+    /// before any window exists, and a fraction that is generous on a
+    /// desktop monitor is a clipped strip on a laptop. The left dock is
+    /// 25% *of the 75% left over by the right split* (18.75% of the
+    /// window, easy to misread as 25%): on a Retina MacBook's
+    /// 960-point default window that was 180 points of Transforms
+    /// panel, with controls cut off.
+    ///
+    /// Raises each side dock to `MIN_SIDE_DOCK_POINTS` and touches
+    /// nothing already wider, so large screens keep their proportions.
+    pub fn apply_startup_dock_minimums(&mut self, dock_width: f32) {
+        if !self.needs_startup_dock_widths {
+            return;
+        }
+        self.needs_startup_dock_widths = false;
+        if dock_width <= 0.0 {
+            return;
+        }
+        let min = Self::MIN_SIDE_DOCK_POINTS;
+
+        // Every preset with side docks has the same shape by
+        // construction: the root split parts the right dock off the
+        // window, and its left child parts the left dock off the
+        // remainder. Compact is a lone leaf — the matches fail and
+        // nothing happens.
+        use egui_dock::{Node, NodeIndex};
+        let tree = self.dock_state.main_surface_mut();
+
+        // Right dock width is (1 − f)·W: lower the fraction to grow the
+        // dock to `min`, but never let it claim more than half.
+        let mut remaining = dock_width;
+        if tree.len() > 0 {
+            if let Node::Horizontal(split) = &mut tree[NodeIndex::root()] {
+                split.fraction = split.fraction.min(1.0 - min / dock_width).max(0.5);
+                remaining = dock_width * split.fraction;
+            }
+        }
+
+        // Left dock width is f·remaining: raise the fraction to reach
+        // `min`, same half-cap.
+        if tree.len() > 1 {
+            if let Node::Horizontal(split) = &mut tree[NodeIndex::root().left()] {
+                split.fraction = split.fraction.max(min / remaining).min(0.5);
+            }
         }
     }
 
@@ -175,6 +234,7 @@ impl Workspace {
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
         self.current_layout = layout;
+        self.needs_startup_dock_widths = true;
     }
 
     /// Whether the workspace is in compact (mobile) layout
@@ -524,5 +584,67 @@ mod layout_tests {
                 "Help window lost switching to {layout:?}"
             );
         }
+    }
+
+    /// Side-dock widths implied by the split fractions after the
+    /// startup fix-up, (left, right) in points.
+    fn dock_widths(ws: &mut Workspace, window: f32) -> (f32, f32) {
+        use egui_dock::{Node, NodeIndex};
+        let tree = ws.dock_state.main_surface_mut();
+        let f0 = match &tree[NodeIndex::root()] {
+            Node::Horizontal(s) => s.fraction,
+            _ => return (0.0, 0.0),
+        };
+        let f1 = match &tree[NodeIndex::root().left()] {
+            Node::Horizontal(s) => s.fraction,
+            _ => return (0.0, window * (1.0 - f0)),
+        };
+        (window * f0 * f1, window * (1.0 - f0))
+    }
+
+    /// The left dock is 25% of the 75% left over by the right split —
+    /// 18.75% of the window. On a Retina MacBook's 960-point window
+    /// that was a 180-point Transforms panel with controls clipped.
+    /// The startup fix-up must raise both docks to the minimum there,
+    /// and must NOT touch a window where the fractions already give
+    /// more.
+    #[test]
+    fn startup_dock_minimums_hold_on_a_laptop_and_leave_desktops_alone() {
+        for layout in [
+            WorkspaceLayout::Standard,
+            WorkspaceLayout::Animation,
+            WorkspaceLayout::Scripting,
+        ] {
+            // Retina MacBook default window: both docks reach the minimum.
+            let mut ws = Workspace::new();
+            ws.apply_layout(layout);
+            ws.apply_startup_dock_minimums(960.0);
+            let (left, right) = dock_widths(&mut ws, 960.0);
+            assert!(
+                left >= Workspace::MIN_SIDE_DOCK_POINTS - 0.5,
+                "{layout:?}: left dock {left:.0}pt on a 960pt window"
+            );
+            assert!(
+                right >= Workspace::MIN_SIDE_DOCK_POINTS - 0.5,
+                "{layout:?}: right dock {right:.0}pt on a 960pt window"
+            );
+
+            // Desktop window: already generous, fractions untouched.
+            let mut wide = Workspace::new();
+            wide.apply_layout(layout);
+            let before = dock_widths(&mut wide, 1920.0);
+            wide.needs_startup_dock_widths = true; // dock_widths consumed nothing
+            wide.apply_startup_dock_minimums(1920.0);
+            let after = dock_widths(&mut wide, 1920.0);
+            assert_eq!(before, after, "{layout:?}: 1920pt window was altered");
+
+            // One-shot: a user drag afterwards must not be re-overridden.
+            ws.apply_startup_dock_minimums(960.0);
+        }
+
+        // Compact is a lone leaf — must not panic, must change nothing.
+        let mut compact = Workspace::new();
+        compact.apply_layout(WorkspaceLayout::Compact);
+        compact.apply_startup_dock_minimums(390.0);
     }
 }
