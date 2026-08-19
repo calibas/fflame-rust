@@ -39,6 +39,32 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
 
+    // The gallery crates (wasm/render, wasm/script) build this crate as
+    // a DEPENDENCY, and nothing in either surfaces build provenance —
+    // but the git watch below re-emits GIT_HASH and BUILD_TIME on every
+    // commit, which invalidated this lib in each of their separate
+    // target directories and cost a full rebuild per commit (measured:
+    // 73s each, and 178s each before the gallery-test profile).
+    // `wasm/.cargo/config.toml` sets this so those builds stop paying
+    // for provenance they never read.
+    //
+    // Never set it for the app or the dist build: the hash in an
+    // exported PNG is what makes a bug report traceable to a source
+    // tree. The values are explicit placeholders rather than a frozen
+    // real hash, because a wrong label is worse than none.
+    println!("cargo:rerun-if-env-changed=FFLAME_SKIP_GIT_PROVENANCE");
+    if env::var_os("FFLAME_SKIP_GIT_PROVENANCE").is_some() {
+        println!("cargo:rustc-env=GIT_HASH=not-recorded");
+        println!("cargo:rustc-env=GIT_BRANCH=not-recorded");
+        println!("cargo:rustc-env=BUILD_TIME=not-recorded");
+        println!("cargo:rustc-env=RUSTC_VERSION={}",
+            rustc_version::version().map(|v| v.to_string()).unwrap_or_else(|_| "unknown".to_string()));
+        copy_assets_to_target();
+        copy_shaders_to_target();
+        generate_palette_manifest();
+        return;
+    }
+
     // Rebuild when the commit changes, or GIT_HASH silently goes stale.
     //
     // Cargo only re-runs this script when a declared input changes, and
