@@ -11,6 +11,20 @@ phase. Source conversations with the math worked out:
 
 - [docs/experimental/pertubation-theory.md](../experimental/pertubation-theory.md)
   — perturbation, rebasing, BLA, floatexp.
+- Claude Heiland-Allen's deep-zoom corpus, reviewed 2026-08 and
+  referenced as *[mathr]*:
+  [theory & practice](https://mathr.co.uk/blog/2021-05-14_deep_zoom_theory_and_practice.html)
+  (glitches, rescaling, abs-formula case analysis),
+  [again](https://mathr.co.uk/blog/2022-02-21_deep_zoom_theory_and_practice_again.html)
+  (rebasing, BLA), the
+  [reference page](https://mathr.co.uk/web/deep-zoom.html)
+  (per-formula BLA details, hybrids), and the fixed-point numerics
+  posts ([2019](https://mathr.co.uk/blog/2019-09-30_fixed-point_numerics.html),
+  [2022](https://mathr.co.uk/blog/2022-11-24_fixed-point_numerics_revisited.html)).
+  Upstream: K.I. Martin's
+  [sft_maths.pdf](http://www.science.eclipse.co.uk/sft_maths.pdf) and
+  Zhuoran's "Another solution to perturbation glitches"
+  (fractalforums.org).
 - [docs/experimental/escape-time-ifs.md](../experimental/escape-time-ifs.md)
   — the missed-fractal sweep, the tetration name-cluster resolution,
   field-mode fractals, the Hepting–Hart escape buffer, and the
@@ -158,17 +172,81 @@ absorbs recompiles when the user flips combinations.
 
 The reference orbit lives in a bounded box (|z| ≤ 2 until escape), so
 the CPU side needs **fixed-point**, not arbitrary-precision floating
-point: `[u64; K]` limbs, a few integer bits, implied binary point.
-That deletes MPFR's hard parts — no exponents, no normalization, no
+point: `[u64; K]` limbs, a few integer bits of headroom (intermediates
+like x²+y² reach 8 before subtraction), implied binary point. That
+deletes MPFR's hard parts — no exponents, no normalization, no
 rounding modes. Surface: add, sub, schoolbook mul (u64×u64→u128;
 Karatsuba past ~30 limbs), shifts, decimal round-trip, f64
 conversion, floatexp export, complex wrapper. ~600–1000 lines with
 tests.
 
+**On "everyone uses floating point for this"** — the deep-zoom
+literature computes references in arbitrary-precision *floats* because
+it builds on existing libraries (MPFR, custom floatexp), not because
+the math wants an exponent: for polynomial formulas the exponent never
+moves, and every mantissa operation inside an MPFR-style float IS
+integer limb arithmetic plus the normalization/rounding we delete.
+*[mathr]*'s own numerics posts say it directly — escape-time z values
+sit near magnitude 1, "a good fit for high-precision fixed-point"
+without "the more-complex algorithms of floating-point numerics" — and
+Fractal eXtreme, the speed benchmark of the pre-perturbation era, was
+fixed-point bignum. Floats genuinely belong in exactly four places,
+all outside the core: the per-pixel delta iteration (hardware
+f32/f64 — the whole point of perturbation), the floatexp export
+boundary, the derivative orbit, and the Newton wrapper (below).
+
+Design points from review (second-opinion pass + *[mathr]*):
+
+- **The bounded box is a per-formula property, not a global
+  assumption.** It holds for the polynomial families (Mandelbrot,
+  Multibrot, Tricorn, Ship). It does NOT hold for the **derivative
+  orbit** dZ/dc — distance estimation's companion sequence grows
+  without bound and must be floatexp, computed alongside from the
+  stored orbit, never inside the fixed-point core. Transcendental/
+  tetration formulas have unbounded Z itself (already "perturbation:
+  none" in the catalog); Magnet is bounded-ish but divides, so it is
+  excluded from deep zoom initially. `FormulaDef` carries a
+  reference-number-system property.
+- **One guard limb** below target precision. Truncating multiplies
+  drift over a 10⁶–10⁸-iteration orbit; an extra u64 costs ~13% at 8
+  limbs and makes bit-identity mean identical *and correct* trailing
+  bits. It also absorbs the error of **truncated multiplication**
+  (compute only the high half: n(n+1)/2 limb-muls vs n² — *[mathr]*
+  2022), which is the cheap 2× at schoolbook sizes; revisit at
+  Karatsuba sizes.
+- **Complex squaring is two big muls, not three**: Re = (x+y)(x−y),
+  Im = 2xy (the 2 is a shift). The big-mul is the entire runtime, so
+  this is a free 33%. The two muls are independent — and that is the
+  only parallelism there is: orbits are inherently sequential, so
+  parallelize within an iteration or across separate references,
+  never across iterations.
+- **Write the limb routines exponent-agnostic** (operate on slices,
+  shift amounts as parameters). Newton nucleus-finding (phase 5)
+  needs dynamic range a fixed binary point cannot hold — the step
+  divides by the unbounded derivative — so it gets a thin big-float
+  wrapper: limb array + one i64 exponent + normalize-on-demand,
+  reusing the same cores, ~200 lines, still no rounding modes. The
+  core itself still never divides.
+- **The floatexp export is where "no normalization" could quietly
+  cost correctness**: fixed→floatexp is a leading-zero count + shift,
+  and near-zero orbit values are precisely where rebasing and glitch
+  behavior live — 2Zₙ at tiny |Zₙ| must convert exactly. lzcnt-based
+  export is a first-class, tested operation, not an afterthought.
+
 Throughput per 1M-iteration orbit: ~30 ms at 1e-30, ~0.3 s at 1e-100,
 ~2–3 s at 1e-300, ~10 s at 1e-600 (Karatsuba). MPFR's FFT wins only
 past several thousand bits (zoom 1e-1000+), out of scope for a
 browser-first app; Toom-3 is an internal upgrade if ever needed.
+
+**wasm asterisk on those timings**: u64×u64→u128 lowers to
+compiler-rt calls over 32-bit halves on wasm32 — deterministic (the
+bit-identity invariant survives) but ~3–5× slower, so 1e-300 is ~10 s
+in-browser. Acceptable with the planned progressive upload; the
+natural upgrade is **server-side reference computation** — references
+are small (period-length × 16 B as floatexp), cacheable by location
+hash, exactly what a gallery backend should precompute. **Rejected: a
+32-bit-limb wasm build** — faster, but truncation positions move and
+bit-identity between targets dies, failing this plan's own premise.
 
 Why owning beats the libraries:
 
@@ -182,10 +260,6 @@ Why owning beats the libraries:
   ~1% surface use. **Rejected: `astro-float`/`dashu`** — a general
   float tower imported as audit surface, 2–5× slower than MPFR
   anyway.
-
-Known gap, accepted: no division in the core set. The orbit never
-divides; Newton nucleus-finding (phase 5) uses reciprocal-by-Newton
-or waits.
 
 ### Config, serialization, contract
 
@@ -246,7 +320,41 @@ The `fixedpoint` module; CPU reference orbit on a worker with
 progressive upload; orbit cache keyed on (center strings, precision,
 maxiter), append-on-deepen; scaled-f32 deltas; floatexp WGSL type;
 Zhuoran rebasing; ladder direct → scaled-f32 → floatexp. Per-formula
-tiers as cataloged. Math: pertubation-theory.md.
+tiers as cataloged. Math: pertubation-theory.md; mechanics *[mathr]*:
+
+- **Rebasing, exactly**: when |Z+z| < |z|, set z ← Z+z and reset the
+  reference index to 0 (generally: jump to whichever orbit minimizes
+  |(Z−Z_o)+z| among the current reference and each critical orbit at
+  iteration 0). This *replaces* glitch detection — Pauldelbrot's
+  criterion |Z+z|² < G·|Z|² needs a G ∈ [1e-8, 1e-2] nobody knows how
+  to choose, and rebasing makes the choice moot: "avoided rather than
+  detected", efficiency and correctness at once.
+- **Rescaling, concretely**: iterate w with z = S·w:
+  `w ← 2Zw + Sw² + d`, re-deriving S every few hundred iterations.
+  Hoist the underflow tests to rescale time (skip Sw² when S
+  underflowed and Z is not small; skip +d when it underflowed) rather
+  than paying them per iteration. When |Z| itself underflows the
+  scaled form breaks: do one full-range floatexp iteration, then
+  rescale — the reference passing near zero is the case, and it is
+  also exactly where the lzcnt export path (§3) must be exact.
+- **BLA is deferred, and that is a decision, not an omission.**
+  Perturbation + rebasing alone give *correct* images at O(iterations)
+  per pixel; BLA is the iteration-skipping accelerator on top, worth
+  it when max_iter runs to millions. When it lands (phase 5): the
+  O(2M) binary-doubling table (M single-step BLAs merged pairwise;
+  start at iteration 1 — iteration 0 has radius 0; merge:
+  `A ← A_y·A_x, B ← A_y·B_x + B_y,
+  r ← min(r_x, max(0, (r_y − |B_x|·max|c|)/|A_x|))`), validity
+  `|z| < ε|Z| − max|c|/(|2Z|+1)`-shaped per formula, real 2×2
+  matrices for the nonconformal family (§5.2). *[mathr]* notes
+  Zhuoran considers this construction suboptimal — check the forum
+  thread before building. Series approximation stays rejected
+  (fold-sensitive, poorly-understood stopping, abs formulas barely
+  skip).
+- **Hybrids/multiple critical points** (phase 5 with the hybrid
+  loops): one reference orbit and BLA table per phase of the loop and
+  per critical point — a (M,BS,M,M) loop carries four — with rebasing
+  selecting the nearest orbit.
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and
@@ -276,8 +384,14 @@ adopt matrix BLAs from day one so the abs family shares the path.
 ### 5.3 Burning Ship family — abs-fold variants of 5.1
 One formula, `variant` enum: Burning Ship, Perpendicular
 Mandelbrot/Ship/Celtic/Buffalo — each a choice of component folds and
-conjugation placement. Perturbation: **diffabs** (case analysis;
-BLA validity shrinks near fold axes, single-step fallback).
+conjugation placement. Perturbation: **diffabs** (case analysis; under
+rescaling it becomes `diffabs(XY/s, Xy + xY + sxy)`). *[mathr]*'s
+deep-needle warning: the scaled form needs a full-range iteration
+whenever *either* component of Z is small — near the needle that is
+constantly, so floatexp-throughout often beats rescaled-with-branches
+there; pick per region, don't force the ladder. BLA validity uses
+min(|X|, |Y|) in place of |Z| (Fraktaler 3 halves it as a fudge) and
+shrinks near the fold axes — single-step fallback.
 
 ### 5.4 McMullen family — `z ← zⁿ + c/zᵐ`
 *The biggest prior omission* *[ETI]*. Rational maps with
@@ -546,7 +660,10 @@ mapping has something real to do.
   lesson: name-gated helper injection is where this breaks).
 - **Fixed-point (phase 4)**: differential vs f64 at 1–2 limbs;
   published deep-zoom orbits; ring axioms; decimal round-trip;
-  CPU↔GPU floatexp boundary agreement.
+  CPU↔GPU floatexp boundary agreement; **lzcnt export exactness for
+  near-zero values** (close reference passes are where rebasing
+  lives); truncation drift over a long orbit stays inside the guard
+  limb.
 - **Littlewood cross-check** (§5.11) against the chaos-game
   variation.
 - **Tetration**: Shell–Thron boundary landmarks; period coloring at
