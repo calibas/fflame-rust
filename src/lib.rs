@@ -767,23 +767,94 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // Logical points, not physical pixels: PhysicalSize(1920, 1080)
-        // was 960×540 POINTS on a Retina display — a half-screen window
-        // whose side docks clipped their panels. Maximized is the
-        // default; the logical size is what un-maximizing restores to
-        // (and macOS/Windows both clamp it to the work area on smaller
-        // screens).
+        // Created at the fallback size first: winit only exposes
+        // monitors through a window (or ActiveEventLoop, which the
+        // compatibility path here never sees), and asking the window
+        // which monitor it actually landed on beats assuming the
+        // primary one on multi-monitor setups. This all happens before
+        // the event loop runs, so nothing is on screen yet to flicker.
         let attributes = winit::window::Window::default_attributes()
             .with_title("Fractal Art Editor")
             .with_window_icon(window_icon())
             .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(400.0, 300.0))
-            .with_maximized(true);
+            .with_min_inner_size(winit::dpi::LogicalSize::new(400.0, 300.0));
 
         #[allow(deprecated)]
         let window = event_loop.create_window(attributes)?;
 
+        let monitor_points = window.current_monitor().or_else(|| window.primary_monitor()).map(|m| {
+            let size = m.size().to_logical::<f64>(m.scale_factor());
+            (size.width, size.height)
+        });
+        let (size, maximized) = desktop_window_plan(monitor_points);
+        if maximized {
+            window.set_maximized(true);
+        } else {
+            let _ = window.request_inner_size(size);
+        }
+
         App::run(event_loop, std::sync::Arc::new(window)).await
+    }
+}
+
+/// Starting window size and whether to open maximized, from the primary
+/// monitor's size in POINTS (logical, DPI-independent).
+///
+/// One fixed default cannot fit both ends: the old
+/// `PhysicalSize(1920, 1080)` was a comfortable window on a 1440p
+/// desktop but a half-screen 960×540 POINTS on a Retina laptop, with
+/// the side docks clipped. And maximizing everywhere fixed the laptop
+/// while taking over the desktop. So:
+///
+/// - a screen with room to spare opens a 75% window (a 2560×1440
+///   monitor gets 1920×1080 — the same window the old default gave it),
+/// - anything under ~1500×1000 points — Retina laptops (1470–1512 wide),
+///   1080p at 125% scaling (1536×864) — opens maximized, because a
+///   windowed default there is what produced the clipped docks,
+/// - no monitor info (some Wayland setups) falls back to a plain
+///   1440×900 window.
+///
+/// The un-maximize restore size is the same 75% plan.
+#[cfg(not(target_arch = "wasm32"))]
+fn desktop_window_plan(
+    monitor_points: Option<(f64, f64)>,
+) -> (winit::dpi::LogicalSize<f64>, bool) {
+    let Some((w, h)) = monitor_points else {
+        return (winit::dpi::LogicalSize::new(1440.0, 900.0), false);
+    };
+    let size = winit::dpi::LogicalSize::new((w * 0.75).max(1024.0), (h * 0.75).max(700.0));
+    let cramped = w < 1500.0 || h < 1000.0;
+    (size, cramped)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod window_plan_tests {
+    use super::desktop_window_plan;
+
+    #[test]
+    fn desktops_get_a_window_laptops_get_maximized() {
+        // 1440p desktop: windowed at 75% — the same 1920×1080 the old
+        // default gave it. Field report: maximizing here was a regression.
+        let (size, maximized) = desktop_window_plan(Some((2560.0, 1440.0)));
+        assert!(!maximized);
+        assert_eq!((size.width, size.height), (1920.0, 1080.0));
+
+        // 1080p at 100%: still roomy enough to stay windowed.
+        let (_, maximized) = desktop_window_plan(Some((1920.0, 1080.0)));
+        assert!(!maximized);
+
+        // Retina MacBooks (1470/1512 points wide) and 1080p at 125%
+        // scaling (1536×864): the screens where a windowed default
+        // produced clipped side docks. Maximize.
+        for laptop in [(1470.0, 956.0), (1512.0, 982.0), (1536.0, 864.0)] {
+            let (_, maximized) = desktop_window_plan(Some(laptop));
+            assert!(maximized, "{laptop:?} should open maximized");
+        }
+
+        // No monitor info: plain window, never a surprise-fullscreen.
+        let (size, maximized) = desktop_window_plan(None);
+        assert!(!maximized);
+        assert_eq!((size.width, size.height), (1440.0, 900.0));
     }
 }
 
