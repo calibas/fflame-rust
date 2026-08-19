@@ -839,14 +839,21 @@ impl PaletteLibrary {
 
         let mut packs: Vec<PalettePackInfo> = Vec::new();
 
-        // Always load the embedded built-in pack first (offline fallback)
+        // Always load the embedded fallback pack first, so the library is
+        // never empty even with no assets folder on disk. Named by
+        // BUILTIN_PACK_FILE, not hardcoded — these logs said "Built-in"
+        // back when that was a separate pack, and kept saying it after
+        // the pack was folded into starter_pack.json.
         match crate::resources::palettes::load_builtin_pack() {
             Ok(pack) => {
-                log::info!("Loaded embedded Built-in pack ({} palettes)", pack.palettes.len());
+                log::info!("Loaded embedded pack {} ({} palettes) from {}",
+                    pack.pack_name, pack.palettes.len(),
+                    crate::resources::palettes::BUILTIN_PACK_FILE);
                 packs.push(PalettePackInfo::from_pack(pack, true));
             }
             Err(e) => {
-                log::error!("Failed to parse embedded Built-in pack: {}", e);
+                log::error!("Failed to parse embedded pack {}: {}",
+                    crate::resources::palettes::BUILTIN_PACK_FILE, e);
             }
         }
 
