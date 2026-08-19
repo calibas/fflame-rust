@@ -102,11 +102,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_load_palettes() {
-        // This test will only pass if assets/palettes exists
-        let palettes = load_palettes_from_dir(&crate::resources::resource_path("assets/palettes"));
-        // Should have at least the default palettes
-        assert!(palettes.is_empty() || !palettes.is_empty()); // Always passes, just exercising the code
+    fn every_shipped_loose_palette_parses() {
+        // These files feed the "Local Files" pack at startup; a load
+        // failure there is only an error log the user never sees. Here
+        // it fails visibly instead. (The previous version of this test
+        // asserted `is_empty() || !is_empty()` — always true — while
+        // the loader itself sat uncalled by the app for months.)
+        let dir = crate::resources::resource_path("assets/palettes");
+        let on_disk = std::fs::read_dir(&dir)
+            .expect("assets/palettes exists")
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("palette"))
+            .count();
+        let loaded = load_palettes_from_dir(&dir).len();
+        assert_eq!(
+            on_disk, loaded,
+            "{} .palette file(s) on disk but only {} parsed — check the loader's error logs",
+            on_disk, loaded
+        );
     }
 
     #[test]
