@@ -1299,7 +1299,7 @@ track_editor:
   interpolation_linear: "Linear"
   interpolation_smooth: "Smooth"
   interpolation_sinusoidal: "Sinusoidal"
-  interpolation_exponential: "Exponential (for zoom)"
+  interpolation_exponential: "Exponential"
   edit_keyframes: "Edit Keyframes"
 
   # Keyframe editor
