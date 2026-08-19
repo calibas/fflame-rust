@@ -183,6 +183,9 @@ web-app = []
 [build-dependencies]
 chrono = "0.4"
 rustc_version = "0.4"
+# Parses the palette pack JSONs to generate the WASM discovery manifest
+# (see generate_palette_manifest in build.rs).
+serde_json = "1.0"
 
 # Embeds the icon (and version strings) into the .exe resource table so
 # Explorer, the taskbar and Alt-Tab show it. Windows-only and

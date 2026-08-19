@@ -99,7 +99,7 @@
 - Per-panel code lives in its own `src/ui/*.rs` file; `src/ui/mod.rs` coordinates docking and bubbles responses through `UiResponse`
 
 ### Palette Library System
-- **Pack-based organization** (`assets/palettes/packs/*.json`): `builtin.json` (curated starter, enabled by default) + `apophysis1-4.json` (the classic Apophysis set, disabled by default, lazy-loaded on demand via `src/resources/` — manifest-based HTTP fetch on WASM, filesystem on desktop)
+- **Pack-based organization** (`assets/palettes/packs/*.json`): **the folder is the catalog** — desktop scans it at startup (drop a pack JSON in, it appears; `enabled_by_default` inside each pack, absent = enabled); `builtin.json` is also embedded as offline fallback; `apophysis1-4.json` ship disabled. WASM discovers packs via a manifest `build.rs` generates into OUT_DIR (browsers can't list directories; nothing committed, guarded by `generated_manifest_matches_packs_folder`) and lazy-fetches content via `src/resources/`. Loose `assets/palettes/*.palette` files load into a "Local Files" pack (desktop)
 - Palette Library panel: gradient previews, expand/collapse per pack, click-to-select creates an editable `"Name (Custom)"` copy
 - All load routes use `add_or_update()` with case-insensitive duplicate checking
 - **See**: [docs/main/COLOR.md](docs/main/COLOR.md) and [docs/main/PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md)
@@ -413,7 +413,7 @@ Apophysis/JWildfire XML (`src/flame_xml.rs`). Round-trips camera (`cam_pitch/yaw
 Presets store **complete FractalConfig** (not just the Flame). Transform buffers are pre-allocated for `MAX_TRANSFORMS` (128) with zero-padding of unused slots; `FlameRenderer::load_config()` synchronizes all GPU state atomically; `reset()` only clears accumulation.
 
 ### Asset Loading
-Desktop builds auto-load `assets/palettes/*.palette` and `assets/presets/*.fflame` at startup; WASM embeds the starter pack and lazy-loads the rest via `src/resources/`.
+Desktop builds auto-load `assets/palettes/packs/*.json` (pack scan), `assets/palettes/*.palette` (the "Local Files" pack) and `assets/presets/*.fflame` at startup; WASM embeds the builtin pack + a build-generated manifest and lazy-loads the rest via `src/resources/`.
 
 ### Pan / Zoom / Rotation Input
 All pan inputs (mouse drag, arrow keys, View-panel buttons, wheel zoom-to-cursor, pinch) convert screen deltas through `FractalConfig::screen_delta_to_pan_frame` — rotation-aware, identical in 2D and 3D because both pipelines compose pan → rotate → zoom. Wheel zoom anchors to the cursor except in fly mode (zooms to center).
