@@ -567,13 +567,38 @@ rustc's bulk-memory default and rejects the module without them.
 (`gallery script parity`, `gallery renderer smoke`) — the CLI-parity
 fixtures §6 names as the guard for `script + seed` reproducibility now
 run in every check. The renderer smoke tests skip cleanly on a machine
-with no GPU adapter. First run on a machine pays each crate's compile
-(~3 min each); cached after. To run one by hand:
+with no GPU adapter. To run one by hand:
 
 ```bash
-cd wasm/script && cargo test    # CLI-parity fixtures: byte-identical flames
-cd wasm/render && cargo test    # GPU smoke + device-reuse regression
+cd wasm/script && cargo test --profile gallery-test   # byte-identical flames
+cd wasm/render && cargo test --profile gallery-test   # GPU smoke + device reuse
 ```
+
+**Run them from the crate directory, and with that profile** — both
+matter, and neither is cosmetic:
+
+- `--profile gallery-test`, never `--release`. These crates'
+  `[profile.release]` is tuned to ship a small `.wasm` (`opt-level =
+  "z"`, fat LTO, one codegen unit). Testing under it fat-LTOs the whole
+  parent crate to optimize a test binary for *download size*: 178s per
+  crate, versus 73s under `gallery-test`, which keeps `opt-level = 2`
+  and drops the rest. `wasm-pack build --release` still ships from
+  `[profile.release]`, so module size is unchanged.
+- **From the crate directory**, because cargo discovers
+  `.cargo/config.toml` by current directory. `--manifest-path` from the
+  repo root silently misses `wasm/.cargo/config.toml`, and with it both
+  wins it carries: one shared `wasm/target-gallery` for the pair (the
+  parent crate compiled once instead of once each, and ~10 GB less on
+  disk) and `FFLAME_SKIP_GIT_PROVENANCE`, which stops `build.rs`
+  re-emitting `GIT_HASH`/`BUILD_TIME` into these builds on every commit.
+  That last one was the real cost: a commit touches no gallery code, but
+  it changed the hash, which invalidated the parent crate in each
+  private target directory and bought a full rebuild of both.
+
+Nothing in the gallery modules reads version, hash or build time, so
+they record explicit `not-recorded` placeholders rather than a frozen
+real hash — a wrong label is worse than none. The app and the dist
+build never set that variable and are unaffected.
 
 `pkg/` is gitignored, so each machine builds its own and nothing about
 these directories appears in a diff. Where the built modules are

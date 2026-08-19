@@ -1,0 +1,27 @@
+# Build settings for the two standalone gallery crates (render, script).
+#
+# They stay separate workspaces on purpose — the app must be unaffected
+# by anything here — but "separate workspace" defaulted to "separate
+# target directory", so each one compiled the whole parent crate into
+# its own 10 GB tree, twice over, and every commit invalidated both.
+#
+# Discovery is by CURRENT DIRECTORY, not manifest path: cargo finds this
+# file only when invoked from inside wasm/. `release.py` runs the
+# gallery gates with their crate directory as the cwd for that reason —
+# `--manifest-path` from the repo root would silently miss all of this
+# and quietly rebuild into the old per-crate directories.
+#
+# The repo-root .cargo/config.toml still merges in (it carries the
+# getrandom wasm backend cfg), so nothing there is lost.
+
+[build]
+# Relative to this file's directory -> wasm/target-gallery. Both crates
+# share it, so the parent crate is compiled once for the pair instead of
+# once each.
+target-dir = "target-gallery"
+
+[env]
+# Skip the git provenance that build.rs otherwise re-emits on every
+# commit — see the comment at its use site. Nothing in the gallery
+# modules reads the version, hash or build time.
+FFLAME_SKIP_GIT_PROVENANCE = "1"
