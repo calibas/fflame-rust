@@ -767,11 +767,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // Logical points, not physical pixels: PhysicalSize(1920, 1080)
+        // was 960×540 POINTS on a Retina display — a half-screen window
+        // whose side docks clipped their panels. Maximized is the
+        // default; the logical size is what un-maximizing restores to
+        // (and macOS/Windows both clamp it to the work area on smaller
+        // screens).
         let attributes = winit::window::Window::default_attributes()
             .with_title("Fractal Art Editor")
             .with_window_icon(window_icon())
-            .with_inner_size(PhysicalSize::new(1920, 1080))
-            .with_min_inner_size(PhysicalSize::new(300, 200));
+            .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(400.0, 300.0))
+            .with_maximized(true);
 
         #[allow(deprecated)]
         let window = event_loop.create_window(attributes)?;

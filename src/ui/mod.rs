@@ -1586,6 +1586,12 @@ impl EguiLayer {
 
             // Render fullscreen DockArea - manages all panels including FractalViewport
             // egui automatically handles input routing for panels
+
+            // First frame after a layout is built: raise the side docks
+            // to their startup minimum now that the real width is known
+            // (no-op on every later frame).
+            workspace.apply_startup_dock_minimums(ctx.screen_rect().width());
+
             egui_dock::DockArea::new(&mut workspace.dock_state)
                 .id(egui::Id::new("main_dock_area"))
                 .show(ctx, &mut panel_viewer::PanelViewer {
