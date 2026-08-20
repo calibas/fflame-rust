@@ -61,6 +61,29 @@ t.scale_xy(sx, sy);
 t.set_affine(a, b, c, d, e, f);
 ```
 
+### Post-affine
+
+Applied after the variations. Same shape as the pre-affine surface:
+raw coefficient properties `post_a`, `post_b`, `post_c`, `post_d`,
+`post_e`, `post_f`, `post_g`, the switch `post_affine_enabled`
+(bool), and the geometry helpers:
+
+```rhai
+t.post_affine_enabled = true;
+t.post_a = rand(0.95, 1.05);
+
+t.post_translate(dx, dy);
+t.post_rotate(degrees);
+t.post_scale(factor);
+t.post_scale_xy(sx, sy);
+t.set_post_affine(a, b, c, d, e, f);
+```
+
+The helpers **enable the post affine automatically** — calling
+`post_rotate` declares you want one. The raw `post_*` properties do
+not touch the switch, so you can stage coefficients and flip
+`post_affine_enabled` yourself.
+
 ### Variations
 
 ```rhai

@@ -879,6 +879,31 @@ fn register_transform(engine: &mut Engine) {
     prop_f32!("f", f);
     prop_f32!("g", g);
 
+    // Post-affine: applied after the variations. The raw coefficient
+    // properties mirror a..g and do NOT flip the enable flag — that is
+    // the scripter's own switch — but the geometry helpers below
+    // (post_rotate & co.) do enable it, because calling them on a
+    // disabled post affine and rendering no change would be a trap.
+    prop_f32!("post_a", post_a);
+    prop_f32!("post_b", post_b);
+    prop_f32!("post_c", post_c);
+    prop_f32!("post_d", post_d);
+    prop_f32!("post_e", post_e);
+    prop_f32!("post_f", post_f);
+    prop_f32!("post_g", post_g);
+    engine.register_get(
+        "post_affine_enabled",
+        |t: &mut TransformHandle| -> Result<bool, Box<EvalAltResult>> {
+            t.with(|x| x.post_affine_enabled)
+        },
+    );
+    engine.register_set(
+        "post_affine_enabled",
+        |t: &mut TransformHandle, v: bool| -> Result<(), Box<EvalAltResult>> {
+            t.with(|x| x.post_affine_enabled = v)
+        },
+    );
+
     engine.register_fn(
         "add_variation",
         |t: &mut TransformHandle, name: &str, weight: Dynamic| -> Result<(), Box<EvalAltResult>> {
@@ -1000,6 +1025,94 @@ fn register_transform(engine: &mut Engine) {
                 x.d = d as f32;
                 x.e = e as f32;
                 x.f = f as f32;
+            })
+        },
+    );
+
+    // ---- Post-affine geometry ----------------------------------------
+    //
+    // Same operations as translate/scale/scale_xy/rotate/set_affine,
+    // applied to the post coefficients. Each one enables the post
+    // affine: calling post_rotate and seeing nothing change (because a
+    // separate flag was still off) is the kind of trap the pre-affine
+    // helpers don't have, so these declare intent.
+
+    engine.register_fn(
+        "post_translate",
+        |t: &mut TransformHandle, dx: Dynamic, dy: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (dx, dy) = (num(&dx, "post_translate x")?, num(&dy, "post_translate y")?);
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_e += dx as f32;
+                x.post_f += dy as f32;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "post_scale",
+        |t: &mut TransformHandle, s: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let s = num(&s, "post_scale")? as f32;
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_a *= s;
+                x.post_b *= s;
+                x.post_c *= s;
+                x.post_d *= s;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "post_scale_xy",
+        |t: &mut TransformHandle, sx: Dynamic, sy: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (sx, sy) = (num(&sx, "post_scale x")? as f32, num(&sy, "post_scale y")? as f32);
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_a *= sx;
+                x.post_b *= sx;
+                x.post_c *= sy;
+                x.post_d *= sy;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "post_rotate",
+        |t: &mut TransformHandle, degrees: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (s, c) = (num(&degrees, "post_rotate")? as f32).to_radians().sin_cos();
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                let (a, b, cc, d) = (x.post_a, x.post_b, x.post_c, x.post_d);
+                x.post_a = c * a - s * cc;
+                x.post_b = c * b - s * d;
+                x.post_c = s * a + c * cc;
+                x.post_d = s * b + c * d;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "set_post_affine",
+        |t: &mut TransformHandle,
+         a: Dynamic,
+         b: Dynamic,
+         c: Dynamic,
+         d: Dynamic,
+         e: Dynamic,
+         f: Dynamic|
+         -> Result<(), Box<EvalAltResult>> {
+            let (a, b) = (num(&a, "post affine a")?, num(&b, "post affine b")?);
+            let (c, d) = (num(&c, "post affine c")?, num(&d, "post affine d")?);
+            let (e, f) = (num(&e, "post affine e")?, num(&f, "post affine f")?);
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_a = a as f32;
+                x.post_b = b as f32;
+                x.post_c = c as f32;
+                x.post_d = d as f32;
+                x.post_e = e as f32;
+                x.post_f = f as f32;
             })
         },
     );

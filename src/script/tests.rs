@@ -3916,3 +3916,73 @@ fn attaching_a_normal_transform_is_refused() {
         "error should explain what attach_to_all is for, got: {msg}"
     );
 }
+
+/// The post affine is scriptable the same way the pre affine is: raw
+/// coefficient properties plus geometry helpers. This was a gap — the
+/// fields existed (set_inversion wrote them) but no property or helper
+/// was registered, so `t.post_affine_enabled = true` errored.
+#[test]
+fn post_affine_is_scriptable() {
+    let out = run(
+        r#"
+        script("Post", "generator");
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.post_a = 1.5;
+        t.post_e = 0.25;
+        t.post_affine_enabled = true;
+        print("" + t.post_a + "," + t.post_e + "," + t.post_affine_enabled);
+        "#,
+        1,
+    )
+    .expect("script should run");
+    assert_eq!(out.messages, vec!["1.5,0.25,true"]);
+    let t = &out.config.flame.transforms[0];
+    assert!(t.post_affine_enabled);
+    assert_eq!((t.post_a, t.post_e), (1.5, 0.25));
+}
+
+/// Raw post_* properties do NOT flip the enable switch (staging is
+/// legitimate); the geometry helpers DO (calling post_rotate on a
+/// disabled post affine and rendering no change would be a trap).
+#[test]
+fn post_helpers_enable_the_post_affine_but_raw_properties_do_not() {
+    let out = run(
+        r#"
+        script("PostEnable", "generator");
+        let raw = flame.add_transform();
+        raw.add_variation("linear", 1.0);
+        raw.post_a = 2.0;
+        let helped = flame.add_transform();
+        helped.add_variation("linear", 1.0);
+        helped.post_rotate(90.0);
+        "#,
+        1,
+    )
+    .expect("script should run");
+    let ts = &out.config.flame.transforms;
+    assert!(!ts[0].post_affine_enabled, "raw property write must not enable");
+    assert!(ts[1].post_affine_enabled, "helper must enable");
+}
+
+/// post_rotate applies the same matrix the pre-affine rotate does —
+/// verified by rotating identical starting matrices both ways.
+#[test]
+fn post_rotate_matches_pre_rotate_math() {
+    let out = run(
+        r#"
+        script("PostRot", "generator");
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.set_affine(0.6, 0.1, -0.2, 0.7, 0.0, 0.0);
+        t.set_post_affine(0.6, 0.1, -0.2, 0.7, 0.0, 0.0);
+        t.rotate(37.0);
+        t.post_rotate(37.0);
+        print("" + (t.a - t.post_a) + "," + (t.b - t.post_b) + ","
+            + (t.c - t.post_c) + "," + (t.d - t.post_d));
+        "#,
+        1,
+    )
+    .expect("script should run");
+    assert_eq!(out.messages, vec!["0.0,0.0,0.0,0.0"]);
+}
