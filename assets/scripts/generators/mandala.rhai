@@ -9,7 +9,7 @@
 // points through it, which orbits every motif around the center. Add a
 // mirror transform and the symmetry group doubles.
 
-script("Mandala", "generator");
+script("Mandala2", "generator");
 
 // How many arms the mandala has.
 let symmetry = param_int("symmetry", 6, 2, 16);
@@ -21,7 +21,7 @@ let motifs = param_int("motifs", 2, 1, 4);
 let radius = param("radius", 0.9, 0.2, 2.0);
 // A soft circular core at the center, drawn with julian.
 let center_core = param_bool("center_core", true);
-let palette_mode = param_choice("palette", ["Generated", "Keep current"], 0);
+let palette_mode = param_choice("palette", ["Generated", "IQ Procedural", "Keep current"], 1);
 
 // The motifs: small, varied, placed off-center. Their shapes are what
 // the symmetry multiplies, so variety here is variety everywhere.
@@ -47,7 +47,11 @@ for i in 0..motifs {
     t.rotate(rand(0.0, 360.0));
 
     t.weight = rand(0.5, 1.0);
-    t.color = rand(0.0, 1.0);
+	if (i > 0) {
+    	t.color = (i + 1)/motifs;
+	} else {
+		t.color = 0.0;
+	}
     motif_weight_total += t.weight;
 }
 
@@ -78,7 +82,7 @@ let sym = flame.add_transform();
 sym.add_variation("linear", 1.0);
 let theta = 2.0 * PI() / symmetry;
 sym.set_affine(cos(theta), -sin(theta), sin(theta), cos(theta), 0.0, 0.0);
-sym.weight = motif_weight_total;
+sym.weight = motif_weight_total * 6;
 sym.color_speed = 1.0;
 
 if mirror {
@@ -105,8 +109,13 @@ if palette_mode == "Generated" {
         val_noise: 0.15,
     }, seed());
 }
+if (palette_mode == "IQ Procedural") {
+  run_script("iq_palette", #{
+    preset: "Random"
+  }, seed());
+}
 
-config.set("brightness", 4.0);
+config.set("saturation", rand(1.0, 1.5));
 
 let arms = if mirror { symmetry * 2 } else { symmetry };
 print("mandala with " + symmetry + "-fold rotation" + if mirror { " + mirror (" + arms + " arms)" } else { "" });

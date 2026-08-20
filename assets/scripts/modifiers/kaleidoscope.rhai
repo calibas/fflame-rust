@@ -20,7 +20,7 @@ let mirror = param_bool("mirror", false);
 // weight. 1.0 = points orbit about half the time, which fills all
 // sectors evenly. Lower leaves the original sector brighter than its
 // copies — sometimes exactly what you want.
-let strength = param("strength", 1.0, 0.2, 2.0);
+let strength = param("strength", 10.0, 0.1, 20.0);
 
 // Weight the symmetry against what is actually in the flame.
 let total = 0.0;

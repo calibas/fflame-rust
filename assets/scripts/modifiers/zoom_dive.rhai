@@ -13,7 +13,7 @@
 //
 // Run it, then open the Animation panel and press play (or Space).
 
-script("Zoom Dive", "modifier", ["norng"]);
+script("Zoom Dive Animation", "modifier", ["norng"]);
 
 let seconds = param("seconds", 12.0, 2.0, 120.0);
 // Total magnification over the whole dive. 10 is a gentle push,

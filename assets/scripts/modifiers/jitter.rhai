@@ -8,7 +8,7 @@
 
 script("Jitter", "modifier");
 
-let amount = param("amount", 0.1, 0.0, 1.0);
+let amount = param("amount", 0.5, 0.0, 2.0);
 let jitter_colors = param_bool("jitter_colors", true);
 
 // flame.transform_count() tells you how many there are; transform(i)
