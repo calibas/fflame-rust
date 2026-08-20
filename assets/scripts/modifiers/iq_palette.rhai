@@ -41,7 +41,7 @@ script("Procedural Palette", "modifier", ["palette"]);
 let preset = param_choice("preset", [
     "Rainbow", "Yellow-pink", "Green-blue", "Orange-blue",
     "Pastel", "Bright", "Dark earth", "Random", "Custom"
-], 0);
+], 7);
 
 let offset = param_color("offset", "#808080");
 let amplitude = param_color("amplitude", "#808080");

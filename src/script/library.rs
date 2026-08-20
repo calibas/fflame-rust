@@ -24,6 +24,10 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/basic_random.rhai"),
     ),
     (
+        "grand_julian.rhai",
+        include_str!("../../assets/scripts/generators/grand_julian.rhai"),
+    ),
+    (
         "lsystem.rhai",
         include_str!("../../assets/scripts/generators/lsystem.rhai"),
     ),
@@ -40,8 +44,8 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/mandala.rhai"),
     ),
     (
-        "gnarl.rhai",
-        include_str!("../../assets/scripts/generators/gnarl.rhai"),
+        "gnarls.rhai",
+        include_str!("../../assets/scripts/generators/gnarls.rhai"),
     ),
     (
         "iq_palette.rhai",
@@ -50,6 +54,10 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
     (
         "random_palette.rhai",
         include_str!("../../assets/scripts/modifiers/random_palette.rhai"),
+    ),
+    (
+        "gnarl.rhai",
+        include_str!("../../assets/scripts/modifiers/gnarl.rhai"),
     ),
     (
         "turntable.rhai",
