@@ -57,7 +57,11 @@ for i in 0..count {
     t.rotate(rand(0.0, 360.0));
 
     // Which part of the palette it draws from (0.0 to 1.0).
-    t.color = rand(0.0, 1.0);
+    if (i > 0) {
+    	t.color = (i + 1)/count;
+	} else {
+		t.color = 0.0;
+	}
 }
 
 // Anything can be made conditional. chance(0.5) is true half the time.
