@@ -14,7 +14,18 @@
 //!
 //! Determinism note for callers: every stage of a gallery pipeline —
 //! the generator and each applied modifier — runs with the same
-//! hallway seed `n`, folded JS-side:
+//! hallway seed `n`. Preferred form, one call per tile (the config
+//! never round-trips through JSON between stages):
+//!
+//! ```js
+//! let env = JSON.parse(run_chain(JSON.stringify([
+//!     { source: gen_src },
+//!     ...rooms.map(r => ({ source: r.src, params: r.params })),
+//! ]), n, null));
+//! ```
+//!
+//! The per-stage loop is equivalent (byte-identical `config_json`),
+//! just slower:
 //!
 //! ```js
 //! let env = JSON.parse(run(gen_src, n, "{}"));
@@ -35,13 +46,30 @@ use fractal_flame_wgpu::script::{
 /// script library the app and the CLI resolve names against, so
 /// `flame.set_palette("...")` and `run_script("random_palette", ...)`
 /// behave identically from every entry point.
-fn host(base: &FractalConfig) -> ScriptHost {
-    ScriptHost::with_palettes(PaletteLibrary::new().iter().cloned().collect()).with_scripts(
-        library::discover(base)
-            .into_iter()
-            .map(|e| (e.id, e.source))
-            .collect(),
-    )
+///
+/// Built ONCE per thread and reused — this is load-bearing for
+/// throughput, not tidiness. The old per-call construction went
+/// through `library::discover`, which parses and declaration-runs
+/// every script in the library to learn metadata a runner never reads:
+/// ~46 ms of fixed overhead per `run`/`run_on` call, which the gallery
+/// pays per tile stage — measured at 20–50% of tile throughput. Reuse
+/// is safe because `ScriptHost::run`/`collect` are `&self` with
+/// per-execute state (the main crate's tests share hosts across runs),
+/// so determinism per (script, seed) is unaffected.
+///
+/// The snapshot is taken at first use: a user script saved to the
+/// store afterwards is not visible until the module reloads. For the
+/// gallery worker that is the correct trade.
+fn with_host<R>(f: impl FnOnce(&ScriptHost) -> R) -> R {
+    thread_local! {
+        static HOST: std::cell::OnceCell<ScriptHost> = const { std::cell::OnceCell::new() };
+    }
+    HOST.with(|cell| {
+        f(cell.get_or_init(|| {
+            ScriptHost::with_palettes(PaletteLibrary::new().iter().cloned().collect())
+                .with_scripts(library::sources())
+        }))
+    })
 }
 
 fn decl_json(d: &ParamDecl) -> serde_json::Value {
@@ -176,11 +204,12 @@ fn resolve_params(
 /// seed, so a hallway of it would show one image over and over.
 pub fn list_scripts_impl() -> Result<String, String> {
     let base = FractalConfig::default();
-    let h = host(&base);
     let mut out = Vec::new();
+    // The one API call that genuinely needs discover's metadata pass —
+    // it runs once per picker, not per tile.
     for entry in library::discover(&base) {
         let doc = parse_doc(&entry.source);
-        let (params, flags) = match h.collect(&entry.source, &base) {
+        let (params, flags) = match with_host(|h| h.collect(&entry.source, &base)) {
             Ok(meta) => (
                 meta.params.iter().map(decl_json).collect::<Vec<_>>(),
                 serde_json::json!({ "norng": meta.flags.no_rng, "palette": meta.flags.palette }),
@@ -204,10 +233,10 @@ pub fn list_scripts_impl() -> Result<String, String> {
 /// A script's source by library id, so a caller can list once and run
 /// by id without shipping sources itself.
 pub fn script_source_impl(id: &str) -> Result<String, String> {
-    let base = FractalConfig::default();
-    let entries = library::discover(&base);
-    library::find(&entries, id)
-        .map(|e| e.source)
+    library::sources()
+        .into_iter()
+        .find(|(sid, _)| sid == id)
+        .map(|(_, source)| source)
         .ok_or_else(|| format!("no script with id `{id}`"))
 }
 
@@ -215,9 +244,7 @@ pub fn script_source_impl(id: &str) -> Result<String, String> {
 /// running it for real.
 pub fn collect_params_impl(source: &str) -> Result<String, String> {
     let base = FractalConfig::default();
-    let meta = host(&base)
-        .collect(source, &base)
-        .map_err(|e| e.to_string())?;
+    let meta = with_host(|h| h.collect(source, &base)).map_err(|e| e.to_string())?;
     let params: Vec<serde_json::Value> = meta.params.iter().map(decl_json).collect();
     serde_json::to_string(&serde_json::json!({
         "name": meta.name,
@@ -247,10 +274,11 @@ pub fn run_impl(
         None => FractalConfig::default(),
     };
 
-    let h = host(&base);
-    let meta = h.collect(source, &base).map_err(|e| e.to_string())?;
-    let params = resolve_params(params_json, &meta.params)?;
-    let outcome = h.run(source, &base, seed, params).map_err(|e| e.to_string())?;
+    let outcome = with_host(|h| -> Result<_, String> {
+        let meta = h.collect(source, &base).map_err(|e| e.to_string())?;
+        let params = resolve_params(params_json, &meta.params)?;
+        h.run(source, &base, seed, params).map_err(|e| e.to_string())
+    })?;
 
     let config_json = outcome.config.to_json().map_err(|e| e.to_string())?;
     // A script that defined an animation gets it in the envelope — the
@@ -267,6 +295,100 @@ pub fn run_impl(
         "kind": outcome.meta.kind.map(ScriptKind::as_str),
         "warnings": outcome.warnings,
         "messages": outcome.messages,
+        "config_json": config_json,
+        "animation_json": animation_json,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+/// Run a whole pipeline — a generator followed by any number of
+/// modifiers — in ONE call, threading the config between stages
+/// in memory.
+///
+/// `stages_json` is `[{ "source": "...", "params": {...} }, ...]`;
+/// `params` may be omitted per stage. Every stage runs with the same
+/// `seed`, exactly as the per-call loop did. The first stage starts
+/// from `base_config_json` (or the default config when `None`).
+///
+/// This exists because the per-stage loop pays the config's JSON
+/// round-trip at every boundary: `run_on` parses the base string and
+/// re-serializes the result, and the caller carries the string across
+/// the JS boundary twice per stage. Here the `FractalConfig` never
+/// leaves Rust between stages. The result envelope is
+/// `{ stages: [{name, kind, warnings, messages}, ...],
+///    config_json, animation_json }` — `config_json` byte-identical
+/// to what the equivalent `run` + `run_on` chain produces.
+pub fn run_chain_impl(
+    stages_json: &str,
+    seed: u64,
+    base_config_json: Option<&str>,
+) -> Result<String, String> {
+    struct Stage {
+        source: String,
+        params: serde_json::Value,
+    }
+    let raw: Vec<serde_json::Value> = serde_json::from_str(stages_json)
+        .map_err(|e| format!("stages must be [{{source, params?}}, ...]: {e}"))?;
+    let stages: Vec<Stage> = raw
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let source = v
+                .get("source")
+                .and_then(|s| s.as_str())
+                .ok_or_else(|| format!("stage {i}: missing `source`"))?
+                .to_string();
+            let params = v.get("params").cloned().unwrap_or(serde_json::Value::Null);
+            Ok(Stage { source, params })
+        })
+        .collect::<Result<_, String>>()?;
+    if stages.is_empty() {
+        return Err("run_chain needs at least one stage".to_string());
+    }
+
+    let mut cfg = match base_config_json {
+        Some(json) => FractalConfig::from_json(json)
+            .map_err(|e| format!("base config did not parse: {e}"))?,
+        None => FractalConfig::default(),
+    };
+
+    let mut stage_reports = Vec::new();
+    let mut animation = None;
+    with_host(|h| -> Result<(), String> {
+        for (i, stage) in stages.iter().enumerate() {
+            let label = |e: String| format!("stage {i}: {e}");
+            let meta = h.collect(&stage.source, &cfg).map_err(|e| label(e.to_string()))?;
+            let params_str = if stage.params.is_null() {
+                String::new()
+            } else {
+                stage.params.to_string()
+            };
+            let params = resolve_params(&params_str, &meta.params).map_err(label)?;
+            let outcome =
+                h.run(&stage.source, &cfg, seed, params).map_err(|e| label(e.to_string()))?;
+            stage_reports.push(serde_json::json!({
+                "name": outcome.meta.name,
+                "kind": outcome.meta.kind.map(ScriptKind::as_str),
+                "warnings": outcome.warnings,
+                "messages": outcome.messages,
+            }));
+            // Later stages win, matching the sequential loop where each
+            // envelope replaced the last non-null the caller kept.
+            if outcome.animation.is_some() {
+                animation = outcome.animation;
+            }
+            cfg = outcome.config;
+        }
+        Ok(())
+    })?;
+
+    let config_json = cfg.to_json().map_err(|e| e.to_string())?;
+    let animation_json = match &animation {
+        Some(a) => serde_json::Value::String(a.to_json().map_err(|e| e.to_string())?),
+        None => serde_json::Value::Null,
+    };
+    serde_json::to_string(&serde_json::json!({
+        "stages": stage_reports,
         "config_json": config_json,
         "animation_json": animation_json,
     }))
@@ -321,5 +443,19 @@ mod wasm {
         base_config_json: &str,
     ) -> Result<String, JsValue> {
         crate::run_impl(source, seed, params_json, Some(base_config_json)).map_err(js)
+    }
+
+    /// Run a generator + modifiers pipeline in one call — the config
+    /// never round-trips through JSON between stages. Preferred over a
+    /// `run` + `run_on` loop for per-tile work. `stages_json`:
+    /// `[{source, params?}, ...]`; `base_config_json` optional (null =
+    /// start from the default config, i.e. first stage is a generator).
+    #[wasm_bindgen]
+    pub fn run_chain(
+        stages_json: &str,
+        seed: u64,
+        base_config_json: Option<String>,
+    ) -> Result<String, JsValue> {
+        crate::run_chain_impl(stages_json, seed, base_config_json.as_deref()).map_err(js)
     }
 }
