@@ -1,5 +1,11 @@
 // Make Gnarly
 //
+// Adds one heavily weighted waves2 transform to the flame you already
+// have — the classic "gnarl" treatment. Random wave frequencies and
+// scales (bounded by the sliders) bend space into flowing, dendritic
+// wisps; random_rotation sometimes tilts the wave or adds a slight
+// post-affine skew for variety. Works best on flames with strong
+// structure to distort.
 script("Gnarl", "modifier");
 
 // Values you can adjust before running. These show up as sliders.

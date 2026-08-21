@@ -198,8 +198,16 @@
         "name": "decompose_group"
       },
       {
-        "kind": "generator",
+        "kind": "modifier",
         "name": "gnarl"
+      },
+      {
+        "kind": "generator",
+        "name": "gnarls"
+      },
+      {
+        "kind": "generator",
+        "name": "grand_julian"
       },
       {
         "kind": "generator",
