@@ -2567,15 +2567,19 @@ fn the_procedural_palette_follows_the_cosine_formula() {
     let entry = super::library::find(&entries, "iq_palette").expect("shipped");
     let host = ScriptHost::new();
 
+    // Rainbow explicitly: the DEFAULT preset is Random (seeded), which
+    // is exactly what a formula check cannot pin.
+    let mut params = HashMap::new();
+    params.insert("preset".to_string(), ParamValue::Choice(0));
     let pal = host
-        .run(&entry.source, &base, 1, HashMap::new())
+        .run(&entry.source, &base, 1, params)
         .unwrap()
         .config
         .palette;
     assert_eq!(pal.stops.len(), 256);
     assert!(pal.locked, "sampled straight into fixed slots");
 
-    // Default preset is the rainbow: a = b = 0.5, c = 1,
+    // The Rainbow preset is a = b = 0.5, c = 1,
     // d = (0, 0.33, 0.67). Check a few slots against the formula.
     let f = |a: f32, b: f32, c: f32, d: f32, t: f32| {
         a + b * (std::f32::consts::TAU * (c * t + d)).cos()
@@ -2608,7 +2612,7 @@ fn the_procedural_palette_follows_the_cosine_formula() {
         .collect();
     let span = hues.iter().cloned().fold(0.0f32, f32::max)
         - hues.iter().cloned().fold(360.0f32, f32::min);
-    assert!(span > 180.0, "the default preset should sweep hues: {span}");
+    assert!(span > 180.0, "the Rainbow preset should sweep hues: {span}");
 }
 
 /// Custom uses the declared parameters; a preset overrides them. Both
