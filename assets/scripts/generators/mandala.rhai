@@ -9,7 +9,7 @@
 // points through it, which orbits every motif around the center. Add a
 // mirror transform and the symmetry group doubles.
 
-script("Mandala2", "generator");
+script("Mandala", "generator");
 
 // How many arms the mandala has.
 let symmetry = param_int("symmetry", 6, 2, 16);
