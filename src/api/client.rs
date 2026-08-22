@@ -23,7 +23,74 @@ mod wasm {
     use super::*;
     use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Headers, Request, RequestCredentials, RequestInit, RequestMode, Response};
+    use web_sys::{
+        AbortController, Headers, Request, RequestCredentials, RequestInit, RequestMode,
+        Response,
+    };
+
+    /// Matches the desktop client's ureq timeout, so "the API is slow"
+    /// means the same thing on both surfaces.
+    const REQUEST_TIMEOUT_MS: i32 = 30_000;
+    /// Thumbnail uploads carry a PNG; give them room.
+    const UPLOAD_TIMEOUT_MS: i32 = 60_000;
+
+    /// A fetch with a deadline.
+    ///
+    /// A browser fetch has no timeout of its own. Before this, a slow
+    /// endpoint could hold the health check "in progress" for as long
+    /// as the browser felt like waiting — minutes, in Firefox — and
+    /// while it was in progress no other check could start, so the app
+    /// sat on a stale connectivity state with no way to recover it.
+    ///
+    /// Wires an `AbortController` into the request and arms a
+    /// `setTimeout` that aborts it. The timer is cleared once the
+    /// response arrives; if clearing fails the late `abort()` lands on
+    /// a finished request, which is a no-op. An aborted fetch is
+    /// reported as a network error with the deadline in the message,
+    /// because "Fetch failed: AbortError" says nothing about why.
+    struct Deadline {
+        controller: AbortController,
+        timer: Option<i32>,
+        ms: i32,
+    }
+
+    impl Deadline {
+        fn arm(opts: &mut RequestInit, ms: i32) -> FetchResult<Self> {
+            let controller = AbortController::new()
+                .map_err(|e| FetchError::Network(format!("Failed to create AbortController: {e:?}")))?;
+            opts.signal(Some(&controller.signal()));
+
+            let window = web_sys::window()
+                .ok_or_else(|| FetchError::Network("No window object".to_string()))?;
+            let abort_target = controller.clone();
+            let cb = Closure::once_into_js(move || abort_target.abort());
+            let timer = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    cb.unchecked_ref(),
+                    ms,
+                )
+                .ok();
+            Ok(Self { controller, timer, ms })
+        }
+
+        /// Translate a rejected fetch, naming the deadline if it was us.
+        fn explain(&self, e: JsValue) -> FetchError {
+            if self.controller.signal().aborted() {
+                FetchError::Network(format!(
+                    "No response within {} s (request aborted)",
+                    self.ms / 1000
+                ))
+            } else {
+                FetchError::Network(format!("Fetch failed: {e:?}"))
+            }
+        }
+
+        fn disarm(&self) {
+            if let (Some(id), Some(window)) = (self.timer, web_sys::window()) {
+                window.clear_timeout_with_handle(id);
+            }
+        }
+    }
 
     /// Make an authenticated API request (WASM).
     ///
@@ -42,6 +109,7 @@ mod wasm {
         opts.method(method);
         opts.mode(RequestMode::Cors);
         opts.credentials(RequestCredentials::Include);
+        let deadline = Deadline::arm(&mut opts, REQUEST_TIMEOUT_MS)?;
 
         // Set headers
         let headers = Headers::new()
@@ -66,9 +134,9 @@ mod wasm {
         let window = web_sys::window()
             .ok_or_else(|| FetchError::Network("No window object".to_string()))?;
 
-        let resp_value = JsFuture::from(window.fetch_with_request(&request))
-            .await
-            .map_err(|e| FetchError::Network(format!("Fetch failed: {:?}", e)))?;
+        let fetched = JsFuture::from(window.fetch_with_request(&request)).await;
+        deadline.disarm();
+        let resp_value = fetched.map_err(|e| deadline.explain(e))?;
 
         let resp: Response = resp_value
             .dyn_into()
@@ -150,6 +218,7 @@ mod wasm {
         opts.method("PUT");
         opts.mode(RequestMode::Cors);
         opts.credentials(RequestCredentials::Include);
+        let deadline = Deadline::arm(&mut opts, UPLOAD_TIMEOUT_MS)?;
 
         let headers = Headers::new()
             .map_err(|e| FetchError::Network(format!("Failed to create headers: {:?}", e)))?;
@@ -171,9 +240,9 @@ mod wasm {
         let window = web_sys::window()
             .ok_or_else(|| FetchError::Network("No window object".to_string()))?;
 
-        let resp_value = JsFuture::from(window.fetch_with_request(&request))
-            .await
-            .map_err(|e| FetchError::Network(format!("Fetch failed: {:?}", e)))?;
+        let fetched = JsFuture::from(window.fetch_with_request(&request)).await;
+        deadline.disarm();
+        let resp_value = fetched.map_err(|e| deadline.explain(e))?;
 
         let resp: Response = resp_value
             .dyn_into()

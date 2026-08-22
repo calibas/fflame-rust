@@ -616,6 +616,10 @@ pub struct App {
     pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
     pub(super) health_check_in_progress: bool,
     pub(super) api_connectivity: crate::api::ApiConnectivity,
+    /// Decides when a failed health check means the server is gone —
+    /// see `api::health`. `api_connectivity` above is its last verdict,
+    /// copied out for the UI.
+    pub(super) health_policy: crate::api::health::HealthPolicy,
     pub(super) last_health_check: Option<web_time::Instant>,
 }
 impl App {
@@ -794,6 +798,7 @@ impl App {
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             health_check_in_progress: false,
             api_connectivity: crate::api::ApiConnectivity::Unknown,
+            health_policy: crate::api::health::HealthPolicy::default(),
             last_health_check: None,
         };
 

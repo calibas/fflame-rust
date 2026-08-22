@@ -108,6 +108,10 @@ web-sys = { version = "0.3", features = [
     "RequestCredentials",
     "Response",
     "Headers",
+    # Request timeouts: a browser fetch has none by default, and a slow
+    # endpoint would otherwise pin the API health check in flight forever
+    "AbortController",
+    "AbortSignal",
     # Web Audio API (for live audio capture)
     "AudioContext",
     "AudioContextOptions",

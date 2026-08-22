@@ -1362,15 +1362,18 @@ impl App {
             }
         }
 
-        // 2. Trigger periodic check (every 30 seconds)
+        // 2. Trigger the periodic check. The cadence is the policy's:
+        //    30 s while healthy, 5 s to confirm or clear a single miss,
+        //    15 s while unreachable so recovery is noticed promptly.
         if !self.health_check_in_progress {
             let settings = self.config_manager.system_settings();
             let has_auth = settings.is_signed_in();
+            let interval = self.health_policy.interval();
 
             let should_check = settings.online_mode
                 && has_auth
                 && self.last_health_check
-                    .map(|t| t.elapsed().as_secs() >= 30)
+                    .map(|t| t.elapsed() >= interval)
                     .unwrap_or(true);
 
             if should_check {
@@ -1380,13 +1383,18 @@ impl App {
     }
 
     fn process_health_check_outcome(&mut self, outcome: crate::api::HealthCheckOutcome) {
-        use crate::api::{ApiConnectivity, HealthCheckOutcome};
+        use crate::api::health::Transition;
+        use crate::api::HealthCheckOutcome;
 
-        let prev = self.api_connectivity;
+        // Connectivity is the policy's call, not this function's: one
+        // failed fetch used to flip the app to Unreachable, grey out
+        // Save Online and announce "connection lost" — for a server
+        // that answered fine from the next tab over.
+        let transition = self.health_policy.record(&outcome);
+        self.api_connectivity = self.health_policy.connectivity();
 
         match outcome {
             HealthCheckOutcome::Authenticated { email, user_id } => {
-                self.api_connectivity = ApiConnectivity::Online;
                 log::debug!("Health check OK: authenticated (email: {:?})", email);
 
                 self.current_user_id = Some(user_id);
@@ -1400,7 +1408,6 @@ impl App {
                 }
             }
             HealthCheckOutcome::TokenExpired => {
-                self.api_connectivity = ApiConnectivity::Online;
                 log::info!("Health check: token expired, clearing auth");
 
                 self.current_user_id = None;
@@ -1427,27 +1434,26 @@ impl App {
                 );
             }
             HealthCheckOutcome::ServerError(ref msg) => {
-                self.api_connectivity = ApiConnectivity::Online;
                 log::warn!("Health check server error: {}", msg);
             }
             HealthCheckOutcome::NetworkError(ref msg) => {
-                self.api_connectivity = ApiConnectivity::Unreachable;
-                log::warn!("Health check network error: {}", msg);
+                log::warn!(
+                    "Health check network error ({} of {} before unreachable): {}",
+                    self.health_policy.failures(),
+                    crate::api::health::FAILURES_BEFORE_UNREACHABLE,
+                    msg
+                );
             }
         }
 
-        // Transition notifications
-        if prev == ApiConnectivity::Online && self.api_connectivity == ApiConnectivity::Unreachable {
-            self.egui_layer.show_api_notification(
-                &rust_i18n::t!("auth.connection_lost"),
-                true,
-            );
-        }
-        if prev == ApiConnectivity::Unreachable && self.api_connectivity == ApiConnectivity::Online {
-            self.egui_layer.show_api_notification(
-                &rust_i18n::t!("auth.connection_restored"),
-                false,
-            );
+        match transition {
+            Transition::Lost => self
+                .egui_layer
+                .show_api_notification(&rust_i18n::t!("auth.connection_lost"), true),
+            Transition::Restored => self
+                .egui_layer
+                .show_api_notification(&rust_i18n::t!("auth.connection_restored"), false),
+            Transition::None => {}
         }
     }
 
