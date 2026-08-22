@@ -38,8 +38,8 @@ use crate::param;
 /// projects via a Julia-N style angular sampling (`xtrb_power` equally-
 /// spaced angles, radial exponent `xtrb_dist`) back to Cartesian. The body
 /// has six branches depending on the relative ordering of the three
-/// trilinear offsets, each with a hex-fold sub-branch gated by `width3 = 1
-/// - w²`.
+/// trilinear offsets, each with a hex-fold sub-branch gated by
+/// `width3 = 1 - w²`.
 ///
 /// # Authors
 /// - Xyrus02

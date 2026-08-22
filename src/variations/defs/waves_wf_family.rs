@@ -291,8 +291,8 @@ fn variation_waves4_wf(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 /// Dini's Surface parametric mapping — emits `(a·cos(u)·sin(v),
 /// a·sin(u)·sin(v), −(a·(cos(v) + log tan(v/2)) + b·u))` where `(u, v) =
 /// (x, y)`. Dini's surface is a helicoid of constant negative Gaussian
-/// curvature, a generalization of the pseudosphere. See [mathworld.wolfram.
-/// com/DinisSurface](https://mathworld.wolfram.com/DinisSurface.html).
+/// curvature, a generalization of the pseudosphere. See
+/// [MathWorld](https://mathworld.wolfram.com/DinisSurface.html).
 pub static DINIS_SURFACE_WF: VariationDef = VariationDef {
     name: "dinis_surface_wf",
     aliases: &[],
