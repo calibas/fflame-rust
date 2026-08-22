@@ -9,6 +9,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod health;
 pub mod sync;
 pub mod types;
 
@@ -56,11 +57,6 @@ pub enum HealthCheckOutcome {
     NetworkError(String),
 }
 
-/// Perform an API health check by calling GET /api/users/me.
-///
-/// On 401, retries once before reporting TokenExpired. This avoids
-/// false logouts caused by stale pooled connections after sleep/wake
-/// — a dead TCP socket can produce spurious 401s on the first attempt.
 /// Percent-encode a query-string value.
 ///
 /// Written rather than pulled in: the only need is one parameter, and
@@ -84,21 +80,39 @@ pub(crate) fn urlencode(value: &str) -> String {
     out
 }
 
+/// Perform an API health check by calling GET /api/users/me.
+///
+/// One failed attempt is retried once, whether it failed as a 401 or
+/// as a transport error — see the comment at the retry. What a single
+/// outcome MEANS for connectivity is not decided here: that is
+/// [`health::HealthPolicy`], which needs two network errors in a row
+/// before it calls the server unreachable.
 pub async fn check_api_health(base_url: &str, token: &str) -> HealthCheckOutcome {
     let url = build_url(base_url, "/api/users/me");
-    match client::api_get::<ApiUser>(&url, token).await {
+    let classify =|r: Result<ApiUser, FetchError>| match r {
         Ok(user) => HealthCheckOutcome::Authenticated { email: user.email, user_id: user.id },
-        Err(FetchError::Unauthorized) => {
-            log::info!("Health check got 401, retrying once...");
-            match client::api_get::<ApiUser>(&url, token).await {
-                Ok(user) => HealthCheckOutcome::Authenticated { email: user.email, user_id: user.id },
-                Err(FetchError::Unauthorized) => HealthCheckOutcome::TokenExpired,
-                Err(FetchError::Network(msg)) => HealthCheckOutcome::NetworkError(msg),
-                Err(other) => HealthCheckOutcome::ServerError(other.to_string()),
-            }
-        }
+        Err(FetchError::Unauthorized) => HealthCheckOutcome::TokenExpired,
         Err(FetchError::Network(msg)) => HealthCheckOutcome::NetworkError(msg),
         Err(other) => HealthCheckOutcome::ServerError(other.to_string()),
+    };
+
+    match client::api_get::<ApiUser>(&url, token).await {
+        // Both retried once, for the same reason: the first request
+        // after an idle stretch may land on a pooled connection the
+        // server has already closed. That shows up as a 401 on some
+        // stacks and as a transport error on others — a browser reports
+        // it as `NetworkError when attempting to fetch resource` — and
+        // in either form the second attempt, on a fresh connection, is
+        // the one that tells the truth.
+        Err(FetchError::Unauthorized) => {
+            log::info!("Health check got 401, retrying once...");
+            classify(client::api_get::<ApiUser>(&url, token).await)
+        }
+        Err(FetchError::Network(msg)) => {
+            log::info!("Health check network error ({msg}), retrying once...");
+            classify(client::api_get::<ApiUser>(&url, token).await)
+        }
+        other => classify(other),
     }
 }
 
