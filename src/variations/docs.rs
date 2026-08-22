@@ -161,84 +161,67 @@ fn parse_doc_block(doc_lines: &[&str]) -> VariationDoc {
         description.remove(0);
     }
 
-    let description = description.join("\n");
-    let description_plain = strip_markdown(&description);
+    let description = reflow(&description);
+    // ONE markdown stripper in this codebase, and it is the script
+    // module's: it handles links, images, escapes and the emphasis
+    // flanking rules that keep `snake_case` and `2 * 3` intact, and
+    // `shipped_script_prose_is_not_corrupted` holds it to a real
+    // corpus. A second implementation here would be a second thing to
+    // keep in agreement, writing to the same API field.
+    let description_plain = crate::script::strip_markdown(&description);
     VariationDoc { description, description_plain, authors }
 }
 
-/// Remove markdown syntax, leaving the words.
+/// Join hard-wrapped lines back into paragraphs.
 ///
-/// Deliberately narrow — it handles what the defs actually use (inline
-/// code, bold, links, headings) and nothing else. In particular it does
-/// NOT treat `_` as emphasis: variation and parameter names are full of
-/// underscores (`popcorn2_3D`, `pre_blur`), and "stripping" those would
-/// corrupt the very identifiers the prose is explaining.
-pub fn strip_markdown(md: &str) -> String {
-    // Headings are line-scoped; inline syntax is NOT. A link's text can
-    // wrap across lines — `waves_wf_family` writes
-    // `[mathworld.wolfram.` / `com/DinisSurface](...)` over two — so
-    // stripping line by line left that one half-converted, with a bare
-    // `](url)` still sitting in the plain text. The inline pass runs
-    // over the whole string instead, newlines preserved as ordinary
-    // characters.
-    let deheaded: Vec<&str> = md.lines().map(strip_heading).collect();
-    strip_inline(&deheaded.join("\n"))
-}
-
-/// Drop a leading `#` marker, but only `#` followed by another `#` or a
-/// space — a bare `#` mid-prose is text.
-fn strip_heading(line: &str) -> &str {
-    let trimmed = line.trim_end();
-    let lead = trimmed.trim_start();
-    match lead.strip_prefix('#') {
-        Some(rest) if rest.starts_with('#') || rest.starts_with(' ') => {
-            lead.trim_start_matches('#').trim_start()
-        }
-        _ => trimmed,
-    }
-}
-
-fn strip_inline(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            // Inline code: the fences go, the code stays.
-            '`' => i += 1,
-            // Bold. A single `*` is left alone: it is multiplication far
-            // more often than emphasis in this corpus.
-            '*' if chars.get(i + 1) == Some(&'*') => i += 2,
-            '[' => match take_link(&chars, i) {
-                Some((text, next)) => {
-                    out.push_str(&strip_inline(&text));
-                    i = next;
-                }
-                None => {
-                    out.push('[');
-                    i += 1;
-                }
-            },
-            c => {
-                out.push(c);
-                i += 1;
-            }
+/// The defs wrap prose at ~72 columns to suit Rust source, and that
+/// wrapping belongs to the file, not to the sentence: in markdown a
+/// single newline inside a paragraph is a SPACE, so any renderer
+/// already flows these back together. Doing it here buys two things.
+///
+/// It keeps the plain text matching what the markdown renders, instead
+/// of baking a 72-column shape into a field nobody wrapped on purpose.
+///
+/// And it is what lets the shared stripper work at all. That stripper
+/// pairs delimiters within a line, deliberately — so inline code
+/// carried across a wrap, as in
+/// `` `sin²/cos = sin ·`` + ``tan` ``, never closes. 256 doc lines in
+/// the defs do this, and the corpus went out with the backticks still
+/// in `description_plain` until they were flowed first.
+///
+/// Blank lines and list items stay as boundaries. Nothing else in the
+/// defs is indentation-sensitive: there are no fenced code blocks, and
+/// every indented line is the continuation of the one above it.
+fn reflow(lines: &[&str]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in lines {
+        let text = line.trim();
+        if text.is_empty() {
+            out.push(String::new());
+            open = false;
+        } else if !open || is_list_item(text) {
+            out.push(text.to_string());
+            open = true;
+        } else {
+            let last = out.last_mut().expect("open implies a line to extend");
+            last.push(' ');
+            last.push_str(text);
         }
     }
-    out
+    out.join("\n")
 }
 
-/// `[text](url)` starting at `open` -> the text, and the index past the
-/// closing paren. The URL is dropped: most of them are rustdoc
-/// intra-doc paths (`super::chladni`) that mean nothing outside the
-/// crate, and a plain-text reader cannot follow any of them anyway.
-fn take_link(chars: &[char], open: usize) -> Option<(String, usize)> {
-    let close = (open + 1..chars.len()).find(|&j| chars[j] == ']')?;
-    if chars.get(close + 1) != Some(&'(') {
-        return None;
+/// `- item`, `* item` or `3. item` — a line that begins a new block
+/// rather than continuing the previous one.
+fn is_list_item(text: &str) -> bool {
+    if text.starts_with("- ") || text.starts_with("* ") {
+        return true;
     }
-    let paren = (close + 2..chars.len()).find(|&j| chars[j] == ')')?;
-    Some((chars[open + 1..close].iter().collect(), paren + 1))
+    match text.split_once(". ") {
+        Some((n, _)) => !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()),
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -280,9 +263,12 @@ pub static CIRCLECROP: VariationDef = VariationDef {
 
         let (name, doc) = &found[0];
         assert_eq!(name, "circleRand", "the wire name, not the static ident");
+        // One paragraph, so one line: the source wrap was Rust's, not
+        // the sentence's.
         assert_eq!(
             doc.description,
-            "Random-circle sampler — samples a random `(rx, ry)` point.\nCapped at 32 iterations."
+            "Random-circle sampler — samples a random `(rx, ry)` point. \
+             Capped at 32 iterations."
         );
         assert!(doc.authors.is_empty(), "no Authors section is normal");
 
@@ -314,22 +300,58 @@ pub static CIRCLECROP: VariationDef = VariationDef {
         assert_eq!(field_str("    display_name: \"Circle Rand\",", "name"), None);
     }
 
+    /// The stripping itself belongs to `script::strip_markdown` and is
+    /// tested there; this checks only that a parsed description is
+    /// actually run through it, on the constructs the defs use.
     #[test]
-    fn markdown_is_stripped_without_eating_identifiers() {
-        assert_eq!(strip_markdown("uses `pre_blur` and **bold**"), "uses pre_blur and bold");
-        assert_eq!(strip_markdown("see [`chladni`](super::chladni)"), "see chladni");
-        assert_eq!(strip_markdown("[MathWorld](https://x/y)"), "MathWorld");
-        // Underscores and lone asterisks survive: they are identifiers
-        // and multiplication, not emphasis.
-        assert_eq!(strip_markdown("popcorn2_3D scales x * y"), "popcorn2_3D scales x * y");
-        // An unclosed bracket is text, not a swallowed line.
-        assert_eq!(strip_markdown("range [-X, X] sampling"), "range [-X, X] sampling");
-        // A link whose TEXT wraps across lines still resolves. The real
-        // one in waves_wf_family does this, and a line-by-line stripper
-        // left `](https://...)` sitting in the plain description.
-        assert_eq!(
-            strip_markdown("see [mathworld.wolfram.\ncom/DinisSurface](https://x/y)."),
-            "see mathworld.wolfram.\ncom/DinisSurface."
+    fn descriptions_carry_a_stripped_twin() {
+        let doc = &parse_source(
+            "/// Uses `pre_blur`, see [`chladni`](super::chladni).\n\
+             pub static X: VariationDef = VariationDef {\n    name: \"x\",\n};\n",
+        )[0]
+        .1;
+        assert_eq!(doc.description, "Uses `pre_blur`, see [`chladni`](super::chladni).");
+        assert_eq!(doc.description_plain, "Uses pre_blur, see chladni.");
+    }
+
+    /// `description_plain` must contain no markdown left over. The
+    /// direct invariant, and it catches a whole class the earlier
+    /// version of this file shipped: a delimiter pair split across the
+    /// source's 72-column wrap. Reflowing closes almost all of them,
+    /// but not one whose continuation line opens a new block — `xtrb`
+    /// wrapped a code span onto a line starting `- w²`, which any
+    /// markdown parser reads as a list item, so the span never closed.
+    /// The prose has to be written closable; this says when it is not.
+    #[test]
+    fn shipped_descriptions_strip_clean() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/variations/defs");
+        let sources: Vec<String> = std::fs::read_dir(&dir)
+            .expect("defs dir")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("rs"))
+            .filter_map(|p| std::fs::read_to_string(p).ok())
+            .collect();
+
+        let mut offenders = Vec::new();
+        for (name, doc) in parse_sources(sources.iter().map(String::as_str)) {
+            let leftover = doc.description_plain.contains('`')
+                || doc.description_plain.contains("](");
+            if leftover {
+                let line = doc
+                    .description_plain
+                    .lines()
+                    .find(|l| l.contains('`') || l.contains("]("))
+                    .unwrap_or_default();
+                offenders.push(format!("{name}: {line}"));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "{} description(s) still carry markdown after stripping — a \
+             delimiter pair is split across a line break in the source:\n  {}",
+            offenders.len(),
+            offenders.join("\n  ")
         );
     }
 
