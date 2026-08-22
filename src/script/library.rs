@@ -18,7 +18,13 @@ use crate::config::fractal_config::FractalConfig;
 use super::{ScriptHost, ScriptKind};
 
 /// Starter scripts compiled in, so they exist regardless of cwd.
-pub(crate) const EMBEDDED: &[(&str, &str)] = &[
+///
+/// `pub` for the export binaries: this is the definition of "built-in"
+/// — the same set `contract::generate` publishes as `builtin_scripts`
+/// and the API refuses at CREATE time — and both corpora have to key
+/// off exactly it, not off [`discover`], which merges in the user's
+/// own scripts.
+pub const EMBEDDED: &[(&str, &str)] = &[
     (
         "basic_random.rhai",
         include_str!("../../assets/scripts/generators/basic_random.rhai"),

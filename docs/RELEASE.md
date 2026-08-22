@@ -104,7 +104,16 @@ The API is a separate repository. What it consumes from here:
 |---|---|---|
 | `docs/generated/engine-contract.json` | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` | vocabularies, engine limits, reserved script stems |
 | the variation corpus | `cargo run --release --bin export_variations_json` | any variation added or edited |
+| the script corpus | `cargo run --release --bin export_scripts_json` | any built-in script added or edited |
 | the effect corpus | `cargo run --release --bin export_effects_json` | any effect added or edited |
+
+The variation and script corpora carry the prose too — descriptions and
+authors from `///` doc comments, script descriptions from the header
+comment. Both refuse to write a file with a missing description rather
+than emitting a null, because the API has no other source for it and a
+null becomes a variation that reaches the browser with nothing to say.
+The script corpus embeds each script's **source verbatim**, so it is
+also what a re-import would have to reproduce byte for byte.
 
 ### What moves the contract's `shape`, and what does not
 

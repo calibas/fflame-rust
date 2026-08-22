@@ -3990,3 +3990,49 @@ fn post_rotate_matches_pre_rotate_math() {
     .expect("script should run");
     assert_eq!(out.messages, vec!["0.0,0.0,0.0,0.0"]);
 }
+
+/// The scripts corpus (`export_scripts_json`) reads three things off
+/// every shipped script: the `script(...)` declaration, the header
+/// comment, and the declared parameters. The description half is
+/// covered by `every_shipped_script_already_documents_itself`; this is
+/// the other half.
+///
+/// A missing kind is the interesting case. It is only a WARNING at
+/// runtime — the host defaults to generator and says so — which is
+/// right for a script someone is editing and wrong for one we ship,
+/// where it would put a modifier in the corpus as a generator.
+#[test]
+fn every_shipped_script_declares_a_kind_and_serialisable_params() {
+    let base = FractalConfig::default();
+    let host = ScriptHost::new();
+    for (name, source) in super::library::EMBEDDED {
+        let meta = host
+            .collect(source, &base)
+            .unwrap_or_else(|e| panic!("{name}: does not collect: {e}"));
+
+        assert!(
+            meta.kind.is_some(),
+            "{name}: no kind — script(...) must declare generator or modifier"
+        );
+        assert!(!meta.name.trim().is_empty(), "{name}: declares no display name");
+        assert!(
+            meta.warnings.is_empty(),
+            "{name}: collect warned, which the corpus would carry: {:?}",
+            meta.warnings
+        );
+
+        for p in &meta.params {
+            let json = p.to_api_json();
+            assert!(
+                json.get("type").and_then(|t| t.as_str()).is_some(),
+                "{name}: parameter `{}` serialised without a type: {json}",
+                p.key()
+            );
+            assert_eq!(
+                json.get("key").and_then(|k| k.as_str()),
+                Some(p.key()),
+                "{name}: parameter key did not survive serialisation"
+            );
+        }
+    }
+}
