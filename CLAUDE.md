@@ -176,6 +176,7 @@ failing silently. Regenerate deliberately and read the diff.
 UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/engine-contract.json
 UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
 cargo run --release --bin export_variations_json              # the corpus the API serves
+cargo run --release --bin export_scripts_json                 # built-in scripts, source included
 cargo run --release --bin export_effects_json
 ```
 

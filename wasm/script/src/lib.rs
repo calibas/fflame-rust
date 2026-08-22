@@ -72,33 +72,6 @@ fn with_host<R>(f: impl FnOnce(&ScriptHost) -> R) -> R {
     })
 }
 
-fn decl_json(d: &ParamDecl) -> serde_json::Value {
-    match d {
-        ParamDecl::Float { key, label, default, min, max } => serde_json::json!({
-            "type": "float", "key": key, "label": label,
-            "default": default, "min": min, "max": max,
-        }),
-        ParamDecl::Int { key, label, default, min, max } => serde_json::json!({
-            "type": "int", "key": key, "label": label,
-            "default": default, "min": min, "max": max,
-        }),
-        ParamDecl::Bool { key, label, default } => serde_json::json!({
-            "type": "bool", "key": key, "label": label, "default": default,
-        }),
-        ParamDecl::Choice { key, label, options, default } => serde_json::json!({
-            "type": "choice", "key": key, "label": label,
-            "options": options, "default": default,
-        }),
-        ParamDecl::Text { key, label, default, max_len } => serde_json::json!({
-            "type": "text", "key": key, "label": label,
-            "default": default, "max_len": max_len,
-        }),
-        ParamDecl::Color { key, label, default } => serde_json::json!({
-            "type": "color", "key": key, "label": label, "default": default,
-        }),
-    }
-}
-
 /// Resolve a `{key: value}` JSON object against a script's declared
 /// parameters — the same semantics as the CLI's `--set`, with JSON
 /// types where the CLI has strings. Unknown keys are an error, not a
@@ -211,7 +184,7 @@ pub fn list_scripts_impl() -> Result<String, String> {
         let doc = parse_doc(&entry.source);
         let (params, flags) = match with_host(|h| h.collect(&entry.source, &base)) {
             Ok(meta) => (
-                meta.params.iter().map(decl_json).collect::<Vec<_>>(),
+                meta.params.iter().map(ParamDecl::to_api_json).collect::<Vec<_>>(),
                 serde_json::json!({ "norng": meta.flags.no_rng, "palette": meta.flags.palette }),
             ),
             // A broken script still lists (its doc says what it meant
@@ -245,7 +218,7 @@ pub fn script_source_impl(id: &str) -> Result<String, String> {
 pub fn collect_params_impl(source: &str) -> Result<String, String> {
     let base = FractalConfig::default();
     let meta = with_host(|h| h.collect(source, &base)).map_err(|e| e.to_string())?;
-    let params: Vec<serde_json::Value> = meta.params.iter().map(decl_json).collect();
+    let params: Vec<serde_json::Value> = meta.params.iter().map(ParamDecl::to_api_json).collect();
     serde_json::to_string(&serde_json::json!({
         "name": meta.name,
         "kind": meta.kind.map(ScriptKind::as_str),
