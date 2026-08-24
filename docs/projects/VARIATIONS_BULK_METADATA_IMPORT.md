@@ -220,16 +220,38 @@ Hybrid Rust + Python, per the analysis in earlier coordination:
     prevent, so the fingerprint travels with the data and the merge can
     refuse rather than silently produce rows nobody can read.
 
-  `description`, `description_plain` and `authors` are emitted as
-  explicit nulls rather than omitted, so the Python pass has a visible
-  merge target instead of adding keys that were never there.
-- **Python script** reads the JSON, then opens each `.rs` file in
-  `defs/` and extracts description + authors + per-param descriptions
-  from the structured `///` comments using tree-sitter-rust or
-  carefully-scoped regex. Merges structural data + extracted
-  metadata. Emits versioned SQL.
+- ~~**Python script** reads the JSON, then opens each `.rs` file in
+  `defs/` and extracts description + authors from the structured `///`
+  comments. Merges structural data + extracted metadata.~~
 
-Equivalent pair for effects.
+  **Superseded 2026-08-22: the Rust binary does this itself.** The
+  split was the wrong shape, and the way it failed is the argument
+  against it. The Python half was never written, so the exporter's
+  "explicit nulls as a visible merge target" were simply nulls: every
+  corpus it produced carried 647 of them, and since prose reaches the
+  app *only* through the API catalog
+  ([`storage::variation_catalog`](../../src/storage/variation_catalog.rs)),
+  that is the whole reason variation descriptions were missing
+  downstream. A two-step pipeline whose second step does not exist
+  looks exactly like a one-step pipeline that works.
+
+  [`variations::docs`](../../src/variations/docs.rs) now parses the
+  `///` blocks — description, `# Authors` list, and a markdown-stripped
+  `description_plain` — and the exporter fills the three fields
+  directly. `cargo run --bin export_variations_json` produces a
+  complete corpus in one command, and **refuses to write one with a
+  missing description** rather than emitting a null. A `--lib` test
+  asserts every registered built-in has prose, so the gap cannot
+  silently reopen.
+
+  Per-parameter descriptions never needed comment parsing: they are
+  struct fields, emitted straight from the registry.
+
+Effects still need the equivalent, and it is NOT the same job: effect
+prose lives in `//` headers in the `.wgsl` files, not in Rust `///`
+comments, and `EffectParameter::description` is unpopulated at the
+source. [`export_effects_json`](../../src/bin/export_effects_json.rs)
+documents both gaps in its own header.
 
 ### 4.2 SQL emission shape
 

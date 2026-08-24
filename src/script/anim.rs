@@ -276,10 +276,11 @@ pub(crate) fn parse_interpolation(name: &str) -> Result<Interpolation, String> {
         "linear" => Interpolation::Linear,
         "smooth" => Interpolation::Smooth,
         "sinusoidal" | "sine" => Interpolation::Sinusoidal,
+        "exponential" | "geometric" | "log" => Interpolation::Exponential,
         other => {
             return Err(format!(
-                "`{other}` is not an interpolation. Try \"step\", \"linear\", \"smooth\" \
-                 or \"sinusoidal\"."
+                "`{other}` is not an interpolation. Try \"step\", \"linear\", \"smooth\", \
+                 \"sinusoidal\" or \"exponential\"."
             ))
         }
     })

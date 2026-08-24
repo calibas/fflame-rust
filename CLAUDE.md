@@ -16,6 +16,8 @@
   - [COLOR.md](docs/main/COLOR.md) - Color modes, palette, histogram
   - [CONFIG.md](docs/main/CONFIG.md) - FractalConfig, presets, undo/redo
   - [EXPORT.md](docs/main/EXPORT.md) - PNG export, metadata, CLI batch mode
+  - [SCRIPTING.md](docs/main/SCRIPTING.md) - Rhai script API reference — every callable function (kept honest by a staleness test)
+  - [SCRIPTING-GUIDE.md](docs/main/SCRIPTING-GUIDE.md) - Rhai language guide: syntax, running scripts, worked examples (CLI-verified)
 - [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) - Unit tests, regression, benchmarks
 - [docs/WASM.md](docs/WASM.md) - WebAssembly build guide
 - [docs/projects/](docs/projects/) - Per-feature design docs and plans
@@ -98,7 +100,7 @@
 - Per-panel code lives in its own `src/ui/*.rs` file; `src/ui/mod.rs` coordinates docking and bubbles responses through `UiResponse`
 
 ### Palette Library System
-- **Pack-based organization** (`assets/palettes/packs/*.json`): `builtin.json` (curated starter, enabled by default) + `apophysis1-4.json` (the classic Apophysis set, disabled by default, lazy-loaded on demand via `src/resources/` — manifest-based HTTP fetch on WASM, filesystem on desktop)
+- **Pack-based organization** (`assets/palettes/packs/*.json`): **the folder is the catalog** — desktop scans it at startup (drop a pack JSON in, it appears; `enabled_by_default` inside each pack, absent = enabled); `starter_pack.json` is also embedded in the binary as the offline fallback (`BUILTIN_PACK_FILE` — both discovery paths skip that filename so it doesn't load twice); `apophysis1-4.json` ship disabled. WASM discovers packs via a manifest `build.rs` generates into OUT_DIR (browsers can't list directories; nothing committed, guarded by `generated_manifest_matches_packs_folder`) and lazy-fetches content via `src/resources/`. Loose `assets/palettes/*.palette` files load into a "Local Files" pack (desktop)
 - Palette Library panel: gradient previews, expand/collapse per pack, click-to-select creates an editable `"Name (Custom)"` copy
 - All load routes use `add_or_update()` with case-insensitive duplicate checking
 - **See**: [docs/main/COLOR.md](docs/main/COLOR.md) and [docs/main/PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md)
@@ -175,6 +177,7 @@ failing silently. Regenerate deliberately and read the diff.
 UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/engine-contract.json
 UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
 cargo run --release --bin export_variations_json              # the corpus the API serves
+cargo run --release --bin export_scripts_json                 # built-in scripts, source included
 cargo run --release --bin export_effects_json
 ```
 
@@ -412,7 +415,7 @@ Apophysis/JWildfire XML (`src/flame_xml.rs`). Round-trips camera (`cam_pitch/yaw
 Presets store **complete FractalConfig** (not just the Flame). Transform buffers are pre-allocated for `MAX_TRANSFORMS` (128) with zero-padding of unused slots; `FlameRenderer::load_config()` synchronizes all GPU state atomically; `reset()` only clears accumulation.
 
 ### Asset Loading
-Desktop builds auto-load `assets/palettes/*.palette` and `assets/presets/*.fflame` at startup; WASM embeds the starter pack and lazy-loads the rest via `src/resources/`.
+Desktop builds auto-load `assets/palettes/packs/*.json` (pack scan), `assets/palettes/*.palette` (the "Local Files" pack) and `assets/presets/*.fflame` at startup; WASM embeds the builtin pack + a build-generated manifest and lazy-loads the rest via `src/resources/`.
 
 ### Pan / Zoom / Rotation Input
 All pan inputs (mouse drag, arrow keys, View-panel buttons, wheel zoom-to-cursor, pinch) convert screen deltas through `FractalConfig::screen_delta_to_pan_frame` — rotation-aware, identical in 2D and 3D because both pipelines compose pan → rotate → zoom. Wheel zoom anchors to the cursor except in fly mode (zooms to center).

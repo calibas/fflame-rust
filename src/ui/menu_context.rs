@@ -47,6 +47,20 @@ pub struct RenderingMenuActions {
     pub reset_to_defaults: bool,
 }
 
+/// Animation playback actions (compact menu's play/pause/stop).
+///
+/// These drive the AnimationController — deliberately NOT the render
+/// pause. The compact menu's transport buttons used to pause the
+/// renderer itself, which reads as "the app froze" on a phone; what a
+/// transport row means everywhere else is the animation.
+#[derive(Default)]
+pub struct AnimationMenuActions {
+    /// Toggle: pause if playing, play (from the current position) if not.
+    pub play_pause: bool,
+    /// Stop and rewind to t=0.
+    pub stop: bool,
+}
+
 /// Combined context for all menu actions
 #[derive(Default)]
 pub struct MenuActions {
@@ -54,6 +68,7 @@ pub struct MenuActions {
     pub edit: EditMenuActions,
     pub view: ViewMenuActions,
     pub rendering: RenderingMenuActions,
+    pub animation: AnimationMenuActions,
     /// Menu-bar Fly Mode toggle button was clicked this frame.
     pub fly_mode_toggle: bool,
 }
@@ -69,6 +84,9 @@ pub struct MenuState {
     pub api_flame_id: Option<String>,
     pub api_flame_is_public: Option<bool>,
     pub has_animation_tracks: bool,
+    /// Whether the animation controller is currently playing (drives
+    /// the compact menu's play/pause label).
+    pub animation_playing: bool,
     pub api_animation_id: Option<String>,
     pub animation_count: u32,
     pub flame_owned: bool,

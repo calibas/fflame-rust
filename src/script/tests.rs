@@ -2567,15 +2567,19 @@ fn the_procedural_palette_follows_the_cosine_formula() {
     let entry = super::library::find(&entries, "iq_palette").expect("shipped");
     let host = ScriptHost::new();
 
+    // Rainbow explicitly: the DEFAULT preset is Random (seeded), which
+    // is exactly what a formula check cannot pin.
+    let mut params = HashMap::new();
+    params.insert("preset".to_string(), ParamValue::Choice(0));
     let pal = host
-        .run(&entry.source, &base, 1, HashMap::new())
+        .run(&entry.source, &base, 1, params)
         .unwrap()
         .config
         .palette;
     assert_eq!(pal.stops.len(), 256);
     assert!(pal.locked, "sampled straight into fixed slots");
 
-    // Default preset is the rainbow: a = b = 0.5, c = 1,
+    // The Rainbow preset is a = b = 0.5, c = 1,
     // d = (0, 0.33, 0.67). Check a few slots against the formula.
     let f = |a: f32, b: f32, c: f32, d: f32, t: f32| {
         a + b * (std::f32::consts::TAU * (c * t + d)).cos()
@@ -2608,7 +2612,7 @@ fn the_procedural_palette_follows_the_cosine_formula() {
         .collect();
     let span = hues.iter().cloned().fold(0.0f32, f32::max)
         - hues.iter().cloned().fold(360.0f32, f32::min);
-    assert!(span > 180.0, "the default preset should sweep hues: {span}");
+    assert!(span > 180.0, "the Rainbow preset should sweep hues: {span}");
 }
 
 /// Custom uses the declared parameters; a preset overrides them. Both
@@ -3785,4 +3789,250 @@ fn adopting_takes_a_free_stem_and_marks_provenance() {
     .unwrap();
     assert!(store::is_untrusted(&saved));
     store::delete(&saved).unwrap();
+}
+
+/// A final transform lives in a POOL and is inert until some normal
+/// transform references it. `add_final_transform()` fills the pool
+/// only — so before `attach_to_all()` existed, a script could build a
+/// perfectly good final and it would never run, with no error and no
+/// visible difference. This is the classic Apophysis shape: one final,
+/// attached to everything.
+#[test]
+fn a_final_attaches_to_every_normal_transform() {
+    let out = run(
+        r#"
+        script("Finals", "generator");
+        for i in 0..3 {
+            let t = flame.add_transform();
+            t.add_variation("linear", 1.0);
+        }
+        let fin = flame.add_final_transform();
+        fin.add_variation("spherical", 1.0);
+        fin.attach_to_all();
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    let flame = &out.config.flame;
+    assert_eq!(flame.transforms.len(), 3);
+    assert_eq!(flame.final_transforms.len(), 1);
+    for (i, t) in flame.transforms.iter().enumerate() {
+        assert_eq!(
+            t.final_attachments,
+            vec![0],
+            "normal transform {i} must reference the final, or it never runs"
+        );
+        assert!(t.linked_attachments.is_empty(), "finals must not land in the linked list");
+    }
+}
+
+/// Attaching is idempotent and individually addressable, and detaching
+/// is the inverse — a modifier has to be able to nudge what it finds
+/// without doubling it.
+#[test]
+fn attachments_are_idempotent_addressable_and_reversible() {
+    let out = run(
+        r#"
+        script("Attach", "generator");
+        for i in 0..3 { flame.add_transform().add_variation("linear", 1.0); }
+        let fin = flame.add_final_transform();
+        fin.add_variation("spherical", 1.0);
+
+        fin.attach_to_all();
+        fin.attach_to_all();          // twice must not double it
+        fin.attach_to(1);             // already attached
+        fin.detach_from(0);           // and one comes off
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    let flame = &out.config.flame;
+    assert!(flame.transforms[0].final_attachments.is_empty(), "detach_from(0) failed");
+    assert_eq!(flame.transforms[1].final_attachments, vec![0], "double-attached");
+    assert_eq!(flame.transforms[2].final_attachments, vec![0]);
+}
+
+/// `attached_to()` reads back what a modifier needs to reason about.
+#[test]
+fn attached_to_reports_the_normals_a_final_runs_on() {
+    let out = run(
+        r#"
+        script("Query", "generator");
+        for i in 0..3 { flame.add_transform().add_variation("linear", 1.0); }
+        let fin = flame.add_final_transform();
+        fin.add_variation("spherical", 1.0);
+        fin.attach_to(2);
+        fin.attach_to(0);
+        let seen = fin.attached_to();
+        // Record the answer where the test can see it.
+        flame.name = "" + seen.len() + ":" + seen[0] + "," + seen[1];
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    // Reported in normal-transform order, not attach order.
+    assert_eq!(out.config.flame.name, "2:0,2");
+}
+
+/// Linked transforms use the same mechanism and must not be confused
+/// with finals — they feed the next iteration, finals only filter what
+/// is plotted.
+#[test]
+fn linked_transforms_attach_to_their_own_list() {
+    let out = run(
+        r#"
+        script("Linked", "generator");
+        for i in 0..2 { flame.add_transform().add_variation("linear", 1.0); }
+        let l = flame.add_linked_transform();
+        l.add_variation("spherical", 1.0);
+        l.attach_to_all();
+        "#,
+        1,
+    )
+    .expect("script should run");
+
+    for t in &out.config.flame.transforms {
+        assert_eq!(t.linked_attachments, vec![0]);
+        assert!(t.final_attachments.is_empty());
+    }
+}
+
+/// A normal transform is what finals attach TO. Asking to attach one is
+/// a mistake worth naming rather than silently ignoring.
+#[test]
+fn attaching_a_normal_transform_is_refused() {
+    let err = run(
+        r#"
+        script("Bad", "generator");
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.attach_to_all();
+        "#,
+        1,
+    )
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("final and linked"),
+        "error should explain what attach_to_all is for, got: {msg}"
+    );
+}
+
+/// The post affine is scriptable the same way the pre affine is: raw
+/// coefficient properties plus geometry helpers. This was a gap — the
+/// fields existed (set_inversion wrote them) but no property or helper
+/// was registered, so `t.post_affine_enabled = true` errored.
+#[test]
+fn post_affine_is_scriptable() {
+    let out = run(
+        r#"
+        script("Post", "generator");
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.post_a = 1.5;
+        t.post_e = 0.25;
+        t.post_affine_enabled = true;
+        print("" + t.post_a + "," + t.post_e + "," + t.post_affine_enabled);
+        "#,
+        1,
+    )
+    .expect("script should run");
+    assert_eq!(out.messages, vec!["1.5,0.25,true"]);
+    let t = &out.config.flame.transforms[0];
+    assert!(t.post_affine_enabled);
+    assert_eq!((t.post_a, t.post_e), (1.5, 0.25));
+}
+
+/// Raw post_* properties do NOT flip the enable switch (staging is
+/// legitimate); the geometry helpers DO (calling post_rotate on a
+/// disabled post affine and rendering no change would be a trap).
+#[test]
+fn post_helpers_enable_the_post_affine_but_raw_properties_do_not() {
+    let out = run(
+        r#"
+        script("PostEnable", "generator");
+        let raw = flame.add_transform();
+        raw.add_variation("linear", 1.0);
+        raw.post_a = 2.0;
+        let helped = flame.add_transform();
+        helped.add_variation("linear", 1.0);
+        helped.post_rotate(90.0);
+        "#,
+        1,
+    )
+    .expect("script should run");
+    let ts = &out.config.flame.transforms;
+    assert!(!ts[0].post_affine_enabled, "raw property write must not enable");
+    assert!(ts[1].post_affine_enabled, "helper must enable");
+}
+
+/// post_rotate applies the same matrix the pre-affine rotate does —
+/// verified by rotating identical starting matrices both ways.
+#[test]
+fn post_rotate_matches_pre_rotate_math() {
+    let out = run(
+        r#"
+        script("PostRot", "generator");
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.set_affine(0.6, 0.1, -0.2, 0.7, 0.0, 0.0);
+        t.set_post_affine(0.6, 0.1, -0.2, 0.7, 0.0, 0.0);
+        t.rotate(37.0);
+        t.post_rotate(37.0);
+        print("" + (t.a - t.post_a) + "," + (t.b - t.post_b) + ","
+            + (t.c - t.post_c) + "," + (t.d - t.post_d));
+        "#,
+        1,
+    )
+    .expect("script should run");
+    assert_eq!(out.messages, vec!["0.0,0.0,0.0,0.0"]);
+}
+
+/// The scripts corpus (`export_scripts_json`) reads three things off
+/// every shipped script: the `script(...)` declaration, the header
+/// comment, and the declared parameters. The description half is
+/// covered by `every_shipped_script_already_documents_itself`; this is
+/// the other half.
+///
+/// A missing kind is the interesting case. It is only a WARNING at
+/// runtime — the host defaults to generator and says so — which is
+/// right for a script someone is editing and wrong for one we ship,
+/// where it would put a modifier in the corpus as a generator.
+#[test]
+fn every_shipped_script_declares_a_kind_and_serialisable_params() {
+    let base = FractalConfig::default();
+    let host = ScriptHost::new();
+    for (name, source) in super::library::EMBEDDED {
+        let meta = host
+            .collect(source, &base)
+            .unwrap_or_else(|e| panic!("{name}: does not collect: {e}"));
+
+        assert!(
+            meta.kind.is_some(),
+            "{name}: no kind — script(...) must declare generator or modifier"
+        );
+        assert!(!meta.name.trim().is_empty(), "{name}: declares no display name");
+        assert!(
+            meta.warnings.is_empty(),
+            "{name}: collect warned, which the corpus would carry: {:?}",
+            meta.warnings
+        );
+
+        for p in &meta.params {
+            let json = p.to_api_json();
+            assert!(
+                json.get("type").and_then(|t| t.as_str()).is_some(),
+                "{name}: parameter `{}` serialised without a type: {json}",
+                p.key()
+            );
+            assert_eq!(
+                json.get("key").and_then(|k| k.as_str()),
+                Some(p.key()),
+                "{name}: parameter key did not survive serialisation"
+            );
+        }
+    }
 }

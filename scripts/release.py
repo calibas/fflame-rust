@@ -65,12 +65,13 @@ else:
     RESET = BOLD = RED = GREEN = YELLOW = DIM = ""
 
 
-def run(cmd, capture=True, env=None):
-    """Run a command from the repo root. Returns (ok, output)."""
+def run(cmd, capture=True, env=None, cwd=None):
+    """Run a command from the repo root (or `cwd`). Returns (ok, output)."""
     full_env = {**os.environ, **(env or {})}
     try:
         p = subprocess.run(
-            cmd, cwd=ROOT, shell=isinstance(cmd, str), env=full_env,
+            cmd, cwd=(ROOT / cwd) if cwd else ROOT,
+            shell=isinstance(cmd, str), env=full_env,
             capture_output=capture, text=True,
         )
     except FileNotFoundError as e:
@@ -84,8 +85,14 @@ def run(cmd, capture=True, env=None):
 class Gate:
     """One thing that must pass, and how to repair it if it can be."""
 
-    def __init__(self, name, cmd, fix=None, why=""):
+    def __init__(self, name, cmd, fix=None, why="", cwd=None):
         self.name, self.cmd, self.fix, self.why = name, cmd, fix, why
+        # Run from this directory instead of the repo root. The gallery
+        # gates need it: cargo discovers .cargo/config.toml by current
+        # directory, so `--manifest-path` from the root would miss
+        # wasm/.cargo/config.toml and rebuild into the old per-crate
+        # target directories at full cost.
+        self.cwd = cwd
 
 
 GATES = [
@@ -106,6 +113,30 @@ GATES = [
          why="generated WGSL changed"),
     Gate("doc links", [sys.executable, "scripts/check_doc_links.py"],
          why="live docs pointing nowhere"),
+    # The gallery crates. wasm/script's CLI-parity fixtures are the
+    # guard for "script + seed reproduces a flame byte-for-byte" — the
+    # public determinism promise — and until now ran in no automated
+    # step (RELEASE.md §5 said "run them by hand until that is fixed";
+    # this is the fix). wasm/render's smoke tests skip cleanly on a
+    # machine with no GPU adapter.
+    #
+    # Run from the crate directory, NOT --manifest-path from the root:
+    # that is how cargo finds wasm/.cargo/config.toml, which shares one
+    # target directory between the two crates and drops the git
+    # provenance that used to invalidate them on every commit. And
+    # `--profile gallery-test`, not `--release`: the crates' own
+    # [profile.release] is tuned to ship a small .wasm (opt-level="z",
+    # fat LTO, one codegen unit), so testing under it spent minutes
+    # optimizing the parent crate for download size. Measured on the
+    # parent-crate-changed case: 178s -> 73s from the profile alone.
+    Gate("gallery script parity",
+         ["cargo", "test", "--profile", "gallery-test"],
+         cwd="wasm/script",
+         why="script + seed is a shareable artifact; drift redefines every published seed"),
+    Gate("gallery renderer smoke",
+         ["cargo", "test", "--profile", "gallery-test"],
+         cwd="wasm/render",
+         why="the device-reuse regression froze real galleries once already"),
 ]
 
 
@@ -114,7 +145,7 @@ def cmd_check(args):
     failed = []
     for g in GATES:
         t0 = time.time()
-        ok, out = run(g.cmd)
+        ok, out = run(g.cmd, cwd=g.cwd)
         secs = time.time() - t0
 
         if ok:
@@ -124,7 +155,7 @@ def cmd_check(args):
         if args.fix and g.fix:
             fix_cmd, fix_env = g.fix
             print(f"  {YELLOW}fix {RESET}  {g.name:<22} {DIM}regenerating…{RESET}")
-            fixed, _ = run(fix_cmd, env=fix_env)
+            fixed, _ = run(fix_cmd, env=fix_env, cwd=g.cwd)
             if fixed:
                 # Regenerating is not the same as being right. Say so —
                 # a generated file that changed is a diff somebody has

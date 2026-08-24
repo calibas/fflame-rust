@@ -351,8 +351,9 @@ impl FractalBrowserPanel {
         // Cache auth credentials for use by trigger methods
         self.auth_credentials = auth.map(|(b, t)| (b.to_string(), t.to_string()));
 
-        // Tab bar
-        ui.horizontal(|ui| {
+        // Tab bar. Wrapped: four tabs with counts exceed a phone-width
+        // panel, and an unwrappable row sets the panel's minimum width.
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .selectable_label(self.current_tab == BrowserTab::Presets, t!("browser.tab_presets"))
                 .clicked()

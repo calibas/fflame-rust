@@ -277,7 +277,7 @@ pub fn generate() -> serde_json::Value {
                          it is a curation constraint.",
             "name_gated": {
                 "noise.wgsl": ["dc_perlin", "crackle", "dc_crackle_wf"],
-                "voronoi.wgsl": ["crackle", "dc_crackle_wf"],
+                "voronoi.wgsl": ["crackle", "dc_crackle_wf", "crackle_fast"],
                 "fractwf.wgsl": ["fract_*_wf"],
                 "subflame.wgsl": ["(any flame using a subflame)"],
             },

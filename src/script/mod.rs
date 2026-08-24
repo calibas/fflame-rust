@@ -94,6 +94,40 @@ impl ParamDecl {
             | Self::Color { label, .. } => label,
         }
     }
+
+    /// The wire shape: what `list_scripts` hands the gallery, and what
+    /// the script corpus hands the API.
+    ///
+    /// Defined once because those two must agree — a parameter that
+    /// serialises one way for the browser and another for the database
+    /// is a bug that only shows up in whichever consumer was written
+    /// second.
+    pub fn to_api_json(&self) -> serde_json::Value {
+        match self {
+            Self::Float { key, label, default, min, max } => serde_json::json!({
+                "type": "float", "key": key, "label": label,
+                "default": default, "min": min, "max": max,
+            }),
+            Self::Int { key, label, default, min, max } => serde_json::json!({
+                "type": "int", "key": key, "label": label,
+                "default": default, "min": min, "max": max,
+            }),
+            Self::Bool { key, label, default } => serde_json::json!({
+                "type": "bool", "key": key, "label": label, "default": default,
+            }),
+            Self::Choice { key, label, options, default } => serde_json::json!({
+                "type": "choice", "key": key, "label": label,
+                "options": options, "default": default,
+            }),
+            Self::Text { key, label, default, max_len } => serde_json::json!({
+                "type": "text", "key": key, "label": label,
+                "default": default, "max_len": max_len,
+            }),
+            Self::Color { key, label, default } => serde_json::json!({
+                "type": "color", "key": key, "label": label, "default": default,
+            }),
+        }
+    }
 }
 
 /// A value supplied for a declared parameter (from the UI or `--set`).

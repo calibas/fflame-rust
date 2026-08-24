@@ -108,6 +108,9 @@ pub enum WorkspaceLayout {
     Standard,
     /// Animation: Standard layout with Animation panel at bottom
     Animation,
+    /// Scripting: Scripts panel left, Fractal Browser right — write a
+    /// script, run it, browse what it generated.
+    Scripting,
     /// Compact: Full-screen viewport only (mobile / small screens)
     Compact,
 }
@@ -118,14 +121,73 @@ pub struct Workspace {
     pub dock_state: DockState<PanelType>,
     /// Active layout preset
     pub current_layout: WorkspaceLayout,
+    /// A layout was just built from fractions, without knowing the
+    /// window size — the first frame that does know it applies the
+    /// side-dock minimums (`apply_startup_dock_minimums`).
+    needs_startup_dock_widths: bool,
 }
 
 impl Workspace {
+    /// Minimum useful width, in points, for a side dock when a layout
+    /// first appears. Transforms — the widest of the default side
+    /// panels — clips its controls below this. Startup only: the user
+    /// can drag the separator below it freely afterwards.
+    const MIN_SIDE_DOCK_POINTS: f32 = 260.0;
+
     /// Create a new workspace with default Standard layout
     pub fn new() -> Self {
         Self {
             dock_state: Self::create_standard_layout(),
             current_layout: WorkspaceLayout::Standard,
+            needs_startup_dock_widths: true,
+        }
+    }
+
+    /// One-shot, called with the real dock width on the first frame
+    /// after a layout is created — layouts are built from fractions
+    /// before any window exists, and a fraction that is generous on a
+    /// desktop monitor is a clipped strip on a laptop. The left dock is
+    /// 25% *of the 75% left over by the right split* (18.75% of the
+    /// window, easy to misread as 25%): on a Retina MacBook's
+    /// 960-point default window that was 180 points of Transforms
+    /// panel, with controls cut off.
+    ///
+    /// Raises each side dock to `MIN_SIDE_DOCK_POINTS` and touches
+    /// nothing already wider, so large screens keep their proportions.
+    pub fn apply_startup_dock_minimums(&mut self, dock_width: f32) {
+        if !self.needs_startup_dock_widths {
+            return;
+        }
+        self.needs_startup_dock_widths = false;
+        if dock_width <= 0.0 {
+            return;
+        }
+        let min = Self::MIN_SIDE_DOCK_POINTS;
+
+        // Every preset with side docks has the same shape by
+        // construction: the root split parts the right dock off the
+        // window, and its left child parts the left dock off the
+        // remainder. Compact is a lone leaf — the matches fail and
+        // nothing happens.
+        use egui_dock::{Node, NodeIndex};
+        let tree = self.dock_state.main_surface_mut();
+
+        // Right dock width is (1 − f)·W: lower the fraction to grow the
+        // dock to `min`, but never let it claim more than half.
+        let mut remaining = dock_width;
+        if tree.len() > 0 {
+            if let Node::Horizontal(split) = &mut tree[NodeIndex::root()] {
+                split.fraction = split.fraction.min(1.0 - min / dock_width).max(0.5);
+                remaining = dock_width * split.fraction;
+            }
+        }
+
+        // Left dock width is f·remaining: raise the fraction to reach
+        // `min`, same half-cap.
+        if tree.len() > 1 {
+            if let Node::Horizontal(split) = &mut tree[NodeIndex::root().left()] {
+                split.fraction = split.fraction.max(min / remaining).min(0.5);
+            }
         }
     }
 
@@ -168,14 +230,29 @@ impl Workspace {
         self.dock_state = match layout {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Animation => Self::create_animation_layout(help_was_open),
+            WorkspaceLayout::Scripting => Self::create_scripting_layout(help_was_open),
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
         self.current_layout = layout;
+        self.needs_startup_dock_widths = true;
     }
 
     /// Whether the workspace is in compact (mobile) layout
     pub fn is_compact(&self) -> bool {
         self.current_layout == WorkspaceLayout::Compact
+    }
+
+    /// Open a panel the way the current mode wants it: docked into the
+    /// main surface in compact (a floating window on a phone is
+    /// unusable — it opens desktop-sized over the whole screen),
+    /// floating on desktop. App-level code that isn't deliberately
+    /// mode-specific should call this, not the mode-specific variants.
+    pub fn open_panel(&mut self, panel_type: PanelType, ctx: &egui::Context) {
+        if self.is_compact() {
+            self.open_compact_panel(panel_type, ctx);
+        } else {
+            self.open_floating_panel(panel_type, ctx);
+        }
     }
 
     /// Open a panel docked into the main surface (compact mode).
@@ -212,12 +289,16 @@ impl Workspace {
             let is_portrait = screen.height() > screen.width();
 
             if is_portrait {
+                // 0.55, not 0.67: at 0.67 a phone panel got the bottom
+                // third minus the tab bar — Transforms and Variations
+                // were unusable strips. Just under half leaves the
+                // viewport dominant while giving controls real room.
                 self.dock_state.main_surface_mut().split_below(
-                    viewport_node, 0.67, vec![panel_type],
+                    viewport_node, 0.55, vec![panel_type],
                 );
             } else {
                 self.dock_state.main_surface_mut().split_right(
-                    viewport_node, 0.67, vec![panel_type],
+                    viewport_node, 0.60, vec![panel_type],
                 );
             }
         } else {
@@ -420,10 +501,150 @@ impl Workspace {
         state
     }
 
+    /// Create Scripting layout: Scripts panel in the left dock, Fractal
+    /// Browser in the right — the write-run-browse loop side by side
+    /// with the viewport showing the current result.
+    fn create_scripting_layout(preserve_help: bool) -> DockState<PanelType> {
+        let mut state = DockState::new(vec![PanelType::FractalViewport]);
+
+        // Scripts panel wants real width (parameter sliders + source
+        // editor) — 30% rather than Standard's 25%.
+        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
+            egui_dock::NodeIndex::root(),
+            0.30,
+            vec![PanelType::Scripts],
+        );
+
+        // Fractal Browser right: generated flames land where the eye
+        // goes after pressing Run.
+        let [_center_node, _right_node] = state.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.70,
+            vec![PanelType::FractalBrowser],
+        );
+
+        if preserve_help {
+            state.add_window(vec![PanelType::Help]);
+        }
+
+        state
+    }
+
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// Every preset layout must contain the panels it is named for —
+    /// a layout that silently drops one renders as an empty dock area
+    /// with no error.
+    #[test]
+    fn preset_layouts_contain_their_panels() {
+        let cases: &[(WorkspaceLayout, &[PanelType])] = &[
+            (
+                WorkspaceLayout::Standard,
+                &[PanelType::FractalViewport, PanelType::Transforms, PanelType::Colors],
+            ),
+            (
+                WorkspaceLayout::Animation,
+                &[PanelType::FractalViewport, PanelType::Animation, PanelType::Transforms],
+            ),
+            (
+                WorkspaceLayout::Scripting,
+                &[PanelType::FractalViewport, PanelType::Scripts, PanelType::FractalBrowser],
+            ),
+            (WorkspaceLayout::Compact, &[PanelType::FractalViewport]),
+        ];
+        for (layout, panels) in cases {
+            let mut ws = Workspace::new();
+            ws.apply_layout(*layout);
+            for p in *panels {
+                assert!(ws.panel_exists(*p), "{p:?} missing from {layout:?} layout");
+            }
+        }
+    }
+
+    /// Help stays open across a layout switch — the two layouts that
+    /// preserve it re-add it as a floating window.
+    #[test]
+    fn help_survives_switching_to_animation_or_scripting() {
+        for layout in [WorkspaceLayout::Animation, WorkspaceLayout::Scripting] {
+            let mut ws = Workspace::new();
+            ws.dock_state.add_window(vec![PanelType::Help]);
+            ws.apply_layout(layout);
+            assert!(
+                ws.panel_exists(PanelType::Help),
+                "Help window lost switching to {layout:?}"
+            );
+        }
+    }
+
+    /// Side-dock widths implied by the split fractions after the
+    /// startup fix-up, (left, right) in points.
+    fn dock_widths(ws: &mut Workspace, window: f32) -> (f32, f32) {
+        use egui_dock::{Node, NodeIndex};
+        let tree = ws.dock_state.main_surface_mut();
+        let f0 = match &tree[NodeIndex::root()] {
+            Node::Horizontal(s) => s.fraction,
+            _ => return (0.0, 0.0),
+        };
+        let f1 = match &tree[NodeIndex::root().left()] {
+            Node::Horizontal(s) => s.fraction,
+            _ => return (0.0, window * (1.0 - f0)),
+        };
+        (window * f0 * f1, window * (1.0 - f0))
+    }
+
+    /// The left dock is 25% of the 75% left over by the right split —
+    /// 18.75% of the window. On a Retina MacBook's 960-point window
+    /// that was a 180-point Transforms panel with controls clipped.
+    /// The startup fix-up must raise both docks to the minimum there,
+    /// and must NOT touch a window where the fractions already give
+    /// more.
+    #[test]
+    fn startup_dock_minimums_hold_on_a_laptop_and_leave_desktops_alone() {
+        for layout in [
+            WorkspaceLayout::Standard,
+            WorkspaceLayout::Animation,
+            WorkspaceLayout::Scripting,
+        ] {
+            // Retina MacBook default window: both docks reach the minimum.
+            let mut ws = Workspace::new();
+            ws.apply_layout(layout);
+            ws.apply_startup_dock_minimums(960.0);
+            let (left, right) = dock_widths(&mut ws, 960.0);
+            assert!(
+                left >= Workspace::MIN_SIDE_DOCK_POINTS - 0.5,
+                "{layout:?}: left dock {left:.0}pt on a 960pt window"
+            );
+            assert!(
+                right >= Workspace::MIN_SIDE_DOCK_POINTS - 0.5,
+                "{layout:?}: right dock {right:.0}pt on a 960pt window"
+            );
+
+            // Desktop window: already generous, fractions untouched.
+            let mut wide = Workspace::new();
+            wide.apply_layout(layout);
+            let before = dock_widths(&mut wide, 1920.0);
+            wide.needs_startup_dock_widths = true; // dock_widths consumed nothing
+            wide.apply_startup_dock_minimums(1920.0);
+            let after = dock_widths(&mut wide, 1920.0);
+            assert_eq!(before, after, "{layout:?}: 1920pt window was altered");
+
+            // One-shot: a user drag afterwards must not be re-overridden.
+            ws.apply_startup_dock_minimums(960.0);
+        }
+
+        // Compact is a lone leaf — must not panic, must change nothing.
+        let mut compact = Workspace::new();
+        compact.apply_layout(WorkspaceLayout::Compact);
+        compact.apply_startup_dock_minimums(390.0);
     }
 }

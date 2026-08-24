@@ -35,6 +35,41 @@
     border-radius: 10px;
 }
 
+/* Multiline twin (script editor). 16px font matters here too — below
+   that iOS auto-zooms the page on focus. Height is capped well short
+   of the viewport so the on-screen keyboard never covers the text. */
+#vkb-overlay textarea {
+    /* NOT `flex: 1` — that means flex-basis 0, and in the multiline
+       bar's COLUMN layout the basis is the height: the textarea
+       collapsed to its min-content (~3 lines) regardless of the height
+       below. `none` lets the explicit height rule win. */
+    flex: none;
+    height: 38vh;
+    max-height: 45vh;
+    resize: none;
+    background: #2a2a2a;
+    color: #fff;
+    border: none;
+    border-bottom: 1px solid #555;
+    outline: none;
+    padding: 8px 12px;
+    font-size: 16px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    box-sizing: border-box;
+    border-radius: 10px;
+    white-space: pre;
+}
+
+/* Stack the bar vertically when the textarea is showing, so the
+   buttons sit under it instead of squeezing it sideways. */
+#vkb-overlay .vkb-bar.vkb-multiline {
+    flex-direction: column;
+    align-items: stretch;
+}
+#vkb-overlay .vkb-bar.vkb-multiline button {
+    height: 44px;
+}
+
 #vkb-overlay button {
     height: 36px;
     min-width: 60px;

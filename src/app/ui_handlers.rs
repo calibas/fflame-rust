@@ -479,7 +479,7 @@ impl App {
 
                 // Open the Fractal Browser panel (auto-switches to Batch tab)
                 use crate::ui::workspace::PanelType;
-                let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+                let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::FractalBrowser, ctx);
             }
         }
     }
@@ -824,7 +824,7 @@ impl App {
 
                                 // Open the Fractal Browser panel
                                 use crate::ui::workspace::PanelType;
-                                let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+                                let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::FractalBrowser, ctx);
                             }
                         }
                         Err(e) => {
@@ -887,7 +887,7 @@ impl App {
 
                                         // Open the Fractal Browser panel
                                         use crate::ui::workspace::PanelType;
-                                        let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+                                        let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::FractalBrowser, ctx);
                                     }
                                 }
                                 Err(e) => {
@@ -960,7 +960,7 @@ impl App {
                     self.egui_layer.load_file_into_fractal_browser(path);
                     // Open the Fractal Browser panel (auto-switches to Files tab)
                     use crate::ui::workspace::PanelType;
-                    let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+                    let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::FractalBrowser, ctx);
                 }
             }
 
@@ -1078,15 +1078,15 @@ impl App {
     fn handle_panel_requests(&mut self, ui_response: &UiResponse) {
         if ui_response.open_palette_editor {
             use crate::ui::workspace::PanelType;
-            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::PaletteEditor, ctx);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::PaletteEditor, ctx);
         }
         if ui_response.open_palette_library {
             use crate::ui::workspace::PanelType;
-            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::PaletteLibrary, ctx);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::PaletteLibrary, ctx);
         }
         if ui_response.open_config_dialog {
             use crate::ui::workspace::PanelType;
-            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::ConfigDialog, ctx);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::ConfigDialog, ctx);
         }
         if ui_response.open_triangle_editor {
             use crate::ui::workspace::PanelType;
@@ -1096,11 +1096,13 @@ impl App {
             use crate::ui::workspace::PanelType;
             use crate::ui::fractal_browser::BrowserTab;
             self.egui_layer.switch_fractal_browser_tab(BrowserTab::Presets);
-            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+            let ctx = &self.egui_layer.ctx;
+            self.workspace.open_panel(PanelType::FractalBrowser, ctx);
         }
         if ui_response.open_random_generator {
             use crate::ui::workspace::PanelType;
-            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::RandomGenerator, ctx);
+            let ctx = &self.egui_layer.ctx;
+            self.workspace.open_panel(PanelType::RandomGenerator, ctx);
         }
     }
 
@@ -1251,7 +1253,7 @@ impl App {
                 self.egui_layer.load_json_into_fractal_browser(&json, "file");
                 // Open the Fractal Browser panel
                 use crate::ui::workspace::PanelType;
-                let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+                let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::FractalBrowser, ctx);
             }
 
             // Check for pending audio file (binary bytes from native file picker)
@@ -1360,15 +1362,18 @@ impl App {
             }
         }
 
-        // 2. Trigger periodic check (every 30 seconds)
+        // 2. Trigger the periodic check. The cadence is the policy's:
+        //    30 s while healthy, 5 s to confirm or clear a single miss,
+        //    15 s while unreachable so recovery is noticed promptly.
         if !self.health_check_in_progress {
             let settings = self.config_manager.system_settings();
             let has_auth = settings.is_signed_in();
+            let interval = self.health_policy.interval();
 
             let should_check = settings.online_mode
                 && has_auth
                 && self.last_health_check
-                    .map(|t| t.elapsed().as_secs() >= 30)
+                    .map(|t| t.elapsed() >= interval)
                     .unwrap_or(true);
 
             if should_check {
@@ -1378,13 +1383,18 @@ impl App {
     }
 
     fn process_health_check_outcome(&mut self, outcome: crate::api::HealthCheckOutcome) {
-        use crate::api::{ApiConnectivity, HealthCheckOutcome};
+        use crate::api::health::Transition;
+        use crate::api::HealthCheckOutcome;
 
-        let prev = self.api_connectivity;
+        // Connectivity is the policy's call, not this function's: one
+        // failed fetch used to flip the app to Unreachable, grey out
+        // Save Online and announce "connection lost" — for a server
+        // that answered fine from the next tab over.
+        let transition = self.health_policy.record(&outcome);
+        self.api_connectivity = self.health_policy.connectivity();
 
         match outcome {
             HealthCheckOutcome::Authenticated { email, user_id } => {
-                self.api_connectivity = ApiConnectivity::Online;
                 log::debug!("Health check OK: authenticated (email: {:?})", email);
 
                 self.current_user_id = Some(user_id);
@@ -1398,7 +1408,6 @@ impl App {
                 }
             }
             HealthCheckOutcome::TokenExpired => {
-                self.api_connectivity = ApiConnectivity::Online;
                 log::info!("Health check: token expired, clearing auth");
 
                 self.current_user_id = None;
@@ -1425,27 +1434,26 @@ impl App {
                 );
             }
             HealthCheckOutcome::ServerError(ref msg) => {
-                self.api_connectivity = ApiConnectivity::Online;
                 log::warn!("Health check server error: {}", msg);
             }
             HealthCheckOutcome::NetworkError(ref msg) => {
-                self.api_connectivity = ApiConnectivity::Unreachable;
-                log::warn!("Health check network error: {}", msg);
+                log::warn!(
+                    "Health check network error ({} of {} before unreachable): {}",
+                    self.health_policy.failures(),
+                    crate::api::health::FAILURES_BEFORE_UNREACHABLE,
+                    msg
+                );
             }
         }
 
-        // Transition notifications
-        if prev == ApiConnectivity::Online && self.api_connectivity == ApiConnectivity::Unreachable {
-            self.egui_layer.show_api_notification(
-                &rust_i18n::t!("auth.connection_lost"),
-                true,
-            );
-        }
-        if prev == ApiConnectivity::Unreachable && self.api_connectivity == ApiConnectivity::Online {
-            self.egui_layer.show_api_notification(
-                &rust_i18n::t!("auth.connection_restored"),
-                false,
-            );
+        match transition {
+            Transition::Lost => self
+                .egui_layer
+                .show_api_notification(&rust_i18n::t!("auth.connection_lost"), true),
+            Transition::Restored => self
+                .egui_layer
+                .show_api_notification(&rust_i18n::t!("auth.connection_restored"), false),
+            Transition::None => {}
         }
     }
 
@@ -1586,7 +1594,18 @@ impl App {
                             self.api_state.flame_animations.clear();
                             self.api_state.animation_id = None;
                         }
-                        let name = self.config_manager.active_config().flame.name.clone();
+                        // The name that was SENT, not the flame's old
+                        // local name — and the flame adopts it, so the
+                        // local file, the online record and this
+                        // message all say the same thing from here on.
+                        // (Falls back to the local name only if some
+                        // path saved without going through the dialog.)
+                        let name = self
+                            .api_pending_name
+                            .take()
+                            .unwrap_or_else(|| self.config_manager.active_config().flame.name.clone());
+                        self.config_manager.rename_flame(name.clone());
+                        self.flame.name = name.clone();
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_success", name = name),
                             false,
@@ -1603,6 +1622,7 @@ impl App {
                         log::error!("Failed to save flame online: {}", e);
                         self.pending_animation_save = None;
                         self.api_pending_visibility = None;
+                        self.api_pending_name = None;
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_error", error = e),
                             true,
@@ -1655,6 +1675,7 @@ impl App {
 
                     self.api_pending_visibility = Some(make_public);
                     self.api_pending_is_new = true;
+                    self.api_pending_name = Some(name.clone());
 
                     let window = self.window.clone();
 
@@ -1709,6 +1730,7 @@ impl App {
 
                     self.api_pending_visibility = Some(make_public);
                     self.api_pending_is_new = false;
+                    self.api_pending_name = Some(name.clone());
 
                     if let Some(flame_id) = self.api_state.flame_id.clone() {
                         let window = self.window.clone();

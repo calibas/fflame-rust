@@ -47,6 +47,7 @@ pub fn render_view_content(
                 .speed(0.001 / config.zoom)
                 .custom_formatter(|v, _| format!("{:.7}", v))
         ).on_hover_text(t!("view.tooltip_pan"));
+        super::vkb_sync_opts(ui, &response_x, &format!("{pan_x:.7}"), "decimal");
         super::vkb_sync_opts(ui, &response_x, &format!("{}", pan_x), "decimal");
         if response_x.changed() {
             let _ = config_manager.update_param(
@@ -62,6 +63,7 @@ pub fn render_view_content(
                 .speed(0.001 / config.zoom)
                 .custom_formatter(|v, _| format!("{:.7}", v))
         ).on_hover_text(t!("view.tooltip_pan"));
+        super::vkb_sync_opts(ui, &response_y, &format!("{pan_y:.7}"), "decimal");
         super::vkb_sync_opts(ui, &response_y, &format!("{}", pan_y), "decimal");
         if response_y.changed() {
             let _ = config_manager.update_param(
@@ -588,6 +590,7 @@ fn render_post_symmetry_section(
                     .on_hover_text(t!("view.tooltip_post_symmetry_order"));
                 let mut order = ps.order as i32;
                 let response = ui.add(egui::Slider::new(&mut order, 1..=32));
+                super::vkb_sync_full(ui, &response, &order.to_string(), "integer", Some(1.0), Some(32.0));
                 if response.changed() {
                     let _ = config_manager.update_param(
                         ConfigPath::PostSymmetryOrder,

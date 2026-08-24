@@ -110,6 +110,7 @@ pub fn render_keyboard_shortcuts_content(ui: &mut egui::Ui) {
     ui.label(t!("help.editing"));
     ui.label(shortcut("undo_shortcut").as_ref());
     ui.label(shortcut("redo_shortcut").as_ref());
+    ui.label(shortcut("play_pause_animation").as_ref());
 
     ui.separator();
     ui.label(t!("help.mouse_controls"));

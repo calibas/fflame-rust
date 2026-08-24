@@ -18,10 +18,20 @@ use crate::config::fractal_config::FractalConfig;
 use super::{ScriptHost, ScriptKind};
 
 /// Starter scripts compiled in, so they exist regardless of cwd.
-pub(crate) const EMBEDDED: &[(&str, &str)] = &[
+///
+/// `pub` for the export binaries: this is the definition of "built-in"
+/// — the same set `contract::generate` publishes as `builtin_scripts`
+/// and the API refuses at CREATE time — and both corpora have to key
+/// off exactly it, not off [`discover`], which merges in the user's
+/// own scripts.
+pub const EMBEDDED: &[(&str, &str)] = &[
     (
         "basic_random.rhai",
         include_str!("../../assets/scripts/generators/basic_random.rhai"),
+    ),
+    (
+        "grand_julian.rhai",
+        include_str!("../../assets/scripts/generators/grand_julian.rhai"),
     ),
     (
         "lsystem.rhai",
@@ -36,12 +46,24 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/hilbert3d.rhai"),
     ),
     (
+        "mandala.rhai",
+        include_str!("../../assets/scripts/generators/mandala.rhai"),
+    ),
+    (
+        "gnarls.rhai",
+        include_str!("../../assets/scripts/generators/gnarls.rhai"),
+    ),
+    (
         "iq_palette.rhai",
         include_str!("../../assets/scripts/modifiers/iq_palette.rhai"),
     ),
     (
         "random_palette.rhai",
         include_str!("../../assets/scripts/modifiers/random_palette.rhai"),
+    ),
+    (
+        "gnarl.rhai",
+        include_str!("../../assets/scripts/modifiers/gnarl.rhai"),
     ),
     (
         "turntable.rhai",
@@ -58,6 +80,14 @@ pub(crate) const EMBEDDED: &[(&str, &str)] = &[
     (
         "decompose_group.rhai",
         include_str!("../../assets/scripts/modifiers/decompose_group.rhai"),
+    ),
+    (
+        "kaleidoscope.rhai",
+        include_str!("../../assets/scripts/modifiers/kaleidoscope.rhai"),
+    ),
+    (
+        "zoom_dive.rhai",
+        include_str!("../../assets/scripts/modifiers/zoom_dive.rhai"),
     ),
 ];
 
@@ -228,13 +258,12 @@ pub fn discover(base: &FractalConfig) -> Vec<ScriptEntry> {
     discover_with_conflicts(base).0
 }
 
-/// As [`discover`], plus the stems of user scripts that were refused
-/// for taking a shipped name.
-///
-/// The panel shows these; a log line alone is not a report, since
-/// nobody reads the console to find out why their file vanished from a
-/// list.
-pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<String>) {
+/// Everything on disk/embedded/in the store, merged by precedence.
+/// The cheap half of discovery — no parsing, no metadata.
+fn merged_sources() -> (
+    std::collections::BTreeMap<String, (String, ScriptOrigin, bool)>,
+    Vec<String>,
+) {
     // Precedence order: embedded, then the shipped disk copies, then the
     // user's own. `merge_sources` applies the rule.
     let mut found: Vec<FoundScript> = EMBEDDED
@@ -265,7 +294,38 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
         });
     }
 
-    let (by_name, refused) = merge_sources(found);
+    merge_sources(found)
+}
+
+/// Just the `(id, source)` pairs `run_script` resolves against — the
+/// precedence merge with none of the per-script metadata collection
+/// [`discover`] pays for.
+///
+/// The distinction is a measured performance cliff, not tidiness:
+/// `discover` parses and declaration-runs EVERY script in the library
+/// to learn display names and kinds, ~4–5 ms each. The gallery wasm
+/// module was building its host through `discover` on every `run` call
+/// — ~46 ms of fixed overhead per tile stage before the actual script
+/// ran, which was 20–50% of tile throughput. A runner needs the
+/// sources; only a picker needs the metadata.
+pub fn sources() -> Vec<(String, String)> {
+    merged_sources()
+        .0
+        .into_iter()
+        .map(|(name, (source, _origin, _untrusted))| {
+            (name.trim_end_matches(".rhai").to_string(), source)
+        })
+        .collect()
+}
+
+/// As [`discover`], plus the stems of user scripts that were refused
+/// for taking a shipped name.
+///
+/// The panel shows these; a log line alone is not a report, since
+/// nobody reads the console to find out why their file vanished from a
+/// list.
+pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<String>) {
+    let (by_name, refused) = merged_sources();
     for stem in &refused {
         log::warn!(
             "Ignoring your script `{stem}`: that is a shipped script's name. Rename it to load it."
@@ -398,6 +458,38 @@ mod tests {
         let (merged, refused) = merge_sources(vec![user("my_thing.rhai", "MINE")]);
         assert!(refused.is_empty());
         assert_eq!(merged["my_thing.rhai"].0, "MINE");
+    }
+
+    /// `sources` is the runner's cheap path (no metadata collection);
+    /// `discover` is the picker's. Same merge, so every script the
+    /// picker lists must resolve identically for the runner — the
+    /// gallery wasm host resolves `run_script` against `sources`.
+    ///
+    /// Compared over non-User scripts only: other tests in this suite
+    /// write to the shared user store concurrently, so the two
+    /// snapshots here can legitimately see different user entries
+    /// (full set-equality flaked on exactly that).
+    #[test]
+    fn sources_and_discover_agree_on_the_shipped_set() {
+        let base = FractalConfig::default();
+        let from_sources = sources();
+        let mut shipped = 0;
+        for e in discover(&base) {
+            if e.origin == ScriptOrigin::User {
+                continue;
+            }
+            shipped += 1;
+            let matched = from_sources.iter().find(|(id, _)| *id == e.id);
+            match matched {
+                Some((_, source)) => assert_eq!(
+                    source, &e.source,
+                    "`{}` has different source via sources() than via discover()",
+                    e.id
+                ),
+                None => panic!("`{}` is listed by discover() but missing from sources()", e.id),
+            }
+        }
+        assert!(shipped >= 10, "shipped library unexpectedly small: {shipped}");
     }
 
     #[test]

@@ -16,6 +16,7 @@ mod compact_menu;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
+mod rhai_highlight;
 mod palette_library;
 mod panel_viewer;
 mod path_editor;
@@ -847,6 +848,9 @@ pub struct EguiLayer {
     compact_mode: bool,
     /// Last time any input was received (for menu button fade)
     last_input_time: web_time::Instant,
+    /// When the current fullscreen (UI-hidden) session started, for
+    /// fading out the exit hint. `None` whenever not in that mode.
+    fullscreen_hint_since: Option<web_time::Instant>,
 
     /// Tab bar height of the FractalViewport leaf node (from previous frame).
     /// Used to inflate the fractal texture so it covers the tab bar seamlessly.
@@ -863,6 +867,17 @@ pub struct EguiLayer {
 }
 
 impl EguiLayer {
+    /// Whether this browser reports a touchscreen. Drives the virtual
+    /// keyboard gate: touch devices need the overlay whether or not the
+    /// layout is compact. `maxTouchPoints` is 0 on mouse-only desktops,
+    /// including ones where the OS merely supports touch drivers.
+    #[cfg(target_arch = "wasm32")]
+    fn device_has_touch() -> bool {
+        web_sys::window()
+            .map(|w| w.navigator().max_touch_points() > 0)
+            .unwrap_or(false)
+    }
+
     /// Reinitialize GPU-dependent resources after surface recreation.
     /// Preserves all UI state (panels, editors, settings, etc).
     pub fn reinit_gpu_resources(&mut self, window: &Window, device: &Device, queue: &Queue, format: TextureFormat) {
@@ -973,6 +988,7 @@ impl EguiLayer {
             touch_tracker: panel_viewer::TouchTracker::default(),
             compact_mode: false,
             last_input_time: web_time::Instant::now(),
+            fullscreen_hint_since: None,
             viewport_tab_bar_height: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
@@ -1227,8 +1243,23 @@ impl EguiLayer {
                     // foreground_color: true,
                     ..egui::style::ScrollStyle::floating()
                 };
+                // Finger-sized hit targets. egui's desktop defaults
+                // (18px interact height, 4x1 button padding) are mouse
+                // sizes; the accepted floor for touch is ~40px+. This
+                // grows the CLICKABLE area — checkboxes, slider
+                // handles, drag-value boxes, combo rows — without
+                // scaling fonts, so layouts stay recognizable.
+                style.spacing.interact_size = egui::vec2(40.0, 28.0);
+                style.spacing.button_padding = egui::vec2(8.0, 5.0);
+                style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+                style.spacing.slider_rail_height = 10.0;
             } else {
                 style.spacing.scroll = egui::style::ScrollStyle::floating();
+                let d = egui::Spacing::default();
+                style.spacing.interact_size = d.interact_size;
+                style.spacing.button_padding = d.button_padding;
+                style.spacing.item_spacing = d.item_spacing;
+                style.spacing.slider_rail_height = d.slider_rail_height;
             }
             // Label drag-to-select disabled globally — opt in per-widget with
             // `.selectable(true)` on any specific Label that should support
@@ -1417,6 +1448,7 @@ impl EguiLayer {
             api_flame_id: api_state.flame_id.clone(),
             api_flame_is_public: api_state.flame_is_public,
             has_animation_tracks,
+            animation_playing: animation_controller.is_playing(),
             api_animation_id: api_state.animation_id.clone(),
             animation_count: api_state.animation_count,
             flame_owned: api_state.flame_owned_by(current_user_id),
@@ -1435,6 +1467,21 @@ impl EguiLayer {
         let fractal_texture_id = self.fractal_texture_id();
         // Capture animation time before closure to avoid borrow conflict with animation_controller
         let anim_current_time = animation_controller.current_time;
+
+        // Fullscreen exit-hint fade clock. Updated OUTSIDE the ctx.run
+        // closure: the closure only gets `&self` alongside the borrowed
+        // context, so the mutation lives here and the closure reads the
+        // precomputed age.
+        if fullscreen_mode {
+            if self.fullscreen_hint_since.is_none() {
+                self.fullscreen_hint_since = Some(web_time::Instant::now());
+            }
+        } else {
+            self.fullscreen_hint_since = None;
+        }
+        let fullscreen_hint_age = self
+            .fullscreen_hint_since
+            .map(|t| t.elapsed().as_secs_f32());
 
         // egui 0.34 deprecates `Context::run` + `CentralPanel::show` + `Panel::show` +
         // `DockArea::show(ctx, ...)` in favor of an eframe::App-based flow that hands
@@ -1467,17 +1514,39 @@ impl EguiLayer {
                         }
                     });
 
-                // Show exit hint at bottom
-                egui::Area::new(egui::Id::new("fullscreen_hint"))
-                    .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
-                    .interactable(false)
-                    .show(ctx, |ui| {
-                        ui.add(egui::Label::new(
-                            egui::RichText::new("Press F or Esc to exit fullscreen")
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180))
-                                .size(14.0)
-                        ).selectable(false));
-                    });
+                // Exit hint at the bottom: full strength for 3 s, fades
+                // over the next 1.5 s, then nothing — an overlay that
+                // never leaves defeats the point of hiding the UI.
+                const HOLD: f32 = 3.0;
+                const FADE: f32 = 1.5;
+                let age = fullscreen_hint_age.unwrap_or(0.0);
+                let strength = if age <= HOLD {
+                    1.0
+                } else {
+                    (1.0 - (age - HOLD) / FADE).max(0.0)
+                };
+                if strength > 0.0 {
+                    // Animate: egui only repaints on input, and a fade
+                    // with nobody touching anything would freeze
+                    // mid-fade on any frame the renderer happens to be
+                    // idle. Ask for the frames explicitly.
+                    if age > HOLD {
+                        ctx.request_repaint();
+                    } else {
+                        ctx.request_repaint_after(std::time::Duration::from_secs_f32(HOLD - age));
+                    }
+                    let alpha = (200.0 * strength) as u8;
+                    egui::Area::new(egui::Id::new("fullscreen_hint"))
+                        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
+                        .interactable(false)
+                        .show(ctx, |ui| {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(t!("help.exit_fullscreen_hint"))
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha))
+                                    .size(20.0)
+                            ).selectable(false));
+                        });
+                }
 
                 return;
             }
@@ -1517,6 +1586,12 @@ impl EguiLayer {
 
             // Render fullscreen DockArea - manages all panels including FractalViewport
             // egui automatically handles input routing for panels
+
+            // First frame after a layout is built: raise the side docks
+            // to their startup minimum now that the real width is known
+            // (no-op on every later frame).
+            workspace.apply_startup_dock_minimums(ctx.screen_rect().width());
+
             egui_dock::DockArea::new(&mut workspace.dock_state)
                 .id(egui::Id::new("main_dock_area"))
                 .show(ctx, &mut panel_viewer::PanelViewer {
@@ -1936,10 +2011,15 @@ impl EguiLayer {
             }
         }
 
-        // Virtual keyboard: open overlay when egui wants keyboard input (WASM + compact mode)
-        // Virtual keyboard: post-frame handling (WASM + compact mode)
+        // Virtual keyboard: post-frame handling. Gated on the device
+        // being touch-capable, NOT on compact mode — a tablet wide
+        // enough to skip compact (>=600 logical px), or a phone whose
+        // user tapped "Desktop view" once (the choice persists), still
+        // has no hardware keyboard. Before this, both had no way to
+        // type into any field at all. On a mouse-driven desktop
+        // browser, max_touch_points is 0 and nothing changes.
         #[cfg(target_arch = "wasm32")]
-        if self.compact_mode {
+        if self.compact_mode || Self::device_has_touch() {
             // If we just submitted, defocus now (after egui processed the text events)
             if self.vkb_defocus_pending {
                 self.vkb_defocus_pending = false;
@@ -1960,20 +2040,19 @@ impl EguiLayer {
                         let max = d.get_temp::<f64>(egui_dock::egui::Id::new("vkb_max"));
                         (text, ftype, min, max)
                     });
-                    // Fallback: if no vkb_sync set the text (e.g. custom widget),
-                    // assume numeric field with decimal type
-                    let field_type = if editing_text.is_none() {
-                        "decimal".to_owned()
-                    } else {
-                        field_type
-                    };
-                    self.web_text_agent.open(
-                        &field_type,
-                        editing_text.as_deref().unwrap_or(""),
-                        min,
-                        max,
-                        false,
-                    );
+                    // Only open when a vkb_sync call published the
+                    // field's current text. The old fallback guessed
+                    // "decimal, empty" for un-synced widgets — and the
+                    // submit path injects Ctrl+A + the typed text, so
+                    // tapping any un-synced field offered a numeric
+                    // keypad prefilled empty and WIPED the field on
+                    // submit (the script editor lost whole scripts to
+                    // this). No keyboard is strictly better than a
+                    // destructive one; the fix for an un-synced field
+                    // is a vkb_sync call at its site.
+                    if let Some(text) = editing_text {
+                        self.web_text_agent.open(&field_type, &text, min, max, false);
+                    }
                 }
             }
         }
@@ -2175,6 +2254,25 @@ impl EguiLayer {
         // Combine undo/redo from both menu and panels (OR to not override panel buttons)
         undo_requested |= menu_actions.edit.undo;
         redo_requested |= menu_actions.edit.redo;
+
+        // Handle animation transport actions (compact menu). Same
+        // semantics as the Space shortcut: pause keeps position, play
+        // needs tracks, stop rewinds (the FSM handles the exit +
+        // seek-to-start on its next update).
+        if menu_actions.animation.play_pause {
+            let has_tracks = animation_controller
+                .animation
+                .as_ref()
+                .is_some_and(|a| !a.tracks.is_empty());
+            if animation_controller.is_playing() {
+                animation_controller.pause();
+            } else if has_tracks {
+                animation_controller.play();
+            }
+        }
+        if menu_actions.animation.stop {
+            animation_controller.stop();
+        }
 
         // Handle Rendering menu actions
         if menu_actions.rendering.pause_toggle {
@@ -2443,7 +2541,7 @@ fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) -
             (ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()),
             // Tone mapping settings
             (ConfigPath::Exposure, defaults::DEFAULT_EXPOSURE.into()),
-            (ConfigPath::Gamma, 2.2f32.into()),
+            (ConfigPath::Gamma, defaults::DEFAULT_GAMMA.into()),
             (ConfigPath::GammaThreshold, defaults::DEFAULT_GAMMA_THRESHOLD.into()),
             (ConfigPath::Brightness, defaults::DEFAULT_BRIGHTNESS.into()),
             (ConfigPath::Vibrancy, 1.0f32.into()),
@@ -2457,8 +2555,8 @@ fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) -
             (ConfigPath::TonemapCurve, ToneCurve::default().into()),
             // Levels
             (ConfigPath::LevelsLow, 0.0f32.into()),
-            (ConfigPath::LevelsHigh, 1000.0f32.into()),
-            (ConfigPath::LevelsGamma, 1.0f32.into()),
+            (ConfigPath::LevelsHigh, defaults::DEFAULT_LEVELS_HIGH.into()),
+            (ConfigPath::LevelsGamma, defaults::DEFAULT_LEVELS_GAMMA.into()),
             // Palette settings (not the palette itself or background)
             (ConfigPath::PaletteRotation, defaults::DEFAULT_PALETTE_ROTATION.into()),
             (ConfigPath::PaletteSqueeze, defaults::DEFAULT_PALETTE_SQUEEZE.into()),

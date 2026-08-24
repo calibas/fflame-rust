@@ -88,15 +88,20 @@ fn render_compact_menu_items(
             (PanelType::Colors, "menu.window_colors"),
             (PanelType::View, "menu.window_view"),
             (PanelType::Rendering, "menu.window_rendering"),
-            (PanelType::PaletteEditor, "menu.window_palette_editor"),
-            (PanelType::PaletteLibrary, "menu.window_palette_library"),
+            (PanelType::SolidLighting, "menu.window_solid_lighting"),
+            // Palette Editor / Palette Library deliberately absent: both
+            // are reachable from the Colors panel, and on a phone this
+            // menu must fit on screen — it was scrolling off the bottom.
             (PanelType::FractalBrowser, "menu.window_fractal_browser"),
+            (PanelType::Variations, "menu.window_variations"),
+            (PanelType::Subflames, "menu.window_subflames"),
+            (PanelType::Scripts, "menu.window_scripts"),
             (PanelType::History, "menu.window_history"),
             (PanelType::Effects, "menu.window_effects"),
             (PanelType::XaosEditor, "menu.window_xaos_editor"),
             (PanelType::Animation, "menu.window_animation"),
             (PanelType::Signal, "menu.window_signal"),
-            (PanelType::Export, "menu.export"),
+            (PanelType::Performance, "menu.window_performance"),
         ];
 
         for &(panel_type, key) in panel_items {
@@ -108,31 +113,62 @@ fn render_compact_menu_items(
         }
     });
     // --- File submenu ---
+    // Same row style as the Window submenu (full-width selectable rows,
+    // not size-to-content buttons). Actions carry no open/closed state,
+    // so their `selected` is always false; panel rows show theirs.
     ui.menu_button(t!("menu.file"), |ui| {
-        if ui.button(t!("menu.new")).clicked() {
+        if ui.selectable_label(false, t!("menu.new").as_ref()).clicked() {
             menu_actions.file.new_flame = true;
             ui.close();
         }
 
-        if ui.button(t!("menu.from_preset_library")).clicked() {
+        // Opens the Fractal Browser docked (bottom in portrait), same
+        // as every Window-menu panel — it IS a panel, the File entry is
+        // just a shortcut that lands on the Presets tab.
+        let browser_open = workspace.panel_exists(PanelType::FractalBrowser);
+        if ui.selectable_label(browser_open, t!("menu.from_preset_library").as_ref()).clicked() {
             menu_actions.file.open_preset_library = true;
+            workspace.open_compact_panel(PanelType::FractalBrowser, ctx);
             ui.close();
         }
 
-        if ui.button(t!("menu.random_flame")).clicked() {
+        if ui.selectable_label(false, t!("menu.random_flame").as_ref()).clicked() {
             menu_actions.file.random_flame = true;
             ui.close();
         }
 
-        if ui.button(t!("menu.random_batch")).clicked() {
+        let random_open = workspace.panel_exists(PanelType::RandomGenerator);
+        if ui.selectable_label(random_open, t!("menu.random_batch").as_ref()).clicked() {
             workspace.open_compact_panel(PanelType::RandomGenerator, ctx);
             ui.close();
         }
 
-        if menu_state.online_mode && menu_state.auth_email.is_some() {
+        let export_open = workspace.panel_exists(PanelType::Export);
+        if ui.selectable_label(export_open, t!("menu.export").as_ref()).clicked() {
+            workspace.open_compact_panel(PanelType::Export, ctx);
+            ui.close();
+        }
+
+        // Shown whenever online mode is on, signed in or not: hiding it
+        // when signed out (the old gate) made the feature look absent —
+        // the reported "Save Online missing from the mobile File menu".
+        // Signed out, it routes to the login panel instead.
+        if menu_state.online_mode {
+            let signed_in = menu_state.auth_email.is_some();
             let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
 
-            if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online"))).clicked() {
+            if ui
+                .add_enabled(
+                    !signed_in || api_available,
+                    egui::SelectableLabel::new(false, t!("menu.save_online").as_ref()),
+                )
+                .clicked()
+            {
+                if !signed_in {
+                    workspace.open_compact_panel(PanelType::LoginDialog, ctx);
+                    ui.close();
+                    return;
+                }
                 let api_flame_id = if menu_state.has_api_flame_id {
                     menu_state.api_flame_id.clone()
                 } else {
@@ -153,7 +189,8 @@ fn render_compact_menu_items(
             }
         }
 
-        if ui.button(t!("menu.config_import_export")).clicked() {
+        let config_open = workspace.panel_exists(PanelType::ConfigDialog);
+        if ui.selectable_label(config_open, t!("menu.config_import_export").as_ref()).clicked() {
             workspace.open_compact_panel(PanelType::ConfigDialog, ctx);
             ui.close();
         }
@@ -179,10 +216,26 @@ fn render_compact_menu_items(
 
     ui.separator();
 
-    // --- Rendering ---
-    let pause_text = if menu_state.is_paused { t!("menu.resume") } else { t!("menu.pause") };
-    if ui.button(pause_text).clicked() {
-        menu_actions.rendering.pause_toggle = true;
+    // --- Animation transport ---
+    // Play/pause/stop drive the ANIMATION, not the renderer. These used
+    // to toggle the render pause, which on a phone reads as "the app
+    // froze"; a transport row means the animation everywhere else in
+    // the app (animation panel, Space key), so it does here too.
+    let play_text = if menu_state.animation_playing {
+        t!("menu.pause_animation")
+    } else {
+        t!("menu.play_animation")
+    };
+    let can_play = menu_state.animation_playing || menu_state.has_animation_tracks;
+    if ui.add_enabled(can_play, egui::Button::new(play_text.as_ref())).clicked() {
+        menu_actions.animation.play_pause = true;
+        ui.close();
+    }
+    if ui
+        .add_enabled(menu_state.animation_playing, egui::Button::new(t!("menu.stop_animation").as_ref()))
+        .clicked()
+    {
+        menu_actions.animation.stop = true;
         ui.close();
     }
 

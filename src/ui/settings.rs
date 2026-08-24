@@ -49,7 +49,14 @@ pub fn render_settings_content(
         let mut log_value = (config.max_iterations as f64).log10();
         let max_iter_response = ui.add(egui::Slider::new(&mut log_value, 7.47713..=12.0)
             .text(t!("settings.max_iterations"))
-            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64))));
+            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64)))
+            // The slider's VALUE is log10(iterations); typed text is an
+            // iteration count ("30M", "500000000"). Without this parser,
+            // typed input was read as the LOG — "10000000" clamped to
+            // the slider max of 12 and every VKB submit became 1T.
+            .custom_parser(|s| {
+                super::formatting::parse_iterations(s).map(|v| v.log10())
+            }));
         super::vkb_sync_opts(ui, &max_iter_response, &format!("{}", config.max_iterations), "integer");
         if max_iter_response
             .on_hover_text(t!("settings.tooltip_max_iterations"))

@@ -39,6 +39,32 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
 
+    // The gallery crates (wasm/render, wasm/script) build this crate as
+    // a DEPENDENCY, and nothing in either surfaces build provenance —
+    // but the git watch below re-emits GIT_HASH and BUILD_TIME on every
+    // commit, which invalidated this lib in each of their separate
+    // target directories and cost a full rebuild per commit (measured:
+    // 73s each, and 178s each before the gallery-test profile).
+    // `wasm/.cargo/config.toml` sets this so those builds stop paying
+    // for provenance they never read.
+    //
+    // Never set it for the app or the dist build: the hash in an
+    // exported PNG is what makes a bug report traceable to a source
+    // tree. The values are explicit placeholders rather than a frozen
+    // real hash, because a wrong label is worse than none.
+    println!("cargo:rerun-if-env-changed=FFLAME_SKIP_GIT_PROVENANCE");
+    if env::var_os("FFLAME_SKIP_GIT_PROVENANCE").is_some() {
+        println!("cargo:rustc-env=GIT_HASH=not-recorded");
+        println!("cargo:rustc-env=GIT_BRANCH=not-recorded");
+        println!("cargo:rustc-env=BUILD_TIME=not-recorded");
+        println!("cargo:rustc-env=RUSTC_VERSION={}",
+            rustc_version::version().map(|v| v.to_string()).unwrap_or_else(|_| "unknown".to_string()));
+        copy_assets_to_target();
+        copy_shaders_to_target();
+        generate_palette_manifest();
+        return;
+    }
+
     // Rebuild when the commit changes, or GIT_HASH silently goes stale.
     //
     // Cargo only re-runs this script when a declared input changes, and
@@ -127,6 +153,73 @@ fn main() {
 
     // Copy shaders folder to target directory
     copy_shaders_to_target();
+
+    // Generate the palette pack manifest for WASM discovery
+    generate_palette_manifest();
+}
+
+/// Generate `palette_manifest.json` in OUT_DIR from the packs folder.
+///
+/// A browser cannot list a directory, so the WASM build embeds this
+/// manifest to discover packs (`src/resources/palettes.rs`). Desktop
+/// ignores it entirely and scans `assets/palettes/packs` at startup.
+/// Generating it here — instead of committing one — means the folder
+/// IS the catalog: a pack added to the repo appears on every platform
+/// with no second file to keep in step.
+///
+/// A pack that fails to parse is skipped with a warning rather than
+/// failing the build; `generated_manifest_matches_packs_folder` in
+/// `src/resources/palettes.rs` turns that into a visible test failure.
+fn generate_palette_manifest() {
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let packs_dir = Path::new("assets/palettes/packs");
+
+    let mut files: Vec<String> = fs::read_dir(packs_dir)
+        .map(|it| {
+            it.flatten()
+                .filter_map(|e| e.file_name().to_str().map(String::from))
+                .filter(|n| n.ends_with(".json") && n != "manifest.json")
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+
+    let mut packs: Vec<serde_json::Value> = Vec::new();
+    for filename in &files {
+        let path = packs_dir.join(filename);
+        let parsed: Option<serde_json::Value> = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        let Some(pack) = parsed else {
+            println!("cargo:warning=palette pack {filename} is not valid JSON; left out of the WASM manifest");
+            continue;
+        };
+        let Some(name) = pack.get("pack_name").and_then(|v| v.as_str()) else {
+            println!("cargo:warning=palette pack {filename} has no pack_name; left out of the WASM manifest");
+            continue;
+        };
+        packs.push(serde_json::json!({
+            "id": filename.trim_end_matches(".json"),
+            "name": name,
+            "description": pack.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+            "file": filename,
+            "item_count": pack.get("palettes").and_then(|v| v.as_array()).map_or(0, |a| a.len()),
+            // Absent means enabled: a drop-in pack should appear.
+            // Mirrors the serde default on PalettePack.
+            "enabled_by_default": pack.get("enabled_by_default").and_then(|v| v.as_bool()).unwrap_or(true),
+        }));
+    }
+
+    let manifest = serde_json::json!({
+        "version": 1,
+        "resource_type": "palettes",
+        "packs": packs,
+    });
+    let out_path = Path::new(&out_dir).join("palette_manifest.json");
+    fs::write(&out_path, serde_json::to_string_pretty(&manifest).unwrap())
+        .unwrap_or_else(|e| panic!("could not write {}: {e}", out_path.display()));
+    // No rerun-if-changed needed: copy_assets_to_target already watches
+    // the whole assets tree.
 }
 
 fn copy_assets_to_target() {
