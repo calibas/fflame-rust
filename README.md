@@ -42,12 +42,15 @@ Variations contributed by:
 Special thanks to the Fractal Chats channel on Discord for all their help.
 
 ## See also
-Fractal renderers:
-- [Apophysis 7x](https://github.com/xyrus02/apophysis-7x)
-- [JWildfire](https://jwildfire.overwhale.com/)
-- [Chaotica](https://www.chaoticafractals.com/)
-- [Ultra Fractal](https://www.ultrafractal.com/)
-- [IFSRenderer](https://github.com/bezo97/IFSRenderer)
+
+| Name | Webpage | Source | Platforms | Language | License |
+| ---- | ------- | ------ | --------- | -------- | ------- |
+| Apophysis 7x | [link](https://sourceforge.net/projects/apophysis7x/) | [GitHub](https://github.com/xyrus02/apophysis-7x) | Win | Pascal | GPL |
+| JWildfire | [link](https://jwildfire.overwhale.com/) | [GitHub](https://github.com/thargor6/JWildfire) | Win/Mac/Linux | Java | GPL |
+| Chaotica | [link](https://www.chaoticafractals.com/) | --- | Win/Mac/Linux | C++ | © |
+| Ultra Fractal | [link](https://www.ultrafractal.com/) | --- | Win/Mac | Object Pascal | © |
+| IFSRenderer | [link](https://github.com/bezo97/IFSRenderer) | [GitHub](https://github.com/bezo97/IFSRenderer) | Win | C# | GPL |
+
 - [Mandelbulber](https://github.com/buddhi1980/mandelbulber2)
 - [GMT Fractals](https://gamazama.github.io/GMT-fractals/)
 - [Iterator.it](https://iterator.it/)
@@ -75,10 +78,3 @@ Fractal renderers:
 - [IFS Construction Kit](https://larryriddle.agnesscott.org/ifskit/index.htm)
 - [Parsec](https://github.com/zoomacroom-games/Parsec)
 
-| Name | Webpage | Source | Platforms | Language | License |
-| ---- | ------- | ------ | --------- | -------- | ------- |
-| Apophysis 7x | [link](https://sourceforge.net/projects/apophysis7x/) | [GitHub](https://github.com/xyrus02/apophysis-7x) | Win | Pascal | GPL |
-| JWildfire | [link](https://jwildfire.overwhale.com/) | [GitHub](https://github.com/thargor6/JWildfire) | Win/Mac/Linux | Java | GPL |
-| Chaotica | [link](https://www.chaoticafractals.com/) | --- | Win/Mac/Linux | C++ | © |
-| Ultra Fractal | [link](https://www.ultrafractal.com/) | --- | Win/Mac | Object Pascal | © |
-| IFSRenderer | [link](https://github.com/bezo97/IFSRenderer) | [GitHub](https://github.com/bezo97/IFSRenderer) | Win | C# | GPL |
