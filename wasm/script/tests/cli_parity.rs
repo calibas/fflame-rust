@@ -131,3 +131,50 @@ fn the_seed_ring_wraps_at_both_ends() {
     // 2^63 / 2^64 confusion this test exists to settle.
     assert_ne!(at(i64::MAX as u64), top, "2^63-1 is mid-ring, not the end");
 }
+
+/// `run_chain` is a pure optimization: one call for
+/// generator + modifiers, config threaded in memory instead of
+/// JSON-round-tripped per stage. Byte-identical output is the
+/// contract — the gallery folds every published seed through it.
+#[test]
+fn run_chain_matches_the_sequential_loop_byte_for_byte() {
+    let gen = include_str!("../../../assets/scripts/generators/basic_random.rhai");
+    let jitter = include_str!("../../../assets/scripts/modifiers/jitter.rhai");
+    let mutate = include_str!("../../../assets/scripts/modifiers/mutate.rhai");
+
+    // The old per-stage loop.
+    let env1 = fflame_script::run_impl(gen, 7, "{}", None).expect("gen runs");
+    let cfg1 = config_of(&env1);
+    let env2 = fflame_script::run_impl(jitter, 7, "{}", Some(&cfg1)).expect("jitter runs");
+    let cfg2 = config_of(&env2);
+    let env3 = fflame_script::run_impl(mutate, 7, "{}", Some(&cfg2)).expect("mutate runs");
+    let sequential = config_of(&env3);
+
+    // One chained call.
+    let stages = serde_json::json!([
+        { "source": gen },
+        { "source": jitter, "params": {} },
+        { "source": mutate },
+    ]);
+    let chained = fflame_script::run_chain_impl(&stages.to_string(), 7, None).expect("chain runs");
+    assert_eq!(config_of(&chained), sequential, "chain drifted from the sequential loop");
+
+    // Per-stage reports arrive in order.
+    let v: serde_json::Value = serde_json::from_str(&chained).unwrap();
+    assert_eq!(v["stages"].as_array().unwrap().len(), 3);
+}
+
+/// Chain errors carry the failing stage's index — a hallway of rooms
+/// needs to know WHICH room broke.
+#[test]
+fn run_chain_errors_name_the_stage() {
+    let gen = include_str!("../../../assets/scripts/generators/basic_random.rhai");
+    let jitter = include_str!("../../../assets/scripts/modifiers/jitter.rhai");
+    let stages = serde_json::json!([
+        { "source": gen },
+        { "source": jitter, "params": { "nope": 1.0 } },
+    ]);
+    let err = fflame_script::run_chain_impl(&stages.to_string(), 1, None).unwrap_err();
+    assert!(err.starts_with("stage 1:"), "got: {err}");
+    assert!(err.contains("no parameter `nope`"), "got: {err}");
+}

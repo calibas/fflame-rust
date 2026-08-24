@@ -19,6 +19,19 @@
     input.spellcheck = false;
     input.setAttribute('enterkeyhint', 'done');
 
+    // Multiline twin (script editor and other TextEdit::multiline
+    // fields). Swapped in by configureInput for type "multiline";
+    // Enter inserts a newline there, so submit is button/blur only.
+    const area = document.createElement('textarea');
+    area.autocapitalize = 'off';
+    area.autocomplete = 'off';
+    area.autocorrect = 'off';
+    area.spellcheck = false;
+    area.style.display = 'none';
+
+    // The element currently being edited (input or area).
+    let field = input;
+
     const submitBtn = document.createElement('button');
     submitBtn.className = 'vkb-submit';
     submitBtn.textContent = '✓';
@@ -30,6 +43,7 @@
     cancelBtn.type = 'button';
 
     bar.appendChild(input);
+    bar.appendChild(area);
     bar.appendChild(submitBtn);
     bar.appendChild(cancelBtn);
     overlay.appendChild(bar);
@@ -45,6 +59,18 @@
 
     function configureInput(detail) {
         const fieldType = detail.type || 'text';
+
+        // Pick the element: textarea for multiline, input otherwise.
+        const wantArea = fieldType === 'multiline';
+        field = wantArea ? area : input;
+        area.style.display = wantArea ? 'block' : 'none';
+        input.style.display = wantArea ? 'none' : 'block';
+        bar.classList.toggle('vkb-multiline', wantArea);
+        if (wantArea) {
+            area.value = detail.value || '';
+            return;
+        }
+
         switch (fieldType) {
             case 'integer':
                 input.type = 'text';
@@ -83,7 +109,8 @@
 
         overlay.style.display = 'none';
         input.value = '';
-        input.blur();
+        area.value = '';
+        field.blur();
 
         // Wake the app from idle — dispatch a synthetic pointer event on the canvas
         const canvas = document.getElementById('canvas');
@@ -94,7 +121,7 @@
 
     function submit() {
         if (!active) return;
-        const value = input.value;
+        const value = field.value;
         close();
         document.dispatchEvent(new CustomEvent('vkb-submit', { detail: { value } }));
     }
@@ -130,7 +157,8 @@
         cancel();
     });
 
-    // Submit on Enter
+    // Submit on Enter — single-line only; the textarea needs Enter for
+    // newlines and submits via the ✓ button or blur instead.
     input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -138,9 +166,9 @@
         }
     });
 
-    // Submit on blur (tap outside the input but inside the overlay)
+    // Submit on blur (tap outside the field but inside the overlay)
     // — but skip if blur is from a button click
-    input.addEventListener('blur', function () {
+    function blurSubmit() {
         setTimeout(function () {
             if (blurFromButton) {
                 blurFromButton = false;
@@ -148,7 +176,9 @@
             }
             submit();
         }, 50);
-    });
+    }
+    input.addEventListener('blur', blurSubmit);
+    area.addEventListener('blur', blurSubmit);
 
     // Tap on overlay background (outside input/buttons) cancels
     overlay.addEventListener('touchend', function (e) {
@@ -164,14 +194,14 @@
         configureInput(e.detail);
         overlay.style.display = 'block';
         active = true;
-        input.focus();
+        field.focus();
     });
 
-    // Focus the input on next touchend (iOS requires user gesture context for keyboard)
+    // Focus the field on next touchend (iOS requires user gesture context for keyboard)
     document.addEventListener('touchend', function () {
         if (pendingOpen) {
             pendingOpen = null;
-            input.focus();
+            field.focus();
         }
     });
 })();

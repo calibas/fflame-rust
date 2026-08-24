@@ -54,6 +54,35 @@ def cargo_version() -> str:
     return m.group(1)
 
 
+def stale_inputs(exe):
+    """Source paths newer than `exe`, worst offender first.
+
+    The zip pairs one compiled binary with a fresh copy of `assets/`,
+    so the two can disagree: a stale exe still carries whatever it
+    embedded via `include_str!` (palette packs, shaders, scripts,
+    locales) at the time it was built. That is not hypothetical — a
+    palette pack deleted from the repo reappeared in a packaged build
+    because the exe predated the deletion by an hour.
+    """
+    exe_mtime = exe.stat().st_mtime
+    roots = ["src", "shaders", "assets", "locales"]
+    files = ["Cargo.toml", "Cargo.lock", "build.rs"]
+
+    newer = []
+    for r in roots:
+        d = ROOT / r
+        if d.is_dir():
+            newer += [f for f in d.rglob("*")
+                      if f.is_file() and f.stat().st_mtime > exe_mtime]
+    for name in files:
+        f = ROOT / name
+        if f.is_file() and f.stat().st_mtime > exe_mtime:
+            newer.append(f)
+
+    newer.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    return [f.relative_to(ROOT).as_posix() for f in newer]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--profile", default="dist",
@@ -74,6 +103,20 @@ def main() -> int:
             f"  build it first:  cargo build --profile {args.profile}"
         )
 
+    stale = stale_inputs(exe)
+    if stale:
+        listed = "\n".join(f"    {p}" for p in stale[:5])
+        more = f"\n    ...and {len(stale) - 5} more" if len(stale) > 5 else ""
+        sys.exit(
+            f"{exe.relative_to(ROOT)} is older than its inputs:\n{listed}{more}\n\n"
+            f"  Assets are copied into the zip fresh from the repo, but anything\n"
+            f"  the binary EMBEDS (palette packs, shaders, scripts, locales) is\n"
+            f"  baked in at compile time. Packaging now would ship fresh assets\n"
+            f"  around a stale exe - which is how a deleted palette pack came\n"
+            f"  back to life in a shipped build.\n\n"
+            f"  rebuild first:  cargo build --profile {args.profile}"
+        )
+
     version = cargo_version()
     out_dir = ROOT / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -83,7 +126,22 @@ def main() -> int:
     root_name = f"{STEM}-{version}"
     zip_path = out_dir / f"{STEM}-{version}-windows.zip"
     if zip_path.exists():
-        zip_path.unlink()
+        # Windows keeps a share lock while Explorer is browsing INSIDE the
+        # zip, or while an app is running from a folder extracted through
+        # the shell view. Both are the normal way to test a release build,
+        # so this is a routine collision, not a broken tree - say what to
+        # close instead of a PermissionError traceback after a 7-minute
+        # rebuild.
+        try:
+            zip_path.unlink()
+        except PermissionError:
+            sys.exit(
+                f"cannot replace {zip_path.relative_to(ROOT)} - another process holds it\n\n"
+                f"  Usually Explorer browsing inside the zip, or the app still\n"
+                f"  running from a folder opened through the zip view. Close it\n"
+                f"  and re-run; the binary is already built, so this is quick.\n"
+                f"  Or package elsewhere:  --out target/windows-2"
+            )
 
     assets = ROOT / "assets"
     if not assets.is_dir():

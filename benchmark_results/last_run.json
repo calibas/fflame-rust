@@ -1,113 +1,113 @@
 {
-  "timestamp": "2026-01-27 10:19:48",
+  "timestamp": "2026-08-18 10:37:05",
   "cpu_benchmarks": [
     {
       "name": "affine_transform/affine_2x3_matrix",
-      "mean_ns": 2.7009,
-      "stddev_ns": 0.006799999999999917,
-      "throughput_ops_sec": 370246954.71879745
+      "mean_ns": 2.7385,
+      "stddev_ns": 0.0038000000000000256,
+      "throughput_ops_sec": 365163410.6262552
     },
     {
       "name": "affine_transform/affine_full",
-      "mean_ns": 3.0801,
-      "stddev_ns": 0.007800000000000029,
-      "throughput_ops_sec": 324664783.61092174
+      "mean_ns": 3.1707,
+      "stddev_ns": 0.056749999999999856,
+      "throughput_ops_sec": 315387769.262308
     },
     {
       "name": "point_helpers/r_squared",
-      "mean_ns": 0.64113,
-      "stddev_ns": 0.0010699999999999933,
-      "throughput_ops_sec": 1559746073.3392603
+      "mean_ns": 0.66151,
+      "stddev_ns": 0.005139999999999987,
+      "throughput_ops_sec": 1511692944.929026
     },
     {
       "name": "point_helpers/r",
-      "mean_ns": 0.73778,
-      "stddev_ns": 0.002199999999999989,
-      "throughput_ops_sec": 1355417604.163843
+      "mean_ns": 0.74991,
+      "stddev_ns": 0.00036000000000001363,
+      "throughput_ops_sec": 1333493352.5356376
     },
     {
       "name": "point_helpers/theta",
-      "mean_ns": 10.051,
-      "stddev_ns": 0.015500000000000291,
-      "throughput_ops_sec": 99492587.80220874
+      "mean_ns": 10.223,
+      "stddev_ns": 0.07650000000000023,
+      "throughput_ops_sec": 97818644.23359092
     },
     {
       "name": "point_helpers/phi",
-      "mean_ns": 10.824,
-      "stddev_ns": 0.015000000000000568,
-      "throughput_ops_sec": 92387287.50923873
+      "mean_ns": 11.307,
+      "stddev_ns": 0.17049999999999965,
+      "throughput_ops_sec": 88440788.89183691
     },
     {
       "name": "color_blending/palette_position/0",
-      "mean_ns": 0.62529,
-      "stddev_ns": 0.0009699999999999705,
-      "throughput_ops_sec": 1599257944.3138382
+      "mean_ns": 0.63141,
+      "stddev_ns": 0.006875,
+      "throughput_ops_sec": 1583756988.3277109
     },
     {
       "name": "color_blending/palette_position/0.5",
-      "mean_ns": 0.62937,
-      "stddev_ns": 0.0019300000000000068,
-      "throughput_ops_sec": 1588890477.7793667
+      "mean_ns": 0.64191,
+      "stddev_ns": 0.007285000000000025,
+      "throughput_ops_sec": 1557850789.0514247
     },
     {
       "name": "color_blending/palette_position/1",
-      "mean_ns": 0.6255499999999999,
-      "stddev_ns": 0.0008600000000000136,
-      "throughput_ops_sec": 1598593237.9506037
+      "mean_ns": 0.62891,
+      "stddev_ns": 0.0014200000000000159,
+      "throughput_ops_sec": 1590052630.7420776
     },
     {
       "name": "preset_iteration/single_transform_iter/Grand",
-      "mean_ns": 20.972,
-      "stddev_ns": 0.034000000000000696,
-      "throughput_ops_sec": 47682624.451649815
+      "mean_ns": 19.716,
+      "stddev_ns": 0.06400000000000006,
+      "throughput_ops_sec": 50720227.22661797
     },
     {
       "name": "preset_iteration/single_transform_iter/Julian",
-      "mean_ns": 160.9,
-      "stddev_ns": 0.1950000000000074,
-      "throughput_ops_sec": 6215040.397762585
+      "mean_ns": 162.53,
+      "stddev_ns": 1.085000000000008,
+      "throughput_ops_sec": 6152710.268873439
     },
     {
       "name": "preset_iteration/single_transform_iter/Plastic",
-      "mean_ns": 19.78,
-      "stddev_ns": 0.02800000000000047,
-      "throughput_ops_sec": 50556117.29019211
+      "mean_ns": 20.303,
+      "stddev_ns": 0.12599999999999945,
+      "throughput_ops_sec": 49253804.85642516
     },
     {
       "name": "variation_lookup/hashmap_get",
-      "mean_ns": 15.43,
-      "stddev_ns": 0.03049999999999997,
-      "throughput_ops_sec": 64808813.99870382
+      "mean_ns": 15.421,
+      "stddev_ns": 0.17800000000000082,
+      "throughput_ops_sec": 64846637.70183516
     },
     {
       "name": "variation_lookup/hashmap_iter",
-      "mean_ns": 4.3489,
-      "stddev_ns": 0.00904999999999978,
-      "throughput_ops_sec": 229943204.02860492
+      "mean_ns": 4.3607,
+      "stddev_ns": 0.04035000000000011,
+      "throughput_ops_sec": 229320980.57651296
     },
     {
       "name": "registry_operations/registry_get",
-      "mean_ns": 20.857,
-      "stddev_ns": 0.049000000000001265,
-      "throughput_ops_sec": 47945533.87351968
+      "mean_ns": 21.066,
+      "stddev_ns": 0.13699999999999868,
+      "throughput_ops_sec": 47469856.64103295
     },
     {
       "name": "registry_operations/registry_get_is_some",
-      "mean_ns": 20.913,
-      "stddev_ns": 0.049000000000001265,
-      "throughput_ops_sec": 47817147.228996314
+      "mean_ns": 21.489,
+      "stddev_ns": 0.18099999999999916,
+      "throughput_ops_sec": 46535436.73507376
     },
     {
       "name": "transform_creation/new_transform",
-      "mean_ns": 27.892,
-      "stddev_ns": 0.04099999999999859,
-      "throughput_ops_sec": 35852574.214828625
+      "mean_ns": 93.574,
+      "stddev_ns": 1.5619999999999976,
+      "throughput_ops_sec": 10686729.219655033
     },
     {
       "name": "transform_creation/clone_transform",
-      "mean_ns": 186.77,
-      "stddev_ns": 0.35999999999999943,
-      "throughput_ops_sec": 5354178.9366600625
+      "mean_ns": 258.9,
+      "stddev_ns": 2.7749999999999773,
+      "throughput_ops_sec": 3862495.1718810354
     }
   ],
   "render_benchmarks": [
@@ -116,72 +116,1359 @@
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 1000341504,
-      "render_time_ms": 1249.8775,
-      "throughput_miter_sec": 800.3516376604907
+      "total_iterations": 1006632960,
+      "render_time_ms": 594.51,
+      "throughput_miter_sec": 1693.2145127920473
+    },
+    {
+      "name": "plastic-sierpinski",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 1006632960,
+      "render_time_ms": 611.7950000000001,
+      "throughput_miter_sec": 1645.376245310929
     },
     {
       "name": "simple-linear",
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 501219328,
-      "render_time_ms": 752.12,
-      "throughput_miter_sec": 666.4087220124449
+      "total_iterations": 503316480,
+      "render_time_ms": 291.05999999999995,
+      "throughput_miter_sec": 1729.2533498247788
+    },
+    {
+      "name": "subflame-blob",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 50331648,
+      "render_time_ms": 151.94,
+      "throughput_miter_sec": 331.26002369356326
+    },
+    {
+      "name": "subflame-julian",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 50331648,
+      "render_time_ms": 177.07999999999998,
+      "throughput_miter_sec": 284.2311271741586
+    },
+    {
+      "name": "subflame-klein",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 50331648,
+      "render_time_ms": 148.94,
+      "throughput_miter_sec": 337.9323754532026
+    },
+    {
+      "name": "subflame-smoke-2d",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 50331648,
+      "render_time_ms": 147.765,
+      "throughput_miter_sec": 340.61955131458734
+    },
+    {
+      "name": "affine3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.47500000000002,
+      "throughput_miter_sec": 65.29369916326132
     },
     {
       "name": "bubble-3d",
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 1000341504,
-      "render_time_ms": 627.4675,
-      "throughput_miter_sec": 1594.2522983262083
+      "total_iterations": 1006632960,
+      "render_time_ms": 364.4,
+      "throughput_miter_sec": 2762.43951701427
+    },
+    {
+      "name": "cpow3_wf-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 127.53999999999999,
+      "throughput_miter_sec": 65.77236945272072
+    },
+    {
+      "name": "flatten-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 131.635,
+      "throughput_miter_sec": 63.726273407528396
+    },
+    {
+      "name": "flower_db-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 131.74,
+      "throughput_miter_sec": 63.675482010019735
+    },
+    {
+      "name": "hypercrop-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.82,
+      "throughput_miter_sec": 66.14578142248857
+    },
+    {
+      "name": "maurer_rose-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.78,
+      "throughput_miter_sec": 66.69270154237557
+    },
+    {
+      "name": "murl-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.505,
+      "throughput_miter_sec": 64.77439481101116
     },
     {
       "name": "simple-zcone",
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 501219328,
-      "render_time_ms": 616.275,
-      "throughput_miter_sec": 813.3046578232121
+      "total_iterations": 503316480,
+      "render_time_ms": 292.545,
+      "throughput_miter_sec": 1720.475414038866
+    },
+    {
+      "name": "stereogram-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 145.89999999999998,
+      "throughput_miter_sec": 57.495599725839625
+    },
+    {
+      "name": "subflame-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 50331648,
+      "render_time_ms": 149.495,
+      "throughput_miter_sec": 336.67780193317503
+    },
+    {
+      "name": "swirl3-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.475,
+      "throughput_miter_sec": 67.39191002209279
+    },
+    {
+      "name": "swirl3D_wf-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.24000000000001,
+      "throughput_miter_sec": 66.44968314321926
+    },
+    {
+      "name": "zcone-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 122.06,
+      "throughput_miter_sec": 68.72528264787809
+    },
+    {
+      "name": "zscale-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.885,
+      "throughput_miter_sec": 65.08599138767119
+    },
+    {
+      "name": "solid-depth-effects",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 193.265,
+      "throughput_miter_sec": 86.80938607611313
+    },
+    {
+      "name": "solid-hard",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 144.12,
+      "throughput_miter_sec": 116.41143491534832
+    },
+    {
+      "name": "solid-lit-transparent",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 145.26,
+      "throughput_miter_sec": 115.4978383588049
+    },
+    {
+      "name": "solid-lit",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 149.05,
+      "throughput_miter_sec": 112.5609929553841
+    },
+    {
+      "name": "solid-shadows",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 297.05,
+      "throughput_miter_sec": 56.47943443864669
+    },
+    {
+      "name": "solid-translucent",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 152.54000000000002,
+      "throughput_miter_sec": 109.98568244394912
     },
     {
       "name": "black-curve",
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 1000341504,
-      "render_time_ms": 2326.2749999999996,
-      "throughput_miter_sec": 430.01859367443666
+      "total_iterations": 1006632960,
+      "render_time_ms": 1190.98,
+      "throughput_miter_sec": 845.2139918386539
     },
     {
       "name": "white-curve",
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 1000341504,
-      "render_time_ms": 2306.625,
-      "throughput_miter_sec": 433.68189627702816
+      "total_iterations": 1006632960,
+      "render_time_ms": 1182.885,
+      "throughput_miter_sec": 850.9981612751874
+    },
+    {
+      "name": "affine3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 138.055,
+      "throughput_miter_sec": 60.76279743580457
+    },
+    {
+      "name": "apo-misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 133.73000000000002,
+      "throughput_miter_sec": 62.72794436551259
+    },
+    {
+      "name": "apo-misc10-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 138.87,
+      "throughput_miter_sec": 60.40619284222654
+    },
+    {
+      "name": "apo-misc11-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.81,
+      "throughput_miter_sec": 67.2110247576316
+    },
+    {
+      "name": "apo-misc12-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.415,
+      "throughput_miter_sec": 66.88679982458238
+    },
+    {
+      "name": "apo-misc13-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.705,
+      "throughput_miter_sec": 66.73249274094108
+    },
+    {
+      "name": "apo-misc14-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 127.60499999999999,
+      "throughput_miter_sec": 65.7388660318953
+    },
+    {
+      "name": "apo-misc15-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.625,
+      "throughput_miter_sec": 66.77498905472636
+    },
+    {
+      "name": "apo-misc16-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.565,
+      "throughput_miter_sec": 66.80689682634492
+    },
+    {
+      "name": "apo-misc17-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.92,
+      "throughput_miter_sec": 66.61855146124523
+    },
+    {
+      "name": "apo-misc7-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.7,
+      "throughput_miter_sec": 66.20842936069455
+    },
+    {
+      "name": "apo-misc8-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.62,
+      "throughput_miter_sec": 66.77764687151726
+    },
+    {
+      "name": "apo-misc9-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.28,
+      "throughput_miter_sec": 65.39295291549735
+    },
+    {
+      "name": "apo_misc18-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.64500000000001,
+      "throughput_miter_sec": 67.8442961704881
+    },
+    {
+      "name": "apo_misc19-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.94999999999999,
+      "throughput_miter_sec": 66.07804647499016
+    },
+    {
+      "name": "apo_misc20-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 154.25,
+      "throughput_miter_sec": 54.3831961102107
+    },
+    {
+      "name": "apo_misc21-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 143.315,
+      "throughput_miter_sec": 58.53265882845481
+    },
+    {
+      "name": "apo_misc22-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 132.16500000000002,
+      "throughput_miter_sec": 63.47072220330646
+    },
+    {
+      "name": "bipolar-series-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 142.94,
+      "throughput_miter_sec": 58.68621799356373
+    },
+    {
+      "name": "blur-extras-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.895,
+      "throughput_miter_sec": 64.57991454636436
+    },
+    {
+      "name": "boarders-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 146.745,
+      "throughput_miter_sec": 57.16452349313435
+    },
+    {
+      "name": "bubblet3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 134.625,
+      "throughput_miter_sec": 62.31092293407614
+    },
+    {
+      "name": "butterfly-fay-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.99000000000001,
+      "throughput_miter_sec": 67.11423313865109
+    },
+    {
+      "name": "bwraps2-phase-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.185,
+      "throughput_miter_sec": 64.93484537678522
+    },
+    {
+      "name": "bwraps7-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.92500000000001,
+      "throughput_miter_sec": 67.69100665725236
+    },
+    {
+      "name": "circle-blur-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.0,
+      "throughput_miter_sec": 66.57625396825397
+    },
+    {
+      "name": "circlecrop-exblur-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.22,
+      "throughput_miter_sec": 65.42355326782094
+    },
+    {
+      "name": "circlecrop-phase-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.115,
+      "throughput_miter_sec": 65.47717285251531
+    },
+    {
+      "name": "circle_rand_misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 141.95499999999998,
+      "throughput_miter_sec": 59.093431016871556
+    },
+    {
+      "name": "classic-2d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.58,
+      "throughput_miter_sec": 66.27119608152947
+    },
+    {
+      "name": "classic-blades-misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 130.06,
+      "throughput_miter_sec": 64.49798554513302
+    },
+    {
+      "name": "complex-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.99,
+      "throughput_miter_sec": 65.0330103108768
+    },
+    {
+      "name": "crackle-distort-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 187.035,
+      "throughput_miter_sec": 44.85047183682198
+    },
+    {
+      "name": "crackle-fast-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 141.225,
+      "throughput_miter_sec": 59.39888829881395
+    },
+    {
+      "name": "crackle-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 136.25,
+      "throughput_miter_sec": 61.567765137614686
+    },
+    {
+      "name": "curl-sp-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 131.24,
+      "throughput_miter_sec": 63.9180737580006
+    },
+    {
+      "name": "curliecue2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 402653184,
+      "render_time_ms": 401.745,
+      "throughput_miter_sec": 1002.2605981406116
+    },
+    {
+      "name": "dc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.89,
+      "throughput_miter_sec": 67.16797181519738
+    },
+    {
+      "name": "dc_carpet3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 132.28,
+      "throughput_miter_sec": 63.4155427880254
+    },
+    {
+      "name": "dc_misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 127.305,
+      "throughput_miter_sec": 65.89378264797139
+    },
+    {
+      "name": "dc_misc2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.485,
+      "throughput_miter_sec": 67.38649636502389
+    },
+    {
+      "name": "erf-misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.585,
+      "throughput_miter_sec": 65.23784267216237
+    },
+    {
+      "name": "extrude-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 122.375,
+      "throughput_miter_sec": 68.548379979571
+    },
+    {
+      "name": "farblur-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 133.06,
+      "throughput_miter_sec": 63.04379978956861
+    },
+    {
+      "name": "gamma-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 121.12,
+      "throughput_miter_sec": 69.25865257595773
+    },
+    {
+      "name": "glynn-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.57999999999998,
+      "throughput_miter_sec": 64.73690384318569
+    },
+    {
+      "name": "glynnlissa-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.57,
+      "throughput_miter_sec": 66.80423668073585
+    },
+    {
+      "name": "glynnspiro-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.99000000000001,
+      "throughput_miter_sec": 66.05723285298053
+    },
+    {
+      "name": "glynnsshape-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.07,
+      "throughput_miter_sec": 67.07130406972097
+    },
+    {
+      "name": "gridout3d-jubiq-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.075,
+      "throughput_miter_sec": 67.60917187185171
+    },
+    {
+      "name": "harmonograph-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 121.83500000000001,
+      "throughput_miter_sec": 68.85220174826608
+    },
+    {
+      "name": "hexaplay3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.595,
+      "throughput_miter_sec": 66.26334373395474
+    },
+    {
+      "name": "hexnix3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.505,
+      "throughput_miter_sec": 67.3756716597727
+    },
+    {
+      "name": "hypertile-poincare",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.17,
+      "throughput_miter_sec": 67.55744543770636
+    },
+    {
+      "name": "hypertile-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 133.35,
+      "throughput_miter_sec": 62.906696662917135
+    },
+    {
+      "name": "hypertile3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.565,
+      "throughput_miter_sec": 65.2479912884533
+    },
+    {
+      "name": "iconattractor_js-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.775,
+      "throughput_miter_sec": 67.77303978994142
+    },
+    {
+      "name": "inflate-z-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.105,
+      "throughput_miter_sec": 64.97508229735487
+    },
+    {
+      "name": "init-migration-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 135.535,
+      "throughput_miter_sec": 61.89255911757111
+    },
+    {
+      "name": "internal-weight-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.575,
+      "throughput_miter_sec": 66.2738139443018
+    },
+    {
+      "name": "jacobi-elliptic-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 138.05,
+      "throughput_miter_sec": 60.764998189061934
+    },
+    {
+      "name": "jac_asn-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.3,
+      "throughput_miter_sec": 65.38275915822291
+    },
+    {
+      "name": "klein-grandma-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 128.68,
+      "throughput_miter_sec": 130.37935965184954
+    },
+    {
+      "name": "klein-maskit-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 130.865,
+      "throughput_miter_sec": 128.20246819241203
+    },
+    {
+      "name": "klein-riley-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 129.36,
+      "throughput_miter_sec": 129.69400123685838
+    },
+    {
+      "name": "lazy-family-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.39000000000001,
+      "throughput_miter_sec": 65.33692655191213
+    },
+    {
+      "name": "macmillan-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 16777216,
+      "render_time_ms": 124.09,
+      "throughput_miter_sec": 135.2019985494399
+    },
+    {
+      "name": "maurer-hyper-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.41,
+      "throughput_miter_sec": 67.9734867514788
+    },
+    {
+      "name": "minkowskope-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.6,
+      "throughput_miter_sec": 64.72691358024692
+    },
+    {
+      "name": "misc-2d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.72,
+      "throughput_miter_sec": 64.66703669441875
+    },
+    {
+      "name": "misc-extras-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 134.805,
+      "throughput_miter_sec": 62.227721523682355
+    },
+    {
+      "name": "misc-extras2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 127.845,
+      "throughput_miter_sec": 65.61545621651219
+    },
+    {
+      "name": "misc-extras3-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.055,
+      "throughput_miter_sec": 67.07934908640199
+    },
+    {
+      "name": "misc-extras4-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 128.86,
+      "throughput_miter_sec": 65.09861865590563
     },
     {
       "name": "misc-variations",
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 1000341504,
-      "render_time_ms": 1990.7275,
-      "throughput_miter_sec": 502.5004698031247
+      "total_iterations": 1006632960,
+      "render_time_ms": 852.34,
+      "throughput_miter_sec": 1181.0227843348898
     },
     {
       "name": "misc-variations2",
       "test_type": "desktop",
       "width": 800,
       "height": 600,
-      "total_iterations": 1000341504,
-      "render_time_ms": 769.93,
-      "throughput_miter_sec": 1299.2629252009924
+      "total_iterations": 1006632960,
+      "render_time_ms": 411.15,
+      "throughput_miter_sec": 2448.3350601970083
+    },
+    {
+      "name": "mobius-extended-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 127.435,
+      "throughput_miter_sec": 65.82656256130576
+    },
+    {
+      "name": "multi_kaleidoscope-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 1006632960,
+      "render_time_ms": 5571.585,
+      "throughput_miter_sec": 180.67263803747048
+    },
+    {
+      "name": "numbered-extras-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.83,
+      "throughput_miter_sec": 67.20025634863414
+    },
+    {
+      "name": "onion2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 122.87,
+      "throughput_miter_sec": 68.27222267437128
+    },
+    {
+      "name": "parametric-curves-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 130.61,
+      "throughput_miter_sec": 64.22638389097312
+    },
+    {
+      "name": "plusrecip-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.685,
+      "throughput_miter_sec": 67.82235517645631
+    },
+    {
+      "name": "pointgrid_misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 133.95499999999998,
+      "throughput_miter_sec": 62.62258221044381
+    },
+    {
+      "name": "popcorn2_3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.335,
+      "throughput_miter_sec": 66.92949295887024
+    },
+    {
+      "name": "post-heat-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.87,
+      "throughput_miter_sec": 66.64501469770399
+    },
+    {
+      "name": "post-rblur-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 131.78,
+      "throughput_miter_sec": 63.656154196387924
+    },
+    {
+      "name": "post_axis_symmetry-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.33,
+      "throughput_miter_sec": 66.93216308944388
+    },
+    {
+      "name": "pre-post-bridges-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.07999999999998,
+      "throughput_miter_sec": 64.98766656337156
+    },
+    {
+      "name": "pre_wave3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.62,
+      "throughput_miter_sec": 67.31349703097416
+    },
+    {
+      "name": "quaternion-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 127.81,
+      "throughput_miter_sec": 65.63342461466239
+    },
+    {
+      "name": "radial-extras-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.94999999999999,
+      "throughput_miter_sec": 66.602683604605
+    },
+    {
+      "name": "rhodonea-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.33500000000001,
+      "throughput_miter_sec": 67.46779265693489
+    },
+    {
+      "name": "rosoni-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 127.705,
+      "throughput_miter_sec": 65.68738890411495
+    },
+    {
+      "name": "shapes3-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.775,
+      "throughput_miter_sec": 67.77303978994142
+    },
+    {
+      "name": "siercarpet_js-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 121.905,
+      "throughput_miter_sec": 68.81266560026249
+    },
+    {
+      "name": "simple-classics-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 130.14,
+      "throughput_miter_sec": 64.45833717534963
+    },
+    {
+      "name": "singleton-misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 140.155,
+      "throughput_miter_sec": 59.85236345474653
+    },
+    {
+      "name": "sosa_attractors-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.905,
+      "throughput_miter_sec": 67.15990552820143
+    },
+    {
+      "name": "sosa_attractors2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 129.155,
+      "throughput_miter_sec": 64.94992838062792
+    },
+    {
+      "name": "sosa_attractors3-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 121.91499999999999,
+      "throughput_miter_sec": 68.80702128532174
+    },
+    {
+      "name": "sosa_attractors4-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.18,
+      "throughput_miter_sec": 66.48128071009668
+    },
+    {
+      "name": "spin-phase-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.315,
+      "throughput_miter_sec": 68.02585249158659
+    },
+    {
+      "name": "spray_blur-normal-xform-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 178.285,
+      "throughput_miter_sec": 47.05167568780324
+    },
+    {
+      "name": "spray_blur-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 1006632960,
+      "render_time_ms": 8838.015,
+      "throughput_miter_sec": 113.89808231825812
+    },
+    {
+      "name": "standalone-exotics-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 133.945,
+      "throughput_miter_sec": 62.62725745641868
+    },
+    {
+      "name": "stub-recoveries-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.635,
+      "throughput_miter_sec": 66.76967405579656
+    },
+    {
+      "name": "stub-recoveries2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 130.41,
+      "throughput_miter_sec": 64.32488306111495
+    },
+    {
+      "name": "supershape3d-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.32,
+      "throughput_miter_sec": 67.47593307593307
+    },
+    {
+      "name": "truchet-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 131.765,
+      "throughput_miter_sec": 63.66340075133761
+    },
+    {
+      "name": "truchet-tw-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 135.325,
+      "throughput_miter_sec": 61.98860520968041
+    },
+    {
+      "name": "truchet2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.485,
+      "throughput_miter_sec": 66.84948798661195
+    },
+    {
+      "name": "vibration2-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.89,
+      "throughput_miter_sec": 67.71012995399144
+    },
+    {
+      "name": "watchlist-misc-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 137.675,
+      "throughput_miter_sec": 60.930510259669504
+    },
+    {
+      "name": "waveblur_wf-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 121.505,
+      "throughput_miter_sec": 69.03920003292046
+    },
+    {
+      "name": "waves2b-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 132.845,
+      "throughput_miter_sec": 63.145831608265276
+    },
+    {
+      "name": "waves_wf_family-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.29,
+      "throughput_miter_sec": 67.49221980851236
+    },
+    {
+      "name": "wedge-extended-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 124.825,
+      "throughput_miter_sec": 67.20294812737833
+    },
+    {
+      "name": "weight-hack-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 126.525,
+      "throughput_miter_sec": 66.30000395178818
+    },
+    {
+      "name": "wf_curves-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 125.83,
+      "throughput_miter_sec": 66.66620042915044
+    },
+    {
+      "name": "wz-lost-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 130.06,
+      "throughput_miter_sec": 64.49798554513302
+    },
+    {
+      "name": "xtrb-smoke",
+      "test_type": "desktop",
+      "width": 800,
+      "height": 600,
+      "total_iterations": 8388608,
+      "render_time_ms": 123.295,
+      "throughput_miter_sec": 68.03688714059776
     }
   ]
 }

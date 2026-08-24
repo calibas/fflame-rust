@@ -73,7 +73,57 @@ fn voronoi_inside(points: array<vec2<f32>, 9>, n: u32, q: u32, u: vec2<f32>) -> 
 // runs simplex_noise_3d 18× per variation call (9 cells × 2 per cell ×
 // 2 passes, with the re-center step). That's the main TDR pressure for
 // the family.
+// Cheap per-cell offset for `crackle_fast`: an integer hash of the
+// lattice coords, value-noise interpolated along z.
+//
+// The insight that licenses this: crackle only ever samples its noise
+// at INTEGER lattice points (scaled by 2.5, which spaces simplex
+// samples far past its feature size — neighbouring cells are already
+// decorrelated). The one property actually used is continuity in `z`,
+// so the cell layout flows when z animates. A hash per (x, y, floor z)
+// plus a smoothstep blend to the next z-slice delivers exactly that
+// for ~15 ALU ops where the simplex pair costs ~200. Statistically the
+// same kind of offset field; the specific cell layout differs from
+// `crackle`'s, which is why this feeds a separate variation instead of
+// changing the existing ones.
+fn crackle_cell_hash2(x: i32, y: i32, zi: i32) -> vec2<f32> {
+    // Integer mix (Wang/PCG-flavoured). bitcast, not conversion: the
+    // lattice coords go negative and we want their bits, wrapped.
+    var h: u32 = bitcast<u32>(x) * 0x8da6b343u
+        ^ bitcast<u32>(y) * 0xd8163841u
+        ^ bitcast<u32>(zi) * 0xcb1ab31fu;
+    h = h ^ (h >> 13u);
+    h = h * 0x9e3779b1u;
+    h = h ^ (h >> 16u);
+    let h2 = h * 0x85ebca6bu;
+    // Two lanes → [-1, 1].
+    let a = f32(h & 0xffffu) * (2.0 / 65535.0) - 1.0;
+    let b = f32((h2 >> 8u) & 0xffffu) * (2.0 / 65535.0) - 1.0;
+    return vec2<f32>(a, b);
+}
+
+fn crackle_fast_cell_noise(x: i32, y: i32, z: f32) -> vec2<f32> {
+    let zf = floor(z);
+    let zi = i32(zf);
+    let t = z - zf;
+    let sm = t * t * (3.0 - 2.0 * t);
+    return mix(
+        crackle_cell_hash2(x, y, zi),
+        crackle_cell_hash2(x, y, zi + 1),
+        sm,
+    );
+}
+
 fn voronoi_crackle_position(x: i32, y: i32, z: f32, s: f32, d: f32) -> vec2<f32> {
+    // Fast path — and the DEFAULT (crackle ships distort = 0): with no
+    // distortion the noise contribution is `0.0 * noise`, exactly 0.0
+    // for the finite values simplex always returns, so skipping the
+    // two simplex calls is bit-identical and turns the whole family's
+    // dominant cost off. The branch is uniform (parameters are the
+    // same for every thread in the dispatch), so it does not diverge.
+    if (d == 0.0) {
+        return vec2<f32>(f32(x) * s, f32(y) * s);
+    }
     let fx = f32(x) * 2.5;
     let fy = f32(y) * 2.5;
     let fz = z * 2.5;
@@ -111,9 +161,26 @@ fn voronoi_crackle_position(x: i32, y: i32, z: f32, s: f32, d: f32) -> vec2<f32>
 // components). With 32K threads × ~256 chaos iters that's ~80M noise
 // calls per dispatch — stays within the TDR budget when noise.wgsl is
 // the table-free Gustavson port.
+// Position dispatch: `fast` selects the hashed cell noise over the
+// simplex pair. A uniform (per-transform-constant) branch, so it costs
+// nothing on the GPU, and it keeps ONE body for all crackle variants —
+// two bodies would drift.
+fn voronoi_cell_position(x: i32, y: i32, z: f32, s: f32, d: f32, fast: bool) -> vec2<f32> {
+    if (fast) {
+        if (d == 0.0) {
+            return vec2<f32>(f32(x) * s, f32(y) * s);
+        }
+        // Same 2.5 z-scale as the simplex path, so animating `z` flows
+        // at a familiar speed.
+        let n = crackle_fast_cell_noise(x, y, z * 2.5);
+        return vec2<f32>((f32(x) + d * n.x) * s, (f32(y) + d * n.y) * s);
+    }
+    return voronoi_crackle_position(x, y, z, s, d);
+}
+
 fn crackle_body(
     cellsize: f32, power: f32, distort: f32, scale: f32, z: f32,
-    rng: ptr<function, RngState>,
+    rng: ptr<function, RngState>, fast: bool,
 ) -> vec3<f32> {
     if (abs(cellsize) < 1.0e-6) {
         return vec3<f32>(0.0, 0.0, 0.0);
@@ -135,7 +202,7 @@ fn crackle_body(
     var i: u32 = 0u;
     for (var di: i32 = -1; di <= 1; di = di + 1) {
         for (var dj: i32 = -1; dj <= 1; dj = dj + 1) {
-            p_arr[i] = voronoi_crackle_position(xcv + di, ycv + dj, z, s, distort);
+            p_arr[i] = voronoi_cell_position(xcv + di, ycv + dj, z, s, distort, fast);
             i = i + 1u;
         }
     }
@@ -148,12 +215,32 @@ fn crackle_body(
     let q_dj = i32(q % 3u) - 1;
     xcv = xcv + q_di;
     ycv = ycv + q_dj;
-    i = 0u;
-    for (var di: i32 = -1; di <= 1; di = di + 1) {
-        for (var dj: i32 = -1; dj <= 1; dj = dj + 1) {
-            p_arr[i] = voronoi_crackle_position(xcv + di, ycv + dj, z, s, distort);
-            i = i + 1u;
+
+    // Second 3×3, REUSING the first pass. The new window is the old
+    // one shifted by (q_di, q_dj) ∈ [-1,1]², so at least 4 of its 9
+    // cells were already computed — and in the by-far-common case
+    // (u starts inside the closest cell, so q = 4 and the shift is
+    // zero) all 9 were. Positions are pure functions of the lattice
+    // coords, so a reused entry is bit-identical to a recomputed one;
+    // this only removes redundant simplex_noise_3d calls, which are
+    // the family's entire cost.
+    if (q != 4u) {
+        var p2: array<vec2<f32>, 9>;
+        i = 0u;
+        for (var di: i32 = -1; di <= 1; di = di + 1) {
+            for (var dj: i32 = -1; dj <= 1; dj = dj + 1) {
+                // This cell's coords relative to the OLD window center.
+                let odi = di + q_di;
+                let odj = dj + q_dj;
+                if (odi >= -1 && odi <= 1 && odj >= -1 && odj <= 1) {
+                    p2[i] = p_arr[u32((odi + 1) * 3 + (odj + 1))];
+                } else {
+                    p2[i] = voronoi_cell_position(xcv + di, ycv + dj, z, s, distort, fast);
+                }
+                i = i + 1u;
+            }
         }
+        p_arr = p2;
     }
 
     let l = voronoi_inside(p_arr, 9u, 4u, u);

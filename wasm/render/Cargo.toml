@@ -8,7 +8,7 @@
 
 [package]
 name = "fflame-render"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
 
 [workspace]
@@ -35,6 +35,19 @@ console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 pollster = { version = "0.4", features = ["macro"] }
+
+# Tests are not a shipping artifact. `cargo test --release` would pick
+# up [profile.release] below — opt-level="z", fat LTO, one codegen unit
+# — and spend minutes optimizing the whole parent crate for DOWNLOAD
+# SIZE, to run a handful of tests. This profile keeps the optimization
+# that makes the tests run fast and drops the part that only matters
+# for the shipped .wasm.
+[profile.gallery-test]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+strip = false
 
 [profile.release]
 opt-level = "z"

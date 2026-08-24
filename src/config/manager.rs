@@ -671,6 +671,28 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Rename the flame itself.
+    ///
+    /// A flame has ONE name, shared by the local `.fflame` and the
+    /// online record (which is identified by UUID, not by name) — so
+    /// naming a flame in the Save Online dialog renames the flame,
+    /// full stop. Before this existed the dialog's name was write-only
+    /// to the API: the local config kept its old name, the success
+    /// notification read that stale local name, and reopening the
+    /// dialog offered it back, silently discarding what was typed.
+    ///
+    /// Not a `ConfigPath` update: the name is metadata, it drives no
+    /// GPU state, and routing it through the delta system would put a
+    /// rename in the undo history between two renders that are
+    /// pixel-identical. Structural actions (add/delete transform,
+    /// preset load) are outside ConfigPath for the same reason.
+    pub fn rename_flame(&mut self, name: String) {
+        self.current.flame.name = name.clone();
+        if let Some(preview) = self.preview.as_mut() {
+            preview.flame.name = name;
+        }
+    }
+
     /// Rename the subflame at `index`. With the un-swap refactor the
     /// list is always intact, so this is a straightforward index
     /// into `current.flame.subflames`.
@@ -3763,6 +3785,29 @@ impl TryFrom<ConfigValue> for ToneCurve {
 mod tests {
     use super::*;
     use super::super::fractal_config::FractalConfig;
+
+    /// A flame has ONE name, and every reader must see the rename.
+    ///
+    /// `active_config()` is what the UI and the save path read, and
+    /// `config()` is what gets serialized to `.fflame` and sent to the
+    /// API — a rename that reached only one of them would put the local
+    /// file and the online record permanently out of step, which is the
+    /// class of bug this method exists to end.
+    #[test]
+    fn rename_flame_reaches_every_reader() {
+        let mut manager = ConfigManager::new(FractalConfig::default());
+        let before = manager.config().flame.name.clone();
+
+        manager.rename_flame("Aurora".to_string());
+        assert_ne!(before, "Aurora", "test needs a name that actually changes");
+        assert_eq!(manager.active_config().flame.name, "Aurora");
+        assert_eq!(manager.config().flame.name, "Aurora");
+        assert_eq!(manager.logical_config().flame.name, "Aurora");
+
+        // Renaming is not a one-shot.
+        manager.rename_flame("Nebula".to_string());
+        assert_eq!(manager.active_config().flame.name, "Nebula");
+    }
 
     #[test]
     fn test_get_set_exposure() {

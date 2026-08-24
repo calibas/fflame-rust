@@ -17,6 +17,22 @@ pub enum Interpolation {
 
     /// Sinusoidal interpolation (smooth S-curve using sine)
     Sinusoidal,
+
+    /// Geometric interpolation — equal RATIO per unit time instead of
+    /// equal difference. The curve for anything perceived
+    /// multiplicatively, zoom above all: linearly interpolating zoom
+    /// 1 → 100 spends its first half getting to 50.5 (five and a half
+    /// doublings) and its second half on less than one doubling — a
+    /// dive that slams the brakes. Exponential makes every doubling
+    /// take the same time, and works identically in both directions
+    /// (zooming out is the same curve run backward).
+    ///
+    /// The value math lives at the keyframe-lerp site, not in
+    /// [`Interpolation::apply`] (which stays identity here, like
+    /// Linear): the ratio a·(b/a)^t needs both endpoint VALUES, and
+    /// `apply` only sees time. Values whose signs differ (or zeros)
+    /// fall back to linear — there is no ratio through zero.
+    Exponential,
 }
 
 /// Easing function for smooth transitions
@@ -91,12 +107,26 @@ impl Interpolation {
         let t = t.clamp(0.0, 1.0);
         match self {
             Interpolation::Step => if t < 0.5 { 0.0 } else { 1.0 },
-            Interpolation::Linear => t,
+            // Exponential is identity in TIME — its curve lives in value
+            // space (see geometric_lerp), which apply() cannot reach.
+            Interpolation::Linear | Interpolation::Exponential => t,
             // Smooth: Hermite/smoothstep curve (3t² - 2t³)
             Interpolation::Smooth => t * t * (3.0 - 2.0 * t),
             // Sinusoidal: sine-based S-curve
             Interpolation::Sinusoidal => (1.0 - (t * PI).cos()) / 2.0,
         }
+    }
+}
+
+/// Geometric (equal-ratio) interpolation between two values, for
+/// [`Interpolation::Exponential`]. Falls back to linear when the
+/// endpoints do not share a nonzero sign — a ratio through zero does
+/// not exist, and a silent linear segment beats a NaN.
+pub fn geometric_lerp(a: f64, b: f64, t: f64) -> f64 {
+    if (a > 0.0 && b > 0.0) || (a < 0.0 && b < 0.0) {
+        a * (b / a).powf(t)
+    } else {
+        a + (b - a) * t
     }
 }
 
@@ -181,5 +211,43 @@ mod tests {
         assert!((Interpolation::Sinusoidal.apply(0.0) - 0.0).abs() < 1e-10);
         assert!((Interpolation::Sinusoidal.apply(0.5) - 0.5).abs() < 1e-10);
         assert!((Interpolation::Sinusoidal.apply(1.0) - 1.0).abs() < 1e-10);
+    }
+
+    /// Equal ratio per unit time: the midpoint of 1 → 4 is 2 (one
+    /// doubling done, one to go), not the linear 2.5.
+    #[test]
+    fn geometric_lerp_moves_by_equal_ratio() {
+        assert!((geometric_lerp(1.0, 4.0, 0.0) - 1.0).abs() < 1e-12);
+        assert!((geometric_lerp(1.0, 4.0, 0.5) - 2.0).abs() < 1e-12);
+        assert!((geometric_lerp(1.0, 4.0, 1.0) - 4.0).abs() < 1e-12);
+
+        // The motivating case: zoom 1 → 100 linearly spends its first
+        // half on five and a half doublings. Geometrically the halfway
+        // value is 10 — half the doublings done, half to go.
+        assert!((geometric_lerp(1.0, 100.0, 0.5) - 10.0).abs() < 1e-9);
+    }
+
+    /// "Both ways": zooming out is the same curve run backward, exactly.
+    #[test]
+    fn geometric_lerp_is_symmetric_in_direction() {
+        for t in [0.0, 0.2, 0.5, 0.8, 1.0] {
+            let dive = geometric_lerp(1.0, 50.0, t);
+            let pull = geometric_lerp(50.0, 1.0, 1.0 - t);
+            assert!(
+                (dive - pull).abs() < 1e-9 * dive,
+                "t={t}: dive {dive} != reversed pull {pull}"
+            );
+        }
+        // Negative pairs work in their own sign domain.
+        assert!((geometric_lerp(-1.0, -4.0, 0.5) - -2.0).abs() < 1e-12);
+    }
+
+    /// No ratio exists through zero — those pairs fall back to linear
+    /// instead of producing NaN.
+    #[test]
+    fn geometric_lerp_falls_back_to_linear_through_zero() {
+        assert!((geometric_lerp(0.0, 4.0, 0.5) - 2.0).abs() < 1e-12);
+        assert!((geometric_lerp(-2.0, 2.0, 0.5) - 0.0).abs() < 1e-12);
+        assert!(geometric_lerp(-1.0, 3.0, 0.25).is_finite());
     }
 }

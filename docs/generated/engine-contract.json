@@ -34,14 +34,14 @@
     },
     {
       "affects_compilation": false,
-      "shipped_variations": 87,
+      "shipped_variations": 88,
       "wire": "plugin"
     }
   ],
   "features": [
     {
       "on_the_wire_today": true,
-      "shipped_variations": 297,
+      "shipped_variations": 298,
       "wire": "needs_rng"
     },
     {
@@ -127,7 +127,8 @@
       ],
       "voronoi.wgsl": [
         "crackle",
-        "dc_crackle_wf"
+        "dc_crackle_wf",
+        "crackle_fast"
       ]
     }
   },
@@ -181,7 +182,7 @@
     },
     {
       "on_the_wire_today": false,
-      "shipped_variations": 545,
+      "shipped_variations": 546,
       "wire": "any"
     }
   ],
@@ -197,6 +198,18 @@
         "name": "decompose_group"
       },
       {
+        "kind": "modifier",
+        "name": "gnarl"
+      },
+      {
+        "kind": "generator",
+        "name": "gnarls"
+      },
+      {
+        "kind": "generator",
+        "name": "grand_julian"
+      },
+      {
         "kind": "generator",
         "name": "hilbert3d"
       },
@@ -209,12 +222,20 @@
         "name": "jitter"
       },
       {
+        "kind": "modifier",
+        "name": "kaleidoscope"
+      },
+      {
         "kind": "generator",
         "name": "lsystem"
       },
       {
         "kind": "generator",
         "name": "lsystem_plant"
+      },
+      {
+        "kind": "generator",
+        "name": "mandala"
       },
       {
         "kind": "modifier",
@@ -227,6 +248,10 @@
       {
         "kind": "modifier",
         "name": "turntable"
+      },
+      {
+        "kind": "modifier",
+        "name": "zoom_dive"
       }
     ],
     "flags": {
@@ -242,6 +267,6 @@
     ]
   },
   "shape": "0441465e249b6911",
-  "shipped_variations": 646,
+  "shipped_variations": 647,
   "shipped_without_shader_3d": []
 }

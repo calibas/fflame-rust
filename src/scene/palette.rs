@@ -839,100 +839,100 @@ impl PaletteLibrary {
 
         let mut packs: Vec<PalettePackInfo> = Vec::new();
 
-        // Always load the embedded built-in pack first (offline fallback)
+        // Always load the embedded fallback pack first, so the library is
+        // never empty even with no assets folder on disk. Named by
+        // BUILTIN_PACK_FILE, not hardcoded — these logs said "Built-in"
+        // back when that was a separate pack, and kept saying it after
+        // the pack was folded into starter_pack.json.
         match crate::resources::palettes::load_builtin_pack() {
             Ok(pack) => {
-                log::info!("Loaded embedded Built-in pack ({} palettes)", pack.palettes.len());
+                log::info!("Loaded embedded pack {} ({} palettes) from {}",
+                    pack.pack_name, pack.palettes.len(),
+                    crate::resources::palettes::BUILTIN_PACK_FILE);
                 packs.push(PalettePackInfo::from_pack(pack, true));
             }
             Err(e) => {
-                log::error!("Failed to parse embedded Built-in pack: {}", e);
+                log::error!("Failed to parse embedded pack {}: {}",
+                    crate::resources::palettes::BUILTIN_PACK_FILE, e);
             }
         }
 
-        // Load manifest to discover available packs
+        // Desktop: the packs folder IS the catalog. Every JSON in
+        // assets/palettes/packs is a pack, and what ships in the repo
+        // is the default set — drop a file in, it appears. No manifest
+        // on this platform: that file is generated at build time for
+        // WASM only, where a browser cannot list a directory (see
+        // build.rs). All packs load eagerly (the whole folder is ~1.3
+        // MB of JSON); enabled_by_default in each pack decides whether
+        // its palettes join the flat list.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match crate::resources::palettes::load_manifest() {
-                Ok(manifest) => {
-                    log::info!("Loaded palette manifest with {} packs", manifest.packs.len());
-                    for pack_meta in manifest.packs {
-                        // Skip builtin - already loaded embedded version
-                        if pack_meta.id == "builtin" {
-                            continue;
-                        }
-                        let enabled = pack_meta.enabled_by_default;
-                        log::info!("  - {} ({} palettes, enabled: {})",
-                            pack_meta.name, pack_meta.item_count, enabled);
+            use std::fs;
 
-                        // If enabled by default, load immediately
-                        if enabled {
-                            let file_path = pack_meta.file.clone();
-                            let full_path = format!("assets/palettes/packs/{}", file_path);
-                            match crate::resources::fetch_json::<PalettePack>(&full_path) {
-                                Ok(pack) => {
-                                    log::info!("Loaded enabled pack: {} ({} palettes)",
-                                        pack.pack_name, pack.palettes.len());
-                                    let mut info = PalettePackInfo::from_metadata(pack_meta);
-                                    info.pack = Some(pack);
-                                    info.load_state = crate::resources::LoadState::Loaded;
-                                    packs.push(info);
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to load enabled pack {}: {}", file_path, e);
-                                    let mut info = PalettePackInfo::from_metadata(pack_meta);
-                                    info.load_state = crate::resources::LoadState::Failed(e.to_string());
-                                    packs.push(info);
-                                }
-                            }
-                        } else {
-                            packs.push(PalettePackInfo::from_metadata(pack_meta));
-                        }
-                    }
+            let packs_dir = crate::resources::resource_path("assets/palettes/packs");
+            let mut entries: Vec<std::path::PathBuf> = fs::read_dir(&packs_dir)
+                .map(|it| it.flatten().map(|e| e.path()).collect())
+                .unwrap_or_default();
+            if entries.is_empty() {
+                log::warn!("No palette packs found in {:?}", packs_dir);
+            }
+            entries.sort();
+            for path in entries {
+                let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                // The embedded pack is already loaded above; a stray
+                // manifest.json (pre-0.5 install layouts shipped one)
+                // is an index, not a pack.
+                if filename == "manifest.json"
+                    || filename == crate::resources::palettes::BUILTIN_PACK_FILE
+                {
+                    continue;
                 }
-                Err(e) => {
-                    log::warn!("Failed to load palette manifest: {}", e);
-                    log::info!("Falling back to filesystem scan...");
-
-                    // Fallback: scan filesystem directly
-                    use std::fs;
-
-                    let packs_dir = crate::resources::resource_path("assets/palettes/packs");
-                    if packs_dir.exists() {
-                        if let Ok(entries) = fs::read_dir(packs_dir) {
-                            for entry in entries.flatten() {
-                                let path = entry.path();
-                                let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-                                // Skip manifest and builtin (already loaded)
-                                if filename == "manifest.json" || filename == "builtin.json" {
-                                    continue;
-                                }
-
-                                if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                                    match fs::read_to_string(&path) {
-                                        Ok(content) => {
-                                            match serde_json::from_str::<PalettePack>(&content) {
-                                                Ok(pack) => {
-                                                    log::info!("Loaded palette pack: {} ({} palettes)",
-                                                        pack.pack_name, pack.palettes.len());
-                                                    packs.push(PalettePackInfo::from_pack(pack, false));
-                                                }
-                                                Err(e) => {
-                                                    log::error!("Failed to parse palette pack {:?}: {}", path, e);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            log::error!("Failed to read palette pack {:?}: {}", path, e);
-                                        }
-                                    }
-                                }
-                            }
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+                match fs::read_to_string(&path) {
+                    Ok(content) => match serde_json::from_str::<PalettePack>(&content) {
+                        Ok(pack) => {
+                            log::info!(
+                                "Loaded palette pack: {} ({} palettes, enabled: {})",
+                                pack.pack_name,
+                                pack.palettes.len(),
+                                pack.enabled_by_default
+                            );
+                            packs.push(PalettePackInfo::from_pack(pack, false));
                         }
+                        Err(e) => {
+                            log::error!("Failed to parse palette pack {:?}: {}", path, e);
+                        }
+                    },
+                    Err(e) => {
+                        log::error!("Failed to read palette pack {:?}: {}", path, e);
                     }
                 }
             }
+
+            // Loose .palette files (the Palette Editor's export format)
+            // from assets/palettes appear as a "Local Files" pack — drop
+            // an exported palette next to the packs and it shows up too.
+            let loose = crate::scene::assets::load_palettes_from_dir(
+                &crate::resources::resource_path("assets/palettes"),
+            );
+            if !loose.is_empty() {
+                log::info!("Loaded {} loose .palette file(s) into Local Files", loose.len());
+                let pack = PalettePack {
+                    pack_name: "Local Files".to_string(),
+                    description: "Loose .palette files from assets/palettes".to_string(),
+                    enabled_by_default: true,
+                    palettes: loose,
+                };
+                packs.push(PalettePackInfo::from_pack(pack, false));
+            }
+
+            // Built-in first, then enabled packs, then disabled ones —
+            // keeps the four disabled Apophysis packs from burying the
+            // starter pack. Stable, so filename order holds within each
+            // group.
+            packs.sort_by_key(|info| (!info.is_builtin, !info.enabled));
         }
 
         // WASM: Use embedded manifest to discover packs (content fetched on-demand)
@@ -942,8 +942,11 @@ impl PaletteLibrary {
                 Ok(manifest) => {
                     log::info!("WASM: Loaded embedded manifest with {} packs", manifest.packs.len());
                     for pack_meta in manifest.packs {
-                        // Skip builtin - already loaded embedded version
-                        if pack_meta.id == "builtin" {
+                        // Skip the embedded pack — already loaded above.
+                        // Matched on `file`, not `id`: build.rs derives
+                        // ids from filename stems, so a hardcoded id
+                        // goes stale silently and the pack double-loads.
+                        if pack_meta.file == crate::resources::palettes::BUILTIN_PACK_FILE {
                             continue;
                         }
                         log::info!("  - {} ({} palettes, enabled: {})",
@@ -1456,6 +1459,41 @@ impl PaletteLibrary {
 mod tests {
     use super::*;
 
+    /// The embedded pack is also a file in the packs folder, so the
+    /// desktop scan has to skip it. When the embedded pack moved from
+    /// `builtin.json` to `starter_pack.json` and the skip did not, the
+    /// Palette Library showed "Starter Pack" twice.
+    #[test]
+    fn no_pack_is_discovered_twice() {
+        let library = PaletteLibrary::new();
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for info in &library.packs {
+            *seen.entry(info.name()).or_default() += 1;
+        }
+        let dupes: Vec<_> = seen.iter().filter(|(_, &n)| n > 1).collect();
+        assert!(
+            dupes.is_empty(),
+            "pack(s) discovered more than once: {dupes:?} — the embedded \
+             pack's filename and the discovery skip have drifted apart"
+        );
+    }
+
+    /// The offline fallback must be a pack the folder actually ships,
+    /// or the skip silently hides a pack instead of a duplicate.
+    #[test]
+    fn embedded_pack_is_one_of_the_shipped_packs() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/palettes/packs")
+            .join(crate::resources::palettes::BUILTIN_PACK_FILE);
+        assert!(path.exists(), "{} is embedded but not in the packs folder", path.display());
+
+        let on_disk: PalettePack =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let embedded = crate::resources::palettes::load_builtin_pack().unwrap();
+        assert_eq!(embedded.pack_name, on_disk.pack_name);
+        assert_eq!(embedded.palettes.len(), on_disk.palettes.len());
+    }
+
     #[test]
     fn test_palette_sampling() {
         let palette = Palette::grayscale();
@@ -1702,7 +1740,14 @@ pub fn global_palette_library() -> &'static RwLock<PaletteLibrary> {
 pub struct PalettePack {
     pub pack_name: String,
     pub description: String,
-    #[serde(default)]
+    /// Absent means enabled: a drop-in pack should appear without its
+    /// author knowing about this flag. build.rs mirrors this default
+    /// when generating the WASM manifest.
+    #[serde(default = "default_pack_enabled")]
     pub enabled_by_default: bool,
     pub palettes: Vec<Palette>,
+}
+
+fn default_pack_enabled() -> bool {
+    true
 }

@@ -104,7 +104,16 @@ The API is a separate repository. What it consumes from here:
 |---|---|---|
 | `docs/generated/engine-contract.json` | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` | vocabularies, engine limits, reserved script stems |
 | the variation corpus | `cargo run --release --bin export_variations_json` | any variation added or edited |
+| the script corpus | `cargo run --release --bin export_scripts_json` | any built-in script added or edited |
 | the effect corpus | `cargo run --release --bin export_effects_json` | any effect added or edited |
+
+The variation and script corpora carry the prose too — descriptions and
+authors from `///` doc comments, script descriptions from the header
+comment. Both refuse to write a file with a missing description rather
+than emitting a null, because the API has no other source for it and a
+null becomes a variation that reaches the browser with nothing to say.
+The script corpus embeds each script's **source verbatim**, so it is
+also what a re-import would have to reproduce byte for byte.
 
 ### What moves the contract's `shape`, and what does not
 
@@ -563,17 +572,42 @@ own `wasm-opt`, so binaryen need not be on PATH. The
 `Cargo.toml` are load-bearing: the bundled wasm-opt 117 predates
 rustc's bulk-memory default and rejects the module without them.
 
-Verify before shipping:
+**Gated since 0.5.** `release.py check` runs both crates' test suites
+(`gallery script parity`, `gallery renderer smoke`) — the CLI-parity
+fixtures §6 names as the guard for `script + seed` reproducibility now
+run in every check. The renderer smoke tests skip cleanly on a machine
+with no GPU adapter. To run one by hand:
 
 ```bash
-cd wasm/script && cargo test    # CLI-parity fixtures: byte-identical flames
-cd wasm/render && cargo test    # GPU smoke + device-reuse regression
+cd wasm/script && cargo test --profile gallery-test   # byte-identical flames
+cd wasm/render && cargo test --profile gallery-test   # GPU smoke + device reuse
 ```
 
-**Not gated.** `release.py check` runs `cargo test --lib` from the repo
-root — the main crate only — so neither crate's tests run in any release
-step, while §6 names the CLI-parity fixtures as the guard for
-`script + seed` reproducibility. Run them by hand until that is fixed.
+**Run them from the crate directory, and with that profile** — both
+matter, and neither is cosmetic:
+
+- `--profile gallery-test`, never `--release`. These crates'
+  `[profile.release]` is tuned to ship a small `.wasm` (`opt-level =
+  "z"`, fat LTO, one codegen unit). Testing under it fat-LTOs the whole
+  parent crate to optimize a test binary for *download size*: 178s per
+  crate, versus 73s under `gallery-test`, which keeps `opt-level = 2`
+  and drops the rest. `wasm-pack build --release` still ships from
+  `[profile.release]`, so module size is unchanged.
+- **From the crate directory**, because cargo discovers
+  `.cargo/config.toml` by current directory. `--manifest-path` from the
+  repo root silently misses `wasm/.cargo/config.toml`, and with it both
+  wins it carries: one shared `wasm/target-gallery` for the pair (the
+  parent crate compiled once instead of once each, and ~10 GB less on
+  disk) and `FFLAME_SKIP_GIT_PROVENANCE`, which stops `build.rs`
+  re-emitting `GIT_HASH`/`BUILD_TIME` into these builds on every commit.
+  That last one was the real cost: a commit touches no gallery code, but
+  it changed the hash, which invalidated the parent crate in each
+  private target directory and bought a full rebuild of both.
+
+Nothing in the gallery modules reads version, hash or build time, so
+they record explicit `not-recorded` placeholders rather than a frozen
+real hash — a wrong label is worse than none. The app and the dist
+build never set that variable and are unaffected.
 
 `pkg/` is gitignored, so each machine builds its own and nothing about
 these directories appears in a diff. Where the built modules are

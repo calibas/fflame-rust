@@ -879,6 +879,31 @@ fn register_transform(engine: &mut Engine) {
     prop_f32!("f", f);
     prop_f32!("g", g);
 
+    // Post-affine: applied after the variations. The raw coefficient
+    // properties mirror a..g and do NOT flip the enable flag — that is
+    // the scripter's own switch — but the geometry helpers below
+    // (post_rotate & co.) do enable it, because calling them on a
+    // disabled post affine and rendering no change would be a trap.
+    prop_f32!("post_a", post_a);
+    prop_f32!("post_b", post_b);
+    prop_f32!("post_c", post_c);
+    prop_f32!("post_d", post_d);
+    prop_f32!("post_e", post_e);
+    prop_f32!("post_f", post_f);
+    prop_f32!("post_g", post_g);
+    engine.register_get(
+        "post_affine_enabled",
+        |t: &mut TransformHandle| -> Result<bool, Box<EvalAltResult>> {
+            t.with(|x| x.post_affine_enabled)
+        },
+    );
+    engine.register_set(
+        "post_affine_enabled",
+        |t: &mut TransformHandle, v: bool| -> Result<(), Box<EvalAltResult>> {
+            t.with(|x| x.post_affine_enabled = v)
+        },
+    );
+
     engine.register_fn(
         "add_variation",
         |t: &mut TransformHandle, name: &str, weight: Dynamic| -> Result<(), Box<EvalAltResult>> {
@@ -1004,7 +1029,216 @@ fn register_transform(engine: &mut Engine) {
         },
     );
 
+    // ---- Post-affine geometry ----------------------------------------
+    //
+    // Same operations as translate/scale/scale_xy/rotate/set_affine,
+    // applied to the post coefficients. Each one enables the post
+    // affine: calling post_rotate and seeing nothing change (because a
+    // separate flag was still off) is the kind of trap the pre-affine
+    // helpers don't have, so these declare intent.
+
+    engine.register_fn(
+        "post_translate",
+        |t: &mut TransformHandle, dx: Dynamic, dy: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (dx, dy) = (num(&dx, "post_translate x")?, num(&dy, "post_translate y")?);
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_e += dx as f32;
+                x.post_f += dy as f32;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "post_scale",
+        |t: &mut TransformHandle, s: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let s = num(&s, "post_scale")? as f32;
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_a *= s;
+                x.post_b *= s;
+                x.post_c *= s;
+                x.post_d *= s;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "post_scale_xy",
+        |t: &mut TransformHandle, sx: Dynamic, sy: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (sx, sy) = (num(&sx, "post_scale x")? as f32, num(&sy, "post_scale y")? as f32);
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_a *= sx;
+                x.post_b *= sx;
+                x.post_c *= sy;
+                x.post_d *= sy;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "post_rotate",
+        |t: &mut TransformHandle, degrees: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let (s, c) = (num(&degrees, "post_rotate")? as f32).to_radians().sin_cos();
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                let (a, b, cc, d) = (x.post_a, x.post_b, x.post_c, x.post_d);
+                x.post_a = c * a - s * cc;
+                x.post_b = c * b - s * d;
+                x.post_c = s * a + c * cc;
+                x.post_d = s * b + c * d;
+            })
+        },
+    );
+
+    engine.register_fn(
+        "set_post_affine",
+        |t: &mut TransformHandle,
+         a: Dynamic,
+         b: Dynamic,
+         c: Dynamic,
+         d: Dynamic,
+         e: Dynamic,
+         f: Dynamic|
+         -> Result<(), Box<EvalAltResult>> {
+            let (a, b) = (num(&a, "post affine a")?, num(&b, "post affine b")?);
+            let (c, d) = (num(&c, "post affine c")?, num(&d, "post affine d")?);
+            let (e, f) = (num(&e, "post affine e")?, num(&f, "post affine f")?);
+            t.with(|x| {
+                x.post_affine_enabled = true;
+                x.post_a = a as f32;
+                x.post_b = b as f32;
+                x.post_c = c as f32;
+                x.post_d = d as f32;
+                x.post_e = e as f32;
+                x.post_f = f as f32;
+            })
+        },
+    );
+
     engine.register_fn("index", |t: &mut TransformHandle| -> i64 { t.idx as i64 });
+
+    // ---- Attachments -------------------------------------------------
+    //
+    // A final or linked transform lives in a POOL and does nothing until
+    // some normal transform references it (`final_attachments` /
+    // `linked_attachments`). `add_final_transform()` fills the pool
+    // only, so without these a script could build a final and never see
+    // it — the shape of the classic Apophysis single global final is
+    // "one final, attached to every normal", which is what
+    // `attach_to_all()` writes.
+    //
+    // Attachment lists are ORDERED (chained finals apply in list order)
+    // and these append, so calling them in the order you want the chain
+    // is the whole story. Idempotent: attaching twice does not run the
+    // transform twice.
+    fn attach_indices(
+        t: &TransformHandle,
+        who: &str,
+    ) -> Result<Vec<usize>, Box<EvalAltResult>> {
+        match t.pool {
+            Pool::Normal => Err(err(format!(
+                "{who} is for final and linked transforms — a normal transform is what \
+                 they attach TO, not something you attach"
+            ))),
+            _ => {
+                let cfg = t.cfg.borrow();
+                Ok((0..cfg.flame.transforms.len()).collect())
+            }
+        }
+    }
+
+    /// Mutate the attachment list of normal transform `n` for `t`'s pool.
+    fn with_attachments<R>(
+        t: &TransformHandle,
+        n: usize,
+        f: impl FnOnce(&mut Vec<usize>) -> R,
+    ) -> Result<R, Box<EvalAltResult>> {
+        let mut cfg = t.cfg.borrow_mut();
+        let pool = t.pool;
+        let normal = cfg
+            .flame
+            .transforms
+            .get_mut(n)
+            .ok_or_else(|| err(format!("no normal transform at index {n}")))?;
+        let list = match pool {
+            Pool::Final => &mut normal.final_attachments,
+            Pool::Linked => &mut normal.linked_attachments,
+            Pool::Normal => unreachable!("guarded by attach_indices"),
+        };
+        Ok(f(list))
+    }
+
+    engine.register_fn(
+        "attach_to_all",
+        |t: &mut TransformHandle| -> Result<(), Box<EvalAltResult>> {
+            let targets = attach_indices(t, "attach_to_all")?;
+            let idx = t.idx;
+            for n in targets {
+                with_attachments(t, n, |list| {
+                    if !list.contains(&idx) {
+                        list.push(idx);
+                    }
+                })?;
+            }
+            Ok(())
+        },
+    );
+
+    engine.register_fn(
+        "attach_to",
+        |t: &mut TransformHandle, n: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            attach_indices(t, "attach_to")?;
+            let n = num(&n, "attach_to index")? as i64;
+            let n = usize::try_from(n).map_err(|_| err("transform index must be >= 0"))?;
+            let idx = t.idx;
+            with_attachments(t, n, |list| {
+                if !list.contains(&idx) {
+                    list.push(idx);
+                }
+            })
+        },
+    );
+
+    engine.register_fn(
+        "detach_from",
+        |t: &mut TransformHandle, n: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            attach_indices(t, "detach_from")?;
+            let n = num(&n, "detach_from index")? as i64;
+            let n = usize::try_from(n).map_err(|_| err("transform index must be >= 0"))?;
+            let idx = t.idx;
+            with_attachments(t, n, |list| {
+                if let Some(pos) = list.iter().position(|&a| a == idx) {
+                    list.remove(pos);
+                }
+            })
+        },
+    );
+
+    engine.register_fn(
+        "attached_to",
+        |t: &mut TransformHandle| -> Result<Array, Box<EvalAltResult>> {
+            attach_indices(t, "attached_to")?;
+            let cfg = t.cfg.borrow();
+            let idx = t.idx;
+            let pool = t.pool;
+            Ok(cfg
+                .flame
+                .transforms
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| {
+                    let list = match pool {
+                        Pool::Final => &n.final_attachments,
+                        _ => &n.linked_attachments,
+                    };
+                    list.contains(&idx)
+                })
+                .map(|(i, _)| Dynamic::from(i as i64))
+                .collect())
+        },
+    );
 
     // Reading what's already on a transform is what separates a MODIFIER
     // from an overwriter: a mutation has to nudge what it finds.
@@ -2576,4 +2810,102 @@ fn register_registry_queries(engine: &mut Engine) {
     engine.register_fn("effect_exists", |name: &str| -> bool {
         crate::effects::global_effect_registry().get(name).is_some()
     });
+}
+
+#[cfg(test)]
+mod doc_coverage {
+    /// Every name a script can call must appear in the reference.
+    ///
+    /// The reference is prose (a bare signature dump is not a
+    /// reference), so it is hand-written — which means it rots the
+    /// moment someone registers a function and forgets. This reads the
+    /// registrations back out of THIS file and fails if one is missing
+    /// from the doc, which is the same staleness-gate shape the shader
+    /// dumps and the engine contract use.
+    ///
+    /// Enumerating from source rather than from `Engine::
+    /// gen_fn_signatures` is deliberate: that needs rhai's `metadata`
+    /// feature, which drags serde_json into the WASM build to serve a
+    /// docs-only purpose.
+    #[test]
+    fn every_script_api_name_is_documented() {
+        const API_SRC: &str = include_str!("api.rs");
+        // The reference and the guide are one documentation surface —
+        // a name may be introduced in either (the guide teaches
+        // `attach_to_all` in prose, the reference tables it).
+        const DOC_REFERENCE: &str = include_str!("../../docs/main/SCRIPTING.md");
+        const DOC_GUIDE: &str = include_str!("../../docs/main/SCRIPTING-GUIDE.md");
+        let doc = format!("{DOC_REFERENCE}\n{DOC_GUIDE}");
+
+        // Names that are Rhai plumbing or internal, not vocabulary a
+        // script author types.
+        const NOT_VOCABULARY: &[&str] = &[
+            // Type registrations (the type NAMES appear in error text,
+            // never in a script).
+            "Anim", "Color", "Config", "Flame", "Transform",
+            // Display plumbing.
+            "to_string",
+        ];
+
+        let mut names: Vec<String> = Vec::new();
+        let mut push = |n: &str| {
+            let n = n.to_string();
+            if !NOT_VOCABULARY.contains(&n.as_str()) && !names.contains(&n) {
+                names.push(n);
+            }
+        };
+
+        // `register_fn("name"`, `register_get("name"`, etc. — take the
+        // first string literal after the opening paren.
+        for (idx, _) in API_SRC.match_indices("register_") {
+            let tail = &API_SRC[idx..];
+            let Some(paren) = tail.find('(') else { continue };
+            // Guard against matching something that isn't a call.
+            if paren > 40 {
+                continue;
+            }
+            let after = &tail[paren + 1..];
+            let trimmed = after.trim_start();
+            if !trimmed.starts_with('"') {
+                continue;
+            }
+            if let Some(end) = trimmed[1..].find('"') {
+                push(&trimmed[1..1 + end]);
+            }
+        }
+
+        // The property macros: `prop_f32!("weight", weight);`
+        for (idx, _) in API_SRC.match_indices("prop_") {
+            let tail = &API_SRC[idx..];
+            let Some(bang) = tail.find("!(") else { continue };
+            if bang > 12 {
+                continue;
+            }
+            let after = &tail[bang + 2..];
+            if !after.starts_with('"') {
+                continue;
+            }
+            if let Some(end) = after[1..].find('"') {
+                push(&after[1..1 + end]);
+            }
+        }
+
+        assert!(
+            names.len() > 80,
+            "extractor found only {} names — it stopped matching the source, \
+             which would make this test pass vacuously",
+            names.len()
+        );
+
+        let missing: Vec<&String> = names.iter().filter(|n| !doc.contains(n.as_str())).collect();
+        assert!(
+            missing.is_empty(),
+            "{} script API name(s) are registered but absent from \
+             docs/main/SCRIPTING.md: {:?}\n\
+             Add them to the reference (or to NOT_VOCABULARY if a script \
+             author never types them).",
+            missing.len(),
+            missing
+        );
+    }
 }

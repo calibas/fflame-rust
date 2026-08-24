@@ -1,6 +1,10 @@
 # Flame Scripting: Random Generation Scripts, Python, Web, Decompositions, L-systems
 
-**Status:** Planned — no code yet. This is the implementation plan.
+**Status:** Implemented (Phase 1 shipped; see §7b field notes). This is
+the design record — the reasoning, the rejected alternatives, and what
+each decision cost. For **how to write a script**, see
+[docs/main/SCRIPTING.md](../main/SCRIPTING.md), which is the user-facing
+reference and is kept current by a staleness test.
 
 One system ties five requests together: user-writable random flame
 generation scripts, a Python library, a web/in-app script platform,

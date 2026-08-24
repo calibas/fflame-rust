@@ -114,6 +114,7 @@ pub fn render_target_selector(
                 .desired_width(ui.available_width()),
         );
         crate::ui::vkb_sync(ui, &r, &state.search_filter);
+        crate::ui::vkb_sync(ui, &r, &state.search_filter);
     });
 
     ui.add_space(4.0);

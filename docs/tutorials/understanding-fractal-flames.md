@@ -22,7 +22,7 @@ That's enough theory for now, let's get started on actually making something.
 
 Load up FAE ([online version here](https://fractalsforall.com/editor/)).
 
-In the top menu, select File and then New. This will create a new fractal with a single transform. 
+In the top menu, select **File** and then **New**. This will create a new fractal with a single transform. 
 
 Then click the **Add Transform** button at the top of the Transforms panel on the left. You should now have two Transforms with the default settings (see image below).
 
@@ -32,7 +32,7 @@ Now we're going to modify the transformation affines so we get something other t
 
 > **Note**: If you make any mistakes, you can always use Ctrl-Z to Undo.  
 
-Click the **Edit 🔺** button under Transform 1 in the Transforms panel on the left. This will open the Triangle Editor with Transform 1 selected.
+Click **Transform 1** to expand that section in the Transforms panel on the left, then the **Edit 🔺** button. This will open the Triangle Editor with Transform 1 selected.
 
 In the **Quick Actions** below the triangles, click **>** twice to move the transform to the right by 0.2 units. Then click **Scale Down** twice, each time will shrink the transform by 10%. The fractal should now look something like the image below.
 

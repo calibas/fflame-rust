@@ -90,6 +90,7 @@ pub fn render(ui: &mut egui::Ui, meta: &ScriptMeta, values: &mut HashMap<String,
                                 .char_limit(*max_len)
                                 .desired_width(f32::INFINITY),
                         );
+                        crate::ui::vkb_sync(ui, &r, &v);
                         if r.changed() {
                             values.insert(key.clone(), ParamValue::Text(v.clone()));
                         }

@@ -40,6 +40,20 @@ use crate::variations::{
 };
 use crate::param;
 
+/// Menger sponge / tesseract IFS as a single variation. Each call
+/// picks a random kept sub-cell and applies `q' = q/3 + (2/3)*size*cell`,
+/// so one transform replaces the whole 20- or 48-transform bank the
+/// construction classically needs. The **hole rule** generalizes it: a
+/// sub-cell of the 3^d grid is kept iff it has at most `rule` zero
+/// coordinates -- `0` keeps only corners (Cantor dust), `1` is the
+/// classic sponge, higher values give fatter sponges. `steps` composes
+/// several rounds per call, converging onto the attractor far faster
+/// for the same iteration budget. The 2D body is the Sierpinski
+/// carpet; in 3D with `rot_xw/yw/zw` it is the orthographic shadow of
+/// a true 4D tesseract. Original to this project -- no
+/// JWildfire/Apophysis counterpart. The module docs carry the full
+/// derivation.
+///
 /// # Authors
 /// - Roger Bagula
 pub static MENGER: VariationDef = VariationDef {

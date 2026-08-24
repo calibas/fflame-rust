@@ -402,6 +402,22 @@ impl AnimationController {
                 let t_eased = kf0.easing.apply(t);
                 Self::lerp_json_value(&kf0.value, &kf1.value, t_eased)
             }
+            Interpolation::Exponential => {
+                // Equal ratio per unit time — the zoom curve. Easing
+                // still applies (it shapes time; the geometry shapes
+                // value). Non-numeric or sign-crossing values fall back
+                // inside geometric_lerp / lerp_json_value.
+                let t_eased = kf0.easing.apply(t);
+                match (kf0.value.as_f64(), kf1.value.as_f64()) {
+                    (Some(a), Some(b)) => {
+                        let v = super::interpolation::geometric_lerp(a, b, t_eased);
+                        serde_json::Number::from_f64(v)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or_else(|| kf1.value.clone())
+                    }
+                    _ => Self::lerp_json_value(&kf0.value, &kf1.value, t_eased),
+                }
+            }
             Interpolation::Smooth => {
                 // Apply easing, then smooth (Hermite) curve
                 let t_eased = kf0.easing.apply(t);
@@ -557,6 +573,41 @@ mod tests {
         let values = controller.evaluate_at_time(10.0);
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert_eq!(val, 10.0);
+    }
+
+    /// An exponential Zoom track evaluates geometrically end to end —
+    /// through Track/Animation/Controller, not just the bare lerp.
+    #[test]
+    fn exponential_track_interpolates_by_ratio() {
+        let mut controller = AnimationController::new();
+        let mut track = Track::linear(
+            "Zoom".into(),
+            serde_json::json!(1.0),
+            serde_json::json!(100.0),
+            10.0,
+        );
+        track.interpolation = Interpolation::Exponential;
+        let mut animation = Animation::new("Dive".into(), 10.0);
+        animation.add_track(track);
+        controller.load(animation);
+
+        let at = |c: &AnimationController, t: f64| -> f64 {
+            c.evaluate_at_time(t)
+                .iter()
+                .find(|(_, k, _)| k == "Zoom")
+                .unwrap()
+                .2
+                .as_f64()
+                .unwrap()
+        };
+
+        // Halfway = 10 (half the doublings), NOT the linear 50.5.
+        assert!((at(&controller, 5.0) - 10.0).abs() < 1e-6);
+        // Quarter points continue the equal-ratio ladder.
+        assert!((at(&controller, 2.5) - 100f64.powf(0.25)).abs() < 1e-6);
+        // Endpoints are exact.
+        assert!((at(&controller, 0.0) - 1.0).abs() < 1e-9);
+        assert!((at(&controller, 10.0) - 100.0).abs() < 1e-9);
     }
 
     #[test]

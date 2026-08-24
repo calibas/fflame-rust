@@ -96,4 +96,47 @@ mod tests {
     // Translation tests require the full app context with assets
     // They work in release mode, but not in unit tests
     // Test translation manually by running the app
+
+    /// egui's fonts have no glyphs for the invisible emoji plumbing
+    /// characters, and egui does not treat them as zero-width — each
+    /// one renders as a tofu box next to the emoji it was meant to
+    /// style. "⚠️" is really ⚠ + U+FE0F, and the FE0F drew as a square
+    /// in every dialog title that used it. Emoji themselves are fine;
+    /// only the invisible modifiers break.
+    #[test]
+    fn no_invisible_emoji_modifiers_in_translations() {
+        let bad = [
+            ('\u{FE0F}', "VARIATION SELECTOR-16 (emoji presentation)"),
+            ('\u{FE0E}', "VARIATION SELECTOR-15 (text presentation)"),
+            ('\u{200D}', "ZERO WIDTH JOINER (emoji sequences)"),
+        ];
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("locales dir exists") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yml") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (line_no, line) in text.lines().enumerate() {
+                for (ch, name) in bad {
+                    if line.contains(ch) {
+                        offenders.push(format!(
+                            "{}:{} contains {} — {}",
+                            path.file_name().unwrap().to_string_lossy(),
+                            line_no + 1,
+                            name,
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these render as tofu boxes in egui — use the bare emoji \
+             (⚠ not ⚠️):\n  {}",
+            offenders.join("\n  ")
+        );
+    }
 }

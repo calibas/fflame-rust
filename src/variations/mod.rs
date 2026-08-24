@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod definition;
 pub mod defs;
+pub mod docs;
 pub mod analytic_blur;
 
 use definition::VariationDef;

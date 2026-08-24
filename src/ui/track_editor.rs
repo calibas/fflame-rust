@@ -690,6 +690,14 @@ fn render_track_editor_panel_content(
             ) {
                 state.new_track_target = path.to_string_key();
                 state.new_track_flame_target = flame_target;
+                // Zoom is perceived multiplicatively — a linear track
+                // from 1 to 100 spends half its time below 50.5, five
+                // and a half of its six-and-a-half doublings. Default
+                // new Zoom tracks to the equal-ratio curve; the
+                // dropdown still offers every other mode.
+                if !is_editing && matches!(path, crate::config::ConfigPath::Zoom) {
+                    state.preview_interpolation = Interpolation::Exponential;
+                }
                 // Auto-initialize values based on track type (Add mode only)
                 if !is_editing {
                     match state.new_track_type {
@@ -773,6 +781,7 @@ fn render_keyframe_subpanel(
                             ui.selectable_value(&mut track.interpolation, Interpolation::Linear, t!("track_editor.interpolation_linear").as_ref());
                             ui.selectable_value(&mut track.interpolation, Interpolation::Smooth, t!("track_editor.interpolation_smooth").as_ref());
                             ui.selectable_value(&mut track.interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
+                            ui.selectable_value(&mut track.interpolation, Interpolation::Exponential, t!("track_editor.interpolation_exponential").as_ref());
                         });
                 });
 
@@ -876,6 +885,7 @@ fn render_keyframe_subpanel(
                     ui.selectable_value(&mut state.preview_interpolation, Interpolation::Linear, t!("track_editor.interpolation_linear").as_ref());
                     ui.selectable_value(&mut state.preview_interpolation, Interpolation::Smooth, t!("track_editor.interpolation_smooth").as_ref());
                     ui.selectable_value(&mut state.preview_interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
+                    ui.selectable_value(&mut state.preview_interpolation, Interpolation::Exponential, t!("track_editor.interpolation_exponential").as_ref());
                 });
         });
 

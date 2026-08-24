@@ -6,7 +6,7 @@
 # Compare two of these with:  cargo run --release --bin variation_probe \
 #                                 -- compare OLD NEW
 #
-# build    0.4.4 (ec5fe45f)
+# build    0.5.0 (bd04a882)
 # os       Windows x86_64
 # adapter  NVIDIA GeForce GTX 1660 SUPER
 # backend  Vulkan
@@ -996,6 +996,16 @@ crackle.scale 2d ...pm.....0..pm........pm..... 2692d0eb4181f146
 crackle.scale 3d 0.zpmH....0.zpmH....0.zpmH.... b9e2cac129adb733
 crackle.z 2d ...pm........pm........pm..... c10765f001a46c23
 crackle.z 3d 0.zpmH....0.zpmH....0.zpmH.... 94d527d85dad8346
+crackle_fast.cellsize 2d ...pm........pm..... 9570df7fd4b9706f
+crackle_fast.cellsize 3d 0.zpmH....0.zpmH.... 8154dc3266e2497f
+crackle_fast.distort 2d ...pm........pm........pm..... 295856ffe3050780
+crackle_fast.distort 3d 0.zpmH....0.zpmH....0.zpmH.... 505d23f74bdf71cd
+crackle_fast.power 2d ...pm....n...pm....n...pm....n 34233a73235c1c8f
+crackle_fast.power 3d 0.zpmH...n0.zpmH...n0.zpmH...n 518be4709a9bee82
+crackle_fast.scale 2d ...pm....n...pm....n...pm....n 844e357a66eed17e
+crackle_fast.scale 3d 0.zpmH...n0.zpmH...n0.zpmH...n a6583efc325daa73
+crackle_fast.z 2d ...pm........pm....n...pm..... 98191060eac3899c
+crackle_fast.z 3d 0.zpmH....0.zpmH...n0.zpmH.... 45503a1ab5dda0e5
 crop.bottom 2d 0ozpm.....0ozpm.....0ozpm..... 26889d4c38208d01
 crop.bottom 3d 0ozpmH....0ozpmH....0ozpmH.... 6d331058b5aa9670
 crop.left 2d 0ozpm.....0ozpm.....0ozpm..... c862045dea849869

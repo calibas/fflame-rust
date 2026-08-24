@@ -303,6 +303,7 @@ impl ScriptsPanel {
         cloud: &crate::app::script_cloud::ScriptCloudState,
         signed_in: bool,
         cloud_request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
+        window: &winit::window::Window,
     ) -> ScriptsResponse {
         let mut response = ScriptsResponse::default();
         self.palettes = palettes;
@@ -329,18 +330,21 @@ impl ScriptsPanel {
             self.adopt_opened("Opened".to_string(), text, ScriptOrigin::External, false);
         }
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            self.render_picker(ui, current);
-            ui.separator();
-            self.render_params(ui);
-            ui.separator();
-            self.render_run_controls(ui, current, &mut response);
-            self.render_editor(ui);
-            self.render_output(ui);
-            // Last: the local script is the primary object, and the
-            // online library is what you can do WITH it.
-            self.render_cloud(ui, cloud, signed_in, cloud_request);
-        });
+        // No ScrollArea of our own: the host already scrolls this panel
+        // (egui_dock's built-in scroll on desktop, the compact wrapper's
+        // AlwaysVisible ScrollArea on mobile), and a second one here
+        // rendered as a scrollbar inside a scrollbar with two competing
+        // drag targets.
+        self.render_picker(ui, current);
+        ui.separator();
+        self.render_params(ui);
+        ui.separator();
+        self.render_run_controls(ui, current, &mut response);
+        self.render_editor(ui, window);
+        self.render_output(ui);
+        // Last: the local script is the primary object, and the
+        // online library is what you can do WITH it.
+        self.render_cloud(ui, cloud, signed_in, cloud_request);
 
         // Land a fork: rescan so the new file is in the list, select it,
         // then restore the message (`load_selected` clears the status).
@@ -418,7 +422,13 @@ impl ScriptsPanel {
 
     /// Save / Revert / Open / Save As / Delete — everything that acts on
     /// the script file rather than on its text.
-    fn render_file_actions(&mut self, ui: &mut egui::Ui) {
+    fn render_file_actions(&mut self, ui: &mut egui::Ui, window: &winit::window::Window) {
+        // `window` parents the rfd dialogs below. Unparented, the modal
+        // can open BEHIND the main window while the main window is
+        // disabled waiting on it — the app looks frozen. Same fix every
+        // other rfd call site uses; wasm ignores it (browser picker).
+        #[cfg(target_arch = "wasm32")]
+        let _ = window;
         if ui
             .button("Save")
             .on_hover_text(
@@ -476,6 +486,7 @@ impl ScriptsPanel {
                 .clicked()
             {
                 let picked = rfd::FileDialog::new()
+                    .set_parent(window)
                     .add_filter("Flame script", &["rhai"])
                     .pick_file();
                 if let Some(path) = picked {
@@ -498,6 +509,7 @@ impl ScriptsPanel {
                 .clicked()
             {
                 let picked = rfd::FileDialog::new()
+                    .set_parent(window)
                     .add_filter("Flame script", &["rhai"])
                     .set_file_name(format!("{}.rhai", self.script_name()))
                     .save_file();
@@ -698,6 +710,7 @@ impl ScriptsPanel {
                             .hint_text("search…")
                             .desired_width(160.0),
                     );
+                    super::vkb_sync(ui, &entry, &self.browse_query);
                     let go = ui.add_enabled(!cloud.busy, egui::Button::new("Search")).clicked();
                     if go || (entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
@@ -1167,7 +1180,7 @@ impl ScriptsPanel {
             .unwrap_or_else(|| "Script".to_string())
     }
 
-    fn render_editor(&mut self, ui: &mut egui::Ui) {
+    fn render_editor(&mut self, ui: &mut egui::Ui, window: &winit::window::Window) {
         ui.separator();
         let section = egui::CollapsingHeader::new("Edit script")
             .default_open(self.show_editor)
@@ -1178,8 +1191,19 @@ impl ScriptsPanel {
                 // script as a whole, and a row buried under sixteen rows
                 // of code is a row you have to go looking for.
                 ui.horizontal(|ui| {
-                    self.render_file_actions(ui);
+                    self.render_file_actions(ui, window);
                 });
+
+                // Syntax highlighting rides egui's own `layouter` hook:
+                // we hand back a LayoutJob of coloured runs and egui
+                // lays it out. The closure must outlive the builder, so
+                // it is bound here rather than inline.
+                let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let mut job = super::rhai_highlight::highlight(buf.as_str(), font_id.clone());
+                    job.wrap.max_width = wrap_width;
+                    ui.fonts_mut(|f| f.layout_job(job))
+                };
 
                 let editor = ui.add(
                     egui::TextEdit::multiline(&mut self.text)
@@ -1191,8 +1215,16 @@ impl ScriptsPanel {
                         .id_salt("script_editor")
                         .code_editor()
                         .desired_rows(16)
-                        .desired_width(f32::INFINITY),
+                        .desired_width(f32::INFINITY)
+                        .layouter(&mut layouter),
                 );
+                // Touch devices edit the script through the overlay's
+                // textarea, seeded with the WHOLE source (the submit
+                // path is select-all-and-replace, which is exactly
+                // right when the overlay started from the full text —
+                // and was exactly wrong before this sync existed, when
+                // the fallback seeded it empty and wiped the script).
+                super::vkb_sync_opts(ui, &editor, &self.text, "multiline");
                 // Take keyboard focus when the section opens. Without it the
                 // editor holds no focus, egui reports it doesn't want
                 // keyboard input, and keystrokes fall through to the app's

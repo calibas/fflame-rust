@@ -594,6 +594,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if css_width <= 0.0 || css_height <= 0.0 {
                     return;
                 }
+                // Subtract the canvas container's safe-area padding.
+                // visualViewport spans the WHOLE screen, insets
+                // included, but the container pads the canvas inside
+                // them (`env(safe-area-inset-*)` in index.html) — and
+                // winit later overrides the canvas's CSS size to
+                // whatever we request here. Sizing to the full viewport
+                // therefore pushed the canvas past the padded box: on
+                // iPhones the bottom ~34px of UI sat under the home
+                // indicator, unreachable. getComputedStyle resolves the
+                // env() values to pixels; zero everywhere without a
+                // notch, so desktop is untouched.
+                let (pad_x, pad_y) = web_window
+                    .document()
+                    .and_then(|doc| doc.get_element_by_id("canvas-container"))
+                    .and_then(|el| web_window.get_computed_style(&el).ok().flatten())
+                    .map(|style| {
+                        let px = |prop: &str| {
+                            style
+                                .get_property_value(prop)
+                                .ok()
+                                .and_then(|v| v.trim_end_matches("px").parse::<f64>().ok())
+                                .unwrap_or(0.0)
+                        };
+                        (
+                            px("padding-left") + px("padding-right"),
+                            px("padding-top") + px("padding-bottom"),
+                        )
+                    })
+                    .unwrap_or((0.0, 0.0));
+                let css_width = (css_width - pad_x).max(1.0);
+                let css_height = (css_height - pad_y).max(1.0);
+
                 let raw_dpr = web_window.device_pixel_ratio();
                 let dpr = raw_dpr.min(1.5);
 
@@ -622,13 +654,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // below the OS DPR (e.g., 1.5 < 2.0 on macOS retina) the
                 // inline style becomes ${CSS × 0.75}px and overrides our
                 // CSS `width: 100%` rule, shrinking the visible canvas.
-                // Restore CSS sizing in that case — drawing buffer stays
-                // at the capped resolution, browser upscales at composite.
+                // Restore explicit CSS sizing in that case — drawing
+                // buffer stays at the capped resolution, browser upscales
+                // at composite.
                 //
-                // Skip when no cap was applied (raw_dpr <= 1.5). On
-                // Windows DPR=1.0, setting style.width "100%" on a canvas
-                // that didn't need it has been observed to trip a reflow
-                // loop in Firefox that froze the renderer.
+                // EXPLICIT PIXELS, not "100%". The container spans the
+                // LAYOUT viewport (html/body are `position:fixed;
+                // inset:0`), and on iOS Safari with the bottom toolbar
+                // visible the layout viewport extends UNDER the toolbar —
+                // the classic 100vh problem. "100%" therefore stretched
+                // the canvas taller than the visual viewport we sized the
+                // surface for, and egui's bottom dock rendered under the
+                // toolbar: the reported ~30px cutoff, on every iPhone,
+                // regardless of safe-area insets. The css_width/height we
+                // computed above ARE the visible size; pin the element to
+                // them.
+                //
+                // Skip when no cap was applied (raw_dpr <= 1.5): winit's
+                // own inline style already equals these values, and
+                // touching style on Windows DPR=1.0 has been observed to
+                // trip a Firefox reflow loop that froze the renderer.
                 if raw_dpr > 1.5 {
                     if let Some(doc) = web_window.document() {
                         if let Some(canvas_el) = doc.get_element_by_id("canvas") {
@@ -637,10 +682,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 let _ = html_canvas
                                     .style()
-                                    .set_property("width", "100%");
+                                    .set_property("width", &format!("{css_width}px"));
                                 let _ = html_canvas
                                     .style()
-                                    .set_property("height", "100%");
+                                    .set_property("height", &format!("{css_height}px"));
                             }
                         }
                     }
@@ -676,6 +721,36 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .expect("Failed to register resize listener");
 
+            // ALSO listen on visualViewport. iOS Safari's toolbar
+            // collapsing/expanding (scroll, rotation settling) changes
+            // the VISIBLE height — which is what we size the surface
+            // from — while firing only visualViewport's own resize
+            // event, not window's. Without this, the canvas kept the
+            // stale height until something else nudged window.resize.
+            if let Some(vv) = web_window.visual_viewport() {
+                let _ = vv.add_event_listener_with_callback(
+                    "resize",
+                    resize_closure.as_ref().unchecked_ref(),
+                );
+            }
+
+            // Kick the sizing at startup — twice. Nothing fires the
+            // resize path on load (the listeners only react to change),
+            // so the canvas kept whatever initial size winit derived
+            // from the LAYOUT viewport — on iOS that includes the strip
+            // under the bottom toolbar, and the UI sat ~30px under it
+            // until the first real resize. Field-confirmed: opening and
+            // closing the virtual keyboard (which fires visualViewport
+            // resize) "fixed" the layout. The second, later kick
+            // catches iOS settling its toolbars after load; both are
+            // no-ops when the size already matches.
+            for delay in [50, 600] {
+                let _ = web_window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    fire_closure.as_ref().unchecked_ref(),
+                    delay,
+                );
+            }
+
             // Keep both closures alive for the lifetime of the page.
             fire_closure.forget();
             resize_closure.forget();
@@ -692,16 +767,94 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // Created at the fallback size first: winit only exposes
+        // monitors through a window (or ActiveEventLoop, which the
+        // compatibility path here never sees), and asking the window
+        // which monitor it actually landed on beats assuming the
+        // primary one on multi-monitor setups. This all happens before
+        // the event loop runs, so nothing is on screen yet to flicker.
         let attributes = winit::window::Window::default_attributes()
             .with_title("Fractal Art Editor")
             .with_window_icon(window_icon())
-            .with_inner_size(PhysicalSize::new(1920, 1080))
-            .with_min_inner_size(PhysicalSize::new(300, 200));
+            .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(400.0, 300.0));
 
         #[allow(deprecated)]
         let window = event_loop.create_window(attributes)?;
 
+        let monitor_points = window.current_monitor().or_else(|| window.primary_monitor()).map(|m| {
+            let size = m.size().to_logical::<f64>(m.scale_factor());
+            (size.width, size.height)
+        });
+        let (size, maximized) = desktop_window_plan(monitor_points);
+        if maximized {
+            window.set_maximized(true);
+        } else {
+            let _ = window.request_inner_size(size);
+        }
+
         App::run(event_loop, std::sync::Arc::new(window)).await
+    }
+}
+
+/// Starting window size and whether to open maximized, from the primary
+/// monitor's size in POINTS (logical, DPI-independent).
+///
+/// One fixed default cannot fit both ends: the old
+/// `PhysicalSize(1920, 1080)` was a comfortable window on a 1440p
+/// desktop but a half-screen 960×540 POINTS on a Retina laptop, with
+/// the side docks clipped. And maximizing everywhere fixed the laptop
+/// while taking over the desktop. So:
+///
+/// - a screen with room to spare opens a 75% window (a 2560×1440
+///   monitor gets 1920×1080 — the same window the old default gave it),
+/// - anything under ~1500×1000 points — Retina laptops (1470–1512 wide),
+///   1080p at 125% scaling (1536×864) — opens maximized, because a
+///   windowed default there is what produced the clipped docks,
+/// - no monitor info (some Wayland setups) falls back to a plain
+///   1440×900 window.
+///
+/// The un-maximize restore size is the same 75% plan.
+#[cfg(not(target_arch = "wasm32"))]
+fn desktop_window_plan(
+    monitor_points: Option<(f64, f64)>,
+) -> (winit::dpi::LogicalSize<f64>, bool) {
+    let Some((w, h)) = monitor_points else {
+        return (winit::dpi::LogicalSize::new(1440.0, 900.0), false);
+    };
+    let size = winit::dpi::LogicalSize::new((w * 0.75).max(1024.0), (h * 0.75).max(700.0));
+    let cramped = w < 1500.0 || h < 1000.0;
+    (size, cramped)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod window_plan_tests {
+    use super::desktop_window_plan;
+
+    #[test]
+    fn desktops_get_a_window_laptops_get_maximized() {
+        // 1440p desktop: windowed at 75% — the same 1920×1080 the old
+        // default gave it. Field report: maximizing here was a regression.
+        let (size, maximized) = desktop_window_plan(Some((2560.0, 1440.0)));
+        assert!(!maximized);
+        assert_eq!((size.width, size.height), (1920.0, 1080.0));
+
+        // 1080p at 100%: still roomy enough to stay windowed.
+        let (_, maximized) = desktop_window_plan(Some((1920.0, 1080.0)));
+        assert!(!maximized);
+
+        // Retina MacBooks (1470/1512 points wide) and 1080p at 125%
+        // scaling (1536×864): the screens where a windowed default
+        // produced clipped side docks. Maximize.
+        for laptop in [(1470.0, 956.0), (1512.0, 982.0), (1536.0, 864.0)] {
+            let (_, maximized) = desktop_window_plan(Some(laptop));
+            assert!(maximized, "{laptop:?} should open maximized");
+        }
+
+        // No monitor info: plain window, never a surprise-fullscreen.
+        let (size, maximized) = desktop_window_plan(None);
+        assert!(!maximized);
+        assert_eq!((size.width, size.height), (1440.0, 900.0));
     }
 }
 

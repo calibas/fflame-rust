@@ -82,6 +82,10 @@ menu:
   layout_beginner: "Beginner"
   layout_standard: "Standard"
   layout_animation: "Animation"
+  layout_scripting: "Scripting"
+  play_animation: "▶ Play Animation"
+  pause_animation: "⏸ Pause Animation"
+  stop_animation: "⏹ Stop Animation"
   layout_compact: "📱 Mobile View"
   layout_advanced: "Advanced"
   layout_export: "Export"
@@ -128,6 +132,8 @@ help:
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
+  play_pause_animation: "  Space    - Play/pause animation"
+  exit_fullscreen_hint: "Press F or Esc to exit fullscreen"
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
@@ -989,7 +995,7 @@ palette_editor:
   no_palette_hint: "Open the Colors panel and click 'Edit Palette' to create one"
 
   # Fixed mode warning dialog
-  warning_title: "⚠️ Convert to Fixed 256-Color Mode?"
+  warning_title: "⚠ Convert to Fixed 256-Color Mode?"
   warning_resample: "This will resample your gradient to exactly 256 color stops."
   warning_locked: "Color positions will be locked at fixed intervals (0/255, 1/255, etc.)."
   warning_revert: "You can switch back to Free Mode later without data loss."
@@ -997,12 +1003,12 @@ palette_editor:
   cancel: "❌ Cancel"
 
   # Overwrite confirmation dialog
-  overwrite_title: "⚠️ Overwrite Palette?"
+  overwrite_title: "⚠ Overwrite Palette?"
   overwrite_message: "A palette named '%{name}' already exists in your Custom library. Overwrite it?"
   overwrite_confirm: "✅ Overwrite"
 
   # Delete confirmation dialog
-  delete_title: "⚠️ Delete Palette?"
+  delete_title: "⚠ Delete Palette?"
   delete_message: "Permanently delete '%{name}' from your Custom library?"
   delete_confirm: "🗑 Delete"
 
@@ -1175,9 +1181,9 @@ animation_panel:
   duration_format: "(%{duration}s)"
 
   # Playback controls
-  pause: "⏸ Pause"
+  pause: "⏸ Pause (Space)"
   resume: "▶ Resume"
-  play: "▶ Play"
+  play: "▶ Play (Space)"
   stop: "⏹ Stop"
   go_to_start: "Go to start"
   go_to_end: "Go to end"
@@ -1293,6 +1299,7 @@ track_editor:
   interpolation_linear: "Linear"
   interpolation_smooth: "Smooth"
   interpolation_sinusoidal: "Sinusoidal"
+  interpolation_exponential: "Exponential"
   edit_keyframes: "Edit Keyframes"
 
   # Keyframe editor
