@@ -2830,7 +2830,12 @@ mod doc_coverage {
     #[test]
     fn every_script_api_name_is_documented() {
         const API_SRC: &str = include_str!("api.rs");
-        const DOC: &str = include_str!("../../docs/main/SCRIPTING.md");
+        // The reference and the guide are one documentation surface —
+        // a name may be introduced in either (the guide teaches
+        // `attach_to_all` in prose, the reference tables it).
+        const DOC_REFERENCE: &str = include_str!("../../docs/main/SCRIPTING.md");
+        const DOC_GUIDE: &str = include_str!("../../docs/main/SCRIPTING-GUIDE.md");
+        let doc = format!("{DOC_REFERENCE}\n{DOC_GUIDE}");
 
         // Names that are Rhai plumbing or internal, not vocabulary a
         // script author types.
@@ -2892,7 +2897,7 @@ mod doc_coverage {
             names.len()
         );
 
-        let missing: Vec<&String> = names.iter().filter(|n| !DOC.contains(*n)).collect();
+        let missing: Vec<&String> = names.iter().filter(|n| !doc.contains(n.as_str())).collect();
         assert!(
             missing.is_empty(),
             "{} script API name(s) are registered but absent from \
