@@ -6,6 +6,12 @@ We just launched our companion website, [Fractals for All](https://fractalsforal
 See the [online version in your browser](https://fractalsforall.com/editor/) (limited mobile support, Chrome recommended).
 
 ## Installation
+
+See the [Releases](https://github.com/calibas/fflame-rust/releases) page for the latest version.
+
+- [Download 0.5 Beta](https://github.com/calibas/fflame-rust/releases/tag/0.5)
+
+### Building
 Download or clone this reposity, [install Rust](https://rust-lang.org/tools/install/) and then run:
 ```
 cargo run --release
