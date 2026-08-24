@@ -1809,6 +1809,9 @@ impl App {
                         });
                     } else {
                         spawn_local(async move {
+                            // read_fractal_pixels takes &mut self now (it
+                            // caches its staging buffer in the renderer).
+                            let mut temp_renderer = temp_renderer;
                             match temp_renderer.read_fractal_pixels(&device, &queue, transparent, background_color).await {
                                 Ok((width, height, rgba_data)) => {
                                     let metadata = crate::png_metadata::PngMetadata::from_app_state(
@@ -1957,6 +1960,9 @@ impl App {
                             Ok(Err(e)) => log::error!("Buffer map error: {:?}", e),
                             Err(_) => log::error!("Failed to receive buffer map result"),
                         }
+                        // Explicit, because dropping frees nothing on
+                        // WebGPU — this staging buffer is per export.
+                        staging_buffer.destroy();
                     });
                 }
             }

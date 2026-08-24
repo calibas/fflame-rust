@@ -855,6 +855,9 @@ impl EffectChainRunner {
 
         drop(data);
         buffer.unmap();
+        // Explicit, because dropping frees nothing on WebGPU — this
+        // read runs per export/tile when color effects are on.
+        buffer.destroy();
 
         Ok((self.width, self.height, rgba_data))
     }

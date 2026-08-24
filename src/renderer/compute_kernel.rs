@@ -165,6 +165,21 @@ pub struct FlameRenderer {
     fractal_texture: Texture,
     fractal_texture_view: TextureView,
 
+    /// Persistent staging buffer for `read_fractal_pixels`, grow-only.
+    ///
+    /// This used to be created per read and never destroyed — and on
+    /// WebGPU, dropping a buffer frees nothing (wgpu's wasm `Drop` is a
+    /// no-op; the memory lives until the JS GC notices the wrapper,
+    /// which it barely does, since GPU memory exerts no JS heap
+    /// pressure). Measured in the gallery client: `createBuffer` 2,137
+    /// times over 1,000 renders, `destroy()` zero — ~width·height·4
+    /// leaked per tile, and MAP_READ buffers in Firefox pin CPU-side
+    /// shmem on top, several times their nominal size. A buffer can be
+    /// re-mapped after `unmap`, so one persistent buffer serves every
+    /// read; it grows to the largest size seen and dies with the
+    /// renderer in `destroy()`.
+    readback_staging: Option<Buffer>,
+
     pub width: u32,
     pub height: u32,
     samples_accumulated: u64,
@@ -354,6 +369,7 @@ impl FlameRenderer {
             init_dirty: true, // Run init once on first frame to populate slots
             fractal_texture,
             fractal_texture_view,
+            readback_staging: None,
             width,
             height,
             samples_accumulated: 0,
@@ -1550,6 +1566,8 @@ impl FlameRenderer {
             bytemuck::cast_slice(&data).to_vec()
         };
         staging.unmap();
+        // Explicit, because dropping frees nothing on WebGPU.
+        staging.destroy();
         Some(words)
     }
 
@@ -2117,6 +2135,31 @@ impl FlameRenderer {
     pub fn destroy(&self) {
         self.buffers.destroy();
         self.fractal_texture.destroy();
+        if let Some(staging) = &self.readback_staging {
+            staging.destroy();
+        }
+    }
+
+    /// Ensure the persistent readback staging buffer holds at least
+    /// `size` bytes. Grow-only; the old buffer is destroyed explicitly
+    /// (see the field's comment for why dropping is not enough on
+    /// WebGPU).
+    fn ensure_readback_staging(&mut self, device: &Device, size: u64) {
+        let needs_new = match &self.readback_staging {
+            Some(b) => b.size() < size,
+            None => true,
+        };
+        if needs_new {
+            if let Some(old) = self.readback_staging.take() {
+                old.destroy();
+            }
+            self.readback_staging = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Fractal Readback Staging (persistent)"),
+                size,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }));
+        }
     }
 
     /// Free the large iteration buffers (histogram + accumulation + sample/path/
@@ -2937,7 +2980,7 @@ impl FlameRenderer {
     /// * `transparent` - If true, preserve alpha channel; if false, blend with background and set alpha=255
     /// * `background_color` - RGB background color for opaque mode (ignored in transparent mode)
     pub async fn read_fractal_pixels(
-        &self,
+        &mut self,
         device: &Device,
         queue: &Queue,
         transparent: bool,
@@ -2950,19 +2993,16 @@ impl FlameRenderer {
         queue.submit(std::iter::once(sync_encoder.finish()));
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
 
-        // Create staging buffer
+        // The persistent staging buffer (see `readback_staging`) —
+        // re-mapped every read, never recreated at a steady size.
         let bytes_per_pixel = 4; // RGBA8
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
         let align = COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
         let buffer_size = (padded_bytes_per_row * self.height) as u64;
 
-        let buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Fractal Read Buffer"),
-            size: buffer_size,
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        self.ensure_readback_staging(device, buffer_size);
+        let buffer = self.readback_staging.as_ref().expect("ensured above");
 
         // Copy texture to buffer
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
@@ -2991,8 +3031,9 @@ impl FlameRenderer {
         );
         queue.submit(std::iter::once(encoder.finish()));
 
-        // Map and read
-        let buffer_slice = buffer.slice(..);
+        // Map and read. Slice only the bytes this read needs — the
+        // persistent buffer may be larger (grow-only) than this size.
+        let buffer_slice = buffer.slice(0..buffer_size);
         let (tx, rx) = futures::channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
             tx.send(result).unwrap();
@@ -3036,6 +3077,12 @@ impl FlameRenderer {
                 }
             }
         }
+
+        // Unmap, so the persistent buffer can be re-mapped next read.
+        // (The old per-read buffer relied on drop, which unmaps but
+        // frees nothing on WebGPU.)
+        drop(data);
+        buffer.unmap();
 
         Ok((self.width, self.height, rgba_data))
     }
@@ -3131,6 +3178,8 @@ impl FlameRenderer {
 
         drop(data);
         staging_buffer.unmap();
+        // Explicit, because dropping frees nothing on WebGPU.
+        staging_buffer.destroy();
 
         Ok(result)
     }
@@ -3249,6 +3298,8 @@ impl FlameRenderer {
 
         drop(data);
         staging_buffer.unmap();
+        // Explicit, because dropping frees nothing on WebGPU.
+        staging_buffer.destroy();
 
         Ok(pixels)
     }

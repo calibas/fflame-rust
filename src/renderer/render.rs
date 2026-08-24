@@ -378,12 +378,21 @@ pub async fn render_with(
         renderer.set_transparent_mode(queue, true, job.premultiplied, job.config, job.iterations_per_thread);
     }
 
-    // Create effect chain runner for post-processing effects
-    let mut effect_chain = EffectChainRunner::new(device, job.width, job.height);
-
     // Check for enabled effects
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
     let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
+
+    // The effect chain only exists when an effect is actually enabled,
+    // and it is destroyed after the pixel read below. It used to be
+    // constructed unconditionally per render and never destroyed — on
+    // WebGPU that leaked its params buffer every render (drop frees
+    // nothing there; see the gallery module's docs), measured as one of
+    // the two per-render buffers growing without bound in the client.
+    let mut effect_chain = if has_density_effects || has_color_effects {
+        Some(EffectChainRunner::new(device, job.width, job.height))
+    } else {
+        None
+    };
 
     log::info!(
         "Render: Effects - density: {} enabled, color: {} enabled",
@@ -397,7 +406,9 @@ pub async fn render_with(
     });
 
     // Reset effect slot counter (allows multiple effects with unique params in same submit)
-    effect_chain.reset_slots();
+    if let Some(chain) = effect_chain.as_mut() {
+        chain.reset_slots();
+    }
 
     // Solid brightness renormalization: exact accepted-density measurement
     // before the single final tonemap.
@@ -438,7 +449,8 @@ pub async fn render_with(
     };
 
     if has_density_effects {
-        let density_ran = effect_chain.run_density_effects(
+        let chain = effect_chain.as_mut().expect("built above: has_density_effects");
+        let density_ran = chain.run_density_effects(
             device,
             queue,
             &mut tonemap_encoder,
@@ -447,7 +459,7 @@ pub async fn render_with(
         );
 
         if density_ran {
-            if let Some(density_output) = effect_chain.get_density_output() {
+            if let Some(density_output) = chain.get_density_output() {
                 renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, density_output);
             } else if dof_ran || shade_ran {
                 renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
@@ -469,11 +481,12 @@ pub async fn render_with(
 
     // Run color effects (after tonemap)
     let color_effects_ran = if has_color_effects {
+        let chain = effect_chain.as_mut().expect("built above: has_color_effects");
         let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Color Effects"),
         });
 
-        let ran = effect_chain.run_color_effects(
+        let ran = chain.run_color_effects(
             device,
             queue,
             &mut color_encoder,
@@ -488,19 +501,31 @@ pub async fn render_with(
     };
 
     // Read pixels from appropriate source
-    let (width, height, rgba_data) = if color_effects_ran {
+    let pixels = if color_effects_ran {
         // Read from color effect output
         effect_chain
+            .as_ref()
+            .expect("color_effects_ran implies a chain")
             .read_color_output_pixels(device, queue)
             .await
-            .map_err(|e| RenderError::PixelReadFailed(e))?
+            .map_err(RenderError::PixelReadFailed)
     } else {
-        // Read from renderer's fractal texture
+        // Read from renderer's fractal texture (persistent staging,
+        // reused across renders)
         renderer
             .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
             .await
-            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))?
+            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
     };
+
+    // The completed readback proves every submission that used the
+    // chain has finished, so this is the safe point to destroy it —
+    // on the error path too, where nothing was read but nothing is
+    // owed either.
+    if let Some(chain) = &effect_chain {
+        chain.destroy();
+    }
+    let (width, height, rgba_data) = pixels?;
 
     let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
