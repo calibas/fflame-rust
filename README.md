@@ -1,7 +1,9 @@
 # Fractal Art Editor [FAE]
 GPU-accelerated Fractal Flame Renderer
 
-See our [demo in your browser](https://fractalsforall.com/editor/) (limited mobile support, Chrome recommended).
+We just launched our companion website, [Fractals for All](https://fractalsforall.com/), which includes an API for saving and sharing fractals online.
+
+See the [online version in your browser](https://fractalsforall.com/editor/) (limited mobile support, Chrome recommended).
 
 ## Installation
 Download or clone this reposity, [install Rust](https://rust-lang.org/tools/install/) and then run:
@@ -30,6 +32,8 @@ It also includes features from [JWildfire](https://jwildfire.overwhale.com/), cr
 
 Variations contributed by:
 - Joel Faber, Michael Faber, Jed Kelsey, Scott Draves, Brad Stefanov, Jesus Sosa, DarkBeam, Xyrus02, cothe, zephyrtronium, Andreas Maschke, Larry Berlin, Zueuk, Tatyana Zabanova, Raykoid666, Zy0rg, CozyG, eralex61, chronologicaldot, Whittaker Courtney, FracFx, gossamer light, TyrantWave, cyberxaos, FractalDesire, Z+, IROIRO++, slobo777, David Young, FarDareisMai, Will Evans, bezo97, Don Town, Ffey, Framelet, Frank Baumann, guagapunyaimel, Keeps,  Maulana Randa, meckie, Paul Bourke, Rick Sidwell, timothy-vincent, Victor Ganora
+
+Special thanks to the Fractal Chats channel on Discord for all their help.
 
 ## See also
 Fractal renderers:
