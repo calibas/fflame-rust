@@ -26,6 +26,15 @@
 //! seeds of one generator usually share a variation set, so the compile
 //! amortizes across the hallway.
 //!
+//! The same rule extends below the renderer: the per-render readback
+//! staging buffer is persistent in `FlameRenderer` (grow-only,
+//! re-mapped each read), and the effect chain in `render_with` is only
+//! built when an effect is enabled and is destroyed after the pixel
+//! read. Steady-state, a render creates **zero** GPU buffers — the
+//! client measured 2,137 `createBuffer` calls and zero `destroy()`
+//! across 1,000 renders before that, growing without bound because the
+//! JS GC feels no GPU-memory pressure.
+//!
 //! Renders are serial. A second call while one is in flight gets an
 //! error rather than sharing the renderer — see `render_impl`. `release()`
 //! frees everything for a page that is done.

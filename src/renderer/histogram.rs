@@ -327,6 +327,9 @@ impl HistogramReadback {
 
         drop(data);
         self.buffer.unmap();
+        // Explicit, because dropping frees nothing on WebGPU — the app
+        // refreshes this histogram repeatedly.
+        self.buffer.destroy();
 
         Ok(histogram)
     }
