@@ -162,10 +162,11 @@ impl EscapeRenderer {
     }
 
     /// Recreate the output for new dimensions. Cheap relative to a
-    /// render; pipelines and params survive.
-    pub fn resize(&mut self, device: &Device, width: u32, height: u32) {
+    /// render; pipelines and params survive. Returns true when the size
+    /// actually changed — the output is stale until the next `render`.
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32) -> bool {
         if width == self.width && height == self.height {
-            return;
+            return false;
         }
         self.output_texture.destroy();
         let (texture, view) = Self::create_output(device, width, height);
@@ -173,6 +174,7 @@ impl EscapeRenderer {
         self.output_view = view;
         self.width = width;
         self.height = height;
+        true
     }
 
     /// Compile (or fetch from cache) the pipeline for this config's

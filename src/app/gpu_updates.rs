@@ -387,6 +387,20 @@ impl App {
             }
         }
 
+        // Escape-mode dirty flag: escape-param edits (rerender_escape),
+        // palette changes, and structural loads/resets all require the
+        // escape pass to re-run. A conservative superset is fine — an
+        // unnecessary re-render is one compute dispatch, not an
+        // accumulation restart. Consumed by the frame loop, which only
+        // acts on it while render_mode is Escape.
+        if actions.rerender_escape
+            || actions.update_palette
+            || actions.update_flame
+            || actions.reset_accumulation
+        {
+            self.escape_dirty = true;
+        }
+
         // Clear pending actions after executing them
         self.config_manager.clear_pending_actions();
 
