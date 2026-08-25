@@ -52,6 +52,22 @@ pub enum FormulaFeature {
     MutatesC,
 }
 
+/// Which quantity the escape test compares against `bailout`
+/// (plan §5.9: "the per-formula escape-test slot exists for these").
+/// The runtime biomorph toggle still overrides either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EscapeMetric {
+    /// `|z|² > bailout` — the classic squared-norm test.
+    #[default]
+    NormSq,
+    /// `Re z > bailout` (RAW, not squared): the exponential family,
+    /// where |e^z| = e^(Re z), and tetration. Typical thresholds are
+    /// ~50, not 4 — the formula tooltips say so.
+    Re,
+    /// `|Im z| > bailout` (RAW): the trig family and Collatz.
+    AbsIm,
+}
+
 /// Capability flags for colorings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColoringFeature {
@@ -111,6 +127,8 @@ pub struct FormulaDef {
     /// Phoenix convention. Manowar starts its auxiliary at the seed:
     /// `"z"` (evaluated after `z` is seeded).
     pub wgsl_prev_init: &'static str,
+    /// Which quantity the escape test compares (see [`EscapeMetric`]).
+    pub escape_metric: EscapeMetric,
 }
 
 impl FormulaDef {
@@ -165,6 +183,12 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::MANOWAR,
     &formulas::BARNSLEY,
     &formulas::CACTUS,
+    &formulas::EXPONENTIAL,
+    &formulas::TRIG,
+    &formulas::DUCKS,
+    &formulas::TETRATION,
+    &formulas::COLLATZ,
+    &formulas::FEATHER,
 ];
 
 /// Ordered coloring registry. **Append-only.**

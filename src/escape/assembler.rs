@@ -77,6 +77,35 @@ fn esc_cpow(z: vec2<f32>, p: f32) -> vec2<f32> {
     return r * vec2<f32>(cos(theta), sin(theta));
 }
 
+// Complex exponential. Re is clamped before exp (the plan's
+// tetration overflow guard); the escaping families trip their
+// escape test far below the clamp.
+fn esc_cexp(z: vec2<f32>) -> vec2<f32> {
+    let ex = exp(min(z.x, 80.0));
+    return ex * vec2<f32>(cos(z.y), sin(z.y));
+}
+
+// Complex log. The origin (a log singularity) returns a large
+// negative real deterministically instead of evaluating atan2 at a
+// zero pair (the Metal fast-math hazard).
+fn esc_clog(z: vec2<f32>) -> vec2<f32> {
+    let r2 = dot(z, z);
+    if (r2 < 1e-30) {
+        return vec2<f32>(-34.5, 0.0);
+    }
+    return vec2<f32>(0.5 * log(r2), atan2(z.y, z.x));
+}
+
+// Complex sine / cosine. sinh/cosh overflow to inf for |Im| ≳ 89;
+// the trig family's |Im| escape test fires long before.
+fn esc_csin(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(sin(z.x) * cosh(z.y), cos(z.x) * sinh(z.y));
+}
+
+fn esc_ccos(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(cos(z.x) * cosh(z.y), -sin(z.x) * sinh(z.y));
+}
+
 //__FORMULA__
 
 //__COLORING__
@@ -137,18 +166,28 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#;
 
 /// The escape test spliced into the loop for escaping formulas.
-/// Biomorph (Pickover): classify on |Re z| or |Im z| alone instead of
-/// |z| — a runtime switch on every formula, not a formula (plan §3).
-/// The squared component keeps `bailout`'s squared-metric meaning.
-const ESCAPE_TEST: &str = r#"        let bio = (params.flags >> 1u) & 3u;
-        var esc_metric = dot(z, z);
-        if (bio == 1u) { esc_metric = z.x * z.x; }
-        if (bio == 2u) { esc_metric = z.y * z.y; }
-        if (esc_metric > params.bailout) {
-            escaped = true;
-            n = i + 1u;
-            break;
-        }"#;
+/// The base metric is per-formula (plan §5.9): squared norm for the
+/// polynomial families, RAW Re z for exp/tetration, RAW |Im z| for
+/// trig/Collatz. Biomorph (Pickover) still overrides either at
+/// runtime — a switch on every formula, not a formula (plan §3).
+fn escape_test(metric: crate::escape::EscapeMetric) -> String {
+    let base = match metric {
+        crate::escape::EscapeMetric::NormSq => "dot(z, z)",
+        crate::escape::EscapeMetric::Re => "z.x",
+        crate::escape::EscapeMetric::AbsIm => "abs(z.y)",
+    };
+    format!(
+        "        let bio = (params.flags >> 1u) & 3u;\n\
+         \x20       var esc_metric = {base};\n\
+         \x20       if (bio == 1u) {{ esc_metric = z.x * z.x; }}\n\
+         \x20       if (bio == 2u) {{ esc_metric = z.y * z.y; }}\n\
+         \x20       if (esc_metric > params.bailout) {{\n\
+         \x20           escaped = true;\n\
+         \x20           n = i + 1u;\n\
+         \x20           break;\n\
+         \x20       }}"
+    )
+}
 
 /// Assemble the WGSL for one (formula, coloring) pair.
 pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> String {
@@ -199,7 +238,7 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
             }
             "//__ESCAPE_TEST__" => {
                 if !non_escaping {
-                    out.push(ESCAPE_TEST.to_string());
+                    out.push(escape_test(formula.escape_metric));
                 }
             }
             "//__C_DECL__" => {
@@ -370,6 +409,17 @@ mod tests {
         assert!(manowar.contains("var z_prev = z;"));
         let phoenix = assemble(&formulas::PHOENIX, &colorings::SMOOTH, false);
         assert!(phoenix.contains("var z_prev = vec2<f32>(0.0, 0.0);"));
+    }
+
+    #[test]
+    fn escape_metric_is_spliced_per_formula() {
+        use crate::escape::{colorings, formulas};
+        let exp = assemble(&formulas::EXPONENTIAL, &colorings::SMOOTH, false);
+        assert!(exp.contains("var esc_metric = z.x;"));
+        let trig = assemble(&formulas::TRIG, &colorings::SMOOTH, false);
+        assert!(trig.contains("var esc_metric = abs(z.y);"));
+        let mandel = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
+        assert!(mandel.contains("var esc_metric = dot(z, z);"));
     }
 
     #[test]
