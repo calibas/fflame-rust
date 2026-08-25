@@ -214,9 +214,13 @@ mod tests {
             config.levels_gamma,
         );
 
-        let mut render_once = |esc_cfg: &crate::config::escape::EscapeConfig, force: bool| -> Vec<u8> {
+        let mut render_once = |esc_cfg: &crate::config::escape::EscapeConfig,
+                               force: bool,
+                               floatexp: bool|
+         -> Vec<u8> {
             let mut escape = crate::escape::EscapeRenderer::new(&device, 256, 192);
             escape.force_perturbed = force;
+            escape.force_floatexp = floatexp;
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("agreement frame"),
             });
@@ -234,9 +238,11 @@ mod tests {
             rgba
         };
 
-        let mut check = |label: &str, esc_cfg: &crate::config::escape::EscapeConfig| {
-            let direct = render_once(esc_cfg, false);
-            let perturbed = render_once(esc_cfg, true);
+        let mut check = |label: &str,
+                         esc_cfg: &crate::config::escape::EscapeConfig,
+                         floatexp: bool| {
+            let direct = render_once(esc_cfg, false, false);
+            let perturbed = render_once(esc_cfg, true, floatexp);
             if let Some(img) = image::RgbaImage::from_raw(256, 192, direct.clone()) {
                 let _ = img.save(format!("output/agree-{label}-direct.png"));
             }
@@ -286,7 +292,9 @@ mod tests {
         esc_cfg.zoom_log2 = 10.0; // shallow: direct is unimpeachable here
         esc_cfg.max_iter = 800;
         esc_cfg.coloring_params.insert("scale".to_string(), 0.01);
-        check("param", &esc_cfg);
+        check("param", &esc_cfg, false);
+        // The floatexp rung must reproduce the same shallow view too.
+        check("param-floatexp", &esc_cfg, true);
 
         // Julia plane, centered on the repelling fixed point of
         // c = -0.8 + 0.156i (guaranteed on the Julia set, so the view
@@ -301,7 +309,8 @@ mod tests {
         julia_cfg.zoom_log2 = 10.0;
         julia_cfg.max_iter = 800;
         julia_cfg.coloring_params.insert("scale".to_string(), 0.01);
-        check("julia", &julia_cfg);
+        check("julia", &julia_cfg, false);
+        check("julia-floatexp", &julia_cfg, true);
     }
 
     /// The GPU half of the plan's formula x coloring probe: every

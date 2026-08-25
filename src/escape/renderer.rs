@@ -35,6 +35,11 @@ use super::reference::OrbitCache;
 /// the floatexp rung takes over beyond [`PERTURB_FLOATEXP_ZOOM`].
 pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 
+/// Above this zoom the scaled-f32 delta rung approaches its w-squared
+/// overflow (~zoom 54) and the floatexp rung takes over. Below it the
+/// scaled rung is preferred: same images, several times faster.
+pub const PERTURB_FLOATEXP_ZOOM: f64 = 48.0;
+
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4 arrays start at a
 /// 16-byte boundary, total 192 bytes).
@@ -67,6 +72,12 @@ struct PerturbParamsGpu {
     orbit_len: u32,
     /// bit 0: skip quadratic term; bit 1: Julia mode.
     flags: u32,
+    /// Pixel spacing as mantissa * 2^exponent (floatexp rung) —
+    /// computed symbolically from zoom_log2, valid at any depth.
+    s_m: f32,
+    s_e: i32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 pub struct EscapeRenderer {
@@ -88,6 +99,9 @@ pub struct EscapeRenderer {
     /// view both ways.
     #[cfg(test)]
     pub(crate) force_perturbed: bool,
+    /// Test-only: with `force_perturbed`, use the floatexp rung.
+    #[cfg(test)]
+    pub(crate) force_floatexp: bool,
     /// Deep-zoom state: CPU reference-orbit cache (append-on-deepen),
     /// its GPU mirror, and the perturbed pipeline's own layout (two
     /// extra bindings: the orbit buffer and the perturb uniform).
@@ -239,6 +253,8 @@ impl EscapeRenderer {
             pipelines: HashMap::new(),
             #[cfg(test)]
             force_perturbed: false,
+            #[cfg(test)]
+            force_floatexp: false,
             orbit_cache: OrbitCache::default(),
             orbit_buffer: None,
             orbit_capacity: 0,
@@ -261,11 +277,16 @@ impl EscapeRenderer {
     }
 
     /// Ensure the perturbed pipeline for this coloring exists.
-    fn ensure_perturbed_pipeline(&mut self, device: &Device, escape: &EscapeConfig) -> String {
+    fn ensure_perturbed_pipeline(
+        &mut self,
+        device: &Device,
+        escape: &EscapeConfig,
+        floatexp: bool,
+    ) -> String {
         let coloring = super::get_coloring(&escape.coloring);
-        let key = format!("perturbed|{}", coloring.name);
+        let key = format!("perturbed|{}|{}", coloring.name, floatexp);
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed(coloring);
+            let source = assembler::assemble_perturbed(coloring, floatexp);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -477,18 +498,37 @@ impl EscapeRenderer {
         let use_perturbed = Self::wants_perturbation(escape);
         if use_perturbed {
             if let Some(orbit_len) = self.ensure_orbit(device, queue, escape) {
-                // Pixel spacing S in f64 (span_y = 4 / 2^zoom over the
-                // height), cast to f32 — normal down to zoom ~119.
-                let s_f64 = 4.0 / escape.zoom_factor() / (self.height.max(1) as f64);
+                #[cfg(test)]
+                let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
+                #[cfg(not(test))]
+                let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+                // Pixel spacing S = 2^(2 - zoom) / height. The scaled
+                // rung takes it as f64->f32 (normal down to ~zoom 119,
+                // past its own ceiling); the floatexp rung takes it
+                // SYMBOLICALLY as mantissa * 2^exponent so no float
+                // ever underflows however deep the zoom goes.
+                let h = self.height.max(1) as f64;
+                let s_f64 = if escape.zoom_log2 < 1000.0 {
+                    4.0 / escape.zoom_factor() / h
+                } else {
+                    0.0
+                };
+                let x = 2.0 - escape.zoom_log2 - h.log2();
+                let s_e = x.floor();
+                let s_m = 2f64.powf(x - s_e);
                 let pp = PerturbParamsGpu {
                     s: s_f64 as f32,
-                    inv_s: (1.0 / s_f64) as f32,
+                    inv_s: if s_f64 > 0.0 { (1.0 / s_f64) as f32 } else { 0.0 },
                     orbit_len: orbit_len.max(2),
                     flags: if escape.julia { 2 } else { 0 },
+                    s_m: s_m as f32,
+                    s_e: s_e as i32,
+                    _pad0: 0,
+                    _pad1: 0,
                 };
                 queue.write_buffer(&self.perturb_params_buffer, 0, bytemuck::bytes_of(&pp));
 
-                let key = self.ensure_perturbed_pipeline(device, escape);
+                let key = self.ensure_perturbed_pipeline(device, escape, floatexp);
                 let bind_group = device.create_bind_group(&BindGroupDescriptor {
                     label: Some("Escape Perturbed Bind Group"),
                     layout: &self.perturb_bind_group_layout,
