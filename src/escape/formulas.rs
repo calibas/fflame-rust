@@ -11,7 +11,7 @@
 //! limit for p > 0) so the polar `atan2` is never evaluated at a zero
 //! pair — the Metal fast-math hazard documented in CLAUDE.md.
 
-use super::{EscapeParamDef, FormulaDef, FormulaFeature};
+use super::{EscapeMetric, EscapeParamDef, FormulaDef, FormulaFeature};
 
 
 /// The classic quadratic map `z ← z² + c` (plan §5.1).
@@ -32,6 +32,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Multibrot `z ← zᵖ + c` (plan §5.1). Non-integer powers render too
@@ -55,6 +56,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Tricorn / Multicorn `z ← z̄ᵖ + c` (plan §5.2): conjugate first,
@@ -78,6 +80,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Burning Ship family (plan §5.3): one formula, a `variant` enum of
@@ -144,6 +147,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// McMullen family `z ← zⁿ + c/zᵐ` (plan §5.4) — rational maps with
@@ -189,6 +193,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Kaliset `z ← |z| / ⟨z,z⟩ − c` (component abs; plan §5.12).
@@ -227,6 +232,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Phoenix — `z ← z² + c + p·z_prev` (plan §5.6). The first
@@ -263,6 +269,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Lambda / logistic plane — `z ← λ·z·(1−z)` (plan §5.5).
@@ -281,6 +288,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "vec2<f32>(0.5, 0.0)",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Fractint Spider — `z ← z² + c; c ← c/2 + z` (plan §5.16). The
@@ -301,6 +309,7 @@ fn formula_step(z: vec2<f32>, c: ptr<function, vec2<f32>>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Fractint Manowar — `z ← z² + m + c; m ← z(old)` (plan §5.16),
@@ -318,6 +327,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "z",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Fractint Barnsley M1–M3 — conditional affine/quadratic maps
@@ -367,6 +377,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
 
 /// Fractint Cactus — `z ← z³ + (c−1)·z − c` (plan §5.16). Fractint
@@ -385,4 +396,144 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+};
+
+/// Exponential map `z ← e^z + c` (plan §5.9): Cantor bouquets.
+/// |e^z| = e^(Re z), so escape tests Re z RAW — set bailout ~50.
+/// esc_cexp clamps Re before exp (overflow guard).
+pub static EXPONENTIAL: FormulaDef = FormulaDef {
+    name: "exponential",
+    display_name: "Exponential",
+    features: &[],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    return esc_cexp(z) + c;
+}
+"#,
+    wgsl_param_seed: "",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::Re,
+};
+
+/// Trig family `z ← sin z + c` / `cos z + c` (plan §5.9). Escape
+/// tests |Im z| RAW (sinh/cosh growth) — set bailout ~50.
+pub static TRIG: FormulaDef = FormulaDef {
+    name: "trig",
+    display_name: "Sine / Cosine",
+    features: &[],
+    parameters: &[EscapeParamDef {
+        name: "variant",
+        display_name: "Function",
+        default: 0.0,
+        min: 0.0,
+        max: 1.0,
+        tooltip: "0: sin z + c, 1: cos z + c.",
+    }],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    if (fparam(0u) < 0.5) {
+        return esc_csin(z) + c;
+    }
+    return esc_ccos(z) + c;
+}
+"#,
+    wgsl_param_seed: "",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::AbsIm,
+};
+
+/// Ducks / Kali-log (Monnier) — `z ← log(Re z + i·|Im z|) + c`
+/// (plan §5.13): half-fold then complex log. Non-escaping; the
+/// average colorings are the point (stripe-average especially).
+pub static DUCKS: FormulaDef = FormulaDef {
+    name: "ducks",
+    display_name: "Ducks (Kali-log)",
+    features: &[FormulaFeature::NonEscaping],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    return esc_clog(vec2<f32>(z.x, abs(z.y))) + c;
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+};
+
+/// Tetration `w ← c^w = e^(w·log c)` (plan §5.8). Parameter plane
+/// seeds w₀ = c (the power-tower convention); Julia mode is "Tower
+/// Julia". Escape tests Re w. log c is loop-invariant — the compiler
+/// hoists it (trust CSE); esc_cexp's clamp is the plan's overflow
+/// guard. Converge/period classification lands with the convergent
+/// axis; escape-only already draws the tetration star.
+pub static TETRATION: FormulaDef = FormulaDef {
+    name: "tetration",
+    display_name: "Tetration",
+    features: &[],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    return esc_cexp(esc_cmul(z, esc_clog(c)));
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::Re,
+};
+
+/// Collatz — the standard interpolation
+/// `z ← ¼(2 + 7z − (2+5z)·cos πz)` (plan §5.15). Escape on |Im z|.
+pub static COLLATZ: FormulaDef = FormulaDef {
+    name: "collatz",
+    display_name: "Collatz",
+    features: &[],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let pi = 3.14159265358979;
+    let cz = esc_ccos(vec2<f32>(pi * z.x, pi * z.y));
+    let seven_z = 7.0 * z;
+    let two_plus_5z = vec2<f32>(2.0 + 5.0 * z.x, 5.0 * z.y);
+    return 0.25 * (vec2<f32>(2.0, 0.0) + seven_z - esc_cmul(two_plus_5z, cz));
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::AbsIm,
+};
+
+/// Feather — `z ← z^p / (1 + (Re²z − i·Im²z)) + c` (plan §5.14).
+/// MandelBrowser's code form (`z^p / (1 + complex(z.x², −z.y²)) + c`);
+/// the Fractal Art Wiki's ASCII rendering omits the minus on the
+/// imaginary part — we follow the code form, and the visual corpus
+/// pins our convention (the plan's Feather policy). Denominator real
+/// part is ≥ 1, so no pole guard is needed.
+pub static FEATHER: FormulaDef = FormulaDef {
+    name: "feather",
+    display_name: "Feather",
+    features: &[],
+    parameters: &[EscapeParamDef {
+        name: "power",
+        display_name: "Power",
+        default: 3.0,
+        min: 2.0,
+        max: 8.0,
+        tooltip: "Exponent p in the numerator z^p. The classic feather uses 3.",
+    }],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let num = esc_cpow(z, fparam(0u));
+    let den = vec2<f32>(1.0 + z.x * z.x, -(z.y * z.y));
+    let d2 = dot(den, den); // >= 1: den.x >= 1 always
+    return vec2<f32>(
+        (num.x * den.x + num.y * den.y) / d2,
+        (num.y * den.x - num.x * den.y) / d2,
+    ) + c;
+}
+"#,
+    wgsl_param_seed: "",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
 };
