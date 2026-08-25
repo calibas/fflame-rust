@@ -31,6 +31,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "",
+    wgsl_prev_init: "",
 };
 
 /// Multibrot `z ← zᵖ + c` (plan §5.1). Non-integer powers render too
@@ -53,6 +54,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "",
+    wgsl_prev_init: "",
 };
 
 /// Tricorn / Multicorn `z ← z̄ᵖ + c` (plan §5.2): conjugate first,
@@ -75,6 +77,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "",
+    wgsl_prev_init: "",
 };
 
 /// Burning Ship family (plan §5.3): one formula, a `variant` enum of
@@ -140,6 +143,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "",
+    wgsl_prev_init: "",
 };
 
 /// McMullen family `z ← zⁿ + c/zᵐ` (plan §5.4) — rational maps with
@@ -184,6 +188,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
 };
 
 /// Kaliset `z ← |z| / ⟨z,z⟩ − c` (component abs; plan §5.12).
@@ -221,6 +226,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
 };
 
 /// Phoenix — `z ← z² + c + p·z_prev` (plan §5.6). The first
@@ -256,6 +262,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "",
+    wgsl_prev_init: "",
 };
 
 /// Lambda / logistic plane — `z ← λ·z·(1−z)` (plan §5.5).
@@ -273,4 +280,109 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 }
 "#,
     wgsl_param_seed: "vec2<f32>(0.5, 0.0)",
+    wgsl_prev_init: "",
+};
+
+/// Fractint Spider — `z ← z² + c; c ← c/2 + z` (plan §5.16). The
+/// first `MutatesC` formula: c drifts toward the orbit, half-life one
+/// iteration. Per Fractint's fractals.doc the c update uses the NEW z.
+pub static SPIDER: FormulaDef = FormulaDef {
+    name: "spider",
+    display_name: "Spider",
+    features: &[FormulaFeature::MutatesC],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: ptr<function, vec2<f32>>) -> vec2<f32> {
+    let cc = *c;
+    let z_new = vec2<f32>(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + cc;
+    *c = cc * 0.5 + z_new;
+    return z_new;
+}
+"#,
+    wgsl_param_seed: "",
+    wgsl_prev_init: "",
+};
+
+/// Fractint Manowar — `z ← z² + m + c; m ← z(old)` (plan §5.16),
+/// i.e. Phoenix with p = 1 but with the auxiliary seeded at z₀
+/// rather than 0 (Fractint starts z = m = pixel).
+pub static MANOWAR: FormulaDef = FormulaDef {
+    name: "manowar",
+    display_name: "Manowar",
+    features: &[FormulaFeature::NeedsPrevZ],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + z_prev + c;
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "z",
+};
+
+/// Fractint Barnsley M1–M3 — conditional affine/quadratic maps
+/// (plan §5.16: "escape-time renderings of IFS-like maps, ancestors
+/// of mode C"). One formula, `variant` enum, per fractals.doc:
+///   M1: z ← (z∓1)·c by sign of Re z
+///   M2: z ← (z∓1)·c by sign of Re(z)·Im(c) + Re(c)·Im(z)
+///   M3: z ← z²−1 (+ c·Re z on the Re z ≤ 0 branch)
+/// Convention pinned by the visual corpus (Feather policy).
+pub static BARNSLEY: FormulaDef = FormulaDef {
+    name: "barnsley",
+    display_name: "Barnsley",
+    features: &[],
+    parameters: &[EscapeParamDef {
+        name: "variant",
+        display_name: "Variant",
+        default: 0.0,
+        min: 0.0,
+        max: 2.0,
+        tooltip: "0: M1 (fold on Re z), 1: M2 (fold on a bilinear test), 2: M3 (quadratic with conditional c term).",
+    }],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let v = u32(clamp(fparam(0u), 0.0, 2.0));
+    switch v {
+        case 0u: {
+            if (z.x >= 0.0) {
+                return esc_cmul(z - vec2<f32>(1.0, 0.0), c);
+            }
+            return esc_cmul(z + vec2<f32>(1.0, 0.0), c);
+        }
+        case 1u: {
+            if (z.x * c.y + c.x * z.y >= 0.0) {
+                return esc_cmul(z - vec2<f32>(1.0, 0.0), c);
+            }
+            return esc_cmul(z + vec2<f32>(1.0, 0.0), c);
+        }
+        default: {
+            let sq = vec2<f32>(z.x * z.x - z.y * z.y - 1.0, 2.0 * z.x * z.y);
+            if (z.x > 0.0) {
+                return sq;
+            }
+            return sq + c * z.x;
+        }
+    }
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
+};
+
+/// Fractint Cactus — `z ← z³ + (c−1)·z − c` (plan §5.16). Fractint
+/// seeds z₀ = pixel on the parameter plane.
+pub static CACTUS: FormulaDef = FormulaDef {
+    name: "cactus",
+    display_name: "Cactus",
+    features: &[],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let z2 = esc_cmul(z, z);
+    let z3 = esc_cmul(z2, z);
+    return z3 + esc_cmul(c - vec2<f32>(1.0, 0.0), z) - c;
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
 };

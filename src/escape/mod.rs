@@ -45,6 +45,11 @@ pub enum FormulaFeature {
     /// history register into the loop; without the flag the loop
     /// carries no history at all.
     NeedsPrevZ,
+    /// The step MUTATES `c` (Fractint Spider: `z ← z²+c; c ← c/2+z`).
+    /// `c` becomes a `var` and `formula_step` receives it as
+    /// `ptr<function, vec2<f32>>`; without the flag `c` stays a `let`
+    /// and the signature is unchanged.
+    MutatesC,
 }
 
 /// Capability flags for colorings.
@@ -101,6 +106,11 @@ pub struct FormulaDef {
     /// (McMullen's pole, Kaliset's 0/0 — both seed `pixel`) override
     /// it. `pixel` is in scope.
     pub wgsl_param_seed: &'static str,
+    /// WGSL expression initializing the `z_prev` history register
+    /// (NeedsPrevZ only; ignored otherwise). Empty ⇒ zero, the
+    /// Phoenix convention. Manowar starts its auxiliary at the seed:
+    /// `"z"` (evaluated after `z` is seeded).
+    pub wgsl_prev_init: &'static str,
 }
 
 impl FormulaDef {
@@ -151,6 +161,10 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::KALISET,
     &formulas::PHOENIX,
     &formulas::LAMBDA,
+    &formulas::SPIDER,
+    &formulas::MANOWAR,
+    &formulas::BARNSLEY,
+    &formulas::CACTUS,
 ];
 
 /// Ordered coloring registry. **Append-only.**

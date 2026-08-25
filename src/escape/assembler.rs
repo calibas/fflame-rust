@@ -107,7 +107,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // (plan section 3).
     let is_julia = (params.flags & 1u) != 0u;
     var z = select(PARAM_PLANE_SEED, pixel, is_julia);
-    let c = select(pixel, params.julia_c, is_julia);
+    //__C_DECL__
 
     //__ACCUM_DECL__
     //__PREV_DECL__
@@ -156,6 +156,7 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
+    let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let param_seed = if formula.wgsl_param_seed.is_empty() {
         "vec2<f32>(0.0, 0.0)"
     } else {
@@ -201,11 +202,24 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                     out.push(ESCAPE_TEST.to_string());
                 }
             }
+            "//__C_DECL__" => {
+                // MutatesC formulas write c back each step (Spider).
+                let kw = if mutates_c { "var" } else { "let" };
+                out.push(format!(
+                    "    {kw} c = select(pixel, params.julia_c, is_julia);"
+                ));
+            }
             "//__PREV_DECL__" => {
                 if needs_prev {
-                    // Phoenix convention: the history starts at the
-                    // seed's predecessor, conventionally 0.
-                    out.push("    var z_prev = vec2<f32>(0.0, 0.0);".to_string());
+                    // Default: history starts at 0 (Phoenix
+                    // convention). Manowar overrides with "z" —
+                    // evaluated here, after z is seeded.
+                    let init = if formula.wgsl_prev_init.is_empty() {
+                        "vec2<f32>(0.0, 0.0)"
+                    } else {
+                        formula.wgsl_prev_init
+                    };
+                    out.push(format!("    var z_prev = {init};"));
                 }
             }
             "//__STEP__" => {
@@ -213,10 +227,11 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                 // COMPLEX alpha. Compiled in only when alpha != 1, so
                 // undamped pipelines stay byte-identical (a runtime
                 // mix() at alpha = 1 is not bit-exact).
+                let c_arg = if mutates_c { "&c" } else { "c" };
                 let call = if needs_prev {
-                    "formula_step(z, c, z_prev)"
+                    format!("formula_step(z, {c_arg}, z_prev)")
                 } else {
-                    "formula_step(z, c)"
+                    format!("formula_step(z, {c_arg})")
                 };
                 if damped {
                     out.push(format!("        let z_raw = {call};"));
@@ -336,6 +351,25 @@ mod tests {
         // NeedsPrevZ + damped: history records the PRE-damping z.
         let phoenix = assemble(&formulas::PHOENIX, &colorings::SMOOTH, true);
         assert!(phoenix.contains("z_prev = z;"));
+    }
+
+    #[test]
+    fn mutates_c_compiles_a_var_and_a_pointer_call() {
+        use crate::escape::{colorings, formulas};
+        let spider = assemble(&formulas::SPIDER, &colorings::SMOOTH, false);
+        assert!(spider.contains("var c = select"));
+        assert!(spider.contains("formula_step(z, &c)"));
+        let plain = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
+        assert!(plain.contains("let c = select"));
+    }
+
+    #[test]
+    fn prev_init_expression_is_spliced() {
+        use crate::escape::{colorings, formulas};
+        let manowar = assemble(&formulas::MANOWAR, &colorings::SMOOTH, false);
+        assert!(manowar.contains("var z_prev = z;"));
+        let phoenix = assemble(&formulas::PHOENIX, &colorings::SMOOTH, false);
+        assert!(phoenix.contains("var z_prev = vec2<f32>(0.0, 0.0);"));
     }
 
     #[test]
