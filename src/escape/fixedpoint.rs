@@ -526,6 +526,15 @@ impl FixedComplex {
         Self { re, im }
     }
 
+    /// General complex multiply (four big muls — used by the
+    /// Multibrot reference's power chain; squaring stays on the
+    /// two-mul fast path).
+    pub fn mul(&self, other: &Self) -> Self {
+        let re = self.re.mul(&other.re).sub(&self.im.mul(&other.im));
+        let im = self.re.mul(&other.im).add(&self.im.mul(&other.re));
+        Self { re, im }
+    }
+
     pub fn add(&self, other: &Self) -> Self {
         Self { re: self.re.add(&other.re), im: self.im.add(&other.im) }
     }
