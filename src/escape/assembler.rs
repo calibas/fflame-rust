@@ -263,6 +263,38 @@ mod tests {
     }
 
     #[test]
+    fn escape_wgsl_passes_the_fast_math_lints() {
+        // Same discipline the variation WGSL is held to (see
+        // shader_lint in src/variations/mod.rs): no NaN self-compares,
+        // no self-divisions (Metal fast-math folds both), no
+        // subnormal f32 literals (FTZ flushes them). Scanning the
+        // ASSEMBLED source for every combination covers the template,
+        // every formula, every coloring and every accum snippet.
+        use crate::variations::shader_lint;
+        for f in FORMULAS {
+            for c in COLORINGS {
+                let src = assemble(f, c);
+                let self_ops = shader_lint::self_operations(&src);
+                assert!(
+                    self_ops.is_empty(),
+                    "{}x{}: fast-math-unsafe self-operations: {:?}",
+                    f.name,
+                    c.name,
+                    self_ops
+                );
+                let subnormals = shader_lint::subnormal_literals(&src);
+                assert!(
+                    subnormals.is_empty(),
+                    "{}x{}: subnormal f32 literals: {:?}",
+                    f.name,
+                    c.name,
+                    subnormals
+                );
+            }
+        }
+    }
+
+    #[test]
     fn defs_fit_the_param_slot_budget() {
         for f in FORMULAS {
             assert!(f.parameters.len() <= PARAM_VEC4S * 4, "{}", f.name);
