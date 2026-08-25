@@ -64,6 +64,8 @@ pub enum PanelType {
     Variations,
     /// Subflames panel (switch which flame the editor operates on)
     Subflames,
+    /// Escape-time fractal editing surface (formula, view, coloring)
+    Escape,
 }
 
 impl std::fmt::Display for PanelType {
@@ -96,6 +98,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Variations => t!("panels.variations"),
             PanelType::Subflames => t!("panels.subflames"),
             PanelType::Scripts => t!("panels.scripts"),
+            PanelType::Escape => t!("panels.escape"),
         };
         write!(f, "{}", title)
     }
@@ -221,6 +224,7 @@ impl Workspace {
             PanelType::Variations => egui::vec2(450.0, 500.0),
             PanelType::Subflames => egui::vec2(320.0, 360.0),
             PanelType::Scripts => egui::vec2(420.0, 560.0),
+            PanelType::Escape => egui::vec2(350.0, 520.0),
         }
     }
 
