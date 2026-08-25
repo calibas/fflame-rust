@@ -25,6 +25,15 @@ use egui_wgpu::wgpu::{
 use crate::config::escape::EscapeConfig;
 
 use super::assembler::{self, PARAM_VEC4S};
+use super::reference::OrbitCache;
+
+/// Above this zoom the direct path's f32 pixel mapping visibly
+/// shreds (center ~1 has ulp ~1e-7; pixel spacing crosses it near
+/// zoom 21) and rendering switches to perturbation. The scaled-f32
+/// delta pipeline holds to roughly zoom 54 (w-squared overflow); the
+/// UI clamp is 45, comfortably inside. The floatexp rung lifts this
+/// when it lands.
+pub const PERTURB_MIN_ZOOM: f64 = 18.0;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4 arrays start at a
@@ -48,6 +57,17 @@ struct EscapeParamsGpu {
     cparams: [[f32; 4]; PARAM_VEC4S],
 }
 
+/// Uniform for the perturbed pipeline — must match `PerturbParams`
+/// in the WGSL template.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PerturbParamsGpu {
+    s: f32,
+    inv_s: f32,
+    orbit_len: u32,
+    skip_quadratic: u32,
+}
+
 pub struct EscapeRenderer {
     width: u32,
     height: u32,
@@ -62,6 +82,15 @@ pub struct EscapeRenderer {
     /// Compiled pipelines keyed `"formula|coloring"` — tiny shaders,
     /// but a live panel flips combinations and recompiles add up.
     pipelines: HashMap<String, ComputePipeline>,
+    /// Deep-zoom state: CPU reference-orbit cache (append-on-deepen),
+    /// its GPU mirror, and the perturbed pipeline's own layout (two
+    /// extra bindings: the orbit buffer and the perturb uniform).
+    orbit_cache: OrbitCache,
+    orbit_buffer: Option<Buffer>,
+    orbit_capacity: u32,
+    orbit_uploaded: u32,
+    perturb_params_buffer: Buffer,
+    perturb_bind_group_layout: BindGroupLayout,
 }
 
 impl EscapeRenderer {
@@ -80,6 +109,75 @@ impl EscapeRenderer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
+        });
+
+        let perturb_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Perturb Params"),
+            size: std::mem::size_of::<PerturbParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let perturb_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Escape Perturbed Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -133,7 +231,99 @@ impl EscapeRenderer {
             palette_sampler,
             bind_group_layout,
             pipelines: HashMap::new(),
+            orbit_cache: OrbitCache::default(),
+            orbit_buffer: None,
+            orbit_capacity: 0,
+            orbit_uploaded: 0,
+            perturb_params_buffer,
+            perturb_bind_group_layout,
         }
+    }
+
+    /// Whether this view renders through the perturbation path:
+    /// Mandelbrot parameter plane, plain iteration, past the direct
+    /// path's f32 ceiling. Everything else stays direct (and deep
+    /// zooms of unsupported combinations render the direct path's
+    /// f32 mush honestly rather than wrong perturbation math).
+    fn wants_perturbation(escape: &EscapeConfig) -> bool {
+        escape.zoom_log2 > PERTURB_MIN_ZOOM
+            && escape.formula == "mandelbrot"
+            && !escape.julia
+            && !escape.is_damped()
+            && escape.biomorph == crate::config::escape::BiomorphMode::Off
+    }
+
+    /// Ensure the perturbed pipeline for this coloring exists.
+    fn ensure_perturbed_pipeline(&mut self, device: &Device, escape: &EscapeConfig) -> String {
+        let coloring = super::get_coloring(&escape.coloring);
+        let key = format!("perturbed|{}", coloring.name);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_perturbed(coloring);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Perturbed Pipeline Layout"),
+                bind_group_layouts: &[Some(&self.perturb_bind_group_layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("escape_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        key
+    }
+
+    /// Compute/extend the reference orbit and mirror it to the GPU.
+    /// Returns the usable orbit length, or None if the center failed
+    /// to parse (caller falls back to the direct path).
+    fn ensure_orbit(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) -> Option<u32> {
+        let orbit = self.orbit_cache.get(
+            &escape.center_re,
+            &escape.center_im,
+            escape.zoom_log2,
+            escape.max_iter,
+        )?;
+        let len = orbit.len();
+        let needed_bytes = (len as u64) * 8;
+        let recreate = match &self.orbit_buffer {
+            Some(_) => len > self.orbit_capacity,
+            None => true,
+        };
+        if recreate {
+            if let Some(old) = self.orbit_buffer.take() {
+                old.destroy();
+            }
+            // Grow with headroom so deepening doesn't recreate every
+            // frame.
+            let capacity = (len + len / 2).max(1024);
+            self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_capacity = capacity;
+            self.orbit_uploaded = 0;
+        }
+        if self.orbit_uploaded != len {
+            // Upload the whole orbit (append-only uploads are a later
+            // optimization; a full orbit at max_iter 100k is 800 KB).
+            queue.write_buffer(
+                self.orbit_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&orbit.orbit),
+            );
+            self.orbit_uploaded = len;
+        }
+        Some(len)
     }
 
     fn create_output(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
@@ -266,6 +456,66 @@ impl EscapeRenderer {
         let params = self.params_for(escape);
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
+        // Deep zoom: the perturbation path. Falls back to direct on a
+        // center-parse failure (matching center_f64's fallback view).
+        if Self::wants_perturbation(escape) {
+            if let Some(orbit_len) = self.ensure_orbit(device, queue, escape) {
+                // Pixel spacing S in f64 (span_y = 4 / 2^zoom over the
+                // height), cast to f32 — normal down to zoom ~119.
+                let s_f64 = 4.0 / escape.zoom_factor() / (self.height.max(1) as f64);
+                let pp = PerturbParamsGpu {
+                    s: s_f64 as f32,
+                    inv_s: (1.0 / s_f64) as f32,
+                    orbit_len: orbit_len.max(2),
+                    skip_quadratic: 0,
+                };
+                queue.write_buffer(&self.perturb_params_buffer, 0, bytemuck::bytes_of(&pp));
+
+                let key = self.ensure_perturbed_pipeline(device, escape);
+                let bind_group = device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("Escape Perturbed Bind Group"),
+                    layout: &self.perturb_bind_group_layout,
+                    entries: &[
+                        BindGroupEntry {
+                            binding: 0,
+                            resource: self.params_buffer.as_entire_binding(),
+                        },
+                        BindGroupEntry {
+                            binding: 1,
+                            resource: BindingResource::TextureView(&self.output_view),
+                        },
+                        BindGroupEntry {
+                            binding: 2,
+                            resource: BindingResource::TextureView(palette_view),
+                        },
+                        BindGroupEntry {
+                            binding: 3,
+                            resource: BindingResource::Sampler(&self.palette_sampler),
+                        },
+                        BindGroupEntry {
+                            binding: 4,
+                            resource: self.orbit_buffer.as_ref().unwrap().as_entire_binding(),
+                        },
+                        BindGroupEntry {
+                            binding: 5,
+                            resource: self.perturb_params_buffer.as_entire_binding(),
+                        },
+                    ],
+                });
+                let pipeline = &self.pipelines[&key];
+                let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("Escape Perturbed Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+                drop(pass);
+                return;
+            }
+            log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
+        }
+
         // Built per pass: the palette view can be recreated under us
         // (palette-size changes), and one bind group per render is
         // noise next to the dispatch itself.
@@ -310,12 +560,34 @@ impl EscapeRenderer {
     pub fn destroy(&self) {
         self.output_texture.destroy();
         self.params_buffer.destroy();
+        self.perturb_params_buffer.destroy();
+        if let Some(b) = &self.orbit_buffer {
+            b.destroy();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn perturbation_gate_is_tight() {
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.zoom_log2 = 30.0;
+        assert!(EscapeRenderer::wants_perturbation(&esc));
+        esc.zoom_log2 = 10.0;
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+        esc.zoom_log2 = 30.0;
+        esc.julia = true;
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "julia not in v1 tier");
+        esc.julia = false;
+        esc.formula = "burning_ship".to_string();
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "diffabs tier not in v1");
+        esc.formula = "mandelbrot".to_string();
+        esc.damping_re = 0.5;
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "damped not in v1");
+    }
 
     #[test]
     fn params_struct_matches_wgsl_layout() {

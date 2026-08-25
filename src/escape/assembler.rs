@@ -221,6 +221,217 @@ fn escape_test(metric: crate::escape::EscapeMetric) -> String {
     )
 }
 
+const PERTURBED_TEMPLATE: &str = r#"
+// Perturbation compute pass (Mandelbrot, scaled-f32 deltas + Zhuoran
+// rebasing). See src/escape/assembler.rs and the phase-4 plan.
+//
+// The reference orbit Z_n (computed on the CPU in fixed-point) rides
+// a storage buffer; each pixel iterates its DELTA from the reference
+// in f32, scaled so w is in pixel units: delta = S*w with S = the
+// complex-plane pixel spacing. The arbitrary-precision terms cancel
+// (delta' = 2 Z w S + S^2 w^2 + S d0  =>  w' = 2 Z w + S w^2 + d0),
+// so one CPU orbit serves every pixel.
+//
+// Rebasing (Zhuoran 2021): whenever |Z_m + delta| < |delta|, restart
+// the reference index with delta <- Z_m + delta. This REPLACES glitch
+// detection, and also handles the reference ending early (escape):
+// wrap-to-zero is a mandatory rebase. Full z = Z_m + delta is
+// reconstructed every iteration for this test - which is exactly what
+// the colorings need, so the whole coloring registry works under
+// perturbation unchanged.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    _pad0: f32,
+    damping: vec2<f32>,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+}
+
+struct PerturbParams {
+    // Pixel spacing S as an f32 (normal down to 2^-126; the v1
+    // ceiling, far past the UI zoom range) and its reciprocal.
+    s: f32,
+    inv_s: f32,
+    orbit_len: u32,   // usable entries in the reference orbit
+    // 1 when S*w*w underflows f32 (deep zoom): the quadratic term is
+    // then legitimately negligible (linear regime) - hoisted here
+    // instead of tested per iteration, per the plan.
+    skip_quadratic: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
+@group(0) @binding(5) var<uniform> perturb: PerturbParams;
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+struct OrbitSummary {
+    z: vec2<f32>,
+    n: u32,
+    escaped: bool,
+    converged: bool,
+    period: u32,
+    dz: vec2<f32>,
+}
+
+//__COLORING__
+
+//__COLORING_ACCUM__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+
+    // Pixel offset from the view center in PIXEL units (order
+    // +-height/2), rotated - this is d0, the c-perturbation in units
+    // of S. Same y-flip and rotation as the direct template.
+    let centered = vec2<f32>(f32(gid.x), f32(gid.y)) + vec2<f32>(0.5, 0.5)
+        - 0.5 * vec2<f32>(f32(params.width), f32(params.height));
+    var dpx = centered;
+    dpx.y = -dpx.y;
+    let rot = params.rot_cs;
+    let d0 = vec2<f32>(
+        dpx.x * rot.x - dpx.y * rot.y,
+        dpx.x * rot.y + dpx.y * rot.x,
+    );
+
+    // Delta iteration state: w = delta / S, m = reference index.
+    var w = d0;
+    var m = 0u;
+    var z = vec2<f32>(0.0, 0.0);
+    var escaped = false;
+    var n = 0u;
+    let converged = false;
+    let period = 0u;
+    let dz = vec2<f32>(1.0, 0.0);
+    // The f32 value of c for the accumulator colorings (trap geometry
+    // lives at O(1) scale, where f32 c is exact enough).
+    let c_f32 = params.center;
+
+    //__ACCUM_DECL__
+
+    for (var i = 0u; i < params.max_iter; i = i + 1u) {
+        let z_ref = ref_orbit[m];
+        // w' = 2 Z w + S w^2 + d0 (quadratic term hoisted out in the
+        // deep-linear regime).
+        var w_new = 2.0 * vec2<f32>(
+            z_ref.x * w.x - z_ref.y * w.y,
+            z_ref.x * w.y + z_ref.y * w.x,
+        ) + d0;
+        if (perturb.skip_quadratic == 0u) {
+            w_new = w_new + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);
+        }
+        let z_before = z;
+        w = w_new;
+        m = m + 1u;
+
+        // Full orbit value: z = Z_m + S*w. S*w underflows to zero
+        // while the delta is far below f32 - exactly when z == Z_m to
+        // f32 precision anyway.
+        let delta = perturb.s * w;
+        let z_full = ref_orbit[min(m, perturb.orbit_len - 1u)] + delta;
+        z = z_full;
+
+        //__ACCUM_UPDATE__
+
+        // Escape test (biomorph is gated off on the perturbed path).
+        if (dot(z_full, z_full) > params.bailout) {
+            escaped = true;
+            n = i + 1u;
+            break;
+        }
+
+        // Zhuoran rebase: reference passed near the pixel's absolute
+        // position, or the reference orbit ended - restart it with
+        // the full value folded into the delta. |w_new| <= |w| at a
+        // proximity rebase, so inv_s never overflows the new w.
+        if (m >= perturb.orbit_len - 1u
+            || dot(z_full, z_full) < dot(delta, delta)) {
+            w = z_full * perturb.inv_s;
+            m = 0u;
+        }
+    }
+    if (!escaped) {
+        n = params.max_iter;
+    }
+
+    var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    if (escaped || COLORING_COLORS_INTERIOR) {
+        let summary = OrbitSummary(z, n, escaped, converged, period, dz);
+        let t = fract(coloring_map(summary, accum_state));
+        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+    }
+
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+}
+"#;
+
+/// Assemble the perturbed (deep-zoom) Mandelbrot WGSL for one
+/// coloring. The formula axis is fixed to Mandelbrot in v1 (the
+/// "clean" perturbation tier); the coloring axis is fully preserved -
+/// the loop reconstructs the full orbit value every iteration for the
+/// rebase test, which is exactly the summary the colorings consume.
+pub fn assemble_perturbed(coloring: &ColoringDef) -> String {
+    let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
+    let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
+
+    let mut out = Vec::new();
+    for line in PERTURBED_TEMPLATE.lines() {
+        match line.trim() {
+            "//__COLORING__" => {
+                out.push(format!(
+                    "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
+                ));
+                out.push(format!("// coloring: {}", coloring.name));
+                out.push(coloring.wgsl.to_string());
+            }
+            "//__COLORING_ACCUM__" => {
+                if needs_accum {
+                    out.push(coloring.wgsl_accum.to_string());
+                }
+            }
+            "//__ACCUM_DECL__" => {
+                if needs_accum {
+                    out.push(format!(
+                        "    var accum_state: vec2<f32> = {};",
+                        coloring.accum_init
+                    ));
+                } else {
+                    out.push("    let accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                }
+            }
+            "//__ACCUM_UPDATE__" => {
+                if needs_accum {
+                    out.push(
+                        "        accum_state = coloring_accum(z_full, z_before, c_f32, accum_state);"
+                            .to_string(),
+                    );
+                }
+            }
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("
+")
+}
+
 /// Assemble the WGSL for one (formula, coloring) pair.
 pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
@@ -545,6 +756,26 @@ mod tests {
         // Coloring that doesn't ask: no derivative code at all.
         let plain = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
         assert!(!plain.contains("formula_derivative"));
+    }
+
+    #[test]
+    fn perturbed_template_validates_for_every_coloring() {
+        for c in COLORINGS {
+            let src = assemble_perturbed(c);
+            assert!(!src.contains("//__"), "{} left a marker", c.name);
+            let module = naga::front::wgsl::parse_str(&src)
+                .unwrap_or_else(|e| panic!("perturbed x {} failed to parse: {e}", c.name));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("perturbed x {} failed validation: {e:?}", c.name));
+            // Fast-math lints hold here too.
+            use crate::variations::shader_lint;
+            assert!(shader_lint::self_operations(&src).is_empty(), "{}", c.name);
+            assert!(shader_lint::subnormal_literals(&src).is_empty(), "{}", c.name);
+        }
     }
 
     #[test]
