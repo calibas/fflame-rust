@@ -280,3 +280,12 @@ pub fn switch_render_mode(
         config_manager.update_param(ConfigPath::RenderMode, mode.into()).map(|_| ())
     }
 }
+
+/// Zoom the escape view by a plain factor (keyboard +/- keys): adds
+/// log2(factor) to the exponent, clamped to the same travel range the
+/// wheel uses.
+pub(crate) fn escape_zoom_by_factor(config_manager: &mut ConfigManager, factor: f64) {
+    let z = config_manager.active_config().escape.zoom_log2;
+    let new_z = (z + factor.log2()).clamp(-8.0, 45.0);
+    let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (new_z as f32).into());
+}

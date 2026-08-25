@@ -1525,7 +1525,16 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            // Escape mode: the flame accumulator is empty; re-tonemap
+                            // from the escape output like the frame loop does.
+                            match self.escape_renderer.as_ref() {
+                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
+                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                            }
+                        } else {
+                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        }
 
                         // Re-run color effects if enabled (they need to process the new tonemapped output)
                         if has_color_effects {
@@ -1612,7 +1621,16 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Restore Normal Tonemap"),
                         });
-                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            // Escape mode: the flame accumulator is empty; re-tonemap
+                            // from the escape output like the frame loop does.
+                            match self.escape_renderer.as_ref() {
+                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
+                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                            }
+                        } else {
+                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        }
 
                         // Re-run color effects with normal tonemap output
                         if has_color_effects {
@@ -1684,7 +1702,9 @@ impl App {
 
                     let mut batch_frame_count = 0;
 
-                    while total_rendered < max_iterations {
+                    let is_escape_export = export_config.render_mode
+                        == crate::scene::transforms::RenderMode::Escape;
+                    while !is_escape_export && total_rendered < max_iterations {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("WASM Export Render Frame"),
                         });
@@ -1750,12 +1770,40 @@ impl App {
                         temp_renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
                     }
 
-                    // Final tonemap pass
+                    // Final tonemap pass. In escape mode the generator is a
+                    // single dispatch here instead of the loop above; the
+                    // temp renderer still supplies palette + tonemap tail.
                     let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("WASM Export Final Tonemap"),
                     });
-                    temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
+                    let escape_export = if is_escape_export {
+                        let mut esc = crate::escape::EscapeRenderer::new(
+                            &self.gpu.device,
+                            export_width,
+                            export_height,
+                        );
+                        esc.render(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &mut final_encoder,
+                            &export_config.escape,
+                            temp_renderer.palette_view(),
+                        );
+                        Some(esc)
+                    } else {
+                        None
+                    };
+                    if let Some(ref esc) = escape_export {
+                        temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, esc.output_view());
+                    } else {
+                        temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
+                    }
                     self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
+                    // WebGPU: explicit destroy after submit (drop frees
+                    // nothing on wasm); queued work keeps its references.
+                    if let Some(esc) = escape_export {
+                        esc.destroy();
+                    }
 
                     // Color effects (if any) allocate a full-res ping-pong
                     // (~512 MB at 8K). On WASM that won't fit alongside the
@@ -1876,7 +1924,16 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            // Escape mode: the flame accumulator is empty; re-tonemap
+                            // from the escape output like the frame loop does.
+                            match self.escape_renderer.as_ref() {
+                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
+                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                            }
+                        } else {
+                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        }
 
                         // Re-run color effects if enabled
                         if has_color_effects {

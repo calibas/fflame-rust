@@ -19,6 +19,10 @@ mod palette_editor;
 mod rhai_highlight;
 mod palette_library;
 mod panel_viewer;
+/// Shared viewport pan entry (drag semantics; routes to escape-mode
+/// panning internally). Re-exported for the keyboard handler.
+pub(crate) use panel_viewer::pan_fractal_view;
+pub(crate) use escape_panel::escape_zoom_by_factor;
 mod path_editor;
 mod performance;
 mod random_generator;
