@@ -325,6 +325,18 @@ mod tests {
         multi_cfg.coloring_params.insert("scale".to_string(), 0.02);
         check("multibrot3", &multi_cfg, false);
         check("multibrot3-floatexp", &multi_cfg, true);
+
+        // Burning Ship (plain variant) over its home view: every
+        // boundary pixel exercises the diffabs case analysis. Scaled
+        // rung only (Ship has no floatexp diffabs yet).
+        let mut ship_cfg = crate::config::escape::EscapeConfig::default();
+        ship_cfg.formula = "burning_ship".to_string();
+        ship_cfg.center_re = "-0.5".to_string();
+        ship_cfg.center_im = "0.5".to_string();
+        ship_cfg.zoom_log2 = 2.0;
+        ship_cfg.max_iter = 300;
+        ship_cfg.coloring_params.insert("scale".to_string(), 0.02);
+        check("ship", &ship_cfg, false);
     }
 
     /// The GPU half of the plan's formula x coloring probe: every
