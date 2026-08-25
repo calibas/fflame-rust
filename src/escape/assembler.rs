@@ -257,8 +257,8 @@ struct EscapeParams {
 }
 
 struct PerturbParams {
-    // Pixel spacing S as an f32 (normal down to 2^-126; the v1
-    // ceiling, far past the UI zoom range) and its reciprocal.
+    // Pixel spacing S as an f32 (scaled-f32 rung; normal down to
+    // 2^-126) and its reciprocal.
     s: f32,
     inv_s: f32,
     orbit_len: u32,   // usable entries in the reference orbit
@@ -267,6 +267,13 @@ struct PerturbParams {
     // from the recurrence and seeds the delta instead (delta_0 =
     // pixel - center).
     flags: u32,
+    // Pixel spacing as mantissa * 2^exponent for the floatexp rung -
+    // computed symbolically from zoom_log2, valid at ANY depth (no
+    // f32/f64 underflow anywhere).
+    s_m: f32,
+    s_e: i32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -394,17 +401,245 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+const PERTURBED_FE_TEMPLATE: &str = r#"
+// Perturbation compute pass, floatexp rung: deltas carried as
+// SHARED-EXPONENT complex floatexp (vec2 mantissa + one i32
+// exponent). Mantissa precision is that of f32 complex arithmetic -
+// the accepted delta precision model - while the exponent range is
+// unbounded, lifting the scaled-f32 rung's ~zoom-54 ceiling.
+// Iteration cost is a few times the scaled rung; this template only
+// runs past PERTURB_FLOATEXP_ZOOM.
+//
+// Same structure as the scaled template otherwise: Zhuoran rebasing
+// against Z_0 (delta <- z_full - Z_0), full z reconstructed every
+// iteration, the whole coloring registry spliced in unchanged.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    _pad0: f32,
+    damping: vec2<f32>,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+}
+
+struct PerturbParams {
+    s: f32,
+    inv_s: f32,
+    orbit_len: u32,
+    flags: u32,
+    s_m: f32,
+    s_e: i32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
+@group(0) @binding(5) var<uniform> perturb: PerturbParams;
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+// ---- shared-exponent complex floatexp ----
+// value = m * 2^e; normalized so max(|m.x|, |m.y|) is in [0.5, 1),
+// or m == (0,0) with the ZERO_E sentinel (large negative, but far
+// from i32::MIN so exponent arithmetic cannot wrap).
+const CFE_ZERO_E: i32 = -1000000000;
+
+struct CFe {
+    m: vec2<f32>,
+    e: i32,
+}
+
+fn cfe_norm(v: CFe) -> CFe {
+    let a = max(abs(v.m.x), abs(v.m.y));
+    if (a == 0.0) {
+        return CFe(vec2<f32>(0.0, 0.0), CFE_ZERO_E);
+    }
+    let f = frexp(a);
+    // a = f.fract * 2^f.exp with f.fract in [0.5, 1).
+    return CFe(v.m * exp2(f32(-f.exp)), v.e + f.exp);
+}
+
+fn cfe_from_f32(v: vec2<f32>) -> CFe {
+    return cfe_norm(CFe(v, 0));
+}
+
+fn cfe_to_f32(v: CFe) -> vec2<f32> {
+    if (v.e < -126 || v.e == CFE_ZERO_E) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    if (v.e > 127) {
+        // Far past any escape threshold; a huge finite stands in.
+        return v.m * 3.0e38;
+    }
+    return v.m * exp2(f32(v.e));
+}
+
+// Multiply by an ordinary f32 complex (|b| bounded ~4: the 2Z term).
+fn cfe_mul_c32(a: CFe, b: vec2<f32>) -> CFe {
+    return cfe_norm(CFe(
+        vec2<f32>(a.m.x * b.x - a.m.y * b.y, a.m.x * b.y + a.m.y * b.x),
+        a.e,
+    ));
+}
+
+fn cfe_sqr(a: CFe) -> CFe {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    return cfe_norm(CFe(
+        vec2<f32>(a.m.x * a.m.x - a.m.y * a.m.y, 2.0 * a.m.x * a.m.y),
+        a.e * 2,
+    ));
+}
+
+fn cfe_add(a: CFe, b: CFe) -> CFe {
+    let d = a.e - b.e;
+    // Past 26 octaves the smaller addend is below the mantissa's
+    // resolution entirely.
+    if (d > 26) {
+        return a;
+    }
+    if (d < -26) {
+        return b;
+    }
+    if (d >= 0) {
+        return cfe_norm(CFe(a.m + b.m * exp2(f32(-d)), a.e));
+    }
+    return cfe_norm(CFe(a.m * exp2(f32(d)) + b.m, b.e));
+}
+
+struct OrbitSummary {
+    z: vec2<f32>,
+    n: u32,
+    escaped: bool,
+    converged: bool,
+    period: u32,
+    dz: vec2<f32>,
+}
+
+//__COLORING__
+
+//__COLORING_ACCUM__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+
+    // Pixel offset in pixel units, rotated (same mapping as the
+    // scaled rung); delta_c = offset * S with S = s_m * 2^s_e.
+    let centered = vec2<f32>(f32(gid.x), f32(gid.y)) + vec2<f32>(0.5, 0.5)
+        - 0.5 * vec2<f32>(f32(params.width), f32(params.height));
+    var dpx = centered;
+    dpx.y = -dpx.y;
+    let rot = params.rot_cs;
+    let d0px = vec2<f32>(
+        dpx.x * rot.x - dpx.y * rot.y,
+        dpx.x * rot.y + dpx.y * rot.x,
+    );
+    let d0 = cfe_norm(CFe(d0px * perturb.s_m, perturb.s_e));
+
+    let is_julia_perturb = (perturb.flags & 2u) != 0u;
+    var w: CFe;
+    if (is_julia_perturb) {
+        w = d0;
+    } else {
+        w = CFe(vec2<f32>(0.0, 0.0), CFE_ZERO_E);
+    }
+
+    var m = 0u;
+    var z = vec2<f32>(0.0, 0.0);
+    var escaped = false;
+    var n = 0u;
+    let converged = false;
+    let period = 0u;
+    let dz = vec2<f32>(1.0, 0.0);
+    let c_f32 = params.center;
+
+    //__ACCUM_DECL__
+
+    for (var i = 0u; i < params.max_iter; i = i + 1u) {
+        let z_ref = ref_orbit[m];
+        // delta' = 2 Z delta + delta^2 (+ delta_c on the parameter
+        // plane) - all in floatexp.
+        var w_new = cfe_add(cfe_mul_c32(w, 2.0 * z_ref), cfe_sqr(w));
+        if (!is_julia_perturb) {
+            w_new = cfe_add(w_new, d0);
+        }
+        let z_before = z;
+        w = w_new;
+        m = m + 1u;
+
+        let delta = cfe_to_f32(w);
+        let z_full = ref_orbit[min(m, perturb.orbit_len - 1u)] + delta;
+        z = z_full;
+
+        //__ACCUM_UPDATE__
+
+        if (dot(z_full, z_full) > params.bailout) {
+            escaped = true;
+            n = i + 1u;
+            break;
+        }
+
+        // Zhuoran rebase against the orbit start (Z_0 = 0 on the
+        // parameter plane, the center on the Julia plane).
+        let rebase_delta = z_full - ref_orbit[0];
+        if (m >= perturb.orbit_len - 1u
+            || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
+            w = cfe_from_f32(rebase_delta);
+            m = 0u;
+        }
+    }
+    if (!escaped) {
+        n = params.max_iter;
+    }
+
+    var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    if (escaped || COLORING_COLORS_INTERIOR) {
+        let summary = OrbitSummary(z, n, escaped, converged, period, dz);
+        let t = fract(coloring_map(summary, accum_state));
+        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+    }
+
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+}
+"#;
+
 /// Assemble the perturbed (deep-zoom) Mandelbrot WGSL for one
 /// coloring. The formula axis is fixed to Mandelbrot in v1 (the
 /// "clean" perturbation tier); the coloring axis is fully preserved -
 /// the loop reconstructs the full orbit value every iteration for the
 /// rebase test, which is exactly the summary the colorings consume.
-pub fn assemble_perturbed(coloring: &ColoringDef) -> String {
+/// `floatexp` picks the deep rung: deltas as shared-exponent complex
+/// floatexp instead of scaled f32, lifting the ~zoom-54 ceiling.
+pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
+    let template = if floatexp {
+        PERTURBED_FE_TEMPLATE
+    } else {
+        PERTURBED_TEMPLATE
+    };
 
     let mut out = Vec::new();
-    for line in PERTURBED_TEMPLATE.lines() {
+    for line in template.lines() {
         match line.trim() {
             "//__COLORING__" => {
                 out.push(format!(
@@ -771,8 +1006,9 @@ mod tests {
 
     #[test]
     fn perturbed_template_validates_for_every_coloring() {
+      for floatexp in [false, true] {
         for c in COLORINGS {
-            let src = assemble_perturbed(c);
+            let src = assemble_perturbed(c, floatexp);
             assert!(!src.contains("//__"), "{} left a marker", c.name);
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("perturbed x {} failed to parse: {e}", c.name));
@@ -787,6 +1023,7 @@ mod tests {
             assert!(shader_lint::self_operations(&src).is_empty(), "{}", c.name);
             assert!(shader_lint::subnormal_literals(&src).is_empty(), "{}", c.name);
         }
+      }
     }
 
     #[test]

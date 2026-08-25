@@ -646,7 +646,7 @@ fn escape_zoom_view(
     };
     // f32 travel ceiling for the ConfigValue::Float leg; the stored
     // field is f64 and phase 4 lifts the range with perturbation.
-    let new_zoom_log2 = (esc.zoom_log2 + zoom_factor.log2()).clamp(-8.0, 45.0);
+    let new_zoom_log2 = (esc.zoom_log2 + zoom_factor.log2()).clamp(-8.0, 300.0);
 
     let mut updates = vec![(
         crate::config::ConfigPath::EscapeZoomLog2,
@@ -1343,7 +1343,7 @@ impl<'a> PanelViewer<'a> {
             let (mut cx, mut cy) = esc.center_f64();
             if zoom_delta != 1.0 {
                 let new_zoom_log2 =
-                    (esc.zoom_log2 + f64::from(zoom_delta).log2()).clamp(-8.0, 45.0);
+                    (esc.zoom_log2 + f64::from(zoom_delta).log2()).clamp(-8.0, 300.0);
                 let off_x = f64::from(pinch_center.x - panel_rect.center().x);
                 let off_y = f64::from(pinch_center.y - panel_rect.center().y);
                 let (wx_old, wy_old) = escape_screen_to_world(&esc, off_x, off_y, panel_size);
