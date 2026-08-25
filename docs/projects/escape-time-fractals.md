@@ -570,14 +570,29 @@ carrying it into S units). Agreement tests cover param/Julia ×
 scaled/floatexp × Mandelbrot/Multibrot-3/Ship: 0/768 structural
 blocks everywhere (3/768 on one Julia filigree case).
 
+Newton nucleus-finding SHIPPED (the phase-5 backlog item, pulled
+forward): ball-method period detection (center orbit in fixed-point,
+radius in extended-range floats) + Newton on f_c^p(0) = 0 in the
+big-float wrapper (limbs + one saturating i64 exponent,
+division-by-reciprocal only — verified against the period-2 nucleus
+at exactly −1 and the period-3 antenna constant to 19 digits).
+Parameter-plane Mandelbrot references relocate to the governing
+nucleus on both the blocking and worker paths: Z_period = 0 makes
+the wrap-rebase exact (the fix for wrap-laundering banding), the
+orbit array is period-length, and the pipeline carries the
+(view − nucleus) offset as a pixel-unit uniform. Search failures
+fall back to the plain reference. The panel gains "Center on
+minibrot" — Newton navigation writing exact-precision center digits
+as one undo point.
+
 Still open within phase 4/5: a floatexp diffabs (Ship past zoom 48
 falls back to direct — CFe-vs-f32 sign analysis plus the deep-needle
 full-range notes); the non-plain Ship variants' case analyses;
-early-escaping references force wrap-rebases whose large deltas
-launder pixel-scale precision (banding at depth on adversarial
-centers) — Newton nucleus-finding (periodic references) is the
-standard fix; orbit persistence for bookmarked locations; a wasm
-worker (browser builds keep the synchronous path).
+worker-side nucleus search (the 20k-period budget and the button's
+synchronous click both lift when the worker owns it); nucleus math
+for the Multibrot/Ship tiers (Mandelbrot-only today); orbit
+persistence for bookmarked locations; a wasm worker (browser builds
+keep the synchronous path).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and
