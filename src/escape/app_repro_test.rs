@@ -140,6 +140,158 @@ mod tests {
         );
     }
 
+    /// Direct vs perturbed agreement: at a zoom where the direct
+    /// path is still accurate (16), the perturbation pipeline must
+    /// reproduce its image. This is THE correctness check for the
+    /// delta math + rebasing — any sign error, scale slip, or
+    /// misindexed reference shows up as wholesale pixel differences.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_agrees_with_direct_at_moderate_zoom() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        let adapter_limits = adapter.limits();
+        let mut limits = wgpu::Limits::default();
+        limits.max_storage_buffers_per_shader_stage =
+            adapter_limits.max_storage_buffers_per_shader_stage;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("escape agreement"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
+        .expect("device");
+        device.on_uncaptured_error(std::sync::Arc::new(|e| {
+            panic!("wgpu error during agreement test: {e}");
+        }));
+
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            256,
+            192,
+            &config.flame,
+            config.palette_size,
+        );
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            256,
+            192,
+            0,
+            config.max_iterations,
+            config.zoom,
+            256,
+            1,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        esc_cfg.center_re = "-0.74364388703715".to_string();
+        esc_cfg.center_im = "0.13182590420531".to_string();
+        esc_cfg.zoom_log2 = 10.0; // shallow: direct is unimpeachable here
+        esc_cfg.max_iter = 800;
+        esc_cfg.coloring_params.insert("scale".to_string(), 0.01);
+
+        let mut render_once = |force: bool| -> Vec<u8> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, 256, 192);
+            escape.force_perturbed = force;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("agreement frame"),
+            });
+            escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view());
+            renderer.tonemap_pass_with_input(&device, &queue, &mut encoder, escape.output_view());
+            queue.submit(std::iter::once(encoder.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device,
+                &queue,
+                false,
+                [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            escape.destroy();
+            rgba
+        };
+
+        let direct = render_once(false);
+        let perturbed = render_once(true);
+
+        // Diagnostic dumps for visual comparison.
+        if let Some(img) = image::RgbaImage::from_raw(256, 192, direct.clone()) {
+            let _ = img.save("output/agree-direct.png");
+        }
+        if let Some(img) = image::RgbaImage::from_raw(256, 192, perturbed.clone()) {
+            let _ = img.save("output/agree-perturbed.png");
+        }
+
+        // Boundary filigree legitimately flips iteration bands (the
+        // two paths round differently), and it can cover a large
+        // fraction of an interesting view — so compare 8x8 BLOCK
+        // MEANS instead of pixels: band noise averages out, while any
+        // structural bug (sign error, scale slip, misindexed
+        // reference) shifts whole features and fails loudly.
+        let (w, h) = (256usize, 192usize);
+        let mut bad_blocks = 0usize;
+        let mut total_blocks = 0usize;
+        for by in 0..h / 8 {
+            for bx in 0..w / 8 {
+                let mut sum_a = [0i64; 3];
+                let mut sum_b = [0i64; 3];
+                for y in 0..8 {
+                    for x in 0..8 {
+                        let idx = ((by * 8 + y) * w + bx * 8 + x) * 4;
+                        for ch in 0..3 {
+                            sum_a[ch] += direct[idx + ch] as i64;
+                            sum_b[ch] += perturbed[idx + ch] as i64;
+                        }
+                    }
+                }
+                total_blocks += 1;
+                let diff: i64 = (0..3).map(|ch| (sum_a[ch] - sum_b[ch]).abs() / 64).sum();
+                // Calibration: filigree band-flips measured at mean
+                // diffs of 25-39 on the densest blocks; a structural
+                // misalignment shifts whole features and produces
+                // contiguous runs in the hundreds.
+                if diff > 48 {
+                    bad_blocks += 1;
+                }
+            }
+        }
+        println!("agreement: {bad_blocks}/{total_blocks} blocks differ structurally");
+        assert!(
+            bad_blocks < total_blocks / 25,
+            "direct and perturbed disagree structurally on {bad_blocks}/{total_blocks} blocks"
+        );
+    }
+
     /// The GPU half of the plan's formula x coloring probe: every
     /// combination dispatches on a real device (the naga test already
     /// guarantees they validate). Content is asserted only for
