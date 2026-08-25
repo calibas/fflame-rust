@@ -65,7 +65,8 @@ struct PerturbParamsGpu {
     s: f32,
     inv_s: f32,
     orbit_len: u32,
-    skip_quadratic: u32,
+    /// bit 0: skip quadratic term; bit 1: Julia mode.
+    flags: u32,
 }
 
 pub struct EscapeRenderer {
@@ -255,7 +256,6 @@ impl EscapeRenderer {
     fn wants_perturbation(escape: &EscapeConfig) -> bool {
         escape.zoom_log2 > PERTURB_MIN_ZOOM
             && escape.formula == "mandelbrot"
-            && !escape.julia
             && !escape.is_damped()
             && escape.biomorph == crate::config::escape::BiomorphMode::Off
     }
@@ -292,11 +292,17 @@ impl EscapeRenderer {
     /// Returns the usable orbit length, or None if the center failed
     /// to parse (caller falls back to the direct path).
     fn ensure_orbit(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) -> Option<u32> {
+        let julia_c = if escape.julia {
+            Some((escape.julia_re, escape.julia_im))
+        } else {
+            None
+        };
         let orbit = self.orbit_cache.get(
             &escape.center_re,
             &escape.center_im,
             escape.zoom_log2,
             escape.max_iter,
+            julia_c,
         )?;
         let len = orbit.len();
         let needed_bytes = (len as u64) * 8;
@@ -478,7 +484,7 @@ impl EscapeRenderer {
                     s: s_f64 as f32,
                     inv_s: (1.0 / s_f64) as f32,
                     orbit_len: orbit_len.max(2),
-                    skip_quadratic: 0,
+                    flags: if escape.julia { 2 } else { 0 },
                 };
                 queue.write_buffer(&self.perturb_params_buffer, 0, bytemuck::bytes_of(&pp));
 
@@ -591,7 +597,7 @@ mod tests {
         assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
         esc.zoom_log2 = 30.0;
         esc.julia = true;
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "julia not in v1 tier");
+        assert!(EscapeRenderer::wants_perturbation(&esc), "julia is in the trivial tier");
         esc.julia = false;
         esc.formula = "burning_ship".to_string();
         assert!(!EscapeRenderer::wants_perturbation(&esc), "diffabs tier not in v1");
