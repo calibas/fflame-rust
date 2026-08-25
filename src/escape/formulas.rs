@@ -13,6 +13,7 @@
 
 use super::{EscapeParamDef, FormulaDef, FormulaFeature};
 
+
 /// The classic quadratic map `z ← z² + c` (plan §5.1).
 ///
 /// No parameters: Multibrot (arbitrary power) is a separate def so
@@ -29,6 +30,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
 }
 "#,
+    wgsl_param_seed: "",
 };
 
 /// Multibrot `z ← zᵖ + c` (plan §5.1). Non-integer powers render too
@@ -50,6 +52,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return esc_cpow(z, fparam(0u)) + c;
 }
 "#,
+    wgsl_param_seed: "",
 };
 
 /// Tricorn / Multicorn `z ← z̄ᵖ + c` (plan §5.2): conjugate first,
@@ -71,6 +74,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return esc_cpow(vec2<f32>(z.x, -z.y), fparam(0u)) + c;
 }
 "#,
+    wgsl_param_seed: "",
 };
 
 /// Burning Ship family (plan §5.3): one formula, a `variant` enum of
@@ -135,6 +139,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(re, im) + c;
 }
 "#,
+    wgsl_param_seed: "",
 };
 
 /// McMullen family `z ← zⁿ + c/zᵐ` (plan §5.4) — rational maps with
@@ -142,14 +147,14 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 ///
 /// The origin is a pole: a near-zero z is treated as escaped (a huge
 /// step output trips the bailout immediately), matching the plan's
-/// guard note. `SeedFromPixel` because the critical point 0 IS the
+/// guard note. seeded from the pixel because the critical point 0 IS the
 /// pole — the classic carpet pictures are Julia mode; the pixel-seeded
 /// parameter plane is the exploratory map until the proper
 /// critical-orbit seed lands with the perturbation work.
 pub static MCMULLEN: FormulaDef = FormulaDef {
     name: "mcmullen",
     display_name: "McMullen",
-    features: &[FormulaFeature::SeedFromPixel],
+    features: &[],
     parameters: &[
         EscapeParamDef {
             name: "n",
@@ -178,11 +183,12 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return esc_cpow(z, fparam(0u)) + esc_cmul(c, esc_cpow(z, -fparam(1u)));
 }
 "#,
+    wgsl_param_seed: "pixel",
 };
 
 /// Kaliset `z ← |z| / ⟨z,z⟩ − c` (component abs; plan §5.12).
 ///
-/// `NonEscaping`: no bailout — the loop runs the full `max_iter`
+/// `NonEscaping` (no bailout), seeded from the pixel — the loop runs the full `max_iter`
 /// (classic renders use ~50–200) and ONLY the orbit-average colorings
 /// show anything (escape-based colorings render black by design; the
 /// panel pairing is the user's choice, per the registry-orthogonality
@@ -192,7 +198,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static KALISET: FormulaDef = FormulaDef {
     name: "kaliset",
     display_name: "Kaliset",
-    features: &[FormulaFeature::NonEscaping, FormulaFeature::SeedFromPixel],
+    features: &[FormulaFeature::NonEscaping],
     parameters: &[EscapeParamDef {
         name: "plus_c",
         display_name: "Add c (instead of subtract)",
@@ -214,4 +220,57 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return folded + sign_c * c;
 }
 "#,
+    wgsl_param_seed: "pixel",
+};
+
+/// Phoenix — `z ← z² + c + p·z_prev` (plan §5.6). The first
+/// `NeedsPrevZ` formula: the loop carries a one-iterate history
+/// register. Classic gallery view: Julia mode, `c = 0.5667`,
+/// `p = −0.5`.
+pub static PHOENIX: FormulaDef = FormulaDef {
+    name: "phoenix",
+    display_name: "Phoenix",
+    features: &[FormulaFeature::NeedsPrevZ],
+    parameters: &[
+        EscapeParamDef {
+            name: "p_re",
+            display_name: "p (re)",
+            default: -0.5,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Real part of the previous-iterate coefficient. The classic Phoenix Julia uses c = 0.5667, p = -0.5.",
+        },
+        EscapeParamDef {
+            name: "p_im",
+            display_name: "p (im)",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Imaginary part of the previous-iterate coefficient.",
+        },
+    ],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
+    let p = vec2<f32>(fparam(0u), fparam(1u));
+    return vec2<f32>(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c + esc_cmul(p, z_prev);
+}
+"#,
+    wgsl_param_seed: "",
+};
+
+/// Lambda / logistic plane — `z ← λ·z·(1−z)` (plan §5.5).
+/// Conformally conjugate to Mandelbrot, but the λ-plane layout is its
+/// own classic. Pixel = λ (the map's `c` slot); the critical point of
+/// the logistic map is z = 1/2, so the parameter plane seeds there.
+pub static LAMBDA: FormulaDef = FormulaDef {
+    name: "lambda",
+    display_name: "Lambda (Logistic)",
+    features: &[],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    return esc_cmul(c, esc_cmul(z, vec2<f32>(1.0, 0.0) - z));
+}
+"#,
+    wgsl_param_seed: "vec2<f32>(0.5, 0.0)",
 };

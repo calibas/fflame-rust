@@ -221,11 +221,13 @@ mod tests {
                 esc_cfg.formula = f.name.to_string();
                 esc_cfg.coloring = c.name.to_string();
                 esc_cfg.max_iter = 64;
-                // Julia mode with a seed that keeps every formula's
-                // dynamical plane interesting enough to light pixels.
-                esc_cfg.julia = true;
-                esc_cfg.julia_re = -0.4;
-                esc_cfg.julia_im = 0.35;
+                // Parameter plane: every escaping formula's home view
+                // has both escaping and bounded territory, so the
+                // lit-pixel assertion below holds for all of them. (A
+                // fixed Julia seed can't promise that — a small-|λ|
+                // Lambda basin, for instance, never escapes at all.)
+                esc_cfg.center_re = "0".to_string();
+                esc_cfg.center_im = "0".to_string();
 
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("combo frame"),
