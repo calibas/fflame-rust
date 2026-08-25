@@ -552,15 +552,32 @@ Verified: seamless direct↔perturbed threshold crossings on both
 planes, block-mean agreement tests (0/768 param, 3/768 julia), and
 crisp structure at zoom 42 (~4·10¹²) on a 38-digit seahorse center.
 
-Still open within phase 4: the floatexp WGSL rung + periodic
-rescaling (lifts the zoom-54 ceiling and the UI clamp); reference
-orbits on a worker with progressive upload (today the first deep
-frame computes synchronously — milliseconds at current depths);
-Multibrot (binomial) and Burning Ship (diffabs) delta tiers;
+Closed since: the switch moved to zoom 14 (field-observed direct
+pixelation by 16 — the center's f32 ulp binds before pixel spacing
+does); the floatexp rung shipped (shared-exponent complex floatexp —
+vec2 f32 mantissa + one i32 exponent via frexp — past zoom 48, pixel
+spacing delivered symbolically so nothing ever underflows; UI clamp
+raised to 300); Multibrot joined via assemble-time binomial codegen
+(p = 2 emits the hand-written step byte-for-byte; integer powers
+2–12, fractional powers honestly direct); reference orbits moved to
+a worker thread with chunked append-only publication and
+newest-request-wins preemption — deep frames render with whatever
+prefix has landed (rebasing makes short orbits an early wrap, so
+partial frames refine rather than being wrong), CLI/export keeps the
+blocking deterministic path; and the plain Burning Ship variant
+joined via diffabs (exact three-branch case analysis, homogeneity
+carrying it into S units). Agreement tests cover param/Julia ×
+scaled/floatexp × Mandelbrot/Multibrot-3/Ship: 0/768 structural
+blocks everywhere (3/768 on one Julia filigree case).
+
+Still open within phase 4/5: a floatexp diffabs (Ship past zoom 48
+falls back to direct — CFe-vs-f32 sign analysis plus the deep-needle
+full-range notes); the non-plain Ship variants' case analyses;
 early-escaping references force wrap-rebases whose large deltas
 launder pixel-scale precision (banding at depth on adversarial
-centers) — the phase-5 Newton nucleus-finding (periodic references)
-is the standard fix; orbit persistence for bookmarked locations.
+centers) — Newton nucleus-finding (periodic references) is the
+standard fix; orbit persistence for bookmarked locations; a wasm
+worker (browser builds keep the synchronous path).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and
