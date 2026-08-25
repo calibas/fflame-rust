@@ -106,6 +106,17 @@ fn esc_ccos(z: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(cos(z.x) * cosh(z.y), -sin(z.x) * sinh(z.y));
 }
 
+// Complex division, pole-guarded: a near-zero denominator returns a
+// huge value (trips the escape test next) instead of dividing toward
+// inf/NaN.
+fn esc_cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    let d = dot(b, b);
+    if (d < 1e-30) {
+        return vec2<f32>(1e20, 0.0);
+    }
+    return vec2<f32>(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / d;
+}
+
 //__FORMULA__
 
 //__COLORING__
@@ -142,10 +153,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     //__PREV_DECL__
 
     var escaped = false;
+    var converged = false;
     var n = 0u;
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
         //__STEP__
         //__ACCUM_UPDATE__
+        //__CONVERGE_TEST__
         //__ESCAPE_TEST__
     }
     if (!escaped) {
@@ -154,7 +167,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
-        let t = fract(coloring_map(z, n, escaped, accum_state));
+        let t = fract(coloring_map(z, n, escaped, converged, accum_state));
         // textureSampleLevel: explicit LOD, legal in non-uniform
         // control flow (unlike textureSample) -- WASM-safe.
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
@@ -196,6 +209,7 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
+    let convergent = formula.has_feature(FormulaFeature::Convergent);
     let param_seed = if formula.wgsl_param_seed.is_empty() {
         "vec2<f32>(0.0, 0.0)"
     } else {
@@ -236,6 +250,22 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                     out.push("        accum_state = coloring_accum(z, accum_state);".to_string());
                 }
             }
+            "//__CONVERGE_TEST__" => {
+                if convergent {
+                    // Terminates on a settled orbit (a root, Magnet's
+                    // fixed point at 1, an attracting cycle of period
+                    // 1). Sets `escaped` too so escape-count/smooth
+                    // shade convergence speed; `converged`
+                    // distinguishes basins for root colorings.
+                    out.push("        let conv_dz = z - z_before;".to_string());
+                    out.push("        if (dot(conv_dz, conv_dz) < 1e-12) {".to_string());
+                    out.push("            converged = true;".to_string());
+                    out.push("            escaped = true;".to_string());
+                    out.push("            n = i + 1u;".to_string());
+                    out.push("            break;".to_string());
+                    out.push("        }".to_string());
+                }
+            }
             "//__ESCAPE_TEST__" => {
                 if !non_escaping {
                     out.push(escape_test(formula.escape_metric));
@@ -272,6 +302,11 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                 } else {
                     format!("formula_step(z, {c_arg})")
                 };
+                if convergent {
+                    // The convergence register: last iterate, kept
+                    // independently of the formula's own history.
+                    out.push("        let z_before = z;".to_string());
+                }
                 if damped {
                     out.push(format!("        let z_raw = {call};"));
                     if needs_prev {
@@ -420,6 +455,20 @@ mod tests {
         assert!(trig.contains("var esc_metric = abs(z.y);"));
         let mandel = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
         assert!(mandel.contains("var esc_metric = dot(z, z);"));
+    }
+
+    #[test]
+    fn convergent_formulas_get_the_convergence_test() {
+        use crate::escape::{colorings, formulas};
+        let newton = assemble(&formulas::NEWTON, &colorings::ROOT_BASIN, false);
+        assert!(newton.contains("conv_dz"));
+        assert!(newton.contains("converged = true;"));
+        let mandel = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
+        assert!(!mandel.contains("conv_dz"));
+        // Novaretti: convergence test WITHOUT an escape test.
+        let nov = assemble(&formulas::NOVARETTI, &colorings::ROOT_BASIN, false);
+        assert!(nov.contains("conv_dz"));
+        assert!(!nov.contains("esc_metric"));
     }
 
     #[test]

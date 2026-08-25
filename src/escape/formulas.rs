@@ -537,3 +537,199 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
 };
+
+/// Newton / root-finder plane over `zᵖ − 1` (plan §5.7): the scheme
+/// axis with complex relaxation R — the generalized-relaxation
+/// "a-plane" galleries. Schemes shipped: Newton, Halley, Chebyshev
+/// (closed forms over f = zᵖ−1, f′ = p·zᵖ⁻¹, f″ = p(p−1)zᵖ⁻²);
+/// Schröder/Householder-3/König are noted follow-ups. `c` is unused —
+/// the Newton fractal is the dynamical plane, so the parameter plane
+/// seeds the pixel too.
+pub static NEWTON: FormulaDef = FormulaDef {
+    name: "newton",
+    display_name: "Newton",
+    features: &[FormulaFeature::Convergent],
+    parameters: &[
+        EscapeParamDef {
+            name: "power",
+            display_name: "Power",
+            default: 3.0,
+            min: 2.0,
+            max: 12.0,
+            tooltip: "Roots of z^p - 1: p basins of attraction.",
+        },
+        EscapeParamDef {
+            name: "scheme",
+            display_name: "Scheme",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "0: Newton, 1: Halley, 2: Chebyshev.",
+        },
+        EscapeParamDef {
+            name: "relax_re",
+            display_name: "Relaxation (re)",
+            default: 1.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "Complex relaxation R multiplying the step. 1+0i is the plain scheme; the interesting galleries live away from it.",
+        },
+        EscapeParamDef {
+            name: "relax_im",
+            display_name: "Relaxation (im)",
+            default: 0.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "Imaginary part of the relaxation.",
+        },
+    ],
+    wgsl: r#"
+fn newton_delta(z: vec2<f32>) -> vec2<f32> {
+    let p = fparam(0u);
+    let f = esc_cpow(z, p) - vec2<f32>(1.0, 0.0);
+    let fp = p * esc_cpow(z, p - 1.0);
+    let scheme = u32(clamp(fparam(1u), 0.0, 2.0));
+    if (scheme == 0u) {
+        return esc_cdiv(f, fp);
+    }
+    let fpp = p * (p - 1.0) * esc_cpow(z, p - 2.0);
+    if (scheme == 1u) {
+        // Halley: 2 f f' / (2 f'^2 - f f'')
+        let num = 2.0 * esc_cmul(f, fp);
+        let den = 2.0 * esc_cmul(fp, fp) - esc_cmul(f, fpp);
+        return esc_cdiv(num, den);
+    }
+    // Chebyshev: (f/f') * (1 + f f'' / (2 f'^2))
+    let nf = esc_cdiv(f, fp);
+    let corr = esc_cdiv(esc_cmul(f, fpp), 2.0 * esc_cmul(fp, fp));
+    return esc_cmul(nf, vec2<f32>(1.0, 0.0) + corr);
+}
+
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let relax = vec2<f32>(fparam(2u), fparam(3u));
+    return z - esc_cmul(relax, newton_delta(z));
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+};
+
+/// Nova (plan §5.7): the Newton step plus `c` — a Mandelbrot-like
+/// parameter plane over the convergent core. Seeds the critical
+/// point z₀ = 1 on the parameter plane.
+pub static NOVA: FormulaDef = FormulaDef {
+    name: "nova",
+    display_name: "Nova",
+    features: &[FormulaFeature::Convergent],
+    parameters: &[
+        EscapeParamDef {
+            name: "power",
+            display_name: "Power",
+            default: 3.0,
+            min: 2.0,
+            max: 12.0,
+            tooltip: "Power of the underlying z^p - 1.",
+        },
+        EscapeParamDef {
+            name: "relax_re",
+            display_name: "Relaxation (re)",
+            default: 1.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "Complex relaxation R multiplying the Newton step.",
+        },
+        EscapeParamDef {
+            name: "relax_im",
+            display_name: "Relaxation (im)",
+            default: 0.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "Imaginary part of the relaxation.",
+        },
+    ],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let p = fparam(0u);
+    let f = esc_cpow(z, p) - vec2<f32>(1.0, 0.0);
+    let fp = p * esc_cpow(z, p - 1.0);
+    let relax = vec2<f32>(fparam(1u), fparam(2u));
+    return z - esc_cmul(relax, esc_cdiv(f, fp)) + c;
+}
+"#,
+    wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+};
+
+/// Magnet I / II (plan §5.10): rational maps from statistical
+/// mechanics; escape AND convergence to the fixed point 1 both
+/// terminate (the generic |z − z_prev| test catches the latter).
+/// Denominator zeros are guarded as escaped.
+pub static MAGNET: FormulaDef = FormulaDef {
+    name: "magnet",
+    display_name: "Magnet",
+    features: &[FormulaFeature::Convergent],
+    parameters: &[EscapeParamDef {
+        name: "variant",
+        display_name: "Variant",
+        default: 0.0,
+        min: 0.0,
+        max: 1.0,
+        tooltip: "0: Magnet I, 1: Magnet II.",
+    }],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    if (fparam(0u) < 0.5) {
+        // I: ((z^2 + c - 1) / (2z + c - 2))^2
+        let num = esc_cmul(z, z) + c - vec2<f32>(1.0, 0.0);
+        let den = 2.0 * z + c - vec2<f32>(2.0, 0.0);
+        let q = esc_cdiv(num, den);
+        return esc_cmul(q, q);
+    }
+    // II: ((z^3 + 3(c-1)z + (c-1)(c-2)) / (3z^2 + 3(c-2)z + (c-1)(c-2) + 1))^2
+    let cm1 = c - vec2<f32>(1.0, 0.0);
+    let cm2 = c - vec2<f32>(2.0, 0.0);
+    let c12 = esc_cmul(cm1, cm2);
+    let z2 = esc_cmul(z, z);
+    let num = esc_cmul(z2, z) + 3.0 * esc_cmul(cm1, z) + c12;
+    let den = 3.0 * z2 + 3.0 * esc_cmul(cm2, z) + c12 + vec2<f32>(1.0, 0.0);
+    let q = esc_cdiv(num, den);
+    return esc_cmul(q, q);
+}
+"#,
+    wgsl_param_seed: "",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+};
+
+/// Novaretti — `z ← −6z(z³ + c) / (2z³ − c)²` (plan §5.17; community
+/// formula credited to Elena Novaretti, ZoneXplorer). Degree-6
+/// rational; NOTHING escapes (∞ ↦ 0), so classification is
+/// convergence — z = 0 attracts iff |c| > 6, other cycles carry
+/// |c| < 6. The parameter plane seeds one of the two closed-form
+/// critical orbits, z³ = c·(−7+3√5)/4 (the second, and true period
+/// detection for the cycle territory, are noted follow-ups). Poles
+/// 2z³ = c are guarded like McMullen's.
+pub static NOVARETTI: FormulaDef = FormulaDef {
+    name: "novaretti",
+    display_name: "Novaretti",
+    features: &[FormulaFeature::NonEscaping, FormulaFeature::Convergent],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let z3 = esc_cmul(esc_cmul(z, z), z);
+    let den_root = 2.0 * z3 - c;
+    let den = esc_cmul(den_root, den_root);
+    if (dot(den, den) < 1e-24) {
+        // Double pole: feeds infinity, which maps to 0 next step.
+        return vec2<f32>(1e10, 0.0);
+    }
+    let num = -6.0 * esc_cmul(z, z3 + c);
+    return esc_cdiv(num, den);
+}
+"#,
+    wgsl_param_seed: "esc_cpow(pixel * -0.0729490168, 0.3333333333)",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+};

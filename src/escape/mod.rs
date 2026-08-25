@@ -50,6 +50,13 @@ pub enum FormulaFeature {
     /// `ptr<function, vec2<f32>>`; without the flag `c` stays a `let`
     /// and the signature is unchanged.
     MutatesC,
+    /// The map CONVERGES (root-finders, Magnet's fixed point at 1,
+    /// Novaretti's attracting cycles): the loop also terminates on
+    /// `|z − z_prev|² < 1e-12`, recording `converged` for the
+    /// colorings (root basins, convergence speed). Composes with the
+    /// escape test — Magnet needs both. The convergence register is
+    /// maintained independently of `NeedsPrevZ`.
+    Convergent,
 }
 
 /// Which quantity the escape test compares against `bailout`
@@ -189,6 +196,10 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::TETRATION,
     &formulas::COLLATZ,
     &formulas::FEATHER,
+    &formulas::NEWTON,
+    &formulas::NOVA,
+    &formulas::MAGNET,
+    &formulas::NOVARETTI,
 ];
 
 /// Ordered coloring registry. **Append-only.**
@@ -198,6 +209,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::ORBIT_TRAP,
     &colorings::ORBIT_AVERAGE,
     &colorings::STRIPE_AVERAGE,
+    &colorings::ROOT_BASIN,
 ];
 
 /// Look up a formula by name. An unknown name renders the default
