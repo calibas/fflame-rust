@@ -383,6 +383,15 @@ pub struct App {
     pub(super) gpu: GpuContext,
     pub(super) egui_layer: EguiLayer,
     pub(super) flame_renderer: Option<FlameRenderer>,
+    /// Escape-time generator, created lazily the first frame the config
+    /// is in `RenderMode::Escape`. Lives beside (not inside) the flame
+    /// renderer: it consumes the flame renderer's palette texture and
+    /// tonemap tail but owns its own pipelines and output.
+    pub(super) escape_renderer: Option<crate::escape::EscapeRenderer>,
+    /// Set by `process_gpu_updates` when an edit requires re-running
+    /// the escape pass (escape params, palette, structural loads).
+    /// Starts true so the first escape frame always renders.
+    pub(super) escape_dirty: bool,
     pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
 
     // UI state (not saved in config)
@@ -709,6 +718,8 @@ impl App {
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
+            escape_renderer: None,
+            escape_dirty: true,
             flame,
             workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
@@ -1054,9 +1065,11 @@ impl App {
                     // Check if actively rendering (not paused and under max_iterations)
                     let config = app.config_manager.active_config();
                     let max_iterations = Some(config.max_iterations);
-                    let is_rendering = !app.paused && app.flame_renderer.as_ref().map_or(false, |r| {
-                        max_iterations.map_or(true, |max| r.total_iterations() < max)
-                    });
+                    let is_rendering = !app.paused
+                        && config.render_mode != crate::scene::transforms::RenderMode::Escape
+                        && app.flame_renderer.as_ref().map_or(false, |r| {
+                            max_iterations.map_or(true, |max| r.total_iterations() < max)
+                        });
 
                     // Check if animation is playing (needs continuous redraws)
                     let animation_playing = app.animation_controller.is_playing();
@@ -2098,6 +2111,38 @@ impl App {
         if let Some(ref mut renderer) = self.flame_renderer {
             renderer.set_overwrite_mode(use_overwrite);
 
+            // Escape-time mode: the generator is one compute dispatch,
+            // not a progressive chaos game — render it only when an
+            // edit marked it dirty (or the viewport size changed), and
+            // let the shared tonemap/effects tail below run every frame
+            // exactly as it does for flames. `should_iterate` is forced
+            // false so the whole chaos-game block (governor included)
+            // idles without re-indenting it.
+            let is_escape = final_config.render_mode
+                == crate::scene::transforms::RenderMode::Escape;
+            if is_escape {
+                let escape = self.escape_renderer.get_or_insert_with(|| {
+                    crate::escape::EscapeRenderer::new(
+                        &self.gpu.device,
+                        renderer.width,
+                        renderer.height,
+                    )
+                });
+                if escape.resize(&self.gpu.device, renderer.width, renderer.height) {
+                    self.escape_dirty = true;
+                }
+                if self.escape_dirty {
+                    escape.render(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut render_encoder,
+                        &final_config.escape,
+                        renderer.palette_view(),
+                    );
+                    self.escape_dirty = false;
+                }
+            }
+
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
             // Skip GPU work during any export to avoid GPU contention (the export
@@ -2106,7 +2151,7 @@ impl App {
                 .map(|s| s.active)
                 .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused && !is_exporting && (
+            let should_iterate = !is_escape && !self.paused && !is_exporting && (
                 is_controller_playing ||
                 // Overwrite mode bypasses the max_iterations gate. With
                 // it gated, a cheap flame that hits max during a long
@@ -2337,11 +2382,13 @@ impl App {
             // Solid brightness renormalization: measure the accepted
             // density every few frames while occlusion culls (async, EMA-
             // smoothed) so hard solids tone-map at full brightness.
-            renderer.update_density_stats(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+            if !is_escape {
+                renderer.update_density_stats(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+            }
 
             // Solid-rendering shade pass (lighting/SSAO on the depth buffer)
             // — runs before density effects; both consume HDR pre-tonemap data.
-            let shade_ran = renderer.run_shade_pass(
+            let shade_ran = !is_escape && renderer.run_shade_pass(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
@@ -2358,14 +2405,19 @@ impl App {
             );
             // Post-process DoF (solid mode) sits between shade and
             // density effects/tonemap.
-            let dof_ran = renderer.run_dof_pass(
+            let dof_ran = !is_escape && renderer.run_dof_pass(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
                 shade_ran,
                 final_config.zoom,
             );
-            let pre_tonemap_view = if dof_ran {
+            let pre_tonemap_view = if is_escape {
+                self.escape_renderer
+                    .as_ref()
+                    .expect("escape branch above created it")
+                    .output_view()
+            } else if dof_ran {
                 renderer.dof_output_view()
             } else if shade_ran {
                 renderer.shade_output_view()
@@ -2387,12 +2439,12 @@ impl App {
             if density_effects_ran {
                 if let Some(density_output) = self.effect_chain.get_density_output() {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
-                } else if dof_ran || shade_ran {
+                } else if is_escape || dof_ran || shade_ran {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
                 } else {
                     renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
                 }
-            } else if dof_ran || shade_ran {
+            } else if is_escape || dof_ran || shade_ran {
                 renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
             } else {
                 renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
