@@ -12,6 +12,7 @@
 pub mod precision;
 pub mod defaults;
 pub mod delta;
+pub mod escape;
 pub mod fractal_config;
 pub mod manager;
 pub mod slider;
