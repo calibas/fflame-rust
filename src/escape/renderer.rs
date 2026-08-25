@@ -230,7 +230,15 @@ impl EscapeRenderer {
             width: self.width,
             height: self.height,
             max_iter: escape.max_iter.max(1),
-            flags: if escape.julia { 1 } else { 0 },
+            flags: {
+                // bit 0 = Julia; bits 1-2 = biomorph classification axis.
+                let bio = match escape.biomorph {
+                    crate::config::escape::BiomorphMode::Off => 0u32,
+                    crate::config::escape::BiomorphMode::Re => 1,
+                    crate::config::escape::BiomorphMode::Im => 2,
+                };
+                (if escape.julia { 1 } else { 0 }) | (bio << 1)
+            },
             bailout: escape.bailout.max(1e-6),
             _pad: [0.0; 3],
             fparams,
