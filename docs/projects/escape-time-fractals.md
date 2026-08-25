@@ -265,8 +265,13 @@ Why owning beats the libraries:
 
 - `EscapeConfig` in `FractalConfig`, skip-if-default — existing
   `.fflame`s stay byte-stable.
-- `render_mode` gains a variant. **This moves the engine contract's
-  shape** — coordinate with the API repo deliberately, pin or no pin.
+- `render_mode` gains a variant (wire form `"escape"`). **Verified at
+  implementation: the engine contract does NOT carry render modes, so
+  the shape fingerprint does not move and nothing forces the API to
+  notice.** That makes the coordination item fully manual — the
+  server's Postgres `render_mode` enum and `openapi.json` must be
+  updated by hand, and until then the client-side Save Online guard is
+  the only thing standing between an escape config and a server 500.
 - `.flame` XML: not written, not read (no Apo/JWF equivalent);
   `.fflame`-only, same policy as depth-density compensation.
 - Scripting: fragment params are ConfigPaths → `config.set` works day
