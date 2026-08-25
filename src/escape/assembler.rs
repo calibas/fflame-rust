@@ -341,15 +341,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
         let z_ref = ref_orbit[m];
-        // w' = 2 Z w + S w^2 + d0 (quadratic term hoisted out in the
-        // deep-linear regime).
-        var w_new = 2.0 * vec2<f32>(
-            z_ref.x * w.x - z_ref.y * w.y,
-            z_ref.x * w.y + z_ref.y * w.x,
-        ) + d0_term;
-        if ((perturb.flags & 1u) == 0u) {
-            w_new = w_new + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);
-        }
+        //__DELTA_STEP__
         let z_before = z;
         w = w_new;
         m = m + 1u;
@@ -496,6 +488,16 @@ fn cfe_mul_c32(a: CFe, b: vec2<f32>) -> CFe {
     ));
 }
 
+fn cfe_mul(a: CFe, b: CFe) -> CFe {
+    if (a.e == CFE_ZERO_E || b.e == CFE_ZERO_E) {
+        return CFe(vec2<f32>(0.0, 0.0), CFE_ZERO_E);
+    }
+    return cfe_norm(CFe(
+        vec2<f32>(a.m.x * b.m.x - a.m.y * b.m.y, a.m.x * b.m.y + a.m.y * b.m.x),
+        a.e + b.e,
+    ));
+}
+
 fn cfe_sqr(a: CFe) -> CFe {
     if (a.e == CFE_ZERO_E) {
         return a;
@@ -575,12 +577,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
         let z_ref = ref_orbit[m];
-        // delta' = 2 Z delta + delta^2 (+ delta_c on the parameter
-        // plane) - all in floatexp.
-        var w_new = cfe_add(cfe_mul_c32(w, 2.0 * z_ref), cfe_sqr(w));
-        if (!is_julia_perturb) {
-            w_new = cfe_add(w_new, d0);
-        }
+        //__DELTA_STEP_FE__
         let z_before = z;
         w = w_new;
         m = m + 1u;
@@ -622,14 +619,117 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-/// Assemble the perturbed (deep-zoom) Mandelbrot WGSL for one
-/// coloring. The formula axis is fixed to Mandelbrot in v1 (the
-/// "clean" perturbation tier); the coloring axis is fully preserved -
-/// the loop reconstructs the full orbit value every iteration for the
-/// rebase test, which is exactly the summary the colorings consume.
-/// `floatexp` picks the deep rung: deltas as shared-exponent complex
-/// floatexp instead of scaled f32, lifting the ~zoom-54 ceiling.
-pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool) -> String {
+/// Binomial coefficient (small arguments; the power cap is 12).
+fn binomial(p: u32, k: u32) -> u64 {
+    let mut acc = 1u64;
+    for i in 0..k as u64 {
+        acc = acc * (p as u64 - i) / (i + 1);
+    }
+    acc
+}
+
+/// Emit the scaled-f32 delta step for `z^p + c`:
+/// `w' = sum_k C(p,k) Z^(p-k) S^(k-1) w^k + d0`. For p = 2 this is
+/// byte-for-byte the original hand-written Mandelbrot step (pipeline
+/// stability); higher powers unroll the binomial chain with the
+/// S-folded w powers (`u_k = S^(k-1) w^k`, underflow of S legitimately
+/// zeroing the high terms in the deep-linear regime).
+fn delta_step_scaled(p: u32) -> String {
+    if p == 2 {
+        return "        // w' = 2 Z w + S w^2 + d0 (quadratic term hoisted out in the\n\
+                \x20       // deep-linear regime).\n\
+                \x20       var w_new = 2.0 * vec2<f32>(\n\
+                \x20           z_ref.x * w.x - z_ref.y * w.y,\n\
+                \x20           z_ref.x * w.y + z_ref.y * w.x,\n\
+                \x20       ) + d0_term;\n\
+                \x20       if ((perturb.flags & 1u) == 0u) {\n\
+                \x20           w_new = w_new + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);\n\
+                \x20       }"
+            .to_string();
+    }
+    let mut out = String::new();
+    out.push_str(&format!("        // Binomial delta step for z^{p} + c.\n"));
+    // Powers of the reference Z up to p-1.
+    out.push_str("        let zr1 = z_ref;\n");
+    for k in 2..p {
+        out.push_str(&format!(
+            "        let zr{k} = vec2<f32>(zr{}.x * z_ref.x - zr{}.y * z_ref.y, zr{}.x * z_ref.y + zr{}.y * z_ref.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    // S-folded powers of w: u1 = w, u(k) = S * u(k-1) * w.
+    out.push_str("        let u1 = w;\n");
+    for k in 2..=p {
+        out.push_str(&format!(
+            "        let u{k} = perturb.s * vec2<f32>(u{}.x * w.x - u{}.y * w.y, u{}.x * w.y + u{}.y * w.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    out.push_str("        var w_new = d0_term;\n");
+    for k in 1..=p {
+        let coeff = binomial(p, k);
+        let term = if k == p {
+            format!("{coeff}.0 * u{k}")
+        } else {
+            let zp = p - k;
+            format!(
+                "{coeff}.0 * vec2<f32>(zr{zp}.x * u{k}.x - zr{zp}.y * u{k}.y, zr{zp}.x * u{k}.y + zr{zp}.y * u{k}.x)"
+            )
+        };
+        out.push_str(&format!("        w_new = w_new + {term};\n"));
+    }
+    out
+}
+
+/// The floatexp flavor of the same step.
+fn delta_step_floatexp(p: u32) -> String {
+    if p == 2 {
+        return "        // delta' = 2 Z delta + delta^2 (+ delta_c on the parameter\n\
+                \x20       // plane) - all in floatexp.\n\
+                \x20       var w_new = cfe_add(cfe_mul_c32(w, 2.0 * z_ref), cfe_sqr(w));\n\
+                \x20       if (!is_julia_perturb) {\n\
+                \x20           w_new = cfe_add(w_new, d0);\n\
+                \x20       }"
+            .to_string();
+    }
+    let mut out = String::new();
+    out.push_str(&format!("        // Binomial delta step for z^{p} + c (floatexp).\n"));
+    out.push_str("        let zr1 = z_ref;\n");
+    for k in 2..p {
+        out.push_str(&format!(
+            "        let zr{k} = vec2<f32>(zr{}.x * z_ref.x - zr{}.y * z_ref.y, zr{}.x * z_ref.y + zr{}.y * z_ref.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    out.push_str("        let u1 = w;\n");
+    for k in 2..=p {
+        out.push_str(&format!("        let u{k} = cfe_mul(u{}, w);\n", k - 1));
+    }
+    out.push_str("        var w_new = CFe(vec2<f32>(0.0, 0.0), CFE_ZERO_E);\n");
+    out.push_str("        if (!is_julia_perturb) {\n            w_new = d0;\n        }\n");
+    for k in 1..=p {
+        let coeff = binomial(p, k);
+        if k == p {
+            out.push_str(&format!(
+                "        w_new = cfe_add(w_new, cfe_mul_c32(u{k}, vec2<f32>({coeff}.0, 0.0)));\n"
+            ));
+        } else {
+            let zp = p - k;
+            out.push_str(&format!(
+                "        w_new = cfe_add(w_new, cfe_mul_c32(u{k}, {coeff}.0 * zr{zp}));\n"
+            ));
+        }
+    }
+    out
+}
+
+/// Assemble the perturbed (deep-zoom) WGSL for one coloring at a
+/// given integer power (`z^p + c` — the "clean" binomial tier; p = 2
+/// is Mandelbrot and emits the original hand-written step). The
+/// coloring axis is fully preserved - the loop reconstructs the full
+/// orbit value every iteration for the rebase test, which is exactly
+/// the summary the colorings consume. `floatexp` picks the deep rung.
+pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, power: u32) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let template = if floatexp {
@@ -638,9 +738,12 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool) -> String {
         PERTURBED_TEMPLATE
     };
 
+    let power = power.clamp(2, 12);
     let mut out = Vec::new();
     for line in template.lines() {
         match line.trim() {
+            "//__DELTA_STEP__" => out.push(delta_step_scaled(power)),
+            "//__DELTA_STEP_FE__" => out.push(delta_step_floatexp(power)),
             "//__COLORING__" => {
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
@@ -1005,10 +1108,31 @@ mod tests {
     }
 
     #[test]
+    fn perturbed_binomial_step_validates_at_higher_powers() {
+        use crate::escape::colorings;
+        for floatexp in [false, true] {
+            for p in [3u32, 4, 7, 12] {
+                let src = assemble_perturbed(&colorings::SMOOTH, floatexp, p);
+                let module = naga::front::wgsl::parse_str(&src)
+                    .unwrap_or_else(|e| panic!("p={p} fe={floatexp} parse: {e}"));
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("p={p} fe={floatexp} validation: {e:?}"));
+            }
+        }
+        // p = 2 must emit the original hand-written step, byte-stable.
+        let src = assemble_perturbed(&colorings::SMOOTH, false, 2);
+        assert!(src.contains("var w_new = 2.0 * vec2<f32>("));
+    }
+
+    #[test]
     fn perturbed_template_validates_for_every_coloring() {
       for floatexp in [false, true] {
         for c in COLORINGS {
-            let src = assemble_perturbed(c, floatexp);
+            let src = assemble_perturbed(c, floatexp, 2);
             assert!(!src.contains("//__"), "{} left a marker", c.name);
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("perturbed x {} failed to parse: {e}", c.name));

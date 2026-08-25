@@ -271,9 +271,29 @@ impl EscapeRenderer {
     /// f32 mush honestly rather than wrong perturbation math).
     fn wants_perturbation(escape: &EscapeConfig) -> bool {
         escape.zoom_log2 > PERTURB_MIN_ZOOM
-            && escape.formula == "mandelbrot"
+            && Self::perturb_power(escape).is_some()
             && !escape.is_damped()
             && escape.biomorph == crate::config::escape::BiomorphMode::Off
+    }
+
+    /// The integer power of the clean binomial tier, if this formula
+    /// is in it: Mandelbrot (p = 2) and Multibrot at integer powers.
+    /// Non-integer Multibrot powers stay on the direct path (the
+    /// binomial expansion needs an integer exponent).
+    fn perturb_power(escape: &EscapeConfig) -> Option<u32> {
+        match escape.formula.as_str() {
+            "mandelbrot" => Some(2),
+            "multibrot" => {
+                let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=12.0).contains(&rounded) {
+                    Some(rounded as u32)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Ensure the perturbed pipeline for this coloring exists.
@@ -284,9 +304,10 @@ impl EscapeRenderer {
         floatexp: bool,
     ) -> String {
         let coloring = super::get_coloring(&escape.coloring);
-        let key = format!("perturbed|{}|{}", coloring.name, floatexp);
+        let power = Self::perturb_power(escape).unwrap_or(2);
+        let key = format!("perturbed|{}|{}|{}", coloring.name, floatexp, power);
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed(coloring, floatexp);
+            let source = assembler::assemble_perturbed(coloring, floatexp, power);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -318,12 +339,14 @@ impl EscapeRenderer {
         } else {
             None
         };
+        let power = Self::perturb_power(escape).unwrap_or(2);
         let orbit = self.orbit_cache.get(
             &escape.center_re,
             &escape.center_im,
             escape.zoom_log2,
             escape.max_iter,
             julia_c,
+            power,
         )?;
         let len = orbit.len();
         let needed_bytes = (len as u64) * 8;
@@ -641,6 +664,14 @@ mod tests {
         esc.julia = false;
         esc.formula = "burning_ship".to_string();
         assert!(!EscapeRenderer::wants_perturbation(&esc), "diffabs tier not in v1");
+        esc.formula = "multibrot".to_string();
+        assert!(EscapeRenderer::wants_perturbation(&esc), "integer multibrot is in the tier");
+        esc.formula_params.insert("power".to_string(), 3.5);
+        assert!(
+            !EscapeRenderer::wants_perturbation(&esc),
+            "non-integer power stays direct (binomial needs an integer exponent)"
+        );
+        esc.formula_params.clear();
         esc.formula = "mandelbrot".to_string();
         esc.damping_re = 0.5;
         assert!(!EscapeRenderer::wants_perturbation(&esc), "damped not in v1");

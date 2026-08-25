@@ -311,6 +311,20 @@ mod tests {
         julia_cfg.coloring_params.insert("scale".to_string(), 0.01);
         check("julia", &julia_cfg, false);
         check("julia-floatexp", &julia_cfg, true);
+
+        // Multibrot p=3 over the WHOLE home view (force flag ignores
+        // the zoom gate): every boundary pixel of the set exercises
+        // the binomial delta step against the direct render.
+        let mut multi_cfg = crate::config::escape::EscapeConfig::default();
+        multi_cfg.formula = "multibrot".to_string();
+        multi_cfg.formula_params.insert("power".to_string(), 3.0);
+        multi_cfg.center_re = "0".to_string();
+        multi_cfg.center_im = "0".to_string();
+        multi_cfg.zoom_log2 = 2.0;
+        multi_cfg.max_iter = 300;
+        multi_cfg.coloring_params.insert("scale".to_string(), 0.02);
+        check("multibrot3", &multi_cfg, false);
+        check("multibrot3-floatexp", &multi_cfg, true);
     }
 
     /// The GPU half of the plan's formula x coloring probe: every
