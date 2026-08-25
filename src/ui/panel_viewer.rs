@@ -681,6 +681,28 @@ fn escape_zoom_view(
 
 impl<'a> PanelViewer<'a> {
     fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
+        // Escape mode hides the flame-only editing panels rather than
+        // teaching them a second vocabulary (plan §3). Shared-tail
+        // panels (Colors, Palette, Effects, History, Animation,
+        // Export, ...) keep working — they edit state escape mode
+        // actually consumes.
+        if self.context.config_manager.active_config().render_mode
+            == crate::scene::transforms::RenderMode::Escape
+            && matches!(
+                tab,
+                PanelType::Transforms
+                    | PanelType::TriangleEditor
+                    | PanelType::View
+                    | PanelType::XaosEditor
+                    | PanelType::Variations
+                    | PanelType::Subflames
+                    | PanelType::SolidLighting
+                    | PanelType::PathEditor
+            )
+        {
+            ui.label(t!("escape_panel.flame_only_hint"));
+            return;
+        }
         match tab {
             PanelType::FractalViewport => {
                 self.render_fractal_viewport(ui);

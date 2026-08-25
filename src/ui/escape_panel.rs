@@ -28,7 +28,7 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
             (RenderMode::Escape, t!("view.mode_escape")),
         ] {
             if ui.selectable_label(mode == m, label.as_ref()).clicked() && mode != m {
-                if let Err(e) = config_manager.update_param(ConfigPath::RenderMode, m.into()) {
+                if let Err(e) = switch_render_mode(config_manager, m) {
                     log::error!("Failed to switch render mode: {e}");
                 }
             }
@@ -231,5 +231,36 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                 v.into(),
             );
         }
+    }
+}
+
+/// Switch render mode, defaulting the tonemap to Linear on the way
+/// INTO escape mode (plan: escape's home tonemap is Linear — the
+/// flame default Logarithmic normalizes by chaos-game sample density
+/// and renders the single-dispatch escape image dim). One batch → one
+/// undo point; a deliberate non-Logarithmic choice is left alone, and
+/// switching back to a flame mode changes nothing (undo covers it).
+pub fn switch_render_mode(
+    config_manager: &mut ConfigManager,
+    mode: RenderMode,
+) -> Result<(), crate::config::manager::ConfigError> {
+    let config = config_manager.active_config();
+    let entering_escape = mode == RenderMode::Escape && config.render_mode != RenderMode::Escape;
+    let default_tonemap = entering_escape
+        && config.tonemap_mode == crate::scene::tonemap::ToneMapMode::Logarithmic;
+    if default_tonemap {
+        config_manager.update_batch(
+            vec![
+                (ConfigPath::RenderMode, mode.into()),
+                (
+                    ConfigPath::TonemapMode,
+                    crate::scene::tonemap::ToneMapMode::Linear.into(),
+                ),
+            ],
+            "history.param.render_mode".to_string(),
+        )
+        .map(|_| ())
+    } else {
+        config_manager.update_param(ConfigPath::RenderMode, mode.into()).map(|_| ())
     }
 }

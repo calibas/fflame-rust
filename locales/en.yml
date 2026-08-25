@@ -1894,6 +1894,8 @@ login:
 
 escape_panel:
   not_active_hint: "Switch to Escape mode above to edit the escape-time fractal."
+  flame_only_hint: "This panel edits the flame and is inactive in Escape mode."
+  open_escape_panel: "Open Escape Fractal panel"
   formula: "Formula"
   julia: "Julia mode"
   tooltip_julia: "Iterate from the pixel with a fixed c (dynamical plane) instead of from the critical point with c = pixel"
