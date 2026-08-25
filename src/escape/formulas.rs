@@ -33,6 +33,12 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    let d = 2.0 * esc_cmul(z, dz);
+    return select(d + vec2<f32>(1.0, 0.0), d, is_julia);
+}
+"#,
 };
 
 /// Multibrot `z ← zᵖ + c` (plan §5.1). Non-integer powers render too
@@ -57,6 +63,13 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    let p = fparam(0u);
+    let d = p * esc_cmul(esc_cpow(z, p - 1.0), dz);
+    return select(d + vec2<f32>(1.0, 0.0), d, is_julia);
+}
+"#,
 };
 
 /// Tricorn / Multicorn `z ← z̄ᵖ + c` (plan §5.2): conjugate first,
@@ -81,6 +94,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Burning Ship family (plan §5.3): one formula, a `variant` enum of
@@ -148,6 +162,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// McMullen family `z ← zⁿ + c/zᵐ` (plan §5.4) — rational maps with
@@ -194,6 +209,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Kaliset `z ← |z| / ⟨z,z⟩ − c` (component abs; plan §5.12).
@@ -233,6 +249,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Phoenix — `z ← z² + c + p·z_prev` (plan §5.6). The first
@@ -270,6 +287,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Lambda / logistic plane — `z ← λ·z·(1−z)` (plan §5.5).
@@ -289,6 +307,13 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(0.5, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    let d = esc_cmul(c, esc_cmul(vec2<f32>(1.0, 0.0) - 2.0 * z, dz));
+    let fc = esc_cmul(z, vec2<f32>(1.0, 0.0) - z);
+    return select(d + fc, d, is_julia);
+}
+"#,
 };
 
 /// Fractint Spider — `z ← z² + c; c ← c/2 + z` (plan §5.16). The
@@ -310,6 +335,7 @@ fn formula_step(z: vec2<f32>, c: ptr<function, vec2<f32>>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Fractint Manowar — `z ← z² + m + c; m ← z(old)` (plan §5.16),
@@ -328,6 +354,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "z",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Fractint Barnsley M1–M3 — conditional affine/quadratic maps
@@ -378,6 +405,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Fractint Cactus — `z ← z³ + (c−1)·z − c` (plan §5.16). Fractint
@@ -397,6 +425,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Exponential map `z ← e^z + c` (plan §5.9): Cantor bouquets.
@@ -415,6 +444,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
+    wgsl_derivative: "",
 };
 
 /// Trig family `z ← sin z + c` / `cos z + c` (plan §5.9). Escape
@@ -442,6 +472,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    wgsl_derivative: "",
 };
 
 /// Ducks / Kali-log (Monnier) — `z ← log(Re z + i·|Im z|) + c`
@@ -460,6 +491,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Tetration `w ← c^w = e^(w·log c)` (plan §5.8). Parameter plane
@@ -481,6 +513,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
+    wgsl_derivative: "",
 };
 
 /// Collatz — the standard interpolation
@@ -502,6 +535,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    wgsl_derivative: "",
 };
 
 /// Feather — `z ← z^p / (1 + (Re²z − i·Im²z)) + c` (plan §5.14).
@@ -536,6 +570,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Newton / root-finder plane over `zᵖ − 1` (plan §5.7): the scheme
@@ -613,6 +648,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Nova (plan §5.7): the Newton step plus `c` — a Mandelbrot-like
@@ -660,6 +696,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Magnet I / II (plan §5.10): rational maps from statistical
@@ -701,6 +738,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Novaretti — `z ← −6z(z³ + c) / (2z³ − c)²` (plan §5.17; community
@@ -732,6 +770,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "esc_cpow(pixel * -0.0729490168, 0.3333333333)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };
 
 /// Littlewood parameter space (plan §5.11): pixel λ is in the root
@@ -789,4 +828,5 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
 };

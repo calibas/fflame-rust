@@ -64,7 +64,8 @@ struct OrbitSummary {
     n: u32,
     escaped: bool,
     converged: bool,
-    period: u32,   // detected cycle length, 0 = none
+    period: u32,       // detected cycle length, 0 = none
+    dz: vec2<f32>,     // derivative orbit (seed value if not compiled)
 }
 
 // Complex multiply.
@@ -165,6 +166,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var converged = false;
     var period = 0u;
     var n = 0u;
+    // Derivative-orbit seed: d z0/dz0 = 1 on the dynamical plane,
+    // d z0/dc = 0 on the parameter plane (z0 is c-independent for
+    // every formula that supplies a derivative). Unread and
+    // dead-code-eliminated unless the coloring uses it.
+    var dz = select(vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), is_julia);
     //__PERIOD_DECL__
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
         //__STEP__
@@ -179,7 +185,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
-        let summary = OrbitSummary(z, n, escaped, converged, period);
+        let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         let t = fract(coloring_map(summary, accum_state));
         // textureSampleLevel: explicit LOD, legal in non-uniform
         // control flow (unlike textureSample) -- WASM-safe.
@@ -224,6 +230,8 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
     let needs_period = coloring.has_feature(ColoringFeature::NeedsPeriod);
+    let needs_derivative = coloring.has_feature(ColoringFeature::NeedsDerivative)
+        && !formula.wgsl_derivative.is_empty();
     let param_seed = if formula.wgsl_param_seed.is_empty() {
         "vec2<f32>(0.0, 0.0)"
     } else {
@@ -236,6 +244,9 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
             "//__FORMULA__" => {
                 out.push(format!("// formula: {}", formula.name));
                 out.push(formula.wgsl.to_string());
+                if needs_derivative {
+                    out.push(formula.wgsl_derivative.to_string());
+                }
             }
             "//__COLORING__" => {
                 out.push(format!(
@@ -345,6 +356,10 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                     // and the accumulator's z_prev argument. Kept
                     // independently of the formula's own history.
                     out.push("        let z_before = z;".to_string());
+                }
+                if needs_derivative {
+                    // Chain rule at the PRE-step iterate.
+                    out.push("        dz = formula_derivative(z, c, dz, is_julia);".to_string());
                 }
                 if damped {
                     out.push(format!("        let z_raw = {call};"));
@@ -517,6 +532,19 @@ mod tests {
         assert!(with.contains("chk_z"));
         let without = assemble(&formulas::NOVARETTI, &colorings::SMOOTH, false);
         assert!(!without.contains("chk_z"));
+    }
+
+    #[test]
+    fn derivative_compiles_only_when_both_sides_agree() {
+        use crate::escape::{colorings, formulas};
+        let de = assemble(&formulas::MANDELBROT, &colorings::DISTANCE_ESTIMATE, false);
+        assert!(de.contains("formula_derivative"));
+        // Formula without a derivative: DE compiles, register stays seeded.
+        let ship = assemble(&formulas::BURNING_SHIP, &colorings::DISTANCE_ESTIMATE, false);
+        assert!(!ship.contains("formula_derivative"));
+        // Coloring that doesn't ask: no derivative code at all.
+        let plain = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
+        assert!(!plain.contains("formula_derivative"));
     }
 
     #[test]

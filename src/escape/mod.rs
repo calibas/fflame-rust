@@ -84,6 +84,11 @@ pub enum ColoringFeature {
     /// the loop carries no accumulator at all (Mandelbrot + smooth
     /// stays two multiplies per step).
     NeedsOrbitAccum,
+    /// The coloring reads the derivative orbit |dz| (distance
+    /// estimation). Compiled in only when the formula also supplies
+    /// `wgsl_derivative`; otherwise the register stays at its seed and
+    /// the coloring degrades (documented on the def).
+    NeedsDerivative,
     /// The coloring reads the detected cycle length; the assembler
     /// compiles Brent-style period detection (power-of-two
     /// checkpoints, `|z − checkpoint|² < 1e-12`) into the loop. This
@@ -142,6 +147,14 @@ pub struct FormulaDef {
     pub wgsl_prev_init: &'static str,
     /// Which quantity the escape test compares (see [`EscapeMetric`]).
     pub escape_metric: EscapeMetric,
+    /// WGSL defining
+    /// `fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32>`
+    /// — the derivative-orbit update evaluated at the PRE-step iterate
+    /// (parameter plane: d/dc, so the chain rule carries a `+ f_c`
+    /// term; Julia: d/dz₀, no inhomogeneous term). Empty ⇒ no
+    /// derivative available (abs-folds, anti-holomorphic maps);
+    /// distance estimation degrades there.
+    pub wgsl_derivative: &'static str,
 }
 
 impl FormulaDef {
@@ -220,6 +233,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::ROOT_BASIN,
     &colorings::TRIANGLE_INEQUALITY,
     &colorings::PERIOD,
+    &colorings::DISTANCE_ESTIMATE,
 ];
 
 /// Look up a formula by name. An unknown name renders the default
