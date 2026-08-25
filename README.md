@@ -26,7 +26,7 @@ apt install libasound2-dev
 
 ## Learn
 
-We have a set of [tutorials](./docs/tutorials/README.md) on how to use FAE.
+We have a set of [tutorials](./docs/tutorials/README.md) on how to use FAE and a [Discord channel](https://discord.gg/PrM8sJt7Za) if you need any help.
 
 ## Credits
 Thanks to [Scott Draves](https://flam3.com/) for the Fractal Flame algorithm.
