@@ -213,6 +213,12 @@ pub struct UpdateAction {
     /// `Animation::rebind_targets` so tracks follow the items they're
     /// bound to.
     pub structural_changed: bool,
+
+    /// Re-render the escape-time (fragment mode) frame. The fragment
+    /// renderer has no reset/accumulate split — any escape parameter
+    /// change means one whole-frame re-render. Ignored while the
+    /// render mode is a flame mode.
+    pub rerender_escape: bool,
 }
 
 impl UpdateAction {
@@ -260,6 +266,12 @@ impl UpdateAction {
                 rebuild_shader: false, // TODO: detect variation changes
                 update_shading: true, // Full updates refresh shading state too (update_flame carries it)
                 structural_changed: false, // Only set by explicit structural mutation sites
+                rerender_escape: false,
+            },
+
+            UpdateType::EscapeRerender => Self {
+                rerender_escape: true,
+                ..Default::default()
             },
         }
     }
@@ -274,6 +286,7 @@ impl UpdateAction {
         self.rebuild_shader |= other.rebuild_shader;
         self.update_shading |= other.update_shading;
         self.structural_changed |= other.structural_changed;
+        self.rerender_escape |= other.rerender_escape;
     }
 }
 
@@ -1693,6 +1706,41 @@ impl ConfigManager {
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
             ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
 
+            // Escape-time
+            ConfigPath::EscapeFormula => Ok(ConfigValue::String(config.escape.formula.clone())),
+            ConfigPath::EscapeJulia => Ok(config.escape.julia.into()),
+            ConfigPath::EscapeJuliaRe => Ok(config.escape.julia_re.into()),
+            ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
+            ConfigPath::EscapeCenterRe => Ok(ConfigValue::String(config.escape.center_re.clone())),
+            ConfigPath::EscapeCenterIm => Ok(ConfigValue::String(config.escape.center_im.clone())),
+            // f32 view of an f64 field — see the ConfigPath doc for why
+            // the precision ceiling is acceptable until phase 4.
+            ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
+            ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
+            ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
+            ConfigPath::EscapeBailout => Ok(config.escape.bailout.into()),
+            ConfigPath::EscapeBiomorph => Ok(ConfigValue::String(
+                crate::config::escape::biomorph_to_str(config.escape.biomorph).to_string(),
+            )),
+            ConfigPath::EscapeColoring => Ok(ConfigValue::String(config.escape.coloring.clone())),
+            // Absent parameter reads as 0.0; the formula's declared
+            // default is a registry concern (the panel resolves it),
+            // mirroring how effect params behave here.
+            ConfigPath::EscapeFormulaParam { param } => Ok(config
+                .escape
+                .formula_params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
+            ConfigPath::EscapeColoringParam { param } => Ok(config
+                .escape
+                .coloring_params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
+
             // Transforms
             ConfigPath::TransformCount => {
                 Ok((flame.transforms.len() as u32).into())
@@ -2490,6 +2538,55 @@ impl ConfigManager {
             }
             ConfigPath::DeterministicRng => {
                 self.current.deterministic_rng = value.try_into()?;
+            }
+
+            // Escape-time
+            ConfigPath::EscapeFormula => {
+                self.current.escape.formula = value.try_into()?;
+            }
+            ConfigPath::EscapeJulia => {
+                self.current.escape.julia = value.try_into()?;
+            }
+            ConfigPath::EscapeJuliaRe => {
+                self.current.escape.julia_re = value.try_into()?;
+            }
+            ConfigPath::EscapeJuliaIm => {
+                self.current.escape.julia_im = value.try_into()?;
+            }
+            ConfigPath::EscapeCenterRe => {
+                self.current.escape.center_re = value.try_into()?;
+            }
+            ConfigPath::EscapeCenterIm => {
+                self.current.escape.center_im = value.try_into()?;
+            }
+            ConfigPath::EscapeZoomLog2 => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.zoom_log2 = v as f64;
+            }
+            ConfigPath::EscapeRotation => {
+                self.current.escape.rotation = value.try_into()?;
+            }
+            ConfigPath::EscapeMaxIter => {
+                self.current.escape.max_iter = value.try_into()?;
+            }
+            ConfigPath::EscapeBailout => {
+                self.current.escape.bailout = value.try_into()?;
+            }
+            ConfigPath::EscapeBiomorph => {
+                let s: String = value.try_into()?;
+                self.current.escape.biomorph = crate::config::escape::biomorph_from_str(&s)
+                    .ok_or(ConfigError::TypeMismatch)?;
+            }
+            ConfigPath::EscapeColoring => {
+                self.current.escape.coloring = value.try_into()?;
+            }
+            ConfigPath::EscapeFormulaParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.formula_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeColoringParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.coloring_params.insert(param.clone(), v);
             }
 
             // Transforms
@@ -3682,6 +3779,16 @@ impl TryFrom<ConfigValue> for [f32; 3] {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::ColorRgb(c) => Ok(c),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for String {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::String(s) => Ok(s),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

@@ -792,6 +792,21 @@ history:
     use_dynamic_blend: "Use Dynamic Blend"
     max_iterations: "Max Iterations"
     deterministic_rng: "Deterministic RNG"
+    # Escape-time (fragment mode)
+    escape_formula: "Escape Formula"
+    escape_julia: "Julia Mode"
+    escape_julia_re: "Julia Seed Re"
+    escape_julia_im: "Julia Seed Im"
+    escape_center_re: "Escape Center Re"
+    escape_center_im: "Escape Center Im"
+    escape_zoom: "Escape Zoom"
+    escape_rotation: "Escape Rotation"
+    escape_max_iter: "Escape Max Iterations"
+    escape_bailout: "Escape Bailout"
+    escape_biomorph: "Biomorph Mode"
+    escape_coloring: "Escape Coloring"
+    escape_formula_param: "Formula %{param}"
+    escape_coloring_param: "Coloring %{param}"
 
     # Transforms
     transform_count: "Transform Count"

@@ -112,6 +112,25 @@ impl BiomorphMode {
     }
 }
 
+/// The wire strings ConfigValue carries for [`BiomorphMode`] — one
+/// place, so the manager's read and write arms cannot disagree.
+pub fn biomorph_to_str(m: BiomorphMode) -> &'static str {
+    match m {
+        BiomorphMode::Off => "off",
+        BiomorphMode::Re => "re",
+        BiomorphMode::Im => "im",
+    }
+}
+
+pub fn biomorph_from_str(s: &str) -> Option<BiomorphMode> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "off" => Some(BiomorphMode::Off),
+        "re" => Some(BiomorphMode::Re),
+        "im" => Some(BiomorphMode::Im),
+        _ => None,
+    }
+}
+
 fn default_formula() -> String {
     "mandelbrot".to_string()
 }
@@ -246,6 +265,121 @@ mod tests {
         // Garbage falls back to home, not to (0, 0).
         esc.center_re = "not a number".into();
         assert_eq!(esc.center_f64().0, -0.5);
+    }
+
+    /// Every escape path must survive the string-key round trip —
+    /// that single property is what animation tracks, signals and
+    /// `config.set` all resolve through.
+    #[test]
+    fn escape_paths_round_trip_their_string_keys() {
+        use crate::config::delta::ConfigPath;
+        let paths = [
+            ConfigPath::EscapeFormula,
+            ConfigPath::EscapeJulia,
+            ConfigPath::EscapeJuliaRe,
+            ConfigPath::EscapeJuliaIm,
+            ConfigPath::EscapeCenterRe,
+            ConfigPath::EscapeCenterIm,
+            ConfigPath::EscapeZoomLog2,
+            ConfigPath::EscapeRotation,
+            ConfigPath::EscapeMaxIter,
+            ConfigPath::EscapeBailout,
+            ConfigPath::EscapeBiomorph,
+            ConfigPath::EscapeColoring,
+            ConfigPath::EscapeFormulaParam { param: "power".into() },
+            ConfigPath::EscapeColoringParam { param: "trap_radius".into() },
+        ];
+        for p in paths {
+            let key = p.to_string_key();
+            assert_eq!(
+                ConfigPath::from_string_key(&key).as_ref(),
+                Some(&p),
+                "`{key}` did not round-trip"
+            );
+            assert_eq!(
+                p.update_type(),
+                crate::config::delta::UpdateType::EscapeRerender,
+                "{key}: every escape path re-renders the fragment frame"
+            );
+        }
+    }
+
+    /// Keyframe values resolve for the continuous parameters and refuse
+    /// the structural/exact ones (formula, coloring, the deep-zoom
+    /// center strings — the latter deliberately, per the plan).
+    #[test]
+    fn escape_animation_value_conversion() {
+        use crate::config::delta::{json_to_config_value, ConfigPath, ConfigValue};
+        let j = serde_json::json!(2.5);
+        assert_eq!(
+            json_to_config_value(&j, &ConfigPath::EscapeZoomLog2),
+            Some(ConfigValue::Float(2.5))
+        );
+        assert_eq!(
+            json_to_config_value(&serde_json::json!(512), &ConfigPath::EscapeMaxIter),
+            Some(ConfigValue::UInt(512))
+        );
+        assert_eq!(
+            json_to_config_value(&serde_json::json!(true), &ConfigPath::EscapeJulia),
+            Some(ConfigValue::Bool(true))
+        );
+        assert_eq!(json_to_config_value(&serde_json::json!("0.1"), &ConfigPath::EscapeCenterRe), None);
+        assert_eq!(
+            json_to_config_value(&serde_json::json!("kaliset"), &ConfigPath::EscapeFormula),
+            None
+        );
+    }
+
+    /// The whole undo loop, through the same entry point the panel
+    /// will use: update_param writes, reports EscapeRerender, and undo
+    /// restores — including the keyed param map and the biomorph
+    /// string form.
+    #[test]
+    fn escape_params_flow_through_config_manager_and_undo() {
+        use crate::config::delta::{ConfigPath, ConfigValue, UpdateType};
+        use crate::config::manager::ConfigManager;
+
+        let mut mgr = ConfigManager::new(crate::config::FractalConfig::default());
+
+        let ut = mgr
+            .update_param(ConfigPath::EscapeZoomLog2, ConfigValue::Float(3.0))
+            .unwrap();
+        assert_eq!(ut, UpdateType::EscapeRerender);
+
+        mgr.update_param(
+            ConfigPath::EscapeFormulaParam { param: "power".into() },
+            ConfigValue::Float(4.0),
+        )
+        .unwrap();
+        mgr.update_param(
+            ConfigPath::EscapeBiomorph,
+            ConfigValue::String("re".into()),
+        )
+        .unwrap();
+        // An unknown biomorph string is an error, not a silent default.
+        assert!(mgr
+            .update_param(ConfigPath::EscapeBiomorph, ConfigValue::String("sideways".into()))
+            .is_err());
+
+        assert_eq!(
+            mgr.get_value(&ConfigPath::EscapeZoomLog2).unwrap(),
+            ConfigValue::Float(3.0)
+        );
+        assert_eq!(
+            mgr.get_value(&ConfigPath::EscapeFormulaParam { param: "power".into() }).unwrap(),
+            ConfigValue::Float(4.0)
+        );
+        assert_eq!(
+            mgr.get_value(&ConfigPath::EscapeBiomorph).unwrap(),
+            ConfigValue::String("re".into())
+        );
+
+        // Undo restores, newest first.
+        mgr.undo().unwrap();
+        assert_eq!(
+            mgr.get_value(&ConfigPath::EscapeBiomorph).unwrap(),
+            ConfigValue::String("off".into())
+        );
     }
 
     #[test]
