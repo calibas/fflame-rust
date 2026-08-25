@@ -26,6 +26,7 @@ pub mod assembler;
 mod app_repro_test;
 pub mod colorings;
 pub mod fixedpoint;
+pub mod reference;
 pub mod formulas;
 pub mod renderer;
 
