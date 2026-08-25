@@ -2486,6 +2486,7 @@ impl App {
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
+
         // Update density histogram for Levels controls (every ~30 frames)
         // Skip during animation playback to avoid frame drops from GPU readback
         if !self.animation_controller.is_playing() {
