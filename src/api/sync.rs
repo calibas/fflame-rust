@@ -18,6 +18,12 @@ impl From<RenderMode> for ApiRenderMode {
         match mode {
             RenderMode::TwoD => ApiRenderMode::TwoD,
             RenderMode::ThreeD => ApiRenderMode::ThreeD,
+            // The server's Postgres render_mode enum has no "escape"
+            // value yet, so escape configs are REFUSED before this
+            // conversion runs (see the guard in config_to_*_request).
+            // If one slips through anyway, "2d" at least parses
+            // server-side instead of 500ing the upload.
+            RenderMode::Escape => ApiRenderMode::TwoD,
         }
     }
 }
@@ -336,12 +342,45 @@ mod tests {
     fn test_render_mode_roundtrip() {
         assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::TwoD)), RenderMode::TwoD);
         assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::ThreeD)), RenderMode::ThreeD);
+        // Escape does NOT round-trip: the server has no such enum value
+        // yet, so the conversion documents its fallback while the
+        // save/update guard keeps it from ever being sent.
+        assert_eq!(ApiRenderMode::from(RenderMode::Escape), ApiRenderMode::TwoD);
     }
 
     #[test]
     fn test_render_mode_serialization() {
         assert_eq!(serde_json::to_string(&ApiRenderMode::TwoD).unwrap(), "\"2d\"");
         assert_eq!(serde_json::to_string(&ApiRenderMode::ThreeD).unwrap(), "\"3d\"");
+        // The app-side enum's wire form for the new mode — what an
+        // .fflame carries, and what the server will eventually accept.
+        assert_eq!(serde_json::to_string(&RenderMode::Escape).unwrap(), "\"escape\"");
+        assert_eq!(
+            serde_json::from_str::<RenderMode>("\"escape\"").unwrap(),
+            RenderMode::Escape
+        );
+    }
+
+    /// The Save Online seatbelt: an escape config is refused before
+    /// anything is sent — and before the token check, so it fires the
+    /// same signed in or out (which is also what makes it testable
+    /// without auth).
+    #[test]
+    fn escape_configs_are_refused_by_save_and_update() {
+        use crate::api::ApiState;
+        use crate::resources::FetchError;
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        let api = ApiState::default();
+
+        let save = pollster::block_on(api.save_flame(&config, Some("x"), None, None));
+        assert!(
+            matches!(save, Err(FetchError::Unsupported(_))),
+            "save must refuse client-side: {save:?}"
+        );
+        let update = pollster::block_on(api.update_flame("id", &config, None, None, None));
+        assert!(matches!(update, Err(FetchError::Unsupported(_))));
     }
 
     /// Mirror a `CreateFlameRequest` back the way the server would on read:

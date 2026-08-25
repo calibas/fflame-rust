@@ -670,6 +670,11 @@ impl FlameRenderer {
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
+                // The flame renderer never receives an escape config —
+                // the app and render_with branch before this point. If
+                // one is mis-routed anyway, render it as 2D rather than
+                // panicking inside a GPU pass.
+                crate::scene::transforms::RenderMode::Escape => 0,
             },
             splat_size: 1.0,
             zoom,
@@ -1800,6 +1805,11 @@ impl FlameRenderer {
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
+                // The flame renderer never receives an escape config —
+                // the app and render_with branch before this point. If
+                // one is mis-routed anyway, render it as 2D rather than
+                // panicking inside a GPU pass.
+                crate::scene::transforms::RenderMode::Escape => 0,
             },
             splat_size: 1.0,
             zoom: config.zoom,
@@ -2004,6 +2014,11 @@ impl FlameRenderer {
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
+                // The flame renderer never receives an escape config —
+                // the app and render_with branch before this point. If
+                // one is mis-routed anyway, render it as 2D rather than
+                // panicking inside a GPU pass.
+                crate::scene::transforms::RenderMode::Escape => 0,
             },
             splat_size: 1.0,
             zoom,
@@ -2307,6 +2322,11 @@ impl FlameRenderer {
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
+                // The flame renderer never receives an escape config —
+                // the app and render_with branch before this point. If
+                // one is mis-routed anyway, render it as 2D rather than
+                // panicking inside a GPU pass.
+                crate::scene::transforms::RenderMode::Escape => 0,
             },
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
@@ -2668,6 +2688,11 @@ impl FlameRenderer {
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
+                // The flame renderer never receives an escape config —
+                // the app and render_with branch before this point. If
+                // one is mis-routed anyway, render it as 2D rather than
+                // panicking inside a GPU pass.
+                crate::scene::transforms::RenderMode::Escape => 0,
             },
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,

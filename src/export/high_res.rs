@@ -1713,6 +1713,9 @@ impl HighResExporter {
                 render_mode: match self.render_mode {
                     RenderMode::TwoD => 0,
                     RenderMode::ThreeD => 1,
+                    // Never reached: escape exports go through the
+                    // fragment path, not the tiled chaos-game exporter.
+                    RenderMode::Escape => 0,
                 },
                 splat_size: 1.0,
                 zoom: config.zoom,

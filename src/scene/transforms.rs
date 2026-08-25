@@ -1835,6 +1835,16 @@ pub enum RenderMode {
     /// 3D rendering with pseudo-3D projection. Wire/cloud-blob form: `"3d"`.
     #[serde(rename = "3d", alias = "ThreeD")]
     ThreeD,
+    /// Escape-time fragment rendering (Mandelbrot and kin) — the whole
+    /// chaos game is replaced by a per-pixel fragment pass; see
+    /// `docs/projects/escape-time-fractals.md`. Wire form `"escape"`.
+    /// An older build loading a config with this mode fails the parse
+    /// (unknown variant), which is honest: it cannot render it.
+    /// NOTE: the server's Postgres `render_mode` enum does not know
+    /// this value yet — Save Online is guarded client-side until the
+    /// API adds it (see `api::sync`).
+    #[serde(rename = "escape")]
+    Escape,
 }
 
 impl Default for RenderMode {

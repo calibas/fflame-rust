@@ -1184,6 +1184,7 @@ fractal_gallery:
   transforms_count: "%{count} transforms"
   render_mode_2d: "2D"
   render_mode_3d: "3D"
+  render_mode_escape: "Escape-time"
   zoom: "Zoom: %{value}"
   max_iterations: "Max Iterations: %{value}"
   color_mode: "Color Mode: %{value}"

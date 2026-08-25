@@ -705,6 +705,10 @@ impl FlamePipelines {
         match render_mode {
             crate::scene::transforms::RenderMode::TwoD => self.shader_cache.pipeline_2d(),
             crate::scene::transforms::RenderMode::ThreeD => self.shader_cache.pipeline_3d(),
+            // Escape mode has no trajectory pipeline — the fragment
+            // renderer owns it, and the app branches before the chaos
+            // game runs. Degrade to 2D rather than panic if mis-routed.
+            crate::scene::transforms::RenderMode::Escape => self.shader_cache.pipeline_2d(),
         }
     }
 
