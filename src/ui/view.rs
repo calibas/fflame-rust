@@ -149,13 +149,26 @@ pub fn render_view_content(
                 log::error!("Failed to update render mode: {}", e);
             }
         }
-        if ui.selectable_label(!was_2d, t!("view.mode_3d").as_ref())
+        let was_3d = matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        if ui.selectable_label(was_3d, t!("view.mode_3d").as_ref())
             .on_hover_text(t!("view.tooltip_mode_3d"))
             .clicked()
         {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::RenderMode,
                 crate::scene::transforms::RenderMode::ThreeD.into()
+            ) {
+                log::error!("Failed to update render mode: {}", e);
+            }
+        }
+        let was_escape = matches!(config.render_mode, crate::scene::transforms::RenderMode::Escape);
+        if ui.selectable_label(was_escape, t!("view.mode_escape").as_ref())
+            .on_hover_text(t!("view.tooltip_mode_escape"))
+            .clicked()
+        {
+            if let Err(e) = config_manager.update_param(
+                ConfigPath::RenderMode,
+                crate::scene::transforms::RenderMode::Escape.into()
             ) {
                 log::error!("Failed to update render mode: {}", e);
             }

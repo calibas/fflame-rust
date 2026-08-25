@@ -37,6 +37,7 @@ mod triangle_editor;
 mod undo_history;
 mod variation_params;
 mod view;
+mod escape_panel;
 pub mod workspace;
 mod palette_generate;
 mod script_params;

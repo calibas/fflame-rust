@@ -664,6 +664,9 @@ impl<'a> PanelViewer<'a> {
             PanelType::Scripts => {
                 self.render_scripts_panel(ui);
             }
+            PanelType::Escape => {
+                super::escape_panel::render_escape_content(ui, self.context.config_manager);
+            }
             PanelType::Subflames => {
                 super::subflames::render_subflames_content(
                     ui,

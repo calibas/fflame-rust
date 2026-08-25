@@ -218,6 +218,11 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::View, ctx);
                 }
 
+                let escape_open = workspace.panel_exists(super::workspace::PanelType::Escape);
+                if ui.selectable_label(escape_open, t!("menu.window_escape").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Escape, ctx);
+                }
+
                 let solid_open = workspace.panel_exists(super::workspace::PanelType::SolidLighting);
                 if ui.selectable_label(solid_open, t!("menu.window_solid_lighting").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::SolidLighting, ctx);
