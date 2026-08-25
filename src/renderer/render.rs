@@ -217,6 +217,15 @@ pub async fn render_with(
 ) -> Result<RenderOutput, RenderError> {
     let start_time = web_time::Instant::now();
 
+    // Escape-time mode is a different generator with the same tail:
+    // one compute pass instead of the chaos-game loop, then the shared
+    // density-effects → tonemap → color-effects → readback pipeline.
+    // Dispatching here is what gives thumbnails, CLI export, video and
+    // the gallery escape rendering for free (plan: integration map).
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
+        return render_escape(renderer, device, queue, job, progress, start_time).await;
+    }
+
     let target = job.target_iterations.unwrap_or(job.config.max_iterations);
 
     log::info!(
@@ -542,6 +551,165 @@ pub async fn render_with(
         height,
         rgba_data,
         total_iterations: total_rendered,
+        render_time_ms,
+    })
+}
+
+/// Escape-time render path — the generator swap behind `render_with`.
+///
+/// Reuses the flame renderer for everything except the generator:
+/// `load_config` uploads palette (rotation/squeeze), tonemap params,
+/// curve LUT and background exactly as the flame path sees them, and
+/// the tail below mirrors the flame tail minus its flame-only stages
+/// (solid shade, DoF, density renormalization). The `EscapeRenderer`
+/// itself is created per call and destroyed after readback, the same
+/// one-shot discipline as `EffectChainRunner` — the interactive app
+/// will hold a persistent one instead.
+async fn render_escape(
+    renderer: &mut FlameRenderer,
+    device: &Device,
+    queue: &Queue,
+    job: RenderJob<'_>,
+    progress: &mut dyn RenderProgress,
+    start_time: web_time::Instant,
+) -> Result<RenderOutput, RenderError> {
+    log::info!(
+        "Render: escape-time {}x{}, formula '{}', coloring '{}', max_iter {}",
+        job.width,
+        job.height,
+        job.config.escape.formula,
+        job.config.escape.coloring,
+        job.config.escape.max_iter
+    );
+    progress.on_progress(0, 1);
+
+    // Full config load. Deliberately the whole thing rather than a
+    // targeted palette+tonemap upload: it is the one call guaranteed
+    // to keep every tail input (palette texture, tonemap uniform,
+    // curve LUT, background, levels) in exact sync with the flame
+    // path. It also compiles the config's (unused) flame shaders —
+    // wasted work worth revisiting if escape thumbnails ever feel
+    // slow, not before.
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Escape Config Encoder"),
+    });
+    renderer.load_config(
+        device,
+        &mut encoder,
+        queue,
+        job.config,
+        &job.config.palette,
+        job.iterations_per_thread,
+        job.burn_in,
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    if job.transparent {
+        renderer.set_transparent_mode(queue, true, job.premultiplied, job.config, job.iterations_per_thread);
+    }
+
+    // The generator: one compute pass is the whole image.
+    let mut escape_renderer = crate::escape::EscapeRenderer::new(device, job.width, job.height);
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Escape Render"),
+    });
+    escape_renderer.render(
+        device,
+        queue,
+        &mut encoder,
+        &job.config.escape,
+        renderer.palette_view(),
+    );
+
+    // Shared tail: density effects → tonemap → color effects → read.
+    let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
+    let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
+    let mut effect_chain = if has_density_effects || has_color_effects {
+        Some(EffectChainRunner::new(device, job.width, job.height))
+    } else {
+        None
+    };
+    if let Some(chain) = effect_chain.as_mut() {
+        chain.reset_slots();
+    }
+
+    let escape_view = escape_renderer.output_view();
+    if has_density_effects {
+        let chain = effect_chain.as_mut().expect("built above: has_density_effects");
+        let density_ran = chain.run_density_effects(
+            device,
+            queue,
+            &mut encoder,
+            escape_view,
+            &job.config.density_effects,
+        );
+        match (density_ran, chain.get_density_output()) {
+            (true, Some(density_output)) => {
+                renderer.tonemap_pass_with_input(device, queue, &mut encoder, density_output)
+            }
+            _ => renderer.tonemap_pass_with_input(device, queue, &mut encoder, escape_view),
+        }
+    } else {
+        renderer.tonemap_pass_with_input(device, queue, &mut encoder, escape_view);
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let color_effects_ran = if has_color_effects {
+        let chain = effect_chain.as_mut().expect("built above: has_color_effects");
+        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Escape Color Effects"),
+        });
+        let ran = chain.run_color_effects(
+            device,
+            queue,
+            &mut color_encoder,
+            renderer.get_fractal_texture_view(),
+            &job.config.color_effects,
+        );
+        queue.submit(std::iter::once(color_encoder.finish()));
+        ran
+    } else {
+        false
+    };
+
+    let pixels = if color_effects_ran {
+        effect_chain
+            .as_ref()
+            .expect("color_effects_ran implies a chain")
+            .read_color_output_pixels(device, queue)
+            .await
+            .map_err(RenderError::PixelReadFailed)
+    } else {
+        renderer
+            .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
+            .await
+            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
+    };
+
+    // Readback completion proves every submission finished — the safe
+    // destroy point for the per-call GPU objects, error path included.
+    if let Some(chain) = &effect_chain {
+        chain.destroy();
+    }
+    escape_renderer.destroy();
+    let (width, height, rgba_data) = pixels?;
+
+    progress.on_progress(1, 1);
+    let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+    log::info!(
+        "Render: escape complete - {}x{} in {:.1}ms",
+        width,
+        height,
+        render_time_ms
+    );
+
+    Ok(RenderOutput {
+        width,
+        height,
+        rgba_data,
+        // "Iterations" means something different here: report the
+        // per-pixel ceiling, not a chaos-game sample count.
+        total_iterations: job.config.escape.max_iter as u64,
         render_time_ms,
     })
 }

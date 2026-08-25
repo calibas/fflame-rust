@@ -1139,6 +1139,13 @@ impl FlameRenderer {
     }
 
     /// Get the current accumulation texture view (for density effects input)
+    /// The palette texture view (with rotation/squeeze applied by
+    /// `update_palette`). The escape-time renderer binds it so escape
+    /// mode inherits the whole palette pipeline.
+    pub fn palette_view(&self) -> &TextureView {
+        &self.buffers.palette_view
+    }
+
     pub fn get_accumulation_view(&self) -> &TextureView {
         self.buffers.current_accumulation_view()
     }
