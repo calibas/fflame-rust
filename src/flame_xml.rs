@@ -477,6 +477,9 @@ fn parse_flame_element(
     let solid_import = solid_shading_from_sld(&sld_attrs);
 
     Ok(FractalConfig {
+        // .flame XML carries no escape-time state (no Apo/JWF
+        // equivalent) — deliberate, see the plan's serialization notes.
+        escape: Default::default(),
         flame,
         // Scene-level render state (config-level since v3).
         render_mode,
