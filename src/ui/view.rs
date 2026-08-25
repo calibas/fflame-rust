@@ -166,9 +166,11 @@ pub fn render_view_content(
             .on_hover_text(t!("view.tooltip_mode_escape"))
             .clicked()
         {
-            if let Err(e) = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::Escape.into()
+            // Shared helper also defaults the tonemap to Linear on the
+            // way into escape mode.
+            if let Err(e) = super::escape_panel::switch_render_mode(
+                config_manager,
+                crate::scene::transforms::RenderMode::Escape,
             ) {
                 log::error!("Failed to update render mode: {}", e);
             }
