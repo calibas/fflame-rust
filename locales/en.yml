@@ -138,6 +138,7 @@ help:
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
+  center_minibrot: "Center on Minibrot"
   alt_drag_rotate: "  Alt-Drag - Rotate view"
 
 # Panel Titles (used in tabs and window titles)
@@ -1905,6 +1906,8 @@ escape_panel:
   view_heading: "View"
   zoom_log2: "Zoom (log2)"
   tooltip_zoom_log2: "Magnification exponent: 0 shows the home view, each +1 doubles the zoom"
+  center_minibrot: "Center on minibrot"
+  tooltip_center_minibrot: "Find the minibrot governing this view (Newton's method) and recenter exactly on its nucleus - the anchor for deep dives"
   rotation: "Rotation"
   max_iter: "Max iterations"
   tooltip_max_iter: "Per-pixel iteration ceiling — higher resolves deeper boundary detail"
