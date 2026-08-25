@@ -403,6 +403,40 @@ orbit average (Kaliset needs it); palette mapping; Linear tonemap
 default; PNG export (thumbnails/CLI/video inherit via `render_with`);
 visual corpus; formula × coloring compile probe.
 
+**Phase 1 status (2026-08-25, branch `escape-time`).** Implemented
+and CLI-verified: EscapeConfig + skip-if-default serialization;
+ConfigPaths/string keys/describe/i18n; `UpdateType::EscapeRerender` →
+`UpdateAction::rerender_escape`; `RenderMode::Escape` + the Save
+Online client-side refusal; FormulaDef/ColoringDef registries with
+feature flags (`NonEscaping`, `SeedFromPixel`, `NeedsOrbitAccum`,
+`ColorsInterior`); marker-splicing assembler (bailout compiles out for
+NonEscaping, accumulators compile in per coloring) + naga
+parse/validate over every formula × coloring (the compile half of the
+probe) + the fast-math lints extended over the assembled WGSL;
+EscapeRenderer (one dispatch, Rgba32Float in accumulator format,
+pipeline cache, explicit destroy) feeding the shared
+tonemap/effects/readback tail via `tonemap_pass_with_input`; dispatch
+inside `render_with` (CLI export, thumbnails, video, gallery inherit);
+lazy `escape_renderer` in the App frame loop, event-driven (no
+progressive refinement); Escape Fractal panel (registry-generated
+param sliders) + Window/compact menus + View-row mode switch; Linear
+tonemap defaulted on mode entry; flame-only panels hidden in escape
+mode; viewport input (drag pan, wheel zoom-to-cursor, pinch) in the
+center-strings/zoom_log2 vocabulary; formulas Mandelbrot, Multibrot,
+Tricorn/Multicorn, Burning Ship family (6 variants), McMullen,
+Kaliset; colorings escape count, smooth, orbit trap (point/axes/
+circle), orbit average; biomorph toggle (runtime flag); Julia toggle;
+12-config visual corpus (`tests/visual/configs/escape/`). Scripting
+works via `.fflame` field names (`config.set("escape.zoom_log2", …)`).
+
+Still open within phase 1: keyboard-arrow pan and alt-drag routing in
+escape mode; viewport-size transparent-PNG export (re-tonemaps the
+flame accumulator; custom-size path is correct); the GPU render half
+of the compile probe; orbit-average look tuning (Kaliset renders
+correct structure but wants weighted-falloff glow — phase-2 coloring
+depth); Burning Ship variant conventions pinned only by our corpus,
+not yet against external reference images.
+
 **Phase 2 — catalog breadth and coloring depth.**
 Phoenix, Lambda, Newton/Nova + the root-finder scheme axis, Magnet,
 exponential family, the tetration family (§5.8), Feather, Collatz,
