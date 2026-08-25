@@ -55,13 +55,13 @@ impl BigFloat {
             for i in (0..n).rev() {
                 self.limbs[i] = if i >= limb_shift { self.limbs[i - limb_shift] } else { 0 };
             }
-            self.exp -= 64 * limb_shift as i64;
+            self.exp = self.exp.saturating_sub(64 * limb_shift as i64);
         }
         let lz = self.limbs[n - 1].leading_zeros();
         if lz > 0 {
             let carry = shl_small(&mut self.limbs, lz);
             debug_assert_eq!(carry, 0);
-            self.exp -= lz as i64;
+            self.exp = self.exp.saturating_sub(lz as i64);
         }
     }
 
@@ -251,8 +251,14 @@ impl BigFloat {
         let mut out = Self {
             neg: self.neg != other.neg,
             // Keep limbs n..2n: their unit is 2^(64 n) relative to the
-            // integer product.
-            exp: self.exp + other.exp + 64 * n as i64,
+            // integer product. Saturating: an escaped orbit squared
+            // repeatedly doubles the exponent past i64 in ~62 steps —
+            // saturation keeps the value an honest "astronomically
+            // huge" instead of a panic (callers bail on magnitude).
+            exp: self
+                .exp
+                .saturating_add(other.exp)
+                .saturating_add(64 * n as i64),
             limbs: prod[n..].to_vec(),
         };
         out.normalize();
@@ -262,9 +268,18 @@ impl BigFloat {
     pub fn mul_pow2(&self, k: i64) -> Self {
         let mut out = self.clone();
         if !out.is_zero() {
-            out.exp += k;
+            out.exp = out.exp.saturating_add(k);
         }
         out
+    }
+
+    /// Magnitude exponent (~log2 |self|), None for zero.
+    pub fn mag_exp(&self) -> Option<i64> {
+        if self.is_zero() {
+            None
+        } else {
+            Some(self.exp.saturating_add(64 * self.n_limbs() as i64 - 1))
+        }
     }
 
     pub fn neg(&self) -> Self {
