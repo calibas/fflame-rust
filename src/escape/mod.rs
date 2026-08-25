@@ -22,6 +22,8 @@
 //! than prefixed.
 
 pub mod assembler;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod app_repro_test;
 pub mod colorings;
 pub mod formulas;
 pub mod renderer;

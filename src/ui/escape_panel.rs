@@ -235,11 +235,19 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
 }
 
 /// Switch render mode, defaulting the tonemap to Linear on the way
-/// INTO escape mode (plan: escape's home tonemap is Linear — the
-/// flame default Logarithmic normalizes by chaos-game sample density
-/// and renders the single-dispatch escape image dim). One batch → one
-/// undo point; a deliberate non-Logarithmic choice is left alone, and
-/// switching back to a flame mode changes nothing (undo covers it).
+/// INTO escape mode (plan: escape's home tonemap is Linear).
+///
+/// Exposure and gamma come along: flame presets carry
+/// LOGARITHMIC-calibrated values (e.g. the startup flame's exposure
+/// 0.016 / gamma 0.35), and Linear mode computes
+/// `rgb × exposure` then `pow(…, 1/gamma)` — under those values the
+/// escape image renders at ~1e-5 brightness, i.e. an all-black
+/// viewport (found the hard way during bring-up). So when the tonemap
+/// is at the flame's Logarithmic mode, entering escape batches
+/// Linear + the config-default exposure/gamma as ONE undo point —
+/// leaving escape and pressing Ctrl+Z restores the flame's look
+/// exactly. A deliberately non-Logarithmic tonemap is left alone.
+/// Per-mode tonemap state is the real fix, noted in the plan.
 pub fn switch_render_mode(
     config_manager: &mut ConfigManager,
     mode: RenderMode,
@@ -255,6 +263,14 @@ pub fn switch_render_mode(
                 (
                     ConfigPath::TonemapMode,
                     crate::scene::tonemap::ToneMapMode::Linear.into(),
+                ),
+                (
+                    ConfigPath::Exposure,
+                    crate::config::defaults::DEFAULT_EXPOSURE.into(),
+                ),
+                (
+                    ConfigPath::Gamma,
+                    crate::config::defaults::DEFAULT_GAMMA.into(),
                 ),
             ],
             "history.param.render_mode".to_string(),
