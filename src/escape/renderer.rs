@@ -28,12 +28,12 @@ use super::assembler::{self, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
 /// Above this zoom the direct path's f32 pixel mapping visibly
-/// shreds (center ~1 has ulp ~1e-7; pixel spacing crosses it near
-/// zoom 21) and rendering switches to perturbation. The scaled-f32
-/// delta pipeline holds to roughly zoom 54 (w-squared overflow); the
-/// UI clamp is 45, comfortably inside. The floatexp rung lifts this
-/// when it lands.
-pub const PERTURB_MIN_ZOOM: f64 = 18.0;
+/// pixelates: the center's f32 ulp (~6e-8 near |c| = 1) stops
+/// resolving pixel spacing a couple of octaves before it equals it —
+/// field-observed at zoom 16, so the switch sits at 14. The scaled
+/// f32 delta pipeline holds to roughly zoom 54 (w-squared overflow);
+/// the floatexp rung takes over beyond [`PERTURB_FLOATEXP_ZOOM`].
+pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4 arrays start at a
