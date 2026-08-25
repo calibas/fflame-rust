@@ -262,10 +262,11 @@ struct PerturbParams {
     s: f32,
     inv_s: f32,
     orbit_len: u32,   // usable entries in the reference orbit
-    // 1 when S*w*w underflows f32 (deep zoom): the quadratic term is
-    // then legitimately negligible (linear regime) - hoisted here
-    // instead of tested per iteration, per the plan.
-    skip_quadratic: u32,
+    // bit 0: skip the S*w*w term (deep-linear regime, hoisted per the
+    // plan). bit 1: Julia mode - c is constant, so the +d0 term drops
+    // from the recurrence and seeds the delta instead (delta_0 =
+    // pixel - center).
+    flags: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -312,9 +313,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     );
 
     // Delta iteration state: w = delta / S, m = reference index.
-    // delta_0 = 0 (pixel and reference both start at z = 0); the +d0
-    // term in the recurrence generates delta_1 = delta_c.
-    var w = vec2<f32>(0.0, 0.0);
+    // Parameter plane: delta_0 = 0 (both orbits start at z = 0) and
+    // the +d0 term generates delta_1 = delta_c. Julia: c is constant
+    // (the term drops) and the SEED differs by the pixel offset.
+    let is_julia_perturb = (perturb.flags & 2u) != 0u;
+    var w = select(vec2<f32>(0.0, 0.0), d0, is_julia_perturb);
+    let d0_term = select(d0, vec2<f32>(0.0, 0.0), is_julia_perturb);
     var m = 0u;
     var z = vec2<f32>(0.0, 0.0);
     var escaped = false;
@@ -335,8 +339,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var w_new = 2.0 * vec2<f32>(
             z_ref.x * w.x - z_ref.y * w.y,
             z_ref.x * w.y + z_ref.y * w.x,
-        ) + d0;
-        if (perturb.skip_quadratic == 0u) {
+        ) + d0_term;
+        if ((perturb.flags & 1u) == 0u) {
             w_new = w_new + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);
         }
         let z_before = z;
@@ -359,13 +363,18 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
 
-        // Zhuoran rebase: reference passed near the pixel's absolute
-        // position, or the reference orbit ended - restart it with
-        // the full value folded into the delta. |w_new| <= |w| at a
-        // proximity rebase, so inv_s never overflows the new w.
+        // Zhuoran rebase: restart the reference index when the new
+        // delta AGAINST THE ORBIT'S START would be smaller than the
+        // current one, or when the reference orbit ended. The new
+        // delta is z_full - Z_0: zero-start references (parameter
+        // plane) reduce to the textbook z_full form, Julia references
+        // start at Z_0 = center and MUST subtract it (found the hard
+        // way: without the subtraction a rebase teleports z to
+        // center + z_full and every pixel escapes instantly).
+        let rebase_delta = z_full - ref_orbit[0];
         if (m >= perturb.orbit_len - 1u
-            || dot(z_full, z_full) < dot(delta, delta)) {
-            w = z_full * perturb.inv_s;
+            || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
+            w = rebase_delta * perturb.inv_s;
             m = 0u;
         }
     }
