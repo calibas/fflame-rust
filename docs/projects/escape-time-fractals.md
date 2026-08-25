@@ -287,18 +287,116 @@ f32 is fast). The iteration governor's median-filtered shape is
 available if a heavyweight combination ever needs adaptive `max_iter`
 — wire only on demonstrated need.
 
+### Integration map — the wiring, point by point
+
+Reviewed against the code before branching (2026-08). Each reuse
+target with its actual mechanism and what this feature must add.
+The requirements this satisfies: parallel to flames, no flame-UI
+complication, no flame-performance cost, undo + coalescing,
+animations, scripts, effects, palettes.
+
+**Undo / ConfigManager / coalescing.** All escape parameters flow
+through `config_manager.update_param(path, value)` like everything
+else, which makes undo, redo, 500 ms/3 s coalescing and the history
+panel automatic. What must be added, in `src/config/delta.rs`:
+
+- `ConfigPath` variants: the scalar set (`EscapeZoomLog2`,
+  `EscapeRotation`, `EscapeMaxIter`, `EscapeBailout`, `EscapeJulia*`,
+  scheme/classification/coloring selectors) plus **two keyed
+  variants** mirroring `DensityEffectParam { index, param }`:
+  `EscapeFormulaParam { param: String }` and
+  `EscapeColoringParam { param: String }` — per-formula and
+  per-coloring params stay open-ended without new enum arms per
+  formula.
+- The center strings are `ConfigValue::String` (already exists) —
+  undoable day one, not animatable (by design, see open questions).
+- `from_string_key`/`to_string_key` arms — this single addition is
+  what makes **animation tracks, scripting (`config.set`) and
+  signal-driven audio reactivity all work unmodified**: anim targets
+  resolve through `ConfigPath::from_string_key`, and signals drive
+  anim tracks, never parameters directly.
+- `describe()` arms + `locales/*.yml` keys, so history entries read
+  as words.
+
+**GPU routing.** `update_type()` today speaks flame
+(`IterationReset` clears the accumulator). Escape needs one new
+answer: `UpdateType::EscapeRerender` → a `rerender_escape` flag on
+`UpdateAction` (`src/config/manager.rs`), drained where the app
+already drains the others (`src/app/gpu_updates.rs::
+apply_pending_updates`). Camera-only changes can re-render without
+pipeline rebuilds; formula/scheme/classification changes go through
+the pipeline LRU. Escape paths return `EscapeRerender`, flame paths
+are untouched — **a flame session never sees a new code path**.
+
+**Parallel renderer, zero flame cost.** `App` gains
+`escape_renderer: Option<EscapeRenderer>` beside `flame_renderer`,
+built lazily on the first escape-mode frame and destroyed on mode
+exit (WebGPU discipline: explicit `destroy()`, the lesson the
+gallery module keeps re-learning). The frame loop branches once, at
+the same point that currently calls `renderer.compute_pass(...)`
+(`src/app/mod.rs`); the governor, batching and overwrite-mode logic
+stay inside the flame branch untouched.
+
+**Everything downstream inherits through the unified render path.**
+`render_thumbnail_async` → `render()` → `render_with`
+(`src/renderer/render.rs`), and the CLI `export` command, the visual
+suite, animation/video export and the gallery's `wasm/render` module
+all go through the same two functions. The escape dispatch therefore
+lives **inside `render_with`** (branch on `config.flame.render_mode`
+before the chaos-game loop), not in the app: thumbnails, headless
+export at any resolution, video export, browser-card previews and
+gallery tiles all get escape rendering with no further wiring. The
+tail of `render_with` (tonemap → density/color effect chains → pixel
+readback) is shared verbatim — which is the effects and palette
+story too: escape writes the same `Rgba32Float` accumulation-shaped
+target the tonemap consumes, and colorings sample the same palette
+texture (reuse the existing palette→texture upload, don't re-derive
+it).
+
+**Save Online / API.** `sync.rs` converts `RenderMode` with
+*exhaustive* `From` impls — adding the variant is a compile error at
+both conversion sites, which is the forcing function working. But
+the server casts the wire string into a **Postgres enum**, so until
+the API adds the value, uploading an escape config would 500.
+Phase 1 therefore ships a client-side guard: Save Online for an
+escape config is disabled with a "not yet supported online" tooltip
+until the API's enum + `openapi.json` are updated (that coordination
+is already a §9 item; the guard makes the interim graceful instead
+of a server error).
+
+**Scripts.** `config.set`/`config.get` reach every ConfigPath via
+the string keys above, so escape scripting works the day the paths
+exist (`script("…", "generator")` + `config.set("escape.formula",
+"mandelbrot")` — exact key spelling decided with the paths). The
+richer typed API (`escape.` handle in Rhai) stays deferred as
+planned. Gallery consequence, for free: `wasm/script` produces
+configs and `wasm/render` renders them through `render_with`, so
+escape tiles in the Endless Gallery need only the reserved-stem and
+corpus updates any new script needs.
+
+**What stays flame-only, deliberately**: the Transforms/Triangle/
+Xaos/Variations panels (never shown in escape mode — the new panel
+is the whole editing surface), the View panel, fly mode, the
+governor, sticky shaders, the probe/census tooling, and `.flame`
+XML. The mode check hides flame-only panels rather than teaching
+them a second vocabulary.
+
 ---
 
 ## 4. Phases
 
 **Phase 1 — mode A core (ships standalone value).**
-Pipeline stage + mode switch; EscapeConfig + serialization; camera +
-input routing; panel; FormulaDef/ColoringDef registries + assembler;
-formulas: Mandelbrot/Multibrot, Tricorn/Multicorn, Burning Ship
-family, McMullen, Kaliset (+ Julia toggle everywhere); biomorph
+Pipeline stage + mode switch; EscapeConfig + serialization; the
+integration map's wiring (ConfigPaths + string keys + describe/i18n,
+`UpdateType::EscapeRerender` + `UpdateAction` flag, dispatch inside
+`render_with`, lazy `escape_renderer` in App, Save Online guard);
+camera + input routing; panel; FormulaDef/ColoringDef registries +
+assembler; formulas: Mandelbrot/Multibrot, Tricorn/Multicorn, Burning
+Ship family, McMullen, Kaliset (+ Julia toggle everywhere); biomorph
 toggle; colorings: escape count, smooth iteration, basic orbit traps,
 orbit average (Kaliset needs it); palette mapping; Linear tonemap
-default; PNG export; visual corpus; formula × coloring compile probe.
+default; PNG export (thumbnails/CLI/video inherit via `render_with`);
+visual corpus; formula × coloring compile probe.
 
 **Phase 2 — catalog breadth and coloring depth.**
 Phoenix, Lambda, Newton/Nova + the root-finder scheme axis, Magnet,
