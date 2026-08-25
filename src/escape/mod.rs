@@ -39,11 +39,12 @@ pub enum FormulaFeature {
     /// color from the orbit accumulators (Kaliset — plan §5.12). The
     /// assembler compiles the bailout test out entirely.
     NonEscaping,
-    /// In parameter-plane mode, seed `z₀` from the pixel instead of
-    /// the critical point 0 (with `c` = pixel as usual). For maps
-    /// where 0 is a pole (McMullen) or a fixed degenerate point
-    /// (Kaliset's 0/0), seeding from 0 renders nothing.
-    SeedFromPixel,
+    /// The step reads the PREVIOUS iterate too (Phoenix: `z ← z² + c
+    /// + p·z_prev`). The formula's `formula_step` gains a
+    /// `z_prev: vec2<f32>` argument and the assembler compiles the
+    /// history register into the loop; without the flag the loop
+    /// carries no history at all.
+    NeedsPrevZ,
 }
 
 /// Capability flags for colorings.
@@ -93,6 +94,13 @@ pub struct FormulaDef {
     pub features: &'static [FormulaFeature],
     pub parameters: &'static [EscapeParamDef],
     pub wgsl: &'static str,
+    /// WGSL expression seeding `z₀` on the PARAMETER plane (`c` =
+    /// pixel). Empty ⇒ the origin — right when 0 is the critical
+    /// point (Mandelbrot family). Formulas whose critical point is
+    /// elsewhere (Lambda: 0.5) or for which 0 is degenerate
+    /// (McMullen's pole, Kaliset's 0/0 — both seed `pixel`) override
+    /// it. `pixel` is in scope.
+    pub wgsl_param_seed: &'static str,
 }
 
 impl FormulaDef {
@@ -141,6 +149,8 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::BURNING_SHIP,
     &formulas::MCMULLEN,
     &formulas::KALISET,
+    &formulas::PHOENIX,
+    &formulas::LAMBDA,
 ];
 
 /// Ordered coloring registry. **Append-only.**
@@ -149,6 +159,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::SMOOTH,
     &colorings::ORBIT_TRAP,
     &colorings::ORBIT_AVERAGE,
+    &colorings::STRIPE_AVERAGE,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

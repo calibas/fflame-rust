@@ -102,21 +102,21 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d.x * rot.y + d.y * rot.x,
     );
 
-    // Julia toggle: parameter plane iterates z from the seed with
-    // c = pixel; dynamical plane iterates z from the pixel with c
-    // fixed. One flag, not a formula-list entry (plan section 3).
-    // SEED_FROM_PIXEL formulas seed the parameter plane from the
-    // pixel too (their critical point is a pole or degenerate).
+    // Julia toggle: parameter plane iterates z from the formula's
+    // critical-point seed with c = pixel; dynamical plane iterates z
+    // from the pixel with c fixed. One flag, not a formula-list entry
+    // (plan section 3).
     let is_julia = (params.flags & 1u) != 0u;
     var z = select(PARAM_PLANE_SEED, pixel, is_julia);
     let c = select(pixel, params.julia_c, is_julia);
 
     //__ACCUM_DECL__
+    //__PREV_DECL__
 
     var escaped = false;
     var n = 0u;
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
-        z = formula_step(z, c);
+        //__STEP__
         //__ACCUM_UPDATE__
         //__ESCAPE_TEST__
     }
@@ -156,7 +156,12 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
-    let seed_pixel = formula.has_feature(FormulaFeature::SeedFromPixel);
+    let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
+    let param_seed = if formula.wgsl_param_seed.is_empty() {
+        "vec2<f32>(0.0, 0.0)"
+    } else {
+        formula.wgsl_param_seed
+    };
 
     let mut out = Vec::new();
     for line in TEMPLATE.lines() {
@@ -197,12 +202,23 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef) -> String {
                     out.push(ESCAPE_TEST.to_string());
                 }
             }
-            _ => out.push(
-                line.replace(
-                    "PARAM_PLANE_SEED",
-                    if seed_pixel { "pixel" } else { "vec2<f32>(0.0, 0.0)" },
-                ),
-            ),
+            "//__PREV_DECL__" => {
+                if needs_prev {
+                    // Phoenix convention: the history starts at the
+                    // seed's predecessor, conventionally 0.
+                    out.push("    var z_prev = vec2<f32>(0.0, 0.0);".to_string());
+                }
+            }
+            "//__STEP__" => {
+                if needs_prev {
+                    out.push("        let z_next = formula_step(z, c, z_prev);".to_string());
+                    out.push("        z_prev = z;".to_string());
+                    out.push("        z = z_next;".to_string());
+                } else {
+                    out.push("        z = formula_step(z, c);".to_string());
+                }
+            }
+            _ => out.push(line.replace("PARAM_PLANE_SEED", param_seed)),
         }
     }
     out.join("\n")

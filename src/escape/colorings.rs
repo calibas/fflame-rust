@@ -135,3 +135,50 @@ fn coloring_accum(z: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
 }
 "#,
 };
+
+/// Stripe average — mean of `0.5 + 0.5·sin(density·arg z)` over the
+/// orbit (plan §8). The banding classic; spectacular on Ducks-family
+/// maps, soft angular striping everywhere else.
+pub static STRIPE_AVERAGE: ColoringDef = ColoringDef {
+    name: "stripe_average",
+    display_name: "Stripe Average",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "density",
+            display_name: "Stripe density",
+            default: 4.0,
+            min: 0.5,
+            max: 32.0,
+            tooltip: "Angular frequency of the stripes (sin(density * arg z)).",
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of averaged stripe value.",
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32 {
+    let mean = state.x / max(state.y, 1.0);
+    return mean * cparam(1u);
+}
+"#,
+    accum_init: "vec2<f32>(0.0, 0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+    // Skip exact zero: atan2 at a zero pair is the Metal fast-math
+    // hazard (garbage or NaN, see CLAUDE.md) — the branch keeps it
+    // from ever being evaluated there, and dropping one sample from
+    // a mean is invisible.
+    if (dot(z, z) < 1e-30) {
+        return state;
+    }
+    let stripe = 0.5 + 0.5 * sin(cparam(0u) * atan2(z.y, z.x));
+    return state + vec2<f32>(stripe, 1.0);
+}
+"#,
+};
