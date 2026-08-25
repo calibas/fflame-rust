@@ -146,6 +146,214 @@ impl ReferenceOrbit {
     }
 }
 
+/// A reference-orbit request, as the worker sees it.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, PartialEq)]
+pub struct OrbitRequest {
+    pub center_re: String,
+    pub center_im: String,
+    pub n_limbs: usize,
+    pub max_iter: u32,
+    pub julia_c: Option<(f32, f32)>,
+    pub power: u32,
+}
+
+/// Progressive snapshot the render side reads each frame.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub struct OrbitProgress {
+    /// Which request this data belongs to (bumped on every new
+    /// request; stale chunks from an abandoned compute are ignored).
+    pub epoch: u64,
+    /// Z_n snapshots so far (orbit[0] = the seed).
+    pub orbit: Vec<[f32; 2]>,
+    /// The orbit covers its request's max_iter (or escaped early).
+    pub done: bool,
+}
+
+/// Reference orbits on a worker thread with progressive upload (the
+/// plan's phase-4 item): the render side posts the latest request and
+/// reads whatever prefix exists each frame — rebasing treats a
+/// too-short orbit as an early wrap, so partial-orbit frames are
+/// merely noisier, never wrong, and refine as chunks land. Deepening
+/// reuses the live fixed-point state (append, not recompute) as long
+/// as the rest of the request matches.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct OrbitWorker {
+    tx: std::sync::mpsc::Sender<(u64, OrbitRequest)>,
+    pub progress: std::sync::Arc<std::sync::Mutex<OrbitProgress>>,
+    latest: Option<OrbitRequest>,
+    epoch: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl OrbitWorker {
+    /// Iterations per chunk between snapshot publications.
+    const CHUNK: u32 = 4096;
+
+    pub fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<(u64, OrbitRequest)>();
+        let progress = std::sync::Arc::new(std::sync::Mutex::new(OrbitProgress::default()));
+        let shared = progress.clone();
+        std::thread::Builder::new()
+            .name("escape-orbit".into())
+            .spawn(move || {
+                let mut current: Option<(OrbitRequest, ReferenceOrbit, u64)> = None;
+                loop {
+                    // Take the newest pending request (drain the queue).
+                    let mut next = match current {
+                        // Idle: block for work.
+                        None => match rx.recv() {
+                            Ok(r) => Some(r),
+                            Err(_) => return,
+                        },
+                        // Working: only preempt if something arrived.
+                        Some(_) => match rx.try_recv() {
+                            Ok(r) => Some(r),
+                            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                        },
+                    };
+                    while let Ok(r) = rx.try_recv() {
+                        next = Some(r);
+                    }
+
+                    if let Some((epoch, req)) = next {
+                        // Same orbit, deeper? Keep the live state and
+                        // append. Otherwise start fresh.
+                        let reuse = current.take().and_then(|(old_req, orbit, _)| {
+                            let same = old_req.center_re == req.center_re
+                                && old_req.center_im == req.center_im
+                                && old_req.n_limbs == req.n_limbs
+                                && old_req.julia_c == req.julia_c
+                                && old_req.power == req.power;
+                            if same { Some(orbit) } else { None }
+                        });
+                        let orbit = match reuse {
+                            Some(o) => o,
+                            None => {
+                                match ReferenceOrbit::compute(
+                                    &req.center_re,
+                                    &req.center_im,
+                                    0.0,
+                                    Some(req.n_limbs),
+                                    0,
+                                    req.julia_c,
+                                    req.power,
+                                ) {
+                                    Some(o) => o,
+                                    None => {
+                                        // Unparseable center: publish an
+                                        // empty done state.
+                                        let mut p = shared.lock().unwrap();
+                                        p.epoch = epoch;
+                                        p.orbit.clear();
+                                        p.done = true;
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        // Publish the (possibly reused) prefix.
+                        {
+                            let mut p = shared.lock().unwrap();
+                            p.epoch = epoch;
+                            p.orbit.clear();
+                            p.orbit.extend_from_slice(&orbit.orbit);
+                            p.done = orbit.escaped_at.is_some()
+                                || orbit.len() > req.max_iter;
+                        }
+                        current = Some((req, orbit, epoch));
+                    }
+
+                    // Advance the current job by one chunk.
+                    if let Some((req, orbit, epoch)) = current.as_mut() {
+                        let target = (orbit.len().saturating_sub(1) + Self::CHUNK)
+                            .min(req.max_iter);
+                        orbit.extend(target);
+                        let done =
+                            orbit.escaped_at.is_some() || orbit.len() > req.max_iter;
+                        {
+                            let mut p = shared.lock().unwrap();
+                            if p.epoch == *epoch {
+                                let have = p.orbit.len();
+                                p.orbit.extend_from_slice(&orbit.orbit[have..]);
+                                p.done = done;
+                            }
+                        }
+                        if done {
+                            // Keep state for future deepening but stop
+                            // spinning: park until the next request.
+                            let parked = current.take().unwrap();
+                            match rx.recv() {
+                                Ok(r) => {
+                                    current = Some((parked.0, parked.1, parked.2));
+                                    // Re-queue the received request into
+                                    // the normal path next loop.
+                                    let _ = tx_loopback_send(&shared, r, &mut current);
+                                }
+                                Err(_) => return,
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("spawn escape-orbit worker");
+        Self { tx, progress, latest: None, epoch: 0 }
+    }
+
+    /// Post a request (deduplicated). Returns the epoch that data for
+    /// it will carry.
+    pub fn request(&mut self, req: OrbitRequest) -> u64 {
+        if self.latest.as_ref() == Some(&req) {
+            return self.epoch;
+        }
+        self.epoch += 1;
+        self.latest = Some(req.clone());
+        let _ = self.tx.send((self.epoch, req));
+        self.epoch
+    }
+}
+
+/// Helper for the parked-worker wakeup: fold a received request into
+/// `current` exactly the way the main loop would.
+#[cfg(not(target_arch = "wasm32"))]
+fn tx_loopback_send(
+    shared: &std::sync::Arc<std::sync::Mutex<OrbitProgress>>,
+    (epoch, req): (u64, OrbitRequest),
+    current: &mut Option<(OrbitRequest, ReferenceOrbit, u64)>,
+) -> Option<()> {
+    let reuse = current.take().and_then(|(old_req, orbit, _)| {
+        let same = old_req.center_re == req.center_re
+            && old_req.center_im == req.center_im
+            && old_req.n_limbs == req.n_limbs
+            && old_req.julia_c == req.julia_c
+            && old_req.power == req.power;
+        if same { Some(orbit) } else { None }
+    });
+    let orbit = match reuse {
+        Some(o) => o,
+        None => ReferenceOrbit::compute(
+            &req.center_re,
+            &req.center_im,
+            0.0,
+            Some(req.n_limbs),
+            0,
+            req.julia_c,
+            req.power,
+        )?,
+    };
+    {
+        let mut p = shared.lock().unwrap();
+        p.epoch = epoch;
+        p.orbit.clear();
+        p.orbit.extend_from_slice(&orbit.orbit);
+        p.done = orbit.escaped_at.is_some() || orbit.len() > req.max_iter;
+    }
+    *current = Some((req, orbit, epoch));
+    Some(())
+}
+
 /// Single-slot orbit cache: during a continuous zoom the center is
 /// unchanged, so one orbit serves every frame; deepening appends. A
 /// pan or precision change replaces the slot.
@@ -299,6 +507,60 @@ mod tests {
                 (ox as f64 - zx).abs() < 1e-5 && (oy as f64 - zy).abs() < 1e-5,
                 "iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
             );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn worker_converges_to_the_synchronous_orbit() {
+        let mut worker = OrbitWorker::new();
+        let req = OrbitRequest {
+            center_re: "-0.5".into(),
+            center_im: "0.1".into(),
+            n_limbs: 3,
+            max_iter: 10_000,
+            julia_c: None,
+            power: 2,
+        };
+        let epoch = worker.request(req);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            {
+                let p = worker.progress.lock().unwrap();
+                if p.epoch == epoch && p.done {
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "worker never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let sync = ReferenceOrbit::compute("-0.5", "0.1", 0.0, Some(3), 10_000, None, 2)
+            .unwrap();
+        let p = worker.progress.lock().unwrap();
+        assert_eq!(p.orbit.len(), sync.orbit.len());
+        assert_eq!(p.orbit, sync.orbit, "worker orbit differs from synchronous");
+
+        // Preemption: a new request replaces the old epoch.
+        drop(p);
+        let e2 = worker.request(OrbitRequest {
+            center_re: "-0.75".into(),
+            center_im: "0.05".into(),
+            n_limbs: 3,
+            max_iter: 2_000,
+            julia_c: None,
+            power: 2,
+        });
+        assert!(e2 > epoch);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            {
+                let p = worker.progress.lock().unwrap();
+                if p.epoch == e2 && p.done {
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "second request never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 

@@ -106,6 +106,18 @@ pub struct EscapeRenderer {
     /// its GPU mirror, and the perturbed pipeline's own layout (two
     /// extra bindings: the orbit buffer and the perturb uniform).
     orbit_cache: OrbitCache,
+    /// Progressive mode (the app sets this): reference orbits come
+    /// from the worker thread and frames render with whatever prefix
+    /// has landed — `render` reports whether the image is final.
+    /// Off (the default), orbit compute is synchronous and exports
+    /// stay deterministic.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub progressive: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    orbit_worker: Option<super::reference::OrbitWorker>,
+    /// Epoch of the worker data currently uploaded (progressive).
+    #[cfg(not(target_arch = "wasm32"))]
+    uploaded_epoch: u64,
     orbit_buffer: Option<Buffer>,
     orbit_capacity: u32,
     orbit_uploaded: u32,
@@ -256,6 +268,12 @@ impl EscapeRenderer {
             #[cfg(test)]
             force_floatexp: false,
             orbit_cache: OrbitCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            progressive: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            orbit_worker: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            uploaded_epoch: 0,
             orbit_buffer: None,
             orbit_capacity: 0,
             orbit_uploaded: 0,
@@ -328,6 +346,92 @@ impl EscapeRenderer {
             self.pipelines.insert(key.clone(), pipeline);
         }
         key
+    }
+
+    /// Progressive orbit acquisition: post the request to the worker,
+    /// upload whatever prefix has landed. Returns
+    /// (usable_len, complete); (0, _) means nothing to render yet.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_orbit_progressive(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+    ) -> (u32, bool) {
+        use super::reference::{OrbitRequest, OrbitWorker};
+        let julia_c = if escape.julia {
+            Some((escape.julia_re, escape.julia_im))
+        } else {
+            None
+        };
+        let power = Self::perturb_power(escape).unwrap_or(2);
+        let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
+        let epoch = worker.request(OrbitRequest {
+            center_re: escape.center_re.clone(),
+            center_im: escape.center_im.clone(),
+            n_limbs: super::fixedpoint::limbs_for_zoom(escape.zoom_log2),
+            max_iter: escape.max_iter,
+            julia_c,
+            power,
+        });
+        let (len, done, data) = {
+            let p = worker.progress.lock().unwrap();
+            if p.epoch != epoch {
+                (0u32, false, Vec::new())
+            } else {
+                let start = if self.uploaded_epoch == epoch {
+                    self.orbit_uploaded as usize
+                } else {
+                    0
+                };
+                (
+                    p.orbit.len() as u32,
+                    p.done,
+                    p.orbit[start.min(p.orbit.len())..].to_vec(),
+                )
+            }
+        };
+        if len < 2 {
+            return (0, false);
+        }
+        // (Re)create the buffer as needed, then append the new tail.
+        let fresh = self.uploaded_epoch != epoch;
+        let recreate = self.orbit_buffer.is_none() || len > self.orbit_capacity || fresh && len > self.orbit_capacity;
+        if recreate {
+            if let Some(old) = self.orbit_buffer.take() {
+                old.destroy();
+            }
+            let capacity = (len + len / 2).max(1024);
+            self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_capacity = capacity;
+            self.orbit_uploaded = 0;
+        }
+        if fresh {
+            // Epoch changed: upload from scratch (the worker republished
+            // the full prefix under the new epoch).
+            let worker = self.orbit_worker.as_ref().unwrap();
+            let p = worker.progress.lock().unwrap();
+            queue.write_buffer(
+                self.orbit_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&p.orbit),
+            );
+            self.orbit_uploaded = p.orbit.len() as u32;
+            self.uploaded_epoch = epoch;
+        } else if !data.is_empty() {
+            queue.write_buffer(
+                self.orbit_buffer.as_ref().unwrap(),
+                (self.orbit_uploaded as u64) * 8,
+                bytemuck::cast_slice(&data),
+            );
+            self.orbit_uploaded += data.len() as u32;
+        }
+        (self.orbit_uploaded, done)
     }
 
     /// Compute/extend the reference orbit and mirror it to the GPU.
@@ -502,6 +606,9 @@ impl EscapeRenderer {
     /// `palette_view` is the flame renderer's palette texture (already
     /// carrying rotation/squeeze from `update_palette`), so escape mode
     /// inherits the whole palette pipeline for free.
+    /// Returns whether the rendered image is FINAL (false only in
+    /// progressive mode while the reference orbit is still growing —
+    /// the caller should keep the escape image marked dirty).
     pub fn render(
         &mut self,
         device: &Device,
@@ -509,7 +616,7 @@ impl EscapeRenderer {
         encoder: &mut CommandEncoder,
         escape: &EscapeConfig,
         palette_view: &TextureView,
-    ) {
+    ) -> bool {
         let params = self.params_for(escape);
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -520,7 +627,27 @@ impl EscapeRenderer {
         #[cfg(not(test))]
         let use_perturbed = Self::wants_perturbation(escape);
         if use_perturbed {
-            if let Some(orbit_len) = self.ensure_orbit(device, queue, escape) {
+            #[cfg(not(target_arch = "wasm32"))]
+            let progressive = self.progressive;
+            #[cfg(target_arch = "wasm32")]
+            let progressive = false;
+            let orbit_state: Option<(u32, bool)> = if progressive {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let (len, done) = self.ensure_orbit_progressive(device, queue, escape);
+                    if len == 0 {
+                        // Nothing to render yet: keep the previous
+                        // frame's texture, come back next frame.
+                        return false;
+                    }
+                    Some((len, done))
+                }
+                #[cfg(target_arch = "wasm32")]
+                None
+            } else {
+                self.ensure_orbit(device, queue, escape).map(|l| (l, true))
+            };
+            if let Some((orbit_len, orbit_done)) = orbit_state {
                 #[cfg(test)]
                 let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
                 #[cfg(not(test))]
@@ -591,7 +718,7 @@ impl EscapeRenderer {
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
                 drop(pass);
-                return;
+                return orbit_done;
             }
             log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
         }
@@ -633,6 +760,7 @@ impl EscapeRenderer {
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         drop(pass);
+        true
     }
 
     /// Free GPU memory explicitly — on WebGPU `Drop` frees nothing.

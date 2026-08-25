@@ -2179,24 +2179,38 @@ impl App {
                 == crate::scene::transforms::RenderMode::Escape;
             if is_escape {
                 let escape = self.escape_renderer.get_or_insert_with(|| {
-                    crate::escape::EscapeRenderer::new(
+                    let mut esc = crate::escape::EscapeRenderer::new(
                         &self.gpu.device,
                         renderer.width,
                         renderer.height,
-                    )
+                    );
+                    // Interactive: reference orbits compute on the
+                    // worker thread and deep frames refine
+                    // progressively instead of stalling the UI.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        esc.progressive = true;
+                    }
+                    esc
                 });
                 if escape.resize(&self.gpu.device, renderer.width, renderer.height) {
                     self.escape_dirty = true;
                 }
                 if self.escape_dirty {
-                    escape.render(
+                    let settled = escape.render(
                         &self.gpu.device,
                         &self.gpu.queue,
                         &mut render_encoder,
                         &final_config.escape,
                         renderer.palette_view(),
                     );
-                    self.escape_dirty = false;
+                    // Progressive deep zoom: an unsettled frame keeps
+                    // the dirty flag so the next frame re-renders with
+                    // the longer orbit prefix.
+                    self.escape_dirty = !settled;
+                    if !settled {
+                        self.window.request_redraw();
+                    }
                 }
             }
 
