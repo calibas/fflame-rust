@@ -460,6 +460,27 @@ Novaretti, Fractint legacy set, Littlewood parameter space, Ducks; damped/Mann
 iteration modifier; stripe-average, triangle-inequality, distance
 estimation (derivative orbit), interior/period coloring.
 
+**Phase 2 status (2026-08-25, branch `escape-time`): COMPLETE.**
+Everything on the list shipped and is corpus-pinned: Phoenix, Lambda,
+Newton/Nova with the scheme axis (Newton/Halley/Chebyshev + complex
+relaxation), Magnet I/II, exponential family (e^z, sin, cos — with
+the per-formula escape-metric slot: Re for exp/tetration, |Im| for
+trig/Collatz), tetration, Feather (MandelBrowser code-form
+convention), Collatz, Novaretti, the Fractint slice (Spider via
+MutatesC, Manowar via per-formula prev-init, Barnsley M1–M3, Cactus),
+Littlewood (greedy SignChoice over three digit sets), Ducks;
+damped/Mann complex-α modifier (compile-gated); stripe-average,
+triangle-inequality, distance estimation (derivative orbit for
+Mandelbrot/Multibrot/Lambda), interior/period (Brent detection,
+compiled per coloring). Colorings read one `OrbitSummary` struct.
+
+Deferred with notes at their sites: Fractint Frothy Basin /
+Volterra–Lotka / Unity (need source consultation);
+Schröder/Householder-3/König/secant schemes; Novaretti's second
+critical orbit; the Littlewood-variation cross-check test; Ducks and
+orbit-average falloff look-tuning; derivative bodies for abs-fold and
+anti-holomorphic families.
+
 **Phase 3 — mode B, field evaluation.**
 Weierstrass / Besicovitch–Ursell / Bagula lacunary-sum fields (one
 FormulaDef, generator + sequence presets; analytic gradient →
