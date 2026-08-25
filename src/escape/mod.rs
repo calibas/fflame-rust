@@ -84,6 +84,12 @@ pub enum ColoringFeature {
     /// the loop carries no accumulator at all (Mandelbrot + smooth
     /// stays two multiplies per step).
     NeedsOrbitAccum,
+    /// The coloring reads the detected cycle length; the assembler
+    /// compiles Brent-style period detection (power-of-two
+    /// checkpoints, `|z − checkpoint|² < 1e-12`) into the loop. This
+    /// is the periodic(k) channel §5.8/§5.17 call for; without the
+    /// flag no detection code exists.
+    NeedsPeriod,
     /// The coloring produces a palette position for interior
     /// (never-escaped) pixels too. Without it the template paints
     /// interior black — right for escape-count/smooth, wrong for
@@ -163,8 +169,9 @@ pub struct ColoringDef {
     /// `NeedsOrbitAccum`, ignored otherwise.
     pub accum_init: &'static str,
     /// WGSL defining
-    /// `fn coloring_accum(z: vec2<f32>, state: vec2<f32>) -> vec2<f32>`
-    /// — the per-iteration accumulator update. Required with
+    /// `fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32>`
+    /// — the per-iteration accumulator update (`z_prev` is the
+    /// pre-step iterate, `c` the current parameter). Required with
     /// `NeedsOrbitAccum`, ignored otherwise.
     pub wgsl_accum: &'static str,
 }
@@ -200,6 +207,7 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::NOVA,
     &formulas::MAGNET,
     &formulas::NOVARETTI,
+    &formulas::LITTLEWOOD,
 ];
 
 /// Ordered coloring registry. **Append-only.**
@@ -210,6 +218,8 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::ORBIT_AVERAGE,
     &colorings::STRIPE_AVERAGE,
     &colorings::ROOT_BASIN,
+    &colorings::TRIANGLE_INEQUALITY,
+    &colorings::PERIOD,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

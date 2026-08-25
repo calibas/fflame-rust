@@ -58,6 +58,15 @@ fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
 }
 
+// What the colorings read: the orbit's terminal state.
+struct OrbitSummary {
+    z: vec2<f32>,
+    n: u32,
+    escaped: bool,
+    converged: bool,
+    period: u32,   // detected cycle length, 0 = none
+}
+
 // Complex multiply.
 fn esc_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
@@ -154,11 +163,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var escaped = false;
     var converged = false;
+    var period = 0u;
     var n = 0u;
+    //__PERIOD_DECL__
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
         //__STEP__
         //__ACCUM_UPDATE__
         //__CONVERGE_TEST__
+        //__PERIOD_TEST__
         //__ESCAPE_TEST__
     }
     if (!escaped) {
@@ -167,7 +179,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
-        let t = fract(coloring_map(z, n, escaped, converged, accum_state));
+        let summary = OrbitSummary(z, n, escaped, converged, period);
+        let t = fract(coloring_map(summary, accum_state));
         // textureSampleLevel: explicit LOD, legal in non-uniform
         // control flow (unlike textureSample) -- WASM-safe.
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
@@ -210,6 +223,7 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
+    let needs_period = coloring.has_feature(ColoringFeature::NeedsPeriod);
     let param_seed = if formula.wgsl_param_seed.is_empty() {
         "vec2<f32>(0.0, 0.0)"
     } else {
@@ -247,7 +261,7 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
             }
             "//__ACCUM_UPDATE__" => {
                 if needs_accum {
-                    out.push("        accum_state = coloring_accum(z, accum_state);".to_string());
+                    out.push("        accum_state = coloring_accum(z, z_before, c, accum_state);".to_string());
                 }
             }
             "//__CONVERGE_TEST__" => {
@@ -263,6 +277,30 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                     out.push("            escaped = true;".to_string());
                     out.push("            n = i + 1u;".to_string());
                     out.push("            break;".to_string());
+                    out.push("        }".to_string());
+                }
+            }
+            "//__PERIOD_DECL__" => {
+                if needs_period {
+                    out.push("    var chk_z = z;".to_string());
+                    out.push("    var chk_i = 0u;".to_string());
+                }
+            }
+            "//__PERIOD_TEST__" => {
+                if needs_period {
+                    // Brent-style: compare against a checkpoint that
+                    // advances at powers of two; a match means the
+                    // orbit revisited itself — cycle length is the
+                    // distance from the checkpoint.
+                    out.push("        let pd = z - chk_z;".to_string());
+                    out.push("        if (dot(pd, pd) < 1e-12) {".to_string());
+                    out.push("            period = max(i - chk_i, 1u);".to_string());
+                    out.push("            n = i + 1u;".to_string());
+                    out.push("            break;".to_string());
+                    out.push("        }".to_string());
+                    out.push("        if (((i + 1u) & i) == 0u) {".to_string());
+                    out.push("            chk_z = z;".to_string());
+                    out.push("            chk_i = i + 1u;".to_string());
                     out.push("        }".to_string());
                 }
             }
@@ -302,8 +340,9 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                 } else {
                     format!("formula_step(z, {c_arg})")
                 };
-                if convergent {
-                    // The convergence register: last iterate, kept
+                if convergent || needs_accum {
+                    // The pre-step iterate: the convergence register,
+                    // and the accumulator's z_prev argument. Kept
                     // independently of the formula's own history.
                     out.push("        let z_before = z;".to_string());
                 }
@@ -469,6 +508,15 @@ mod tests {
         let nov = assemble(&formulas::NOVARETTI, &colorings::ROOT_BASIN, false);
         assert!(nov.contains("conv_dz"));
         assert!(!nov.contains("esc_metric"));
+    }
+
+    #[test]
+    fn period_detection_compiles_in_only_for_the_period_coloring() {
+        use crate::escape::{colorings, formulas};
+        let with = assemble(&formulas::NOVARETTI, &colorings::PERIOD, false);
+        assert!(with.contains("chk_z"));
+        let without = assemble(&formulas::NOVARETTI, &colorings::SMOOTH, false);
+        assert!(!without.contains("chk_z"));
     }
 
     #[test]

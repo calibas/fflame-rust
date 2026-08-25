@@ -733,3 +733,60 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
 };
+
+/// Littlewood parameter space (plan §5.11): pixel λ is in the root
+/// cloud iff the greedy sign-choice map `w ← λ·w + d` (d from the
+/// digit set, chosen to minimize |w|) stays bounded — the
+/// parameter-space twin of the chaos-game `littlewood` variation.
+/// Cross-check against the variation's attractor at landmark λ is a
+/// noted follow-up; the corpus pins the annulus structure meanwhile.
+pub static LITTLEWOOD: FormulaDef = FormulaDef {
+    name: "littlewood",
+    display_name: "Littlewood",
+    features: &[],
+    parameters: &[EscapeParamDef {
+        name: "digit_set",
+        display_name: "Digit set",
+        default: 0.0,
+        min: 0.0,
+        max: 2.0,
+        tooltip: "0: {+1,-1} (Littlewood), 1: {0,+1,-1}, 2: {+1,-1,+i,-i}.",
+    }],
+    wgsl: r#"
+fn littlewood_pick(w: vec2<f32>, ds: u32) -> vec2<f32> {
+    // Greedy: the digit minimizing |w + d|.
+    var best = w + vec2<f32>(1.0, 0.0);
+    var best_d = dot(best, best);
+    let cand_m = w - vec2<f32>(1.0, 0.0);
+    if (dot(cand_m, cand_m) < best_d) {
+        best = cand_m;
+        best_d = dot(cand_m, cand_m);
+    }
+    if (ds >= 1u && dot(w, w) < best_d) {
+        // {0,...}: keeping w unchanged is allowed
+        best = w;
+        best_d = dot(w, w);
+    }
+    if (ds == 2u) {
+        let cand_i = w + vec2<f32>(0.0, 1.0);
+        if (dot(cand_i, cand_i) < best_d) {
+            best = cand_i;
+            best_d = dot(cand_i, cand_i);
+        }
+        let cand_mi = w - vec2<f32>(0.0, 1.0);
+        if (dot(cand_mi, cand_mi) < best_d) {
+            best = cand_mi;
+        }
+    }
+    return best;
+}
+
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let ds = u32(clamp(fparam(0u), 0.0, 2.0));
+    return littlewood_pick(esc_cmul(c, z), ds);
+}
+"#,
+    wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+};
