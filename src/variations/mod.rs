@@ -973,7 +973,7 @@ mod category_wire_tests {
 /// and a lint that flags its own documentation teaches people to write
 /// worse documentation. WGSL comments are stripped for the same reason.
 #[cfg(test)]
-mod shader_lint {
+pub(crate) mod shader_lint {
     /// `f32::MIN_POSITIVE` as f64: the smallest NORMAL f32. Anything
     /// below it (and not zero) flushes to zero on the GPU.
     const MIN_NORMAL_F32: f64 = 1.175_494_350_822_287_5e-38;
@@ -983,7 +983,7 @@ mod shader_lint {
     /// against a pointer deref — valid code writes `/ *p` with a space
     /// — so matching the exact two-byte sequence is the correct rule,
     /// not an approximation.
-    fn strip_wgsl_comments(src: &str) -> String {
+    pub(crate) fn strip_wgsl_comments(src: &str) -> String {
         let b = src.as_bytes();
         let mut out = Vec::with_capacity(b.len());
         let mut i = 0;
@@ -1023,7 +1023,7 @@ mod shader_lint {
     /// without an exponent cannot reach 1e-38 without ~38 typed zeros,
     /// and a too-large positive literal already fails shader
     /// compilation, which existing tests catch.
-    fn subnormal_literals(wgsl: &str) -> Vec<(String, f64)> {
+    pub(crate) fn subnormal_literals(wgsl: &str) -> Vec<(String, f64)> {
         let text = strip_wgsl_comments(wgsl);
         let b = text.as_bytes();
         let mut out = Vec::new();
@@ -1087,7 +1087,7 @@ mod shader_lint {
         out
     }
 
-    fn explain(violations: &[String]) -> String {
+    pub(crate) fn explain(violations: &[String]) -> String {
         format!(
             "float literal(s) that are SUBNORMAL in f32 — GPUs flush these to \
              zero, so on the GPU each one IS 0.0 and any guard built on it \
@@ -1175,7 +1175,7 @@ mod shader_lint {
     /// starts, and a lint that cries wolf teaches people to ignore it.
     /// The banned idiom is the bare form; that is also the only form
     /// the JWF/GLSL sources ever use it in.
-    fn self_operations(wgsl: &str) -> Vec<(String, String)> {
+    pub(crate) fn self_operations(wgsl: &str) -> Vec<(String, String)> {
         let text = strip_wgsl_comments(wgsl);
         let b = text.as_bytes();
         let is_operand = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.';
@@ -1235,7 +1235,7 @@ mod shader_lint {
         out
     }
 
-    fn explain_self_ops(violations: &[String]) -> String {
+    pub(crate) fn explain_self_ops(violations: &[String]) -> String {
         format!(
             "self-comparison / self-division of one operand — these only work \
              through IEEE rules that Metal's fast-math does not honour:\n  {}\n\
