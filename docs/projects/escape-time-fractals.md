@@ -530,6 +530,38 @@ tiers as cataloged. Math: pertubation-theory.md; mechanics *[mathr]*:
   per critical point — a (M,BS,M,M) loop carries four — with rebasing
   selecting the nearest orbit.
 
+**Phase 4 status (2026-08-25, branch `escape-time`): core shipped.**
+The `fixedpoint` module is exactly the planned design — sign-magnitude
+u64 limbs, 8 integer bits of headroom, exponent-agnostic slice cores,
+truncated high-window multiply with the guard limb, two-big-mul
+complex squaring, exact-decimal parse (the config's center strings go
+straight to full precision), and the lzcnt floatexp export tested
+exact at near-zero. Reference orbits iterate in fixed-point with
+append-on-deepen (bit-identical to fresh compute) behind the
+(center, precision, julia-c)-keyed single-slot cache. The GPU delta
+pipeline iterates scaled-f32 deltas (w = δ/S, S = pixel spacing) with
+Zhuoran rebasing generalized to `δ ← z_full − Z₀` (zero-start
+references reduce to the textbook form; Julia references start at
+Z₀ = center and NEED the subtraction — found by the agreement test).
+Every coloring works under perturbation unchanged: the loop
+reconstructs z = Zₘ + δ for the rebase test, which is exactly the
+OrbitSummary colorings consume. Gate: Mandelbrot (parameter and
+Julia planes), undamped, no biomorph, zoom_log2 > 18; the fixed-scale
+f32 ladder holds to ~zoom 54 (w² overflow) and the UI clamp is 45.
+Verified: seamless direct↔perturbed threshold crossings on both
+planes, block-mean agreement tests (0/768 param, 3/768 julia), and
+crisp structure at zoom 42 (~4·10¹²) on a 38-digit seahorse center.
+
+Still open within phase 4: the floatexp WGSL rung + periodic
+rescaling (lifts the zoom-54 ceiling and the UI clamp); reference
+orbits on a worker with progressive upload (today the first deep
+frame computes synchronously — milliseconds at current depths);
+Multibrot (binomial) and Burning Ship (diffabs) delta tiers;
+early-escaping references force wrap-rebases whose large deltas
+launder pixel-scale precision (banding at depth on adversarial
+centers) — the phase-5 Newton nucleus-finding (periodic references)
+is the standard fix; orbit persistence for bookmarked locations.
+
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and
 index-map coloring; the JFA distance-field bridge (§7.3) — which is
