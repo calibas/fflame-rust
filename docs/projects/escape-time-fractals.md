@@ -429,13 +429,29 @@ circle), orbit average; biomorph toggle (runtime flag); Julia toggle;
 12-config visual corpus (`tests/visual/configs/escape/`). Scripting
 works via `.fflame` field names (`config.set("escape.zoom_log2", …)`).
 
-Still open within phase 1: keyboard-arrow pan and alt-drag routing in
-escape mode; viewport-size transparent-PNG export (re-tonemaps the
-flame accumulator; custom-size path is correct); the GPU render half
-of the compile probe; orbit-average look tuning (Kaliset renders
-correct structure but wants weighted-falloff glow — phase-2 coloring
-depth); Burning Ship variant conventions pinned only by our corpus,
-not yet against external reference images.
+Closed since: keyboard arrows/+/- routed (drag semantics through the
+shared pan entry); viewport-size transparent export re-tonemaps from
+the escape output; the WASM in-app custom-size export grew an escape
+branch; escape configs are kept off the flame-only HighResExporter
+(the `long_render` heuristic reads flame iteration counts); the GPU
+render half of the probe runs every formula × coloring on a device
+(`app_repro_test.rs`, ignored). Entering escape mode also resets
+exposure/gamma to config defaults alongside the Linear tonemap —
+flame presets carry Logarithmic-calibrated values (exposure 0.016)
+that render Linear output at ~1e-5 brightness (the all-black-viewport
+bug).
+
+Still open within phase 1: alt-drag look routing (writes flame camera
+paths, invisible in escape mode); escape-native high-res tiling —
+custom-size exports whose histogram exceeds one storage binding are
+refused with a toast (the size limit is the FLAME renderer's
+histogram; escape itself needs no histogram, so a lean tiled path is
+straightforward when wanted); per-mode tonemap state (the mode switch
+currently adjusts shared exposure/gamma, one undo point);
+orbit-average look tuning (Kaliset renders correct structure but
+wants weighted-falloff glow — phase-2 coloring depth); Burning Ship
+variant conventions pinned only by our corpus, not yet against
+external reference images.
 
 **Phase 2 — catalog breadth and coloring depth.**
 Phoenix, Lambda, Newton/Nova + the root-finder scheme axis, Magnet,

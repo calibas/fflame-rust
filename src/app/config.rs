@@ -312,7 +312,23 @@ impl App {
             && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
         let hist_size = crate::export::histogram_size_bytes(render_width, render_height, solid_active);
         let long_render = config.max_iterations > Self::BACKGROUND_EXPORT_ITER_THRESHOLD;
-        if hist_size > max_binding || long_render {
+        // Escape mode: one compute dispatch, always fast -- the flame
+        // iteration count is irrelevant, so `long_render` must not send
+        // it to the background HighResExporter (a flame-only engine).
+        // Sizes whose histogram exceeds one binding have no escape
+        // path yet (escape-native tiling is a plan open item): refuse
+        // honestly instead of rendering the wrong thing.
+        let escape_mode = config.render_mode == crate::scene::transforms::RenderMode::Escape;
+        if escape_mode && hist_size > max_binding {
+            let msg = format!(
+                "Escape-time export at {}x{} exceeds this GPU's buffer limit; escape tiling isn't implemented yet -- try a smaller size",
+                render_width, render_height
+            );
+            log::error!("{msg}");
+            self.egui_layer.show_api_notification(&msg, true);
+            return;
+        }
+        if !escape_mode && (hist_size > max_binding || long_render) {
             println!(
                 "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",
                 render_width, render_height,
