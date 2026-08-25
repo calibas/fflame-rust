@@ -316,6 +316,10 @@ pub enum ConfigPath {
     EscapeMaxIter,
     /// Escape radius squared.
     EscapeBailout,
+    /// Mann-iteration damping α (complex): `z ← (1−α)z + α·f(z)`.
+    /// `1 + 0i` = plain iteration.
+    EscapeDampingRe,
+    EscapeDampingIm,
     /// Biomorph classification axis, as its wire string
     /// (`"off"`/`"re"`/`"im"`).
     EscapeBiomorph,
@@ -815,6 +819,8 @@ impl Display for ConfigPath {
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
             ConfigPath::EscapeBailout => write!(f, "Escape Bailout"),
+            ConfigPath::EscapeDampingRe => write!(f, "Damping (re)"),
+            ConfigPath::EscapeDampingIm => write!(f, "Damping (im)"),
             ConfigPath::EscapeBiomorph => write!(f, "Biomorph Mode"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
@@ -1033,6 +1039,8 @@ impl ConfigPath {
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
             ConfigPath::EscapeBailout => I18nKey::simple("history.param.escape_bailout"),
+            ConfigPath::EscapeDampingRe => I18nKey::simple("history.param.escape_damping_re"),
+            ConfigPath::EscapeDampingIm => I18nKey::simple("history.param.escape_damping_im"),
             ConfigPath::EscapeBiomorph => I18nKey::simple("history.param.escape_biomorph"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
@@ -2325,6 +2333,8 @@ impl ConfigPath {
             | ConfigPath::EscapeRotation
             | ConfigPath::EscapeMaxIter
             | ConfigPath::EscapeBailout
+            | ConfigPath::EscapeDampingRe
+            | ConfigPath::EscapeDampingIm
             | ConfigPath::EscapeBiomorph
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
@@ -2575,6 +2585,8 @@ impl ConfigPath {
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
             ConfigPath::EscapeBailout => "Escape.Bailout".to_string(),
+            ConfigPath::EscapeDampingRe => "Escape.DampingRe".to_string(),
+            ConfigPath::EscapeDampingIm => "Escape.DampingIm".to_string(),
             ConfigPath::EscapeBiomorph => "Escape.Biomorph".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
@@ -2754,6 +2766,8 @@ impl ConfigPath {
                 ["Rotation"] => return Some(ConfigPath::EscapeRotation),
                 ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
                 ["Bailout"] => return Some(ConfigPath::EscapeBailout),
+                ["DampingRe"] => return Some(ConfigPath::EscapeDampingRe),
+                ["DampingIm"] => return Some(ConfigPath::EscapeDampingIm),
                 ["Biomorph"] => return Some(ConfigPath::EscapeBiomorph),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
@@ -3322,6 +3336,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeZoomLog2
         | ConfigPath::EscapeRotation
         | ConfigPath::EscapeBailout
+        | ConfigPath::EscapeDampingRe
+        | ConfigPath::EscapeDampingIm
         | ConfigPath::EscapeFormulaParam { .. }
         | ConfigPath::EscapeColoringParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))

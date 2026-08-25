@@ -41,7 +41,9 @@ struct EscapeParamsGpu {
     max_iter: u32,
     flags: u32,
     bailout: f32,
-    _pad: [f32; 3],
+    _pad0: f32,
+    /// Mann α (re, im); the shader reads it only in damped pipelines.
+    damping: [f32; 2],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
 }
@@ -182,9 +184,10 @@ impl EscapeRenderer {
     fn ensure_pipeline(&mut self, device: &Device, escape: &EscapeConfig) -> String {
         let formula = super::get_formula(&escape.formula);
         let coloring = super::get_coloring(&escape.coloring);
-        let key = format!("{}|{}", formula.name, coloring.name);
+        let damped = escape.is_damped();
+        let key = format!("{}|{}|{}", formula.name, coloring.name, damped);
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble(formula, coloring);
+            let source = assembler::assemble(formula, coloring, damped);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -240,7 +243,8 @@ impl EscapeRenderer {
                 (if escape.julia { 1 } else { 0 }) | (bio << 1)
             },
             bailout: escape.bailout.max(1e-6),
-            _pad: [0.0; 3],
+            _pad0: 0.0,
+            damping: [escape.damping_re, escape.damping_im],
             fparams,
             cparams,
         }

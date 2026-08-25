@@ -70,6 +70,17 @@ pub struct EscapeConfig {
     #[serde(default = "default_bailout")]
     pub bailout: f32,
 
+    /// Damped / Mann iteration (plan §3): `z ← (1−α)z + α·f(z)` with
+    /// COMPLEX α. `1 + 0i` (the default) is plain iteration and
+    /// compiles the wrap out entirely, keeping undamped shaders
+    /// byte-identical; the published Mann/Ishikawa fractal families
+    /// live at real α ∈ (0,1), the generalized-relaxation galleries
+    /// at complex α.
+    #[serde(default = "default_damping_re", skip_serializing_if = "is_one")]
+    pub damping_re: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub damping_im: f32,
+
     /// Pickover biomorph classification: test |Re z| / |Im z|
     /// separately instead of |z|. A switch on every formula, not a
     /// formula (see the plan §3).
@@ -151,6 +162,12 @@ fn default_max_iter() -> u32 {
 fn default_bailout() -> f32 {
     4.0
 }
+fn default_damping_re() -> f32 {
+    1.0
+}
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
+}
 fn is_false(v: &bool) -> bool {
     !*v
 }
@@ -174,6 +191,8 @@ impl Default for EscapeConfig {
             rotation: 0.0,
             max_iter: default_max_iter(),
             bailout: default_bailout(),
+            damping_re: default_damping_re(),
+            damping_im: 0.0,
             biomorph: BiomorphMode::Off,
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
@@ -202,6 +221,12 @@ impl EscapeConfig {
     /// Magnification as a plain factor (2^zoom_log2).
     pub fn zoom_factor(&self) -> f64 {
         self.zoom_log2.exp2()
+    }
+
+    /// Whether the Mann-iteration wrap is active (α ≠ 1). The
+    /// assembler compiles the wrap in only when this is true.
+    pub fn is_damped(&self) -> bool {
+        self.damping_re != 1.0 || self.damping_im != 0.0
     }
 }
 
