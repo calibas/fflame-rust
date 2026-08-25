@@ -26,6 +26,9 @@ pub struct ReferenceOrbit {
     /// The map's power (z^p + c). 2 = Mandelbrot (two-mul squaring
     /// fast path); higher powers square-and-multiply.
     pub power: u32,
+    /// Burning Ship: fold |x|, |y| before squaring (power is then 2).
+    /// Sign-magnitude makes the fold free (clear the sign flags).
+    pub ship: bool,
     /// Precision this orbit was computed at.
     pub n_limbs: usize,
     /// Zₙ as f32 pairs, orbit[0] = Z₀ = 0. Length = iterations
@@ -52,6 +55,7 @@ impl ReferenceOrbit {
         max_iter: u32,
         julia_c: Option<(f32, f32)>,
         power: u32,
+        ship: bool,
     ) -> Option<Self> {
         let n = n_limbs.unwrap_or_else(|| limbs_for_zoom(zoom_log2));
         let center = FixedComplex {
@@ -79,6 +83,7 @@ impl ReferenceOrbit {
             center_im: center_im.to_string(),
             julia_c,
             power: power.max(2),
+            ship,
             n_limbs: n,
             orbit: vec![first],
             escaped_at: None,
@@ -105,6 +110,12 @@ impl ReferenceOrbit {
             return;
         }
         while (self.orbit.len() as u32) <= max_iter {
+            if self.ship {
+                // Burning Ship: fold both components (free in
+                // sign-magnitude), then square.
+                self.z.re.neg = false;
+                self.z.im.neg = false;
+            }
             // z^p: square-and-multiply from the two-mul square.
             let mut zp = self.z.sqr();
             for _ in 2..self.power {
@@ -137,12 +148,14 @@ impl ReferenceOrbit {
         n_limbs: usize,
         julia_c: Option<(f32, f32)>,
         power: u32,
+        ship: bool,
     ) -> bool {
         self.center_re == center_re
             && self.center_im == center_im
             && self.n_limbs >= n_limbs
             && self.julia_c == julia_c
             && self.power == power.max(2)
+            && self.ship == ship
     }
 }
 
@@ -156,6 +169,7 @@ pub struct OrbitRequest {
     pub max_iter: u32,
     pub julia_c: Option<(f32, f32)>,
     pub power: u32,
+    pub ship: bool,
 }
 
 /// Progressive snapshot the render side reads each frame.
@@ -226,7 +240,8 @@ impl OrbitWorker {
                                 && old_req.center_im == req.center_im
                                 && old_req.n_limbs == req.n_limbs
                                 && old_req.julia_c == req.julia_c
-                                && old_req.power == req.power;
+                                && old_req.power == req.power
+                                && old_req.ship == req.ship;
                             if same { Some(orbit) } else { None }
                         });
                         let orbit = match reuse {
@@ -240,6 +255,7 @@ impl OrbitWorker {
                                     0,
                                     req.julia_c,
                                     req.power,
+                                    req.ship,
                                 ) {
                                     Some(o) => o,
                                     None => {
@@ -328,7 +344,8 @@ fn tx_loopback_send(
             && old_req.center_im == req.center_im
             && old_req.n_limbs == req.n_limbs
             && old_req.julia_c == req.julia_c
-            && old_req.power == req.power;
+            && old_req.power == req.power
+                                && old_req.ship == req.ship;
         if same { Some(orbit) } else { None }
     });
     let orbit = match reuse {
@@ -341,6 +358,7 @@ fn tx_loopback_send(
             0,
             req.julia_c,
             req.power,
+            req.ship,
         )?,
     };
     {
@@ -373,18 +391,19 @@ impl OrbitCache {
         max_iter: u32,
         julia_c: Option<(f32, f32)>,
         power: u32,
+        ship: bool,
     ) -> Option<&ReferenceOrbit> {
         let n = limbs_for_zoom(zoom_log2);
         let hit = self
             .slot
             .as_ref()
-            .is_some_and(|o| o.serves(center_re, center_im, n, julia_c, power));
+            .is_some_and(|o| o.serves(center_re, center_im, n, julia_c, power, ship));
         if hit {
             let orbit = self.slot.as_mut().unwrap();
             orbit.extend(max_iter);
         } else {
             self.slot = Some(ReferenceOrbit::compute(
-                center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power,
+                center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power, ship,
             )?);
         }
         self.slot.as_ref()
@@ -403,7 +422,7 @@ mod tests {
     fn shallow_orbit_matches_f64_iteration() {
         // c = -0.5 + 0.1i is inside the main cardioid: never escapes,
         // so the orbit length is exactly what we asked for.
-        let orbit = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 100, None, 2).unwrap();
+        let orbit = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 100, None, 2, false).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=100usize {
             let t = zx * zx - zy * zy + -0.5;
@@ -420,7 +439,7 @@ mod tests {
 
     #[test]
     fn escaping_reference_stops_early() {
-        let orbit = ReferenceOrbit::compute("1", "1", 5.0, None, 1000, None, 2).unwrap();
+        let orbit = ReferenceOrbit::compute("1", "1", 5.0, None, 1000, None, 2, false).unwrap();
         let at = orbit.escaped_at.expect("c = 1+i escapes fast");
         assert!(at < 10);
         assert_eq!(orbit.len() - 1, at);
@@ -428,9 +447,9 @@ mod tests {
 
     #[test]
     fn deepen_is_an_append_and_matches_fresh_compute() {
-        let mut a = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 50, None, 2).unwrap();
+        let mut a = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 50, None, 2, false).unwrap();
         a.extend(120);
-        let b = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 120, None, 2).unwrap();
+        let b = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 120, None, 2, false).unwrap();
         assert_eq!(a.orbit.len(), b.orbit.len());
         for (i, (x, y)) in a.orbit.iter().zip(b.orbit.iter()).enumerate() {
             assert_eq!(x, y, "diverged at iteration {i}");
@@ -441,22 +460,22 @@ mod tests {
     fn cache_hits_extends_and_replaces() {
         let mut cache = OrbitCache::default();
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 50, None, 2).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 50, None, 2, false).unwrap();
             assert_eq!(o.len(), 51);
         }
         // Same view, deeper iterations: extend in place.
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 80, None, 2).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 80, None, 2, false).unwrap();
             assert_eq!(o.len(), 81);
         }
         // Different center: replace.
         {
-            let o = cache.get("-0.75", "0.1", 10.0, 10, None, 2).unwrap();
+            let o = cache.get("-0.75", "0.1", 10.0, 10, None, 2, false).unwrap();
             assert_eq!(o.center_re, "-0.75");
             assert_eq!(o.len(), 11);
         }
         // Unparseable center: None.
-        assert!(cache.get("not a number", "0", 10.0, 10, None, 2).is_none());
+        assert!(cache.get("not a number", "0", 10.0, 10, None, 2, false).is_none());
     }
 
     #[test]
@@ -464,7 +483,7 @@ mod tests {
         // Julia: z0 = center, c fixed. First entry must be the center,
         // then iterate z^2 + c.
         let orbit = ReferenceOrbit::compute(
-            "0.25", "0.5", 10.0, None, 20, Some((-0.8, 0.156)), 2,
+            "0.25", "0.5", 10.0, None, 20, Some((-0.8, 0.156)), 2, false,
         )
         .unwrap();
         assert_eq!(orbit.orbit[0], [0.25, 0.5]);
@@ -483,8 +502,8 @@ mod tests {
         }
         // And the cache distinguishes julia from param-plane orbits.
         let mut cache = OrbitCache::default();
-        cache.get("0.25", "0.5", 10.0, 20, Some((-0.8, 0.156)), 2).unwrap();
-        let replaced = cache.get("0.25", "0.5", 10.0, 20, None, 2).unwrap();
+        cache.get("0.25", "0.5", 10.0, 20, Some((-0.8, 0.156)), 2, false).unwrap();
+        let replaced = cache.get("0.25", "0.5", 10.0, 20, None, 2, false).unwrap();
         assert_eq!(replaced.julia_c, None);
     }
 
@@ -492,7 +511,7 @@ mod tests {
     fn cubic_orbit_matches_f64_iteration() {
         // power 3: z^3 + c against a plain f64 loop.
         let orbit =
-            ReferenceOrbit::compute("-0.2", "0.4", 10.0, None, 60, None, 3).unwrap();
+            ReferenceOrbit::compute("-0.2", "0.4", 10.0, None, 60, None, 3, false).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=60usize {
             let (x2, y2) = (zx * zx - zy * zy, 2.0 * zx * zy);
@@ -521,6 +540,7 @@ mod tests {
             max_iter: 10_000,
             julia_c: None,
             power: 2,
+            ship: false,
         };
         let epoch = worker.request(req);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -534,7 +554,7 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "worker never finished");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        let sync = ReferenceOrbit::compute("-0.5", "0.1", 0.0, Some(3), 10_000, None, 2)
+        let sync = ReferenceOrbit::compute("-0.5", "0.1", 0.0, Some(3), 10_000, None, 2, false)
             .unwrap();
         let p = worker.progress.lock().unwrap();
         assert_eq!(p.orbit.len(), sync.orbit.len());
@@ -549,6 +569,7 @@ mod tests {
             max_iter: 2_000,
             julia_c: None,
             power: 2,
+            ship: false,
         });
         assert!(e2 > epoch);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -561,6 +582,27 @@ mod tests {
             }
             assert!(std::time::Instant::now() < deadline, "second request never finished");
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn ship_orbit_matches_f64_iteration() {
+        let orbit =
+            ReferenceOrbit::compute("-0.6", "-0.4", 10.0, None, 60, None, 2, true).unwrap();
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        for i in 1..=60usize {
+            let (ax, ay) = (zx.abs(), zy.abs());
+            let t = ax * ax - ay * ay + -0.6;
+            zy = 2.0 * ax * ay + -0.4;
+            zx = t;
+            if i >= orbit.orbit.len() {
+                break;
+            }
+            let [ox, oy] = orbit.orbit[i];
+            assert!(
+                (ox as f64 - zx).abs() < 1e-5 && (oy as f64 - zy).abs() < 1e-5,
+                "iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
+            );
         }
     }
 
@@ -579,6 +621,7 @@ mod tests {
             50,
             None,
             2,
+            false,
         )
         .unwrap();
         let b = ReferenceOrbit::compute(
@@ -589,6 +632,7 @@ mod tests {
             50,
             None,
             2,
+            false,
         )
         .unwrap();
         let (are, _) = a.z_state();

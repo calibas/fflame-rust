@@ -289,23 +289,33 @@ impl EscapeRenderer {
     /// f32 mush honestly rather than wrong perturbation math).
     fn wants_perturbation(escape: &EscapeConfig) -> bool {
         escape.zoom_log2 > PERTURB_MIN_ZOOM
-            && Self::perturb_power(escape).is_some()
+            && Self::perturb_tier(escape).is_some()
             && !escape.is_damped()
             && escape.biomorph == crate::config::escape::BiomorphMode::Off
     }
 
-    /// The integer power of the clean binomial tier, if this formula
-    /// is in it: Mandelbrot (p = 2) and Multibrot at integer powers.
-    /// Non-integer Multibrot powers stay on the direct path (the
-    /// binomial expansion needs an integer exponent).
-    fn perturb_power(escape: &EscapeConfig) -> Option<u32> {
+    /// The delta tier this view can use, if any: Mandelbrot (p = 2)
+    /// and integer-power Multibrot (the binomial expansion needs an
+    /// integer exponent), plus the plain Burning Ship variant via
+    /// diffabs — SCALED RUNG ONLY (a floatexp diffabs is deferred, so
+    /// Ship past the floatexp threshold falls back to the direct
+    /// path's honest mush rather than wrong math).
+    fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
         match escape.formula.as_str() {
-            "mandelbrot" => Some(2),
+            "mandelbrot" => Some(assembler::PerturbTier::Power(2)),
             "multibrot" => {
                 let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
                 let rounded = p.round();
                 if (p - rounded).abs() < 1e-6 && (2.0..=12.0).contains(&rounded) {
-                    Some(rounded as u32)
+                    Some(assembler::PerturbTier::Power(rounded as u32))
+                } else {
+                    None
+                }
+            }
+            "burning_ship" => {
+                let variant = escape.formula_params.get("variant").copied().unwrap_or(0.0);
+                if variant.abs() < 1e-6 && escape.zoom_log2 <= PERTURB_FLOATEXP_ZOOM {
+                    Some(assembler::PerturbTier::Ship)
                 } else {
                     None
                 }
@@ -322,10 +332,11 @@ impl EscapeRenderer {
         floatexp: bool,
     ) -> String {
         let coloring = super::get_coloring(&escape.coloring);
-        let power = Self::perturb_power(escape).unwrap_or(2);
-        let key = format!("perturbed|{}|{}|{}", coloring.name, floatexp, power);
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        let key = format!("perturbed|{}|{}|{:?}", coloring.name, floatexp, tier);
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed(coloring, floatexp, power);
+            let source = assembler::assemble_perturbed(coloring, floatexp, tier);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -364,7 +375,12 @@ impl EscapeRenderer {
         } else {
             None
         };
-        let power = Self::perturb_power(escape).unwrap_or(2);
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        let (power, ship) = match tier {
+            assembler::PerturbTier::Power(p) => (p, false),
+            assembler::PerturbTier::Ship => (2, true),
+        };
         let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
         let epoch = worker.request(OrbitRequest {
             center_re: escape.center_re.clone(),
@@ -373,6 +389,7 @@ impl EscapeRenderer {
             max_iter: escape.max_iter,
             julia_c,
             power,
+            ship,
         });
         let (len, done, data) = {
             let p = worker.progress.lock().unwrap();
@@ -443,7 +460,12 @@ impl EscapeRenderer {
         } else {
             None
         };
-        let power = Self::perturb_power(escape).unwrap_or(2);
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        let (power, ship) = match tier {
+            assembler::PerturbTier::Power(p) => (p, false),
+            assembler::PerturbTier::Ship => (2, true),
+        };
         let orbit = self.orbit_cache.get(
             &escape.center_re,
             &escape.center_im,
@@ -451,6 +473,7 @@ impl EscapeRenderer {
             escape.max_iter,
             julia_c,
             power,
+            ship,
         )?;
         let len = orbit.len();
         let needed_bytes = (len as u64) * 8;
@@ -791,7 +814,22 @@ mod tests {
         assert!(EscapeRenderer::wants_perturbation(&esc), "julia is in the trivial tier");
         esc.julia = false;
         esc.formula = "burning_ship".to_string();
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "diffabs tier not in v1");
+        assert!(
+            EscapeRenderer::wants_perturbation(&esc),
+            "plain Ship is in the diffabs tier (scaled rung)"
+        );
+        esc.zoom_log2 = 60.0;
+        assert!(
+            !EscapeRenderer::wants_perturbation(&esc),
+            "Ship past the floatexp threshold stays direct (no floatexp diffabs yet)"
+        );
+        esc.zoom_log2 = 30.0;
+        esc.formula_params.insert("variant".to_string(), 3.0);
+        assert!(
+            !EscapeRenderer::wants_perturbation(&esc),
+            "non-plain Ship variants stay direct"
+        );
+        esc.formula_params.clear();
         esc.formula = "multibrot".to_string();
         assert!(EscapeRenderer::wants_perturbation(&esc), "integer multibrot is in the tier");
         esc.formula_params.insert("power".to_string(), 3.5);

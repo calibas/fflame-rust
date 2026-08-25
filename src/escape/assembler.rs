@@ -296,6 +296,23 @@ struct OrbitSummary {
     dz: vec2<f32>,
 }
 
+// |X + x| - |X| computed exactly by sign case (laser blaster's
+// diffabs; Kalles Fraktaler lineage): piecewise linear in the
+// perturbation, no cancellation. Positively homogeneous, which is
+// what lets the scaled form pass X/S and keep S factored out.
+fn diffabs(X: f32, x: f32) -> f32 {
+    if (X >= 0.0) {
+        if (X + x >= 0.0) {
+            return x;
+        }
+        return -(2.0 * X + x);
+    }
+    if (X + x > 0.0) {
+        return 2.0 * X + x;
+    }
+    return -x;
+}
+
 //__COLORING__
 
 //__COLORING_ACCUM__
@@ -619,6 +636,34 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// Which delta algebra the perturbed pipeline compiles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PerturbTier {
+    /// z^p + c, integer p — the clean binomial expansion.
+    Power(u32),
+    /// Burning Ship (plain variant): abs-folds via diffabs case
+    /// analysis. Scaled rung only in v1 (a floatexp diffabs needs
+    /// CFe-vs-f32 sign analysis; deferred with the deep-needle notes).
+    Ship,
+}
+
+/// The scaled-f32 Burning Ship delta step. Real part is fold-free
+/// (x² - y² squares away the signs); the imaginary part is
+/// 2(|xy| - |XY|) = 2·diffabs(XY, X·dy + Y·dx + dx·dy), and diffabs'
+/// positive homogeneity moves the whole thing into S units:
+/// w_im' = 2·diffabs(XY/S, X·wy + Y·wx + S·wx·wy) + d0_im. XY/S stays
+/// inside f32 for the scaled rung's whole zoom range (< 2^54).
+fn delta_step_ship() -> String {
+    "        let sx = z_ref.x;\n\
+     \x20       let sy = z_ref.y;\n\
+     \x20       let re_new = 2.0 * (sx * w.x - sy * w.y)\n\
+     \x20           + perturb.s * (w.x * w.x - w.y * w.y) + d0_term.x;\n\
+     \x20       let cross = sx * w.y + sy * w.x + perturb.s * w.x * w.y;\n\
+     \x20       let im_new = 2.0 * diffabs(sx * sy * perturb.inv_s, cross) + d0_term.y;\n\
+     \x20       var w_new = vec2<f32>(re_new, im_new);"
+        .to_string()
+}
+
 /// Binomial coefficient (small arguments; the power cap is 12).
 fn binomial(p: u32, k: u32) -> u64 {
     let mut acc = 1u64;
@@ -729,7 +774,7 @@ fn delta_step_floatexp(p: u32) -> String {
 /// coloring axis is fully preserved - the loop reconstructs the full
 /// orbit value every iteration for the rebase test, which is exactly
 /// the summary the colorings consume. `floatexp` picks the deep rung.
-pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, power: u32) -> String {
+pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbTier) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let template = if floatexp {
@@ -738,12 +783,19 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, power: u32) ->
         PERTURBED_TEMPLATE
     };
 
-    let power = power.clamp(2, 12);
     let mut out = Vec::new();
     for line in template.lines() {
         match line.trim() {
-            "//__DELTA_STEP__" => out.push(delta_step_scaled(power)),
-            "//__DELTA_STEP_FE__" => out.push(delta_step_floatexp(power)),
+            "//__DELTA_STEP__" => out.push(match tier {
+                PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
+                PerturbTier::Ship => delta_step_ship(),
+            }),
+            "//__DELTA_STEP_FE__" => out.push(match tier {
+                PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
+                // Renderer gates Ship off the floatexp rung; emit the
+                // p=2 step so the module still validates if assembled.
+                PerturbTier::Ship => delta_step_floatexp(2),
+            }),
             "//__COLORING__" => {
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
@@ -1108,11 +1160,28 @@ mod tests {
     }
 
     #[test]
+    fn perturbed_ship_step_validates() {
+        use crate::escape::colorings;
+        let src = assemble_perturbed(&colorings::SMOOTH, false, PerturbTier::Ship);
+        assert!(src.contains("diffabs("));
+        let module = naga::front::wgsl::parse_str(&src)
+            .unwrap_or_else(|e| panic!("ship parse: {e}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("ship validation: {e:?}"));
+        use crate::variations::shader_lint;
+        assert!(shader_lint::self_operations(&src).is_empty());
+    }
+
+    #[test]
     fn perturbed_binomial_step_validates_at_higher_powers() {
         use crate::escape::colorings;
         for floatexp in [false, true] {
             for p in [3u32, 4, 7, 12] {
-                let src = assemble_perturbed(&colorings::SMOOTH, floatexp, p);
+                let src = assemble_perturbed(&colorings::SMOOTH, floatexp, PerturbTier::Power(p));
                 let module = naga::front::wgsl::parse_str(&src)
                     .unwrap_or_else(|e| panic!("p={p} fe={floatexp} parse: {e}"));
                 naga::valid::Validator::new(
@@ -1124,7 +1193,7 @@ mod tests {
             }
         }
         // p = 2 must emit the original hand-written step, byte-stable.
-        let src = assemble_perturbed(&colorings::SMOOTH, false, 2);
+        let src = assemble_perturbed(&colorings::SMOOTH, false, PerturbTier::Power(2));
         assert!(src.contains("var w_new = 2.0 * vec2<f32>("));
     }
 
@@ -1132,7 +1201,7 @@ mod tests {
     fn perturbed_template_validates_for_every_coloring() {
       for floatexp in [false, true] {
         for c in COLORINGS {
-            let src = assemble_perturbed(c, floatexp, 2);
+            let src = assemble_perturbed(c, floatexp, PerturbTier::Power(2));
             assert!(!src.contains("//__"), "{} left a marker", c.name);
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("perturbed x {} failed to parse: {e}", c.name));
