@@ -142,6 +142,50 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         }
     });
 
+    // Newton navigation: locate the minibrot governing the current
+    // view and recenter on its nucleus exactly (arbitrary-precision
+    // digits). One batch -> one undo point. Mandelbrot parameter
+    // plane only - the same eligibility as the nucleus references.
+    if esc.formula == "mandelbrot" && !esc.julia {
+        if ui
+            .button(t!("escape_panel.center_minibrot").as_ref())
+            .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
+            .clicked()
+        {
+            match crate::escape::nucleus::locate_minibrot(
+                &esc.center_re,
+                &esc.center_im,
+                esc.zoom_log2,
+                100_000,
+            ) {
+                Some(hit) => {
+                    log::info!(
+                        "Minibrot found: period {} at ({}, {})",
+                        hit.period,
+                        hit.re,
+                        hit.im
+                    );
+                    let _ = config_manager.update_batch(
+                        vec![
+                            (
+                                ConfigPath::EscapeCenterRe,
+                                ConfigValue::String(hit.re),
+                            ),
+                            (
+                                ConfigPath::EscapeCenterIm,
+                                ConfigValue::String(hit.im),
+                            ),
+                        ],
+                        "history.action.center_minibrot".to_string(),
+                    );
+                }
+                None => {
+                    log::info!("No minibrot found governing this view");
+                }
+            }
+        }
+    }
+
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.rotation"));
         let mut deg = esc.rotation.to_degrees();
