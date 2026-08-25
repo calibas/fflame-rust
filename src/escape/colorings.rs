@@ -22,7 +22,7 @@ pub static ESCAPE_COUNT: ColoringDef = ColoringDef {
         tooltip: "Palette distance per iteration band. Smaller = broader bands.",
     }],
     wgsl: r#"
-fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32 {
+fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, converged: bool, state: vec2<f32>) -> f32 {
     return f32(n) * cparam(0u);
 }
 "#,
@@ -46,7 +46,7 @@ pub static SMOOTH: ColoringDef = ColoringDef {
         tooltip: "Palette distance per iteration. Smaller = broader gradient.",
     }],
     wgsl: r#"
-fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32 {
+fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, converged: bool, state: vec2<f32>) -> f32 {
     // |z|^2 at escape is > bailout >= 1, so log2 is safe; the max()
     // guards the first-iteration corner (bailout < 1 configs) without
     // any fast-math-hazard idiom (no self-compare, no self-divide).
@@ -86,7 +86,7 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32 {
+fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, converged: bool, state: vec2<f32>) -> f32 {
     return state.x * cparam(1u);
 }
 "#,
@@ -122,7 +122,7 @@ pub static ORBIT_AVERAGE: ColoringDef = ColoringDef {
         tooltip: "Palette distance per unit of averaged trap value.",
     }],
     wgsl: r#"
-fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32 {
+fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, converged: bool, state: vec2<f32>) -> f32 {
     // state.x = sum of min(|re|, |im|) over the orbit, state.y = count.
     let mean = state.x / max(state.y, 1.0);
     return mean * cparam(0u);
@@ -162,7 +162,7 @@ pub static STRIPE_AVERAGE: ColoringDef = ColoringDef {
         },
     ],
     wgsl: r#"
-fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, state: vec2<f32>) -> f32 {
+fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, converged: bool, state: vec2<f32>) -> f32 {
     let mean = state.x / max(state.y, 1.0);
     return mean * cparam(1u);
 }
@@ -181,4 +181,49 @@ fn coloring_accum(z: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
     return state + vec2<f32>(stripe, 1.0);
 }
 "#,
+};
+
+/// Root basin — for Convergent formulas over `zᵖ − 1`: which root the
+/// orbit landed on (angle-bucketed final z) shaded by convergence
+/// speed. On anything else it degrades to an angle-of-final-z wash.
+pub static ROOT_BASIN: ColoringDef = ColoringDef {
+    name: "root_basin",
+    display_name: "Root Basin",
+    features: &[ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "roots",
+            display_name: "Root count",
+            default: 3.0,
+            min: 2.0,
+            max: 12.0,
+            tooltip: "Number of basins to bucket the final angle into - match the formula's power.",
+        },
+        EscapeParamDef {
+            name: "speed",
+            display_name: "Speed shading",
+            default: 0.01,
+            min: 0.0,
+            max: 0.2,
+            tooltip: "Palette offset per iteration of convergence time, shading within each basin.",
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(z: vec2<f32>, n: u32, escaped: bool, converged: bool, state: vec2<f32>) -> f32 {
+    // Angle of the final iterate, bucketed into `roots` equal arcs.
+    // A converged orbit sits on a root of z^p - 1, so the bucket IS
+    // the basin index. Origin guard: never hand atan2 a zero pair
+    // (Metal fast-math hazard).
+    var t = 0.0;
+    if (dot(z, z) > 1e-30) {
+        let tau = 6.28318530718;
+        let ang = fract(atan2(z.y, z.x) / tau + 1.0);
+        let roots = clamp(cparam(0u), 2.0, 12.0);
+        t = floor(ang * roots + 0.5) / roots;
+    }
+    return t + f32(n) * cparam(1u);
+}
+"#,
+    accum_init: "",
+    wgsl_accum: "",
 };
