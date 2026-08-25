@@ -82,6 +82,11 @@ pub struct EscapeRenderer {
     /// Compiled pipelines keyed `"formula|coloring"` — tiny shaders,
     /// but a live panel flips combinations and recompiles add up.
     pipelines: HashMap<String, ComputePipeline>,
+    /// Test-only: force the perturbed path regardless of zoom so the
+    /// direct/perturbed agreement test can render the SAME shallow
+    /// view both ways.
+    #[cfg(test)]
+    pub(crate) force_perturbed: bool,
     /// Deep-zoom state: CPU reference-orbit cache (append-on-deepen),
     /// its GPU mirror, and the perturbed pipeline's own layout (two
     /// extra bindings: the orbit buffer and the perturb uniform).
@@ -231,6 +236,8 @@ impl EscapeRenderer {
             palette_sampler,
             bind_group_layout,
             pipelines: HashMap::new(),
+            #[cfg(test)]
+            force_perturbed: false,
             orbit_cache: OrbitCache::default(),
             orbit_buffer: None,
             orbit_capacity: 0,
@@ -458,7 +465,11 @@ impl EscapeRenderer {
 
         // Deep zoom: the perturbation path. Falls back to direct on a
         // center-parse failure (matching center_f64's fallback view).
-        if Self::wants_perturbation(escape) {
+        #[cfg(test)]
+        let use_perturbed = Self::wants_perturbation(escape) || self.force_perturbed;
+        #[cfg(not(test))]
+        let use_perturbed = Self::wants_perturbation(escape);
+        if use_perturbed {
             if let Some(orbit_len) = self.ensure_orbit(device, queue, escape) {
                 // Pixel spacing S in f64 (span_y = 4 / 2^zoom over the
                 // height), cast to f32 — normal down to zoom ~119.

@@ -312,7 +312,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     );
 
     // Delta iteration state: w = delta / S, m = reference index.
-    var w = d0;
+    // delta_0 = 0 (pixel and reference both start at z = 0); the +d0
+    // term in the recurrence generates delta_1 = delta_c.
+    var w = vec2<f32>(0.0, 0.0);
     var m = 0u;
     var z = vec2<f32>(0.0, 0.0);
     var escaped = false;
