@@ -15,6 +15,51 @@
 
 use super::fixedpoint::{limbs_for_zoom, FixedComplex, FixedPoint};
 
+/// Cap on ball-method period detection when hunting a nucleus
+/// reference. Beyond this the search costs more than it saves.
+const NUCLEUS_MAX_PERIOD: u32 = 100_000;
+
+/// Try to relocate a parameter-plane reference to the minibrot
+/// nucleus governing the view. Returns (nucleus_re, nucleus_im,
+/// period, ref_offset) where ref_offset = (view − nucleus) in units
+/// of the PIXEL SPACING (f32-safe: the nucleus lies within ~a view
+/// radius). Mandelbrot (power 2), parameter plane only.
+fn nucleus_for_view(
+    center_re: &str,
+    center_im: &str,
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<(String, String, u32, [f32; 2])> {
+    let hit = super::nucleus::locate_minibrot(
+        center_re,
+        center_im,
+        zoom_log2,
+        NUCLEUS_MAX_PERIOD,
+    )?;
+    // ref_offset = (C_view − C_nucleus) / S, computed exactly in
+    // fixed-point, exported via floatexp.
+    let n = limbs_for_zoom(zoom_log2) + 1;
+    let vx = FixedPoint::from_decimal(center_re, n)?;
+    let vy = FixedPoint::from_decimal(center_im, n)?;
+    let nx = FixedPoint::from_decimal(&hit.re, n)?;
+    let ny = FixedPoint::from_decimal(&hit.im, n)?;
+    // S = 2^(2 − zoom) / height ⇒ 1/S = height · 2^(zoom − 2).
+    let to_px = |d: FixedPoint| -> f64 {
+        let fe = d.to_floatexp();
+        let e = fe.e as f64 + (zoom_log2 - 2.0) + height_px.log2();
+        if fe.m == 0.0 || e < -60.0 {
+            0.0
+        } else {
+            fe.m * 2f64.powf(e.min(40.0))
+        }
+    };
+    let off = [to_px(vx.sub(&nx)) as f32, to_px(vy.sub(&ny)) as f32];
+    if !off[0].is_finite() || !off[1].is_finite() || off[0].abs() > 1.0e7 || off[1].abs() > 1.0e7 {
+        return None; // nucleus implausibly far: distrust it
+    }
+    Some((hit.re, hit.im, hit.period, off))
+}
+
 /// A computed reference orbit plus the live state to extend it.
 pub struct ReferenceOrbit {
     /// Exact center, as the config's decimal strings.
@@ -29,6 +74,13 @@ pub struct ReferenceOrbit {
     /// Burning Ship: fold |x|, |y| before squaring (power is then 2).
     /// Sign-magnitude makes the fold free (clear the sign flags).
     pub ship: bool,
+    /// This orbit sits at a minibrot nucleus of the given period:
+    /// Z_period = 0 = Z_0 exactly, so the wrap-rebase is exact and
+    /// the orbit never needs extending past the period.
+    pub periodic: Option<u32>,
+    /// (view − reference) in pixel-spacing units, for the pipeline's
+    /// d0. Zero when the reference IS the view center.
+    pub ref_offset: [f32; 2],
     /// Precision this orbit was computed at.
     pub n_limbs: usize,
     /// Zₙ as f32 pairs, orbit[0] = Z₀ = 0. Length = iterations
@@ -84,6 +136,8 @@ impl ReferenceOrbit {
             julia_c,
             power: power.max(2),
             ship,
+            periodic: None,
+            ref_offset: [0.0, 0.0],
             n_limbs: n,
             orbit: vec![first],
             escaped_at: None,
@@ -107,6 +161,11 @@ impl ReferenceOrbit {
     /// it already does, or if the reference escaped earlier).
     pub fn extend(&mut self, max_iter: u32) {
         if self.escaped_at.is_some() {
+            return;
+        }
+        if let Some(p) = self.periodic {
+            // A nucleus orbit is complete at its period.
+            let _ = p;
             return;
         }
         while (self.orbit.len() as u32) <= max_iter {
@@ -170,12 +229,19 @@ pub struct OrbitRequest {
     pub julia_c: Option<(f32, f32)>,
     pub power: u32,
     pub ship: bool,
+    /// Zoom (for nucleus search precision) and viewport height (for
+    /// the relocation offset's pixel units).
+    pub zoom_log2: f64,
+    pub height_px: f64,
 }
 
 /// Progressive snapshot the render side reads each frame.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct OrbitProgress {
+    /// Relocation of this orbit's reference relative to the request's
+    /// view center, in pixel-spacing units (nucleus references).
+    pub ref_offset: [f32; 2],
     /// Which request this data belongs to (bumped on every new
     /// request; stale chunks from an abandoned compute are ignored).
     pub epoch: u64,
@@ -247,16 +313,7 @@ impl OrbitWorker {
                         let orbit = match reuse {
                             Some(o) => o,
                             None => {
-                                match ReferenceOrbit::compute(
-                                    &req.center_re,
-                                    &req.center_im,
-                                    0.0,
-                                    Some(req.n_limbs),
-                                    0,
-                                    req.julia_c,
-                                    req.power,
-                                    req.ship,
-                                ) {
+                                match worker_compute_orbit(&req) {
                                     Some(o) => o,
                                     None => {
                                         // Unparseable center: publish an
@@ -276,7 +333,9 @@ impl OrbitWorker {
                             p.epoch = epoch;
                             p.orbit.clear();
                             p.orbit.extend_from_slice(&orbit.orbit);
-                            p.done = orbit.escaped_at.is_some()
+                            p.ref_offset = orbit.ref_offset;
+                            p.done = orbit.periodic.is_some()
+                                || orbit.escaped_at.is_some()
                                 || orbit.len() > req.max_iter;
                         }
                         current = Some((req, orbit, epoch));
@@ -287,8 +346,9 @@ impl OrbitWorker {
                         let target = (orbit.len().saturating_sub(1) + Self::CHUNK)
                             .min(req.max_iter);
                         orbit.extend(target);
-                        let done =
-                            orbit.escaped_at.is_some() || orbit.len() > req.max_iter;
+                        let done = orbit.periodic.is_some()
+                            || orbit.escaped_at.is_some()
+                            || orbit.len() > req.max_iter;
                         {
                             let mut p = shared.lock().unwrap();
                             if p.epoch == *epoch {
@@ -331,6 +391,34 @@ impl OrbitWorker {
     }
 }
 
+/// Worker-side orbit construction: nucleus-aware for the eligible
+/// case (parameter-plane Mandelbrot), plain otherwise. Starts at zero
+/// iterations — the chunk loop grows it (a periodic nucleus orbit
+/// arrives complete).
+#[cfg(not(target_arch = "wasm32"))]
+fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
+    if req.julia_c.is_none() && req.power == 2 && !req.ship {
+        ReferenceOrbit::compute_nucleus_aware(
+            &req.center_re,
+            &req.center_im,
+            req.zoom_log2,
+            0,
+            req.height_px.max(1.0),
+        )
+    } else {
+        ReferenceOrbit::compute(
+            &req.center_re,
+            &req.center_im,
+            0.0,
+            Some(req.n_limbs),
+            0,
+            req.julia_c,
+            req.power,
+            req.ship,
+        )
+    }
+}
+
 /// Helper for the parked-worker wakeup: fold a received request into
 /// `current` exactly the way the main loop would.
 #[cfg(not(target_arch = "wasm32"))]
@@ -350,26 +438,60 @@ fn tx_loopback_send(
     });
     let orbit = match reuse {
         Some(o) => o,
-        None => ReferenceOrbit::compute(
-            &req.center_re,
-            &req.center_im,
-            0.0,
-            Some(req.n_limbs),
-            0,
-            req.julia_c,
-            req.power,
-            req.ship,
-        )?,
+        None => worker_compute_orbit(&req)?,
     };
     {
         let mut p = shared.lock().unwrap();
         p.epoch = epoch;
         p.orbit.clear();
         p.orbit.extend_from_slice(&orbit.orbit);
-        p.done = orbit.escaped_at.is_some() || orbit.len() > req.max_iter;
+        p.ref_offset = orbit.ref_offset;
+        p.done = orbit.periodic.is_some()
+            || orbit.escaped_at.is_some()
+            || orbit.len() > req.max_iter;
     }
     *current = Some((req, orbit, epoch));
     Some(())
+}
+
+impl ReferenceOrbit {
+    /// Parameter-plane Mandelbrot: try a nucleus-relocated periodic
+    /// reference first (exact wrap, period-length orbit, maximal
+    /// glitch resistance); fall back to the view-center reference.
+    /// `height_px` converts the relocation offset into pixel units.
+    pub fn compute_nucleus_aware(
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        max_iter: u32,
+        height_px: f64,
+    ) -> Option<Self> {
+        if let Some((nre, nim, period, off)) =
+            nucleus_for_view(center_re, center_im, zoom_log2, height_px)
+        {
+            if let Some(mut orbit) = Self::compute(
+                &nre,
+                &nim,
+                zoom_log2,
+                None,
+                period,
+                None,
+                2,
+                false,
+            ) {
+                if orbit.escaped_at.is_none() && orbit.len() > period {
+                    // Store under the VIEW key (the cache is keyed on
+                    // what was asked for), remember the relocation.
+                    orbit.center_re = center_re.to_string();
+                    orbit.center_im = center_im.to_string();
+                    orbit.periodic = Some(period);
+                    orbit.ref_offset = off;
+                    return Some(orbit);
+                }
+            }
+        }
+        Self::compute(center_re, center_im, zoom_log2, None, max_iter, None, 2, false)
+    }
 }
 
 /// Single-slot orbit cache: during a continuous zoom the center is
@@ -378,6 +500,7 @@ fn tx_loopback_send(
 #[derive(Default)]
 pub struct OrbitCache {
     slot: Option<ReferenceOrbit>,
+    height_px: f64,
 }
 
 impl OrbitCache {
@@ -401,12 +524,29 @@ impl OrbitCache {
         if hit {
             let orbit = self.slot.as_mut().unwrap();
             orbit.extend(max_iter);
+        } else if julia_c.is_none() && power == 2 && !ship {
+            self.slot = Some(ReferenceOrbit::compute_nucleus_aware(
+                center_re,
+                center_im,
+                zoom_log2,
+                max_iter,
+                self.height_px.max(1.0),
+            )?);
         } else {
             self.slot = Some(ReferenceOrbit::compute(
                 center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power, ship,
             )?);
         }
         self.slot.as_ref()
+    }
+
+    /// The viewport height the relocation offset is measured against.
+    pub fn set_height(&mut self, h: f64) {
+        if (self.height_px - h).abs() > 0.5 {
+            self.height_px = h;
+            // The offset unit changed: recompute on next get.
+            self.slot = None;
+        }
     }
 
     pub fn clear(&mut self) {
@@ -458,21 +598,32 @@ mod tests {
 
     #[test]
     fn cache_hits_extends_and_replaces() {
+        // Julia c = 0 (z -> z^2 from |z0| < 1: bounded, never escapes,
+        // and the Julia key skips nucleus relocation) keeps orbit
+        // lengths exactly deterministic for the cache mechanics.
+        let jc = Some((0.0f32, 0.0f32));
         let mut cache = OrbitCache::default();
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 50, None, 2, false).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 50, jc, 2, false).unwrap();
             assert_eq!(o.len(), 51);
         }
         // Same view, deeper iterations: extend in place.
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 80, None, 2, false).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 80, jc, 2, false).unwrap();
             assert_eq!(o.len(), 81);
         }
         // Different center: replace.
         {
-            let o = cache.get("-0.75", "0.1", 10.0, 10, None, 2, false).unwrap();
+            let o = cache.get("-0.75", "0.1", 10.0, 10, jc, 2, false).unwrap();
             assert_eq!(o.center_re, "-0.75");
             assert_eq!(o.len(), 11);
+        }
+        // Parameter-plane Mandelbrot goes nucleus-aware: an interior
+        // view relocates to a periodic reference.
+        {
+            let o = cache.get("-1.0", "0.0", 10.0, 100, None, 2, false).unwrap();
+            assert_eq!(o.periodic, Some(2), "the period-2 nucleus governs c = -1");
+            assert_eq!(o.len(), 3);
         }
         // Unparseable center: None.
         assert!(cache.get("not a number", "0", 10.0, 10, None, 2, false).is_none());
@@ -541,6 +692,8 @@ mod tests {
             julia_c: None,
             power: 2,
             ship: false,
+            zoom_log2: 5.0,
+            height_px: 320.0,
         };
         let epoch = worker.request(req);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -554,11 +707,14 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "worker never finished");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        let sync = ReferenceOrbit::compute("-0.5", "0.1", 0.0, Some(3), 10_000, None, 2, false)
+        // The worker goes nucleus-aware for this request; compare
+        // against the same nucleus-aware synchronous compute.
+        let sync = ReferenceOrbit::compute_nucleus_aware("-0.5", "0.1", 5.0, 10_000, 320.0)
             .unwrap();
         let p = worker.progress.lock().unwrap();
         assert_eq!(p.orbit.len(), sync.orbit.len());
         assert_eq!(p.orbit, sync.orbit, "worker orbit differs from synchronous");
+        assert_eq!(p.ref_offset, sync.ref_offset);
 
         // Preemption: a new request replaces the old epoch.
         drop(p);
@@ -570,6 +726,8 @@ mod tests {
             julia_c: None,
             power: 2,
             ship: false,
+            zoom_log2: 5.0,
+            height_px: 320.0,
         });
         assert!(e2 > epoch);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -604,6 +762,38 @@ mod tests {
                 "iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
             );
         }
+    }
+
+    #[test]
+    fn nucleus_reference_relocates_and_is_periodic() {
+        // A view near (not on) the period-3 antenna nucleus: the
+        // reference must relocate to the nucleus (Z_3 = 0), carry the
+        // relocation offset, and arrive complete at period length.
+        let orbit = ReferenceOrbit::compute_nucleus_aware(
+            "-1.7548776",
+            "0.0000001",
+            20.0,
+            5000,
+            320.0,
+        )
+        .expect("computes");
+        assert_eq!(orbit.periodic, Some(3));
+        assert_eq!(orbit.len(), 4); // Z_0..Z_3
+        let [zx, zy] = orbit.orbit[3];
+        assert!(
+            (zx * zx + zy * zy) < 1e-10,
+            "Z_period must be ~0, got ({zx}, {zy})"
+        );
+        assert!(
+            orbit.ref_offset[0].abs() > 0.0 || orbit.ref_offset[1].abs() > 0.0,
+            "off-nucleus view must carry a relocation offset"
+        );
+        // Far from any small-period atom: falls back to the plain
+        // view-center reference.
+        let plain = ReferenceOrbit::compute_nucleus_aware("0.3", "0.5", 20.0, 100, 320.0)
+            .expect("computes");
+        assert_eq!(plain.periodic, None);
+        assert_eq!(plain.ref_offset, [0.0, 0.0]);
     }
 
     #[test]

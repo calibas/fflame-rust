@@ -101,6 +101,7 @@ pub fn find_nucleus(
         // F(c) = f_c^p(0), F'(c) = d/dc of the same.
         let mut z = BigComplex::zero(n);
         let mut dz = BigComplex::zero(n);
+        let mut escaped_mid_orbit = false;
         for _ in 0..period {
             // dz <- 2 z dz + 1
             let two_z_dz = z.mul(&dz).mul_scalar_pow2(1);
@@ -110,6 +111,18 @@ pub fn find_nucleus(
             };
             // z <- z^2 + c
             z = z.mul(&z).add(&c);
+            // An escaped orbit squares its EXPONENT every step — bail
+            // before it saturates: this c is far from any period-p
+            // nucleus, so the Newton pass is garbage anyway.
+            let huge = z.re.mag_exp().unwrap_or(i64::MIN) > 1 << 20
+                || z.im.mag_exp().unwrap_or(i64::MIN) > 1 << 20;
+            if huge {
+                escaped_mid_orbit = true;
+                break;
+            }
+        }
+        if escaped_mid_orbit {
+            return None;
         }
         if dz.re.is_zero() && dz.im.is_zero() {
             return None; // super-degenerate: cannot step
@@ -175,6 +188,12 @@ pub fn locate_minibrot(
 ) -> Option<Nucleus> {
     let radius_log2 = 1.0 - zoom_log2;
     let period = find_period(center_re, center_im, radius_log2, max_period)?;
+    // Newton cost is passes x period x big-muls; past this budget the
+    // search costs more than the periodic reference saves. (Lifting
+    // it wants the worker to own the search with a progress channel.)
+    if period > 20_000 {
+        return None;
+    }
     find_nucleus(center_re, center_im, period, zoom_log2 + 16.0)
 }
 
@@ -221,6 +240,17 @@ mod tests {
         let hit = locate_minibrot("-1.754", "0.0005", 9.0, 200).expect("found");
         assert_eq!(hit.period, 3);
         assert!(hit.re.starts_with("-1.754877666"), "re = {}", hit.re);
+    }
+
+    #[test]
+    fn escaped_inner_orbit_bails_instead_of_overflowing() {
+        // A large period at a c whose orbit escapes within a few
+        // iterations: the inner loop must bail (this used to double
+        // the exponent per step and overflow i64 in BigFloat::mul —
+        // found by a deep render). The first attempt at this test
+        // used a cusp-adjacent point and Newton legitimately CONVERGED
+        // to a period-5000 nucleus — hence the unambiguous exterior c.
+        assert!(find_nucleus("0.5", "0.5", 5000, 60.0).is_none());
     }
 
     #[test]

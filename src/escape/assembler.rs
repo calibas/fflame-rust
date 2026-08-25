@@ -272,8 +272,9 @@ struct PerturbParams {
     // f32/f64 underflow anywhere).
     s_m: f32,
     s_e: i32,
-    _pad0: u32,
-    _pad1: u32,
+    // (view center - reference center) in pixel-spacing units:
+    // nonzero when the reference was relocated to a minibrot nucleus.
+    ref_offset: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -334,7 +335,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let d0 = vec2<f32>(
         dpx.x * rot.x - dpx.y * rot.y,
         dpx.x * rot.y + dpx.y * rot.x,
-    );
+    ) + perturb.ref_offset;
 
     // Delta iteration state: w = delta / S, m = reference index.
     // Parameter plane: delta_0 = 0 (both orbits start at z = 0) and
@@ -446,8 +447,9 @@ struct PerturbParams {
     flags: u32,
     s_m: f32,
     s_e: i32,
-    _pad0: u32,
-    _pad1: u32,
+    // (view center - reference center) in pixel-spacing units:
+    // nonzero when the reference was relocated to a minibrot nucleus.
+    ref_offset: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -571,7 +573,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dpx.x * rot.x - dpx.y * rot.y,
         dpx.x * rot.y + dpx.y * rot.x,
     );
-    let d0 = cfe_norm(CFe(d0px * perturb.s_m, perturb.s_e));
+    let d0 = cfe_norm(CFe((d0px + perturb.ref_offset) * perturb.s_m, perturb.s_e));
 
     let is_julia_perturb = (perturb.flags & 2u) != 0u;
     var w: CFe;

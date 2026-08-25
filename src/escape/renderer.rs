@@ -76,8 +76,8 @@ struct PerturbParamsGpu {
     /// computed symbolically from zoom_log2, valid at any depth.
     s_m: f32,
     s_e: i32,
-    _pad0: u32,
-    _pad1: u32,
+    /// (view - reference) in pixel units (nucleus relocation).
+    ref_offset: [f32; 2],
 }
 
 pub struct EscapeRenderer {
@@ -123,6 +123,9 @@ pub struct EscapeRenderer {
     orbit_uploaded: u32,
     perturb_params_buffer: Buffer,
     perturb_bind_group_layout: BindGroupLayout,
+    /// Relocation of the current reference (pixel units); fed into
+    /// the perturb uniform each render.
+    current_ref_offset: [f32; 2],
 }
 
 impl EscapeRenderer {
@@ -279,6 +282,7 @@ impl EscapeRenderer {
             orbit_uploaded: 0,
             perturb_params_buffer,
             perturb_bind_group_layout,
+            current_ref_offset: [0.0, 0.0],
         }
     }
 
@@ -381,6 +385,7 @@ impl EscapeRenderer {
             assembler::PerturbTier::Power(p) => (p, false),
             assembler::PerturbTier::Ship => (2, true),
         };
+        let height_px = self.height.max(1) as f64;
         let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
         let epoch = worker.request(OrbitRequest {
             center_re: escape.center_re.clone(),
@@ -390,9 +395,14 @@ impl EscapeRenderer {
             julia_c,
             power,
             ship,
+            zoom_log2: escape.zoom_log2,
+            height_px,
         });
         let (len, done, data) = {
             let p = worker.progress.lock().unwrap();
+            if p.epoch == epoch {
+                self.current_ref_offset = p.ref_offset;
+            }
             if p.epoch != epoch {
                 (0u32, false, Vec::new())
             } else {
@@ -466,6 +476,7 @@ impl EscapeRenderer {
             assembler::PerturbTier::Power(p) => (p, false),
             assembler::PerturbTier::Ship => (2, true),
         };
+        self.orbit_cache.set_height(self.height.max(1) as f64);
         let orbit = self.orbit_cache.get(
             &escape.center_re,
             &escape.center_im,
@@ -475,6 +486,7 @@ impl EscapeRenderer {
             power,
             ship,
         )?;
+        self.current_ref_offset = orbit.ref_offset;
         let len = orbit.len();
         let needed_bytes = (len as u64) * 8;
         let recreate = match &self.orbit_buffer {
@@ -696,8 +708,7 @@ impl EscapeRenderer {
                     flags: if escape.julia { 2 } else { 0 },
                     s_m: s_m as f32,
                     s_e: s_e as i32,
-                    _pad0: 0,
-                    _pad1: 0,
+                    ref_offset: self.current_ref_offset,
                 };
                 queue.write_buffer(&self.perturb_params_buffer, 0, bytemuck::bytes_of(&pp));
 

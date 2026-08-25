@@ -498,6 +498,55 @@ impl FloatExp {
         }
         self.m * 2f64.powi(self.e as i32)
     }
+
+    fn renorm(self) -> Self {
+        if self.m == 0.0 {
+            return Self::zero();
+        }
+        let shift = self.m.abs().log2().floor() as i64;
+        Self { m: self.m / 2f64.powi(shift as i32), e: self.e + shift }
+    }
+
+    /// Product (exact exponent bookkeeping, f64 mantissa rounding).
+    pub fn mul(self, other: Self) -> Self {
+        if self.m == 0.0 || other.m == 0.0 {
+            return Self::zero();
+        }
+        Self { m: self.m * other.m, e: self.e + other.e }.renorm()
+    }
+
+    /// Sum; addends more than ~60 octaves apart collapse to the larger.
+    pub fn add(self, other: Self) -> Self {
+        if self.m == 0.0 {
+            return other;
+        }
+        if other.m == 0.0 {
+            return self;
+        }
+        let (hi, lo) = if self.e >= other.e { (self, other) } else { (other, self) };
+        let d = hi.e - lo.e;
+        if d > 60 {
+            return hi;
+        }
+        Self { m: hi.m + lo.m / 2f64.powi(d as i32), e: hi.e }.renorm()
+    }
+
+    /// |self| < |other| (magnitude comparison across the full range).
+    pub fn abs_less_than(self, other: Self) -> bool {
+        if self.m == 0.0 {
+            return other.m != 0.0;
+        }
+        if other.m == 0.0 {
+            return false;
+        }
+        // Renormalized invariants: |m| in [1, 2).
+        let a = self.renorm();
+        let b = other.renorm();
+        if a.e != b.e {
+            return a.e < b.e;
+        }
+        a.m.abs() < b.m.abs()
+    }
 }
 
 // ============================================================
