@@ -51,7 +51,7 @@ pub fn limbs_for_zoom(zoom_log2: f64) -> usize {
 // ============================================================
 
 /// c = a + b (equal lengths). Returns the carry out.
-fn add_mag(a: &[u64], b: &[u64], c: &mut [u64]) -> bool {
+pub(crate) fn add_mag(a: &[u64], b: &[u64], c: &mut [u64]) -> bool {
     let mut carry = false;
     for i in 0..a.len() {
         let (s1, c1) = a[i].overflowing_add(b[i]);
@@ -63,7 +63,7 @@ fn add_mag(a: &[u64], b: &[u64], c: &mut [u64]) -> bool {
 }
 
 /// c = a − b, requiring a ≥ b (caller compares first).
-fn sub_mag(a: &[u64], b: &[u64], c: &mut [u64]) {
+pub(crate) fn sub_mag(a: &[u64], b: &[u64], c: &mut [u64]) {
     let mut borrow = false;
     for i in 0..a.len() {
         let (d1, b1) = a[i].overflowing_sub(b[i]);
@@ -75,7 +75,7 @@ fn sub_mag(a: &[u64], b: &[u64], c: &mut [u64]) {
 }
 
 /// Magnitude comparison.
-fn cmp_mag(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
+pub(crate) fn cmp_mag(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
     for i in (0..a.len()).rev() {
         match a[i].cmp(&b[i]) {
             std::cmp::Ordering::Equal => continue,
@@ -86,7 +86,7 @@ fn cmp_mag(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
 }
 
 /// In-place left shift by `bits` < 64. Returns the bits shifted out.
-fn shl_small(a: &mut [u64], bits: u32) -> u64 {
+pub(crate) fn shl_small(a: &mut [u64], bits: u32) -> u64 {
     if bits == 0 {
         return 0;
     }
@@ -100,7 +100,7 @@ fn shl_small(a: &mut [u64], bits: u32) -> u64 {
 }
 
 /// In-place right shift by `bits` < 64.
-fn shr_small(a: &mut [u64], bits: u32) {
+pub(crate) fn shr_small(a: &mut [u64], bits: u32) {
     if bits == 0 {
         return;
     }

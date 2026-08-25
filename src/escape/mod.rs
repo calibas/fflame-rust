@@ -25,6 +25,7 @@ pub mod assembler;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod app_repro_test;
 pub mod colorings;
+pub mod bigfloat;
 pub mod fixedpoint;
 pub mod reference;
 pub mod formulas;
