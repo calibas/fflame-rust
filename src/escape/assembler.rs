@@ -40,8 +40,7 @@ struct EscapeParams {
     flags: u32,            // bit 0 = Julia mode; bits 1-2 = biomorph (0 off, 1 |Re|, 2 |Im|)
     bailout: f32,          // escape test threshold, SQUARED metric
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    damping: vec2<f32>,    // Mann alpha (re, im); read only when compiled damped
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
 }
@@ -152,7 +151,7 @@ const ESCAPE_TEST: &str = r#"        let bio = (params.flags >> 1u) & 3u;
         }"#;
 
 /// Assemble the WGSL for one (formula, coloring) pair.
-pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef) -> String {
+pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
@@ -210,12 +209,27 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef) -> String {
                 }
             }
             "//__STEP__" => {
-                if needs_prev {
-                    out.push("        let z_next = formula_step(z, c, z_prev);".to_string());
+                // Damped (Mann) wrap: z <- z + alpha*(f(z) - z), with
+                // COMPLEX alpha. Compiled in only when alpha != 1, so
+                // undamped pipelines stay byte-identical (a runtime
+                // mix() at alpha = 1 is not bit-exact).
+                let call = if needs_prev {
+                    "formula_step(z, c, z_prev)"
+                } else {
+                    "formula_step(z, c)"
+                };
+                if damped {
+                    out.push(format!("        let z_raw = {call};"));
+                    if needs_prev {
+                        out.push("        z_prev = z;".to_string());
+                    }
+                    out.push("        z = z + esc_cmul(params.damping, z_raw - z);".to_string());
+                } else if needs_prev {
+                    out.push(format!("        let z_next = {call};"));
                     out.push("        z_prev = z;".to_string());
                     out.push("        z = z_next;".to_string());
                 } else {
-                    out.push("        z = formula_step(z, c);".to_string());
+                    out.push(format!("        z = {call};"));
                 }
             }
             _ => out.push(line.replace("PARAM_PLANE_SEED", param_seed)),
@@ -234,7 +248,7 @@ mod tests {
     fn assembly_splices_both_bodies_and_leaves_no_markers() {
         for f in FORMULAS {
             for c in COLORINGS {
-                let src = assemble(f, c);
+                let src = assemble(f, c, false);
                 assert!(src.contains("fn formula_step"), "{}x{}", f.name, c.name);
                 assert!(src.contains("fn coloring_map"), "{}x{}", f.name, c.name);
                 assert!(!src.contains("//__"), "{}x{} left a marker", f.name, c.name);
@@ -251,7 +265,8 @@ mod tests {
         // probe" the plan calls for; the render half needs a device.
         for f in FORMULAS {
             for c in COLORINGS {
-                let src = assemble(f, c);
+              for damped in [false, true] {
+                let src = assemble(f, c, damped);
                 let module = naga::front::wgsl::parse_str(&src)
                     .unwrap_or_else(|e| panic!("{}x{} failed to parse: {e}", f.name, c.name));
                 naga::valid::Validator::new(
@@ -260,20 +275,21 @@ mod tests {
                 )
                 .validate(&module)
                 .unwrap_or_else(|e| panic!("{}x{} failed validation: {e:?}", f.name, c.name));
+              }
             }
         }
     }
 
     #[test]
     fn non_escaping_formulas_compile_out_the_bailout() {
-        let src = assemble(&crate::escape::formulas::KALISET, &crate::escape::colorings::ORBIT_AVERAGE);
+        let src = assemble(&crate::escape::formulas::KALISET, &crate::escape::colorings::ORBIT_AVERAGE, false);
         assert!(!src.contains("esc_metric"), "Kaliset should carry no escape test");
         assert!(src.contains("coloring_accum"), "orbit average should carry its accumulator");
     }
 
     #[test]
     fn escaping_formulas_keep_the_bailout_and_skip_the_accum() {
-        let src = assemble(&crate::escape::formulas::MANDELBROT, &crate::escape::colorings::SMOOTH);
+        let src = assemble(&crate::escape::formulas::MANDELBROT, &crate::escape::colorings::SMOOTH, false);
         assert!(src.contains("esc_metric"));
         assert!(!src.contains("fn coloring_accum"));
     }
@@ -289,7 +305,7 @@ mod tests {
         use crate::variations::shader_lint;
         for f in FORMULAS {
             for c in COLORINGS {
-                let src = assemble(f, c);
+                let src = assemble(f, c, true);
                 let self_ops = shader_lint::self_operations(&src);
                 assert!(
                     self_ops.is_empty(),
@@ -308,6 +324,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn damping_compiles_in_only_when_asked() {
+        use crate::escape::{colorings, formulas};
+        let plain = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
+        assert!(!plain.contains("params.damping"), "undamped shader must not read damping");
+        let damped = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, true);
+        assert!(damped.contains("esc_cmul(params.damping"));
+        // NeedsPrevZ + damped: history records the PRE-damping z.
+        let phoenix = assemble(&formulas::PHOENIX, &colorings::SMOOTH, true);
+        assert!(phoenix.contains("z_prev = z;"));
     }
 
     #[test]

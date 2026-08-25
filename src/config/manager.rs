@@ -1719,6 +1719,8 @@ impl ConfigManager {
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
             ConfigPath::EscapeBailout => Ok(config.escape.bailout.into()),
+            ConfigPath::EscapeDampingRe => Ok(config.escape.damping_re.into()),
+            ConfigPath::EscapeDampingIm => Ok(config.escape.damping_im.into()),
             ConfigPath::EscapeBiomorph => Ok(ConfigValue::String(
                 crate::config::escape::biomorph_to_str(config.escape.biomorph).to_string(),
             )),
@@ -2571,6 +2573,12 @@ impl ConfigManager {
             }
             ConfigPath::EscapeBailout => {
                 self.current.escape.bailout = value.try_into()?;
+            }
+            ConfigPath::EscapeDampingRe => {
+                self.current.escape.damping_re = value.try_into()?;
+            }
+            ConfigPath::EscapeDampingIm => {
+                self.current.escape.damping_im = value.try_into()?;
             }
             ConfigPath::EscapeBiomorph => {
                 let s: String = value.try_into()?;

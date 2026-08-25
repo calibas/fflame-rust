@@ -179,6 +179,26 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         }
     });
 
+    // Mann-iteration damping (complex α; 1+0i = plain iteration)
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.damping"))
+            .on_hover_text(t!("escape_panel.tooltip_damping"));
+        let mut dre = esc.damping_re;
+        if ui
+            .add(egui::DragValue::new(&mut dre).speed(0.005).prefix("re: "))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeDampingRe, dre.into());
+        }
+        let mut dim = esc.damping_im;
+        if ui
+            .add(egui::DragValue::new(&mut dim).speed(0.005).prefix("im: "))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeDampingIm, dim.into());
+        }
+    });
+
     // Biomorph classification axis
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.biomorph"));
