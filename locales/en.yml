@@ -1796,6 +1796,15 @@ effects:
       intensity: "Intensity"
       blend_mode: "Blend Mode"
 
+  distance_field:
+    name: "Distance Field"
+    params:
+      threshold: "Seed Threshold"
+      spread: "Spread"
+      mode: "Mode"
+      intensity: "Intensity"
+      band_count: "Band Count"
+
 # Signal Panel
 signal:
   generators_section: "Signal Generators"
