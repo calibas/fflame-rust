@@ -44,17 +44,43 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
     ui.separator();
 
     // ---- Formula ----
+    // Mode B (field) formulas share the dropdown as a second group;
+    // which registry resolves the name routes everything downstream.
+    let field = crate::escape::fields::get_field(&esc.formula);
     let formula = crate::escape::get_formula(&esc.formula);
+    let selected_label = match field {
+        Some(f) => f.display_name,
+        None => formula.display_name,
+    };
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
         egui::ComboBox::from_id_salt("escape_formula")
-            .selected_text(formula.display_name)
+            .selected_text(selected_label)
             .show_ui(ui, |ui| {
                 for f in crate::escape::FORMULAS {
                     if ui
-                        .selectable_label(f.name == formula.name, f.display_name)
+                        .selectable_label(
+                            field.is_none() && f.name == formula.name,
+                            f.display_name,
+                        )
                         .clicked()
-                        && f.name != formula.name
+                        && esc.formula != f.name
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeFormula,
+                            ConfigValue::String(f.name.to_string()),
+                        );
+                    }
+                }
+                ui.separator();
+                for f in crate::escape::fields::FIELDS {
+                    if ui
+                        .selectable_label(
+                            field.is_some_and(|sel| sel.name == f.name),
+                            f.display_name,
+                        )
+                        .clicked()
+                        && esc.formula != f.name
                     {
                         let _ = config_manager.update_param(
                             ConfigPath::EscapeFormula,
@@ -68,7 +94,11 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
     // Formula parameters, straight from the def (slider bounds and
     // tooltips included). Values read def defaults when unset — the
     // same value the shader's packer uses.
-    for p in formula.parameters {
+    let formula_params = match field {
+        Some(f) => f.parameters,
+        None => formula.parameters,
+    };
+    for p in formula_params {
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
         let resp = ui
             .add(egui::Slider::new(&mut v, p.min..=p.max).text(p.display_name))
@@ -81,12 +111,13 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         }
     }
 
-    // ---- Julia toggle ----
+    // ---- Julia toggle ---- (mode A only: fields have no Julia plane)
     let mut julia = esc.julia;
-    if ui
-        .checkbox(&mut julia, t!("escape_panel.julia").as_ref())
-        .on_hover_text(t!("escape_panel.tooltip_julia"))
-        .changed()
+    if field.is_none()
+        && ui
+            .checkbox(&mut julia, t!("escape_panel.julia").as_ref())
+            .on_hover_text(t!("escape_panel.tooltip_julia"))
+            .changed()
     {
         let _ = config_manager.update_param(ConfigPath::EscapeJulia, julia.into());
     }
@@ -333,6 +364,53 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
     ui.separator();
 
     // ---- Coloring ----
+    show_coloring_section(ui, config_manager, &esc, field);
+}
+
+/// Coloring dropdown + params. `field` = Some routes to the mode-B
+/// coloring registry (with the def's fallback resolution — the
+/// stored name usually still says "smooth" right after a switch).
+fn show_coloring_section(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+    field: Option<&'static crate::escape::fields::FieldDef>,
+) {
+    if let Some(f) = field {
+        let coloring = crate::escape::fields::get_field_coloring(&esc.coloring, f);
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.coloring"));
+            egui::ComboBox::from_id_salt("escape_coloring")
+                .selected_text(coloring.display_name)
+                .show_ui(ui, |ui| {
+                    for c in crate::escape::fields::FIELD_COLORINGS {
+                        if ui
+                            .selectable_label(c.name == coloring.name, c.display_name)
+                            .clicked()
+                            && c.name != coloring.name
+                        {
+                            let _ = config_manager.update_param(
+                                ConfigPath::EscapeColoring,
+                                ConfigValue::String(c.name.to_string()),
+                            );
+                        }
+                    }
+                });
+        });
+        for p in coloring.parameters {
+            let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
+            let resp = ui
+                .add(egui::Slider::new(&mut v, p.min..=p.max).text(p.display_name))
+                .on_hover_text(p.tooltip);
+            if resp.changed() {
+                let _ = config_manager.update_param(
+                    ConfigPath::EscapeColoringParam { param: p.name.to_string() },
+                    v.into(),
+                );
+            }
+        }
+        return;
+    }
     let coloring = crate::escape::get_coloring(&esc.coloring);
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.coloring"));

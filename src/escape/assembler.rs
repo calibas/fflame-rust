@@ -18,6 +18,7 @@
 //! round trip is identity at the default gamma — the same
 //! `srgb_to_linear` convention the flame plot uses.
 
+use super::fields::{FieldColoringDef, FieldDef};
 use super::{ColoringDef, ColoringFeature, FormulaDef, FormulaFeature};
 
 /// Number of vec4 slots for each param block in the uniform — 16 float
@@ -1303,6 +1304,122 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
 }
 
 /// Assemble the WGSL for one (formula, coloring) pair.
+
+const FIELD_TEMPLATE: &str = r#"
+// Field-evaluation compute pass (mode B, plan phase 3): no
+// classification, no escape - each pixel runs a fixed-count loop
+// accumulating a scalar field value (and its analytic gradient, when
+// the field has one), then colors the scalar. `max_iter` is the TERM
+// COUNT here; the same uniform block as the escape template keeps the
+// renderer's params packing shared.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    _pad0: f32,
+    damping: vec2<f32>,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+// Eight floats of per-pixel loop state (the FTLE tangent matrix plus
+// the map's own point needs more than a vec4).
+struct FieldState {
+    a: vec4<f32>,
+    b: vec4<f32>,
+}
+
+struct FieldStep {
+    state: FieldState,
+    value: f32,
+    grad: vec2<f32>,
+}
+
+// What a field coloring returns: palette position + luminance (the
+// hillshade channel; 1.0 elsewhere).
+struct FieldShade {
+    t: f32,
+    lum: f32,
+}
+
+//__FIELD__
+
+//__FIELD_COLORING__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+
+    // Pixel center -> plane: same mapping as the escape template.
+    let uv = (vec2<f32>(f32(gid.x), f32(gid.y)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height));
+    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
+    d.y = -d.y;
+    let rot = params.rot_cs;
+    let pixel = params.center + vec2<f32>(
+        d.x * rot.x - d.y * rot.y,
+        d.x * rot.y + d.y * rot.x,
+    );
+
+    var state = field_init(pixel);
+    var sum = 0.0;
+    var grad = vec2<f32>(0.0, 0.0);
+    // Term count: max_iter, clamped - mode B sums converge in tens of
+    // terms and statistics in thousands; a runaway count is a TDR.
+    let terms = min(params.max_iter, 20000u);
+    for (var i = 0u; i < terms; i = i + 1u) {
+        let step = field_step(i, pixel, state);
+        state = step.state;
+        sum = sum + step.value;
+        grad = grad + step.grad;
+    }
+
+    let shade = field_color(sum, grad, terms);
+    let t = fract(shade.t);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+}
+"#;
+
+/// Assemble a mode-B field shader: splice one field def and one field
+/// coloring into [`FIELD_TEMPLATE`]. Same marker discipline as
+/// [`assemble`].
+pub fn assemble_field(field: &FieldDef, coloring: &FieldColoringDef) -> String {
+    let mut out = Vec::new();
+    for line in FIELD_TEMPLATE.lines() {
+        match line.trim() {
+            "//__FIELD__" => out.push(field.wgsl.trim().to_string()),
+            "//__FIELD_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("\n")
+}
+
 pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
@@ -1469,6 +1586,40 @@ mod tests {
     use super::*;
     use crate::escape::{COLORINGS, FORMULAS};
     use egui_wgpu::wgpu::naga;
+
+    #[test]
+    fn every_field_coloring_combination_validates() {
+        // The whole mode-B matrix through naga, same discipline as
+        // the escape matrix below (plus the fast-math lints).
+        use crate::escape::fields;
+        use crate::variations::shader_lint;
+        for f in fields::FIELDS {
+            for c in fields::FIELD_COLORINGS {
+                let src = assemble_field(f, c);
+                assert!(!src.contains("//__"), "{}x{} left a marker", f.name, c.name);
+                let module = naga::front::wgsl::parse_str(&src)
+                    .unwrap_or_else(|e| panic!("{}x{} parse: {e}", f.name, c.name));
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{}x{} validation: {e:?}", f.name, c.name));
+                assert!(
+                    shader_lint::self_operations(&src).is_empty(),
+                    "{}x{} fast-math self-op",
+                    f.name,
+                    c.name
+                );
+                assert!(
+                    shader_lint::subnormal_literals(&src).is_empty(),
+                    "{}x{} subnormal literal",
+                    f.name,
+                    c.name
+                );
+            }
+        }
+    }
 
     #[test]
     fn assembly_splices_both_bodies_and_leaves_no_markers() {

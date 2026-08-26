@@ -854,6 +854,41 @@ impl EscapeRenderer {
     /// Compile (or fetch from cache) the pipeline for this config's
     /// (formula, coloring) pair; returns its cache key.
     fn ensure_pipeline(&mut self, device: &Device, escape: &EscapeConfig) -> String {
+        // Mode B routing: a formula name resolving in the FIELD
+        // registry compiles the field template instead. Same bind
+        // group layout, same dispatch — only the shader differs.
+        let (key, source_for) = if let Some(field) = super::fields::get_field(&escape.formula) {
+            let coloring = super::fields::get_field_coloring(&escape.coloring, field);
+            (
+                format!("field|{}|{}", field.name, coloring.name),
+                Some(assembler::assemble_field(field, coloring)),
+            )
+        } else {
+            (String::new(), None)
+        };
+        if let Some(source) = source_for {
+            if !self.pipelines.contains_key(&key) {
+                let module = device.create_shader_module(ShaderModuleDescriptor {
+                    label: Some(&format!("Escape Shader {key}")),
+                    source: ShaderSource::Wgsl(source.into()),
+                });
+                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Escape Pipeline Layout"),
+                    bind_group_layouts: &[Some(&self.bind_group_layout)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Escape Pipeline {key}")),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("escape_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                self.pipelines.insert(key.clone(), pipeline);
+            }
+            return key;
+        }
         let formula = super::get_formula(&escape.formula);
         let coloring = super::get_coloring(&escape.coloring);
         let damped = escape.is_damped();
@@ -883,9 +918,6 @@ impl EscapeRenderer {
     }
 
     fn params_for(&self, escape: &EscapeConfig) -> EscapeParamsGpu {
-        let formula = super::get_formula(&escape.formula);
-        let coloring = super::get_coloring(&escape.coloring);
-
         // zoom_log2 = 0 is the home view: vertical span 4 complex
         // units (the EscapeConfig doc contract); width follows aspect.
         let span_y = 4.0 / escape.zoom_factor();
@@ -894,8 +926,17 @@ impl EscapeRenderer {
 
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
-        super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
-        super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+        if let Some(field) = super::fields::get_field(&escape.formula) {
+            // Mode B: pack the field's params + its resolved coloring's.
+            let coloring = super::fields::get_field_coloring(&escape.coloring, field);
+            super::pack_params(field.parameters, &escape.formula_params, fparams.as_flattened_mut());
+            super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+        } else {
+            let formula = super::get_formula(&escape.formula);
+            let coloring = super::get_coloring(&escape.coloring);
+            super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
+            super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+        }
 
         EscapeParamsGpu {
             center: [cx as f32, cy as f32],
@@ -1187,6 +1228,12 @@ mod tests {
             "every fold variant has its own delta algebra now"
         );
         esc.formula_params.clear();
+        esc.formula = "weierstrass".to_string();
+        assert!(
+            !EscapeRenderer::wants_perturbation(&esc),
+            "mode B fields never perturb"
+        );
+        esc.formula = "burning_ship".to_string();
         esc.formula = "multibrot".to_string();
         assert!(EscapeRenderer::wants_perturbation(&esc), "integer multibrot is in the tier");
         esc.formula_params.insert("power".to_string(), 3.5);

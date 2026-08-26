@@ -489,6 +489,31 @@ hillshade normals for free); Markus–Lyapunov (unparked per *[ETI]* —
 FTLE / standard-map stability as the generalization. Mode B may land
 interleaved with phase 2 — it is the cheapest of the three modes.
 
+**Phase 3 status (2026-08-26, branch `escape-time`): SHIPPED.**
+`src/escape/fields.rs`: a `FieldDef` registry parallel to the
+formula registry (append-only, inline WGSL, name-disjointness
+test-pinned) with its own template (`FIELD_TEMPLATE` — no
+classification, no escape test; a fixed-count loop over eight floats
+of per-pixel state accumulating value + analytic gradient;
+`max_iter` is the term count). Three fields: `weierstrass` — the 2D
+Besicovitch–Ursell product form Σ aⁿ·g(bⁿx+φ)·g(bⁿy+φ) with
+cos/sin/triangle generators (Bagula's published double-x is a 1D
+field in disguise; we implement the evident intent) and the
+term-by-term analytic gradient; `markus_lyapunov` — logistic λ over
+the (r_A, r_B) plane, bit-pattern forcing sequence, warmup
+transient, in-loop normalization; `standard_map_ftle` — Chirikov
+tangent-map log growth with per-step renormalization. Three field
+colorings: value bands, diverging (atan squash, zero at
+mid-palette — the signed-scalar convention), analytic-gradient
+hillshade (azimuth/elevation/relief). Routing is by which registry
+resolves `EscapeConfig::formula` — the renderer's pipeline/params
+paths branch there, the panel shows the field group in the same
+dropdowns, fields never enter the perturbation gate (test-pinned),
+and a stored mode-A coloring name falls back to the field's declared
+default rather than mis-resolving. Whole matrix naga-validated +
+fast-math-linted; corpus: weierstrass-hillshade, markus-lyapunov-ab,
+standard-map-ftle.
+
 **Phase 4 — perturbation (deep zoom, mode A).**
 The `fixedpoint` module; CPU reference orbit on a worker with
 progressive upload; orbit cache keyed on (center strings, precision,

@@ -32,6 +32,7 @@ pub mod nucleus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod orbit_store;
 pub mod reference;
+pub mod fields;
 pub mod formulas;
 pub mod renderer;
 
