@@ -806,6 +806,7 @@ history:
     escape_center_im: "Escape Center Im"
     escape_zoom: "Escape Zoom"
     escape_rotation: "Escape Rotation"
+    escape_supersample: "Escape Antialiasing"
     escape_max_iter: "Escape Max Iterations"
     escape_bailout: "Escape Bailout"
     escape_damping_re: "Damping (re)"
@@ -1905,6 +1906,9 @@ login:
   remember_me: "Remember me"
 
 escape_panel:
+  supersample: "Antialiasing"
+  supersample_off: "Off"
+  tooltip_supersample: "Render at N\u00d7 resolution per axis and box-downsample. Smooths pixel noise in dense filigree at N\u00b2 the render cost."
   not_active_hint: "Switch to Escape mode above to edit the escape-time fractal."
   flame_only_hint: "This panel edits the flame and is inactive in Escape mode."
   open_escape_panel: "Open Escape Fractal panel"

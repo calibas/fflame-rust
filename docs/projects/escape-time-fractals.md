@@ -681,6 +681,27 @@ into the multi-pass pipeline, with one params slot per pass and all
 field reads via textureLoad (rg32float is unfilterable; also the
 WASM-safe idiom).
 
+In-app polish (field-reported, 2026-08-26): mouse pan and
+zoom-to-cursor now accumulate the center in FIXED-POINT
+(`FixedPoint::decimal_add_f64`) — the old f64 round-trip capped the
+step at the center's own ulp, so past ~zoom 45 horizontal pans
+"skipped" while a small-imaginary axis still moved (the reported
+symptom, pinned by a unit test whose f64 control drops the step
+entirely). Supersampling shipped as `EscapeConfig::supersample`
+(1–3×; renders at N× per axis into the internal texture and
+box-downsamples pre-tonemap — config-level, so files reproduce
+identically in-app, CLI and thumbnails; the whole perturbation
+pipeline inherits consistency because the render resolution IS the
+internal resolution). Density Levels is hard-off in escape mode
+(it remaps the chaos game's measured density statistic — stale
+flame data here, and escape density is a constant 1/px), with the
+tonemap panel saying so. The animation system's target picker
+gained an Escape category (zoom, rotation, iterations, bailout,
+Julia seed, damping, and the ACTIVE formula's/coloring's parameters
+— mode B fields included); the apply path worked all along via the
+Escape.* string keys, and selectors/center strings stay
+deliberately non-animatable.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 worker (browser builds keep the synchronous path — wants a

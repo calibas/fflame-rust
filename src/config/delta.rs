@@ -314,6 +314,8 @@ pub enum ConfigPath {
     EscapeRotation,
     /// Per-pixel iteration ceiling.
     EscapeMaxIter,
+    /// Supersampling factor (1 = off): N× per axis + box downsample.
+    EscapeSupersample,
     /// Escape radius squared.
     EscapeBailout,
     /// Mann-iteration damping α (complex): `z ← (1−α)z + α·f(z)`.
@@ -818,6 +820,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeZoomLog2 => write!(f, "Escape Zoom"),
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
+            ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
             ConfigPath::EscapeBailout => write!(f, "Escape Bailout"),
             ConfigPath::EscapeDampingRe => write!(f, "Damping (re)"),
             ConfigPath::EscapeDampingIm => write!(f, "Damping (im)"),
@@ -1038,6 +1041,7 @@ impl ConfigPath {
             ConfigPath::EscapeZoomLog2 => I18nKey::simple("history.param.escape_zoom"),
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
+            ConfigPath::EscapeSupersample => I18nKey::simple("history.param.escape_supersample"),
             ConfigPath::EscapeBailout => I18nKey::simple("history.param.escape_bailout"),
             ConfigPath::EscapeDampingRe => I18nKey::simple("history.param.escape_damping_re"),
             ConfigPath::EscapeDampingIm => I18nKey::simple("history.param.escape_damping_im"),
@@ -2332,6 +2336,7 @@ impl ConfigPath {
             | ConfigPath::EscapeZoomLog2
             | ConfigPath::EscapeRotation
             | ConfigPath::EscapeMaxIter
+            | ConfigPath::EscapeSupersample
             | ConfigPath::EscapeBailout
             | ConfigPath::EscapeDampingRe
             | ConfigPath::EscapeDampingIm
@@ -2584,6 +2589,7 @@ impl ConfigPath {
             ConfigPath::EscapeZoomLog2 => "Escape.ZoomLog2".to_string(),
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
+            ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
             ConfigPath::EscapeBailout => "Escape.Bailout".to_string(),
             ConfigPath::EscapeDampingRe => "Escape.DampingRe".to_string(),
             ConfigPath::EscapeDampingIm => "Escape.DampingIm".to_string(),
@@ -2765,6 +2771,7 @@ impl ConfigPath {
                 ["ZoomLog2"] => return Some(ConfigPath::EscapeZoomLog2),
                 ["Rotation"] => return Some(ConfigPath::EscapeRotation),
                 ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
+                ["Supersample"] => return Some(ConfigPath::EscapeSupersample),
                 ["Bailout"] => return Some(ConfigPath::EscapeBailout),
                 ["DampingRe"] => return Some(ConfigPath::EscapeDampingRe),
                 ["DampingIm"] => return Some(ConfigPath::EscapeDampingIm),
@@ -3343,6 +3350,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
         ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+        ConfigPath::EscapeSupersample => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::EscapeJulia => json.as_bool().map(ConfigValue::Bool),
         // Selectors and the deep-zoom center strings are structural /
         // exact — not animatable (centers deliberately: see the plan's

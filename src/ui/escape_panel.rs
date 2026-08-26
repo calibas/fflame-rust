@@ -312,6 +312,29 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         }
     });
     ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.supersample"));
+        let current = esc.supersample.clamp(1, 3);
+        egui::ComboBox::from_id_salt("escape_supersample")
+            .selected_text(match current {
+                1 => t!("escape_panel.supersample_off").to_string(),
+                n => format!("{n}\u{00d7}"),
+            })
+            .show_ui(ui, |ui| {
+                for n in 1u32..=3 {
+                    let label = match n {
+                        1 => t!("escape_panel.supersample_off").to_string(),
+                        n => format!("{n}\u{00d7}"),
+                    };
+                    if ui.selectable_label(n == current, label).clicked() && n != current {
+                        let _ = config_manager
+                            .update_param(ConfigPath::EscapeSupersample, ConfigValue::UInt(n));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_supersample"));
+    });
+    ui.horizontal(|ui| {
         ui.label(t!("escape_panel.bailout"));
         let mut bail = esc.bailout;
         if ui

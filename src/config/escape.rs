@@ -102,6 +102,22 @@ pub struct EscapeConfig {
     /// Per-coloring parameters, same shape.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
+
+    /// Supersampling factor: the image renders at N× resolution per
+    /// axis and box-downsamples (N² samples per display pixel).
+    /// 1 = off. Part of the CONFIG (not a device preference) so a
+    /// saved file reproduces exactly, everywhere — viewport, CLI,
+    /// thumbnails alike.
+    #[serde(default = "default_supersample", skip_serializing_if = "is_one_u32")]
+    pub supersample: u32,
+}
+
+fn default_supersample() -> u32 {
+    1
+}
+
+fn is_one_u32(v: &u32) -> bool {
+    *v == 1
 }
 
 /// Biomorph classification axis (Pickover): which component escape is
@@ -197,6 +213,7 @@ impl Default for EscapeConfig {
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
+            supersample: 1,
         }
     }
 }

@@ -161,6 +161,20 @@ pub struct EscapeRenderer {
     /// Test hook: force per-step iteration to compare against skips.
     #[cfg(test)]
     pub(crate) disable_bla: bool,
+    /// Display (output) size. `width`/`height` are the RENDER size =
+    /// display × supersample; everything internal keys off those, so
+    /// the whole pipeline (pixel spacing, iteration state, chunk
+    /// keys, nucleus offsets) is supersampling-consistent for free.
+    out_width: u32,
+    out_height: u32,
+    supersample: u32,
+    /// Display-size target of the box downsample (None at 1×:
+    /// `output_view` then serves the render texture directly).
+    final_texture: Option<Texture>,
+    final_view: Option<TextureView>,
+    /// (factor, pipeline, layout) — the factor is spliced into the
+    /// WGSL, so a factor change recompiles (rare).
+    downsample: Option<(u32, wgpu::ComputePipeline, BindGroupLayout)>,
 }
 
 /// What the current BLA table was built for (rebuild trigger).
@@ -360,6 +374,12 @@ impl EscapeRenderer {
             bla_built: None,
             #[cfg(test)]
             disable_bla: false,
+            out_width: width,
+            out_height: height,
+            supersample: 1,
+            final_texture: None,
+            final_view: None,
+            downsample: None,
         }
     }
 
@@ -830,25 +850,155 @@ impl EscapeRenderer {
     }
 
     /// The rendered image, in the flame-accumulator format the tonemap
-    /// tail expects.
+    /// tail expects — display-sized (the downsampled target when
+    /// supersampling is on).
     pub fn output_view(&self) -> &TextureView {
-        &self.output_view
+        self.final_view.as_ref().unwrap_or(&self.output_view)
     }
 
-    /// Recreate the output for new dimensions. Cheap relative to a
-    /// render; pipelines and params survive. Returns true when the size
-    /// actually changed — the output is stale until the next `render`.
-    pub fn resize(&mut self, device: &Device, width: u32, height: u32) -> bool {
-        if width == self.width && height == self.height {
+    /// Recreate the output for new DISPLAY dimensions and
+    /// supersampling factor (render size = display × factor). Cheap
+    /// relative to a render; pipelines and params survive. Returns
+    /// true when anything changed — the output is stale until the
+    /// next `render`.
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
+        let ss = supersample.clamp(1, 3);
+        if width == self.out_width && height == self.out_height && ss == self.supersample {
             return false;
         }
+        self.out_width = width;
+        self.out_height = height;
+        self.supersample = ss;
+        let (rw, rh) = (width.saturating_mul(ss).max(1), height.saturating_mul(ss).max(1));
         self.output_texture.destroy();
-        let (texture, view) = Self::create_output(device, width, height);
+        let (texture, view) = Self::create_output(device, rw, rh);
         self.output_texture = texture;
         self.output_view = view;
-        self.width = width;
-        self.height = height;
+        self.width = rw;
+        self.height = rh;
+        if let Some(t) = self.final_texture.take() {
+            t.destroy();
+        }
+        self.final_view = None;
+        if ss > 1 {
+            let (t, v) = Self::create_output(device, width, height);
+            self.final_texture = Some(t);
+            self.final_view = Some(v);
+        }
         true
+    }
+
+    /// The box-downsample pass: render texture → display texture,
+    /// factor² samples averaged per output pixel. Linear-space (the
+    /// texture is pre-tonemap accumulator format), so the average is
+    /// the radiometrically correct one.
+    fn run_downsample(&mut self, device: &Device, encoder: &mut CommandEncoder) {
+        if self.supersample <= 1 {
+            return;
+        }
+        let factor = self.supersample;
+        let rebuild = match &self.downsample {
+            Some((f, _, _)) => *f != factor,
+            None => true,
+        };
+        if rebuild {
+            let src = format!(
+                r#"
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
+
+@compute @workgroup_size(8, 8, 1)
+fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let dims = textureDimensions(dst_tex);
+    if (gid.x >= dims.x || gid.y >= dims.y) {{
+        return;
+    }}
+    var sum = vec4<f32>(0.0);
+    for (var dy = 0u; dy < {factor}u; dy = dy + 1u) {{
+        for (var dx = 0u; dx < {factor}u; dx = dx + 1u) {{
+            sum = sum + textureLoad(
+                src_tex,
+                vec2<i32>(i32(gid.x * {factor}u + dx), i32(gid.y * {factor}u + dy)),
+                0,
+            );
+        }}
+    }}
+    textureStore(
+        dst_tex,
+        vec2<i32>(i32(gid.x), i32(gid.y)),
+        sum / f32({factor}u * {factor}u),
+    );
+}}
+"#
+            );
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Downsample Shader"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Downsample Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Downsample Pipeline Layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Downsample Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some("downsample_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.downsample = Some((factor, pipeline, layout));
+        }
+        let (_, pipeline, layout) = self.downsample.as_ref().unwrap();
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Downsample Bind Group"),
+            layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(
+                        self.final_view.as_ref().expect("final texture at ss > 1"),
+                    ),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Downsample Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(self.out_width.div_ceil(8), self.out_height.div_ceil(8), 1);
     }
 
     /// Compile (or fetch from cache) the pipeline for this config's
@@ -1124,6 +1274,9 @@ impl EscapeRenderer {
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
                 drop(pass);
+                // Every chunk refreshes the display image, so
+                // progressive refinement stays visible under AA.
+                self.run_downsample(device, encoder);
                 let iterations_done = iter_end >= escape.max_iter;
                 self.chunk_next = if iterations_done { 0 } else { iter_end };
                 if iterations_done {
@@ -1172,6 +1325,7 @@ impl EscapeRenderer {
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         drop(pass);
+        self.run_downsample(device, encoder);
         true
     }
 
@@ -1192,6 +1346,9 @@ impl EscapeRenderer {
         }
         if let Some(b) = &self.bla_dummy {
             b.destroy();
+        }
+        if let Some(t) = &self.final_texture {
+            t.destroy();
         }
     }
 }

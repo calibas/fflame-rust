@@ -196,6 +196,7 @@ rendering:
 
 # Tone Mapping
 tonemap:
+  levels_escape_hint: "Density Levels applies to the flame renderer's density statistics — escape-time images have none, so it is off in this mode."
   title: "Mapeo de Tonos"
   mode: "Modo de Mapeo de Tonos"
   mode_log: "Logarítmico"
