@@ -592,14 +592,27 @@ iteration windows with 48 B/px resume state, adaptive to pixel
 count and rung cost, refining on screen chunk by chunk; verified by
 forcing 64-iteration chunks through every agreement scenario.
 
-Still open within phase 4/5: a floatexp diffabs (Ship past zoom 48
-falls back to direct — CFe-vs-f32 sign analysis plus the deep-needle
-full-range notes); the non-plain Ship variants' case analyses;
-worker-side nucleus search (the 20k-period budget and the button's
-synchronous click both lift when the worker owns it); nucleus math
-for the Multibrot/Ship tiers (Mandelbrot-only today); orbit
-persistence for bookmarked locations; a wasm worker (browser builds
-keep the synchronous path).
+The whole Ship family now rides both perturbation rungs: each of the
+six fold variants gets its own delta algebra (re plain or
+diffabs-folded, im from the variant's sign/abs arrangement of the
+cross term), the fixed-point reference builds every variant from the
+plain square's parts by sign-magnitude flips (verified per-variant
+against an f64 loop), and the floatexp rung runs the same algebra on
+extended-range scalars — a per-component SFe type whose sfe_diffabs
+does the exact three-branch analysis against the f32 reference
+components, closing the deferred "floatexp diffabs" item (the
+deep-needle full-range concern dissolves: every quantity in that
+step is full-range by construction). Agreement sweep: ship v0–v5
+scaled + ship floatexp, all within tolerance (worst 4/768 boundary
+blocks). Multibrot nucleus math shipped with batch N1 (ball-method
+majorant generalized to z^p + c, Newton with the p-power derivative
+chain), and the minibrot button became an async background search.
+
+Still open within phase 4/5: nucleus math for the Ship tier (needs a
+2×2 real-Jacobian Newton — abs-folds break holomorphy); orbit
+persistence for bookmarked locations; BLA iteration skipping; a wasm
+worker (browser builds keep the synchronous path — wants a
+SharedArrayBuffer/COOP-COEP hosting decision first).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and

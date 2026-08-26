@@ -74,9 +74,10 @@ pub struct ReferenceOrbit {
     /// The map's power (z^p + c). 2 = Mandelbrot (two-mul squaring
     /// fast path); higher powers square-and-multiply.
     pub power: u32,
-    /// Burning Ship: fold |x|, |y| before squaring (power is then 2).
-    /// Sign-magnitude makes the fold free (clear the sign flags).
+    /// Burning Ship family: use the ship-variant step (power 2).
     pub ship: bool,
+    /// Which fold arrangement (0..=5, the formula's variant enum).
+    pub ship_variant: u32,
     /// This orbit sits at a minibrot nucleus of the given period:
     /// Z_period = 0 = Z_0 exactly, so the wrap-rebase is exact and
     /// the orbit never needs extending past the period.
@@ -111,6 +112,7 @@ impl ReferenceOrbit {
         julia_c: Option<(f32, f32)>,
         power: u32,
         ship: bool,
+        ship_variant: u32,
     ) -> Option<Self> {
         let n = n_limbs.unwrap_or_else(|| limbs_for_zoom(zoom_log2));
         let center = FixedComplex {
@@ -139,6 +141,7 @@ impl ReferenceOrbit {
             julia_c,
             power: power.max(2),
             ship,
+            ship_variant: ship_variant.min(5),
             periodic: None,
             ref_offset: [0.0, 0.0],
             n_limbs: n,
@@ -173,17 +176,60 @@ impl ReferenceOrbit {
         }
         while (self.orbit.len() as u32) <= max_iter {
             if self.ship {
-                // Burning Ship: fold both components (free in
-                // sign-magnitude), then square.
-                self.z.re.neg = false;
-                self.z.im.neg = false;
+                // Ship-family step from the plain square's parts:
+                // sqr gives (x^2 - y^2, 2xy); every variant is a
+                // sign/abs rearrangement of those, free in
+                // sign-magnitude (see the delta codegen's derivation).
+                let x_neg = self.z.re.neg;
+                let y_neg = self.z.im.neg;
+                let mut sq = self.z.sqr();
+                match self.ship_variant {
+                    0 => {
+                        // Burning Ship: (|x|+i|y|)^2: re unchanged,
+                        // im = 2|x||y| = |2xy|.
+                        sq.im.neg = false;
+                    }
+                    1 => {
+                        // Perpendicular Mandelbrot: im = -2|x|y.
+                        sq.im.neg = false;
+                        if !y_neg {
+                            sq.im.neg = true;
+                        }
+                    }
+                    2 => {
+                        // Perpendicular Ship: im = -2x|y|.
+                        sq.im.neg = false;
+                        if !x_neg {
+                            sq.im.neg = true;
+                        }
+                    }
+                    3 => {
+                        // Celtic: re = |x^2 - y^2|.
+                        sq.re.neg = false;
+                    }
+                    4 => {
+                        // Buffalo: re = |x^2-y^2|, im = -|2xy|.
+                        sq.re.neg = false;
+                        sq.im.neg = true;
+                    }
+                    _ => {
+                        // Perpendicular Celtic: celtic re + perp-M im.
+                        sq.re.neg = false;
+                        sq.im.neg = false;
+                        if !y_neg {
+                            sq.im.neg = true;
+                        }
+                    }
+                }
+                self.z = sq.add(&self.c);
+            } else {
+                // z^p: square-and-multiply from the two-mul square.
+                let mut zp = self.z.sqr();
+                for _ in 2..self.power {
+                    zp = zp.mul(&self.z);
+                }
+                self.z = zp.add(&self.c);
             }
-            // z^p: square-and-multiply from the two-mul square.
-            let mut zp = self.z.sqr();
-            for _ in 2..self.power {
-                zp = zp.mul(&self.z);
-            }
-            self.z = zp.add(&self.c);
             let x = self.z.re.to_f64();
             let y = self.z.im.to_f64();
             self.orbit.push([x as f32, y as f32]);
@@ -211,6 +257,7 @@ impl ReferenceOrbit {
         julia_c: Option<(f32, f32)>,
         power: u32,
         ship: bool,
+        ship_variant: u32,
     ) -> bool {
         self.center_re == center_re
             && self.center_im == center_im
@@ -218,6 +265,7 @@ impl ReferenceOrbit {
             && self.julia_c == julia_c
             && self.power == power.max(2)
             && self.ship == ship
+            && self.ship_variant == ship_variant.min(5)
     }
 }
 
@@ -232,6 +280,7 @@ pub struct OrbitRequest {
     pub julia_c: Option<(f32, f32)>,
     pub power: u32,
     pub ship: bool,
+    pub ship_variant: u32,
     /// Zoom (for nucleus search precision) and viewport height (for
     /// the relocation offset's pixel units).
     pub zoom_log2: f64,
@@ -310,7 +359,8 @@ impl OrbitWorker {
                                 && old_req.n_limbs == req.n_limbs
                                 && old_req.julia_c == req.julia_c
                                 && old_req.power == req.power
-                                && old_req.ship == req.ship;
+                                && old_req.ship == req.ship
+                                && old_req.ship_variant == req.ship_variant;
                             if same { Some(orbit) } else { None }
                         });
                         let orbit = match reuse {
@@ -419,6 +469,7 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
             req.julia_c,
             req.power,
             req.ship,
+            req.ship_variant,
         )
     }
 }
@@ -437,7 +488,8 @@ fn tx_loopback_send(
             && old_req.n_limbs == req.n_limbs
             && old_req.julia_c == req.julia_c
             && old_req.power == req.power
-                                && old_req.ship == req.ship;
+                                && old_req.ship == req.ship
+                                && old_req.ship_variant == req.ship_variant;
         if same { Some(orbit) } else { None }
     });
     let orbit = match reuse {
@@ -483,6 +535,7 @@ impl ReferenceOrbit {
                 None,
                 power,
                 false,
+                0,
             ) {
                 if orbit.escaped_at.is_none() && orbit.len() > period {
                     // Store under the VIEW key (the cache is keyed on
@@ -495,7 +548,9 @@ impl ReferenceOrbit {
                 }
             }
         }
-        Self::compute(center_re, center_im, zoom_log2, None, max_iter, None, power, false)
+        Self::compute(
+            center_re, center_im, zoom_log2, None, max_iter, None, power, false, 0,
+        )
     }
 }
 
@@ -520,12 +575,12 @@ impl OrbitCache {
         julia_c: Option<(f32, f32)>,
         power: u32,
         ship: bool,
+        ship_variant: u32,
     ) -> Option<&ReferenceOrbit> {
         let n = limbs_for_zoom(zoom_log2);
-        let hit = self
-            .slot
-            .as_ref()
-            .is_some_and(|o| o.serves(center_re, center_im, n, julia_c, power, ship));
+        let hit = self.slot.as_ref().is_some_and(|o| {
+            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
+        });
         if hit {
             let orbit = self.slot.as_mut().unwrap();
             orbit.extend(max_iter);
@@ -541,6 +596,7 @@ impl OrbitCache {
         } else {
             self.slot = Some(ReferenceOrbit::compute(
                 center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power, ship,
+                ship_variant,
             )?);
         }
         self.slot.as_ref()
@@ -568,7 +624,7 @@ mod tests {
     fn shallow_orbit_matches_f64_iteration() {
         // c = -0.5 + 0.1i is inside the main cardioid: never escapes,
         // so the orbit length is exactly what we asked for.
-        let orbit = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 100, None, 2, false).unwrap();
+        let orbit = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 100, None, 2, false, 0).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=100usize {
             let t = zx * zx - zy * zy + -0.5;
@@ -585,7 +641,7 @@ mod tests {
 
     #[test]
     fn escaping_reference_stops_early() {
-        let orbit = ReferenceOrbit::compute("1", "1", 5.0, None, 1000, None, 2, false).unwrap();
+        let orbit = ReferenceOrbit::compute("1", "1", 5.0, None, 1000, None, 2, false, 0).unwrap();
         let at = orbit.escaped_at.expect("c = 1+i escapes fast");
         assert!(at < 10);
         assert_eq!(orbit.len() - 1, at);
@@ -593,9 +649,9 @@ mod tests {
 
     #[test]
     fn deepen_is_an_append_and_matches_fresh_compute() {
-        let mut a = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 50, None, 2, false).unwrap();
+        let mut a = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 50, None, 2, false, 0).unwrap();
         a.extend(120);
-        let b = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 120, None, 2, false).unwrap();
+        let b = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 120, None, 2, false, 0).unwrap();
         assert_eq!(a.orbit.len(), b.orbit.len());
         for (i, (x, y)) in a.orbit.iter().zip(b.orbit.iter()).enumerate() {
             assert_eq!(x, y, "diverged at iteration {i}");
@@ -610,29 +666,29 @@ mod tests {
         let jc = Some((0.0f32, 0.0f32));
         let mut cache = OrbitCache::default();
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 50, jc, 2, false).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 50, jc, 2, false, 0).unwrap();
             assert_eq!(o.len(), 51);
         }
         // Same view, deeper iterations: extend in place.
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 80, jc, 2, false).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 80, jc, 2, false, 0).unwrap();
             assert_eq!(o.len(), 81);
         }
         // Different center: replace.
         {
-            let o = cache.get("-0.75", "0.1", 10.0, 10, jc, 2, false).unwrap();
+            let o = cache.get("-0.75", "0.1", 10.0, 10, jc, 2, false, 0).unwrap();
             assert_eq!(o.center_re, "-0.75");
             assert_eq!(o.len(), 11);
         }
         // Parameter-plane Mandelbrot goes nucleus-aware: an interior
         // view relocates to a periodic reference.
         {
-            let o = cache.get("-1.0", "0.0", 10.0, 100, None, 2, false).unwrap();
+            let o = cache.get("-1.0", "0.0", 10.0, 100, None, 2, false, 0).unwrap();
             assert_eq!(o.periodic, Some(2), "the period-2 nucleus governs c = -1");
             assert_eq!(o.len(), 3);
         }
         // Unparseable center: None.
-        assert!(cache.get("not a number", "0", 10.0, 10, None, 2, false).is_none());
+        assert!(cache.get("not a number", "0", 10.0, 10, None, 2, false, 0).is_none());
     }
 
     #[test]
@@ -640,7 +696,7 @@ mod tests {
         // Julia: z0 = center, c fixed. First entry must be the center,
         // then iterate z^2 + c.
         let orbit = ReferenceOrbit::compute(
-            "0.25", "0.5", 10.0, None, 20, Some((-0.8, 0.156)), 2, false,
+            "0.25", "0.5", 10.0, None, 20, Some((-0.8, 0.156)), 2, false, 0,
         )
         .unwrap();
         assert_eq!(orbit.orbit[0], [0.25, 0.5]);
@@ -659,8 +715,8 @@ mod tests {
         }
         // And the cache distinguishes julia from param-plane orbits.
         let mut cache = OrbitCache::default();
-        cache.get("0.25", "0.5", 10.0, 20, Some((-0.8, 0.156)), 2, false).unwrap();
-        let replaced = cache.get("0.25", "0.5", 10.0, 20, None, 2, false).unwrap();
+        cache.get("0.25", "0.5", 10.0, 20, Some((-0.8, 0.156)), 2, false, 0).unwrap();
+        let replaced = cache.get("0.25", "0.5", 10.0, 20, None, 2, false, 0).unwrap();
         assert_eq!(replaced.julia_c, None);
     }
 
@@ -668,7 +724,7 @@ mod tests {
     fn cubic_orbit_matches_f64_iteration() {
         // power 3: z^3 + c against a plain f64 loop.
         let orbit =
-            ReferenceOrbit::compute("-0.2", "0.4", 10.0, None, 60, None, 3, false).unwrap();
+            ReferenceOrbit::compute("-0.2", "0.4", 10.0, None, 60, None, 3, false, 0).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=60usize {
             let (x2, y2) = (zx * zx - zy * zy, 2.0 * zx * zy);
@@ -698,6 +754,7 @@ mod tests {
             julia_c: None,
             power: 2,
             ship: false,
+            ship_variant: 0,
             zoom_log2: 5.0,
             height_px: 320.0,
         };
@@ -732,6 +789,7 @@ mod tests {
             julia_c: None,
             power: 2,
             ship: false,
+            ship_variant: 0,
             zoom_log2: 5.0,
             height_px: 320.0,
         });
@@ -752,7 +810,7 @@ mod tests {
     #[test]
     fn ship_orbit_matches_f64_iteration() {
         let orbit =
-            ReferenceOrbit::compute("-0.6", "-0.4", 10.0, None, 60, None, 2, true).unwrap();
+            ReferenceOrbit::compute("-0.6", "-0.4", 10.0, None, 60, None, 2, true, 0).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=60usize {
             let (ax, ay) = (zx.abs(), zy.abs());
@@ -804,6 +862,46 @@ mod tests {
     }
 
     #[test]
+    fn ship_variant_orbits_match_f64() {
+        // Each variant's fixed-point step against a plain f64 loop.
+        let f64_step = |v: u32, zx: f64, zy: f64, cr: f64, ci: f64| -> (f64, f64) {
+            let (x, y) = (zx, zy);
+            let (re, im) = match v {
+                0 => {
+                    let (a, b) = (x.abs(), y.abs());
+                    (a * a - b * b, 2.0 * a * b)
+                }
+                1 => (x * x - y * y, -2.0 * x.abs() * y),
+                2 => (x * x - y * y, -2.0 * x * y.abs()),
+                3 => ((x * x - y * y).abs(), 2.0 * x * y),
+                4 => ((x * x - y * y).abs(), -2.0 * (x * y).abs()),
+                _ => ((x * x - y * y).abs(), -2.0 * x.abs() * y),
+            };
+            (re + cr, im + ci)
+        };
+        for v in 0..=5u32 {
+            let orbit = ReferenceOrbit::compute(
+                "-0.55", "-0.4", 10.0, None, 40, None, 2, true, v,
+            )
+            .unwrap();
+            let (mut zx, mut zy) = (0.0f64, 0.0f64);
+            for i in 1..=40usize {
+                let (nx, ny) = f64_step(v, zx, zy, -0.55, -0.4);
+                zx = nx;
+                zy = ny;
+                if i >= orbit.orbit.len() {
+                    break;
+                }
+                let [ox, oy] = orbit.orbit[i];
+                assert!(
+                    (ox as f64 - zx).abs() < 1e-4 && (oy as f64 - zy).abs() < 1e-4,
+                    "variant {v} iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn deep_center_precision_is_carried() {
         // Two centers differing at the 60th decimal digit: the
         // fixed-point ITERATES must differ (f32 snapshots cannot show
@@ -819,6 +917,7 @@ mod tests {
             None,
             2,
             false,
+            0,
         )
         .unwrap();
         let b = ReferenceOrbit::compute(
@@ -830,6 +929,7 @@ mod tests {
             None,
             2,
             false,
+            0,
         )
         .unwrap();
         let (are, _) = a.z_state();
