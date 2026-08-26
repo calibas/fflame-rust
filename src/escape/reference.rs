@@ -564,6 +564,12 @@ pub struct OrbitCache {
 }
 
 impl OrbitCache {
+    /// The currently cached orbit, if any (read-only — BLA table
+    /// construction reads the CPU copy the GPU mirror was built from).
+    pub fn peek(&self) -> Option<&ReferenceOrbit> {
+        self.slot.as_ref()
+    }
+
     /// Get (computing or extending as needed) the orbit for a view.
     /// Returns None only when the center strings fail to parse.
     pub fn get(

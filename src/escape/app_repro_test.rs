@@ -145,6 +145,35 @@ mod tests {
     /// reproduce its image. This is THE correctness check for the
     /// delta math + rebasing — any sign error, scale slip, or
     /// misindexed reference shows up as wholesale pixel differences.
+    /// 8x8 block-mean compare (same calibration as the direct-vs-
+    /// perturbed check): band noise averages out, structural shifts
+    /// fail. Returns (bad_blocks, total_blocks).
+    fn block_diff(a: &[u8], b: &[u8], w: usize, h: usize) -> (usize, usize) {
+        let mut bad = 0usize;
+        let mut total = 0usize;
+        for by in 0..h / 8 {
+            for bx in 0..w / 8 {
+                let mut sum_a = [0i64; 3];
+                let mut sum_b = [0i64; 3];
+                for y in 0..8 {
+                    for x in 0..8 {
+                        let idx = ((by * 8 + y) * w + bx * 8 + x) * 4;
+                        for ch in 0..3 {
+                            sum_a[ch] += a[idx + ch] as i64;
+                            sum_b[ch] += b[idx + ch] as i64;
+                        }
+                    }
+                }
+                total += 1;
+                let diff: i64 = (0..3).map(|ch| (sum_a[ch] - sum_b[ch]).abs() / 64).sum();
+                if diff > 48 {
+                    bad += 1;
+                }
+            }
+        }
+        (bad, total)
+    }
+
     #[test]
     #[ignore = "needs a GPU"]
     fn perturbed_agrees_with_direct_at_moderate_zoom() {
@@ -214,6 +243,7 @@ mod tests {
             config.levels_gamma,
         );
 
+        let bla_off = std::cell::Cell::new(false);
         let mut render_once = |esc_cfg: &crate::config::escape::EscapeConfig,
                                force: bool,
                                floatexp: bool|
@@ -221,6 +251,7 @@ mod tests {
             let mut escape = crate::escape::EscapeRenderer::new(&device, 256, 192);
             escape.force_perturbed = force;
             escape.force_floatexp = floatexp;
+            escape.disable_bla = bla_off.get();
             // Tiny chunks force the multi-dispatch path on the
             // perturbed renders: state save/restore must reproduce
             // the single-pass images exactly.
@@ -365,6 +396,45 @@ mod tests {
         }
         ship_cfg.formula_params.insert("variant".to_string(), 0.0);
         check("ship-floatexp", &ship_cfg, true);
+
+        // BLA on-vs-off agreement: iteration skips must reproduce the
+        // per-step images, including PAST direct's reach (the shallow
+        // checks above already run the perturbed arm with BLA active,
+        // so skips are also held against direct there).
+        let mut bla_case = crate::config::escape::EscapeConfig::default();
+        bla_case.center_re = "-0.74364388703715".to_string();
+        bla_case.center_im = "0.13182590420531".to_string();
+        bla_case.max_iter = 3000;
+        bla_case.coloring_params.insert("scale".to_string(), 0.01);
+        for (label, zoom, fe) in
+            [("bla-scaled", 40.0f64, false), ("bla-floatexp", 60.0, true)]
+        {
+            bla_case.zoom_log2 = zoom;
+            bla_off.set(false);
+            let with_bla = render_once(&bla_case, true, fe);
+            bla_off.set(true);
+            let without = render_once(&bla_case, true, fe);
+            bla_off.set(false);
+            let (bad, total) = block_diff(&with_bla, &without, 256, 192);
+            println!("agreement[{label}]: {bad}/{total} blocks differ structurally");
+            assert!(
+                bad < total / 25,
+                "[{label}] BLA on/off disagree on {bad}/{total} blocks"
+            );
+        }
+        // Julia (dc_max = 0: every skip's B term is exact).
+        julia_cfg.zoom_log2 = 40.0;
+        bla_off.set(false);
+        let jb = render_once(&julia_cfg, true, false);
+        bla_off.set(true);
+        let jn = render_once(&julia_cfg, true, false);
+        bla_off.set(false);
+        let (bad, total) = block_diff(&jb, &jn, 256, 192);
+        println!("agreement[bla-julia]: {bad}/{total} blocks differ structurally");
+        assert!(
+            bad < total / 25,
+            "[bla-julia] BLA on/off disagree on {bad}/{total} blocks"
+        );
     }
 
     /// The GPU half of the plan's formula x coloring probe: every
