@@ -520,7 +520,9 @@ pub fn switch_render_mode(
 /// wheel uses.
 pub(crate) fn escape_zoom_by_factor(config_manager: &mut ConfigManager, factor: f64) {
     let z = config_manager.active_config().escape.zoom_log2;
-    let new_z = (z + factor.log2()).clamp(-8.0, 300.0);
+    // Same ceiling as the wheel (panel_viewer): the phase-1 clamp of
+    // 300 would collapse a deep session's zoom on one keypress.
+    let new_z = (z + factor.log2()).clamp(-8.0, 100_000_000.0);
     let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (new_z as f32).into());
 }
 
