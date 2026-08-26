@@ -379,12 +379,22 @@ impl FixedPoint {
         if !m.is_finite() {
             return None;
         }
-        let n = limbs_for_zoom(zoom_log2) + 1;
-        let base = Self::from_decimal(dec.trim(), n)?;
+        // Precision follows the DEEPER of (what the zoom needs, what
+        // the input already carries): a curated location can hold
+        // thousands of digits — valid far past the current view — and
+        // reformatting it to zoom-proportional digits on a pan would
+        // silently truncate the location's depth.
+        let dec = dec.trim();
+        let frac_digits = dec
+            .split_once('.')
+            .map(|(_, f)| f.trim_end_matches(|c: char| !c.is_ascii_digit()).len())
+            .unwrap_or(0);
+        let auto_digits = (zoom_log2.max(0.0) * 0.30103) as usize + 24;
+        let digits = auto_digits.max(frac_digits);
+        let n = (limbs_for_zoom(zoom_log2) + 1)
+            .max((digits * 10) / 192 + 2); // digits·log2(10)/64 limbs, ceil-ish
+        let base = Self::from_decimal(dec, n)?;
         let d = Self::from_floatexp(m, e2, n);
-        // Digits: the view needs ~zoom·log10(2) places; +24 keeps
-        // sub-pixel headroom for the next several zoom levels.
-        let digits = (zoom_log2.max(0.0) * 0.30103) as usize + 24;
         Some(base.add(&d).to_decimal(digits))
     }
 
@@ -879,6 +889,31 @@ mod tests {
             resid.m == 0.0 || (resid.e as f64) < -(z + 40.0),
             "round-trip residual 2^{} not sub-pixel",
             resid.e
+        );
+    }
+
+    #[test]
+    fn decimal_add_preserves_deep_centers_at_shallow_zoom() {
+        // A 3757-digit curated location panned at zoom 20 must keep
+        // its depth: the fractional digits in equals the digits out.
+        let deep = format!("-1.{}", "0918273645".repeat(40)); // 400 digits
+        let out = FixedPoint::decimal_add_f64(&deep, 0.0, 20.0).unwrap();
+        let frac_out = out.split_once('.').unwrap().1.len();
+        assert!(frac_out >= 400, "pan truncated a deep center to {frac_out} digits");
+        // Exact string round-trip is impossible (a decimal fraction
+        // has an infinite binary expansion; the parse truncates at
+        // the limb width) — the contract is that the reformat error
+        // stays BELOW the input's last digit: value agreement to
+        // ~10^-398 for a 400-digit center.
+        let n = limbs_for_zoom(1400.0);
+        let diff = FixedPoint::from_decimal(&deep, n)
+            .unwrap()
+            .sub(&FixedPoint::from_decimal(&out, n).unwrap())
+            .to_floatexp();
+        assert!(
+            diff.m == 0.0 || (diff.e as f64) < -(398.0 * 3.3219),
+            "reformat error 2^{} reaches into the kept digits",
+            diff.e
         );
     }
 

@@ -253,9 +253,16 @@ impl BlaTable {
     ///   r = eps·|Zₙ|·2/(p−1)  — |δ| below this keeps the largest
     ///   dropped term, C(p,2)·Z^(p−2)·δ², under eps of the linear one.
     pub fn build(orbit: &[[f32; 2]], power: u32, dc_max: f64) -> Self {
+        Self::build_with_dc(orbit, power, MagFe::from_f64(dc_max), dc_max)
+    }
+
+    /// Extended-range form: `dc` as mantissa·2^exponent, so tables
+    /// build at any depth (an f64 |δc| underflows past ~zoom 1000 —
+    /// exactly where multi-million-iteration renders need the skips
+    /// most). `dc_max_hint` is only recorded on the table.
+    pub fn build_with_dc(orbit: &[[f32; 2]], power: u32, dc: MagFe, dc_max_hint: f64) -> Self {
         let p = power.max(2);
         let steps = orbit.len().saturating_sub(1);
-        let dc = MagFe::from_f64(dc_max);
         // Level 0 of the recurrence: single steps (used only to merge
         // — the shader's plain iteration handles unskipped steps).
         let mut prev: Vec<BlaEntry> = (0..steps)
@@ -282,7 +289,7 @@ impl BlaTable {
             levels.push(merged.clone());
             prev = merged;
         }
-        Self { levels, dc_max }
+        Self { levels, dc_max: dc_max_hint }
     }
 
     /// y ∘ x: apply x's span first, then y's.

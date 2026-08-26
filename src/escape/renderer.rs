@@ -182,10 +182,11 @@ struct BlaBuilt {
     orbit_len: u32,
     power: u32,
     julia: bool,
-    /// The |δc| bound the radii used. Zooming IN shrinks the actual
-    /// bound below it (still conservative — no rebuild); widening the
-    /// view past it forces one.
-    dc_max: f64,
+    /// log2 of the |δc| bound the radii used (finite at ANY zoom).
+    /// Zooming IN shrinks the actual bound below it (still
+    /// conservative — no rebuild); widening the view past it forces
+    /// one. Julia renders carry −∞ (δc = 0 exactly).
+    dc_log2: f64,
 }
 
 impl EscapeRenderer {
@@ -413,30 +414,23 @@ impl EscapeRenderer {
             return false;
         }
         // |δc| bound over the viewport: half-diagonal plus the nucleus
-        // relocation offset, in absolute units. Past f64's exponent
-        // range the bound (and the radii merges) would degenerate —
-        // no table there.
+        // relocation offset, in PIXEL units, carried against the pixel
+        // spacing in LOG SPACE — an f64 absolute bound underflows past
+        // ~zoom 1000, which used to disable BLA exactly where deep
+        // renders need the skips most.
         let h = self.height.max(1) as f64;
-        let s = if escape.zoom_log2 < 900.0 {
-            4.0 / escape.zoom_factor() / h
-        } else {
-            0.0
-        };
-        if s <= 0.0 {
-            return false;
-        }
-        let dc_max = if escape.julia {
-            0.0
+        let dc_log2 = if escape.julia {
+            f64::NEG_INFINITY
         } else {
             let half_diag = 0.5 * (self.width as f64).hypot(h);
             let off = (self.current_ref_offset[0] as f64).hypot(self.current_ref_offset[1] as f64);
-            (half_diag + off) * s
+            (half_diag + off).max(1e-30).log2() + (2.0 - escape.zoom_log2 - h.log2())
         };
         if let Some(b) = &self.bla_built {
             if b.orbit_len == orbit_len
                 && b.power == power
                 && b.julia == escape.julia
-                && dc_max <= b.dc_max * 1.000001
+                && dc_log2 <= b.dc_log2 + 1e-9
             {
                 return self.bla_buffer.is_some();
             }
@@ -474,7 +468,14 @@ impl EscapeRenderer {
                 break;
             }
         }
-        let table = super::bla::BlaTable::build(&orbit_data[..prefix], power, dc_max);
+        let dc = if dc_log2 == f64::NEG_INFINITY {
+            super::bla::MagFe::zero()
+        } else {
+            let e = dc_log2.floor();
+            super::bla::MagFe { m: 2f64.powf(dc_log2 - e), e: e as i64 }
+        };
+        let table =
+            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_log2);
         let n_levels = table.levels.len().min(30);
         let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
         if total == 0 {
@@ -535,7 +536,7 @@ impl EscapeRenderer {
             orbit_len,
             power,
             julia: escape.julia,
-            dc_max,
+            dc_log2,
         });
         true
     }
