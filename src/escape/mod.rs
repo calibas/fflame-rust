@@ -26,6 +26,7 @@ pub mod assembler;
 mod app_repro_test;
 pub mod colorings;
 pub mod bigfloat;
+pub mod bla;
 pub mod fixedpoint;
 pub mod nucleus;
 pub mod reference;
