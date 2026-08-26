@@ -774,7 +774,16 @@ past ~zoom 1000 and disabled BLA exactly where multi-million-
 iteration renders need skips most); the GPU agreement harness gained
 BLA on/off cases at zoom 484 and zoom 1000 on the field location —
 both 0/768. Iteration ceiling raised to 100M (u32 carries 4.29G;
-chunked dispatches and BLA make it practical).
+chunked dispatches and BLA make it practical). The reported
+"glitchy coloring" at ~zoom 484 was investigated to ground truth on
+the field location: iteration-ceiling-independent, ~3× smoothed by
+3× supersampling, and POSITION-LOCKED under a half-pixel view
+jitter (speckle-residual correlation 0.94 — sensitivity-amplified
+precision noise would decorrelate). Verdict: real, deterministic
+sub-pixel band dust around the target minibrot — correctly
+rendered unresolved structure, not an artifact. Remedies are
+supersampling (shipped) and coloring-scale/squeeze; the "glitchy
+panning" half was the digit-truncation footgun fixed above.
 
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
