@@ -662,11 +662,26 @@ worker (browser builds keep the synchronous path — wants a
 SharedArrayBuffer/COOP-COEP hosting decision first).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
-The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and
-index-map coloring; the JFA distance-field bridge (§7.3) — which is
-independent of everything above and can land whenever wanted; BLA
-skipping and Newton nucleus-finding from phase 4's backlog; hybrid
-formula loops.
+Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as
+the `distance_field` color effect; BLA skipping and Newton
+nucleus-finding both shipped inside phase 4 (see above). What
+remains is mode C itself and the deferred tails:
+
+- **Mode C (§6) is a project, not a tail item** — sequenced last,
+  deliberately. Its prerequisites are its own scope: an
+  invertible-variation registry (closed-form inverses on the defs),
+  the largest-singular-value contractiveness extension (shared with
+  flame-deep-zoom §7 — build it as common analysis, it has two
+  customers), the bounding-disk fit, the ping-pong buffer pipeline
+  with per-map layers for RIFS/xaos, and index-map coloring shipped
+  WITH the mode. None of it blocks anything else in this plan.
+- **Hybrid formula loops**: deferred — per-phase BLA validity is the
+  open design question, and BLA just landed; revisit once the
+  single-formula skip tables have soaked.
+- **wasm worker**: deferred on infrastructure, not code — a
+  SharedArrayBuffer worker needs COOP/COEP headers (a hosting
+  decision) or a separate worker bundle; browser builds keep the
+  synchronous reference path meanwhile.
 
 ---
 
