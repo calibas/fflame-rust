@@ -2564,7 +2564,11 @@ impl ConfigManager {
             }
             ConfigPath::EscapeZoomLog2 => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.zoom_log2 = v as f64;
+                // Same travel range as the input paths; NaN from a
+                // wild animation signal must not poison the view.
+                let v = v as f64;
+                self.current.escape.zoom_log2 =
+                    if v.is_finite() { v.clamp(-8.0, 100_000_000.0) } else { 0.0 };
             }
             ConfigPath::EscapeRotation => {
                 self.current.escape.rotation = value.try_into()?;

@@ -606,6 +606,29 @@ fn escape_screen_to_world(
     (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
 }
 
+/// Screen delta → world delta in SYMBOLIC form: rotated pixel
+/// offsets as f64 mantissas plus the pixel spacing's shared power-of-
+/// two exponent (S = 2^(2−zoom)/height = s_m·2^s_e). The f64 form
+/// underflows past ~zoom 1060; this form reaches any depth.
+fn escape_pan_delta_symbolic(
+    esc: &crate::config::escape::EscapeConfig,
+    dx_px: f64,
+    dy_px: f64,
+    panel_size: egui::Vec2,
+) -> (f64, f64, i64) {
+    let height = f64::from(panel_size.y.max(1.0));
+    let x = 2.0 - esc.zoom_log2 - height.log2();
+    let s_e = x.floor();
+    let s_m = 2f64.powf(x - s_e);
+    let (dx, dy) = (dx_px, -dy_px);
+    let (cos_r, sin_r) = (f64::from(esc.rotation).cos(), f64::from(esc.rotation).sin());
+    (
+        (dx * cos_r - dy * sin_r) * s_m,
+        (dx * sin_r + dy * cos_r) * s_m,
+        s_e as i64,
+    )
+}
+
 /// Pan the escape view: the image follows the cursor, so the center
 /// moves opposite the drag. One batch → one undo point per coalesced
 /// gesture, same as flame pan.
@@ -615,19 +638,23 @@ fn escape_pan_view(
     panel_size: egui::Vec2,
 ) {
     let esc = config_manager.active_config().escape.clone();
-    let (wx, wy) = escape_screen_to_world(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
-    // The center accumulates in FIXED-POINT: an f64 round-trip caps
-    // the step at the center's own ulp, which pixel-sized deltas fall
-    // under past ~zoom 45 (the "horizontal pan skips" bug). Parse
-    // failure (mid-edit center text) falls back to the f64 path so
-    // panning never dead-stops.
+    // The center accumulates in FIXED-POINT with a SYMBOLIC delta
+    // (mantissa · 2^exponent): an f64 round-trip caps the step at the
+    // center's own ulp (the zoom-45 "horizontal pan skips" bug), and
+    // a plain f64 delta underflows outright past ~zoom 1060. The
+    // rotated pixel offset carries the shape, the pixel spacing's
+    // exponent carries the scale — pan works at any depth the
+    // renderer reaches. Parse failure (mid-edit center text) falls
+    // back to the f64 path so panning never dead-stops.
     let z = esc.zoom_log2;
-    let fx = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_re, -wx, z);
-    let fy = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_im, -wy, z);
+    let (mx, my, se) = escape_pan_delta_symbolic(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
+    let fx = crate::escape::fixedpoint::FixedPoint::decimal_add_floatexp(&esc.center_re, -mx, se, z);
+    let fy = crate::escape::fixedpoint::FixedPoint::decimal_add_floatexp(&esc.center_im, -my, se, z);
     let (new_re, new_im) = match (fx, fy) {
         (Some(re), Some(im)) => (re, im),
         _ => {
             let (cx, cy) = esc.center_f64();
+            let (wx, wy) = escape_screen_to_world(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
             (format!("{}", cx - wx), format!("{}", cy - wy))
         }
     };
@@ -658,9 +685,11 @@ fn escape_zoom_view(
     } else {
         return;
     };
-    // f32 travel ceiling for the ConfigValue::Float leg; the stored
-    // field is f64 and phase 4 lifts the range with perturbation.
-    let new_zoom_log2 = (esc.zoom_log2 + zoom_factor.log2()).clamp(-8.0, 300.0);
+    // Ceiling far past practical use but far below the floatexp
+    // rung's i32-exponent arithmetic (~2^31): the old 300 was the
+    // phase-1 travel clamp and would COLLAPSE a deep session's zoom
+    // on the first wheel notch.
+    let new_zoom_log2 = (esc.zoom_log2 + zoom_factor.log2()).clamp(-8.0, 100_000_000.0);
 
     let mut updates = vec![(
         crate::config::ConfigPath::EscapeZoomLog2,
@@ -675,19 +704,30 @@ fn escape_zoom_view(
             // difference of the offset at the two spans.
             let off_x = f64::from(mouse_pos.x - panel_rect.center().x);
             let off_y = f64::from(mouse_pos.y - panel_rect.center().y);
-            let (wx_old, wy_old) = escape_screen_to_world(&esc, off_x, off_y, panel_size);
-            let shrink = esc.zoom_factor() / f64::exp2(new_zoom_log2);
-            let (dx, dy) = (wx_old * (1.0 - shrink), wy_old * (1.0 - shrink));
-            // Same exact-accumulation rule as panning (see
-            // escape_pan_view): the anchor shift is pixel-scale, so it
-            // must land in fixed-point, not through the center's f64.
+            // Symbolic anchor: center += off·S_old − off·S_new, each
+            // term a mantissa·2^exponent added in fixed-point. The old
+            // f64 form (zoom_factor ratios) turns to inf/NaN past
+            // ~zoom 1023 and underflows past ~1060; this reaches any
+            // depth. Same exact-accumulation rule as panning.
             let z = esc.zoom_log2.max(new_zoom_log2);
-            let fx = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_re, dx, z);
-            let fy = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_im, dy, z);
+            let (mx_o, my_o, se_o) = escape_pan_delta_symbolic(&esc, off_x, off_y, panel_size);
+            let mut esc_new = esc.clone();
+            esc_new.zoom_log2 = new_zoom_log2;
+            let (mx_n, my_n, se_n) = escape_pan_delta_symbolic(&esc_new, off_x, off_y, panel_size);
+            use crate::escape::fixedpoint::FixedPoint;
+            let fx = FixedPoint::decimal_add_floatexp(&esc.center_re, mx_o, se_o, z)
+                .and_then(|c| FixedPoint::decimal_add_floatexp(&c, -mx_n, se_n, z));
+            let fy = FixedPoint::decimal_add_floatexp(&esc.center_im, my_o, se_o, z)
+                .and_then(|c| FixedPoint::decimal_add_floatexp(&c, -my_n, se_n, z));
             let (new_re, new_im) = match (fx, fy) {
                 (Some(re), Some(im)) => (re, im),
                 _ => {
                     let (cx, cy) = esc.center_f64();
+                    let (wx_old, wy_old) =
+                        escape_screen_to_world(&esc, off_x, off_y, panel_size);
+                    let shrink =
+                        f64::exp2((esc.zoom_log2 - new_zoom_log2).clamp(-60.0, 60.0));
+                    let (dx, dy) = (wx_old * (1.0 - shrink), wy_old * (1.0 - shrink));
                     (format!("{}", cx + dx), format!("{}", cy + dy))
                 }
             };

@@ -365,13 +365,81 @@ impl FixedPoint {
     /// symptom. The DELTA itself is fine in f64 (it only needs
     /// relative precision); the accumulation is what needs exactness.
     pub fn decimal_add_f64(dec: &str, delta: f64, zoom_log2: f64) -> Option<String> {
+        if !delta.is_finite() {
+            return None;
+        }
+        Self::decimal_add_floatexp(dec, delta, 0, zoom_log2)
+    }
+
+    /// `dec + m·2^e2` exactly — the any-depth form of
+    /// [`decimal_add_f64`](Self::decimal_add_f64): the mantissa
+    /// carries the shape of the delta, the exponent its scale, so
+    /// pixel-sized steps survive past f64's exponent range.
+    pub fn decimal_add_floatexp(dec: &str, m: f64, e2: i64, zoom_log2: f64) -> Option<String> {
+        if !m.is_finite() {
+            return None;
+        }
         let n = limbs_for_zoom(zoom_log2) + 1;
         let base = Self::from_decimal(dec.trim(), n)?;
-        let d = Self::from_f64(delta, n);
+        let d = Self::from_floatexp(m, e2, n);
         // Digits: the view needs ~zoom·log10(2) places; +24 keeps
         // sub-pixel headroom for the next several zoom levels.
         let digits = (zoom_log2.max(0.0) * 0.30103) as usize + 24;
         Some(base.add(&d).to_decimal(digits))
+    }
+
+    /// Construct `m · 2^e2` exactly. `m` needs only f64 RELATIVE
+    /// precision (53 mantissa bits); the exponent rides separately,
+    /// so pixel-sized deltas stay constructible at ANY zoom — plain
+    /// f64 values underflow to zero past ~zoom 1060.
+    pub fn from_floatexp(m: f64, e2: i64, n_limbs: usize) -> Self {
+        if m == 0.0 || !m.is_finite() {
+            return Self::zero(n_limbs);
+        }
+        // Normalize |m| into [1, 2) and fold the remainder into the
+        // exponent so the f64 seed always fits the headroom window.
+        let lg = m.abs().log2().floor();
+        let mant = m / 2f64.powi(lg as i32);
+        let mut v = Self::from_f64(mant, n_limbs);
+        v.shift_pow2(e2.saturating_add(lg as i64));
+        v
+    }
+
+    /// Multiply by 2^e in place: whole-limb moves plus a sub-limb
+    /// shift. Bits leaving the representable range drop (right shifts
+    /// underflow toward zero; left shifts past the integer headroom
+    /// would be a caller bug — deltas here are always sub-unit).
+    pub fn shift_pow2(&mut self, e: i64) {
+        if e == 0 || self.is_zero() {
+            return;
+        }
+        let n = self.limbs.len();
+        let mag = e.unsigned_abs();
+        let limb_shift = (mag / 64) as usize;
+        let bit_shift = (mag % 64) as u32;
+        if limb_shift >= n {
+            self.limbs.fill(0);
+            self.canonicalize();
+            return;
+        }
+        if e > 0 {
+            // Left: toward the top limb.
+            for i in (0..n).rev() {
+                self.limbs[i] = if i >= limb_shift { self.limbs[i - limb_shift] } else { 0 };
+            }
+            if bit_shift > 0 {
+                shl_small(&mut self.limbs, bit_shift);
+            }
+        } else {
+            // Right: toward zero.
+            for i in 0..n {
+                self.limbs[i] = if i + limb_shift < n { self.limbs[i + limb_shift] } else { 0 };
+            }
+            if bit_shift > 0 {
+                shr_small(&mut self.limbs, bit_shift);
+            }
+        }
+        self.canonicalize();
     }
 
     pub fn from_f64(v: f64, n_limbs: usize) -> Self {
@@ -761,6 +829,57 @@ mod tests {
         // Control: the f64 path loses every step.
         let f64_way = -1.4143355295031044f64 + step;
         assert_eq!(f64_way, -1.4143355295031044, "f64 keeps the step?!");
+    }
+
+    #[test]
+    fn from_floatexp_matches_from_f64_and_shifts_exactly() {
+        let n = 4;
+        for v in [0.375f64, -1.5, 0.001953125] {
+            assert_eq!(FixedPoint::from_floatexp(v, 0, n), FixedPoint::from_f64(v, n));
+            // A ±small shift equals scaling the f64 (still exact).
+            assert_eq!(
+                FixedPoint::from_floatexp(v, -3, n),
+                FixedPoint::from_f64(v / 8.0, n)
+            );
+            assert_eq!(
+                FixedPoint::from_floatexp(v, 2, n),
+                FixedPoint::from_f64(v * 4.0, n)
+            );
+        }
+        assert!(FixedPoint::from_floatexp(f64::NAN, 0, n).is_zero());
+    }
+
+    #[test]
+    fn decimal_add_floatexp_survives_past_f64_range() {
+        // A pixel-sized step at zoom 2000: 2^-2005 underflows f64
+        // outright — the symbolic form must land it. The decimal
+        // format is zoom-proportional (~626 digits here), so a dyadic
+        // delta is stored to ~2^-2079 granularity, not exactly — 69
+        // bits BELOW pixel size, which is the design contract. Assert
+        // the step lands with far-sub-pixel accuracy, both ways.
+        let z = 2000.0;
+        let n = limbs_for_zoom(z) + 1;
+        let stepped = FixedPoint::decimal_add_f64("0.5", 0.0, z).unwrap();
+        let moved = FixedPoint::decimal_add_floatexp(&stepped, 1.5, -2005, z).unwrap();
+        let delta = FixedPoint::from_decimal(&moved, n)
+            .unwrap()
+            .sub(&FixedPoint::from_decimal(&stepped, n).unwrap())
+            .to_floatexp();
+        // The step itself: 1.5·2^-2005, to ~1e-9 relative.
+        assert_eq!(delta.e, -2005, "step magnitude octave"); // 1.5·2^-2005: m=1.5 ∈ [1,2), e=-2005
+        let rel = (delta.m * 2f64.powi((delta.e + 2005) as i32) - 1.5).abs() / 1.5;
+        assert!(rel < 1e-9, "step landed with relative error {rel:e}");
+        // Round trip: residual at least 40 bits below pixel size.
+        let back = FixedPoint::decimal_add_floatexp(&moved, -1.5, -2005, z).unwrap();
+        let resid = FixedPoint::from_decimal(&back, n)
+            .unwrap()
+            .sub(&FixedPoint::from_decimal(&stepped, n).unwrap())
+            .to_floatexp();
+        assert!(
+            resid.m == 0.0 || (resid.e as f64) < -(z + 40.0),
+            "round-trip residual 2^{} not sub-pixel",
+            resid.e
+        );
     }
 
     #[test]
