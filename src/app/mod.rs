@@ -1452,7 +1452,13 @@ impl App {
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.white_level, resize_config.saturation, resize_config.hue_shift,
                         resize_config.alpha_blend_low, resize_config.alpha_blend_high,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false,
-                        resize_config.levels_enabled, resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
+                        // Same escape-mode Levels gate as the live path.
+                        if resize_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            false
+                        } else {
+                            resize_config.levels_enabled
+                        },
+                        resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
                     // Re-register texture with egui after resize (new texture view created)
@@ -2193,7 +2199,12 @@ impl App {
                     }
                     esc
                 });
-                if escape.resize(&self.gpu.device, renderer.width, renderer.height) {
+                if escape.resize(
+                    &self.gpu.device,
+                    renderer.width,
+                    renderer.height,
+                    final_config.escape.supersample,
+                ) {
                     self.escape_dirty = true;
                 }
                 if self.escape_dirty {
@@ -2445,7 +2456,13 @@ impl App {
                 final_config.alpha_blend_low, final_config.alpha_blend_high,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview,
-                final_config.levels_enabled, final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
+                // Escape mode: Levels normalizes by the chaos game's
+                // measured sample density — stale flame data here, and
+                // the escape image's density is a constant 1/px, so the
+                // remap has no statistic to act on. Hard-off (the
+                // panel says so too).
+                if is_escape { false } else { final_config.levels_enabled },
+                final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
             // Reset effect slot counter for this frame (allows multiple effects with unique params)
             self.effect_chain.reset_slots();

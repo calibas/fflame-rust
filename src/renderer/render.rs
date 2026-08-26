@@ -613,6 +613,9 @@ async fn render_escape(
     // sees an unbounded pass (the TDR class of crash). The final
     // chunk's encoder carries the tail passes below.
     let mut escape_renderer = crate::escape::EscapeRenderer::new(device, job.width, job.height);
+    // Config-declared supersampling applies on every path (viewport,
+    // CLI, thumbnails): a saved file reproduces exactly.
+    escape_renderer.resize(device, job.width, job.height, job.config.escape.supersample);
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Escape Render"),
     });

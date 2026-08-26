@@ -1718,6 +1718,7 @@ impl ConfigManager {
             ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
+            ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
             ConfigPath::EscapeBailout => Ok(config.escape.bailout.into()),
             ConfigPath::EscapeDampingRe => Ok(config.escape.damping_re.into()),
             ConfigPath::EscapeDampingIm => Ok(config.escape.damping_im.into()),
@@ -2570,6 +2571,10 @@ impl ConfigManager {
             }
             ConfigPath::EscapeMaxIter => {
                 self.current.escape.max_iter = value.try_into()?;
+            }
+            ConfigPath::EscapeSupersample => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.supersample = v.clamp(1, 3);
             }
             ConfigPath::EscapeBailout => {
                 self.current.escape.bailout = value.try_into()?;

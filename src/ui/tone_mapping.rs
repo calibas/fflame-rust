@@ -432,10 +432,20 @@ pub fn render_colors_content(
     }
 
     // Section 3: Density Levels (histogram + levels controls).
+    // Escape mode has no density statistic for Levels to remap (its
+    // image is a constant 1 sample/px) — the render path hard-offs
+    // the remap there, and the panel says so instead of offering
+    // controls wired to stale flame data.
+    let is_escape_mode = config_manager.active_config().render_mode
+        == crate::scene::transforms::RenderMode::Escape;
     let levels_enabled = config_manager.active_config().levels_enabled;
     let levels_resp = egui::CollapsingHeader::new(t!("tonemap.histogram"))
         .default_open(false)
         .show(ui, |ui| {
+            if is_escape_mode {
+                ui.label(t!("tonemap.levels_escape_hint"));
+                return;
+            }
             // Render histogram visualization with levels markers from config
             let _response = render_histogram_with_config(ui, histogram, config_manager);
 
@@ -446,7 +456,7 @@ pub fn render_colors_content(
             max_update = max_update.max(levels_update);
         });
     // Green dot on a collapsed header = levels are on.
-    if levels_enabled && levels_resp.fully_closed() {
+    if levels_enabled && !is_escape_mode && levels_resp.fully_closed() {
         paint_enabled_dot(ui, levels_resp.header_response.rect);
     }
 
