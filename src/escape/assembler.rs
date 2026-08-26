@@ -303,6 +303,52 @@ struct IterState {
     status: u32,        // 0 = iterating, 1 = escaped
 }
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
+// BLA table (binding 7): iteration skipping. Level l holds entries
+// each collapsing 2^(l+1) delta iterations to one affine application
+// delta' = A*delta + B*delta_c, valid while |delta| < r. Extended
+// range: mantissa pairs + i32 exponents (A overflows f32 across a
+// long merged run). n_levels == 0 disables skipping (dummy buffer).
+struct BlaEntry {
+    a_m: vec2<f32>,
+    b_m: vec2<f32>,
+    a_e: i32,
+    b_e: i32,
+    r_m: f32,
+    r_e: i32,
+}
+struct BlaBuf {
+    // Start index of each level's entries, 32 levels max (a 2^33-step
+    // skip ceiling -- far past any orbit).
+    offsets: array<vec4<u32>, 8>,
+    n_levels: u32,
+    // Steps the table covers: the orbit prefix BEFORE the reference's
+    // own escape (skips must never ride the escaped tail - n would
+    // overshoot by the span).
+    n_steps: u32,
+    _p1: u32,
+    _p2: u32,
+    entries: array<BlaEntry>,
+}
+@group(0) @binding(7) var<storage, read> bla: BlaBuf;
+
+// (a_m * 2^a_e) < (b_m * 2^b_e) on magnitudes; mantissas need not be
+// pre-normalized. b_m <= 0 encodes "radius zero, never valid".
+fn bla_mag_lt(a_m: f32, a_e: i32, b_m: f32, b_e: i32) -> bool {
+    if (b_m <= 0.0) {
+        return false;
+    }
+    if (a_m <= 0.0) {
+        return true;
+    }
+    let fa = frexp(a_m);
+    let fb = frexp(b_m);
+    let ea = a_e + fa.exp;
+    let eb = b_e + fb.exp;
+    if (ea != eb) {
+        return ea < eb;
+    }
+    return fa.fract < fb.fract;
+}
 
 fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
@@ -393,12 +439,76 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    for (var i = perturb.iter_start; i < perturb.iter_end && !escaped; i = i + 1u) {
-        let z_ref = ref_orbit[m];
-        //__DELTA_STEP__
+    var i = perturb.iter_start;
+    while (i < perturb.iter_end && !escaped) {
+        // BLA skip: from an aligned reference index, collapse the
+        // longest valid run of iterations to one affine application.
+        // m == 0 never validates (the Z_0 = 0 step has no linear
+        // part, so its entry radius is 0 by construction).
+        var did_skip = false;
+        if (bla.n_levels > 0u && m > 0u) {
+            // |delta| = |w| * S, held symbolically (s_m * 2^s_e).
+            let aw = length(w);
+            var d_m = 0.0;
+            var d_e = -1000000;
+            if (aw > 0.0) {
+                let fw = frexp(aw);
+                d_m = fw.fract * perturb.s_m;
+                d_e = fw.exp + perturb.s_e;
+            }
+            var pick_a = vec2<f32>(0.0, 0.0);
+            var pick_b = vec2<f32>(0.0, 0.0);
+            var pick_ae = 0;
+            var pick_be = 0;
+            var pick_span = 0u;
+            let m_left = perturb.orbit_len - 1u - m;
+            let steps_left = perturb.iter_end - i;
+            for (var l = 0u; l < bla.n_levels; l = l + 1u) {
+                let span = 2u << l;
+                if ((m & (span - 1u)) != 0u || span > m_left || span > steps_left
+                    || m + span > bla.n_steps) {
+                    break;
+                }
+                let ent = bla.entries[bla.offsets[l >> 2u][l & 3u] + (m >> (l + 1u))];
+                if (aw > 0.0 && !bla_mag_lt(d_m, d_e, ent.r_m, ent.r_e)) {
+                    break;
+                }
+                if (aw == 0.0 && ent.r_m <= 0.0) {
+                    break;
+                }
+                pick_a = ent.a_m;
+                pick_ae = ent.a_e;
+                pick_b = ent.b_m;
+                pick_be = ent.b_e;
+                pick_span = span;
+            }
+            if (pick_span > 0u) {
+                // w' = A*w + B*d0 (both dimensionless: the S factors
+                // cancel exactly as in the per-step recurrence).
+                // Exponents clamp at f32's edge; validity keeps the
+                // PRODUCTS representable long before A alone is.
+                let ta = vec2<f32>(
+                    pick_a.x * w.x - pick_a.y * w.y,
+                    pick_a.x * w.y + pick_a.y * w.x,
+                ) * exp2(f32(clamp(pick_ae, -126, 126)));
+                let tb = vec2<f32>(
+                    pick_b.x * d0_term.x - pick_b.y * d0_term.y,
+                    pick_b.x * d0_term.y + pick_b.y * d0_term.x,
+                ) * exp2(f32(clamp(pick_be, -126, 126)));
+                w = ta + tb;
+                m = m + pick_span;
+                i = i + pick_span;
+                did_skip = true;
+            }
+        }
+        if (!did_skip) {
+            let z_ref = ref_orbit[m];
+            //__DELTA_STEP__
+            w = w_new;
+            m = m + 1u;
+            i = i + 1u;
+        }
         let z_before = z;
-        w = w_new;
-        m = m + 1u;
 
         // Full orbit value: z = Z_m + S*w. S*w underflows to zero
         // while the delta is far below f32 - exactly when z == Z_m to
@@ -412,7 +522,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Escape test (biomorph is gated off on the perturbed path).
         if (dot(z_full, z_full) > params.bailout) {
             escaped = true;
-            n = i + 1u;
+            n = i;
             break;
         }
 
@@ -522,6 +632,52 @@ struct IterState {
     status: u32,        // 0 = iterating, 1 = escaped
 }
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
+// BLA table (binding 7): iteration skipping. Level l holds entries
+// each collapsing 2^(l+1) delta iterations to one affine application
+// delta' = A*delta + B*delta_c, valid while |delta| < r. Extended
+// range: mantissa pairs + i32 exponents (A overflows f32 across a
+// long merged run). n_levels == 0 disables skipping (dummy buffer).
+struct BlaEntry {
+    a_m: vec2<f32>,
+    b_m: vec2<f32>,
+    a_e: i32,
+    b_e: i32,
+    r_m: f32,
+    r_e: i32,
+}
+struct BlaBuf {
+    // Start index of each level's entries, 32 levels max (a 2^33-step
+    // skip ceiling -- far past any orbit).
+    offsets: array<vec4<u32>, 8>,
+    n_levels: u32,
+    // Steps the table covers: the orbit prefix BEFORE the reference's
+    // own escape (skips must never ride the escaped tail - n would
+    // overshoot by the span).
+    n_steps: u32,
+    _p1: u32,
+    _p2: u32,
+    entries: array<BlaEntry>,
+}
+@group(0) @binding(7) var<storage, read> bla: BlaBuf;
+
+// (a_m * 2^a_e) < (b_m * 2^b_e) on magnitudes; mantissas need not be
+// pre-normalized. b_m <= 0 encodes "radius zero, never valid".
+fn bla_mag_lt(a_m: f32, a_e: i32, b_m: f32, b_e: i32) -> bool {
+    if (b_m <= 0.0) {
+        return false;
+    }
+    if (a_m <= 0.0) {
+        return true;
+    }
+    let fa = frexp(a_m);
+    let fb = frexp(b_m);
+    let ea = a_e + fa.exp;
+    let eb = b_e + fb.exp;
+    if (ea != eb) {
+        return ea < eb;
+    }
+    return fa.fract < fb.fract;
+}
 
 fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
@@ -768,12 +924,59 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    for (var i = perturb.iter_start; i < perturb.iter_end && !escaped; i = i + 1u) {
-        let z_ref = ref_orbit[m];
-        //__DELTA_STEP_FE__
+    var i = perturb.iter_start;
+    while (i < perturb.iter_end && !escaped) {
+        // BLA skip (see the scaled template). Here w IS the absolute
+        // delta as a CFe, so validity compares and the affine
+        // application run in full extended range -- no clamps.
+        var did_skip = false;
+        if (bla.n_levels > 0u && m > 0u) {
+            let aw = length(w.m);
+            var pick_a = vec2<f32>(0.0, 0.0);
+            var pick_b = vec2<f32>(0.0, 0.0);
+            var pick_ae = 0;
+            var pick_be = 0;
+            var pick_span = 0u;
+            let w_zero = aw == 0.0 || w.e == CFE_ZERO_E;
+            let m_left = perturb.orbit_len - 1u - m;
+            let steps_left = perturb.iter_end - i;
+            for (var l = 0u; l < bla.n_levels; l = l + 1u) {
+                let span = 2u << l;
+                if ((m & (span - 1u)) != 0u || span > m_left || span > steps_left
+                    || m + span > bla.n_steps) {
+                    break;
+                }
+                let ent = bla.entries[bla.offsets[l >> 2u][l & 3u] + (m >> (l + 1u))];
+                if (w_zero) {
+                    if (ent.r_m <= 0.0) {
+                        break;
+                    }
+                } else if (!bla_mag_lt(aw, w.e, ent.r_m, ent.r_e)) {
+                    break;
+                }
+                pick_a = ent.a_m;
+                pick_ae = ent.a_e;
+                pick_b = ent.b_m;
+                pick_be = ent.b_e;
+                pick_span = span;
+            }
+            if (pick_span > 0u) {
+                let ta = cfe_mul(CFe(pick_a, pick_ae), w);
+                let tb = cfe_mul(CFe(pick_b, pick_be), d0);
+                w = cfe_add(ta, tb);
+                m = m + pick_span;
+                i = i + pick_span;
+                did_skip = true;
+            }
+        }
+        if (!did_skip) {
+            let z_ref = ref_orbit[m];
+            //__DELTA_STEP_FE__
+            w = w_new;
+            m = m + 1u;
+            i = i + 1u;
+        }
         let z_before = z;
-        w = w_new;
-        m = m + 1u;
 
         let delta = cfe_to_f32(w);
         let z_full = ref_orbit[min(m, perturb.orbit_len - 1u)] + delta;
@@ -783,7 +986,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         if (dot(z_full, z_full) > params.bailout) {
             escaped = true;
-            n = i + 1u;
+            n = i;
             break;
         }
 

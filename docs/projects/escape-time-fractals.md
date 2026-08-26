@@ -608,11 +608,32 @@ blocks). Multibrot nucleus math shipped with batch N1 (ball-method
 majorant generalized to z^p + c, Newton with the p-power derivative
 chain), and the minibrot button became an async background search.
 
+BLA iteration skipping SHIPPED (Zhuoran's improved construction as
+described by Claude Heiland-Allen — mathr.co.uk/web/deep-zoom.html
+and the 2022-02-21 deep-zoom-theory post): the CPU builds an O(2M)
+binary-merge table from the reference orbit in extended-range floats
+(single steps linearize z → z^p + c; each level merges adjacent
+pairs, radii composed so an entry is valid exactly when both halves
+would have been, |δc| bounded by the viewport half-diagonal plus the
+nucleus offset), truncated at the reference's own escape so a skip
+can never overshoot a pixel's escape iteration past the covered
+prefix. Both perturbed rungs walk the level table per iteration
+(binding 7; a zeroed dummy disables it with no pipeline
+permutation): from an aligned reference index the longest valid
+2^ℓ-step run collapses to one affine δ' = A·δ + B·δc — extended
+range on the floatexp rung, clamped-exponent collapse on the scaled
+rung. Holomorphic tiers only (the Ship family's abs-folds are not
+linear in δ across a fold-sign change), and colorings that
+accumulate per iteration keep the per-step path. Agreement: BLA
+on-vs-off at zoom 40 (scaled), zoom 60 (floatexp) and Julia all
+0/768 blocks, and the shallow direct-vs-perturbed checks now run
+their perturbed arm with skips active.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); orbit
-persistence for bookmarked locations; BLA iteration skipping; a wasm
-worker (browser builds keep the synchronous path — wants a
-SharedArrayBuffer/COOP-COEP hosting decision first).
+persistence for bookmarked locations; a wasm worker (browser builds
+keep the synchronous path — wants a SharedArrayBuffer/COOP-COEP
+hosting decision first).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and

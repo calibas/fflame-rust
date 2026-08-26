@@ -152,6 +152,26 @@ pub struct EscapeRenderer {
     /// Test hook: shrink the chunk to force multi-chunk renders.
     #[cfg(test)]
     pub(crate) chunk_override: Option<u32>,
+    /// BLA iteration-skip table (binding 7): GPU buffer + what it was
+    /// built for. A zeroed dummy (n_levels = 0) is bound whenever the
+    /// table is inapplicable, so there is no pipeline permutation.
+    bla_buffer: Option<Buffer>,
+    bla_dummy: Option<Buffer>,
+    bla_built: Option<BlaBuilt>,
+    /// Test hook: force per-step iteration to compare against skips.
+    #[cfg(test)]
+    pub(crate) disable_bla: bool,
+}
+
+/// What the current BLA table was built for (rebuild trigger).
+struct BlaBuilt {
+    orbit_len: u32,
+    power: u32,
+    julia: bool,
+    /// The |δc| bound the radii used. Zooming IN shrinks the actual
+    /// bound below it (still conservative — no rebuild); widening the
+    /// view past it forces one.
+    dc_max: f64,
 }
 
 impl EscapeRenderer {
@@ -248,6 +268,16 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -325,7 +355,169 @@ impl EscapeRenderer {
             chunk_key: None,
             #[cfg(test)]
             chunk_override: None,
+            bla_buffer: None,
+            bla_dummy: None,
+            bla_built: None,
+            #[cfg(test)]
+            disable_bla: false,
         }
+    }
+
+    /// Build/refresh the BLA table when skipping applies to this
+    /// render; returns whether `bla_buffer` is current. Inapplicable
+    /// (Ship tier, per-iteration colorings, unreachable CPU orbit):
+    /// false, and the caller binds the zeroed dummy.
+    fn ensure_bla(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        orbit_len: u32,
+        tier: assembler::PerturbTier,
+        progressive: bool,
+    ) -> bool {
+        #[cfg(test)]
+        if self.disable_bla {
+            return false;
+        }
+        let power = match tier {
+            assembler::PerturbTier::Power(p) => p.clamp(2, 12),
+            assembler::PerturbTier::Ship(_) => return false,
+        };
+        // Skipped iterations never run the accumulator/period updates,
+        // so those colorings keep the per-step path.
+        let coloring = super::get_coloring(&escape.coloring);
+        if coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum)
+            || coloring.has_feature(super::ColoringFeature::NeedsPeriod)
+        {
+            return false;
+        }
+        // |δc| bound over the viewport: half-diagonal plus the nucleus
+        // relocation offset, in absolute units. Past f64's exponent
+        // range the bound (and the radii merges) would degenerate —
+        // no table there.
+        let h = self.height.max(1) as f64;
+        let s = if escape.zoom_log2 < 900.0 {
+            4.0 / escape.zoom_factor() / h
+        } else {
+            0.0
+        };
+        if s <= 0.0 {
+            return false;
+        }
+        let dc_max = if escape.julia {
+            0.0
+        } else {
+            let half_diag = 0.5 * (self.width as f64).hypot(h);
+            let off = (self.current_ref_offset[0] as f64).hypot(self.current_ref_offset[1] as f64);
+            (half_diag + off) * s
+        };
+        if let Some(b) = &self.bla_built {
+            if b.orbit_len == orbit_len
+                && b.power == power
+                && b.julia == escape.julia
+                && dc_max <= b.dc_max * 1.000001
+            {
+                return self.bla_buffer.is_some();
+            }
+        }
+        // The CPU copy of the orbit the GPU mirror holds.
+        #[cfg(not(target_arch = "wasm32"))]
+        let orbit_data: Option<Vec<[f32; 2]>> = if progressive {
+            self.orbit_worker
+                .as_ref()
+                .map(|wk| wk.progress.lock().unwrap().orbit.clone())
+        } else {
+            self.orbit_cache.peek().map(|o| o.orbit.clone())
+        };
+        #[cfg(target_arch = "wasm32")]
+        let orbit_data: Option<Vec<[f32; 2]>> = {
+            let _ = progressive;
+            self.orbit_cache.peek().map(|o| o.orbit.clone())
+        };
+        let Some(orbit_data) = orbit_data else {
+            return false;
+        };
+        let usable = (orbit_len as usize).min(orbit_data.len());
+        if usable < 3 {
+            return false;
+        }
+        // Truncate at the reference's own escape: a skip riding the
+        // escaped tail would overshoot the pixel's escape iteration
+        // by up to the span.
+        let bail = escape.bailout.max(1e-6) as f64;
+        let mut prefix = usable;
+        for (i, z) in orbit_data[..usable].iter().enumerate() {
+            let q = (z[0] as f64) * (z[0] as f64) + (z[1] as f64) * (z[1] as f64);
+            if q > bail {
+                prefix = (i + 1).max(2);
+                break;
+            }
+        }
+        let table = super::bla::BlaTable::build(&orbit_data[..prefix], power, dc_max);
+        let n_levels = table.levels.len().min(30);
+        let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
+        if total == 0 {
+            self.bla_built = None;
+            return false;
+        }
+        let mut bytes = Vec::with_capacity(144 + total * 32);
+        let mut offsets = [0u32; 32];
+        let mut acc = 0u32;
+        for (l, lev) in table.levels[..n_levels].iter().enumerate() {
+            offsets[l] = acc;
+            acc += lev.len() as u32;
+        }
+        for o in offsets {
+            bytes.extend_from_slice(&o.to_le_bytes());
+        }
+        bytes.extend_from_slice(&(n_levels as u32).to_le_bytes());
+        bytes.extend_from_slice(&((prefix - 1) as u32).to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        let clamp_e = |e: i64| -> i32 { e.clamp(-1_000_000_000, 1_000_000_000) as i32 };
+        for lev in &table.levels[..n_levels] {
+            for ent in lev {
+                bytes.extend_from_slice(&(ent.a.re as f32).to_le_bytes());
+                bytes.extend_from_slice(&(ent.a.im as f32).to_le_bytes());
+                bytes.extend_from_slice(&(ent.b.re as f32).to_le_bytes());
+                bytes.extend_from_slice(&(ent.b.im as f32).to_le_bytes());
+                bytes.extend_from_slice(&clamp_e(ent.a.e).to_le_bytes());
+                bytes.extend_from_slice(&clamp_e(ent.b.e).to_le_bytes());
+                let (rm, re) = if ent.r.m > 0.0 {
+                    (ent.r.m as f32, clamp_e(ent.r.e))
+                } else {
+                    (0.0f32, 0)
+                };
+                bytes.extend_from_slice(&rm.to_le_bytes());
+                bytes.extend_from_slice(&re.to_le_bytes());
+            }
+        }
+        let size = bytes.len() as u64;
+        let recreate = match &self.bla_buffer {
+            Some(b) => b.size() < size,
+            None => true,
+        };
+        if recreate {
+            if let Some(old) = self.bla_buffer.take() {
+                old.destroy();
+            }
+            // Headroom so progressive deepening doesn't recreate
+            // every rebuild.
+            self.bla_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape BLA Table"),
+                size: (size + size / 2).max(176),
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        queue.write_buffer(self.bla_buffer.as_ref().unwrap(), 0, &bytes);
+        self.bla_built = Some(BlaBuilt {
+            orbit_len,
+            power,
+            julia: escape.julia,
+            dc_max,
+        });
+        true
     }
 
     fn chunk_size(&self, floatexp: bool) -> u32 {
@@ -806,6 +998,20 @@ impl EscapeRenderer {
                 let iter_start = self.chunk_next.min(escape.max_iter);
                 let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
                 self.ensure_iter_state(device);
+                // BLA table: build/refresh when skipping applies,
+                // else bind the zeroed dummy (n_levels = 0).
+                let tier = Self::perturb_tier(escape)
+                    .unwrap_or(assembler::PerturbTier::Power(2));
+                let bla_ready =
+                    self.ensure_bla(device, queue, escape, orbit_len, tier, progressive);
+                if self.bla_dummy.is_none() {
+                    self.bla_dummy = Some(device.create_buffer(&BufferDescriptor {
+                        label: Some("Escape BLA Dummy"),
+                        size: 176,
+                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
                 let pp = PerturbParamsGpu {
                     s: s_f64 as f32,
                     inv_s: if s_f64 > 0.0 { (1.0 / s_f64) as f32 } else { 0.0 },
@@ -857,6 +1063,14 @@ impl EscapeRenderer {
                                 .as_ref()
                                 .unwrap()
                                 .as_entire_binding(),
+                        },
+                        BindGroupEntry {
+                            binding: 7,
+                            resource: if bla_ready {
+                                self.bla_buffer.as_ref().unwrap().as_entire_binding()
+                            } else {
+                                self.bla_dummy.as_ref().unwrap().as_entire_binding()
+                            },
                         },
                     ],
                 });
@@ -930,6 +1144,12 @@ impl EscapeRenderer {
             b.destroy();
         }
         if let Some(b) = &self.iter_state_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.bla_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.bla_dummy {
             b.destroy();
         }
     }
