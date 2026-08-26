@@ -29,6 +29,8 @@ pub mod bigfloat;
 pub mod bla;
 pub mod fixedpoint;
 pub mod nucleus;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod orbit_store;
 pub mod reference;
 pub mod formulas;
 pub mod renderer;
