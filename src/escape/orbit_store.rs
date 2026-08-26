@@ -9,11 +9,11 @@
 //! the in-memory one (`deepen_is_an_append` semantics carry over).
 //!
 //! Nucleus-relocated orbits carry a view-dependent `ref_offset`
-//! (pixel units at a given zoom + viewport height); their files
-//! record the (zoom, height) the offset was measured at and only
-//! serve an exactly matching view — the bookmark use-case. Offset-free
-//! orbits (Julia, Ship, plain fallback) serve any view at their
-//! precision.
+//! (pixel units at a given zoom + viewport height); files record the
+//! provenance view and consumers rescale to theirs
+//! (`offset_for_view`), so a stored orbit serves any view the
+//! rescale can express. Offset-free orbits (Julia, Ship, plain
+//! fallback) serve any view at their precision.
 //!
 //! Format: `FFORBIT1` magic, then a little-endian binary layout
 //! written/read by `ReferenceOrbit::{to_bytes, from_bytes}` (the
@@ -99,7 +99,7 @@ fn saved_len(path: &Path) -> Option<u32> {
 
 /// Save into an explicit directory (tests). See [`maybe_save`] for
 /// the production entry point with the cost gate.
-pub fn save_to(dir: &Path, orbit: &ReferenceOrbit, zoom_log2: f64, height_px: f64) -> bool {
+pub fn save_to(dir: &Path, orbit: &ReferenceOrbit) -> bool {
     let name = key_for(
         &orbit.center_re,
         &orbit.center_im,
@@ -116,7 +116,7 @@ pub fn save_to(dir: &Path, orbit: &ReferenceOrbit, zoom_log2: f64, height_px: f6
             return true;
         }
     }
-    let bytes = orbit.to_bytes(zoom_log2, height_px);
+    let bytes = orbit.to_bytes();
     let tmp = path.with_extension("orbit.tmp");
     if std::fs::write(&tmp, &bytes).is_err() {
         return false;
@@ -148,7 +148,7 @@ pub fn load_from(
     let name = key_for(center_re, center_im, n_limbs, julia_c, power, ship, ship_variant);
     let path = dir.join(name);
     let bytes = std::fs::read(&path).ok()?;
-    let (orbit, off_zoom, off_height) = ReferenceOrbit::from_bytes(&bytes)?;
+    let orbit = ReferenceOrbit::from_bytes(&bytes)?;
     // Defense in depth: the deserialized identity must serve the
     // request (hash collisions, hand-edited files).
     if !orbit.serves(center_re, center_im, n_limbs, julia_c, power, ship, ship_variant)
@@ -156,17 +156,16 @@ pub fn load_from(
     {
         return None;
     }
-    // A pixel-unit relocation offset only means something at the view
-    // it was measured for.
-    let relocated = orbit.ref_offset != [0.0, 0.0] || orbit.periodic.is_some();
-    if relocated && ((off_zoom - zoom_log2).abs() > 1e-9 || (off_height - height_px).abs() > 0.5) {
+    // The offset carries its provenance view; consumers rescale via
+    // offset_for_view. A view it can't rescale to is a miss.
+    if !orbit.relocation_serves(zoom_log2, height_px) {
         return None;
     }
     Some(orbit)
 }
 
 /// Production save: cost-gated, into the default store directory.
-pub fn maybe_save(orbit: &ReferenceOrbit, zoom_log2: f64, height_px: f64) {
+pub fn maybe_save(orbit: &ReferenceOrbit) {
     let limbs = orbit.n_limbs as u64;
     let cost = orbit.len() as u64 * limbs * limbs;
     let precious_nucleus = orbit.periodic.is_some() && orbit.n_limbs >= 4;
@@ -174,7 +173,7 @@ pub fn maybe_save(orbit: &ReferenceOrbit, zoom_log2: f64, height_px: f64) {
         return;
     }
     if let Some(dir) = default_dir() {
-        save_to(&dir, orbit, zoom_log2, height_px);
+        save_to(&dir, orbit);
     }
 }
 
@@ -240,7 +239,7 @@ mod tests {
         let dir = test_dir("roundtrip");
         let orbit =
             ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0).unwrap();
-        assert!(save_to(&dir, &orbit, 60.0, 320.0));
+        assert!(save_to(&dir, &orbit));
         let mut loaded =
             load_from(&dir, "-0.5", "0.1", orbit.n_limbs, None, 2, false, 0, 60.0, 320.0)
                 .expect("hit");
@@ -260,7 +259,7 @@ mod tests {
         let orbit =
             ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0).unwrap();
         let n = orbit.n_limbs;
-        assert!(save_to(&dir, &orbit, 60.0, 320.0));
+        assert!(save_to(&dir, &orbit));
         // Different center / power / plane: different key, miss.
         assert!(load_from(&dir, "-0.6", "0.1", n, None, 2, false, 0, 60.0, 320.0).is_none());
         assert!(load_from(&dir, "-0.5", "0.1", n, None, 3, false, 0, 60.0, 320.0).is_none());
@@ -286,13 +285,13 @@ mod tests {
         let mut orbit =
             ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0).unwrap();
         let n = orbit.n_limbs;
-        assert!(save_to(&dir, &orbit, 60.0, 320.0));
+        assert!(save_to(&dir, &orbit));
         let len_300 = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
             .unwrap()
             .len();
         // Deepen and re-save: the file must pick up the new depth.
         orbit.extend(600);
-        assert!(save_to(&dir, &orbit, 60.0, 320.0));
+        assert!(save_to(&dir, &orbit));
         let len_600 = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
             .unwrap()
             .len();
@@ -300,7 +299,7 @@ mod tests {
         // Saving the SHALLOW state again must not clobber the deep file.
         let shallow =
             ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0).unwrap();
-        assert!(save_to(&dir, &shallow, 60.0, 320.0));
+        assert!(save_to(&dir, &shallow));
         let still = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
             .unwrap()
             .len();
@@ -315,7 +314,7 @@ mod tests {
             let re = format!("-0.5000{i}");
             let orbit =
                 ReferenceOrbit::compute(&re, "0.1", 60.0, None, 50, None, 2, false, 0).unwrap();
-            assert!(save_to(&dir, &orbit, 60.0, 320.0));
+            assert!(save_to(&dir, &orbit));
         }
         let count = std::fs::read_dir(&dir)
             .unwrap()

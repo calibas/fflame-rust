@@ -551,7 +551,11 @@ impl EscapeRenderer {
             PERTURB_CHUNK_BUDGET
         };
         let px = (self.width as u64 * self.height as u64).max(1);
-        (budget / px).clamp(256, 65_536) as u32
+        // Floor 16, not 256: at supersampled resolutions (or plain
+        // 4K+), 256 iterations x tens of megapixels is a multi-second
+        // dispatch — the TDR class of crash the budget exists to
+        // prevent. 16 still makes visible progress every frame.
+        (budget / px).clamp(16, 65_536) as u32
     }
 
     /// Everything that invalidates in-flight chunk state.
@@ -706,7 +710,18 @@ impl EscapeRenderer {
         let (len, done, data) = {
             let p = worker.progress.lock().unwrap();
             if p.epoch == epoch {
-                self.current_ref_offset = p.ref_offset;
+                // Rescale to this view (see the blocking path). The
+                // reuse guard retires orbits whose relocation can't
+                // rescale, so a None here is at most one transitional
+                // frame — render it centered rather than displaced.
+                self.current_ref_offset = super::reference::rescale_offset(
+                    p.ref_offset,
+                    p.off_zoom_log2,
+                    p.off_height_px,
+                    escape.zoom_log2,
+                    self.height.max(1) as f64,
+                )
+                .unwrap_or([0.0, 0.0]);
             }
             if p.epoch != epoch {
                 (0u32, false, Vec::new())
@@ -782,6 +797,17 @@ impl EscapeRenderer {
             assembler::PerturbTier::Ship(v) => (2, true, v),
         };
         self.orbit_cache.set_height(self.height.max(1) as f64);
+        // Retire a cached relocation this view can't express (zoomed
+        // far out from where its nucleus was found) BEFORE borrowing
+        // the slot — the recompute then happens inside get() at the
+        // current view.
+        if self
+            .orbit_cache
+            .peek()
+            .is_some_and(|o| !o.relocation_serves(escape.zoom_log2, self.height.max(1) as f64))
+        {
+            self.orbit_cache.clear();
+        }
         let orbit = self.orbit_cache.get(
             &escape.center_re,
             &escape.center_im,
@@ -792,7 +818,15 @@ impl EscapeRenderer {
             ship,
             ship_variant,
         )?;
-        self.current_ref_offset = orbit.ref_offset;
+        // The offset's pixel units are rescaled to THIS view (zoom
+        // drags and supersampling change the units under a reused
+        // orbit). A fresh orbit is always at the current view, so the
+        // rescale is the identity there and the fallback never fires
+        // after the pre-borrow retirement above.
+        let h_px = self.height.max(1) as f64;
+        self.current_ref_offset = orbit
+            .offset_for_view(escape.zoom_log2, h_px)
+            .unwrap_or([0.0, 0.0]);
         let len = orbit.len();
         let needed_bytes = (len as u64) * 8;
         let recreate = match &self.orbit_buffer {
@@ -862,7 +896,23 @@ impl EscapeRenderer {
     /// true when anything changed — the output is stale until the
     /// next `render`.
     pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
-        let ss = supersample.clamp(1, 3);
+        let mut ss = supersample.clamp(1, 3);
+        // Cap the RENDER pixel count: the perturbed path carries
+        // 48 B/px of iteration state (plus the 16 B/px accumulator),
+        // and an unbounded supersample x display product is a device
+        // OOM (observed as a device-loss abort). 32 Mpx ~ 1.5 GB of
+        // state — reduce the factor until it fits rather than crash.
+        const MAX_RENDER_PX: u64 = 32 * 1024 * 1024;
+        while ss > 1
+            && (width as u64 * ss as u64) * (height as u64 * ss as u64) > MAX_RENDER_PX
+        {
+            ss -= 1;
+        }
+        if ss != supersample.clamp(1, 3) {
+            log::warn!(
+                "Escape supersample clamped to {ss}x at {width}x{height} (render-pixel budget)"
+            );
+        }
         if width == self.out_width && height == self.out_height && ss == self.supersample {
             return false;
         }

@@ -85,6 +85,13 @@ pub struct ReferenceOrbit {
     /// (view − reference) in pixel-spacing units, for the pipeline's
     /// d0. Zero when the reference IS the view center.
     pub ref_offset: [f32; 2],
+    /// The view the offset's PIXEL units were measured at. Pixel
+    /// units scale with S = 2^(2−zoom)/height, so consumers at any
+    /// other view must rescale by 2^(zoom−off_zoom)·(h/off_height)
+    /// (see [`Self::offset_for_view`]) — applying the raw numbers at
+    /// a different zoom silently pans the render toward the nucleus.
+    pub off_zoom_log2: f64,
+    pub off_height_px: f64,
     /// Precision this orbit was computed at.
     pub n_limbs: usize,
     /// Zₙ as f32 pairs, orbit[0] = Z₀ = 0. Length = iterations
@@ -144,6 +151,8 @@ impl ReferenceOrbit {
             ship_variant: ship_variant.min(5),
             periodic: None,
             ref_offset: [0.0, 0.0],
+            off_zoom_log2: zoom_log2,
+            off_height_px: 1.0,
             n_limbs: n,
             orbit: vec![first],
             escaped_at: None,
@@ -268,14 +277,37 @@ impl ReferenceOrbit {
             && self.ship_variant == ship_variant.min(5)
     }
 
+    /// The relocation offset in the PIXEL UNITS of a given view.
+    /// Pixel spacing S = 2^(2−zoom)/height, so
+    /// off_px(view) = off_px(measured) · 2^(zoom−off_zoom) · h/off_h.
+    /// None when the rescaled offset leaves f32's useful range
+    /// (zooming far OUT from where the nucleus was found) — the
+    /// caller must recompute the reference rather than render with
+    /// a garbage offset.
+    pub fn offset_for_view(&self, zoom_log2: f64, height_px: f64) -> Option<[f32; 2]> {
+        rescale_offset(
+            self.ref_offset,
+            self.off_zoom_log2,
+            self.off_height_px,
+            zoom_log2,
+            height_px,
+        )
+    }
+
+    /// Whether a reuse at the given view can still express this
+    /// orbit's relocation (always true for offset-free orbits).
+    pub fn relocation_serves(&self, zoom_log2: f64, height_px: f64) -> bool {
+        self.offset_for_view(zoom_log2, height_px).is_some()
+    }
+
     /// Serialize for the disk store (`orbit_store`): identity, orbit,
     /// AND the live fixed-point state, so a reloaded orbit deepens
     /// with [`extend`](Self::extend) exactly like the original.
-    /// `zoom_log2`/`height_px` record the view a nonzero `ref_offset`
-    /// was measured at. Layout: magic, orbit length at byte 8 (the
-    /// store's cheap staleness probe), then little-endian fields.
+    /// Layout: magic, orbit length at byte 8 (the store's cheap
+    /// staleness probe), then little-endian fields (including the
+    /// offset's provenance view).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn to_bytes(&self, zoom_log2: f64, height_px: f64) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         fn put_str(out: &mut Vec<u8>, s: &str) {
             out.extend_from_slice(&(s.len() as u32).to_le_bytes());
             out.extend_from_slice(s.as_bytes());
@@ -312,8 +344,8 @@ impl ReferenceOrbit {
         }
         out.extend_from_slice(&self.ref_offset[0].to_le_bytes());
         out.extend_from_slice(&self.ref_offset[1].to_le_bytes());
-        out.extend_from_slice(&zoom_log2.to_le_bytes());
-        out.extend_from_slice(&height_px.to_le_bytes());
+        out.extend_from_slice(&self.off_zoom_log2.to_le_bytes());
+        out.extend_from_slice(&self.off_height_px.to_le_bytes());
         out.extend_from_slice(&(self.n_limbs as u32).to_le_bytes());
         match self.escaped_at {
             None => out.push(0),
@@ -332,12 +364,10 @@ impl ReferenceOrbit {
         out
     }
 
-    /// Inverse of [`to_bytes`](Self::to_bytes). Returns the orbit and
-    /// the (zoom, height) its `ref_offset` was measured at; None on
-    /// any truncation, magic, or shape mismatch (a miss, not an
-    /// error).
+    /// Inverse of [`to_bytes`](Self::to_bytes); None on any
+    /// truncation, magic, or shape mismatch (a miss, not an error).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn from_bytes(bytes: &[u8]) -> Option<(Self, f64, f64)> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         struct R<'a>(&'a [u8]);
         impl<'a> R<'a> {
             fn take(&mut self, n: usize) -> Option<&'a [u8]> {
@@ -418,26 +448,49 @@ impl ReferenceOrbit {
         }
         let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
-        Some((
-            Self {
-                center_re,
-                center_im,
-                julia_c,
-                power,
-                ship,
-                ship_variant,
-                periodic,
-                ref_offset,
-                n_limbs,
-                orbit,
-                escaped_at,
-                z,
-                c,
-            },
-            off_zoom,
-            off_height,
-        ))
+        Some(Self {
+            center_re,
+            center_im,
+            julia_c,
+            power,
+            ship,
+            ship_variant,
+            periodic,
+            ref_offset,
+            off_zoom_log2: off_zoom,
+            off_height_px: off_height,
+            n_limbs,
+            orbit,
+            escaped_at,
+            z,
+            c,
+        })
     }
+}
+
+/// Rescale a pixel-unit relocation offset from the view it was
+/// measured at to another view. Pixel spacing S = 2^(2−zoom)/height,
+/// so off_px scales by 2^(Δzoom)·(h/off_h). None when the result
+/// leaves f32's useful range — render with a recomputed reference,
+/// never with a garbage offset.
+pub fn rescale_offset(
+    off: [f32; 2],
+    off_zoom: f64,
+    off_height: f64,
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<[f32; 2]> {
+    if off == [0.0, 0.0] {
+        return Some([0.0, 0.0]);
+    }
+    let factor = 2f64.powf((zoom_log2 - off_zoom).clamp(-2000.0, 60.0))
+        * (height_px.max(1.0) / off_height.max(1.0));
+    let x = off[0] as f64 * factor;
+    let y = off[1] as f64 * factor;
+    if !x.is_finite() || !y.is_finite() || x.abs() > 1.0e7 || y.abs() > 1.0e7 {
+        return None;
+    }
+    Some([x as f32, y as f32])
 }
 
 /// A reference-orbit request, as the worker sees it.
@@ -463,8 +516,13 @@ pub struct OrbitRequest {
 #[derive(Default)]
 pub struct OrbitProgress {
     /// Relocation of this orbit's reference relative to the request's
-    /// view center, in pixel-spacing units (nucleus references).
+    /// view center, in pixel-spacing units (nucleus references), plus
+    /// the view those units were measured at — the consumer rescales
+    /// to ITS view (`rescale_offset`), because the worker may serve
+    /// one orbit across many zoom levels.
     pub ref_offset: [f32; 2],
+    pub off_zoom_log2: f64,
+    pub off_height_px: f64,
     /// Which request this data belongs to (bumped on every new
     /// request; stale chunks from an abandoned compute are ignored).
     pub epoch: u64,
@@ -532,7 +590,14 @@ impl OrbitWorker {
                                 && old_req.power == req.power
                                 && old_req.ship == req.ship
                                 && old_req.ship_variant == req.ship_variant;
-                            if same { Some(orbit) } else { None }
+                            if same
+                                && orbit
+                                    .relocation_serves(req.zoom_log2, req.height_px.max(1.0))
+                            {
+                                Some(orbit)
+                            } else {
+                                None
+                            }
                         });
                         let orbit = match reuse {
                             Some(o) => o,
@@ -558,6 +623,8 @@ impl OrbitWorker {
                             p.orbit.clear();
                             p.orbit.extend_from_slice(&orbit.orbit);
                             p.ref_offset = orbit.ref_offset;
+                            p.off_zoom_log2 = orbit.off_zoom_log2;
+                            p.off_height_px = orbit.off_height_px;
                             p.done = orbit.periodic.is_some()
                                 || orbit.escaped_at.is_some()
                                 || orbit.len() > req.max_iter;
@@ -583,11 +650,7 @@ impl OrbitWorker {
                         }
                         if done {
                             // Persist the finished orbit (cost-gated).
-                            super::orbit_store::maybe_save(
-                                orbit,
-                                req.zoom_log2,
-                                req.height_px.max(1.0),
-                            );
+                            super::orbit_store::maybe_save(orbit);
                             // Keep state for future deepening but stop
                             // spinning: park until the next request.
                             let parked = current.take().unwrap();
@@ -680,7 +743,11 @@ fn tx_loopback_send(
             && old_req.power == req.power
                                 && old_req.ship == req.ship
                                 && old_req.ship_variant == req.ship_variant;
-        if same { Some(orbit) } else { None }
+        if same && orbit.relocation_serves(req.zoom_log2, req.height_px.max(1.0)) {
+            Some(orbit)
+        } else {
+            None
+        }
     });
     let orbit = match reuse {
         Some(o) => o,
@@ -692,6 +759,8 @@ fn tx_loopback_send(
         p.orbit.clear();
         p.orbit.extend_from_slice(&orbit.orbit);
         p.ref_offset = orbit.ref_offset;
+        p.off_zoom_log2 = orbit.off_zoom_log2;
+        p.off_height_px = orbit.off_height_px;
         p.done = orbit.periodic.is_some()
             || orbit.escaped_at.is_some()
             || orbit.len() > req.max_iter;
@@ -734,6 +803,8 @@ impl ReferenceOrbit {
                     orbit.center_im = center_im.to_string();
                     orbit.periodic = Some(period);
                     orbit.ref_offset = off;
+                    orbit.off_zoom_log2 = zoom_log2;
+                    orbit.off_height_px = height_px.max(1.0);
                     return Some(orbit);
                 }
             }
@@ -821,7 +892,7 @@ impl OrbitCache {
         // when deeper than what the store already holds).
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(o) = self.slot.as_ref() {
-            super::orbit_store::maybe_save(o, zoom_log2, self.height_px.max(1.0));
+            super::orbit_store::maybe_save(o);
         }
         self.slot.as_ref()
     }
@@ -1123,6 +1194,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn relocation_offset_rescales_with_the_view() {
+        let mut orbit =
+            ReferenceOrbit::compute("-0.5", "0.1", 30.0, None, 50, None, 2, false, 0).unwrap();
+        orbit.ref_offset = [12.0, -3.0];
+        orbit.off_zoom_log2 = 30.0;
+        orbit.off_height_px = 480.0;
+        // Same view: identity.
+        assert_eq!(orbit.offset_for_view(30.0, 480.0), Some([12.0, -3.0]));
+        // +2 zoom doubles pixel density twice: offsets scale by 4.
+        assert_eq!(orbit.offset_for_view(32.0, 480.0), Some([48.0, -12.0]));
+        // Doubled height (e.g. 2x supersampling): offsets double —
+        // THE "pan changes with AA" bug when this was missing.
+        assert_eq!(orbit.offset_for_view(30.0, 960.0), Some([24.0, -6.0]));
+        // Zooming far OUT overflows the useful range: a miss, so the
+        // caller recomputes instead of rendering a garbage offset.
+        assert_eq!(orbit.offset_for_view(30.0 - 40.0, 480.0), Some([12.0 / 1.0995116e12, -3.0 / 1.0995116e12].map(|v: f32| v)));
+        assert!(orbit.offset_for_view(70.0, 480.0).is_none(), "overflow must miss");
+        assert!(!orbit.relocation_serves(70.0, 480.0));
+        // Offset-free orbits serve any view.
+        orbit.ref_offset = [0.0, 0.0];
+        assert!(orbit.relocation_serves(300.0, 480.0));
     }
 
     #[test]
