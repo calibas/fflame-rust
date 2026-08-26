@@ -267,6 +267,177 @@ impl ReferenceOrbit {
             && self.ship == ship
             && self.ship_variant == ship_variant.min(5)
     }
+
+    /// Serialize for the disk store (`orbit_store`): identity, orbit,
+    /// AND the live fixed-point state, so a reloaded orbit deepens
+    /// with [`extend`](Self::extend) exactly like the original.
+    /// `zoom_log2`/`height_px` record the view a nonzero `ref_offset`
+    /// was measured at. Layout: magic, orbit length at byte 8 (the
+    /// store's cheap staleness probe), then little-endian fields.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn to_bytes(&self, zoom_log2: f64, height_px: f64) -> Vec<u8> {
+        fn put_str(out: &mut Vec<u8>, s: &str) {
+            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            out.extend_from_slice(s.as_bytes());
+        }
+        fn put_fixed(out: &mut Vec<u8>, f: &super::fixedpoint::FixedPoint) {
+            out.push(f.neg as u8);
+            out.extend_from_slice(&(f.limbs.len() as u32).to_le_bytes());
+            for l in &f.limbs {
+                out.extend_from_slice(&l.to_le_bytes());
+            }
+        }
+        let mut out = Vec::with_capacity(64 + self.orbit.len() * 8 + self.n_limbs * 32);
+        out.extend_from_slice(super::orbit_store::MAGIC);
+        out.extend_from_slice(&(self.orbit.len() as u32).to_le_bytes());
+        put_str(&mut out, &self.center_re);
+        put_str(&mut out, &self.center_im);
+        match self.julia_c {
+            None => out.push(0),
+            Some((re, im)) => {
+                out.push(1);
+                out.extend_from_slice(&re.to_le_bytes());
+                out.extend_from_slice(&im.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&self.power.to_le_bytes());
+        out.push(self.ship as u8);
+        out.extend_from_slice(&self.ship_variant.to_le_bytes());
+        match self.periodic {
+            None => out.push(0),
+            Some(p) => {
+                out.push(1);
+                out.extend_from_slice(&p.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&self.ref_offset[0].to_le_bytes());
+        out.extend_from_slice(&self.ref_offset[1].to_le_bytes());
+        out.extend_from_slice(&zoom_log2.to_le_bytes());
+        out.extend_from_slice(&height_px.to_le_bytes());
+        out.extend_from_slice(&(self.n_limbs as u32).to_le_bytes());
+        match self.escaped_at {
+            None => out.push(0),
+            Some(e) => {
+                out.push(1);
+                out.extend_from_slice(&e.to_le_bytes());
+            }
+        }
+        for z in &self.orbit {
+            out.extend_from_slice(&z[0].to_le_bytes());
+            out.extend_from_slice(&z[1].to_le_bytes());
+        }
+        for f in [&self.z.re, &self.z.im, &self.c.re, &self.c.im] {
+            put_fixed(&mut out, f);
+        }
+        out
+    }
+
+    /// Inverse of [`to_bytes`](Self::to_bytes). Returns the orbit and
+    /// the (zoom, height) its `ref_offset` was measured at; None on
+    /// any truncation, magic, or shape mismatch (a miss, not an
+    /// error).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_bytes(bytes: &[u8]) -> Option<(Self, f64, f64)> {
+        struct R<'a>(&'a [u8]);
+        impl<'a> R<'a> {
+            fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+                if self.0.len() < n {
+                    return None;
+                }
+                let (a, b) = self.0.split_at(n);
+                self.0 = b;
+                Some(a)
+            }
+            fn u8(&mut self) -> Option<u8> {
+                Some(self.take(1)?[0])
+            }
+            fn u32(&mut self) -> Option<u32> {
+                Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+            }
+            fn f32(&mut self) -> Option<f32> {
+                Some(f32::from_le_bytes(self.take(4)?.try_into().ok()?))
+            }
+            fn f64(&mut self) -> Option<f64> {
+                Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?))
+            }
+            fn string(&mut self) -> Option<String> {
+                let n = self.u32()? as usize;
+                if n > 4096 {
+                    return None;
+                }
+                String::from_utf8(self.take(n)?.to_vec()).ok()
+            }
+            fn fixed(&mut self, expect_limbs: usize) -> Option<super::super::escape::fixedpoint::FixedPoint> {
+                let neg = self.u8()? != 0;
+                let n = self.u32()? as usize;
+                if n != expect_limbs || n > 1024 {
+                    return None;
+                }
+                let mut limbs = Vec::with_capacity(n);
+                for _ in 0..n {
+                    limbs.push(u64::from_le_bytes(self.take(8)?.try_into().ok()?));
+                }
+                Some(super::super::escape::fixedpoint::FixedPoint { neg, limbs })
+            }
+        }
+        let mut r = R(bytes);
+        if r.take(8)? != super::orbit_store::MAGIC {
+            return None;
+        }
+        let orbit_len = r.u32()? as usize;
+        if orbit_len == 0 || orbit_len > 64_000_000 {
+            return None;
+        }
+        let center_re = r.string()?;
+        let center_im = r.string()?;
+        let julia_c = match r.u8()? {
+            0 => None,
+            _ => Some((r.f32()?, r.f32()?)),
+        };
+        let power = r.u32()?;
+        let ship = r.u8()? != 0;
+        let ship_variant = r.u32()?;
+        let periodic = match r.u8()? {
+            0 => None,
+            _ => Some(r.u32()?),
+        };
+        let ref_offset = [r.f32()?, r.f32()?];
+        let off_zoom = r.f64()?;
+        let off_height = r.f64()?;
+        let n_limbs = r.u32()? as usize;
+        if n_limbs == 0 || n_limbs > 1024 {
+            return None;
+        }
+        let escaped_at = match r.u8()? {
+            0 => None,
+            _ => Some(r.u32()?),
+        };
+        let mut orbit = Vec::with_capacity(orbit_len);
+        for _ in 0..orbit_len {
+            orbit.push([r.f32()?, r.f32()?]);
+        }
+        let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+        let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+        Some((
+            Self {
+                center_re,
+                center_im,
+                julia_c,
+                power,
+                ship,
+                ship_variant,
+                periodic,
+                ref_offset,
+                n_limbs,
+                orbit,
+                escaped_at,
+                z,
+                c,
+            },
+            off_zoom,
+            off_height,
+        ))
+    }
 }
 
 /// A reference-orbit request, as the worker sees it.
@@ -411,6 +582,12 @@ impl OrbitWorker {
                             }
                         }
                         if done {
+                            // Persist the finished orbit (cost-gated).
+                            super::orbit_store::maybe_save(
+                                orbit,
+                                req.zoom_log2,
+                                req.height_px.max(1.0),
+                            );
                             // Keep state for future deepening but stop
                             // spinning: park until the next request.
                             let parked = current.take().unwrap();
@@ -450,6 +627,19 @@ impl OrbitWorker {
 /// arrives complete).
 #[cfg(not(target_arch = "wasm32"))]
 fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
+    if let Some(o) = super::orbit_store::load(
+        &req.center_re,
+        &req.center_im,
+        req.n_limbs,
+        req.julia_c,
+        req.power,
+        req.ship,
+        req.ship_variant,
+        req.zoom_log2,
+        req.height_px.max(1.0),
+    ) {
+        return Some(o);
+    }
     if req.julia_c.is_none() && !req.ship {
         ReferenceOrbit::compute_nucleus_aware(
             &req.center_re,
@@ -590,20 +780,48 @@ impl OrbitCache {
         if hit {
             let orbit = self.slot.as_mut().unwrap();
             orbit.extend(max_iter);
-        } else if julia_c.is_none() && !ship {
-            self.slot = Some(ReferenceOrbit::compute_nucleus_aware(
+        } else {
+            // Disk store first (desktop): an exact-identity hit skips
+            // the fixed-point recompute entirely and still deepens.
+            #[cfg(not(target_arch = "wasm32"))]
+            let loaded = super::orbit_store::load(
                 center_re,
                 center_im,
-                zoom_log2,
-                max_iter,
-                self.height_px.max(1.0),
+                n,
+                julia_c,
                 power,
-            )?);
-        } else {
-            self.slot = Some(ReferenceOrbit::compute(
-                center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power, ship,
-                ship_variant,
-            )?);
+                ship,
+                ship_variant.min(5),
+                zoom_log2,
+                self.height_px.max(1.0),
+            );
+            #[cfg(target_arch = "wasm32")]
+            let loaded: Option<ReferenceOrbit> = None;
+            let orbit = if let Some(mut o) = loaded {
+                o.extend(max_iter);
+                o
+            } else if julia_c.is_none() && !ship {
+                ReferenceOrbit::compute_nucleus_aware(
+                    center_re,
+                    center_im,
+                    zoom_log2,
+                    max_iter,
+                    self.height_px.max(1.0),
+                    power,
+                )?
+            } else {
+                ReferenceOrbit::compute(
+                    center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power, ship,
+                    ship_variant,
+                )?
+            };
+            self.slot = Some(orbit);
+        }
+        // Persist anything worth keeping (cost-gated; rewrites only
+        // when deeper than what the store already holds).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(o) = self.slot.as_ref() {
+            super::orbit_store::maybe_save(o, zoom_log2, self.height_px.max(1.0));
         }
         self.slot.as_ref()
     }

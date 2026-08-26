@@ -629,11 +629,25 @@ on-vs-off at zoom 40 (scaled), zoom 60 (floatexp) and Julia all
 0/768 blocks, and the shallow direct-vs-perturbed checks now run
 their perturbed arm with skips active.
 
+Orbit persistence SHIPPED (desktop): a disk store under the app data
+dir memoizes reference orbits exactly — files are content-addressed
+on the full request identity (center strings, limb count, plane,
+power, Ship variant) and carry the orbit PLUS the live fixed-point
+state, so a reloaded orbit deepens with extend() bit-identically to
+the original (pinned by a resume-vs-fresh-compute test). Cost-gated
+(len·limbs² threshold; deep nucleus orbits always qualify), rewrite
+only when deeper than the stored file (12-byte staleness probe),
+rename-over writes, newest-first eviction to 24 files / 256 MB.
+Nucleus-relocated orbits record the (zoom, height) their pixel-unit
+offset was measured at and only serve an exactly matching view — the
+bookmark case; offset-free orbits serve any view at their precision.
+Hooked into both the blocking cache and the worker (load before
+compute, save on completion).
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
-2×2 real-Jacobian Newton — abs-folds break holomorphy); orbit
-persistence for bookmarked locations; a wasm worker (browser builds
-keep the synchronous path — wants a SharedArrayBuffer/COOP-COEP
-hosting decision first).
+2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
+worker (browser builds keep the synchronous path — wants a
+SharedArrayBuffer/COOP-COEP hosting decision first).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 The Hepting–Hart escape buffer (§6) with RIFS/xaos layer support and
