@@ -742,12 +742,31 @@ ergonomics at depth — smooth values crowding one palette segment
 until `palette_squeeze` ≳ 3 spreads them — noted as a later
 usability item, per the field report.)
 
+WASM escape SHIPPED (2026-08-26) — without the deferred
+SharedArrayBuffer worker, which turned out unnecessary for
+correctness: the single-threaded browser build TIME-SLICES the
+fixed-point reference per frame (`OrbitCache::get_budgeted` /
+`ensure_orbit_with` — budget shrinks with limb count to keep a slice
+in tens of milliseconds), and rebasing renders partial-orbit frames
+correctly (early wrap), so deep zooms refine progressively exactly
+like the desktop worker, minus parallelism. The budgeted path skips
+the nucleus Newton search (a blocking run has no place on a UI
+thread; plain references + rebasing serve). Supersampling's
+render-pixel cap now also respects the DEVICE's storage-binding and
+texture limits (browsers grant far less than desktop adapters).
+Verified in a real Chrome WebGPU session driving the wasm bundle:
+direct (mandelbrot), perturbed (zoom 30), mode B (weierstrass
+hillshade) and a zoom-5000 sliced-orbit render all produce correct
+imagery; the WASM visual-regression harness now includes the escape
+corpus category. Still wasm-absent, deliberately: orbit persistence
+(no filesystem; IndexedDB is async-only) and the worker thread
+(now a pure parallelism upgrade, still gated on COOP/COEP hosting).
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
-worker (browser builds keep the synchronous path — wants a
-SharedArrayBuffer/COOP-COEP hosting decision first); coloring-scale
-ergonomics at extreme depth (auto-ranging the smooth value, so deep
-views don't need manual palette squeeze).
+WORKER as a performance upgrade only (COOP/COEP hosting decision);
+coloring-scale ergonomics at extreme depth (auto-ranging the smooth
+value, so deep views don't need manual palette squeeze).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as

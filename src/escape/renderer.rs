@@ -785,6 +785,22 @@ impl EscapeRenderer {
     /// Returns the usable orbit length, or None if the center failed
     /// to parse (caller falls back to the direct path).
     fn ensure_orbit(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) -> Option<u32> {
+        self.ensure_orbit_with(device, queue, escape, None).map(|(len, _)| len)
+    }
+
+    /// Blocking (`budget` None) or time-sliced (`budget` Some) orbit
+    /// acquisition + GPU mirror. The sliced form is the WASM path's
+    /// per-frame call — no worker thread exists there, so the orbit
+    /// grows a bounded amount each frame and partial-orbit renders
+    /// refine via rebasing, exactly like the desktop worker's
+    /// progressive prefixes.
+    fn ensure_orbit_with(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        budget: Option<u32>,
+    ) -> Option<(u32, bool)> {
         let julia_c = if escape.julia {
             Some((escape.julia_re, escape.julia_im))
         } else {
@@ -808,16 +824,32 @@ impl EscapeRenderer {
         {
             self.orbit_cache.clear();
         }
-        let orbit = self.orbit_cache.get(
-            &escape.center_re,
-            &escape.center_im,
-            escape.zoom_log2,
-            escape.max_iter,
-            julia_c,
-            power,
-            ship,
-            ship_variant,
-        )?;
+        let (orbit, done) = match budget {
+            None => (
+                self.orbit_cache.get(
+                    &escape.center_re,
+                    &escape.center_im,
+                    escape.zoom_log2,
+                    escape.max_iter,
+                    julia_c,
+                    power,
+                    ship,
+                    ship_variant,
+                )?,
+                true,
+            ),
+            Some(b) => self.orbit_cache.get_budgeted(
+                &escape.center_re,
+                &escape.center_im,
+                escape.zoom_log2,
+                escape.max_iter,
+                julia_c,
+                power,
+                ship,
+                ship_variant,
+                b,
+            )?,
+        };
         // The offset's pixel units are rescaled to THIS view (zoom
         // drags and supersampling change the units under a reused
         // orbit). A fresh orbit is always at the current view, so the
@@ -859,7 +891,7 @@ impl EscapeRenderer {
             );
             self.orbit_uploaded = len;
         }
-        Some(len)
+        Some((len, done))
     }
 
     fn create_output(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
@@ -903,8 +935,18 @@ impl EscapeRenderer {
         // OOM (observed as a device-loss abort). 32 Mpx ~ 1.5 GB of
         // state — reduce the factor until it fits rather than crash.
         const MAX_RENDER_PX: u64 = 32 * 1024 * 1024;
+        // The perturbed path binds 48 B/px of iteration state as ONE
+        // storage buffer; the device's binding limit (browsers often
+        // grant far less than desktop adapters) caps render pixels
+        // harder than the fixed ceiling.
+        let device_px_cap = device.limits().max_storage_buffer_binding_size as u64 / 48;
+        let px_cap = MAX_RENDER_PX.min(device_px_cap.max(1))
+            .min({
+                let d = device.limits().max_texture_dimension_2d as u64;
+                d * d
+            });
         while ss > 1
-            && (width as u64 * ss as u64) * (height as u64 * ss as u64) > MAX_RENDER_PX
+            && (width as u64 * ss as u64) * (height as u64 * ss as u64) > px_cap
         {
             ss -= 1;
         }
@@ -1207,7 +1249,27 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 #[cfg(target_arch = "wasm32")]
                 None
             } else {
-                self.ensure_orbit(device, queue, escape).map(|l| (l, true))
+                // WASM has no worker thread: slice the fixed-point
+                // compute per frame (budget shrinks with limb count so
+                // a slice stays in tens of milliseconds) and let the
+                // partial orbit render progressively via rebasing.
+                // Desktop non-progressive (CLI, tests) stays blocking
+                // and deterministic.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let limbs =
+                        super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1) as u32;
+                    let budget = (1_000_000 / limbs).clamp(256, 50_000);
+                    match self.ensure_orbit_with(device, queue, escape, Some(budget)) {
+                        Some((len, done)) if len >= 2 => Some((len, done)),
+                        Some(_) => return false,
+                        None => None,
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.ensure_orbit(device, queue, escape).map(|l| (l, true))
+                }
             };
             if let Some((orbit_len, orbit_done)) = orbit_state {
                 #[cfg(test)]

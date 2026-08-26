@@ -897,6 +897,56 @@ impl OrbitCache {
         self.slot.as_ref()
     }
 
+    /// Budgeted variant of [`get`](Self::get): extend the orbit by at
+    /// most `budget` iterations this call, returning the (possibly
+    /// partial) orbit and whether it now covers the request. The
+    /// single-threaded WASM path calls this once per frame so the tab
+    /// stays responsive while a deep reference computes; rebasing
+    /// renders partial-orbit frames correctly (early wrap), so each
+    /// slice refines the image. Skips the nucleus search (a blocking
+    /// Newton run has no place on a UI thread) — plain references,
+    /// which rebasing serves fine.
+    pub fn get_budgeted(
+        &mut self,
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        max_iter: u32,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        budget: u32,
+    ) -> Option<(&ReferenceOrbit, bool)> {
+        let n = limbs_for_zoom(zoom_log2);
+        let hit = self.slot.as_ref().is_some_and(|o| {
+            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
+        });
+        let budget = budget.max(64);
+        if hit {
+            let orbit = self.slot.as_mut().unwrap();
+            let target = orbit.len().saturating_sub(1).saturating_add(budget).min(max_iter);
+            orbit.extend(target);
+        } else {
+            self.slot = Some(ReferenceOrbit::compute(
+                center_re,
+                center_im,
+                zoom_log2,
+                Some(n),
+                budget.min(max_iter),
+                julia_c,
+                power,
+                ship,
+                ship_variant,
+            )?);
+        }
+        let orbit = self.slot.as_ref().unwrap();
+        let done = orbit.periodic.is_some()
+            || orbit.escaped_at.is_some()
+            || orbit.len() > max_iter;
+        Some((orbit, done))
+    }
+
     /// The viewport height the relocation offset is measured against.
     pub fn set_height(&mut self, h: f64) {
         if (self.height_px - h).abs() > 0.5 {
@@ -1194,6 +1244,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn budgeted_get_converges_to_the_blocking_orbit() {
+        // Slices must end at the exact same orbit the blocking call
+        // produces (Julia key: skips nucleus relocation on both
+        // paths, so the comparison is byte-exact).
+        let jc = Some((-0.8f32, 0.156f32));
+        let mut blocking = OrbitCache::default();
+        let full = blocking
+            .get("0.1", "0.2", 12.0, 500, jc, 2, false, 0)
+            .unwrap()
+            .orbit
+            .clone();
+        let mut sliced = OrbitCache::default();
+        let mut steps = 0;
+        loop {
+            let (orbit, done) = sliced
+                .get_budgeted("0.1", "0.2", 12.0, 500, jc, 2, false, 0, 64)
+                .unwrap();
+            steps += 1;
+            assert!(steps < 100, "failed to converge");
+            assert!(
+                orbit.orbit.as_slice() == &full[..orbit.orbit.len().min(full.len())],
+                "slice {steps} diverged from the blocking orbit"
+            );
+            if done {
+                assert_eq!(orbit.orbit, full, "converged orbit differs");
+                break;
+            }
+        }
+        assert!(steps > 3, "budget was not actually slicing ({steps} steps)");
     }
 
     #[test]
