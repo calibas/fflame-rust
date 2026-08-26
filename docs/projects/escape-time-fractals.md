@@ -762,6 +762,20 @@ corpus category. Still wasm-absent, deliberately: orbit persistence
 (no filesystem; IndexedDB is async-only) and the worker thread
 (now a pure parallelism upgrade, still gated on COOP/COEP hosting).
 
+Deep-location hardening (2026-08-26, field report at zoom ~484 on a
+3757-digit curated center): pan now preserves the DEEPER of (what
+the zoom needs, what the center already carries) — the
+zoom-proportional reformat would have truncated a curated location
+to ~170 digits on the first pan, silently capping its depth (test:
+a 400-digit center pans at zoom 20 with reformat error below its
+last digit). BLA now builds at ANY depth: the |δc| bound rides log
+space into an extended-range MagFe (the old f64 bound underflowed
+past ~zoom 1000 and disabled BLA exactly where multi-million-
+iteration renders need skips most); the GPU agreement harness gained
+BLA on/off cases at zoom 484 and zoom 1000 on the field location —
+both 0/768. Iteration ceiling raised to 100M (u32 carries 4.29G;
+chunked dispatches and BLA make it practical).
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);

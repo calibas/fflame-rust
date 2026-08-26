@@ -304,7 +304,7 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         ui.label(t!("escape_panel.max_iter"));
         let mut iter = esc.max_iter;
         if ui
-            .add(egui::DragValue::new(&mut iter).speed(4).range(1..=1_000_000))
+            .add(egui::DragValue::new(&mut iter).speed(4).range(1..=100_000_000))
             .on_hover_text(t!("escape_panel.tooltip_max_iter"))
             .changed()
         {

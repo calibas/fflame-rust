@@ -422,6 +422,46 @@ mod tests {
                 "[{label}] BLA on/off disagree on {bad}/{total} blocks"
             );
         }
+        // Deep BLA at the field-reported glitch depth (zoom 484,
+        // floatexp rung, ~10-limb reference) on a real curated
+        // location — earlier BLA coverage stopped at zoom 60.
+        let mut deep_cfg = crate::config::escape::EscapeConfig::default();
+        deep_cfg.center_re = "-1.94156484721061838178274553314663068785257733081147918532807665584651847303430909385256500685469587446965379269662621640024354437".to_string();
+        deep_cfg.center_im = "0.0002348911956401652748611382363072520535146733491918842206467215035002992134677528497852082859490167037836900129822995".to_string();
+        deep_cfg.zoom_log2 = 484.0;
+        deep_cfg.max_iter = 20000;
+        deep_cfg.coloring_params.insert("scale".to_string(), 0.05);
+        bla_off.set(false);
+        let with_bla = render_once(&deep_cfg, true, true);
+        bla_off.set(true);
+        let without = render_once(&deep_cfg, true, true);
+        bla_off.set(false);
+        let (bad, total) = block_diff(&with_bla, &without, 256, 192);
+        println!("agreement[bla-z484]: {bad}/{total} blocks differ structurally");
+        assert!(
+            bad < total / 25,
+            "[bla-z484] BLA on/off disagree on {bad}/{total} blocks"
+        );
+
+        // BLA past the old zoom-900 gate: the log-space |δc| bound
+        // must keep tables valid at any depth (430-digit center from
+        // the same field location).
+        deep_cfg.center_re = "-1.9415648472106183817827455331466306878525773308114791853287171106263154653138889844065700912718617763788260927901438262039941523255909231478771330222244384505055953923324421692687866048802396828480134068979835794320627022921996449325642064207757630337300264109603930340243794485583132951277844263815922780809251921981665064149459854149137453666056576556104770782432234331286505619021491097669553415414488892520906440504495875324".to_string();
+        deep_cfg.center_im = "0.0002348911956401652748611382363072520535146733491918842206389055226478822558334356028474458306453568269131543696797365302213154106976514279082244760267169482925324526783567612979671556935057632055950984996909780142673870494806718441563468971222881465156907737846885411815804623686136775248121351602452938196791632141551203544924477065181043689768585002934501366247348894440025575034790977798556673982209118819387316634056673728437".to_string();
+        deep_cfg.zoom_log2 = 1000.0;
+        deep_cfg.max_iter = 30000;
+        bla_off.set(false);
+        let deep_b = render_once(&deep_cfg, true, true);
+        bla_off.set(true);
+        let deep_n = render_once(&deep_cfg, true, true);
+        bla_off.set(false);
+        let (bad, total) = block_diff(&deep_b, &deep_n, 256, 192);
+        println!("agreement[bla-z1000]: {bad}/{total} blocks differ structurally");
+        assert!(
+            bad < total / 25,
+            "[bla-z1000] BLA on/off disagree on {bad}/{total} blocks"
+        );
+
         // Julia (dc_max = 0: every skip's B term is exact).
         julia_cfg.zoom_log2 = 40.0;
         bla_off.set(false);
