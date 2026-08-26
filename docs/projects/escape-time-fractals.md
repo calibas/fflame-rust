@@ -585,6 +585,13 @@ fall back to the plain reference. The panel gains "Center on
 minibrot" — Newton navigation writing exact-precision center digits
 as one undo point.
 
+Chunked perturbed dispatches (field-driven): a single unbounded
+dispatch at high max_iter tripped Windows' TDR watchdog (driver
+reset, process abort) — perturbed renders now run bounded
+iteration windows with 48 B/px resume state, adaptive to pixel
+count and rung cost, refining on screen chunk by chunk; verified by
+forcing 64-iteration chunks through every agreement scenario.
+
 Still open within phase 4/5: a floatexp diffabs (Ship past zoom 48
 falls back to direct — CFe-vs-f32 sign analysis plus the deep-needle
 full-range notes); the non-plain Ship variants' case analyses;
