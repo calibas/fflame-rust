@@ -275,6 +275,15 @@ struct PerturbParams {
     // (view center - reference center) in pixel-spacing units:
     // nonzero when the reference was relocated to a minibrot nucleus.
     ref_offset: vec2<f32>,
+    // Chunked iteration: this dispatch covers [iter_start, iter_end).
+    // A single unbounded dispatch at high max_iter is a Windows TDR
+    // (driver reset kills the device; observed in the field as a
+    // 0xc0000409 abort at 200k iterations deep). Chunks bound every
+    // dispatch; per-pixel state rides binding 6 between them.
+    iter_start: u32,
+    iter_end: u32,
+    _pad_c0: u32,
+    _pad_c1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -283,6 +292,17 @@ struct PerturbParams {
 @group(0) @binding(3) var palette_sampler: sampler;
 @group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
+// Per-pixel iteration state for chunked dispatches (48 bytes/px).
+struct IterState {
+    w: vec2<f32>,       // scaled: w | floatexp: CFe mantissa
+    z: vec2<f32>,       // last full orbit value
+    accum: vec2<f32>,   // coloring accumulator
+    w_e: i32,           // floatexp exponent (unused by the scaled rung)
+    m: u32,             // reference index
+    n_done: u32,        // iterations recorded at termination
+    status: u32,        // 0 = iterating, 1 = escaped
+}
+@group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
 
 fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
@@ -344,6 +364,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_julia_perturb = (perturb.flags & 2u) != 0u;
     var w = select(vec2<f32>(0.0, 0.0), d0, is_julia_perturb);
     let d0_term = select(d0, vec2<f32>(0.0, 0.0), is_julia_perturb);
+    let px_index = gid.y * params.width + gid.x;
     var m = 0u;
     var z = vec2<f32>(0.0, 0.0);
     var escaped = false;
@@ -357,7 +378,22 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     //__ACCUM_DECL__
 
-    for (var i = 0u; i < params.max_iter; i = i + 1u) {
+    // Chunk resume: after the first chunk every register comes from
+    // the state buffer; an already-escaped pixel just rewrites its
+    // (final) color.
+    if (perturb.iter_start > 0u) {
+        let st = iter_state[px_index];
+        w = st.w;
+        z = st.z;
+        m = st.m;
+        accum_state = st.accum;
+        if (st.status == 1u) {
+            escaped = true;
+            n = st.n_done;
+        }
+    }
+
+    for (var i = perturb.iter_start; i < perturb.iter_end && !escaped; i = i + 1u) {
         let z_ref = ref_orbit[m];
         //__DELTA_STEP__
         let z_before = z;
@@ -394,6 +430,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             w = rebase_delta * perturb.inv_s;
             m = 0u;
         }
+    }
+    if (perturb.iter_end < params.max_iter) {
+        // More chunks follow: persist the registers.
+        iter_state[px_index] = IterState(
+            w, z, accum_state, 0, m,
+            select(0u, n, escaped),
+            select(0u, 1u, escaped),
+        );
     }
     if (!escaped) {
         n = params.max_iter;
@@ -450,6 +494,15 @@ struct PerturbParams {
     // (view center - reference center) in pixel-spacing units:
     // nonzero when the reference was relocated to a minibrot nucleus.
     ref_offset: vec2<f32>,
+    // Chunked iteration: this dispatch covers [iter_start, iter_end).
+    // A single unbounded dispatch at high max_iter is a Windows TDR
+    // (driver reset kills the device; observed in the field as a
+    // 0xc0000409 abort at 200k iterations deep). Chunks bound every
+    // dispatch; per-pixel state rides binding 6 between them.
+    iter_start: u32,
+    iter_end: u32,
+    _pad_c0: u32,
+    _pad_c1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -458,6 +511,17 @@ struct PerturbParams {
 @group(0) @binding(3) var palette_sampler: sampler;
 @group(0) @binding(4) var<storage, read> ref_orbit: array<vec2<f32>>;
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
+// Per-pixel iteration state for chunked dispatches (48 bytes/px).
+struct IterState {
+    w: vec2<f32>,       // scaled: w | floatexp: CFe mantissa
+    z: vec2<f32>,       // last full orbit value
+    accum: vec2<f32>,   // coloring accumulator
+    w_e: i32,           // floatexp exponent (unused by the scaled rung)
+    m: u32,             // reference index
+    n_done: u32,        // iterations recorded at termination
+    status: u32,        // 0 = iterating, 1 = escaped
+}
+@group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
 
 fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
@@ -574,6 +638,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dpx.x * rot.y + dpx.y * rot.x,
     );
     let d0 = cfe_norm(CFe((d0px + perturb.ref_offset) * perturb.s_m, perturb.s_e));
+    let px_index = gid.y * params.width + gid.x;
 
     let is_julia_perturb = (perturb.flags & 2u) != 0u;
     var w: CFe;
@@ -594,7 +659,19 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     //__ACCUM_DECL__
 
-    for (var i = 0u; i < params.max_iter; i = i + 1u) {
+    if (perturb.iter_start > 0u) {
+        let st = iter_state[px_index];
+        w = CFe(st.w, st.w_e);
+        z = st.z;
+        m = st.m;
+        accum_state = st.accum;
+        if (st.status == 1u) {
+            escaped = true;
+            n = st.n_done;
+        }
+    }
+
+    for (var i = perturb.iter_start; i < perturb.iter_end && !escaped; i = i + 1u) {
         let z_ref = ref_orbit[m];
         //__DELTA_STEP_FE__
         let z_before = z;
@@ -621,6 +698,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             w = cfe_from_f32(rebase_delta);
             m = 0u;
         }
+    }
+    if (perturb.iter_end < params.max_iter) {
+        iter_state[px_index] = IterState(
+            w.m, z, accum_state, w.e, m,
+            select(0u, n, escaped),
+            select(0u, 1u, escaped),
+        );
     }
     if (!escaped) {
         n = params.max_iter;
@@ -817,7 +901,9 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                         coloring.accum_init
                     ));
                 } else {
-                    out.push("    let accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                    // `var`, not `let`: the perturbed templates' chunk
+                    // resume assigns it even when no accumulator runs.
+                    out.push("    var accum_state = vec2<f32>(0.0, 0.0);".to_string());
                 }
             }
             "//__ACCUM_UPDATE__" => {
@@ -881,7 +967,9 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                         coloring.accum_init
                     ));
                 } else {
-                    out.push("    let accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                    // `var`, not `let`: the perturbed templates' chunk
+                    // resume assigns it even when no accumulator runs.
+                    out.push("    var accum_state = vec2<f32>(0.0, 0.0);".to_string());
                 }
             }
             "//__ACCUM_UPDATE__" => {

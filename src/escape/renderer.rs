@@ -40,6 +40,16 @@ pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 /// scaled rung is preferred: same images, several times faster.
 pub const PERTURB_FLOATEXP_ZOOM: f64 = 48.0;
 
+/// Iteration budget per perturbed dispatch, in pixel-iterations
+/// (pixels x iterations). One unbounded dispatch at high max_iter is
+/// a Windows TDR (driver reset; observed in the field as a 0xc0000409
+/// abort at 200k iterations deep, reproduced as "Parent device is
+/// lost" at 1080p). The budget targets a fraction of the 2-second TDR
+/// window on a mid-range GPU; the floatexp rung's iterations cost
+/// several times the scaled rung's, so its budget is smaller.
+pub const PERTURB_CHUNK_BUDGET: u64 = 8_000_000_000;
+pub const PERTURB_CHUNK_BUDGET_FE: u64 = 2_000_000_000;
+
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4 arrays start at a
 /// 16-byte boundary, total 192 bytes).
@@ -78,6 +88,11 @@ struct PerturbParamsGpu {
     s_e: i32,
     /// (view - reference) in pixel units (nucleus relocation).
     ref_offset: [f32; 2],
+    /// Chunk window [iter_start, iter_end) for this dispatch.
+    iter_start: u32,
+    iter_end: u32,
+    _pad_c0: u32,
+    _pad_c1: u32,
 }
 
 pub struct EscapeRenderer {
@@ -126,6 +141,17 @@ pub struct EscapeRenderer {
     /// Relocation of the current reference (pixel units); fed into
     /// the perturb uniform each render.
     current_ref_offset: [f32; 2],
+    /// Per-pixel iteration state for chunked perturbed dispatches
+    /// (48 B/px, created on demand, explicit destroy).
+    iter_state_buffer: Option<Buffer>,
+    iter_state_px: u32,
+    /// Next chunk's starting iteration and the render it belongs to;
+    /// a key change restarts from chunk 0.
+    chunk_next: u32,
+    chunk_key: Option<String>,
+    /// Test hook: shrink the chunk to force multi-chunk renders.
+    #[cfg(test)]
+    pub(crate) chunk_override: Option<u32>,
 }
 
 impl EscapeRenderer {
@@ -212,6 +238,16 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -283,6 +319,60 @@ impl EscapeRenderer {
             perturb_params_buffer,
             perturb_bind_group_layout,
             current_ref_offset: [0.0, 0.0],
+            iter_state_buffer: None,
+            iter_state_px: 0,
+            chunk_next: 0,
+            chunk_key: None,
+            #[cfg(test)]
+            chunk_override: None,
+        }
+    }
+
+    fn chunk_size(&self, floatexp: bool) -> u32 {
+        #[cfg(test)]
+        if let Some(c) = self.chunk_override {
+            return c;
+        }
+        let budget = if floatexp {
+            PERTURB_CHUNK_BUDGET_FE
+        } else {
+            PERTURB_CHUNK_BUDGET
+        };
+        let px = (self.width as u64 * self.height as u64).max(1);
+        (budget / px).clamp(256, 65_536) as u32
+    }
+
+    /// Everything that invalidates in-flight chunk state.
+    fn chunk_key_for(&self, escape: &EscapeConfig, orbit_len: u32) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}|{:?}|{}x{}|{}",
+            escape.formula,
+            escape.coloring,
+            escape.center_re,
+            escape.center_im,
+            escape.zoom_log2,
+            escape.max_iter,
+            escape.julia,
+            escape.coloring_params,
+            self.width,
+            self.height,
+            orbit_len,
+        )
+    }
+
+    fn ensure_iter_state(&mut self, device: &Device) {
+        let px = self.width * self.height;
+        if self.iter_state_px != px || self.iter_state_buffer.is_none() {
+            if let Some(old) = self.iter_state_buffer.take() {
+                old.destroy();
+            }
+            self.iter_state_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Iter State"),
+                size: (px as u64) * 48,
+                usage: BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }));
+            self.iter_state_px = px;
         }
     }
 
@@ -701,6 +791,17 @@ impl EscapeRenderer {
                 let x = 2.0 - escape.zoom_log2 - h.log2();
                 let s_e = x.floor();
                 let s_m = 2f64.powf(x - s_e);
+                // Chunk window: restart on any render-state change,
+                // else continue where the last dispatch stopped.
+                let chunk = self.chunk_size(floatexp);
+                let key = self.chunk_key_for(escape, orbit_len);
+                if self.chunk_key.as_deref() != Some(key.as_str()) {
+                    self.chunk_key = Some(key);
+                    self.chunk_next = 0;
+                }
+                let iter_start = self.chunk_next.min(escape.max_iter);
+                let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
+                self.ensure_iter_state(device);
                 let pp = PerturbParamsGpu {
                     s: s_f64 as f32,
                     inv_s: if s_f64 > 0.0 { (1.0 / s_f64) as f32 } else { 0.0 },
@@ -709,6 +810,10 @@ impl EscapeRenderer {
                     s_m: s_m as f32,
                     s_e: s_e as i32,
                     ref_offset: self.current_ref_offset,
+                    iter_start,
+                    iter_end,
+                    _pad_c0: 0,
+                    _pad_c1: 0,
                 };
                 queue.write_buffer(&self.perturb_params_buffer, 0, bytemuck::bytes_of(&pp));
 
@@ -741,6 +846,14 @@ impl EscapeRenderer {
                             binding: 5,
                             resource: self.perturb_params_buffer.as_entire_binding(),
                         },
+                        BindGroupEntry {
+                            binding: 6,
+                            resource: self
+                                .iter_state_buffer
+                                .as_ref()
+                                .unwrap()
+                                .as_entire_binding(),
+                        },
                     ],
                 });
                 let pipeline = &self.pipelines[&key];
@@ -752,7 +865,13 @@ impl EscapeRenderer {
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
                 drop(pass);
-                return orbit_done;
+                let iterations_done = iter_end >= escape.max_iter;
+                self.chunk_next = if iterations_done { 0 } else { iter_end };
+                if iterations_done {
+                    // A repeat of the same render starts fresh.
+                    self.chunk_key = None;
+                }
+                return orbit_done && iterations_done;
             }
             log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
         }
@@ -804,6 +923,9 @@ impl EscapeRenderer {
         self.params_buffer.destroy();
         self.perturb_params_buffer.destroy();
         if let Some(b) = &self.orbit_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.iter_state_buffer {
             b.destroy();
         }
     }

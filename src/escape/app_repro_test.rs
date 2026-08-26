@@ -221,10 +221,31 @@ mod tests {
             let mut escape = crate::escape::EscapeRenderer::new(&device, 256, 192);
             escape.force_perturbed = force;
             escape.force_floatexp = floatexp;
+            // Tiny chunks force the multi-dispatch path on the
+            // perturbed renders: state save/restore must reproduce
+            // the single-pass images exactly.
+            escape.chunk_override = Some(64);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("agreement frame"),
             });
-            escape.render(&device, &queue, &mut encoder, esc_cfg, renderer.palette_view());
+            let mut settled =
+                escape.render(&device, &queue, &mut encoder, esc_cfg, renderer.palette_view());
+            let mut guard = 0;
+            while !settled {
+                queue.submit(std::iter::once(encoder.finish()));
+                encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("agreement chunk"),
+                });
+                settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    esc_cfg,
+                    renderer.palette_view(),
+                );
+                guard += 1;
+                assert!(guard < 10_000, "chunk loop failed to settle");
+            }
             renderer.tonemap_pass_with_input(&device, &queue, &mut encoder, escape.output_view());
             queue.submit(std::iter::once(encoder.finish()));
             let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(

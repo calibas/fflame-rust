@@ -608,18 +608,41 @@ async fn render_escape(
         renderer.set_transparent_mode(queue, true, job.premultiplied, job.config, job.iterations_per_thread);
     }
 
-    // The generator: one compute pass is the whole image.
+    // The generator. High-iteration deep renders run as bounded
+    // chunked dispatches, each its own submission — the driver never
+    // sees an unbounded pass (the TDR class of crash). The final
+    // chunk's encoder carries the tail passes below.
     let mut escape_renderer = crate::escape::EscapeRenderer::new(device, job.width, job.height);
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Escape Render"),
     });
-    escape_renderer.render(
+    let mut settled = escape_renderer.render(
         device,
         queue,
         &mut encoder,
         &job.config.escape,
         renderer.palette_view(),
     );
+    let mut guard = 0u32;
+    while !settled {
+        queue.submit(std::iter::once(encoder.finish()));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Escape Render Chunk"),
+        });
+        settled = escape_renderer.render(
+            device,
+            queue,
+            &mut encoder,
+            &job.config.escape,
+            renderer.palette_view(),
+        );
+        guard += 1;
+        if guard > 4_000_000 {
+            log::error!("escape chunk loop failed to settle; rendering what we have");
+            break;
+        }
+    }
 
     // Shared tail: density effects → tonemap → color effects → read.
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
