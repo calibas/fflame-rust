@@ -353,6 +353,27 @@ impl FixedPoint {
         top >> (64 - INT_BITS)
     }
 
+    /// `dec + delta` exactly: parse the decimal at the precision the
+    /// zoom needs, add the (small) f64 delta in fixed-point, format
+    /// back with enough digits that nothing is lost.
+    ///
+    /// This is what pan and zoom-to-cursor must use past ~zoom 45:
+    /// f64 round-tripping the CENTER caps the absolute step at the
+    /// center's own ulp (~2.2e-16 near |re| = 1.4) while the pixel
+    /// spacing keeps shrinking — horizontal pans "skip" while the
+    /// small-imaginary axis still works, exactly the reported
+    /// symptom. The DELTA itself is fine in f64 (it only needs
+    /// relative precision); the accumulation is what needs exactness.
+    pub fn decimal_add_f64(dec: &str, delta: f64, zoom_log2: f64) -> Option<String> {
+        let n = limbs_for_zoom(zoom_log2) + 1;
+        let base = Self::from_decimal(dec.trim(), n)?;
+        let d = Self::from_f64(delta, n);
+        // Digits: the view needs ~zoom·log10(2) places; +24 keeps
+        // sub-pixel headroom for the next several zoom levels.
+        let digits = (zoom_log2.max(0.0) * 0.30103) as usize + 24;
+        Some(base.add(&d).to_decimal(digits))
+    }
+
     pub fn from_f64(v: f64, n_limbs: usize) -> Self {
         let neg = v < 0.0;
         assert!(
@@ -714,6 +735,40 @@ mod tests {
         let z = a.sub(&a);
         assert!(z.is_zero());
         assert!(!z.neg);
+    }
+
+    #[test]
+    fn decimal_add_preserves_deep_precision() {
+        // The reported failure: pixel-sized steps at zoom 50 near
+        // re = -1.414... are ~4e-18 — under f64's ulp there (2.2e-16),
+        // so an f64 round-trip drops them entirely. The fixed-point
+        // path must accumulate 100 such steps to their exact sum.
+        let step = 4.0e-18;
+        let mut re = "-1.4143355295031044".to_string();
+        for _ in 0..100 {
+            re = FixedPoint::decimal_add_f64(&re, step, 50.0).unwrap();
+        }
+        let n = limbs_for_zoom(50.0) + 1;
+        let moved = FixedPoint::from_decimal(&re, n)
+            .unwrap()
+            .sub(&FixedPoint::from_decimal("-1.4143355295031044", n).unwrap());
+        let total = moved.to_f64();
+        assert!(
+            (total - 100.0 * step).abs() < 1e-24,
+            "accumulated {total:e}, expected {:e}",
+            100.0 * step
+        );
+        // Control: the f64 path loses every step.
+        let f64_way = -1.4143355295031044f64 + step;
+        assert_eq!(f64_way, -1.4143355295031044, "f64 keeps the step?!");
+    }
+
+    #[test]
+    fn decimal_add_shallow_matches_f64() {
+        // At shallow zoom the helper must agree with plain arithmetic.
+        let out = FixedPoint::decimal_add_f64("-0.5", 0.125, 4.0).unwrap();
+        let v: f64 = out.parse().unwrap();
+        assert!((v - (-0.375)).abs() < 1e-12, "{out}");
     }
 
     #[test]

@@ -615,12 +615,26 @@ fn escape_pan_view(
     panel_size: egui::Vec2,
 ) {
     let esc = config_manager.active_config().escape.clone();
-    let (cx, cy) = esc.center_f64();
     let (wx, wy) = escape_screen_to_world(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
+    // The center accumulates in FIXED-POINT: an f64 round-trip caps
+    // the step at the center's own ulp, which pixel-sized deltas fall
+    // under past ~zoom 45 (the "horizontal pan skips" bug). Parse
+    // failure (mid-edit center text) falls back to the f64 path so
+    // panning never dead-stops.
+    let z = esc.zoom_log2;
+    let fx = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_re, -wx, z);
+    let fy = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_im, -wy, z);
+    let (new_re, new_im) = match (fx, fy) {
+        (Some(re), Some(im)) => (re, im),
+        _ => {
+            let (cx, cy) = esc.center_f64();
+            (format!("{}", cx - wx), format!("{}", cy - wy))
+        }
+    };
     let _ = config_manager.update_batch(
         vec![
-            (crate::config::ConfigPath::EscapeCenterRe, crate::config::ConfigValue::String(format!("{}", cx - wx))),
-            (crate::config::ConfigPath::EscapeCenterIm, crate::config::ConfigValue::String(format!("{}", cy - wy))),
+            (crate::config::ConfigPath::EscapeCenterRe, crate::config::ConfigValue::String(new_re)),
+            (crate::config::ConfigPath::EscapeCenterIm, crate::config::ConfigValue::String(new_im)),
         ],
         "history.param.escape_center_re".to_string(),
     );
@@ -661,17 +675,29 @@ fn escape_zoom_view(
             // difference of the offset at the two spans.
             let off_x = f64::from(mouse_pos.x - panel_rect.center().x);
             let off_y = f64::from(mouse_pos.y - panel_rect.center().y);
-            let (cx, cy) = esc.center_f64();
             let (wx_old, wy_old) = escape_screen_to_world(&esc, off_x, off_y, panel_size);
             let shrink = esc.zoom_factor() / f64::exp2(new_zoom_log2);
-            let (wx_new, wy_new) = (wx_old * shrink, wy_old * shrink);
+            let (dx, dy) = (wx_old * (1.0 - shrink), wy_old * (1.0 - shrink));
+            // Same exact-accumulation rule as panning (see
+            // escape_pan_view): the anchor shift is pixel-scale, so it
+            // must land in fixed-point, not through the center's f64.
+            let z = esc.zoom_log2.max(new_zoom_log2);
+            let fx = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_re, dx, z);
+            let fy = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_im, dy, z);
+            let (new_re, new_im) = match (fx, fy) {
+                (Some(re), Some(im)) => (re, im),
+                _ => {
+                    let (cx, cy) = esc.center_f64();
+                    (format!("{}", cx + dx), format!("{}", cy + dy))
+                }
+            };
             updates.push((
                 crate::config::ConfigPath::EscapeCenterRe,
-                crate::config::ConfigValue::String(format!("{}", cx + (wx_old - wx_new))),
+                crate::config::ConfigValue::String(new_re),
             ));
             updates.push((
                 crate::config::ConfigPath::EscapeCenterIm,
-                crate::config::ConfigValue::String(format!("{}", cy + (wy_old - wy_new))),
+                crate::config::ConfigValue::String(new_im),
             ));
         }
     }
