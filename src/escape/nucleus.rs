@@ -34,6 +34,7 @@ pub fn find_period(
     center_im: &str,
     radius_log2: f64,
     max_period: u32,
+    power: u32,
 ) -> Option<u32> {
     let n = limbs_for_zoom(-radius_log2);
     let c = FixedComplex {
@@ -44,22 +45,34 @@ pub fn find_period(
         m: 1.0,
         e: radius_log2.floor() as i64,
     };
+    let power = power.clamp(2, 12);
     let mut z = FixedComplex::zero(n);
     let mut radius = r;
     for p in 1..=max_period {
-        z = z.sqr().add(&c);
+        // z <- z^power + c (square-and-multiply).
+        let mut zp = z.sqr();
+        for _ in 2..power {
+            zp = zp.mul(&z);
+        }
+        z = zp.add(&c);
         let zx = z.re.to_f64();
         let zy = z.im.to_f64();
         let z_abs = FloatExp::from_f64((zx * zx + zy * zy).sqrt());
         if zx * zx + zy * zy > 16.0 {
             return None; // center orbit escaped: no interior period here
         }
-        // R' = 2|z|R + R^2 + r
-        radius = z_abs
-            .mul(radius)
-            .mul(FloatExp::from_f64(2.0))
-            .add(radius.mul(radius))
-            .add(r);
+        // Ball image bound: |(z+dz)^p - z^p| <= (|z|+R)^p - |z|^p for
+        // |dz| <= R (binomial, all terms positive), so
+        // R' = (|z|+R)^p - |z|^p + r. For p = 2 this is exactly the
+        // classic 2|z|R + R^2 + r.
+        let zr = z_abs.add(radius);
+        let mut zr_p = zr;
+        let mut za_p = z_abs;
+        for _ in 1..power {
+            zr_p = zr_p.mul(zr);
+            za_p = za_p.mul(z_abs);
+        }
+        radius = zr_p.add(FloatExp { m: -za_p.m, e: za_p.e }).add(r);
         if z_abs.abs_less_than(radius) {
             return Some(p);
         }
@@ -86,7 +99,9 @@ pub fn find_nucleus(
     guess_im: &str,
     period: u32,
     precision_log2: f64,
+    power: u32,
 ) -> Option<Nucleus> {
+    let power = power.clamp(2, 12);
     let n = limbs_for_zoom(precision_log2) + 1;
     let bits = 64 * n as i64 - 8;
     let cx = FixedPoint::from_decimal(guess_re, n)?;
@@ -103,14 +118,29 @@ pub fn find_nucleus(
         let mut dz = BigComplex::zero(n);
         let mut escaped_mid_orbit = false;
         for _ in 0..period {
-            // dz <- 2 z dz + 1
-            let two_z_dz = z.mul(&dz).mul_scalar_pow2(1);
+            // dz <- p z^(p-1) dz + 1 (dc-derivative chain rule).
+            let mut zp1 = z.clone(); // z^1
+            for _ in 2..power {
+                zp1 = zp1.mul(&z); // z^(p-1)
+            }
+            let mut d = zp1.mul(&dz);
+            // multiply by the integer power (small): repeated add via
+            // exponent bump for powers of two, generic sum otherwise.
+            let mut acc = BigComplex::zero(n);
+            for _ in 0..power {
+                acc = acc.add(&d);
+            }
+            d = acc;
             dz = BigComplex {
-                re: two_z_dz.re.add(&one),
-                im: two_z_dz.im,
+                re: d.re.add(&one),
+                im: d.im,
             };
-            // z <- z^2 + c
-            z = z.mul(&z).add(&c);
+            // z <- z^p + c
+            let mut zp = z.mul(&z);
+            for _ in 2..power {
+                zp = zp.mul(&z);
+            }
+            z = zp.add(&c);
             // An escaped orbit squares its EXPONENT every step — bail
             // before it saturates: this c is far from any period-p
             // nucleus, so the Newton pass is garbage anyway.
@@ -185,16 +215,19 @@ pub fn locate_minibrot(
     center_im: &str,
     zoom_log2: f64,
     max_period: u32,
+    power: u32,
+    newton_period_budget: u32,
 ) -> Option<Nucleus> {
     let radius_log2 = 1.0 - zoom_log2;
-    let period = find_period(center_re, center_im, radius_log2, max_period)?;
-    // Newton cost is passes x period x big-muls; past this budget the
-    // search costs more than the periodic reference saves. (Lifting
-    // it wants the worker to own the search with a progress channel.)
-    if period > 20_000 {
+    let period = find_period(center_re, center_im, radius_log2, max_period, power)?;
+    // Newton cost is passes x period x big-muls. Blocking callers
+    // (CLI, the worker's per-request auto-relocation) pass a modest
+    // budget; the panel's background search can afford the full
+    // detection range.
+    if period > newton_period_budget {
         return None;
     }
-    find_nucleus(center_re, center_im, period, zoom_log2 + 16.0)
+    find_nucleus(center_re, center_im, period, zoom_log2 + 16.0, power)
 }
 
 #[cfg(test)]
@@ -204,17 +237,17 @@ mod tests {
     #[test]
     fn period_detection_finds_known_atoms() {
         // A view around the period-2 nucleus at c = -1.
-        assert_eq!(find_period("-1.0", "0.0", -8.0, 100), Some(2));
+        assert_eq!(find_period("-1.0", "0.0", -8.0, 100, 2), Some(2));
         // The famous real period-3 nucleus on the antenna.
-        assert_eq!(find_period("-1.7548776662", "0.0", -10.0, 100), Some(3));
+        assert_eq!(find_period("-1.7548776662", "0.0", -10.0, 100, 2), Some(3));
         // Deep exterior: the center orbit escapes, no period.
-        assert_eq!(find_period("2.0", "1.5", -8.0, 100), None);
+        assert_eq!(find_period("2.0", "1.5", -8.0, 100, 2), None);
     }
 
     #[test]
     fn newton_lands_on_the_period_2_nucleus() {
         // F(c) = c^2 + c: the period-2 root is exactly -1.
-        let n = find_nucleus("-0.9", "0.05", 2, 40.0).expect("converges");
+        let n = find_nucleus("-0.9", "0.05", 2, 40.0, 2).expect("converges");
         let re: f64 = n.re.parse().unwrap();
         let im: f64 = n.im.parse().unwrap();
         assert!((re - -1.0).abs() < 1e-10, "re = {}", n.re);
@@ -224,7 +257,7 @@ mod tests {
     #[test]
     fn newton_lands_on_the_period_3_antenna_nucleus() {
         // Known constant: c = -1.7548776662466927600...
-        let n = find_nucleus("-1.76", "0.001", 3, 60.0).expect("converges");
+        let n = find_nucleus("-1.76", "0.001", 3, 60.0, 2).expect("converges");
         assert!(
             n.re.starts_with("-1.75487766624669276"),
             "re = {}",
@@ -237,7 +270,7 @@ mod tests {
     #[test]
     fn locate_minibrot_end_to_end() {
         // A shallow view over the period-3 atom: detect + refine.
-        let hit = locate_minibrot("-1.754", "0.0005", 9.0, 200).expect("found");
+        let hit = locate_minibrot("-1.754", "0.0005", 9.0, 200, 2, 20_000).expect("found");
         assert_eq!(hit.period, 3);
         assert!(hit.re.starts_with("-1.754877666"), "re = {}", hit.re);
     }
@@ -250,13 +283,26 @@ mod tests {
         // found by a deep render). The first attempt at this test
         // used a cusp-adjacent point and Newton legitimately CONVERGED
         // to a period-5000 nucleus — hence the unambiguous exterior c.
-        assert!(find_nucleus("0.5", "0.5", 5000, 60.0).is_none());
+        assert!(find_nucleus("0.5", "0.5", 5000, 60.0, 2).is_none());
+    }
+
+    #[test]
+    fn cubic_nucleus_lands_on_a_known_root() {
+        // z^3 + c, period 2: F(c) = (c^3 + c) -> c(c^2 + 1) = 0, so
+        // the nonzero period-2 nuclei are c = +-i exactly.
+        let hit = find_nucleus("0.05", "0.9", 2, 40.0, 3).expect("converges");
+        let re: f64 = hit.re.parse().unwrap();
+        let im: f64 = hit.im.parse().unwrap();
+        assert!(re.abs() < 1e-10, "re = {}", hit.re);
+        assert!((im - 1.0).abs() < 1e-10, "im = {}", hit.im);
+        // And period detection on the cubic around it.
+        assert_eq!(find_period("0.0", "1.0", -8.0, 100, 3), Some(2));
     }
 
     #[test]
     fn newton_reports_failure_instead_of_nonsense() {
         // A guess nowhere near any period-7 atom, in the far exterior:
         // Newton must fail cleanly, not return garbage.
-        assert!(find_nucleus("3.0", "2.0", 7, 40.0).is_none());
+        assert!(find_nucleus("3.0", "2.0", 7, 40.0, 2).is_none());
     }
 }

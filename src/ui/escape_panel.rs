@@ -144,43 +144,112 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
 
     // Newton navigation: locate the minibrot governing the current
     // view and recenter on its nucleus exactly (arbitrary-precision
-    // digits). One batch -> one undo point. Mandelbrot parameter
-    // plane only - the same eligibility as the nucleus references.
-    if esc.formula == "mandelbrot" && !esc.julia {
-        if ui
-            .button(t!("escape_panel.center_minibrot").as_ref())
-            .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
-            .clicked()
+    // digits). One batch -> one undo point. Eligible formulas match
+    // the nucleus references: z^p + c at integer powers, parameter
+    // plane. The search runs on a background thread (six-figure
+    // periods take seconds) and the result lands on a later frame.
+    let nav_power: Option<u32> = if esc.julia {
+        None
+    } else {
+        match esc.formula.as_str() {
+            "mandelbrot" => Some(2),
+            "multibrot" => {
+                let p = esc.formula_params.get("power").copied().unwrap_or(3.0);
+                let r = p.round();
+                if (p - r).abs() < 1e-6 && (2.0..=12.0).contains(&r) {
+                    Some(r as u32)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    };
+    if let Some(power) = nav_power {
+        #[cfg(not(target_arch = "wasm32"))]
         {
-            match crate::escape::nucleus::locate_minibrot(
-                &esc.center_re,
-                &esc.center_im,
-                esc.zoom_log2,
-                100_000,
-            ) {
-                Some(hit) => {
-                    log::info!(
-                        "Minibrot found: period {} at ({}, {})",
-                        hit.period,
-                        hit.re,
-                        hit.im
+            let pending = minibrot_search_slot();
+            let in_flight = {
+                let s = pending.lock().unwrap();
+                matches!(*s, MinibrotSearch::Running)
+            };
+            if in_flight {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(t!("escape_panel.searching_minibrot"));
+                });
+                ui.ctx().request_repaint();
+            } else if ui
+                .button(t!("escape_panel.center_minibrot").as_ref())
+                .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
+                .clicked()
+            {
+                let re = esc.center_re.clone();
+                let im = esc.center_im.clone();
+                let zoom = esc.zoom_log2;
+                *pending.lock().unwrap() = MinibrotSearch::Running;
+                let slot = pending.clone();
+                std::thread::spawn(move || {
+                    let hit = crate::escape::nucleus::locate_minibrot(
+                        &re, &im, zoom, 100_000, power, 100_000,
                     );
+                    *slot.lock().unwrap() = MinibrotSearch::Done(hit);
+                });
+            }
+            // Poll: a finished search applies on this frame.
+            let done = {
+                let mut s = pending.lock().unwrap();
+                if matches!(*s, MinibrotSearch::Done(_)) {
+                    std::mem::replace(&mut *s, MinibrotSearch::Idle)
+                } else {
+                    MinibrotSearch::Idle
+                }
+            };
+            if let MinibrotSearch::Done(result) = done {
+                match result {
+                    Some(hit) => {
+                        log::info!(
+                            "Minibrot found: period {} at ({}, {})",
+                            hit.period,
+                            hit.re,
+                            hit.im
+                        );
+                        let _ = config_manager.update_batch(
+                            vec![
+                                (ConfigPath::EscapeCenterRe, ConfigValue::String(hit.re)),
+                                (ConfigPath::EscapeCenterIm, ConfigValue::String(hit.im)),
+                            ],
+                            "history.action.center_minibrot".to_string(),
+                        );
+                    }
+                    None => log::info!("No minibrot found governing this view"),
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // No threads in the browser build: synchronous with a
+            // modest budget.
+            if ui
+                .button(t!("escape_panel.center_minibrot").as_ref())
+                .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
+                .clicked()
+            {
+                if let Some(hit) = crate::escape::nucleus::locate_minibrot(
+                    &esc.center_re,
+                    &esc.center_im,
+                    esc.zoom_log2,
+                    20_000,
+                    power,
+                    5_000,
+                ) {
                     let _ = config_manager.update_batch(
                         vec![
-                            (
-                                ConfigPath::EscapeCenterRe,
-                                ConfigValue::String(hit.re),
-                            ),
-                            (
-                                ConfigPath::EscapeCenterIm,
-                                ConfigValue::String(hit.im),
-                            ),
+                            (ConfigPath::EscapeCenterRe, ConfigValue::String(hit.re)),
+                            (ConfigPath::EscapeCenterIm, ConfigValue::String(hit.im)),
                         ],
                         "history.action.center_minibrot".to_string(),
                     );
-                }
-                None => {
-                    log::info!("No minibrot found governing this view");
                 }
             }
         }
@@ -352,4 +421,21 @@ pub(crate) fn escape_zoom_by_factor(config_manager: &mut ConfigManager, factor: 
     let z = config_manager.active_config().escape.zoom_log2;
     let new_z = (z + factor.log2()).clamp(-8.0, 300.0);
     let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (new_z as f32).into());
+}
+
+/// Background minibrot-search state (desktop). Module-static because
+/// the panel is stateless between frames; one search at a time.
+#[cfg(not(target_arch = "wasm32"))]
+enum MinibrotSearch {
+    Idle,
+    Running,
+    Done(Option<crate::escape::nucleus::Nucleus>),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn minibrot_search_slot() -> std::sync::Arc<std::sync::Mutex<MinibrotSearch>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static SLOT: OnceLock<Arc<Mutex<MinibrotSearch>>> = OnceLock::new();
+    SLOT.get_or_init(|| Arc::new(Mutex::new(MinibrotSearch::Idle)))
+        .clone()
 }

@@ -29,12 +29,15 @@ fn nucleus_for_view(
     center_im: &str,
     zoom_log2: f64,
     height_px: f64,
+    power: u32,
 ) -> Option<(String, String, u32, [f32; 2])> {
     let hit = super::nucleus::locate_minibrot(
         center_re,
         center_im,
         zoom_log2,
         NUCLEUS_MAX_PERIOD,
+        power,
+        20_000,
     )?;
     // ref_offset = (C_view − C_nucleus) / S, computed exactly in
     // fixed-point, exported via floatexp.
@@ -397,13 +400,14 @@ impl OrbitWorker {
 /// arrives complete).
 #[cfg(not(target_arch = "wasm32"))]
 fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
-    if req.julia_c.is_none() && req.power == 2 && !req.ship {
+    if req.julia_c.is_none() && !req.ship {
         ReferenceOrbit::compute_nucleus_aware(
             &req.center_re,
             &req.center_im,
             req.zoom_log2,
             0,
             req.height_px.max(1.0),
+            req.power,
         )
     } else {
         ReferenceOrbit::compute(
@@ -465,9 +469,10 @@ impl ReferenceOrbit {
         zoom_log2: f64,
         max_iter: u32,
         height_px: f64,
+        power: u32,
     ) -> Option<Self> {
         if let Some((nre, nim, period, off)) =
-            nucleus_for_view(center_re, center_im, zoom_log2, height_px)
+            nucleus_for_view(center_re, center_im, zoom_log2, height_px, power)
         {
             if let Some(mut orbit) = Self::compute(
                 &nre,
@@ -476,7 +481,7 @@ impl ReferenceOrbit {
                 None,
                 period,
                 None,
-                2,
+                power,
                 false,
             ) {
                 if orbit.escaped_at.is_none() && orbit.len() > period {
@@ -490,7 +495,7 @@ impl ReferenceOrbit {
                 }
             }
         }
-        Self::compute(center_re, center_im, zoom_log2, None, max_iter, None, 2, false)
+        Self::compute(center_re, center_im, zoom_log2, None, max_iter, None, power, false)
     }
 }
 
@@ -524,13 +529,14 @@ impl OrbitCache {
         if hit {
             let orbit = self.slot.as_mut().unwrap();
             orbit.extend(max_iter);
-        } else if julia_c.is_none() && power == 2 && !ship {
+        } else if julia_c.is_none() && !ship {
             self.slot = Some(ReferenceOrbit::compute_nucleus_aware(
                 center_re,
                 center_im,
                 zoom_log2,
                 max_iter,
                 self.height_px.max(1.0),
+                power,
             )?);
         } else {
             self.slot = Some(ReferenceOrbit::compute(
@@ -709,7 +715,7 @@ mod tests {
         }
         // The worker goes nucleus-aware for this request; compare
         // against the same nucleus-aware synchronous compute.
-        let sync = ReferenceOrbit::compute_nucleus_aware("-0.5", "0.1", 5.0, 10_000, 320.0)
+        let sync = ReferenceOrbit::compute_nucleus_aware("-0.5", "0.1", 5.0, 10_000, 320.0, 2)
             .unwrap();
         let p = worker.progress.lock().unwrap();
         assert_eq!(p.orbit.len(), sync.orbit.len());
@@ -775,6 +781,7 @@ mod tests {
             20.0,
             5000,
             320.0,
+            2,
         )
         .expect("computes");
         assert_eq!(orbit.periodic, Some(3));
@@ -790,7 +797,7 @@ mod tests {
         );
         // Far from any small-period atom: falls back to the plain
         // view-center reference.
-        let plain = ReferenceOrbit::compute_nucleus_aware("0.3", "0.5", 20.0, 100, 320.0)
+        let plain = ReferenceOrbit::compute_nucleus_aware("0.3", "0.5", 20.0, 100, 320.0, 2)
             .expect("computes");
         assert_eq!(plain.periodic, None);
         assert_eq!(plain.ref_offset, [0.0, 0.0]);

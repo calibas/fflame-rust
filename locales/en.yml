@@ -1907,6 +1907,7 @@ escape_panel:
   zoom_log2: "Zoom (log2)"
   tooltip_zoom_log2: "Magnification exponent: 0 shows the home view, each +1 doubles the zoom"
   center_minibrot: "Center on minibrot"
+  searching_minibrot: "Searching for minibrot..."
   tooltip_center_minibrot: "Find the minibrot governing this view (Newton's method) and recenter exactly on its nucleus - the anchor for deep dives"
   rotation: "Rotation"
   max_iter: "Max iterations"
