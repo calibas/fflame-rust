@@ -720,10 +720,34 @@ crash class), and resize clamps the render pixel count to 32 Mpx
 (48 B/px iteration state; unbounded supersample × display was a
 device OOM abort).
 
+Zoom-limit audit + accuracy verification (2026-08-26, prompted by a
+user session at zoom_log2 = 50000 on the Misiurewicz point c = i):
+the design ceiling is the floatexp rung's i32 exponent arithmetic
+(≈2^31 — zoom_log2 ~10^9); the interaction paths now reach 1e8 (the
+old wheel/keyboard clamp of 300 was the phase-1 travel ceiling and
+COLLAPSED deep sessions; pan/anchor deltas are symbolic
+mantissa·2^exponent — plain f64 dies at ~1060). The practical walls
+arrive first: reference-orbit CPU time (limbs ≈ zoom/64; ~783 limbs
+and ~4 min for a 500k-iteration orbit at 50000) and max_iter, which
+grows ~linearly with zoom at boundary points (escape from a
+2^-zoom-sized δ₀ takes ~zoom doublings). Accuracy verified by Tan
+Lei self-similarity at c = i (multiplier λ = 4(1+i), |λ| = 2^2.5,
+arg 45°): the zoom-50000 render matches the zoom-50002.5 render
+under the predicted 45° rotation — near-identical visually, and
+edge-map correlation ranks the λ-rotated frame ~3× above both a
+half-period control and the wrong-sign rotation. Precision noise
+cannot reproduce the correct similarity with the correct rotation
+direction; the imagery at these depths is real. (Coloring
+ergonomics at depth — smooth values crowding one palette segment
+until `palette_squeeze` ≳ 3 spreads them — noted as a later
+usability item, per the field report.)
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 worker (browser builds keep the synchronous path — wants a
-SharedArrayBuffer/COOP-COEP hosting decision first).
+SharedArrayBuffer/COOP-COEP hosting decision first); coloring-scale
+ergonomics at extreme depth (auto-ranging the smooth value, so deep
+views don't need manual palette squeeze).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as
