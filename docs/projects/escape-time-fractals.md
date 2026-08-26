@@ -644,6 +644,18 @@ bookmark case; offset-free orbits serve any view at their precision.
 Hooked into both the blocking cache and the worker (load before
 compute, save on completion).
 
+The JFA distance-field bridge (§7.3) SHIPPED as the
+`distance_field` color effect: the rendered attractor (any flame —
+no invertibility required) seeds an rg32float coordinate field,
+~log2(max dim) jump-flood passes propagate nearest-seed coordinates,
+and a composite pass shades the distance — glow (nearest-seed color,
+exponential falloff), contour bands, or nearest-color fill. It
+registers as an ordinary color effect (config, UI, animation,
+undo/redo all free); the chain runner special-cases its execution
+into the multi-pass pipeline, with one params slot per pass and all
+field reads via textureLoad (rg32float is unfilterable; also the
+WASM-safe idiom).
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 worker (browser builds keep the synchronous path — wants a

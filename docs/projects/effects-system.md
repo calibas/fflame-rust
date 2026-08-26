@@ -29,6 +29,14 @@ Operate on final RGB colors after tonemapping.
 - No density information available
 - Run AFTER tonemapping
 
+**Multi-pass special case:** `distance_field` registers like any
+other color effect but has no `fs_main`; the chain runner detects it
+by name and executes a jump-flood sub-pipeline instead (seed +
+~log2(max dim) flood passes over an rg32float coordinate ping-pong +
+composite), allocating one params slot per pass. Its shader carries
+three fragment entry points (`fs_seed` / `fs_flood` /
+`fs_composite`) validated by a naga test.
+
 **Example Effects:**
 - **color_grade** - LUT-based color grading
 - **hue_cycle** - Psychedelic hue rotation (animatable)
