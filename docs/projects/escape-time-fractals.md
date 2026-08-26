@@ -702,6 +702,24 @@ Julia seed, damping, and the ACTIVE formula's/coloring's parameters
 Escape.* string keys, and selectors/center strings stay
 deliberately non-animatable.
 
+Second field round (2026-08-26): nucleus relocation offsets now
+carry their PROVENANCE view (`off_zoom_log2`/`off_height_px` on
+ReferenceOrbit and OrbitProgress) and every consumer rescales to its
+own view via `rescale_offset` (pixel units scale with
+S = 2^(2−zoom)/height). The missing rescale was one root with two
+faces: dragging the zoom VALUE panned the render toward the
+governing nucleus (same center string → cached orbit reused → stale
+pixel units; wheel zoom masked it by rewriting the center every
+notch), and toggling supersampling shifted the view (internal
+height changed under the same offset). Relocations a view can't
+rescale to (far zoom-out) retire the orbit — blocking cache and
+worker reuse both guard. Also two AA-exposed capacity hazards:
+the chunk floor dropped 256 → 16 iterations (256 × tens of
+supersampled megapixels was a multi-second dispatch — the TDR
+crash class), and resize clamps the render pixel count to 32 Mpx
+(48 B/px iteration state; unbounded supersample × display was a
+device OOM abort).
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 worker (browser builds keep the synchronous path — wants a
