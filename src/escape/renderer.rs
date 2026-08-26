@@ -345,8 +345,9 @@ impl EscapeRenderer {
     /// Everything that invalidates in-flight chunk state.
     fn chunk_key_for(&self, escape: &EscapeConfig, orbit_len: u32) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{:?}|{}x{}|{}",
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{:?}|{}x{}|{}",
             escape.formula,
+            escape.formula_params,
             escape.coloring,
             escape.center_re,
             escape.center_im,
@@ -408,8 +409,9 @@ impl EscapeRenderer {
             }
             "burning_ship" => {
                 let variant = escape.formula_params.get("variant").copied().unwrap_or(0.0);
-                if variant.abs() < 1e-6 && escape.zoom_log2 <= PERTURB_FLOATEXP_ZOOM {
-                    Some(assembler::PerturbTier::Ship)
+                let v = variant.round();
+                if (variant - v).abs() < 1e-6 && (0.0..=5.0).contains(&v) {
+                    Some(assembler::PerturbTier::Ship(v as u32))
                 } else {
                     None
                 }
@@ -471,9 +473,9 @@ impl EscapeRenderer {
         };
         let tier = Self::perturb_tier(escape)
             .unwrap_or(assembler::PerturbTier::Power(2));
-        let (power, ship) = match tier {
-            assembler::PerturbTier::Power(p) => (p, false),
-            assembler::PerturbTier::Ship => (2, true),
+        let (power, ship, ship_variant) = match tier {
+            assembler::PerturbTier::Power(p) => (p, false, 0),
+            assembler::PerturbTier::Ship(v) => (2, true, v),
         };
         let height_px = self.height.max(1) as f64;
         let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
@@ -485,6 +487,7 @@ impl EscapeRenderer {
             julia_c,
             power,
             ship,
+            ship_variant,
             zoom_log2: escape.zoom_log2,
             height_px,
         });
@@ -562,9 +565,9 @@ impl EscapeRenderer {
         };
         let tier = Self::perturb_tier(escape)
             .unwrap_or(assembler::PerturbTier::Power(2));
-        let (power, ship) = match tier {
-            assembler::PerturbTier::Power(p) => (p, false),
-            assembler::PerturbTier::Ship => (2, true),
+        let (power, ship, ship_variant) = match tier {
+            assembler::PerturbTier::Power(p) => (p, false, 0),
+            assembler::PerturbTier::Ship(v) => (2, true, v),
         };
         self.orbit_cache.set_height(self.height.max(1) as f64);
         let orbit = self.orbit_cache.get(
@@ -575,6 +578,7 @@ impl EscapeRenderer {
             julia_c,
             power,
             ship,
+            ship_variant,
         )?;
         self.current_ref_offset = orbit.ref_offset;
         let len = orbit.len();
@@ -949,18 +953,18 @@ mod tests {
         esc.formula = "burning_ship".to_string();
         assert!(
             EscapeRenderer::wants_perturbation(&esc),
-            "plain Ship is in the diffabs tier (scaled rung)"
+            "the Ship family is in the diffabs tier"
         );
         esc.zoom_log2 = 60.0;
         assert!(
-            !EscapeRenderer::wants_perturbation(&esc),
-            "Ship past the floatexp threshold stays direct (no floatexp diffabs yet)"
+            EscapeRenderer::wants_perturbation(&esc),
+            "deep Ship rides the floatexp diffabs rung"
         );
         esc.zoom_log2 = 30.0;
         esc.formula_params.insert("variant".to_string(), 3.0);
         assert!(
-            !EscapeRenderer::wants_perturbation(&esc),
-            "non-plain Ship variants stay direct"
+            EscapeRenderer::wants_perturbation(&esc),
+            "every fold variant has its own delta algebra now"
         );
         esc.formula_params.clear();
         esc.formula = "multibrot".to_string();

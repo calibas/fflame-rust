@@ -607,6 +607,103 @@ fn cfe_add(a: CFe, b: CFe) -> CFe {
     return cfe_norm(CFe(a.m * exp2(f32(d)) + b.m, b.e));
 }
 
+// ---- extended-range scalars: the Ship family's per-component
+// algebra (abs-folds break complex structure, so its floatexp step
+// runs on scalar mantissa+exponent pairs). ----
+struct SFe {
+    m: f32,
+    e: i32,
+}
+
+fn sfe_norm(v: SFe) -> SFe {
+    if (v.m == 0.0) {
+        return SFe(0.0, CFE_ZERO_E);
+    }
+    let f = frexp(v.m);
+    return SFe(f.fract, v.e + f.exp);
+}
+
+fn sfe_from_f32(v: f32) -> SFe {
+    return sfe_norm(SFe(v, 0));
+}
+
+fn sfe_mul(a: SFe, b: SFe) -> SFe {
+    if (a.e == CFE_ZERO_E || b.e == CFE_ZERO_E) {
+        return SFe(0.0, CFE_ZERO_E);
+    }
+    return sfe_norm(SFe(a.m * b.m, a.e + b.e));
+}
+
+fn sfe_scale(a: SFe, k: f32) -> SFe {
+    if (a.e == CFE_ZERO_E || k == 0.0) {
+        return SFe(0.0, CFE_ZERO_E);
+    }
+    return sfe_norm(SFe(a.m * k, a.e));
+}
+
+fn sfe_neg(a: SFe) -> SFe {
+    return SFe(-a.m, a.e);
+}
+
+fn sfe_abs(a: SFe) -> SFe {
+    return SFe(abs(a.m), a.e);
+}
+
+fn sfe_add(a: SFe, b: SFe) -> SFe {
+    if (a.e == CFE_ZERO_E) {
+        return b;
+    }
+    if (b.e == CFE_ZERO_E) {
+        return a;
+    }
+    let d = a.e - b.e;
+    if (d > 26) {
+        return a;
+    }
+    if (d < -26) {
+        return b;
+    }
+    if (d >= 0) {
+        return sfe_norm(SFe(a.m + b.m * exp2(f32(-d)), a.e));
+    }
+    return sfe_norm(SFe(a.m * exp2(f32(d)) + b.m, b.e));
+}
+
+// |X + x| - |X| exactly, X an ordinary f32 (a reference component),
+// x extended-range: the floatexp diffabs. The sum's mantissa sign IS
+// its sign, so the three-branch analysis is exact.
+fn sfe_diffabs(X: f32, x: SFe) -> SFe {
+    let xf = sfe_from_f32(X);
+    let sum = sfe_add(xf, x);
+    if (X >= 0.0) {
+        if (sum.m >= 0.0) {
+            return x;
+        }
+        return sfe_neg(sfe_add(sfe_add(xf, xf), x));
+    }
+    if (sum.m > 0.0) {
+        return sfe_add(sfe_add(xf, xf), x);
+    }
+    return sfe_neg(x);
+}
+
+// Reassemble a shared-exponent complex from two scalars.
+fn cfe_from_sfe(re: SFe, im: SFe) -> CFe {
+    if (re.e == CFE_ZERO_E && im.e == CFE_ZERO_E) {
+        return CFe(vec2<f32>(0.0, 0.0), CFE_ZERO_E);
+    }
+    if (re.e == CFE_ZERO_E) {
+        return cfe_norm(CFe(vec2<f32>(0.0, im.m), im.e));
+    }
+    if (im.e == CFE_ZERO_E) {
+        return cfe_norm(CFe(vec2<f32>(re.m, 0.0), re.e));
+    }
+    let e = max(re.e, im.e);
+    let rm = re.m * exp2(f32(clamp(re.e - e, -60, 0)));
+    let im2 = im.m * exp2(f32(clamp(im.e - e, -60, 0)));
+    return cfe_norm(CFe(vec2<f32>(rm, im2), e));
+}
+
 struct OrbitSummary {
     z: vec2<f32>,
     n: u32,
@@ -727,27 +824,110 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 pub enum PerturbTier {
     /// z^p + c, integer p — the clean binomial expansion.
     Power(u32),
-    /// Burning Ship (plain variant): abs-folds via diffabs case
-    /// analysis. Scaled rung only in v1 (a floatexp diffabs needs
-    /// CFe-vs-f32 sign analysis; deferred with the deep-needle notes).
-    Ship,
+    /// Burning Ship family: abs-folds via diffabs case analysis, on
+    /// both rungs (the floatexp rung runs extended-range scalar
+    /// diffabs). The u32 is the variant enum (0..=5) — each fold
+    /// arrangement has its own delta algebra.
+    Ship(u32),
 }
 
-/// The scaled-f32 Burning Ship delta step. Real part is fold-free
-/// (x² - y² squares away the signs); the imaginary part is
-/// 2(|xy| - |XY|) = 2·diffabs(XY, X·dy + Y·dx + dx·dy), and diffabs'
-/// positive homogeneity moves the whole thing into S units:
-/// w_im' = 2·diffabs(XY/S, X·wy + Y·wx + S·wx·wy) + d0_im. XY/S stays
-/// inside f32 for the scaled rung's whole zoom range (< 2^54).
-fn delta_step_ship() -> String {
-    "        let sx = z_ref.x;\n\
-     \x20       let sy = z_ref.y;\n\
-     \x20       let re_new = 2.0 * (sx * w.x - sy * w.y)\n\
-     \x20           + perturb.s * (w.x * w.x - w.y * w.y) + d0_term.x;\n\
-     \x20       let cross = sx * w.y + sy * w.x + perturb.s * w.x * w.y;\n\
-     \x20       let im_new = 2.0 * diffabs(sx * sy * perturb.inv_s, cross) + d0_term.y;\n\
-     \x20       var w_new = vec2<f32>(re_new, im_new);"
-        .to_string()
+/// The scaled-f32 Burning Ship-family delta step for one variant.
+///
+/// Derivations (delta = S*w; diffabs is positively homogeneous, so
+/// diffabs(A, S*t)/S = diffabs(A/S, t), and A/S stays inside f32 for
+/// the scaled rung's zoom range < 2^54):
+///   re plain   (v0,1,2): d(x^2-y^2)/S = 2Xwx - 2Ywy + S(wx^2-wy^2)
+///   re folded  (v3,4,5): diffabs((X^2-Y^2)/S, plain-re)
+///   im ship    (v0):  2*diffabs(XY/S, cross), cross = Xwy+Ywx+Swxwy
+///   im perp-M  (v1,5): -2[diffabs(X/S, wx)*(Y+Swy) + |X|*wy]
+///   im perp-S  (v2):  -2[wx*|Y+Swy| + X*diffabs(Y/S, wy)]
+///   im celtic  (v3):  2*cross
+///   im buffalo (v4):  -2*diffabs(XY/S, cross)
+fn delta_step_ship(variant: u32) -> String {
+    let mut out = String::new();
+    out.push_str("        let sx = z_ref.x;\n");
+    out.push_str("        let sy = z_ref.y;\n");
+    let re_plain = "2.0 * (sx * w.x - sy * w.y) + perturb.s * (w.x * w.x - w.y * w.y)";
+    match variant {
+        0 | 1 | 2 => {
+            out.push_str(&format!("        let re_new = {re_plain} + d0_term.x;\n"));
+        }
+        _ => {
+            out.push_str(&format!(
+                "        let re_new = diffabs((sx * sx - sy * sy) * perturb.inv_s, {re_plain}) + d0_term.x;\n"
+            ));
+        }
+    }
+    match variant {
+        0 => {
+            out.push_str("        let cross = sx * w.y + sy * w.x + perturb.s * w.x * w.y;\n");
+            out.push_str("        let im_new = 2.0 * diffabs(sx * sy * perturb.inv_s, cross) + d0_term.y;\n");
+        }
+        1 | 5 => {
+            out.push_str("        let im_new = -2.0 * (diffabs(sx * perturb.inv_s, w.x) * (sy + perturb.s * w.y) + abs(sx) * w.y) + d0_term.y;\n");
+        }
+        2 => {
+            out.push_str("        let im_new = -2.0 * (w.x * abs(sy + perturb.s * w.y) + sx * diffabs(sy * perturb.inv_s, w.y)) + d0_term.y;\n");
+        }
+        3 => {
+            out.push_str("        let im_new = 2.0 * (sx * w.y + sy * w.x + perturb.s * w.x * w.y) + d0_term.y;\n");
+        }
+        _ => {
+            out.push_str("        let cross = sx * w.y + sy * w.x + perturb.s * w.x * w.y;\n");
+            out.push_str("        let im_new = -2.0 * diffabs(sx * sy * perturb.inv_s, cross) + d0_term.y;\n");
+        }
+    }
+    out.push_str("        var w_new = vec2<f32>(re_new, im_new);");
+    out
+}
+
+/// The floatexp Burning Ship-family delta step: the same algebra on
+/// ABSOLUTE deltas carried as extended-range scalars (SFe), with
+/// sfe_diffabs doing the exact three-branch case analysis against
+/// the f32 reference components. This is the "floatexp diffabs" the
+/// plan deferred — and the deep-needle case (either component of Z
+/// small, full-range iteration required) is handled by construction:
+/// every quantity here is full-range.
+fn delta_step_ship_fe(variant: u32) -> String {
+    let mut out = String::new();
+    out.push_str("        let sx = z_ref.x;\n");
+    out.push_str("        let sy = z_ref.y;\n");
+    out.push_str("        let dx = sfe_norm(SFe(w.m.x, w.e));\n");
+    out.push_str("        let dy = sfe_norm(SFe(w.m.y, w.e));\n");
+    out.push_str("        let d0x = sfe_norm(SFe(d0.m.x, d0.e));\n");
+    out.push_str("        let d0y = sfe_norm(SFe(d0.m.y, d0.e));\n");
+    out.push_str("        let du = sfe_add(sfe_add(sfe_scale(dx, 2.0 * sx), sfe_scale(dy, -2.0 * sy)), sfe_add(sfe_mul(dx, dx), sfe_neg(sfe_mul(dy, dy))));\n");
+    match variant {
+        0 | 1 | 2 => {
+            out.push_str("        let re_s = sfe_add(du, d0x);\n");
+        }
+        _ => {
+            out.push_str("        let re_s = sfe_add(sfe_diffabs(sx * sx - sy * sy, du), d0x);\n");
+        }
+    }
+    match variant {
+        0 | 4 => {
+            out.push_str("        let cross = sfe_add(sfe_add(sfe_scale(dy, sx), sfe_scale(dx, sy)), sfe_mul(dx, dy));\n");
+            let sign = if variant == 0 { "2.0" } else { "-2.0" };
+            out.push_str(&format!(
+                "        let im_s = sfe_add(sfe_scale(sfe_diffabs(sx * sy, cross), {sign}), d0y);\n"
+            ));
+        }
+        1 | 5 => {
+            out.push_str("        let yprime = sfe_add(sfe_from_f32(sy), dy);\n");
+            out.push_str("        let im_s = sfe_add(sfe_scale(sfe_add(sfe_mul(sfe_diffabs(sx, dx), yprime), sfe_scale(dy, abs(sx))), -2.0), d0y);\n");
+        }
+        2 => {
+            out.push_str("        let yabs = sfe_abs(sfe_add(sfe_from_f32(sy), dy));\n");
+            out.push_str("        let im_s = sfe_add(sfe_scale(sfe_add(sfe_mul(dx, yabs), sfe_scale(sfe_diffabs(sy, dy), sx)), -2.0), d0y);\n");
+        }
+        _ => {
+            out.push_str("        let cross = sfe_add(sfe_add(sfe_scale(dy, sx), sfe_scale(dx, sy)), sfe_mul(dx, dy));\n");
+            out.push_str("        let im_s = sfe_add(sfe_scale(cross, 2.0), d0y);\n");
+        }
+    }
+    out.push_str("        var w_new = cfe_from_sfe(re_s, im_s);");
+    out
 }
 
 /// Binomial coefficient (small arguments; the power cap is 12).
@@ -874,13 +1054,11 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
         match line.trim() {
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
-                PerturbTier::Ship => delta_step_ship(),
+                PerturbTier::Ship(v) => delta_step_ship(v.min(5)),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
-                // Renderer gates Ship off the floatexp rung; emit the
-                // p=2 step so the module still validates if assembled.
-                PerturbTier::Ship => delta_step_floatexp(2),
+                PerturbTier::Ship(v) => delta_step_ship_fe(v.min(5)),
             }),
             "//__COLORING__" => {
                 out.push(format!(
@@ -1252,18 +1430,24 @@ mod tests {
     #[test]
     fn perturbed_ship_step_validates() {
         use crate::escape::colorings;
-        let src = assemble_perturbed(&colorings::SMOOTH, false, PerturbTier::Ship);
-        assert!(src.contains("diffabs("));
-        let module = naga::front::wgsl::parse_str(&src)
-            .unwrap_or_else(|e| panic!("ship parse: {e}"));
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("ship validation: {e:?}"));
-        use crate::variations::shader_lint;
-        assert!(shader_lint::self_operations(&src).is_empty());
+        for v in 0..=5u32 {
+            for floatexp in [false, true] {
+                let src =
+                    assemble_perturbed(&colorings::SMOOTH, floatexp, PerturbTier::Ship(v));
+                assert!(src.contains("diffabs("), "v{v} fe={floatexp}");
+                let module = naga::front::wgsl::parse_str(&src)
+                    .unwrap_or_else(|e| panic!("ship v{v} fe={floatexp} parse: {e}"));
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("ship v{v} fe={floatexp} validation: {e:?}"));
+                use crate::variations::shader_lint;
+                assert!(shader_lint::self_operations(&src).is_empty(), "v{v}");
+                assert!(shader_lint::subnormal_literals(&src).is_empty(), "v{v}");
+            }
+        }
     }
 
     #[test]
