@@ -40,7 +40,11 @@ struct EscapeParams {
     max_iter: u32,
     flags: u32,            // bit 0 = Julia mode; bits 1-2 = biomorph (0 off, 1 |Re|, 2 |Im|)
     bailout: f32,          // escape test threshold, SQUARED metric
-    _pad0: f32,
+    // First row this dispatch covers. The perturbed templates
+    // chunk by ITERATION and leave this zero; the direct and field
+    // templates have no per-pixel resume state, so they chunk by
+    // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
+    tile_y0: u32,
     damping: vec2<f32>,    // Mann alpha (re, im); read only when compiled damped
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
@@ -136,13 +140,15 @@ fn esc_cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 
 @compute @workgroup_size(8, 8, 1)
 fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.width || gid.y >= params.height) {
+    // Row band: this dispatch covers [tile_y0, tile_y0 + dispatched).
+    let py = gid.y + params.tile_y0;
+    if (gid.x >= params.width || py >= params.height) {
         return;
     }
 
     // Pixel center -> complex plane: offset from view center, y flipped
     // (texture y grows down, Im grows up), then view rotation.
-    let uv = (vec2<f32>(f32(gid.x), f32(gid.y)) + vec2<f32>(0.5, 0.5))
+    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
         / vec2<f32>(f32(params.width), f32(params.height));
     var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
     d.y = -d.y;
@@ -194,7 +200,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
 }
 "#;
 
@@ -251,7 +257,11 @@ struct EscapeParams {
     max_iter: u32,
     flags: u32,
     bailout: f32,
-    _pad0: f32,
+    // First row this dispatch covers. The perturbed templates
+    // chunk by ITERATION and leave this zero; the direct and field
+    // templates have no per-pixel resume state, so they chunk by
+    // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
+    tile_y0: u32,
     damping: vec2<f32>,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -642,7 +652,11 @@ struct EscapeParams {
     max_iter: u32,
     flags: u32,
     bailout: f32,
-    _pad0: f32,
+    // First row this dispatch covers. The perturbed templates
+    // chunk by ITERATION and leave this zero; the direct and field
+    // templates have no per-pixel resume state, so they chunk by
+    // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
+    tile_y0: u32,
     damping: vec2<f32>,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -1683,7 +1697,11 @@ struct EscapeParams {
     max_iter: u32,
     flags: u32,
     bailout: f32,
-    _pad0: f32,
+    // First row this dispatch covers. The perturbed templates
+    // chunk by ITERATION and leave this zero; the direct and field
+    // templates have no per-pixel resume state, so they chunk by
+    // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
+    tile_y0: u32,
     damping: vec2<f32>,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
@@ -1728,12 +1746,14 @@ struct FieldShade {
 
 @compute @workgroup_size(8, 8, 1)
 fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.width || gid.y >= params.height) {
+    // Row band: this dispatch covers [tile_y0, tile_y0 + dispatched).
+    let py = gid.y + params.tile_y0;
+    if (gid.x >= params.width || py >= params.height) {
         return;
     }
 
     // Pixel center -> plane: same mapping as the escape template.
-    let uv = (vec2<f32>(f32(gid.x), f32(gid.y)) + vec2<f32>(0.5, 0.5))
+    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
         / vec2<f32>(f32(params.width), f32(params.height));
     var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
     d.y = -d.y;
@@ -1761,7 +1781,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
     let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
 
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
 }
 "#;
 
