@@ -1030,7 +1030,9 @@ anyone "optimizes" the deep path:
 Ordered. Each entry says what is MEASURED and what is inferred, so
 nobody re-derives it.
 
-1. **Adaptive chunk sizing.** IN PROGRESS. The in-app path runs
+1. **Adaptive chunk sizing.** DONE 2026-08-27 — and it exposed a
+   correctness bug worth more than the speed. Original diagnosis:
+   the in-app path runs
    exactly one chunk per redraw and sizes it as
    `6e8 / (W·H·ss²)` iterations — at 3× supersampling on a
    1280×720 viewport that is ~72 iterations per frame, so a
@@ -1041,8 +1043,33 @@ nobody re-derives it.
    why the same frame is 26.5 s from the CLI and minutes in-app.
    Measured effective rate on this GPU at z9316/2× AA:
    3.7e11 pixel-iterations/s, i.e. the 6e8 budget is a **1.6 ms**
-   chunk. Fix: feedback-size the chunk against a wall-clock target
-   per call (small in-app, large headless).
+   chunk.
+
+   Shipped: the static `budget / pixels` rule is now only a SEED, and
+   a feedback loop resizes the chunk against a wall-clock target
+   measured between calls. The target is derived from a running
+   minimum of that time rather than being a fixed millisecond figure
+   — under vsync the inter-call time is pinned at the refresh period,
+   so a fixed 12 ms target would read 16.7 ms as "over budget" and
+   shrink to the floor forever. Headless sets an explicit 200 ms.
+   `ESCAPE_CHUNK_MS` forces a target, for the invariance test below.
+   Measured on the f3 frame, 640×384: 26.5 s → **6.6 s** at 2× AA,
+   and 3× AA (2.25× the pixels) costs only 7.3 s — both are now
+   dominated by loading the 197 MB reference, not by compute.
+
+   THE BUG IT EXPOSED: the same config rendered 36% of its pixels
+   differently at the new chunk size. Chunk size was an INPUT to the
+   image. BLA skip selection was bounded by `perturb.iter_end - i`,
+   the CHUNK's end, so small chunks permitted only short skips and
+   the amount of linearization depended on where the boundaries
+   fell — i.e. on window size, supersampling and frame pacing. Fixed
+   by bounding the skip with `params.max_iter - i` (the render's end)
+   and carrying the true iteration index across chunks in
+   `IterState.i_at`, so a skip may cross a boundary and the next
+   chunk resumes where the pixel actually is. The escaped flag moved
+   into the high bit of `n_done` to pay for the word, keeping the
+   struct at 48 B/px. Verified: a 1 ms target and a 500 ms target now
+   produce **bit-identical** frames (0 pixels differ, was 36%).
 
 2. **Persist the rejected hint** (format FFORBIT5). The orbit
    filename hashes (center, limbs, julia, power, ship, variant) —
@@ -1066,7 +1093,27 @@ nobody re-derives it.
    deep enough for z9316 would exceed max_iter 10.1M, so for that
    target NO hint is the right answer and the field should say so.
 
-4. **BLA is blocked at deep dips.** Mechanism, not yet measured.
+4. **BLA disagrees with exact iteration at depth — and the cause is
+   NOT the tolerance.** Measured 2026-08-27 on the f3 frame
+   (z9316, 10.1M iterations, 640×384): against a BLA-off render
+   (exact perturbed iteration, 177 s vs 6.3 s — BLA buys **28×** at
+   this depth, against only 1.4× at z1500), the BLA render differs on
+   **66.5%** of pixels, mean |Δ| 25.6/255. Tightening `BLA_EPS` from
+   2^-24 to 2^-40 — 65,536× — moved that by 0.01 and cost nothing in
+   time; the two tolerances agree with EACH OTHER on 99.5% of
+   pixels. So the divergence is systematic, not accumulated
+   linearization error.
+
+   Leading hypothesis, untested: the BLA table is built from the f32
+   reference `hi` alone (`Cfe64::from_f64(orbit[n][0] as f64, ...)`)
+   while the delta arithmetic now runs in DF at ~2^-48. Every skip
+   would then inject ~2^-24 relative error into δ — invisible to
+   `BLA_EPS`, which bounds only the dropped nonlinear term. The fix
+   would be to build the table from `hi + lo` and the exponent, which
+   also subsumes the original dip problem below. Test it by
+   rebuilding the table in DF and re-running the same comparison.
+
+   The original dip mechanism, still true and still unmeasured:
    BLA is fed exponent-flushed reference values (`entry_value`), so
    an iterate below 2^-126 reads as zero, its radius
    `eps·|Z|·2/(p−1)` is zero, and `bla_mag_lt` treats that as "never
@@ -1078,6 +1125,10 @@ nobody re-derives it.
    recur roughly every 9,000 iterations in the z700 orbit. Unknown
    until instrumented: the actual skip rate, so the win is unsized.
    Same bug family as the reference-exponent fix, one layer up.
+
+   Practical note for now: at extreme depth BLA is a 28× speedup that
+   visibly changes the frame. Exploration wants it on; a final render
+   may want `ESCAPE_DISABLE_BLA=1` until this is understood.
 
 5. **Headless chunk overhead.** Partly subsumed by (1): the
    per-chunk downsample pass is redundant for an export where only

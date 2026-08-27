@@ -155,6 +155,29 @@ pub struct EscapeRenderer {
     /// a key change restarts from chunk 0.
     chunk_next: u32,
     chunk_key: Option<String>,
+    /// Adaptive chunk sizing. The static `budget / pixels` rule is a
+    /// safe SEED, not a good steady state: it sized a chunk at ~1.6 ms
+    /// of GPU work on the measured hardware, and since the in-app path
+    /// runs exactly one chunk per redraw, a 10.1M-iteration render at
+    /// 3x supersampling needed ~140,000 frames — the GPU idle most of
+    /// each one. These three fields close a feedback loop on the
+    /// wall-clock time between calls instead.
+    chunk_iters: u32,
+    chunk_count: u32,
+    /// Running minimum of the observed inter-call time: the cost of a
+    /// frame whose chunk work is negligible. Under vsync this settles
+    /// at the refresh period, which is exactly the baseline the target
+    /// must be measured against — a fixed millisecond target would
+    /// read 16.7 ms as "over budget" and shrink to the floor forever.
+    chunk_base_ms: f32,
+    chunk_last: Option<web_time::Instant>,
+    /// Explicit per-chunk time target (headless sets one). Zero means
+    /// derive it from `chunk_base_ms`, the interactive behaviour.
+    chunk_target_ms: f32,
+    /// Diagnostic escape hatch (ESCAPE_CHUNK_MS): force a per-chunk
+    /// time target. The render must be IDENTICAL at every setting -
+    /// that is the property the chunk-invariance test checks.
+    chunk_target_env: Option<f32>,
     /// Test hook: shrink the chunk to force multi-chunk renders.
     #[cfg(test)]
     pub(crate) chunk_override: Option<u32>,
@@ -396,6 +419,15 @@ impl EscapeRenderer {
             iter_state_px: 0,
             chunk_next: 0,
             chunk_key: None,
+            chunk_iters: 0,
+            chunk_count: 0,
+            chunk_base_ms: f32::MAX,
+            chunk_last: None,
+            chunk_target_ms: 0.0,
+            chunk_target_env: std::env::var("ESCAPE_CHUNK_MS")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|v| *v > 0.0),
             #[cfg(test)]
             chunk_override: None,
             bla_buffer: None,
@@ -591,6 +623,71 @@ impl EscapeRenderer {
         true
     }
 
+    /// Per-chunk wall-clock target for callers that are not driving a
+    /// UI. A headless export only needs the FINAL image, so its chunks
+    /// should be big enough that the per-chunk downsample stops
+    /// mattering; interactive callers leave this at zero and get a
+    /// target derived from the observed frame baseline.
+    pub fn set_chunk_time_target(&mut self, ms: f32) {
+        self.chunk_target_ms = ms.max(0.0);
+    }
+
+    /// Reset the size feedback (new render state, or a finished one).
+    fn reset_chunk_pacing(&mut self) {
+        self.chunk_iters = 0;
+        self.chunk_base_ms = f32::MAX;
+        self.chunk_last = None;
+        self.chunk_count = 0;
+    }
+
+    /// The next chunk's iteration count, grown or shrunk to hold the
+    /// caller's per-call time near its target.
+    ///
+    /// The first chunk of any render uses the static seed, so a
+    /// configuration that turns out to be expensive per iteration is
+    /// never met with a large chunk; growth is at most 2x per call and
+    /// only when the previous call came in under target, which bounds
+    /// an overshoot to roughly one target period.
+    fn next_chunk(&mut self, floatexp: bool) -> u32 {
+        let seed = self.chunk_size(floatexp);
+        #[cfg(test)]
+        if self.chunk_override.is_some() {
+            return seed;
+        }
+        let now = web_time::Instant::now();
+        self.chunk_count = self.chunk_count.saturating_add(1);
+        let Some(last) = self.chunk_last.replace(now) else {
+            // First chunk: seed, and start the clock.
+            self.chunk_iters = seed;
+            self.chunk_count = 0;
+            return seed;
+        };
+        let elapsed_ms = now.duration_since(last).as_secs_f32() * 1000.0;
+        if elapsed_ms > 0.0 {
+            self.chunk_base_ms = self.chunk_base_ms.min(elapsed_ms);
+        }
+        let target = if let Some(forced) = self.chunk_target_env {
+            forced
+        } else if self.chunk_target_ms > 0.0 {
+            self.chunk_target_ms
+        } else {
+            // Baseline plus headroom: under vsync this lands a little
+            // above the refresh period (grow until the chunk eats the
+            // frame's slack, then stop); with vsync off the 12 ms
+            // floor keeps the UI at ~60+ fps rather than chasing a
+            // 2 ms baseline.
+            (self.chunk_base_ms + 8.0).clamp(12.0, 33.0)
+        };
+        let mut chunk = self.chunk_iters.max(seed);
+        if elapsed_ms < target {
+            chunk = chunk.saturating_mul(2).min(Self::CHUNK_ITERS_MAX);
+        } else if elapsed_ms > target * 1.4 {
+            chunk = (chunk / 2).max(16);
+        }
+        self.chunk_iters = chunk;
+        chunk
+    }
+
     fn chunk_size(&self, floatexp: bool) -> u32 {
         #[cfg(test)]
         if let Some(c) = self.chunk_override {
@@ -610,6 +707,12 @@ impl EscapeRenderer {
     }
 
     /// Everything that invalidates in-flight chunk state.
+    /// Ceiling on an adaptively grown chunk. The feedback loop stops
+    /// well below this on any real configuration; it exists so a
+    /// pathological measurement (a frame that reports ~0 ms) cannot
+    /// run away into a TDR-length dispatch.
+    const CHUNK_ITERS_MAX: u32 = 1_048_576;
+
     fn chunk_key_for(&self, escape: &EscapeConfig, orbit_len: u32) -> String {
         format!(
             "{}|{:?}|{}|{}|{}|{}|{}|{}|{:?}|{}x{}|{}",
@@ -1430,12 +1533,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let s_m = 2f64.powf(x - s_e);
                 // Chunk window: restart on any render-state change,
                 // else continue where the last dispatch stopped.
-                let chunk = self.chunk_size(floatexp);
                 let key = self.chunk_key_for(escape, orbit_len);
                 if self.chunk_key.as_deref() != Some(key.as_str()) {
                     self.chunk_key = Some(key);
                     self.chunk_next = 0;
+                    self.reset_chunk_pacing();
                 }
+                let chunk = self.next_chunk(floatexp);
                 let iter_start = self.chunk_next.min(escape.max_iter);
                 let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
                 self.ensure_iter_state(device);
@@ -1546,8 +1650,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let iterations_done = iter_end >= escape.max_iter;
                 self.chunk_next = if iterations_done { 0 } else { iter_end };
                 if iterations_done {
+                    log::debug!(
+                        "escape: {} iterations in {} chunks (final chunk {}, baseline {:.1} ms)",
+                        escape.max_iter,
+                        self.chunk_count + 1,
+                        self.chunk_iters,
+                        self.chunk_base_ms,
+                    );
                     // A repeat of the same render starts fresh.
                     self.chunk_key = None;
+                    self.reset_chunk_pacing();
                 }
                 return orbit_done && iterations_done;
             }

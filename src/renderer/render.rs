@@ -616,6 +616,9 @@ async fn render_escape(
     // Config-declared supersampling applies on every path (viewport,
     // CLI, thumbnails): a saved file reproduces exactly.
     escape_renderer.resize(device, job.width, job.height, job.config.escape.supersample);
+    // No UI to keep responsive here, and every chunk pays a downsample
+    // pass over the supersampled image — so chunk for throughput.
+    escape_renderer.set_chunk_time_target(200.0);
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Escape Render"),
     });

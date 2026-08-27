@@ -301,9 +301,18 @@ struct IterState {
     w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
-    n_done: u32,        // iterations recorded at termination
-    status: u32,        // 0 = iterating, 1 = escaped
+    // Iterations recorded at termination, with the escaped flag in the
+    // high bit (max_iter is capped far below 2^31). Packing it here
+    // frees a word for `i_at` and keeps the struct at 48 B/px.
+    n_done: u32,
+    // The iteration index this pixel ACTUALLY reached. A BLA skip is
+    // allowed to run past the chunk's nominal end - see the skip
+    // guard - so the next chunk resumes from here, not from the CPU's
+    // iter_start. Without this the legal skip length would depend on
+    // where chunk boundaries fell, and the rendered image with it.
+    i_at: u32,
 }
+const ITER_ESCAPED_BIT: u32 = 0x80000000u;
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
 // BLA table (binding 7): iteration skipping. Level l holds entries
 // each collapsing 2^(l+1) delta iterations to one affine application
@@ -467,19 +476,20 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Chunk resume: after the first chunk every register comes from
     // the state buffer; an already-escaped pixel just rewrites its
     // (final) color.
+    var i = perturb.iter_start;
     if (perturb.iter_start > 0u) {
         let st = iter_state[px_index];
         w = st.w;
         z = st.z;
         m = st.m;
         accum_state = st.accum;
-        if (st.status == 1u) {
+        i = max(i, st.i_at);
+        if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
             escaped = true;
-            n = st.n_done;
+            n = st.n_done & ~ITER_ESCAPED_BIT;
         }
     }
 
-    var i = perturb.iter_start;
     while (i < perturb.iter_end && !escaped) {
         // BLA skip: from an aligned reference index, collapse the
         // longest valid run of iterations to one affine application.
@@ -502,7 +512,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var pick_be = 0;
             var pick_span = 0u;
             let m_left = perturb.orbit_len - 1u - m;
-            let steps_left = perturb.iter_end - i;
+            // Bounded by the RENDER's end, not the chunk's: a skip
+            // that crosses a chunk boundary is fine (i_at carries the
+            // overshoot), and bounding it by the chunk would make the
+            // image depend on the chunk size.
+            let steps_left = params.max_iter - i;
             for (var l = 0u; l < bla.n_levels; l = l + 1u) {
                 let span = 2u << l;
                 if ((m & (span - 1u)) != 0u || span > m_left || span > steps_left
@@ -585,8 +599,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // More chunks follow: persist the registers.
         iter_state[px_index] = IterState(
             w, z, accum_state, vec2<f32>(0.0, 0.0), 0, m,
-            select(0u, n, escaped),
-            select(0u, 1u, escaped),
+            select(0u, n | ITER_ESCAPED_BIT, escaped),
+            i,
         );
     }
     if (!escaped) {
@@ -669,9 +683,18 @@ struct IterState {
     w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
-    n_done: u32,        // iterations recorded at termination
-    status: u32,        // 0 = iterating, 1 = escaped
+    // Iterations recorded at termination, with the escaped flag in the
+    // high bit (max_iter is capped far below 2^31). Packing it here
+    // frees a word for `i_at` and keeps the struct at 48 B/px.
+    n_done: u32,
+    // The iteration index this pixel ACTUALLY reached. A BLA skip is
+    // allowed to run past the chunk's nominal end - see the skip
+    // guard - so the next chunk resumes from here, not from the CPU's
+    // iter_start. Without this the legal skip length would depend on
+    // where chunk boundaries fell, and the rendered image with it.
+    i_at: u32,
 }
+const ITER_ESCAPED_BIT: u32 = 0x80000000u;
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
 // BLA table (binding 7): iteration skipping. Level l holds entries
 // each collapsing 2^(l+1) delta iterations to one affine application
@@ -1201,19 +1224,20 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     //__ACCUM_DECL__
 
+    var i = perturb.iter_start;
     if (perturb.iter_start > 0u) {
         let st = iter_state[px_index];
         w = CFe2(st.w, st.w_lo, st.w_e);
         z = st.z;
         m = st.m;
         accum_state = st.accum;
-        if (st.status == 1u) {
+        i = max(i, st.i_at);
+        if ((st.n_done & ITER_ESCAPED_BIT) != 0u) {
             escaped = true;
-            n = st.n_done;
+            n = st.n_done & ~ITER_ESCAPED_BIT;
         }
     }
 
-    var i = perturb.iter_start;
     while (i < perturb.iter_end && !escaped) {
         // BLA skip (see the scaled template). Here w IS the absolute
         // delta as a CFe, so validity compares and the affine
@@ -1228,7 +1252,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var pick_span = 0u;
             let w_zero = aw == 0.0 || w.e == CFE_ZERO_E;
             let m_left = perturb.orbit_len - 1u - m;
-            let steps_left = perturb.iter_end - i;
+            // Bounded by the RENDER's end, not the chunk's: a skip
+            // that crosses a chunk boundary is fine (i_at carries the
+            // overshoot), and bounding it by the chunk would make the
+            // image depend on the chunk size.
+            let steps_left = params.max_iter - i;
             for (var l = 0u; l < bla.n_levels; l = l + 1u) {
                 let span = 2u << l;
                 if ((m & (span - 1u)) != 0u || span > m_left || span > steps_left
@@ -1324,8 +1352,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (perturb.iter_end < params.max_iter) {
         iter_state[px_index] = IterState(
             w.hi, z, accum_state, w.lo, w.e, m,
-            select(0u, n, escaped),
-            select(0u, 1u, escaped),
+            select(0u, n | ITER_ESCAPED_BIT, escaped),
+            i,
         );
     }
     if (!escaped) {
