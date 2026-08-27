@@ -69,6 +69,29 @@ fn nucleus_for_view(
     Some((hit.re, hit.im, hit.period, off))
 }
 
+/// The period of the reference the renderer is CURRENTLY using, for
+/// the panel to display: 0 = aperiodic (or none yet). Progressive
+/// detection finds deeper periods as a dive continues and retires
+/// shallow ones, so this changes under the user mid-zoom - which is
+/// exactly what makes it worth showing rather than leaving implicit.
+static LIVE_PERIOD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Record the period of the reference now in use (None = aperiodic).
+pub fn set_live_reference_period(period: Option<u32>) {
+    LIVE_PERIOD.store(
+        period.unwrap_or(0),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The period of the reference now in use, if it is periodic.
+pub fn live_reference_period() -> Option<u32> {
+    match LIVE_PERIOD.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        p => Some(p),
+    }
+}
+
 /// The iterate's plain f32 value: `hi * 2^e`, flushing to zero below
 /// f32's normal range - which is exactly what the pre-exponent
 /// storage handed every consumer, so any reader that only needs a

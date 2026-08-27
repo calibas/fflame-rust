@@ -840,10 +840,12 @@ cascade's doubling, period 284,432 (|Z| ~ 2^-1379), in 14 s. Orbit
 files carry the closure octave (format FFORBIT2). The hint layer's
 remaining role is pre-seeding the FULL deep orbit ahead of a dive;
 at any given zoom the auto-detected (cheaper, shallower-but-valid)
-closure may supersede it — correct per-zoom behavior. Deferred:
-surfacing the auto period in the panel (needs a renderer→panel
-channel; the worker already publishes `detected_period`), and hints
-on the wasm budgeted path. (The z900+ interior wall once blamed
+closure may supersede it — correct per-zoom behavior. The panel now shows the
+period actually IN USE ("In use: period N", with a Use button that
+adopts it into the hint field) - published by both orbit paths
+through a small atomic slot, since the auto-detected period changes
+under the user mid-dive and was otherwise invisible. Deferred:
+hints on the wasm budgeted path. (The z900+ interior wall once blamed
 here on "f32-mantissa crush" was the reference-exponent bug
 described below — z900 and z1100 render full structure as soon as
 near-nucleus iterates keep their magnitude.)
@@ -958,7 +960,7 @@ Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
 coloring-scale ergonomics at extreme depth (auto-ranging the smooth
-value); panel surfacing of the auto-detected period.
+value).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as
