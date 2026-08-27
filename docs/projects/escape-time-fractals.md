@@ -816,12 +816,43 @@ aligned with the reference — the reason fraktaler-3 ships the
 field); and double-f32 ("DF") mantissas for the CFe rung (~2^-48
 relative). Both are scoped follow-ups, not band-aids.
 
+Periodic references + PROGRESSIVE period detection (2026-08-26/27):
+three layers. (1) `EscapeConfig::reference_period` — f3's
+`reference.period` as a verified hint (the center's orbit must close
+at that period below the view's pixel scale, or it falls back with a
+warning). (2) A panel Detect button running ball-method detection at
+the center's intrinsic depth on a background thread
+(`detect_center_period`). (3) The automation: ball-method period
+candidates are exactly the indices where the center orbit's |Z|
+reaches a new minimum — and the reference worker is ALREADY
+iterating that orbit, so `extend()` tracks the running minimum as an
+OCTAVE (extended-range: f64 magnitudes underflow at 2^-537, and
+intermediate cascade passes go far deeper) and the orbit becomes its
+own periodic reference the moment |Z_p| drops 16+ octaves below the
+view's pixel scale — truncate to one period, stop extending, zero
+extra compute. Closure validity is ZOOM-RELATIVE
+(`closure_limit_for_zoom`, `periodic_serves`): zooming deeper
+tightens the limit, shallow closures retire, and detection
+rediscovers the deeper period — measured live on the f3 location:
+period 142,232 (|Z| ~ 2^-921) discovered in 7 s serving z700 (which
+now renders full structure), retired at z1100 and re-detected at the
+cascade's doubling, period 284,432 (|Z| ~ 2^-1379), in 14 s. Orbit
+files carry the closure octave (format FFORBIT2). The hint layer's
+remaining role is pre-seeding the FULL deep orbit ahead of a dive;
+at any given zoom the auto-detected (cheaper, shallower-but-valid)
+closure may supersede it — correct per-zoom behavior. Deferred:
+surfacing the auto period in the panel (needs a renderer→panel
+channel; the worker already publishes `detected_period`), and hints
+on the wasm budgeted path. The z900+ interior wall on this location
+is unchanged — that is the documented f32-mantissa crush limit, not
+a reference problem.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
 coloring-scale ergonomics at extreme depth (auto-ranging the smooth
-value); f3 `reference.period` import + periodic deep references;
-DF-mantissa deltas for crush-heavy locations.
+value); DF-mantissa deltas for crush-heavy locations (the remaining
+depth wall); panel surfacing of the auto-detected period.
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as
