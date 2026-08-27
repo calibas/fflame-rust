@@ -1912,6 +1912,8 @@ escape_panel:
   detect_period: "Detect"
   tooltip_detect_period: "Ball-method period detection at the center's intrinsic depth. Runs in the background; minutes for large periods."
   searching_period: "Detecting period…"
+  period_found: "Period %{period} — wrap exact to 2^-%{octave}, i.e. zoom ~%{zoom}"
+  period_none: "No period under 8,000,000 wraps at this depth — leave the field empty and let the plain reference run."
   detected_period: "In use: period %{period}"
   tooltip_detected_period: "The period of the reference the renderer is using right now. Auto-detection finds deeper periods as a dive continues and retires shallow ones, so this can change while zooming."
   use_detected_period: "Use"

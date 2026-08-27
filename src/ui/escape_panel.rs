@@ -220,9 +220,13 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                 };
                 *slot.lock().unwrap() = PeriodSearch::Running;
                 let out = slot.clone();
+                // The view's depth decides which period is USEFUL: the
+                // smallest closing period is the wrong answer at depth,
+                // because a shallow atom's wrap is not exact there.
+                let zoom = esc.zoom_log2;
                 std::thread::spawn(move || {
-                    let found = crate::escape::nucleus::detect_center_period(
-                        &re, &im, power, 8_000_000,
+                    let found = crate::escape::nucleus::detect_period_for_zoom(
+                        &re, &im, power, 8_000_000, zoom,
                     );
                     *out.lock().unwrap() = PeriodSearch::Done(found);
                 });
@@ -238,17 +242,37 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                 }
             };
             if let Some(found) = done {
+                let note = period_note_slot();
                 match found {
-                    Some(p) => {
+                    Some((p, oct)) => {
                         let _ = config_manager.update_param(
                             ConfigPath::EscapeReferencePeriod,
                             ConfigValue::UInt(p),
                         );
+                        // -oct - 16 inverts closure_limit_for_zoom: the
+                        // deepest view this wrap stays exact for.
+                        *note.lock().unwrap() = Some(
+                            t!(
+                                "escape_panel.period_found",
+                                period = p,
+                                octave = -oct,
+                                zoom = (-oct - 16).max(0)
+                            )
+                            .to_string(),
+                        );
                     }
                     None => {
-                        log::warn!("period detection: no closure found (center may not sit on a nucleus)");
+                        log::warn!(
+                            "period detection: nothing within 8,000,000 wraps at zoom {:.0}",
+                            esc.zoom_log2
+                        );
+                        *note.lock().unwrap() =
+                            Some(t!("escape_panel.period_none").to_string());
                     }
                 }
+            }
+            if let Some(msg) = period_note_slot().lock().unwrap().as_ref() {
+                ui.label(egui::RichText::new(msg).small().weak());
             }
         }
     });
@@ -628,7 +652,9 @@ pub(crate) fn escape_zoom_by_factor(config_manager: &mut ConfigManager, factor: 
 enum PeriodSearch {
     Idle,
     Running,
-    Done(Option<u32>),
+    /// (period, closure octave) — the octave is what makes the result
+    /// explainable: it says how deep the wrap stays exact.
+    Done(Option<(u32, i64)>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -637,6 +663,17 @@ fn period_search_slot() -> std::sync::Arc<std::sync::Mutex<PeriodSearch>> {
     static SLOT: OnceLock<Arc<Mutex<PeriodSearch>>> = OnceLock::new();
     SLOT.get_or_init(|| Arc::new(Mutex::new(PeriodSearch::Idle)))
         .clone()
+}
+
+/// What the last detection concluded, shown under the field. A period
+/// that cannot wrap at the current depth is a real answer and the user
+/// needs to see it — silently writing it into the field is what made a
+/// z9316 view adopt a period-71,100 atom that serves only to ~z597.
+#[cfg(not(target_arch = "wasm32"))]
+fn period_note_slot() -> std::sync::Arc<std::sync::Mutex<Option<String>>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static SLOT: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Arc::new(Mutex::new(None))).clone()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
