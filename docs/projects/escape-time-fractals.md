@@ -1119,8 +1119,9 @@ nobody re-derives it.
    ~Z") and says plainly when nothing within the cap wraps at this
    depth, which is the f3 target's actual answer.
 
-4. **BLA disagrees with exact iteration at depth — and the cause is
-   NOT the tolerance.** Measured 2026-08-27 on the f3 frame
+4. **BLA disagrees with exact iteration at depth.** LARGELY FIXED
+   2026-08-27; a residual remains, and its cause is NOT any of the
+   three things one would try first. Measured on the f3 frame
    (z9316, 10.1M iterations, 640×384): against a BLA-off render
    (exact perturbed iteration, 177 s vs 6.3 s — BLA buys **28×** at
    this depth, against only 1.4× at z1500), the BLA render differs on
@@ -1130,16 +1131,42 @@ nobody re-derives it.
    pixels. So the divergence is systematic, not accumulated
    linearization error.
 
-   Leading hypothesis, untested: the BLA table is built from the f32
-   reference `hi` alone (`Cfe64::from_f64(orbit[n][0] as f64, ...)`)
-   while the delta arithmetic now runs in DF at ~2^-48. Every skip
-   would then inject ~2^-24 relative error into δ — invisible to
-   `BLA_EPS`, which bounds only the dropped nonlinear term. The fix
-   would be to build the table from `hi + lo` and the exponent, which
-   also subsumes the original dip problem below. Test it by
-   rebuilding the table in DF and re-running the same comparison.
+   That hypothesis was right. The table was built from the f32
+   reference `hi` alone while the deltas ran in DF at ~2^-48, so
+   every skip injected ~2^-24 of coefficient error — invisible to
+   `BLA_EPS`, which bounds only the dropped nonlinear term. Feeding
+   `build_with_dc` the resolved `hi + lo` scaled by the per-entry
+   exponent, in f64, moved the disagreement with exact iteration from
+   **66.5% of pixels (mean 25.6/255) to 12.4% (mean 2.6)** — 10x on
+   the mean — and made the render slightly FASTER (6.3 s → 5.7 s),
+   because a deep dip now carries a real radius instead of a zero one
+   and those steps became skippable. That also subsumes the dip
+   mechanism described below, which was the same range problem seen
+   from the other side.
 
-   The original dip mechanism, still true and still unmeasured:
+   THE RESIDUAL (12.4%, mean 2.6/255 ≈ 1%) is NOT explained by the
+   obvious candidates, all measured:
+   - Not the tolerance. `BLA_EPS` from 2^-24 to 2^-40 — 65,536x —
+     moves it by 0.01 and costs nothing in time.
+   - Not per-skip coefficient error accumulating. Capping the table
+     at 8 levels (spans ≤ 512, so many more, much shorter skips)
+     gives 12.58%/2.63 — indistinguishable, and 42% slower.
+   - Not skip length in either direction.
+   What remains, unproven: the GPU `BlaEntry` still carries `a_m` as
+   a **vec2<f32> mantissa**, so the multiplier a skip applies is
+   f32-precise even though the table is now computed in f64. Making
+   it a DF pair costs ~25% on table memory. The skip-length evidence
+   argues AGAINST per-skip error dominating, so this is a real
+   precision gap but probably not the explanation — do not start
+   there without a cheaper discriminating experiment. Chaotic
+   amplification of any path difference at 10M iterations is the
+   other candidate and would be irreducible.
+
+   Practical state: BLA now buys **31x** (177 s → 5.7 s) at ~1% mean
+   colour deviation from exact iteration on the hardest frame we
+   have. `ESCAPE_DISABLE_BLA=1` still renders the exact path.
+
+   The original dip mechanism, now subsumed by the f64 feed:
    BLA is fed exponent-flushed reference values (`entry_value`), so
    an iterate below 2^-126 reads as zero, its radius
    `eps·|Z|·2/(p−1)` is zero, and `bla_mag_lt` treats that as "never
@@ -1152,9 +1179,7 @@ nobody re-derives it.
    until instrumented: the actual skip rate, so the win is unsized.
    Same bug family as the reference-exponent fix, one layer up.
 
-   Practical note for now: at extreme depth BLA is a 28× speedup that
-   visibly changes the frame. Exploration wants it on; a final render
-   may want `ESCAPE_DISABLE_BLA=1` until this is understood.
+
 
 5. **Headless chunk overhead.** Partly subsumed by (1): the
    per-chunk downsample pass is redundant for an export where only
