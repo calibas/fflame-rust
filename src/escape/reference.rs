@@ -103,6 +103,9 @@ pub struct ReferenceOrbit {
     /// Zₙ as f32 pairs, orbit[0] = Z₀ = 0. Length = iterations
     /// computed + 1.
     pub orbit: Vec<[f32; 2]>,
+    /// The f64 residual of each entry below its f32 hi (DF storage:
+    /// Z ≈ hi + lo to ~2^-48 relative). Same length as `orbit`.
+    pub orbit_lo: Vec<[f32; 2]>,
     /// Iteration at which the REFERENCE escaped (|Z|² > 4), if it did.
     /// Pixels needing more iterations rebase (wrap to index 0), so a
     /// short orbit is fine — it just stops growing.
@@ -182,6 +185,7 @@ impl ReferenceOrbit {
             off_height_px: 1.0,
             n_limbs: n,
             orbit: vec![first],
+            orbit_lo: vec![[0.0, 0.0]],
             escaped_at: None,
             z: z0,
             c,
@@ -296,7 +300,11 @@ impl ReferenceOrbit {
                     self.min_octave = oct;
                     self.min_at = idx;
                     if oct <= self.closure_limit_octave && idx > 0 {
-                        self.orbit.push([x as f32, y as f32]);
+                        let hix = x as f32;
+                        let hiy = y as f32;
+                        self.orbit.push([hix, hiy]);
+                        self.orbit_lo
+                            .push([(x - hix as f64) as f32, (y - hiy as f64) as f32]);
                         self.periodic = Some(idx);
                         self.closure_octave = oct;
                         log::info!(
@@ -306,7 +314,10 @@ impl ReferenceOrbit {
                     }
                 }
             }
-            self.orbit.push([x as f32, y as f32]);
+            let hix = x as f32;
+            let hiy = y as f32;
+            self.orbit.push([hix, hiy]);
+            self.orbit_lo.push([(x - hix as f64) as f32, (y - hiy as f64) as f32]);
             if x * x + y * y > 4.0 {
                 self.escaped_at = Some(self.orbit.len() as u32 - 1);
                 break;
@@ -424,6 +435,10 @@ impl ReferenceOrbit {
             out.extend_from_slice(&z[0].to_le_bytes());
             out.extend_from_slice(&z[1].to_le_bytes());
         }
+        for z in &self.orbit_lo {
+            out.extend_from_slice(&z[0].to_le_bytes());
+            out.extend_from_slice(&z[1].to_le_bytes());
+        }
         for f in [&self.z.re, &self.z.im, &self.c.re, &self.c.im] {
             put_fixed(&mut out, f);
         }
@@ -513,6 +528,10 @@ impl ReferenceOrbit {
         for _ in 0..orbit_len {
             orbit.push([r.f32()?, r.f32()?]);
         }
+        let mut orbit_lo = Vec::with_capacity(orbit_len);
+        for _ in 0..orbit_len {
+            orbit_lo.push([r.f32()?, r.f32()?]);
+        }
         let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         Some(Self {
@@ -528,6 +547,7 @@ impl ReferenceOrbit {
             off_height_px: off_height,
             n_limbs,
             orbit,
+            orbit_lo,
             escaped_at,
             z,
             c,
@@ -636,6 +656,8 @@ pub struct OrbitProgress {
     pub epoch: u64,
     /// Z_n snapshots so far (orbit[0] = the seed).
     pub orbit: Vec<[f32; 2]>,
+    /// DF residuals, parallel to `orbit`.
+    pub orbit_lo: Vec<[f32; 2]>,
     /// The orbit covers its request's max_iter (or escaped early).
     pub done: bool,
 }
@@ -720,6 +742,7 @@ impl OrbitWorker {
                                         let mut p = shared.lock().unwrap();
                                         p.epoch = epoch;
                                         p.orbit.clear();
+                                        p.orbit_lo.clear();
                                         p.done = true;
                                         continue;
                                     }
@@ -732,6 +755,8 @@ impl OrbitWorker {
                             p.epoch = epoch;
                             p.orbit.clear();
                             p.orbit.extend_from_slice(&orbit.orbit);
+                            p.orbit_lo.clear();
+                            p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
                             p.ref_offset = orbit.ref_offset;
                             p.off_zoom_log2 = orbit.off_zoom_log2;
                             p.off_height_px = orbit.off_height_px;
@@ -758,11 +783,14 @@ impl OrbitWorker {
                                 let have = p.orbit.len();
                                 if orbit.orbit.len() >= have {
                                     p.orbit.extend_from_slice(&orbit.orbit[have..]);
+                                    p.orbit_lo.extend_from_slice(&orbit.orbit_lo[have..]);
                                 } else {
                                     // Auto-closure truncated the orbit
                                     // to one period: republish whole.
                                     p.orbit.clear();
                                     p.orbit.extend_from_slice(&orbit.orbit);
+                                    p.orbit_lo.clear();
+                                    p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
                                 }
                                 p.detected_period = orbit.periodic;
                                 p.done = done;
@@ -883,6 +911,8 @@ fn tx_loopback_send(
         p.epoch = epoch;
         p.orbit.clear();
         p.orbit.extend_from_slice(&orbit.orbit);
+        p.orbit_lo.clear();
+        p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
         p.ref_offset = orbit.ref_offset;
         p.off_zoom_log2 = orbit.off_zoom_log2;
         p.off_height_px = orbit.off_height_px;
@@ -915,9 +945,16 @@ impl ReferenceOrbit {
             return None;
         }
         let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+        // Compute WITHOUT auto-closure: a shallower cascade closure
+        // would truncate the orbit mid-verification and preempt the
+        // hinted DEEP reference (observed: period 142,232 stealing a
+        // 1,137,764 hint). The hint asks for exactly this period; the
+        // closure check below is the arbiter.
         let mut orbit = Self::compute(
-            center_re, center_im, zoom_log2, Some(n), period, None, power, false, 0,
+            center_re, center_im, zoom_log2, Some(n), 0, None, power, false, 0,
         )?;
+        orbit.closure_limit_octave = i64::MIN / 4;
+        orbit.extend(period);
         if orbit.escaped_at.is_some() || orbit.len() <= period {
             log::warn!("reference period {period}: center orbit escapes before closing");
             return None;
@@ -935,6 +972,7 @@ impl ReferenceOrbit {
         }
         orbit.periodic = Some(period);
         orbit.orbit.truncate(period as usize + 1);
+        orbit.orbit_lo.truncate(period as usize + 1);
         {
             let fx = orbit.z.re.to_floatexp();
             let fy = orbit.z.im.to_floatexp();
@@ -1511,6 +1549,8 @@ mod tests {
         }
         assert!(steps > 3, "budget was not actually slicing ({steps} steps)");
     }
+
+
 
     #[test]
     fn extend_auto_detects_a_periodic_center() {
