@@ -69,6 +69,71 @@ fn nucleus_for_view(
     Some((hit.re, hit.im, hit.period, off))
 }
 
+/// The iterate's plain f32 value: `hi * 2^e`, flushing to zero below
+/// f32's normal range - which is exactly what the pre-exponent
+/// storage handed every consumer, so any reader that only needs a
+/// coarse value (BLA radii, the rebase test, `z_full`) keeps its old
+/// semantics.
+#[inline]
+pub fn entry_value(hi: [f32; 2], e: i32) -> [f32; 2] {
+    if e == 0 {
+        return hi;
+    }
+    if e < -126 {
+        return [0.0, 0.0];
+    }
+    let s = 2f32.powi(e);
+    [hi[0] * s, hi[1] * s]
+}
+
+/// Split an iterate into the (hi, lo, exponent) storage form.
+///
+/// Above 2^-90 the exponent is 0 and the pair is the plain DF value -
+/// byte-identical to the old format, and `lo` stays a normal f32.
+/// Below it the magnitude is taken from the LIVE fixed-point state,
+/// not from the f64 pair: deep references reach 2^-1379, far past
+/// f64's 2^-1074, so an f64 round-trip would lose the very iterates
+/// this exists to keep.
+fn split_entry(z: &FixedComplex, x: f64, y: f64) -> ([f32; 2], [f32; 2], i32) {
+    const DEEP: f64 = 8.077_935_669_463_16e-28; // 2^-90
+    if x.abs().max(y.abs()) >= DEEP {
+        let hix = x as f32;
+        let hiy = y as f32;
+        return (
+            [hix, hiy],
+            [(x - hix as f64) as f32, (y - hiy as f64) as f32],
+            0,
+        );
+    }
+    let fx = z.re.to_floatexp();
+    let fy = z.im.to_floatexp();
+    let e = match (fx.m == 0.0, fy.m == 0.0) {
+        (true, true) => return ([0.0, 0.0], [0.0, 0.0], 0),
+        (true, false) => fy.e,
+        (false, true) => fx.e,
+        (false, false) => fx.e.max(fy.e),
+    };
+    let comp = |f: super::fixedpoint::FloatExp| -> f64 {
+        if f.m == 0.0 {
+            return 0.0;
+        }
+        let shift = f.e - e;
+        if shift < -1070 {
+            return 0.0;
+        }
+        f.m * (shift as f64).exp2()
+    };
+    let mx = comp(fx);
+    let my = comp(fy);
+    let hix = mx as f32;
+    let hiy = my as f32;
+    (
+        [hix, hiy],
+        [(mx - hix as f64) as f32, (my - hiy as f64) as f32],
+        e.clamp(-2_000_000_000, 2_000_000_000) as i32,
+    )
+}
+
 /// A computed reference orbit plus the live state to extend it.
 pub struct ReferenceOrbit {
     /// Exact center, as the config's decimal strings.
@@ -106,6 +171,21 @@ pub struct ReferenceOrbit {
     /// The f64 residual of each entry below its f32 hi (DF storage:
     /// Z ≈ hi + lo to ~2^-48 relative). Same length as `orbit`.
     pub orbit_lo: Vec<[f32; 2]>,
+    /// Per-entry binary exponent: the stored iterate is
+    /// `(hi + lo) * 2^orbit_e[i]`. It is **zero for every iterate at
+    /// or above 2^-90**, so those entries hold the plain f32 value
+    /// and read exactly as they did before this field existed.
+    ///
+    /// Only a reference passing very close to a nucleus produces a
+    /// nonzero exponent - and those iterates are precisely the ones
+    /// f32 storage used to flush to zero, which deleted the 2*Z*delta
+    /// term from the delta recurrence for that step. Measured on the
+    /// z700 field location: a 2^-183 dip at i=8897 cost the delta 154
+    /// octaves it never recovered (growth ran at half the true rate
+    /// from there on), pushing a corner pixel's escape from its true
+    /// 23,649 out to 41,163 - the "deep zoom renders interior mush"
+    /// wall.
+    pub orbit_e: Vec<i32>,
     /// Iteration at which the REFERENCE escaped (|Z|² > 4), if it did.
     /// Pixels needing more iterations rebase (wrap to index 0), so a
     /// short orbit is fine — it just stops growing.
@@ -186,6 +266,7 @@ impl ReferenceOrbit {
             n_limbs: n,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
+            orbit_e: vec![0],
             escaped_at: None,
             z: z0,
             c,
@@ -300,11 +381,10 @@ impl ReferenceOrbit {
                     self.min_octave = oct;
                     self.min_at = idx;
                     if oct <= self.closure_limit_octave && idx > 0 {
-                        let hix = x as f32;
-                        let hiy = y as f32;
-                        self.orbit.push([hix, hiy]);
-                        self.orbit_lo
-                            .push([(x - hix as f64) as f32, (y - hiy as f64) as f32]);
+                        let (hi, lo, ee) = split_entry(&self.z, x, y);
+                        self.orbit.push(hi);
+                        self.orbit_lo.push(lo);
+                        self.orbit_e.push(ee);
                         self.periodic = Some(idx);
                         self.closure_octave = oct;
                         log::info!(
@@ -314,15 +394,21 @@ impl ReferenceOrbit {
                     }
                 }
             }
-            let hix = x as f32;
-            let hiy = y as f32;
-            self.orbit.push([hix, hiy]);
-            self.orbit_lo.push([(x - hix as f64) as f32, (y - hiy as f64) as f32]);
+            let (hi, lo, ee) = split_entry(&self.z, x, y);
+            self.orbit.push(hi);
+            self.orbit_lo.push(lo);
+            self.orbit_e.push(ee);
             if x * x + y * y > 4.0 {
                 self.escaped_at = Some(self.orbit.len() as u32 - 1);
                 break;
             }
         }
+    }
+
+    /// The iterate's plain f32 value (deep entries read as zero,
+    /// exactly as pre-exponent f32 storage did).
+    pub fn z_f32(&self, i: usize) -> [f32; 2] {
+        entry_value(self.orbit[i], self.orbit_e.get(i).copied().unwrap_or(0))
     }
 
     /// Test-only view of the live fixed-point iterate.
@@ -439,6 +525,9 @@ impl ReferenceOrbit {
             out.extend_from_slice(&z[0].to_le_bytes());
             out.extend_from_slice(&z[1].to_le_bytes());
         }
+        for e in &self.orbit_e {
+            out.extend_from_slice(&e.to_le_bytes());
+        }
         for f in [&self.z.re, &self.z.im, &self.c.re, &self.c.im] {
             put_fixed(&mut out, f);
         }
@@ -532,6 +621,10 @@ impl ReferenceOrbit {
         for _ in 0..orbit_len {
             orbit_lo.push([r.f32()?, r.f32()?]);
         }
+        let mut orbit_e = Vec::with_capacity(orbit_len);
+        for _ in 0..orbit_len {
+            orbit_e.push(r.u32()? as i32);
+        }
         let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         Some(Self {
@@ -548,6 +641,7 @@ impl ReferenceOrbit {
             n_limbs,
             orbit,
             orbit_lo,
+            orbit_e,
             escaped_at,
             z,
             c,
@@ -564,7 +658,8 @@ impl ReferenceOrbit {
     /// fixed-point state as the orbit extends.
     #[cfg(not(target_arch = "wasm32"))]
     fn with_rescanned_min(mut self) -> Self {
-        for (i, z) in self.orbit.iter().enumerate().skip(1) {
+        for i in 1..self.orbit.len() {
+            let z = self.z_f32(i);
             let m = (z[0] as f64) * (z[0] as f64) + (z[1] as f64) * (z[1] as f64);
             let oct = if m == 0.0 { -149 } else { (m.log2() / 2.0) as i64 };
             if oct < self.min_octave {
@@ -658,6 +753,9 @@ pub struct OrbitProgress {
     pub orbit: Vec<[f32; 2]>,
     /// DF residuals, parallel to `orbit`.
     pub orbit_lo: Vec<[f32; 2]>,
+    /// Per-entry exponents, parallel to `orbit` (see
+    /// [`ReferenceOrbit::orbit_e`]).
+    pub orbit_e: Vec<i32>,
     /// The orbit covers its request's max_iter (or escaped early).
     pub done: bool,
 }
@@ -743,6 +841,7 @@ impl OrbitWorker {
                                         p.epoch = epoch;
                                         p.orbit.clear();
                                         p.orbit_lo.clear();
+                                        p.orbit_e.clear();
                                         p.done = true;
                                         continue;
                                     }
@@ -757,6 +856,8 @@ impl OrbitWorker {
                             p.orbit.extend_from_slice(&orbit.orbit);
                             p.orbit_lo.clear();
                             p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+                            p.orbit_e.clear();
+                            p.orbit_e.extend_from_slice(&orbit.orbit_e);
                             p.ref_offset = orbit.ref_offset;
                             p.off_zoom_log2 = orbit.off_zoom_log2;
                             p.off_height_px = orbit.off_height_px;
@@ -784,6 +885,7 @@ impl OrbitWorker {
                                 if orbit.orbit.len() >= have {
                                     p.orbit.extend_from_slice(&orbit.orbit[have..]);
                                     p.orbit_lo.extend_from_slice(&orbit.orbit_lo[have..]);
+                                    p.orbit_e.extend_from_slice(&orbit.orbit_e[have..]);
                                 } else {
                                     // Auto-closure truncated the orbit
                                     // to one period: republish whole.
@@ -791,6 +893,8 @@ impl OrbitWorker {
                                     p.orbit.extend_from_slice(&orbit.orbit);
                                     p.orbit_lo.clear();
                                     p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+                                    p.orbit_e.clear();
+                                    p.orbit_e.extend_from_slice(&orbit.orbit_e);
                                 }
                                 p.detected_period = orbit.periodic;
                                 p.done = done;
@@ -913,6 +1017,8 @@ fn tx_loopback_send(
         p.orbit.extend_from_slice(&orbit.orbit);
         p.orbit_lo.clear();
         p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+        p.orbit_e.clear();
+        p.orbit_e.extend_from_slice(&orbit.orbit_e);
         p.ref_offset = orbit.ref_offset;
         p.off_zoom_log2 = orbit.off_zoom_log2;
         p.off_height_px = orbit.off_height_px;
@@ -973,6 +1079,7 @@ impl ReferenceOrbit {
         orbit.periodic = Some(period);
         orbit.orbit.truncate(period as usize + 1);
         orbit.orbit_lo.truncate(period as usize + 1);
+        orbit.orbit_e.truncate(period as usize + 1);
         {
             let fx = orbit.z.re.to_floatexp();
             let fy = orbit.z.im.to_floatexp();
@@ -1441,6 +1548,63 @@ mod tests {
     }
 
     #[test]
+    fn near_nucleus_iterates_survive_f32_storage() {
+        // The z700 escape-lag bug: a reference iterate that passes
+        // very close to a nucleus is far below f32's smallest normal
+        // (2^-126), so plain f32 storage read it as EXACTLY ZERO -
+        // which deletes 2*Z*delta from that step of the delta
+        // recurrence. Measured cost on the field location: a 2^-183
+        // dip at i=8897 dropped the delta 154 octaves it never
+        // recovered, and a corner pixel whose true escape is 23,649
+        // rendered as interior past 41,163.
+        //
+        // The exponent must therefore be carried, and the mantissa
+        // must stay normalized.
+        let orbit = ReferenceOrbit::compute_nucleus_aware(
+            "-1.7548776",
+            "0.0000001",
+            20.0,
+            5000,
+            320.0,
+            2,
+            None,
+        )
+        .expect("computes");
+        assert_eq!(orbit.periodic, Some(3));
+        assert_eq!(orbit.orbit_e.len(), orbit.orbit.len());
+        // Z_3 is the nucleus closure: deep enough that f32 alone
+        // cannot hold it.
+        let e = orbit.orbit_e[3];
+        assert!(
+            e < -126,
+            "a nucleus closure must carry its own exponent, got {e}"
+        );
+        let m = orbit.orbit[3];
+        let mag = m[0].abs().max(m[1].abs());
+        assert!(
+            (1.0..4.0).contains(&mag),
+            "stored mantissa must be normalized, got {mag}"
+        );
+        // The value view is unchanged from the pre-exponent format.
+        assert_eq!(entry_value(m, e), [0.0, 0.0]);
+        assert_eq!(orbit.z_f32(3), [0.0, 0.0]);
+        // ...and the magnitude the recurrence needs is recoverable:
+        // mantissa * 2^e agrees with the exact fixed-point iterate.
+        let (zre, _zim) = orbit.z_state();
+        let fe = zre.to_floatexp();
+        assert!(
+            (fe.e - e as i64).abs() <= 1,
+            "octave mismatch: stored 2^{e} vs exact 2^{}",
+            fe.e
+        );
+        // Every ordinary iterate keeps exponent 0 (the old format),
+        // so nothing else in the pipeline changes meaning.
+        assert_eq!(orbit.orbit_e[0], 0);
+        assert_eq!(orbit.orbit_e[1], 0);
+        assert_eq!(orbit.z_f32(1), orbit.orbit[1]);
+    }
+
+    #[test]
     fn nucleus_reference_relocates_and_is_periodic() {
         // A view near (not on) the period-3 antenna nucleus: the
         // reference must relocate to the nucleus (Z_3 = 0), carry the
@@ -1457,7 +1621,10 @@ mod tests {
         .expect("computes");
         assert_eq!(orbit.periodic, Some(3));
         assert_eq!(orbit.len(), 4); // Z_0..Z_3
-        let [zx, zy] = orbit.orbit[3];
+        // Through the accessor: a closure this deep is stored as a
+        // normalized mantissa plus an exponent (the raw array holds
+        // the mantissa, which is O(1) by construction).
+        let [zx, zy] = orbit.z_f32(3);
         assert!(
             (zx * zx + zy * zy) < 1e-10,
             "Z_period must be ~0, got ({zx}, {zy})"
@@ -1549,6 +1716,10 @@ mod tests {
         }
         assert!(steps > 3, "budget was not actually slicing ({steps} steps)");
     }
+
+
+
+
 
 
 

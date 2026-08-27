@@ -843,9 +843,10 @@ at any given zoom the auto-detected (cheaper, shallower-but-valid)
 closure may supersede it — correct per-zoom behavior. Deferred:
 surfacing the auto period in the panel (needs a renderer→panel
 channel; the worker already publishes `detected_period`), and hints
-on the wasm budgeted path. The z900+ interior wall on this location
-is unchanged — that is the documented f32-mantissa crush limit, not
-a reference problem.
+on the wasm budgeted path. (The z900+ interior wall once blamed
+here on "f32-mantissa crush" was the reference-exponent bug
+described below — z900 and z1100 render full structure as soon as
+near-nucleus iterates keep their magnitude.)
 
 DF ("double-f32") tier shipped (2026-08-26/27): error-free
 transforms with BITMASK Dekker splits (integer ops — immune to
@@ -863,26 +864,66 @@ references now actually build (measured: 53 s once at 197 limbs,
 then persisted). All gates and the 18-scenario agreement suite
 hold.
 
-MEASURED HONESTLY: none of it moved the z700 wall on the field
-location. Two independent exact implementations (fixed-point and
-python-Decimal) agree the window's true escape band is
-[23,638..23,928] with only the exact center interior — while the
-rendered band sits in (41k, 50k], a coherent ~2× lag that is
-IDENTICAL across f32/DF deltas, f32/DF references, shallow/deep
-periodic references, and BLA on/off. The earlier "center escapes at
-40,285" ground truth was itself an artifact of the probe's 15-limb
-truncation (the true center is interior ≥60k). Diagnosis in
-progress: a full-precision Decimal delta-growth trace of the corner
-(−699 octaves → escape across 23,649 iterations, uneven staircase)
-against a bit-faithful DF replica of the shader model, to locate
-the operation where represented growth lags truth.
+MEASURED HONESTLY at the time: none of it moved the z700 wall. Two
+independent exact implementations (fixed-point and python-Decimal)
+agreed the window's true escape band is [23,638..23,928] with only
+the exact center interior — while the rendered band sat in (41k,
+50k], a coherent ~2× lag IDENTICAL across f32/DF deltas, f32/DF
+references, shallow/deep periodic references, and BLA on/off. (The
+earlier "center escapes at 40,285" ground truth was itself an
+artifact of a probe's 15-limb truncation; the true center is
+interior ≥60k.)
+
+REFERENCE EXPONENTS — the z700 wall, resolved (2026-08-26).
+It was never a precision limit. Reference iterates were stored as
+f32 hi + f32 lo: 48 bits of MANTISSA, but only f32's EXPONENT
+RANGE. A reference that passes close to a nucleus goes far below
+f32's smallest normal (2^-126) and read back as exactly zero —
+deleting the 2·Z·δ term from that step of the delta recurrence.
+With the dominant term gone the delta drops to δ², and it never
+recovers the octaves it lost.
+
+Found by a paired trace: the shader's DF model and an EXACT
+fixed-point delta, side by side against the same reference. They
+agreed to one octave for 8,896 iterations, then the model lost 154
+octaves in a single step — at i=8,897, where the reference dips to
+|Z| ~ 2^-183 — and another 156 at i=17,769 (the next such dip).
+Between drops the growth rates match exactly; the entire ~2×
+deficit is those two steps. Dips to 2^-13..2^-37 recur every ~70
+iterations and are harmless; only the sub-2^-126 ones bite, which is
+why the lag looked like a smooth model deviation rather than an
+arithmetic bug.
+
+The fix is a per-entry binary exponent (`ReferenceOrbit::orbit_e`,
+binding 9, orbit format FFORBIT4): the stored iterate is
+(hi + lo)·2^e, with **e = 0 for every iterate above 2^-90**. The
+overwhelming majority of entries are therefore byte-identical to
+the old format, and every consumer that wants a plain value (BLA
+radii, the rebase test, `z_full`, Ship) keeps its old semantics
+through `entry_value` / `ref_z` — which flush to zero exactly as
+f32 did. Only near-nucleus iterates carry a nonzero exponent, and
+the deep rung's 2Z multiplier (`cfe2_mul_zdfe`, and `k·z_ref_e` on
+the multibrot terms) is what reads it.
+
+Verified: the CPU replica of the shader model now escapes at 23,649
+— exactly ground truth — with the model-vs-exact gap flat at one
+octave across all 24k iterations, both dips included. On the GPU
+the same window renders 100% interior at max_iter 23,000 and 99%
+escaped at 24,000, bracketing the true band [23,638..23,928]; the
+pre-fix build was 100% interior at 30,000 AND at 41,000. The
+curated z680 location and z900/z1100 on it — the "interior wall"
+previously blamed on f32-mantissa crush — now render full
+structure.
+
+Cost: 4 bytes per orbit entry (16 → 20 B) and one extra buffer read
+per iteration. BLA is unchanged and still declines to skip across a
+deep dip (a zero-radius entry): conservative, not wrong.
 
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
 coloring-scale ergonomics at extreme depth (auto-ranging the smooth
-value); the z700-class ~2× escape-lag investigation (see above);
-panel surfacing of the auto-detected period.
+value); panel surfacing of the auto-detected period.
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as
