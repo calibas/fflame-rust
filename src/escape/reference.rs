@@ -231,6 +231,19 @@ pub struct ReferenceOrbit {
     /// far-negative for Newton-exact nuclei). Persisted: validity at
     /// a new zoom is closure_octave vs that zoom's limit.
     pub closure_octave: i64,
+    /// A period hint that was TRIED on this center and turned out too
+    /// shallow to wrap at the view it was built for, with the |Z_p|
+    /// octave it actually closed at.
+    ///
+    /// Without this, a request carrying that hint cannot recognise
+    /// THIS orbit as its answer: the cache key hashes the center, not
+    /// the period, so a stored plain reference gets rejected and a
+    /// perfectly good multi-minute computation is repeated. Keeping
+    /// the octave rather than a bare "rejected" flag makes the
+    /// decision zoom-aware - the same hint may be too shallow here
+    /// and exactly right two hundred octaves out.
+    pub hint_period: Option<u32>,
+    pub hint_octave: i64,
 }
 
 /// Octave limit for accepting a closure at a zoom: 16 octaves below
@@ -297,6 +310,8 @@ impl ReferenceOrbit {
             min_at: 0,
             closure_limit_octave: closure_limit_for_zoom(zoom_log2),
             closure_octave: i64::MAX,
+            hint_period: None,
+            hint_octave: i64::MAX,
         };
         orbit.extend(max_iter);
         Some(orbit)
@@ -507,6 +522,11 @@ impl ReferenceOrbit {
         let mut out = Vec::with_capacity(64 + self.orbit.len() * 8 + self.n_limbs * 32);
         out.extend_from_slice(super::orbit_store::MAGIC);
         out.extend_from_slice(&(self.orbit.len() as u32).to_le_bytes());
+        // Fixed prefix: the store's staleness probe reads exactly this
+        // much (see orbit_store::saved_meta) to decide whether a
+        // rewrite would ADD anything, without parsing the whole file.
+        out.extend_from_slice(&self.hint_period.unwrap_or(0).to_le_bytes());
+        out.extend_from_slice(&self.hint_octave.to_le_bytes());
         put_str(&mut out, &self.center_re);
         put_str(&mut out, &self.center_im);
         match self.julia_c {
@@ -611,6 +631,11 @@ impl ReferenceOrbit {
         if orbit_len == 0 || orbit_len > 64_000_000 {
             return None;
         }
+        let hint_period = match r.u32()? {
+            0 => None,
+            p => Some(p),
+        };
+        let hint_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
         let center_re = r.string()?;
         let center_im = r.string()?;
         let julia_c = match r.u8()? {
@@ -672,6 +697,8 @@ impl ReferenceOrbit {
             min_at: 0,
             closure_limit_octave: closure_limit_for_zoom(off_zoom),
             closure_octave,
+            hint_period,
+            hint_octave,
         }
         .with_rescanned_min())
     }
@@ -698,6 +725,24 @@ impl ReferenceOrbit {
     /// octave stays below the view's limit.
     pub fn periodic_serves(&self, zoom_log2: f64) -> bool {
         self.periodic.is_none() || self.closure_octave <= closure_limit_for_zoom(zoom_log2)
+    }
+
+    /// Whether this orbit answers a request carrying `hint`.
+    ///
+    /// A periodic orbit of that period obviously does. So does a
+    /// PLAIN orbit that already tried the hint and measured it too
+    /// shallow for this zoom — that is the right reference for the
+    /// request, and rebuilding it would only rediscover the same
+    /// fact at the same cost.
+    pub fn answers_hint(&self, hint: Option<u32>, zoom_log2: f64) -> bool {
+        match hint {
+            None => true,
+            Some(p) => {
+                self.periodic == Some(p)
+                    || (self.hint_period == Some(p)
+                        && self.hint_octave > closure_limit_for_zoom(zoom_log2))
+            }
+        }
     }
 
     /// Retighten the closure limit before extending for a (possibly
@@ -1164,6 +1209,8 @@ impl ReferenceOrbit {
                         orbit.closure_octave,
                         closure_limit_for_zoom(zoom_log2),
                     );
+                    orbit.hint_period = Some(p);
+                    orbit.hint_octave = orbit.closure_octave;
                     orbit.periodic = None;
                     orbit.closure_octave = i64::MAX;
                     orbit.set_closure_limit(zoom_log2);
@@ -1278,8 +1325,7 @@ impl OrbitCache {
             // A stored orbit only serves a hint-set request if it IS
             // the hinted periodic form.
             let loaded = loaded.filter(|o| {
-                (self.reference_period.is_none() || o.periodic == self.reference_period)
-                    && o.periodic_serves(zoom_log2)
+                o.answers_hint(self.reference_period, zoom_log2) && o.periodic_serves(zoom_log2)
             });
             let orbit = if let Some(mut o) = loaded {
                 o.extend(max_iter);
@@ -1600,6 +1646,43 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn a_too_shallow_hint_makes_the_plain_orbit_the_answer() {
+        // The cache key hashes the CENTER, not the period, so a
+        // request carrying a hint has to be able to recognise a
+        // stored plain reference as its answer — otherwise setting
+        // the period field silently discards a multi-minute orbit
+        // and recomputes it (measured: 8 minutes, observed by a user
+        // at zoom 9316 with period 71,100).
+        let mut orbit =
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0).unwrap();
+        orbit.hint_period = Some(4242);
+        orbit.hint_octave = -100; // the hint closes only at 2^-100
+
+        // Deep view: 2^-100 cannot wrap below its pixel scale, so the
+        // plain orbit IS what that request should get.
+        assert!(orbit.answers_hint(Some(4242), 200.0));
+        // Shallow view: there the same hint WOULD serve, so the
+        // periodic form must be built rather than this one reused.
+        assert!(!orbit.answers_hint(Some(4242), 50.0));
+        // A different hint is a different question.
+        assert!(!orbit.answers_hint(Some(99), 200.0));
+        // No hint asks nothing of the orbit.
+        assert!(orbit.answers_hint(None, 200.0));
+
+        // A genuinely periodic orbit answers its own period.
+        let mut periodic =
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0).unwrap();
+        periodic.periodic = Some(4242);
+        assert!(periodic.answers_hint(Some(4242), 200.0));
+
+        // The fact survives serialization (it lives in the fixed
+        // prefix so the store can read it without parsing the file).
+        let back = ReferenceOrbit::from_bytes(&orbit.to_bytes()).expect("round trip");
+        assert_eq!(back.hint_period, Some(4242));
+        assert_eq!(back.hint_octave, -100);
+    }
 
     #[test]
     fn near_nucleus_iterates_survive_f32_storage() {

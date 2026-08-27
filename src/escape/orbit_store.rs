@@ -26,7 +26,7 @@ use super::reference::ReferenceOrbit;
 use std::path::{Path, PathBuf};
 
 /// Bump on any layout change: old files then read as misses.
-pub const MAGIC: &[u8; 8] = b"FFORBIT4";
+pub const MAGIC: &[u8; 8] = b"FFORBIT5";
 
 /// Save when recomputing would actually hurt: orbit length times
 /// limbs² is proportional to the fixed-point work done. ~2e6 is a
@@ -84,17 +84,21 @@ pub fn key_for(
     name
 }
 
-/// Orbit length recorded in a file (12-byte read), or None on any
-/// mismatch — the cheap staleness probe.
-fn saved_len(path: &Path) -> Option<u32> {
+/// Orbit length and tried-hint recorded in a file (24-byte read), or
+/// None on any mismatch — the cheap staleness probe. Both live in the
+/// format's fixed prefix precisely so this stays a header read.
+fn saved_meta(path: &Path) -> Option<(u32, u32)> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
-    let mut head = [0u8; 12];
+    let mut head = [0u8; 16];
     f.read_exact(&mut head).ok()?;
     if &head[..8] != MAGIC {
         return None;
     }
-    Some(u32::from_le_bytes(head[8..12].try_into().unwrap()))
+    Some((
+        u32::from_le_bytes(head[8..12].try_into().unwrap()),
+        u32::from_le_bytes(head[12..16].try_into().unwrap()),
+    ))
 }
 
 /// Save into an explicit directory (tests). See [`maybe_save`] for
@@ -110,9 +114,14 @@ pub fn save_to(dir: &Path, orbit: &ReferenceOrbit) -> bool {
         orbit.ship_variant,
     );
     let path = dir.join(name);
-    // Don't rewrite a file that is already at least as deep.
-    if let Some(len) = saved_len(&path) {
-        if len >= orbit.len() {
+    // Don't rewrite a file that is already at least as deep AND
+    // already records the same tried-hint. The second half matters:
+    // the fallback orbit built for a rejected hint is exactly as long
+    // as the plain one already stored, so a length-only test would
+    // drop the one fact that stops the next session repeating a
+    // multi-minute rebuild.
+    if let Some((len, hint)) = saved_meta(&path) {
+        if len >= orbit.len() && hint == orbit.hint_period.unwrap_or(0) {
             return true;
         }
     }
@@ -232,6 +241,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_rejected_hint_is_worth_a_rewrite() {
+        // The fallback orbit built after a hint is found too shallow
+        // is exactly as long as the plain orbit already stored, so a
+        // length-only staleness test drops the one fact that stops
+        // the next session repeating the whole computation.
+        let dir = test_dir("hint_rewrite");
+        let plain =
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0).unwrap();
+        assert!(save_to(&dir, &plain));
+        // Rebuilt rather than cloned: ReferenceOrbit is deliberately
+        // not Clone (these reach hundreds of megabytes).
+        let mut with_hint =
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0).unwrap();
+        with_hint.hint_period = Some(4242);
+        with_hint.hint_octave = -100;
+        assert!(save_to(&dir, &with_hint));
+        let loaded =
+            load_from(&dir, "-0.5", "0.1", plain.n_limbs, None, 2, false, 0, 60.0, 320.0)
+                .expect("hit");
+        assert_eq!(
+            loaded.hint_period,
+            Some(4242),
+            "the tried-hint must survive; without it the next session rebuilds"
+        );
+        assert_eq!(loaded.hint_octave, -100);
+        // ...and the same save again is a no-op (nothing new to add).
+        assert!(save_to(&dir, &with_hint));
+        let again =
+            load_from(&dir, "-0.5", "0.1", plain.n_limbs, None, 2, false, 0, 60.0, 320.0)
+                .expect("hit");
+        assert_eq!(again.hint_period, Some(4242));
     }
 
     #[test]
