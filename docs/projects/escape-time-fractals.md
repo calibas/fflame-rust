@@ -1071,7 +1071,8 @@ nobody re-derives it.
    struct at 48 B/px. Verified: a 1 ms target and a 500 ms target now
    produce **bit-identical** frames (0 pixels differ, was 36%).
 
-2. **Persist the rejected hint** (format FFORBIT5). The orbit
+2. **Persist the rejected hint.** DONE 2026-08-27 (format FFORBIT5).
+   The orbit
    filename hashes (center, limbs, julia, power, ship, variant) —
    NOT the period — while the disk-load filter demands
    `stored.periodic == reference_period`. So setting a period on a
@@ -1079,10 +1080,28 @@ nobody re-derives it.
    file and rebuilds it (8 minutes at 10.1M/197 limbs), and then
    `save_to` refuses to rewrite because the rebuilt orbit is not
    longer — no new file, old timestamp, all work discarded.
-   Observed by the user verbatim. Fix: store "hint X was tried and
-   is too shallow" and accept the stored orbit for that hint.
+   Observed by the user verbatim.
 
-3. **Make Detect zoom-aware.** `detect_center_period` returns the
+   Shipped: the orbit records the hint it TRIED and the |Z_p| octave
+   that hint actually closed at, both in the format's fixed prefix so
+   the store's staleness probe stays a 16-byte header read.
+   `answers_hint` then lets a request carrying that period recognise
+   the plain orbit as its answer — and it is zoom-aware, so the same
+   hint can be too shallow here and exactly right two hundred octaves
+   out. `save_to` also had to learn that a hint-only difference is
+   worth a rewrite: the fallback orbit is exactly as long as the plain
+   one already stored, so a length-only staleness test silently
+   dropped the fact. Measured end to end on the f3 config with the
+   period field set: run 1 **495 s** (one hint build, then the
+   fallback), run 2 **6.2 s** (zero hint builds, loaded from store).
+
+   Related, NOT addressed: `MAX_TOTAL_BYTES` is 256 MB and one
+   10.1M-iteration reference is 202 MB, so exactly one deep reference
+   survives eviction. A second deep location costs the first its
+   8 minutes. Raising the cap is a decision about the user's disk.
+
+3. **Make Detect zoom-aware.** DONE 2026-08-27.
+   `detect_center_period` returns the
    SMALLEST closing period; deep views need the largest period whose
    closure still sits below the view's pixel scale. Measured on the
    f3 location: period 71,100 closes at |Z_p| ~ 2^-613 (serves to
@@ -1092,6 +1111,13 @@ nobody re-derives it.
    serve and silently costs a rebuild. Note the corollary: a period
    deep enough for z9316 would exceed max_iter 10.1M, so for that
    target NO hint is the right answer and the field should say so.
+
+   Shipped as `detect_period_for_zoom`, applying the same test
+   `extend` uses to accept a closure — the first NEW |Z| minimum below
+   the view's limit — so anything returned provably wraps. The panel
+   reports the conclusion ("Period P — wrap exact to 2^-N, i.e. zoom
+   ~Z") and says plainly when nothing within the cap wraps at this
+   depth, which is the f3 target's actual answer.
 
 4. **BLA disagrees with exact iteration at depth — and the cause is
    NOT the tolerance.** Measured 2026-08-27 on the f3 frame
