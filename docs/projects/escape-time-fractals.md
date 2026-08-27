@@ -956,6 +956,34 @@ What is NOT claimed: only the z700 window has exact ground truth
 self-consistency (BLA on/off) and for producing structure, not
 against an exact escape band.
 
+THE HINT RECOMPUTE LOOP (fixed 2026-08-27). Pushing the same
+location to the f3 file's own depth (zoom 9316.69) exposed a
+separate pathology: nothing rendered, and one CPU core stayed busy
+forever. The log said why once it was read at info level — "periodic
+reference from hint: period 1137764" every 54 seconds, endlessly.
+`try_periodic_from_hint` returned a periodic orbit whose closure was
+NOT deep enough for the view; the cache's `periodic_serves` check
+then rejected it on the very next frame, and the next frame rebuilt
+it. Every frame paid a full reference computation and none of them
+was ever usable.
+
+The fix keeps the work rather than throwing it away: when the hinted
+period closes but not below the view's pixel scale, the orbit is
+already the plain prefix 0..=p with a live fixed-point state that
+continues it, so the periodicity is dropped, the ordinary closure
+limit is restored (auto-detection can still close it deeper later),
+and it extends to max_iter as a plain reference. One build, then the
+frame renders. The warning names the numbers.
+
+Measured on the f3 location at zoom 9317: |Z_p| ~ 2^-6263 against a
+pixel-scale limit of 2^-9332. So THAT center string, with that
+period, supports a periodic-wrap reference down to about z6250 —
+past that the wrap is not exact and the render needs a full-length
+reference (or a center refined further toward the nucleus, which is
+the Newton work still open for large periods). This is a property of
+the coordinates, not a bug: |Z_p| is the center's distance from the
+true nucleus amplified by the multiplier.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);

@@ -1135,9 +1135,39 @@ impl ReferenceOrbit {
         let skip_nucleus = std::env::var("ESCAPE_DISABLE_NUCLEUS").is_ok();
         if !skip_nucleus {
             if let Some(p) = period_hint {
-                if let Some(orbit) =
+                if let Some(mut orbit) =
                     Self::try_periodic_from_hint(center_re, center_im, zoom_log2, p, power)
                 {
+                    if orbit.periodic_serves(zoom_log2) {
+                        return Some(orbit);
+                    }
+                    // The hinted period CLOSES, but not below this
+                    // view's pixel scale — the center is not the
+                    // nucleus to enough digits for the wrap to be
+                    // exact here. Returning it anyway is what made
+                    // extreme zooms spin: the cache rejects a
+                    // non-serving orbit on the very next frame, so
+                    // every frame paid a full reference computation
+                    // and nothing ever rendered (measured at
+                    // zoom 9316: one rebuild every 54 s, forever).
+                    //
+                    // Keep the work instead. The orbit already IS the
+                    // plain prefix 0..=p and the live fixed-point
+                    // state continues it, so dropping the periodicity
+                    // and extending costs nothing extra — and
+                    // ordinary auto-detection can still close it at a
+                    // depth that does serve.
+                    log::warn!(
+                        "reference period {p} does not serve zoom {zoom_log2:.0}: \
+                         |Z_p| ~ 2^{} vs pixel-scale limit 2^{} — continuing as a plain \
+                         reference (refine the center toward the nucleus for an exact wrap)",
+                        orbit.closure_octave,
+                        closure_limit_for_zoom(zoom_log2),
+                    );
+                    orbit.periodic = None;
+                    orbit.closure_octave = i64::MAX;
+                    orbit.set_closure_limit(zoom_log2);
+                    orbit.extend(max_iter);
                     return Some(orbit);
                 }
             }
@@ -1569,6 +1599,7 @@ mod tests {
             );
         }
     }
+
 
     #[test]
     fn near_nucleus_iterates_survive_f32_storage() {
