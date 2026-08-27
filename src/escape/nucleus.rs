@@ -52,6 +52,71 @@ pub fn detect_center_period(
     find_period(center_re, center_im, radius_log2, max_period, power)
 }
 
+/// The period to hint for a view at `zoom_log2`: the first orbit
+/// index whose |Z| sits below that view's closure limit, together
+/// with the octave it reached.
+///
+/// This is a different question from [`detect_center_period`], which
+/// returns the SMALLEST closing period regardless of depth. A shallow
+/// atom's wrap is not exact at a deep view, and hinting it there costs
+/// a full reference build that is then discarded — measured on the f3
+/// location, period 71,100 closes at |Z_p| ~ 2^-613 and serves only to
+/// about z597, while the view asking for it was z9316.
+///
+/// The test is the same one `ReferenceOrbit::extend` uses to accept an
+/// auto-detected closure, so anything returned here is guaranteed to
+/// serve. `None` means no period within `max_period` wraps at this
+/// depth — in which case the honest answer is to use no hint at all
+/// and let the plain reference run.
+pub fn detect_period_for_zoom(
+    center_re: &str,
+    center_im: &str,
+    power: u32,
+    max_period: u32,
+    zoom_log2: f64,
+) -> Option<(u32, i64)> {
+    let limit = super::reference::closure_limit_for_zoom(zoom_log2);
+    let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+    let c = FixedComplex {
+        re: FixedPoint::from_decimal(center_re, n)?,
+        im: FixedPoint::from_decimal(center_im, n)?,
+    };
+    let power = power.clamp(2, 12);
+    let mut z = FixedComplex::zero(n);
+    let mut best = i64::MAX;
+    for p in 1..=max_period {
+        let mut zp = z.sqr();
+        for _ in 2..power {
+            zp = zp.mul(&z);
+        }
+        z = zp.add(&c);
+        // Octave from the fixed-point state, not an f64 magnitude:
+        // deep references reach 2^-1379, far past f64's range.
+        let fx = z.re.to_floatexp();
+        let fy = z.im.to_floatexp();
+        let oct = match (fx.m == 0.0, fy.m == 0.0) {
+            (true, true) => i64::MIN / 2,
+            (true, false) => fy.e,
+            (false, true) => fx.e,
+            (false, false) => fx.e.max(fy.e),
+        };
+        // Only a NEW minimum is a period candidate (the ball-method
+        // rule): a later pass that is merely small repeats an atom
+        // already accounted for.
+        if oct < best {
+            best = oct;
+            if oct <= limit {
+                return Some((p, oct));
+            }
+        }
+        let (zx, zy) = (z.re.to_f64(), z.im.to_f64());
+        if zx * zx + zy * zy > 16.0 {
+            return None; // the center escapes: no interior period
+        }
+    }
+    None
+}
+
 pub fn find_period(
     center_re: &str,
     center_im: &str,
@@ -256,6 +321,32 @@ pub fn locate_minibrot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detection_answers_the_view_not_just_the_smallest_atom() {
+        use crate::escape::reference::closure_limit_for_zoom;
+        // c = -1 + 1e-7 sits just inside the period-2 bulb, so its
+        // orbit closes to |Z_2| ~ 1e-7 and no further.
+        let (p, oct) = detect_period_for_zoom("-0.9999999", "0", 2, 1000, 5.0)
+            .expect("a shallow view is served");
+        assert_eq!(p, 2);
+        assert!(
+            oct <= closure_limit_for_zoom(5.0),
+            "a returned period must actually wrap: 2^{oct} vs limit 2^{}",
+            closure_limit_for_zoom(5.0)
+        );
+        // The same atom cannot wrap below a deep view's pixel scale.
+        // Returning it anyway is what cost a z9316 render a full
+        // reference build for a period serving only ~z597, so the
+        // honest answer here is None.
+        assert!(
+            detect_period_for_zoom("-0.9999999", "0", 2, 1000, 100.0).is_none(),
+            "a period that cannot wrap at this depth must not be offered"
+        );
+        // An exact nucleus closes completely and serves any depth.
+        let (p0, _) = detect_period_for_zoom("0", "0", 2, 10, 5000.0).expect("c = 0 is period 1");
+        assert_eq!(p0, 1);
+    }
 
     #[test]
     fn period_detection_finds_known_atoms() {
