@@ -36,7 +36,54 @@ const SAVE_COST_THRESHOLD: u64 = 2_000_000;
 
 /// Eviction caps: newest-first by modification time.
 const MAX_FILES: usize = 24;
-const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Byte cap, runtime-settable because the right value depends on what
+/// the user is doing: one 10.1M-iteration reference is ~202 MB, so the
+/// old 256 MB constant retained exactly ONE deep location and made a
+/// second dive evict the first — at eight minutes each to rebuild.
+static MAX_TOTAL_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1024 * 1024 * 1024);
+
+/// Set the store's byte cap (from SystemSettings, in megabytes).
+pub fn set_max_total_mb(mb: u32) {
+    MAX_TOTAL_BYTES.store(
+        (mb.max(1) as u64) * 1024 * 1024,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// Bytes currently held by the store, for the settings display.
+pub fn bytes_in_use() -> u64 {
+    let Some(dir) = default_dir() else {
+        return 0;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Delete every stored orbit. The next visit to any deep location
+/// pays its reference build again, so this is a deliberate act.
+pub fn clear() {
+    let Some(dir) = default_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().is_some_and(|x| x == "orbit") {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
 
 /// The default store directory, or None when app storage is
 /// unavailable (headless CI without a profile, etc. — the store just
@@ -226,7 +273,7 @@ fn trim(dir: &Path) {
     let mut total = 0u64;
     for (i, (_, size, path)) in files.iter().enumerate() {
         total += size;
-        if i >= MAX_FILES || total > MAX_TOTAL_BYTES {
+        if i >= MAX_FILES || total > MAX_TOTAL_BYTES.load(std::sync::atomic::Ordering::Relaxed) {
             let _ = std::fs::remove_file(path);
         }
     }

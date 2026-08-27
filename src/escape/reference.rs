@@ -76,6 +76,43 @@ fn nucleus_for_view(
 /// exactly what makes it worth showing rather than leaving implicit.
 static LIVE_PERIOD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// Seconds a reference of `iters` iterations at `n_limbs` will take
+/// to compute, from the measured cost of the step.
+///
+/// A reference iteration is two truncated big multiplies and nothing
+/// else that matters (measured: 48.9 us at 197 limbs, 91% of it in
+/// those two calls), so the cost is iterations x limbs^2 x a
+/// constant. The constant is calibrated against the f3 reference:
+/// 10,100,100 iterations at 197 limbs took 495 s.
+pub fn predicted_orbit_seconds(iters: u32, n_limbs: usize) -> f64 {
+    const PER_LIMB2_ITER: f64 = 1.263e-9;
+    iters as f64 * (n_limbs as f64) * (n_limbs as f64) * PER_LIMB2_ITER
+}
+
+/// How far along the reference the renderer is waiting for is:
+/// (iterations computed, iterations wanted). Both zero when nothing
+/// is pending.
+static ORBIT_HAVE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static ORBIT_WANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Publish reference-build progress for the viewport overlay. `want`
+/// of zero clears it.
+pub fn set_orbit_progress(have: u32, want: u32) {
+    ORBIT_HAVE.store(have, std::sync::atomic::Ordering::Relaxed);
+    ORBIT_WANT.store(want, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// (computed, wanted) while a reference the render is WAITING on is
+/// still building, else None. A reference that renders progressively
+/// never reports here — there is nothing for the user to wait for.
+pub fn orbit_progress() -> Option<(u32, u32)> {
+    let want = ORBIT_WANT.load(std::sync::atomic::Ordering::Relaxed);
+    if want == 0 {
+        return None;
+    }
+    Some((ORBIT_HAVE.load(std::sync::atomic::Ordering::Relaxed), want))
+}
+
 /// Record the period of the reference now in use (None = aperiodic).
 pub fn set_live_reference_period(period: Option<u32>) {
     LIVE_PERIOD.store(
@@ -1646,6 +1683,26 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn the_orbit_cost_model_matches_what_we_measured() {
+        // The f3 reference: 10,100,100 iterations at 197 limbs took
+        // 495 s of single-threaded fixed-point arithmetic. The model
+        // exists to decide whether to WAIT for a reference or render
+        // against its growing prefix, so being within a factor of two
+        // is what matters, not precision.
+        let f3 = predicted_orbit_seconds(10_100_100, 197);
+        assert!(
+            (400.0..600.0).contains(&f3),
+            "f3 reference predicted at {f3:.0} s, measured 495 s"
+        );
+        // A shallow view's reference is not worth waiting for.
+        assert!(predicted_orbit_seconds(10_000, 13) < 0.01);
+        // Cost is quadratic in limbs: twice the precision is 4x.
+        let a = predicted_orbit_seconds(100_000, 50);
+        let b = predicted_orbit_seconds(100_000, 100);
+        assert!((b / a - 4.0).abs() < 1e-6);
+    }
 
     #[test]
     fn a_too_shallow_hint_makes_the_plain_orbit_the_answer() {

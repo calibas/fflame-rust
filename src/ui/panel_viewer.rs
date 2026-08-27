@@ -1277,6 +1277,48 @@ impl<'a> PanelViewer<'a> {
 
             let response = ui.add(image);
 
+            // Deep-zoom reference builds take minutes and the frame
+            // cannot start until one exists, so say so rather than
+            // leaving the last image up with no explanation.
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.context.config_manager.active_config().render_mode
+                == crate::scene::transforms::RenderMode::Escape
+            {
+                if let Some((have, want)) = crate::escape::reference::orbit_progress() {
+                    let rect = response.rect;
+                    let pct = if want > 0 {
+                        (have as f64 / want as f64 * 100.0).min(99.9)
+                    } else {
+                        0.0
+                    };
+                    let text = t!(
+                        "escape_panel.building_reference",
+                        percent = format!("{pct:.1}")
+                    );
+                    let painter = ui.painter_at(rect);
+                    let galley = painter.layout_no_wrap(
+                        text.to_string(),
+                        egui::FontId::proportional(15.0),
+                        egui::Color32::from_rgb(235, 235, 245),
+                    );
+                    let pad = egui::vec2(12.0, 7.0);
+                    let box_size = galley.size() + pad * 2.0;
+                    let origin = egui::pos2(
+                        rect.center().x - box_size.x * 0.5,
+                        rect.top() + 16.0,
+                    );
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(origin, box_size),
+                        6.0,
+                        egui::Color32::from_black_alpha(190),
+                    );
+                    painter.galley(origin + pad, galley, egui::Color32::WHITE);
+                    // The worker publishes a longer prefix every chunk;
+                    // keep repainting so the percentage actually moves.
+                    ui.ctx().request_repaint();
+                }
+            }
+
             // Handle pinch-to-zoom on touchscreens (check before drag to avoid conflicts)
             // Uses custom TouchTracker because egui's multi_touch() doesn't work on web
             // (winit assigns different TouchDeviceId per finger, so egui never sees 2 fingers)

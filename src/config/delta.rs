@@ -338,6 +338,7 @@ pub enum ConfigPath {
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
     SystemBurnIn,
+    SystemOrbitCacheMb,
     SystemVsyncEnabled,
     SystemTargetFps,
     SystemFlyMouseSensitivity,
@@ -895,6 +896,7 @@ impl Display for ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
             ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
+            ConfigPath::SystemOrbitCacheMb => write!(f, "System: Orbit Cache Size (MB)"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
             ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
             ConfigPath::SystemFlyMouseSensitivity => write!(f, "System: Fly Mouse Sensitivity"),
@@ -1394,6 +1396,9 @@ impl ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread => I18nKey::simple("history.param.system_iterations_per_thread"),
             ConfigPath::SystemBurnIn => I18nKey::simple("history.param.system_burn_in"),
+            ConfigPath::SystemOrbitCacheMb => {
+                I18nKey::simple("history.param.system_orbit_cache_mb")
+            }
             ConfigPath::SystemVsyncEnabled => I18nKey::simple("history.param.system_vsync_enabled"),
             ConfigPath::SystemTargetFps => I18nKey::simple("history.param.system_target_fps"),
             ConfigPath::SystemFlyMouseSensitivity => I18nKey::simple("history.param.system_fly_mouse_sensitivity"),
@@ -2364,6 +2369,8 @@ impl ConfigPath {
 
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
+            // Disk housekeeping only: nothing on the GPU changes.
+            ConfigPath::SystemOrbitCacheMb => UpdateType::None,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
             // Nothing to re-render: it only changes what a future
@@ -2646,6 +2653,7 @@ impl ConfigPath {
             // System Settings (not typically animated, but included for completeness)
             ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
             ConfigPath::SystemBurnIn => "System.BurnIn".to_string(),
+            ConfigPath::SystemOrbitCacheMb => "System.OrbitCacheMb".to_string(),
             ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
             ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
             ConfigPath::SystemFlyMouseSensitivity => "System.FlyMouseSensitivity".to_string(),
@@ -2979,6 +2987,7 @@ impl ConfigPath {
             match parts[1] {
                 "IterationsPerThread" => return Some(ConfigPath::SystemIterationsPerThread),
                 "BurnIn" => return Some(ConfigPath::SystemBurnIn),
+                "OrbitCacheMb" => return Some(ConfigPath::SystemOrbitCacheMb),
                 "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
                 "TargetFps" => return Some(ConfigPath::SystemTargetFps),
                 "FlyMouseSensitivity" => return Some(ConfigPath::SystemFlyMouseSensitivity),
@@ -3250,6 +3259,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformCount
         | ConfigPath::SystemIterationsPerThread
         | ConfigPath::SystemBurnIn
+        | ConfigPath::SystemOrbitCacheMb
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
         | ConfigPath::SystemPngStripMetadata => {
