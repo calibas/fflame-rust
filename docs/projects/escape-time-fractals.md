@@ -1095,10 +1095,33 @@ nobody re-derives it.
    period field set: run 1 **495 s** (one hint build, then the
    fallback), run 2 **6.2 s** (zero hint builds, loaded from store).
 
-   Related, NOT addressed: `MAX_TOTAL_BYTES` is 256 MB and one
-   10.1M-iteration reference is 202 MB, so exactly one deep reference
-   survives eviction. A second deep location costs the first its
-   8 minutes. Raising the cap is a decision about the user's disk.
+   Related, FIXED 2026-08-27 after it bit in practice: the store's
+   byte cap was a 256 MB constant while one 10.1M-iteration reference
+   is 202 MB, so a second deep location evicted the first. Observed
+   live - a session wrote a 45 MB orbit, the f3 reference went out
+   with it, and the next visit spent eight minutes rebuilding a file
+   that had been on disk. The cap is now a SystemSetting
+   (`orbit_cache_mb`, Settings -> Advanced, 64-8192 MB) applied to a
+   runtime static, default raised to 1 GB, with current usage shown
+   and a Clear button.
+
+**Waiting for a slow reference instead of rendering against it.**
+A partial reference does not render as progressive refinement at
+depth: every pixel wraps almost immediately, so the frame is flat
+colour that changes wholesale as the prefix grows - the user's
+report was "flashing, solid colors". Where the reference is quick
+that flicker is invisible and the early frames are genuinely useful,
+so the rule has to distinguish the two cases rather than pick one.
+
+`predicted_orbit_seconds(iters, limbs)` does it from the measured
+step cost - a reference iteration is two truncated big multiplies
+and nothing else that matters, so cost is iterations x limbs^2 x a
+constant calibrated against the f3 build (10,100,100 iterations at
+197 limbs = 495 s). Above 0.75 s predicted, the in-app path holds
+the last good frame and publishes progress instead of dispatching;
+below it, nothing changes. The viewport draws "Computing reference
+orbit... N%" over the held frame. The headless path is untouched (it
+was never progressive) - verified bit-identical output.
 
 3. **Make Detect zoom-aware.** DONE 2026-08-27.
    `detect_center_period` returns the

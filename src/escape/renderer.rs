@@ -719,6 +719,13 @@ impl EscapeRenderer {
     }
 
     /// Everything that invalidates in-flight chunk state.
+    /// A reference predicted to take longer than this is waited for
+    /// rather than rendered against progressively. Low enough that
+    /// anything interactive still refines in front of the user, high
+    /// enough that a minutes-long build does not flash flat colour
+    /// the whole time.
+    const ORBIT_WAIT_SECONDS: f64 = 0.75;
+
     /// Ceiling on an adaptively grown chunk. The feedback loop stops
     /// well below this on any real configuration; it exists so a
     /// pathological measurement (a frame that reports ~0 ms) cannot
@@ -1497,6 +1504,29 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         // frame's texture, come back next frame.
                         return false;
                     }
+                    // Rendering against a small fraction of a long
+                    // reference is not progressive refinement, it is
+                    // noise: every pixel wraps almost immediately and
+                    // the frame is flat colour that changes wholesale
+                    // as the prefix grows. Where the reference is
+                    // quick that flicker is invisible and the early
+                    // frames are useful; where it takes minutes, it
+                    // is all the user sees. So: predict the build
+                    // cost, and if it is more than a moment, hold the
+                    // last good frame and report progress instead.
+                    let want = escape.max_iter;
+                    let limbs = super::fixedpoint::limbs_for_view(
+                        &escape.center_re,
+                        &escape.center_im,
+                        escape.zoom_log2,
+                    );
+                    let slow = super::reference::predicted_orbit_seconds(want, limbs)
+                        > Self::ORBIT_WAIT_SECONDS;
+                    if !done && slow {
+                        super::reference::set_orbit_progress(len, want);
+                        return false;
+                    }
+                    super::reference::set_orbit_progress(0, 0);
                     Some((len, done))
                 }
                 #[cfg(target_arch = "wasm32")]

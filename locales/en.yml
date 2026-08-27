@@ -1528,6 +1528,11 @@ settings:
 
   # Tooltips
   tooltip_iterations_per_thread: "GPU workgroup performance tuning.\nHigher values = fewer dispatches, better GPU utilization.\nLower values = more frequent updates, smoother animation."
+  orbit_cache_mb: "Orbit Cache (MB)"
+  tooltip_orbit_cache_mb: "Disk budget for cached deep-zoom reference orbits. One 10M-iteration reference is ~200 MB and takes minutes of single-threaded arithmetic to rebuild, so this decides how many deep locations stay instant to revisit."
+  orbit_cache_in_use: "Using %{used} MB"
+  orbit_cache_clear: "Clear"
+  tooltip_orbit_cache_clear: "Delete every cached reference orbit. The next visit to a deep location will rebuild its reference."
   tooltip_burn_in: "Skip first N iterations before plotting.\nAllows points to 'settle' onto the attractor before contributing to the image.\nHigher values = cleaner results but slower convergence.\n0 = no burn-in (may show artifacts from random starting points)"
   tooltip_use_dynamic_blend: "Exponential convergence.\nWhen enabled, blend rate adapts over time.\nWhen disabled, uses fixed blend rate below."
   tooltip_fixed_blend_rate: "Controls how quickly new samples blend with history.\nOnly active when Dynamic Blend is disabled.\n\n0.001 = Nearly permanent (very slow fade)\n0.01 = Very slow/smooth\n0.1 = Balanced (default)\n1.0 = Fast/flickery"
@@ -1912,6 +1917,7 @@ escape_panel:
   detect_period: "Detect"
   tooltip_detect_period: "Ball-method period detection at the center's intrinsic depth. Runs in the background; minutes for large periods."
   searching_period: "Detecting period…"
+  building_reference: "Computing reference orbit… %{percent}%"
   period_found: "Period %{period} — wrap exact to 2^-%{octave}, i.e. zoom ~%{zoom}"
   period_none: "No period under 8,000,000 wraps at this depth — leave the field empty and let the plain reference run."
   detected_period: "In use: period %{period}"

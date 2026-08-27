@@ -364,6 +364,11 @@ impl ConfigManager {
     pub fn new(config: FractalConfig) -> Self {
         // Load system settings from disk (or use defaults)
         let system_settings = crate::storage::SystemSettings::load();
+        // The orbit store's eviction cap lives in a runtime static, so
+        // the saved preference has to be pushed into it here as well
+        // as on every later edit.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::escape::orbit_store::set_max_total_mb(system_settings.orbit_cache_mb);
 
         Self {
             current: config,
@@ -904,6 +909,12 @@ impl ConfigManager {
             ConfigPath::SystemBurnIn => {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.burn_in = value;
+            }
+            ConfigPath::SystemOrbitCacheMb => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.orbit_cache_mb = value;
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::escape::orbit_store::set_max_total_mb(value);
             }
             ConfigPath::SystemVsyncEnabled => {
                 let value: bool = new_value.try_into()?;
@@ -2249,6 +2260,7 @@ impl ConfigManager {
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemOrbitCacheMb
             | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be accessed via get_value(). Use config_manager.system_settings() instead.");
             }
@@ -3180,6 +3192,7 @@ impl ConfigManager {
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemOrbitCacheMb
             | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");
             }
