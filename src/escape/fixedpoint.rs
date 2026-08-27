@@ -41,6 +41,23 @@ pub fn frac_bits(n_limbs: usize) -> u32 {
 /// How many limbs (guard included) a zoom depth needs: the pixel
 /// spacing at `zoom_log2` is ~2^(2 − zoom), and the delta pipeline
 /// wants ~64 bits below that; plus the guard limb.
+/// Reference precision for a view: the zoom's needs OR the center's
+/// intrinsic digit depth, whichever is deeper (capped - a megabyte
+/// center string must not conjure a gigabyte orbit pipeline). See
+/// the deep-collapse note in reference.rs.
+pub fn limbs_for_view(center_re: &str, center_im: &str, zoom_log2: f64) -> usize {
+    let frac_digits = |s: &str| {
+        s.trim()
+            .split_once('.')
+            .map(|(_, f)| f.trim_end_matches(|c: char| !c.is_ascii_digit()).len())
+            .unwrap_or(0)
+    };
+    let digits = frac_digits(center_re).max(frac_digits(center_im));
+    // digits · log2(10)/64 limbs, ceil-ish, +1 headroom.
+    let digit_limbs = (digits * 10) / 192 + 2;
+    limbs_for_zoom(zoom_log2).max(digit_limbs.min(2048))
+}
+
 pub fn limbs_for_zoom(zoom_log2: f64) -> usize {
     let bits = (zoom_log2.max(0.0) as u32).saturating_add(64 + INT_BITS);
     (bits as usize).div_ceil(64) + 1

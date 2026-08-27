@@ -57,8 +57,14 @@ fn nucleus_for_view(
         }
     };
     let off = [to_px(vx.sub(&nx)) as f32, to_px(vy.sub(&ny)) as f32];
-    if !off[0].is_finite() || !off[1].is_finite() || off[0].abs() > 1.0e7 || off[1].abs() > 1.0e7 {
-        return None; // nucleus implausibly far: distrust it
+    // 2^15 px: beyond this the f32 sum (pixel_offset + ref_offset)
+    // in the shader's d0 quantizes pixel positions past ~2^-8 px —
+    // and by ~2^23 px merges pixels entirely (the zoom-700 uniform-
+    // collapse bug, ground-truthed against exact orbits). A nucleus
+    // that far out buys little; the plain reference is correct.
+    if !off[0].is_finite() || !off[1].is_finite() || off[0].abs() > 32768.0 || off[1].abs() > 32768.0
+    {
+        return None;
     }
     Some((hit.re, hit.im, hit.period, off))
 }
@@ -487,7 +493,9 @@ pub fn rescale_offset(
         * (height_px.max(1.0) / off_height.max(1.0));
     let x = off[0] as f64 * factor;
     let y = off[1] as f64 * factor;
-    if !x.is_finite() || !y.is_finite() || x.abs() > 1.0e7 || y.abs() > 1.0e7 {
+    // Same 2^15 px ceiling as nucleus_for_view — a rescaled offset
+    // rides the identical f32 d0 sum.
+    if !x.is_finite() || !y.is_finite() || x.abs() > 32768.0 || y.abs() > 32768.0 {
         return None;
     }
     Some([x as f32, y as f32])
@@ -782,9 +790,18 @@ impl ReferenceOrbit {
         height_px: f64,
         power: u32,
     ) -> Option<Self> {
-        if let Some((nre, nim, period, off)) =
-            nucleus_for_view(center_re, center_im, zoom_log2, height_px, power)
+        // Diagnostic escape hatch: render with plain references to
+        // isolate relocation-dependent differences.
+        let skip_nucleus = std::env::var("ESCAPE_DISABLE_NUCLEUS").is_ok();
+        if let Some((nre, nim, period, off)) = (!skip_nucleus)
+            .then(|| nucleus_for_view(center_re, center_im, zoom_log2, height_px, power))
+            .flatten()
         {
+            log::info!(
+                "nucleus relocation: period {period}, offset ({:.3}, {:.3}) px, zoom {zoom_log2:.2}",
+                off[0],
+                off[1]
+            );
             if let Some(mut orbit) = Self::compute(
                 &nre,
                 &nim,
@@ -809,8 +826,9 @@ impl ReferenceOrbit {
                 }
             }
         }
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         Self::compute(
-            center_re, center_im, zoom_log2, None, max_iter, None, power, false, 0,
+            center_re, center_im, zoom_log2, Some(n), max_iter, None, power, false, 0,
         )
     }
 }
@@ -844,7 +862,11 @@ impl OrbitCache {
         ship: bool,
         ship_variant: u32,
     ) -> Option<&ReferenceOrbit> {
-        let n = limbs_for_zoom(zoom_log2);
+        // The center's own digits set a precision FLOOR: a truncated
+        // deep center is a different (shallow, early-escaping) point,
+        // and pixels that can't outgrow d0 before that escape collapse
+        // onto it (the zoom-685 uniform-frame bug).
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         let hit = self.slot.as_ref().is_some_and(|o| {
             o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
         });
@@ -918,7 +940,7 @@ impl OrbitCache {
         ship_variant: u32,
         budget: u32,
     ) -> Option<(&ReferenceOrbit, bool)> {
-        let n = limbs_for_zoom(zoom_log2);
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         let hit = self.slot.as_ref().is_some_and(|o| {
             o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
         });
@@ -1205,6 +1227,10 @@ mod tests {
         assert_eq!(plain.periodic, None);
         assert_eq!(plain.ref_offset, [0.0, 0.0]);
     }
+
+
+
+
 
     #[test]
     fn ship_variant_orbits_match_f64() {

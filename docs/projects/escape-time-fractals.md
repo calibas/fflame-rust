@@ -785,11 +785,43 @@ rendered unresolved structure, not an artifact. Remedies are
 supersampling (shipped) and coloring-scale/squeeze; the "glitchy
 panning" half was the digit-truncation footgun fixed above.
 
+Deep-dive reference anchoring (2026-08-26, field report: an
+f3-imported location collapsing to a uniform frame past zoom ~684):
+reference precision now honors the CENTER'S OWN DIGITS
+(`limbs_for_view` — cache, budgeted path, worker request and
+nucleus fallback all anchor there). Truncating a curated deep
+center to zoom-proportional limbs made the reference a shallow dust
+point whose orbit escapes early; pixels whose deltas cannot outgrow
+d0 before that escape get stolen by the reference's own escape —
+past a razor cliff (z680→z685 on the field location) the entire
+frame rides the reference and renders one uniform value. Diagnosed
+by exact fixed-point ground truth plus a bit-faithful CPU replica
+of the shader's CFe arithmetic; the replica confirms the fix
+(deltas grow to O(1) and escape individually once the reference is
+the 197-limb center). Also: relocation offsets are capped at 2^15
+px (the f32 d0 sum quantizes pixels past that — defensive; not the
+collapse's cause), and `ESCAPE_DISABLE_NUCLEUS` /
+`ESCAPE_DISABLE_BLA` env hooks ship as diagnostics.
+
+HONEST LIMITS, measured on the field location: the fix restores
+real structure through ~zoom 700; deeper (z900+) the f32-mantissa
+delta model itself stalls at THIS location class (near-nucleus
+dives whose dynamics repeatedly crush δ back to d0 scale — each
+crush truncates pixel history to f32/26-octave resolution, so
+represented orbits drift from truth; visible as reference-dependent
+fine structure at z543 and interior-stall at z900+). The two known
+remedies, in order: import f3's `reference.period` hint and build
+the PERIODIC deep-nucleus reference (orbit = one period, crushes
+aligned with the reference — the reason fraktaler-3 ships the
+field); and double-f32 ("DF") mantissas for the CFe rung (~2^-48
+relative). Both are scoped follow-ups, not band-aids.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
 coloring-scale ergonomics at extreme depth (auto-ranging the smooth
-value, so deep views don't need manual palette squeeze).
+value); f3 `reference.period` import + periodic deep references;
+DF-mantissa deltas for crush-heavy locations.
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as

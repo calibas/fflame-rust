@@ -401,6 +401,11 @@ impl EscapeRenderer {
         if self.disable_bla {
             return false;
         }
+        // Diagnostic escape hatch (all builds): isolate BLA-dependent
+        // differences from per-step rendering.
+        if std::env::var("ESCAPE_DISABLE_BLA").is_ok() {
+            return false;
+        }
         let power = match tier {
             assembler::PerturbTier::Power(p) => p.clamp(2, 12),
             assembler::PerturbTier::Ship(_) => return false,
@@ -699,7 +704,11 @@ impl EscapeRenderer {
         let epoch = worker.request(OrbitRequest {
             center_re: escape.center_re.clone(),
             center_im: escape.center_im.clone(),
-            n_limbs: super::fixedpoint::limbs_for_zoom(escape.zoom_log2),
+            n_limbs: super::fixedpoint::limbs_for_view(
+                &escape.center_re,
+                &escape.center_im,
+                escape.zoom_log2,
+            ),
             max_iter: escape.max_iter,
             julia_c,
             power,
