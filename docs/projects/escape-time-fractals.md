@@ -1025,6 +1025,64 @@ anyone "optimizes" the deep path:
   too shallow", i.e. another format bump; deliberately deferred
   rather than churning the format twice in a day.
 
+### Deep-zoom performance queue (agreed 2026-08-27)
+
+Ordered. Each entry says what is MEASURED and what is inferred, so
+nobody re-derives it.
+
+1. **Adaptive chunk sizing.** IN PROGRESS. The in-app path runs
+   exactly one chunk per redraw and sizes it as
+   `6e8 / (W·H·ss²)` iterations — at 3× supersampling on a
+   1280×720 viewport that is ~72 iterations per frame, so a
+   10.1M-iteration render needs ~140,000 frames and each of those
+   frames also re-runs downsample + tonemap over 8.3M pixels. The
+   GPU is idle most of every frame: low CPU, low GPU, slow render.
+   The headless path has no such pacing (`while !settled`), which is
+   why the same frame is 26.5 s from the CLI and minutes in-app.
+   Measured effective rate on this GPU at z9316/2× AA:
+   3.7e11 pixel-iterations/s, i.e. the 6e8 budget is a **1.6 ms**
+   chunk. Fix: feedback-size the chunk against a wall-clock target
+   per call (small in-app, large headless).
+
+2. **Persist the rejected hint** (format FFORBIT5). The orbit
+   filename hashes (center, limbs, julia, power, ship, variant) —
+   NOT the period — while the disk-load filter demands
+   `stored.periodic == reference_period`. So setting a period on a
+   location whose plain reference is already cached rejects that
+   file and rebuilds it (8 minutes at 10.1M/197 limbs), and then
+   `save_to` refuses to rewrite because the rebuilt orbit is not
+   longer — no new file, old timestamp, all work discarded.
+   Observed by the user verbatim. Fix: store "hint X was tried and
+   is too shallow" and accept the stored orbit for that hint.
+
+3. **Make Detect zoom-aware.** `detect_center_period` returns the
+   SMALLEST closing period; deep views need the largest period whose
+   closure still sits below the view's pixel scale. Measured on the
+   f3 location: period 71,100 closes at |Z_p| ~ 2^-613 (serves to
+   ~z597) and period 1,137,764 at 2^-6263 (serves to ~z6250) — a
+   cascade ladder, ×16 in period and ~×10 in closure octaves per
+   rung. Detect handed back 71,100 for a z9316 view, which cannot
+   serve and silently costs a rebuild. Note the corollary: a period
+   deep enough for z9316 would exceed max_iter 10.1M, so for that
+   target NO hint is the right answer and the field should say so.
+
+4. **BLA is blocked at deep dips.** Mechanism, not yet measured.
+   BLA is fed exponent-flushed reference values (`entry_value`), so
+   an iterate below 2^-126 reads as zero, its radius
+   `eps·|Z|·2/(p−1)` is zero, and `bla_mag_lt` treats that as "never
+   valid" — no skip across that step, and every merged entry
+   spanning it inherits radius zero, capping useful skip spans near
+   the dip. With exponent-aware input the radius at a 2^-183 dip
+   would be ~2^-207, and the traced pixel's δ there was ~2^-350 —
+   comfortably inside, so those skips would become legal. Dips
+   recur roughly every 9,000 iterations in the z700 orbit. Unknown
+   until instrumented: the actual skip rate, so the win is unsized.
+   Same bug family as the reference-exponent fix, one layer up.
+
+5. **Headless chunk overhead.** Partly subsumed by (1): the
+   per-chunk downsample pass is redundant for an export where only
+   the final image matters.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
