@@ -501,35 +501,47 @@ impl EscapeRenderer {
             }
         }
         // The CPU copy of the orbit the GPU mirror holds.
-        // BLA takes PLAIN values: a near-nucleus iterate reads as
-        // zero here exactly as it did before the exponent existed,
-        // which zeroes that step's radius and simply makes the table
-        // refuse to skip across the dip (conservative, never wrong).
-        let with_exp = |hi: &[[f32; 2]], e: &[i32]| -> Vec<[f32; 2]> {
+        // BLA takes the reference at FULL precision: hi + lo, scaled
+        // by the per-entry exponent, in f64. The deltas iterate in DF
+        // at ~2^-48, so an A coefficient built from the f32 half alone
+        // would inject 2^-24 of error on every skip - error BLA_EPS
+        // never bounds, since it governs the dropped nonlinear term
+        // rather than the coefficient. f64 also carries the deep dips
+        // (2^-183 and below) that f32 flushes to zero, which is what
+        // made those steps un-skippable.
+        let with_exp = |hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]| -> Vec<[f64; 2]> {
             hi.iter()
                 .enumerate()
                 .map(|(i, z)| {
-                    super::reference::entry_value(*z, e.get(i).copied().unwrap_or(0))
+                    let l = lo.get(i).copied().unwrap_or([0.0, 0.0]);
+                    let scale = match e.get(i).copied().unwrap_or(0) {
+                        0 => 1.0,
+                        k => (k as f64).exp2(),
+                    };
+                    [
+                        (z[0] as f64 + l[0] as f64) * scale,
+                        (z[1] as f64 + l[1] as f64) * scale,
+                    ]
                 })
                 .collect()
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let orbit_data: Option<Vec<[f32; 2]>> = if progressive {
+        let orbit_data: Option<Vec<[f64; 2]>> = if progressive {
             self.orbit_worker.as_ref().map(|wk| {
                 let p = wk.progress.lock().unwrap();
-                with_exp(&p.orbit, &p.orbit_e)
+                with_exp(&p.orbit, &p.orbit_lo, &p.orbit_e)
             })
         } else {
             self.orbit_cache
                 .peek()
-                .map(|o| with_exp(&o.orbit, &o.orbit_e))
+                .map(|o| with_exp(&o.orbit, &o.orbit_lo, &o.orbit_e))
         };
         #[cfg(target_arch = "wasm32")]
-        let orbit_data: Option<Vec<[f32; 2]>> = {
+        let orbit_data: Option<Vec<[f64; 2]>> = {
             let _ = progressive;
             self.orbit_cache
                 .peek()
-                .map(|o| with_exp(&o.orbit, &o.orbit_e))
+                .map(|o| with_exp(&o.orbit, &o.orbit_lo, &o.orbit_e))
         };
         let Some(orbit_data) = orbit_data else {
             return false;
@@ -544,7 +556,7 @@ impl EscapeRenderer {
         let bail = escape.bailout.max(1e-6) as f64;
         let mut prefix = usable;
         for (i, z) in orbit_data[..usable].iter().enumerate() {
-            let q = (z[0] as f64) * (z[0] as f64) + (z[1] as f64) * (z[1] as f64);
+            let q = z[0] * z[0] + z[1] * z[1];
             if q > bail {
                 prefix = (i + 1).max(2);
                 break;

@@ -244,7 +244,21 @@ pub struct BlaTable {
 pub const BLA_EPS: f64 = 5.960_464_477_539_063e-8;
 
 impl BlaTable {
-    /// Build from a reference orbit (Zₙ as f32 pairs, orbit[0] = Z₀)
+    /// Build from a reference orbit (Zₙ as f64 pairs, orbit[0] = Z₀).
+    ///
+    /// f64, not f32, and that is load-bearing. The deltas iterate in
+    /// DF at ~2^-48 while an A coefficient built from the reference's
+    /// f32 half carries 2^-24 — every skip would then inject error a
+    /// thousand times coarser than the arithmetic around it, which
+    /// `BLA_EPS` does not bound (it bounds the DROPPED NONLINEAR
+    /// TERM, and says nothing about coefficient precision). Measured
+    /// on the f3 frame: feeding hi + lo and the per-entry exponent
+    /// took the disagreement with exact iteration from 66.5% of
+    /// pixels (mean 25.6/255) to 12.4% (mean 2.6), and made the
+    /// render slightly FASTER — a deep dip now carries a real radius
+    /// instead of a zero one, so those steps became skippable.
+    /// Callers resolve hi + lo and the exponent before handing the
+    /// orbit over.
     /// for z^p + c. `dc_max` bounds |δc| over the viewport (0 for
     /// Julia — every skip's B term is then exact).
     ///
@@ -252,7 +266,7 @@ impl BlaTable {
     ///   A = p·Zₙ^(p−1), B = 1,
     ///   r = eps·|Zₙ|·2/(p−1)  — |δ| below this keeps the largest
     ///   dropped term, C(p,2)·Z^(p−2)·δ², under eps of the linear one.
-    pub fn build(orbit: &[[f32; 2]], power: u32, dc_max: f64) -> Self {
+    pub fn build(orbit: &[[f64; 2]], power: u32, dc_max: f64) -> Self {
         Self::build_with_dc(orbit, power, MagFe::from_f64(dc_max), dc_max)
     }
 
@@ -260,14 +274,14 @@ impl BlaTable {
     /// build at any depth (an f64 |δc| underflows past ~zoom 1000 —
     /// exactly where multi-million-iteration renders need the skips
     /// most). `dc_max_hint` is only recorded on the table.
-    pub fn build_with_dc(orbit: &[[f32; 2]], power: u32, dc: MagFe, dc_max_hint: f64) -> Self {
+    pub fn build_with_dc(orbit: &[[f64; 2]], power: u32, dc: MagFe, dc_max_hint: f64) -> Self {
         let p = power.max(2);
         let steps = orbit.len().saturating_sub(1);
         // Level 0 of the recurrence: single steps (used only to merge
         // — the shader's plain iteration handles unskipped steps).
         let mut prev: Vec<BlaEntry> = (0..steps)
             .map(|n| {
-                let z = Cfe64::from_f64(orbit[n][0] as f64, orbit[n][1] as f64);
+                let z = Cfe64::from_f64(orbit[n][0], orbit[n][1]);
                 // p·Z^(p−1)
                 let mut a = Cfe64::from_f64(p as f64, 0.0);
                 for _ in 0..(p - 1) {
@@ -328,8 +342,8 @@ impl BlaTable {
 mod tests {
     use super::*;
 
-    fn f64_orbit(cr: f64, ci: f64, p: u32, n: usize) -> Vec<[f32; 2]> {
-        let mut out = vec![[0.0f32; 2]];
+    fn f64_orbit(cr: f64, ci: f64, p: u32, n: usize) -> Vec<[f64; 2]> {
+        let mut out = vec![[0.0f64; 2]];
         let (mut x, mut y) = (0.0f64, 0.0f64);
         for _ in 0..n {
             let (mut zr, mut zi) = (x, y);
@@ -340,13 +354,13 @@ mod tests {
             }
             x = zr + cr;
             y = zi + ci;
-            out.push([x as f32, y as f32]);
+            out.push([x, y]);
         }
         out
     }
 
     fn delta_steps(
-        orbit: &[[f32; 2]],
+        orbit: &[[f64; 2]],
         p: u32,
         start: usize,
         count: usize,
@@ -357,7 +371,7 @@ mod tests {
         // δ' = (Z+δ)^p − Z^p + δc, expanded via full complex ops.
         let (mut dr, mut di) = d;
         for n in start..start + count {
-            let (zr, zi) = (orbit[n][0] as f64, orbit[n][1] as f64);
+            let (zr, zi) = (orbit[n][0], orbit[n][1]);
             let (fr, fi) = (zr + dr, zi + di);
             let powc = |mut ar: f64, mut ai: f64, p: u32| -> (f64, f64) {
                 let (br, bi) = (ar, ai);
@@ -454,7 +468,7 @@ mod tests {
         // radius 0, and every merged entry containing it inherits a
         // conservative radius. best() at m=0 must respect r=0 when the
         // orbit is all-zero (degenerate c=0 case).
-        let orbit = vec![[0.0f32; 2]; 64];
+        let orbit = vec![[0.0f64; 2]; 64];
         let table = BlaTable::build(&orbit, 2, 0.0);
         assert!(table.best(0, MagFe::from_f64(1e-30)).is_none());
     }
