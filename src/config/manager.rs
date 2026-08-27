@@ -1719,6 +1719,9 @@ impl ConfigManager {
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
             ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
+            ConfigPath::EscapeReferencePeriod => {
+                Ok(ConfigValue::UInt(config.escape.reference_period.unwrap_or(0)))
+            }
             ConfigPath::EscapeBailout => Ok(config.escape.bailout.into()),
             ConfigPath::EscapeDampingRe => Ok(config.escape.damping_re.into()),
             ConfigPath::EscapeDampingIm => Ok(config.escape.damping_im.into()),
@@ -2579,6 +2582,10 @@ impl ConfigManager {
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;
                 self.current.escape.supersample = v.clamp(1, 3);
+            }
+            ConfigPath::EscapeReferencePeriod => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.reference_period = if v == 0 { None } else { Some(v) };
             }
             ConfigPath::EscapeBailout => {
                 self.current.escape.bailout = value.try_into()?;

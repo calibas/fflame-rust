@@ -29,6 +29,29 @@ use super::fixedpoint::{limbs_for_zoom, FixedComplex, FixedPoint, FloatExp};
 /// Returns the lowest candidate period, or None if the center orbit
 /// escapes first (exterior-dominated view) or nothing is found within
 /// `max_period` iterations.
+/// Detect the period of the nucleus a curated center sits on: ball
+/// method at the center's INTRINSIC depth (its digit count), which
+/// is where a deep-dive location's governing nucleus lives. Minutes
+/// of CPU at large periods — run on a background thread.
+pub fn detect_center_period(
+    center_re: &str,
+    center_im: &str,
+    power: u32,
+    max_period: u32,
+) -> Option<u32> {
+    let frac_digits = |s: &str| {
+        s.trim()
+            .split_once('.')
+            .map(|(_, f)| f.trim_end_matches(|c: char| !c.is_ascii_digit()).len())
+            .unwrap_or(0)
+    };
+    let digits = frac_digits(center_re).max(frac_digits(center_im)).max(16);
+    // Radius a few octaves inside the center's precision: the ball
+    // must be smaller than the nucleus it is probing for.
+    let radius_log2 = -((digits as f64) * 3.3219 - 8.0);
+    find_period(center_re, center_im, radius_log2, max_period, power)
+}
+
 pub fn find_period(
     center_re: &str,
     center_im: &str,

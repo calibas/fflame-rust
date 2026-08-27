@@ -110,6 +110,14 @@ pub struct EscapeConfig {
     /// thumbnails alike.
     #[serde(default = "default_supersample", skip_serializing_if = "is_one_u32")]
     pub supersample: u32,
+
+    /// Reference-orbit period hint (fraktaler-3's `reference.period`):
+    /// for a location centered on a deep nucleus, the period of that
+    /// nucleus. The renderer VERIFIES the center's orbit closes at
+    /// this period before trusting it (a wrong hint falls back to
+    /// plain references with a warning). None = detect/none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_period: Option<u32>,
 }
 
 fn default_supersample() -> u32 {
@@ -214,6 +222,7 @@ impl Default for EscapeConfig {
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
             supersample: 1,
+            reference_period: None,
         }
     }
 }

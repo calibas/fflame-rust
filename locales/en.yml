@@ -807,6 +807,7 @@ history:
     escape_zoom: "Escape Zoom"
     escape_rotation: "Escape Rotation"
     escape_supersample: "Escape Antialiasing"
+    escape_reference_period: "Escape Reference Period"
     escape_max_iter: "Escape Max Iterations"
     escape_bailout: "Escape Bailout"
     escape_damping_re: "Damping (re)"
@@ -1906,6 +1907,11 @@ login:
   remember_me: "Remember me"
 
 escape_panel:
+  reference_period: "Reference Period"
+  tooltip_reference_period: "Period of the nucleus this location targets (fraktaler-3's reference.period). Verified before use; 0 = none. Enables the periodic deep reference that carries dives to extreme depth."
+  detect_period: "Detect"
+  tooltip_detect_period: "Ball-method period detection at the center's intrinsic depth. Runs in the background; minutes for large periods."
+  searching_period: "Detecting period…"
   supersample: "Antialiasing"
   supersample_off: "Off"
   tooltip_supersample: "Render at N\u00d7 resolution per axis and box-downsample. Smooths pixel noise in dense filigree at N\u00b2 the render cost."

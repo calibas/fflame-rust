@@ -179,6 +179,80 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
     // the nucleus references: z^p + c at integer powers, parameter
     // plane. The search runs on a background thread (six-figure
     // periods take seconds) and the result lands on a later frame.
+    // ---- Reference period (deep dives) ----
+    // f3's reference.period: the governing nucleus's period. Verified
+    // before use; 0 = none. Detect runs the ball method at the
+    // center's intrinsic depth on a background thread (minutes at
+    // large periods).
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.reference_period"));
+        let mut period = esc.reference_period.unwrap_or(0);
+        if ui
+            .add(egui::DragValue::new(&mut period).speed(10).range(0..=100_000_000))
+            .on_hover_text(t!("escape_panel.tooltip_reference_period"))
+            .changed()
+        {
+            let _ = config_manager
+                .update_param(ConfigPath::EscapeReferencePeriod, ConfigValue::UInt(period));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let slot = period_search_slot();
+            let running = matches!(*slot.lock().unwrap(), PeriodSearch::Running);
+            if running {
+                ui.spinner();
+                ui.label(t!("escape_panel.searching_period"));
+                ui.ctx().request_repaint();
+            } else if ui
+                .button(t!("escape_panel.detect_period").as_ref())
+                .on_hover_text(t!("escape_panel.tooltip_detect_period"))
+                .clicked()
+            {
+                let re = esc.center_re.clone();
+                let im = esc.center_im.clone();
+                let power = match esc.formula.as_str() {
+                    "multibrot" => esc
+                        .formula_params
+                        .get("power")
+                        .map(|p| p.round() as u32)
+                        .unwrap_or(3),
+                    _ => 2,
+                };
+                *slot.lock().unwrap() = PeriodSearch::Running;
+                let out = slot.clone();
+                std::thread::spawn(move || {
+                    let found = crate::escape::nucleus::detect_center_period(
+                        &re, &im, power, 8_000_000,
+                    );
+                    *out.lock().unwrap() = PeriodSearch::Done(found);
+                });
+            }
+            let done = {
+                let mut s = slot.lock().unwrap();
+                if let PeriodSearch::Done(found) = &*s {
+                    let f = *found;
+                    *s = PeriodSearch::Idle;
+                    Some(f)
+                } else {
+                    None
+                }
+            };
+            if let Some(found) = done {
+                match found {
+                    Some(p) => {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeReferencePeriod,
+                            ConfigValue::UInt(p),
+                        );
+                    }
+                    None => {
+                        log::warn!("period detection: no closure found (center may not sit on a nucleus)");
+                    }
+                }
+            }
+        }
+    });
+
     let nav_power: Option<u32> = if esc.julia {
         None
     } else {
@@ -528,6 +602,21 @@ pub(crate) fn escape_zoom_by_factor(config_manager: &mut ConfigManager, factor: 
 
 /// Background minibrot-search state (desktop). Module-static because
 /// the panel is stateless between frames; one search at a time.
+#[cfg(not(target_arch = "wasm32"))]
+enum PeriodSearch {
+    Idle,
+    Running,
+    Done(Option<u32>),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn period_search_slot() -> std::sync::Arc<std::sync::Mutex<PeriodSearch>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static SLOT: OnceLock<Arc<Mutex<PeriodSearch>>> = OnceLock::new();
+    SLOT.get_or_init(|| Arc::new(Mutex::new(PeriodSearch::Idle)))
+        .clone()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 enum MinibrotSearch {
     Idle,

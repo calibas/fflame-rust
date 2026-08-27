@@ -110,6 +110,27 @@ pub struct ReferenceOrbit {
     /// Live fixed-point state (c and current Z) for append-on-deepen.
     c: FixedComplex,
     z: FixedComplex,
+    /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
+    /// f64 magnitudes underflow at 2^-537 and would falsely read as
+    /// closures) and its index — the ball-method candidate tracker.
+    min_octave: i64,
+    min_at: u32,
+    /// Closure acceptance limit in octaves: |Z_p| must sit BELOW the
+    /// view's pixel scale for the wrap to be exact there. Derived
+    /// from the zoom the orbit currently serves (tightens as the
+    /// view deepens — shallow closures retire and deeper periods get
+    /// discovered progressively).
+    closure_limit_octave: i64,
+    /// The |Z_period| octave at closure (periodic orbits only;
+    /// far-negative for Newton-exact nuclei). Persisted: validity at
+    /// a new zoom is closure_octave vs that zoom's limit.
+    pub closure_octave: i64,
+}
+
+/// Octave limit for accepting a closure at a zoom: 16 octaves below
+/// pixel scale (margin), and never looser than f32 visibility.
+pub fn closure_limit_for_zoom(zoom_log2: f64) -> i64 {
+    (-(zoom_log2 + 16.0) as i64).min(-24)
 }
 
 impl ReferenceOrbit {
@@ -164,6 +185,10 @@ impl ReferenceOrbit {
             escaped_at: None,
             z: z0,
             c,
+            min_octave: i64::MAX,
+            min_at: 0,
+            closure_limit_octave: closure_limit_for_zoom(zoom_log2),
+            closure_octave: i64::MAX,
         };
         orbit.extend(max_iter);
         Some(orbit)
@@ -247,6 +272,40 @@ impl ReferenceOrbit {
             }
             let x = self.z.re.to_f64();
             let y = self.z.im.to_f64();
+            // Progressive period detection (parameter-plane power
+            // tiers): a new |Z| minimum is a ball-method period
+            // candidate; below f32 visibility the orbit has PROVEN
+            // its period — become the periodic reference on the spot.
+            if self.julia_c.is_none() && !self.ship {
+                // |Z| octave from the LIVE fixed-point state —
+                // extended range, because f64 magnitudes underflow at
+                // 2^-537 and intermediate cascade passes go far
+                // deeper without being closures for the current view.
+                let fx = self.z.re.to_floatexp();
+                let fy = self.z.im.to_floatexp();
+                let oct = match (fx.m == 0.0, fy.m == 0.0) {
+                    (true, true) => i64::MIN / 2,
+                    (true, false) => fy.e,
+                    (false, true) => fx.e,
+                    (false, false) => fx.e.max(fy.e),
+                };
+                // The value just computed is iterate index len()
+                // (it has not been pushed yet).
+                let idx = self.orbit.len() as u32;
+                if oct < self.min_octave {
+                    self.min_octave = oct;
+                    self.min_at = idx;
+                    if oct <= self.closure_limit_octave && idx > 0 {
+                        self.orbit.push([x as f32, y as f32]);
+                        self.periodic = Some(idx);
+                        self.closure_octave = oct;
+                        log::info!(
+                            "auto-detected periodic reference: period {idx} (|Z| ~ 2^{oct})"
+                        );
+                        return;
+                    }
+                }
+            }
             self.orbit.push([x as f32, y as f32]);
             if x * x + y * y > 4.0 {
                 self.escaped_at = Some(self.orbit.len() as u32 - 1);
@@ -348,6 +407,7 @@ impl ReferenceOrbit {
                 out.extend_from_slice(&p.to_le_bytes());
             }
         }
+        out.extend_from_slice(&self.closure_octave.to_le_bytes());
         out.extend_from_slice(&self.ref_offset[0].to_le_bytes());
         out.extend_from_slice(&self.ref_offset[1].to_le_bytes());
         out.extend_from_slice(&self.off_zoom_log2.to_le_bytes());
@@ -437,6 +497,7 @@ impl ReferenceOrbit {
             0 => None,
             _ => Some(r.u32()?),
         };
+        let closure_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
         let ref_offset = [r.f32()?, r.f32()?];
         let off_zoom = r.f64()?;
         let off_height = r.f64()?;
@@ -470,7 +531,41 @@ impl ReferenceOrbit {
             escaped_at,
             z,
             c,
-        })
+            min_octave: i64::MAX,
+            min_at: 0,
+            closure_limit_octave: closure_limit_for_zoom(off_zoom),
+            closure_octave,
+        }
+        .with_rescanned_min())
+    }
+
+    /// Rebuild the minimum tracker from the stored f32 orbit (loads).
+    /// f32 floors at ~2^-149; deeper minima re-emerge from the live
+    /// fixed-point state as the orbit extends.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn with_rescanned_min(mut self) -> Self {
+        for (i, z) in self.orbit.iter().enumerate().skip(1) {
+            let m = (z[0] as f64) * (z[0] as f64) + (z[1] as f64) * (z[1] as f64);
+            let oct = if m == 0.0 { -149 } else { (m.log2() / 2.0) as i64 };
+            if oct < self.min_octave {
+                self.min_octave = oct;
+                self.min_at = i as u32;
+            }
+        }
+        self
+    }
+
+    /// Whether this orbit's periodic wrap is exact enough for a view:
+    /// non-periodic always serves; a closure serves while its |Z_p|
+    /// octave stays below the view's limit.
+    pub fn periodic_serves(&self, zoom_log2: f64) -> bool {
+        self.periodic.is_none() || self.closure_octave <= closure_limit_for_zoom(zoom_log2)
+    }
+
+    /// Retighten the closure limit before extending for a (possibly
+    /// deeper) view.
+    pub fn set_closure_limit(&mut self, zoom_log2: f64) {
+        self.closure_limit_octave = closure_limit_for_zoom(zoom_log2);
     }
 }
 
@@ -513,6 +608,8 @@ pub struct OrbitRequest {
     pub power: u32,
     pub ship: bool,
     pub ship_variant: u32,
+    /// Verified-before-use period hint (parameter-plane power tiers).
+    pub reference_period: Option<u32>,
     /// Zoom (for nucleus search precision) and viewport height (for
     /// the relocation offset's pixel units).
     pub zoom_log2: f64,
@@ -531,6 +628,9 @@ pub struct OrbitProgress {
     pub ref_offset: [f32; 2],
     pub off_zoom_log2: f64,
     pub off_height_px: f64,
+    /// The reference's period when periodic (hinted or auto-detected)
+    /// — the panel surfaces it.
+    pub detected_period: Option<u32>,
     /// Which request this data belongs to (bumped on every new
     /// request; stale chunks from an abandoned compute are ignored).
     pub epoch: u64,
@@ -597,7 +697,9 @@ impl OrbitWorker {
                                 && old_req.julia_c == req.julia_c
                                 && old_req.power == req.power
                                 && old_req.ship == req.ship
-                                && old_req.ship_variant == req.ship_variant;
+                                && old_req.ship_variant == req.ship_variant
+                                && old_req.reference_period == req.reference_period
+                                && orbit.periodic_serves(req.zoom_log2);
                             if same
                                 && orbit
                                     .relocation_serves(req.zoom_log2, req.height_px.max(1.0))
@@ -633,6 +735,7 @@ impl OrbitWorker {
                             p.ref_offset = orbit.ref_offset;
                             p.off_zoom_log2 = orbit.off_zoom_log2;
                             p.off_height_px = orbit.off_height_px;
+                            p.detected_period = orbit.periodic;
                             p.done = orbit.periodic.is_some()
                                 || orbit.escaped_at.is_some()
                                 || orbit.len() > req.max_iter;
@@ -642,6 +745,7 @@ impl OrbitWorker {
 
                     // Advance the current job by one chunk.
                     if let Some((req, orbit, epoch)) = current.as_mut() {
+                        orbit.set_closure_limit(req.zoom_log2);
                         let target = (orbit.len().saturating_sub(1) + Self::CHUNK)
                             .min(req.max_iter);
                         orbit.extend(target);
@@ -652,7 +756,15 @@ impl OrbitWorker {
                             let mut p = shared.lock().unwrap();
                             if p.epoch == *epoch {
                                 let have = p.orbit.len();
-                                p.orbit.extend_from_slice(&orbit.orbit[have..]);
+                                if orbit.orbit.len() >= have {
+                                    p.orbit.extend_from_slice(&orbit.orbit[have..]);
+                                } else {
+                                    // Auto-closure truncated the orbit
+                                    // to one period: republish whole.
+                                    p.orbit.clear();
+                                    p.orbit.extend_from_slice(&orbit.orbit);
+                                }
+                                p.detected_period = orbit.periodic;
                                 p.done = done;
                             }
                         }
@@ -709,7 +821,9 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
         req.zoom_log2,
         req.height_px.max(1.0),
     ) {
-        return Some(o);
+        if req.reference_period.is_none() || o.periodic == req.reference_period {
+            return Some(o);
+        }
     }
     if req.julia_c.is_none() && !req.ship {
         ReferenceOrbit::compute_nucleus_aware(
@@ -719,6 +833,7 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
             0,
             req.height_px.max(1.0),
             req.power,
+            req.reference_period,
         )
     } else {
         ReferenceOrbit::compute(
@@ -750,7 +865,9 @@ fn tx_loopback_send(
             && old_req.julia_c == req.julia_c
             && old_req.power == req.power
                                 && old_req.ship == req.ship
-                                && old_req.ship_variant == req.ship_variant;
+                                && old_req.ship_variant == req.ship_variant
+                                && old_req.reference_period == req.reference_period
+                                && orbit.periodic_serves(req.zoom_log2);
         if same && orbit.relocation_serves(req.zoom_log2, req.height_px.max(1.0)) {
             Some(orbit)
         } else {
@@ -769,6 +886,7 @@ fn tx_loopback_send(
         p.ref_offset = orbit.ref_offset;
         p.off_zoom_log2 = orbit.off_zoom_log2;
         p.off_height_px = orbit.off_height_px;
+        p.detected_period = orbit.periodic;
         p.done = orbit.periodic.is_some()
             || orbit.escaped_at.is_some()
             || orbit.len() > req.max_iter;
@@ -778,6 +896,59 @@ fn tx_loopback_send(
 }
 
 impl ReferenceOrbit {
+    /// Build a PERIODIC reference from a period hint (fraktaler-3's
+    /// `reference.period`): the center is taken as the nucleus, its
+    /// orbit computed for exactly one period at the view's full
+    /// precision, and VERIFIED to close (|Z_period| below f32
+    /// visibility — the exact-wrap requirement). A wrong hint returns
+    /// None (the caller warns and falls back). This is the deep-dive
+    /// reference: one period long, never extends, and its
+    /// delta-crushes align with the true cascade dynamics.
+    pub fn try_periodic_from_hint(
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        period: u32,
+        power: u32,
+    ) -> Option<Self> {
+        if period == 0 {
+            return None;
+        }
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+        let mut orbit = Self::compute(
+            center_re, center_im, zoom_log2, Some(n), period, None, power, false, 0,
+        )?;
+        if orbit.escaped_at.is_some() || orbit.len() <= period {
+            log::warn!("reference period {period}: center orbit escapes before closing");
+            return None;
+        }
+        // Closure check on the LIVE fixed-point state (the stored f32
+        // value would round a near-miss to zero).
+        let zx = orbit.z.re.to_f64();
+        let zy = orbit.z.im.to_f64();
+        if zx * zx + zy * zy > 2f64.powi(-48) {
+            log::warn!(
+                "reference period {period} rejected: |Z_period| ~ {:.3e} (not a nucleus closure)",
+                (zx * zx + zy * zy).sqrt()
+            );
+            return None;
+        }
+        orbit.periodic = Some(period);
+        orbit.orbit.truncate(period as usize + 1);
+        {
+            let fx = orbit.z.re.to_floatexp();
+            let fy = orbit.z.im.to_floatexp();
+            orbit.closure_octave = match (fx.m == 0.0, fy.m == 0.0) {
+                (true, true) => i64::MIN / 2,
+                (true, false) => fy.e,
+                (false, true) => fx.e,
+                (false, false) => fx.e.max(fy.e),
+            };
+        }
+        log::info!("periodic reference from hint: period {period} at {n} limbs");
+        Some(orbit)
+    }
+
     /// Parameter-plane Mandelbrot: try a nucleus-relocated periodic
     /// reference first (exact wrap, period-length orbit, maximal
     /// glitch resistance); fall back to the view-center reference.
@@ -789,10 +960,20 @@ impl ReferenceOrbit {
         max_iter: u32,
         height_px: f64,
         power: u32,
+        period_hint: Option<u32>,
     ) -> Option<Self> {
         // Diagnostic escape hatch: render with plain references to
         // isolate relocation-dependent differences.
         let skip_nucleus = std::env::var("ESCAPE_DISABLE_NUCLEUS").is_ok();
+        if !skip_nucleus {
+            if let Some(p) = period_hint {
+                if let Some(orbit) =
+                    Self::try_periodic_from_hint(center_re, center_im, zoom_log2, p, power)
+                {
+                    return Some(orbit);
+                }
+            }
+        }
         if let Some((nre, nim, period, off)) = (!skip_nucleus)
             .then(|| nucleus_for_view(center_re, center_im, zoom_log2, height_px, power))
             .flatten()
@@ -819,6 +1000,7 @@ impl ReferenceOrbit {
                     orbit.center_re = center_re.to_string();
                     orbit.center_im = center_im.to_string();
                     orbit.periodic = Some(period);
+                    orbit.closure_octave = i64::MIN / 2;
                     orbit.ref_offset = off;
                     orbit.off_zoom_log2 = zoom_log2;
                     orbit.off_height_px = height_px.max(1.0);
@@ -840,6 +1022,9 @@ impl ReferenceOrbit {
 pub struct OrbitCache {
     slot: Option<ReferenceOrbit>,
     height_px: f64,
+    /// Verified-before-use period hint for parameter-plane power
+    /// tiers (see [`ReferenceOrbit::try_periodic_from_hint`]).
+    reference_period: Option<u32>,
 }
 
 impl OrbitCache {
@@ -869,9 +1054,11 @@ impl OrbitCache {
         let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         let hit = self.slot.as_ref().is_some_and(|o| {
             o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
+                && o.periodic_serves(zoom_log2)
         });
         if hit {
             let orbit = self.slot.as_mut().unwrap();
+            orbit.set_closure_limit(zoom_log2);
             orbit.extend(max_iter);
         } else {
             // Disk store first (desktop): an exact-identity hit skips
@@ -890,6 +1077,12 @@ impl OrbitCache {
             );
             #[cfg(target_arch = "wasm32")]
             let loaded: Option<ReferenceOrbit> = None;
+            // A stored orbit only serves a hint-set request if it IS
+            // the hinted periodic form.
+            let loaded = loaded.filter(|o| {
+                (self.reference_period.is_none() || o.periodic == self.reference_period)
+                    && o.periodic_serves(zoom_log2)
+            });
             let orbit = if let Some(mut o) = loaded {
                 o.extend(max_iter);
                 o
@@ -901,6 +1094,7 @@ impl OrbitCache {
                     max_iter,
                     self.height_px.max(1.0),
                     power,
+                    self.reference_period,
                 )?
             } else {
                 ReferenceOrbit::compute(
@@ -943,10 +1137,12 @@ impl OrbitCache {
         let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         let hit = self.slot.as_ref().is_some_and(|o| {
             o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
+                && o.periodic_serves(zoom_log2)
         });
         let budget = budget.max(64);
         if hit {
             let orbit = self.slot.as_mut().unwrap();
+            orbit.set_closure_limit(zoom_log2);
             let target = orbit.len().saturating_sub(1).saturating_add(budget).min(max_iter);
             orbit.extend(target);
         } else {
@@ -967,6 +1163,15 @@ impl OrbitCache {
             || orbit.escaped_at.is_some()
             || orbit.len() > max_iter;
         Some((orbit, done))
+    }
+
+    /// The reference-period hint; a change invalidates the slot so
+    /// the next get() rebuilds with (or without) the periodic form.
+    pub fn set_reference_period(&mut self, period: Option<u32>) {
+        if self.reference_period != period {
+            self.reference_period = period;
+            self.slot = None;
+        }
     }
 
     /// The viewport height the relocation offset is measured against.
@@ -1122,6 +1327,7 @@ mod tests {
             power: 2,
             ship: false,
             ship_variant: 0,
+            reference_period: None,
             zoom_log2: 5.0,
             height_px: 320.0,
         };
@@ -1139,7 +1345,7 @@ mod tests {
         }
         // The worker goes nucleus-aware for this request; compare
         // against the same nucleus-aware synchronous compute.
-        let sync = ReferenceOrbit::compute_nucleus_aware("-0.5", "0.1", 5.0, 10_000, 320.0, 2)
+        let sync = ReferenceOrbit::compute_nucleus_aware("-0.5", "0.1", 5.0, 10_000, 320.0, 2, None)
             .unwrap();
         let p = worker.progress.lock().unwrap();
         assert_eq!(p.orbit.len(), sync.orbit.len());
@@ -1157,6 +1363,7 @@ mod tests {
             power: 2,
             ship: false,
             ship_variant: 0,
+            reference_period: None,
             zoom_log2: 5.0,
             height_px: 320.0,
         });
@@ -1207,6 +1414,7 @@ mod tests {
             5000,
             320.0,
             2,
+            None,
         )
         .expect("computes");
         assert_eq!(orbit.periodic, Some(3));
@@ -1222,7 +1430,7 @@ mod tests {
         );
         // Far from any small-period atom: falls back to the plain
         // view-center reference.
-        let plain = ReferenceOrbit::compute_nucleus_aware("0.3", "0.5", 20.0, 100, 320.0, 2)
+        let plain = ReferenceOrbit::compute_nucleus_aware("0.3", "0.5", 20.0, 100, 320.0, 2, None)
             .expect("computes");
         assert_eq!(plain.periodic, None);
         assert_eq!(plain.ref_offset, [0.0, 0.0]);
@@ -1302,6 +1510,71 @@ mod tests {
             }
         }
         assert!(steps > 3, "budget was not actually slicing ({steps} steps)");
+    }
+
+    #[test]
+    fn extend_auto_detects_a_periodic_center() {
+        // The period-3 antenna nucleus (16-digit truncation): the
+        // center orbit closes at index 3 far below f32 visibility —
+        // extend() must become the periodic reference on its own,
+        // truncate to one period, and stop.
+        let orbit = ReferenceOrbit::compute(
+            "-1.7548776662466927",
+            "0",
+            10.0,
+            None,
+            1000,
+            None,
+            2,
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(orbit.periodic, Some(3), "auto-detection missed the closure");
+        assert_eq!(orbit.len(), 4, "orbit must truncate to one period");
+        // The SAME center at a deep view must NOT accept the shallow
+        // closure (|Z_3| ~ 2^-56 is far above a zoom-300 pixel): the
+        // wrap would inject a visible discontinuity there.
+        let deep_view = ReferenceOrbit::compute(
+            "-1.7548776662466927",
+            "0",
+            300.0,
+            None,
+            1000,
+            None,
+            2,
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            deep_view.periodic, None,
+            "shallow closure must be rejected at a deep view"
+        );
+        assert!(
+            !orbit.periodic_serves(300.0),
+            "periodic_serves must retire the closure as the view deepens"
+        );
+        assert!(orbit.periodic_serves(12.0));
+
+        // A generic exterior center must NEVER auto-close.
+        let plain =
+            ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 500, None, 2, false, 0).unwrap();
+        assert_eq!(plain.periodic, None);
+        // Julia references are exempt (their wrap returns to Z_0, not 0).
+        let julia = ReferenceOrbit::compute(
+            "0.0",
+            "0.0",
+            10.0,
+            None,
+            100,
+            Some((-0.1, 0.05)),
+            2,
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(julia.periodic, None, "Julia must not auto-close");
     }
 
     #[test]

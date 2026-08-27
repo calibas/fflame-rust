@@ -316,6 +316,8 @@ pub enum ConfigPath {
     EscapeMaxIter,
     /// Supersampling factor (1 = off): N× per axis + box downsample.
     EscapeSupersample,
+    /// Reference-orbit period hint (0 = none). Verified before use.
+    EscapeReferencePeriod,
     /// Escape radius squared.
     EscapeBailout,
     /// Mann-iteration damping α (complex): `z ← (1−α)z + α·f(z)`.
@@ -821,6 +823,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
             ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
+            ConfigPath::EscapeReferencePeriod => write!(f, "Escape Reference Period"),
             ConfigPath::EscapeBailout => write!(f, "Escape Bailout"),
             ConfigPath::EscapeDampingRe => write!(f, "Damping (re)"),
             ConfigPath::EscapeDampingIm => write!(f, "Damping (im)"),
@@ -1042,6 +1045,9 @@ impl ConfigPath {
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
             ConfigPath::EscapeSupersample => I18nKey::simple("history.param.escape_supersample"),
+            ConfigPath::EscapeReferencePeriod => {
+                I18nKey::simple("history.param.escape_reference_period")
+            }
             ConfigPath::EscapeBailout => I18nKey::simple("history.param.escape_bailout"),
             ConfigPath::EscapeDampingRe => I18nKey::simple("history.param.escape_damping_re"),
             ConfigPath::EscapeDampingIm => I18nKey::simple("history.param.escape_damping_im"),
@@ -2337,6 +2343,7 @@ impl ConfigPath {
             | ConfigPath::EscapeRotation
             | ConfigPath::EscapeMaxIter
             | ConfigPath::EscapeSupersample
+            | ConfigPath::EscapeReferencePeriod
             | ConfigPath::EscapeBailout
             | ConfigPath::EscapeDampingRe
             | ConfigPath::EscapeDampingIm
@@ -2590,6 +2597,7 @@ impl ConfigPath {
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
             ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
+            ConfigPath::EscapeReferencePeriod => "Escape.ReferencePeriod".to_string(),
             ConfigPath::EscapeBailout => "Escape.Bailout".to_string(),
             ConfigPath::EscapeDampingRe => "Escape.DampingRe".to_string(),
             ConfigPath::EscapeDampingIm => "Escape.DampingIm".to_string(),
@@ -2772,6 +2780,7 @@ impl ConfigPath {
                 ["Rotation"] => return Some(ConfigPath::EscapeRotation),
                 ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
                 ["Supersample"] => return Some(ConfigPath::EscapeSupersample),
+                ["ReferencePeriod"] => return Some(ConfigPath::EscapeReferencePeriod),
                 ["Bailout"] => return Some(ConfigPath::EscapeBailout),
                 ["DampingRe"] => return Some(ConfigPath::EscapeDampingRe),
                 ["DampingIm"] => return Some(ConfigPath::EscapeDampingIm),
@@ -3357,6 +3366,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // open questions on center-path animation).
         ConfigPath::EscapeFormula
         | ConfigPath::EscapeColoring
+        | ConfigPath::EscapeReferencePeriod
         | ConfigPath::EscapeBiomorph
         | ConfigPath::EscapeCenterRe
         | ConfigPath::EscapeCenterIm => None,

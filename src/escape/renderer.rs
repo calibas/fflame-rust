@@ -714,6 +714,11 @@ impl EscapeRenderer {
             power,
             ship,
             ship_variant,
+            reference_period: if julia_c.is_none() && !ship {
+                escape.reference_period.filter(|&p| p > 0)
+            } else {
+                None
+            },
             zoom_log2: escape.zoom_log2,
             height_px,
         });
@@ -822,6 +827,12 @@ impl EscapeRenderer {
             assembler::PerturbTier::Power(p) => (p, false, 0),
             assembler::PerturbTier::Ship(v) => (2, true, v),
         };
+        let period_hint = if julia_c.is_none() && !ship {
+            escape.reference_period.filter(|&p| p > 0)
+        } else {
+            None
+        };
+        self.orbit_cache.set_reference_period(period_hint);
         self.orbit_cache.set_height(self.height.max(1) as f64);
         // Retire a cached relocation this view can't express (zoomed
         // far out from where its nucleus was found) BEFORE borrowing
