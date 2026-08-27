@@ -48,6 +48,37 @@ pub const PERTURB_FLOATEXP_ZOOM: f64 = 48.0;
 /// window on a mid-range GPU; the floatexp rung's iterations cost
 /// several times the scaled rung's, so its budget is smaller.
 pub const PERTURB_CHUNK_BUDGET: u64 = 8_000_000_000;
+
+/// Pixel-iterations the DIRECT path may put in one dispatch, which
+/// [`EscapeRenderer::direct_rows_per_dispatch`] turns into a row band.
+///
+/// The direct path has no per-pixel resume state, so its whole render
+/// is a single dispatch: cost is pixels x max_iter, with nothing
+/// bounding it. That is fine at the iteration counts a shallow view
+/// normally carries, and fatal when a deep-zoom config keeps its
+/// max_iter and the view zooms OUT past the perturbation threshold —
+/// 10.1M iterations over a supersampled viewport is tens of seconds
+/// in one submission, Windows resets the driver at two, and wgpu's
+/// device-lost aborts the process (0xc0000409). Reported from an app
+/// session zooming out of an f3-depth location, and again from an
+/// animation whose zoom track crossed the same line.
+///
+/// Deliberately fixed and conservative, not adaptive. Getting this
+/// wrong is not a slow frame but a LOST DEVICE, which is fatal and
+/// unrecoverable, and the wall-clock feedback that paces the
+/// iteration chunks does not transfer: a small band is latency-bound
+/// rather than throughput-bound, so several doublings all come back
+/// under target and the next one is the whole frame again. Measured
+/// exactly that - blind doubling lost the device in 2.6 s.
+///
+/// The numbers behind the value: at 4x this budget a supersampled
+/// 10M-iteration view lost the device, while this budget completed
+/// both that view and its non-supersampled twin. Small bands do cost
+/// throughput (they under-fill the GPU: this view renders in 20 s
+/// against ~3 s for one unbounded dispatch) and that is the price of
+/// not gambling the process on a config the user can reach with one
+/// zoom-out.
+pub const DIRECT_DISPATCH_BUDGET: u64 = 250_000_000_000;
 // DF mantissas cost ~3-5x per iteration vs plain f32 CFe.
 pub const PERTURB_CHUNK_BUDGET_FE: u64 = 600_000_000;
 
@@ -66,7 +97,11 @@ struct EscapeParamsGpu {
     max_iter: u32,
     flags: u32,
     bailout: f32,
-    _pad0: f32,
+    /// First row of the band this dispatch covers (direct and field
+    /// templates; the perturbed ones chunk by iteration and leave it
+    /// zero). Occupies what used to be explicit padding, so the
+    /// uniform layout is unchanged.
+    tile_y0: u32,
     /// Mann α (re, im); the shader reads it only in damped pipelines.
     damping: [f32; 2],
     fparams: [[f32; 4]; PARAM_VEC4S],
@@ -164,6 +199,10 @@ pub struct EscapeRenderer {
     /// wall-clock time between calls instead.
     chunk_iters: u32,
     chunk_count: u32,
+    /// First row the next DIRECT dispatch covers (row-band chunking;
+    /// the perturbed path chunks by iteration instead).
+    direct_tile_y: u32,
+
     /// Running minimum of the observed inter-call time: the cost of a
     /// frame whose chunk work is negligible. Under vsync this settles
     /// at the refresh period, which is exactly the baseline the target
@@ -421,6 +460,7 @@ impl EscapeRenderer {
             chunk_key: None,
             chunk_iters: 0,
             chunk_count: 0,
+            direct_tile_y: 0,
             chunk_base_ms: f32::MAX,
             chunk_last: None,
             chunk_target_ms: 0.0,
@@ -777,6 +817,29 @@ impl EscapeRenderer {
             && !escape.is_damped()
             && escape.biomorph == crate::config::escape::BiomorphMode::Off
     }
+
+    /// Rows the direct path may cover in one dispatch.
+    ///
+    /// The direct and field templates have no per-pixel resume state,
+    /// so a whole render is one dispatch: cost is pixels x max_iter
+    /// with nothing bounding it. Fine at ordinary iteration counts,
+    /// fatal when a deep-zoom config keeps its max_iter and the view
+    /// zooms OUT past the perturbation threshold - tens of seconds in
+    /// one submission, which Windows answers by resetting the driver
+    /// and wgpu by aborting the process (0xc0000409). Reported from an
+    /// app session zooming out of an f3-depth location, and again from
+    /// an animation whose zoom track crossed the same line.
+    ///
+    /// Splitting by ROW BAND bounds the dispatch without needing any
+    /// resume state: each band is a complete render of its own rows,
+    /// and the output texture accumulates them. It also gives the
+    /// direct path progressive top-to-bottom feedback it never had.
+    fn direct_rows_per_dispatch(&self, escape: &EscapeConfig) -> u32 {
+        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
+        let rows = DIRECT_DISPATCH_BUDGET / per_row.max(1);
+        (rows.max(1) as u32).min(self.height.max(1))
+    }
+
 
     /// The delta tier this view can use, if any: Mandelbrot (p = 2)
     /// and integer-power Multibrot (the binomial expansion needs an
@@ -1458,7 +1521,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 (if escape.julia { 1 } else { 0 }) | (bio << 1)
             },
             bailout: escape.bailout.max(1e-6),
-            _pad0: 0.0,
+            tile_y0: 0,
             damping: [escape.damping_re, escape.damping_im],
             fparams,
             cparams,
@@ -1481,7 +1544,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         escape: &EscapeConfig,
         palette_view: &TextureView,
     ) -> bool {
-        let params = self.params_for(escape);
+        let mut params = self.params_for(escape);
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
         // Deep zoom: the perturbation path. Falls back to direct on a
@@ -1708,6 +1771,24 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
         }
 
+        // Row-band chunking for the unchunkable-by-iteration templates
+        // (direct and field). A band is a complete render of its own
+        // rows, so no resume state is needed and the output texture
+        // accumulates the frame top to bottom.
+        let key = self.chunk_key_for(escape, 0);
+        if self.chunk_key.as_deref() != Some(key.as_str()) {
+            self.chunk_key = Some(key);
+            self.direct_tile_y = 0;
+        }
+        let rows = self.direct_rows_per_dispatch(escape);
+        if self.direct_tile_y >= self.height {
+            self.direct_tile_y = 0;
+        }
+        let tile_y0 = self.direct_tile_y;
+        let band = rows.min(self.height - tile_y0);
+        params.tile_y0 = tile_y0;
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+
         // Built per pass: the palette view can be recreated under us
         // (palette-size changes), and one bind group per render is
         // noise next to the dispatch itself.
@@ -1743,10 +1824,17 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+        pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
         drop(pass);
         self.run_downsample(device, encoder);
-        true
+        self.direct_tile_y = tile_y0.saturating_add(band);
+        let done = self.direct_tile_y >= self.height;
+        if done {
+            // A repeat of the same render starts from the top.
+            self.chunk_key = None;
+            self.direct_tile_y = 0;
+        }
+        done
     }
 
     /// Free GPU memory explicitly — on WebGPU `Drop` frees nothing.
@@ -1782,6 +1870,45 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_direct_render_is_split_into_bands_it_can_survive() {
+        // Zooming a 10M-iteration config OUT past the perturbation
+        // threshold used to hand the direct path a single dispatch of
+        // pixels x max_iter with nothing bounding it: tens of seconds
+        // in one submission, which Windows answers by resetting the
+        // driver and wgpu by aborting the process.
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.zoom_log2 = 10.0;
+        esc.max_iter = 10_100_100;
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+
+        // A band's work must respect the budget, and a render must
+        // still be reachable in a finite number of them.
+        let (w, h) = (1280u32, 768u32);
+        let rows = rows_for(w, h, esc.max_iter);
+        assert!(rows >= 1, "a band must cover at least one row");
+        let work = (w as u64) * (rows as u64) * (esc.max_iter as u64);
+        assert!(
+            work <= DIRECT_DISPATCH_BUDGET,
+            "a band is {work} pixel-iterations, over the {DIRECT_DISPATCH_BUDGET} budget"
+        );
+        assert!(rows < h, "10M iterations over this viewport must take several bands");
+
+        // Ordinary iteration counts still render in one pass, so
+        // nothing about the common case changes.
+        esc.max_iter = 2_000;
+        assert_eq!(rows_for(w, h, esc.max_iter), h);
+    }
+
+    /// The band size without needing a GPU: mirrors
+    /// EscapeRenderer::direct_rows_per_dispatch.
+    fn rows_for(width: u32, height: u32, max_iter: u32) -> u32 {
+        let per_row = (width as u64).saturating_mul(max_iter.max(1) as u64);
+        let rows = DIRECT_DISPATCH_BUDGET / per_row.max(1);
+        (rows.max(1) as u32).min(height.max(1))
+    }
+
 
     #[test]
     fn perturbation_gate_is_tight() {

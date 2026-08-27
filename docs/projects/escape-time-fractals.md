@@ -1105,6 +1105,41 @@ nobody re-derives it.
    runtime static, default raised to 1 GB, with current usage shown
    and a Clear button.
 
+**The zoom-OUT crash (fixed 2026-08-27).** Reported as
+STATUS_STACK_BUFFER_OVERRUN (0xc0000409) when zooming out of an
+f3-depth location, and again from an animation whose zoom track
+crossed the same line. Reproduced headlessly: `Parent device is
+lost` -> wgpu panics -> the process aborts, which is what that exit
+code is.
+
+The cause is not the live-update pacing it looked like. Below
+`PERTURB_MIN_ZOOM` the DIRECT template renders, and it has no
+per-pixel resume state, so a whole frame is ONE dispatch costing
+pixels x max_iter. That is harmless at the iteration counts a
+shallow view normally carries and fatal when a deep-zoom config
+keeps its 10.1M max_iter on the way out: tens of seconds in a single
+submission, and Windows resets the driver at two.
+
+Fixed by splitting the direct and field templates into ROW BANDS.
+Each band is a complete render of its own rows - no resume state
+needed, the output texture accumulates them - so the dispatch is
+bounded without touching the math. Verified pixel-identical to the
+old single-dispatch render at two sizes. The band offset reuses the
+uniform's spare pad word, so the layout is unchanged and the
+perturbed templates (which chunk by ITERATION) simply leave it zero.
+
+The band size is deliberately FIXED and conservative rather than
+adapted. The wall-clock feedback that paces iteration chunks does
+not transfer here: a small band is latency-bound rather than
+throughput-bound, so several doublings all come back under target
+and the next one is the whole frame again - measured, blind doubling
+lost the device in 2.6 s. At 4x the chosen budget a supersampled
+10M-iteration view still lost the device while the budget completed
+it, so that is where it sits. The cost is real and worth stating:
+small bands under-fill the GPU, and this view renders in 20 s
+against ~3 s for one unbounded dispatch. That is the price of not
+gambling the process on a state the user reaches with one zoom-out.
+
 **Waiting for a slow reference instead of rendering against it.**
 A partial reference does not render as progressive refinement at
 depth: every pixel wraps almost immediately, so the frame is flat
