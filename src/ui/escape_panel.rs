@@ -253,6 +253,28 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         }
     });
 
+    // What the renderer is ACTUALLY using. Progressive detection
+    // finds its own periods while zooming (and retires them as the
+    // view deepens), so this can differ from the field above - and
+    // when the field is empty it is the only way to see that a
+    // periodic reference is in play at all.
+    if let Some(live) = crate::escape::reference::live_reference_period() {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.detected_period", period = live))
+                .on_hover_text(t!("escape_panel.tooltip_detected_period"));
+            if esc.reference_period.unwrap_or(0) != live
+                && ui
+                    .small_button(t!("escape_panel.use_detected_period").as_ref())
+                    .clicked()
+            {
+                let _ = config_manager.update_param(
+                    ConfigPath::EscapeReferencePeriod,
+                    ConfigValue::UInt(live),
+                );
+            }
+        });
+    }
+
     let nav_power: Option<u32> = if esc.julia {
         None
     } else {

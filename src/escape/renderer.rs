@@ -783,6 +783,9 @@ impl EscapeRenderer {
                 )
                 .unwrap_or([0.0, 0.0]);
             }
+            if p.epoch == epoch {
+                super::reference::set_live_reference_period(p.detected_period);
+            }
             if p.epoch != epoch {
                 (0u32, false, Vec::new(), Vec::new(), Vec::new())
             } else {
@@ -965,6 +968,7 @@ impl EscapeRenderer {
         self.current_ref_offset = orbit
             .offset_for_view(escape.zoom_log2, h_px)
             .unwrap_or([0.0, 0.0]);
+        super::reference::set_live_reference_period(orbit.periodic);
         let len = orbit.len();
         let needed_bytes = (len as u64) * 8;
         let recreate = match &self.orbit_buffer {
