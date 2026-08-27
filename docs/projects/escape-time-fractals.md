@@ -984,6 +984,26 @@ the Newton work still open for large periods). This is a property of
 the coordinates, not a bug: |Z_p| is the center's distance from the
 true nucleus amplified by the multiplier.
 
+THE f3 TARGET RENDERS (2026-08-27). 001.f3.toml's own location and
+depth - zoom_log2 9316.69, 10,100,100 iterations, the coordinates
+verified char-for-char against the .fflame - now produces a clean
+deep-zoom frame: a double-scepter valley with spiral filigree, no
+glitch dust, no interior collapse. 640x384 took ~8 minutes cold
+(dominated by the 10.1M-iteration reference at 197 limbs) and
+**26.5 s** warm at 2x supersampling, reference reloaded from the
+orbit store. Two practical notes fell out of it:
+
+- Drop `reference_period` from a config whose zoom the hint cannot
+  serve. It costs a 54-second build that is then discarded, and -
+  because the disk-load filter matches on the hint - it also blocks
+  the cached plain reference from loading. Without the hint the
+  same frame reuses the stored orbit and renders in seconds.
+- The first pass looked like noise at `scale` 0.02 with no AA. It
+  was not: 2x supersampling and a wide palette (2e-4) resolve it
+  into clean structure. Same lesson as the BLA comparison - a
+  compressed palette at depth turns per-pixel iteration differences
+  into speckle, and judging accuracy through one is a mistake.
+
 Two costs measured while chasing this, both worth knowing before
 anyone "optimizes" the deep path:
 
