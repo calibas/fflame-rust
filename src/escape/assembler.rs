@@ -337,6 +337,39 @@ struct BlaBuf {
 // values — the multiplier and rebase read both halves on the
 // floatexp rung; the scaled rung ignores this binding).
 @group(0) @binding(8) var<storage, read> ref_orbit_lo: array<vec2<f32>>;
+// Per-entry binary exponent of the reference orbit, parallel to
+// binding 4: entry m is (ref_orbit[m] + ref_orbit_lo[m]) * 2^e. It is
+// 0 for every iterate above 2^-90 (the overwhelming majority), and
+// nonzero only where the reference passes close to a nucleus - the
+// iterates plain f32 flushes to zero, which would delete 2*Z*delta
+// from that step and permanently halve delta growth from there on.
+@group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
+
+// The reference iterate as a plain f32 value (zero below f32's normal
+// range - the pre-exponent behaviour, which is all the rebase test
+// and the z_full reconstruction need).
+fn ref_z(m: u32) -> vec2<f32> {
+    let e = ref_orbit_e[m];
+    if (e == 0) {
+        return ref_orbit[m];
+    }
+    if (e < -126) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    return ref_orbit[m] * exp2(f32(e));
+}
+
+// The scaled DF tail of the same iterate.
+fn ref_z_lo(m: u32) -> vec2<f32> {
+    let e = ref_orbit_e[m];
+    if (e == 0) {
+        return ref_orbit_lo[m];
+    }
+    if (e < -126) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    return ref_orbit_lo[m] * exp2(f32(e));
+}
 
 // (a_m * 2^a_e) < (b_m * 2^b_e) on magnitudes; mantissas need not be
 // pre-normalized. b_m <= 0 encodes "radius zero, never valid".
@@ -509,7 +542,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
         if (!did_skip) {
-            let z_ref = ref_orbit[m];
+            let z_ref = ref_z(m);
             //__DELTA_STEP__
             w = w_new;
             m = m + 1u;
@@ -521,7 +554,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // while the delta is far below f32 - exactly when z == Z_m to
         // f32 precision anyway.
         let delta = perturb.s * w;
-        let z_full = ref_orbit[min(m, perturb.orbit_len - 1u)] + delta;
+        let z_full = ref_z(min(m, perturb.orbit_len - 1u)) + delta;
         z = z_full;
 
         //__ACCUM_UPDATE__
@@ -541,7 +574,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // start at Z_0 = center and MUST subtract it (found the hard
         // way: without the subtraction a rebase teleports z to
         // center + z_full and every pixel escapes instantly).
-        let rebase_delta = z_full - ref_orbit[0];
+        let rebase_delta = z_full - ref_z(0u);
         if (m >= perturb.orbit_len - 1u
             || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
             w = rebase_delta * perturb.inv_s;
@@ -672,6 +705,39 @@ struct BlaBuf {
 // values — the multiplier and rebase read both halves on the
 // floatexp rung; the scaled rung ignores this binding).
 @group(0) @binding(8) var<storage, read> ref_orbit_lo: array<vec2<f32>>;
+// Per-entry binary exponent of the reference orbit, parallel to
+// binding 4: entry m is (ref_orbit[m] + ref_orbit_lo[m]) * 2^e. It is
+// 0 for every iterate above 2^-90 (the overwhelming majority), and
+// nonzero only where the reference passes close to a nucleus - the
+// iterates plain f32 flushes to zero, which would delete 2*Z*delta
+// from that step and permanently halve delta growth from there on.
+@group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
+
+// The reference iterate as a plain f32 value (zero below f32's normal
+// range - the pre-exponent behaviour, which is all the rebase test
+// and the z_full reconstruction need).
+fn ref_z(m: u32) -> vec2<f32> {
+    let e = ref_orbit_e[m];
+    if (e == 0) {
+        return ref_orbit[m];
+    }
+    if (e < -126) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    return ref_orbit[m] * exp2(f32(e));
+}
+
+// The scaled DF tail of the same iterate.
+fn ref_z_lo(m: u32) -> vec2<f32> {
+    let e = ref_orbit_e[m];
+    if (e == 0) {
+        return ref_orbit_lo[m];
+    }
+    if (e < -126) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    return ref_orbit_lo[m] * exp2(f32(e));
+}
 
 // (a_m * 2^a_e) < (b_m * 2^b_e) on magnitudes; mantissas need not be
 // pre-normalized. b_m <= 0 encodes "radius zero, never valid".
@@ -999,6 +1065,19 @@ fn cfe2_mul_zdf(a: CFe2, zh: vec2<f32>, zl: vec2<f32>) -> CFe2 {
 }
 
 // As above but the f32 complex carries its own exponent (BLA A/B).
+// w x Z where Z is DF mantissa + its own binary exponent: the deep
+// rung's 2Z multiplier. The exponent is what keeps a near-nucleus
+// reference iterate (|Z| far below f32's 2^-126) in the recurrence
+// instead of silently reading as zero.
+fn cfe2_mul_zdfe(a: CFe2, zh: vec2<f32>, zl: vec2<f32>, ze: i32) -> CFe2 {
+    var r = cfe2_mul_zdf(a, zh, zl);
+    if (r.e != CFE_ZERO_E) {
+        r.e = r.e + ze;
+    }
+    return r;
+}
+
+// As above but the f32 complex carries its own exponent (BLA A/B).
 fn cfe2_mul_cfe32(a: CFe2, m: vec2<f32>, e: i32) -> CFe2 {
     var r = cfe2_mul_c32(a, m);
     if (r.e != CFE_ZERO_E) {
@@ -1180,8 +1259,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
         if (!did_skip) {
-            let z_ref = ref_orbit[m];
-            let z_ref_lo = ref_orbit_lo[m];
+            // Two views of the same iterate: the plain value (Ship
+            // and anything that needs an f32) and the raw mantissa
+            // with its exponent (the exact multiplier, valid at any
+            // depth - see ReferenceOrbit::orbit_e).
+            let z_ref = ref_z(m);
+            let z_ref_m = ref_orbit[m];
+            let z_ref_lo_m = ref_orbit_lo[m];
+            let z_ref_e = ref_orbit_e[m];
             //__DELTA_STEP_FE__
             w = w_new;
             m = m + 1u;
@@ -1190,7 +1275,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let z_before = z;
 
         let delta = cfe2_to_f32(w);
-        let zi = ref_orbit[min(m, perturb.orbit_len - 1u)];
+        let zi = ref_z(min(m, perturb.orbit_len - 1u));
         let z_full = zi + delta;
         z = z_full;
 
@@ -1207,12 +1292,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // CONDITION uses the f32 view; the ASSIGNMENT rebuilds the
         // delta in DF so the wrap does not truncate pixel history to
         // f32 (the reseed-precision loss the DF rung exists to fix).
-        let rebase_delta = z_full - ref_orbit[0];
+        let rebase_delta = z_full - ref_z(0u);
         if (m >= perturb.orbit_len - 1u
             || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
-            let z0 = ref_orbit[0];
-            let zi_lo = ref_orbit_lo[min(m, perturb.orbit_len - 1u)];
-            let z0_lo = ref_orbit_lo[0];
+            let z0 = ref_z(0u);
+            let zi_lo = ref_z_lo(min(m, perturb.orbit_len - 1u));
+            let z0_lo = ref_z_lo(0u);
             var dxr = vec2<f32>(0.0, 0.0);
             var dyr = vec2<f32>(0.0, 0.0);
             if (w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127) {
@@ -1437,9 +1522,12 @@ fn delta_step_scaled(p: u32) -> String {
 fn delta_step_floatexp(p: u32) -> String {
     if p == 2 {
         return "        // delta' = 2 Z delta + delta^2 (+ delta_c on the parameter\n\
-                \x20       // plane) - DF mantissas AND DF reference (~2^-48).\n\
+                \x20       // plane) - DF mantissas AND DF reference (~2^-48),\n\
+                \x20       // the reference read with its own exponent so a\n\
+                \x20       // near-nucleus iterate cannot underflow out of the\n\
+                \x20       // multiplier.\n\
                 \x20       var w_new = cfe2_add(\n\
-                \x20           cfe2_mul_zdf(w, 2.0 * z_ref, 2.0 * z_ref_lo),\n\
+                \x20           cfe2_mul_zdfe(w, 2.0 * z_ref_m, 2.0 * z_ref_lo_m, z_ref_e),\n\
                 \x20           cfe2_sqr(w),\n\
                 \x20       );\n\
                 \x20       if (!is_julia_perturb) {\n\
@@ -1449,10 +1537,14 @@ fn delta_step_floatexp(p: u32) -> String {
     }
     let mut out = String::new();
     out.push_str(&format!("        // Binomial delta step for z^{p} + c (floatexp).\n"));
-    out.push_str("        let zr1 = z_ref;\n");
+    // zr{k} is the k-th power of the reference MANTISSA; the matching
+    // exponent k*z_ref_e is applied at the term multiply below. The
+    // mantissa stays in [1,4), so no power of it underflows even when
+    // the iterate itself is far below f32's range.
+    out.push_str("        let zr1 = z_ref_m;\n");
     for k in 2..p {
         out.push_str(&format!(
-            "        let zr{k} = vec2<f32>(zr{}.x * z_ref.x - zr{}.y * z_ref.y, zr{}.x * z_ref.y + zr{}.y * z_ref.x);\n",
+            "        let zr{k} = vec2<f32>(zr{}.x * z_ref_m.x - zr{}.y * z_ref_m.y, zr{}.x * z_ref_m.y + zr{}.y * z_ref_m.x);\n",
             k - 1, k - 1, k - 1, k - 1
         ));
     }
@@ -1471,7 +1563,7 @@ fn delta_step_floatexp(p: u32) -> String {
         } else {
             let zp = p - k;
             out.push_str(&format!(
-                "        w_new = cfe2_add(w_new, cfe2_mul_c32(u{k}, {coeff}.0 * zr{zp}));\n"
+                "        w_new = cfe2_add(w_new, cfe2_mul_cfe32(u{k}, {coeff}.0 * zr{zp}, {zp} * z_ref_e));\n"
             ));
         }
     }

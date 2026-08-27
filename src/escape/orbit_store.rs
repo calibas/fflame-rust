@@ -26,7 +26,7 @@ use super::reference::ReferenceOrbit;
 use std::path::{Path, PathBuf};
 
 /// Bump on any layout change: old files then read as misses.
-pub const MAGIC: &[u8; 8] = b"FFORBIT3";
+pub const MAGIC: &[u8; 8] = b"FFORBIT4";
 
 /// Save when recomputing would actually hurt: orbit length times
 /// limbs² is proportional to the fixed-point work done. ~2e6 is a
