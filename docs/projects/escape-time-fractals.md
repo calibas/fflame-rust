@@ -915,9 +915,44 @@ curated z680 location and z900/z1100 on it — the "interior wall"
 previously blamed on f32-mantissa crush — now render full
 structure.
 
+It also explains "panning changes the STRUCTURE of the fractal,"
+reported at z543 and never explained: a pan moves the reference
+center, which moves where that reference's sub-2^-126 dips fall,
+which changes how much delta growth gets deleted — so the picture
+reorganized instead of sliding. Measured on the user's z543 pan
+pair (200k iterations, 640×384): pre-fix the two frames have no
+alignment peak at all (best mean|Δ| 44.9 at dy=−2 vs 46.8
+unshifted — uncorrelated images). Post-fix they align at dx=0,
+dy=−3, mean|Δ| 44.3 → 23.6: a pure vertical pan, which is what the
+config pair actually encodes. The pre-fix and post-fix renders of
+the SAME config are entirely different images.
+
 Cost: 4 bytes per orbit entry (16 → 20 B) and one extra buffer read
-per iteration. BLA is unchanged and still declines to skip across a
-deep dip (a zero-radius entry): conservative, not wrong.
+per iteration. Measured on identical-output workloads (1280×800,
+max_iter 400k, best of 2, ~0.4 s of that is process + GPU startup):
+floatexp rung 1067 → 1138 ms, scaled rung 551 → 574 ms — +4 to +7%
+wall clock, and the two builds' PNGs are byte-identical where no
+dip occurs, which is what makes it a fair comparison. BLA is
+unchanged and still declines to skip across a deep dip (a
+zero-radius entry): conservative, not wrong.
+
+Depth reached after the fix, on the curated z680 location (640×384,
+reference_period 1,137,764, ~1–2 s per frame once the orbit is
+persisted): z680, z900, z1100, z1500, z2000 and z3000 all render
+full structure. BLA-on vs BLA-off agree on the interior/escaped
+classification to 0.00–0.08% of pixels across z700–z3000.
+CAUTION when eyeballing that comparison: at `scale` 0.1 a palette
+cycle is ~10 iterations, so a ±1-iteration difference repaints the
+frame and the two renders "differ" on 26–73% of pixels. Widen the
+palette (`scale` 1e-5, a 100k-iteration cycle) and the same pair
+differs on 0.03–0.15% — boundary dust, the z484 class. Judge
+agreement on the escape MASK or a wide palette, never on a
+compressed one.
+
+What is NOT claimed: only the z700 window has exact ground truth
+(two independent implementations). Deeper frames are verified for
+self-consistency (BLA on/off) and for producing structure, not
+against an exact escape band.
 
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
