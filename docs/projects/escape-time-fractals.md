@@ -984,6 +984,27 @@ the Newton work still open for large periods). This is a property of
 the coordinates, not a bug: |Z_p| is the center's distance from the
 true nucleus amplified by the multiplier.
 
+Two costs measured while chasing this, both worth knowing before
+anyone "optimizes" the deep path:
+
+- A reference iteration at 197 limbs is 48.9 us, and 44.6 us of that
+  (91%) is the two `mul_trunc` calls. Stripping essentially every
+  heap allocation out of `z.sqr().add(&c)` won 1.03x - the allocator
+  reuses same-size blocks and is not the problem. Karatsuba does not
+  pay at this limb count either: the truncated high-window product
+  already costs ~n^2/2 MACs, about what Karatsuba on the FULL product
+  would cost at n = 197. So a 10.1M-iteration reference is ~8 minutes
+  of arithmetic, one-time and persisted - the honest floor for the
+  f3-class target, not an inefficiency to hunt.
+- Known cost not yet addressed: the disk-load filter requires
+  `o.periodic == reference_period`, so a fallback (non-periodic)
+  orbit built for a hinted location is rejected next session and
+  rebuilt. In-session reuse works - the in-memory slot has no such
+  check - so this is 8 minutes once per session, not per frame.
+  Fixing it properly means persisting "this hint was tried and found
+  too shallow", i.e. another format bump; deliberately deferred
+  rather than churning the format twice in a day.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
