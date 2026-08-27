@@ -295,9 +295,10 @@ struct PerturbParams {
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
 // Per-pixel iteration state for chunked dispatches (48 bytes/px).
 struct IterState {
-    w: vec2<f32>,       // scaled: w | floatexp: CFe mantissa
+    w: vec2<f32>,       // scaled: w | floatexp: DF mantissa hi
     z: vec2<f32>,       // last full orbit value
     accum: vec2<f32>,   // coloring accumulator
+    w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
     n_done: u32,        // iterations recorded at termination
@@ -331,6 +332,11 @@ struct BlaBuf {
     entries: array<BlaEntry>,
 }
 @group(0) @binding(7) var<storage, read> bla: BlaBuf;
+// DF residuals of the reference orbit, parallel to binding 4: each
+// entry's f64 tail below its f32 hi (~2^-48 relative reference
+// values — the multiplier and rebase read both halves on the
+// floatexp rung; the scaled rung ignores this binding).
+@group(0) @binding(8) var<storage, read> ref_orbit_lo: array<vec2<f32>>;
 
 // (a_m * 2^a_e) < (b_m * 2^b_e) on magnitudes; mantissas need not be
 // pre-normalized. b_m <= 0 encodes "radius zero, never valid".
@@ -545,7 +551,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (perturb.iter_end < params.max_iter) {
         // More chunks follow: persist the registers.
         iter_state[px_index] = IterState(
-            w, z, accum_state, 0, m,
+            w, z, accum_state, vec2<f32>(0.0, 0.0), 0, m,
             select(0u, n, escaped),
             select(0u, 1u, escaped),
         );
@@ -624,9 +630,10 @@ struct PerturbParams {
 @group(0) @binding(5) var<uniform> perturb: PerturbParams;
 // Per-pixel iteration state for chunked dispatches (48 bytes/px).
 struct IterState {
-    w: vec2<f32>,       // scaled: w | floatexp: CFe mantissa
+    w: vec2<f32>,       // scaled: w | floatexp: DF mantissa hi
     z: vec2<f32>,       // last full orbit value
     accum: vec2<f32>,   // coloring accumulator
+    w_lo: vec2<f32>,    // floatexp DF mantissa lo (zero on the scaled rung)
     w_e: i32,           // floatexp exponent (unused by the scaled rung)
     m: u32,             // reference index
     n_done: u32,        // iterations recorded at termination
@@ -660,6 +667,11 @@ struct BlaBuf {
     entries: array<BlaEntry>,
 }
 @group(0) @binding(7) var<storage, read> bla: BlaBuf;
+// DF residuals of the reference orbit, parallel to binding 4: each
+// entry's f64 tail below its f32 hi (~2^-48 relative reference
+// values — the multiplier and rebase read both halves on the
+// floatexp rung; the scaled rung ignores this binding).
+@group(0) @binding(8) var<storage, read> ref_orbit_lo: array<vec2<f32>>;
 
 // (a_m * 2^a_e) < (b_m * 2^b_e) on magnitudes; mantissas need not be
 // pre-normalized. b_m <= 0 encodes "radius zero, never valid".
@@ -861,6 +873,194 @@ fn cfe_from_sfe(re: SFe, im: SFe) -> CFe {
     return cfe_norm(CFe(vec2<f32>(rm, im2), e));
 }
 
+// ---- double-f32 ("DF") arithmetic: error-free transforms with
+// BITMASK splits (integer ops — immune to fast-math folding on
+// Metal). A value is hi + lo with |lo| <= ulp(hi)/2: ~2^-48 relative
+// precision, doubling the crush-survival depth of the delta
+// iteration (each near-nucleus pass reseeds deltas toward d0 scale
+// and truncates pixel history to the mantissa width). ----
+fn df_two_sum(a: f32, b: f32) -> vec2<f32> {
+    let s = a + b;
+    let bb = s - a;
+    let err = (a - (s - bb)) + (b - bb);
+    return vec2<f32>(s, err);
+}
+
+fn df_quick_sum(a: f32, b: f32) -> vec2<f32> {
+    // Requires |a| >= |b| (true for a value + its rounding error).
+    let s = a + b;
+    return vec2<f32>(s, b - (s - a));
+}
+
+fn df_split(a: f32) -> vec2<f32> {
+    let hi = bitcast<f32>(bitcast<u32>(a) & 0xFFFFF000u);
+    return vec2<f32>(hi, a - hi);
+}
+
+fn df_two_prod(a: f32, b: f32) -> vec2<f32> {
+    let p = a * b;
+    let aa = df_split(a);
+    let bb = df_split(b);
+    let err = ((aa.x * bb.x - p) + aa.x * bb.y + aa.y * bb.x) + aa.y * bb.y;
+    return vec2<f32>(p, err);
+}
+
+fn df_add(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    let t = df_two_sum(a.x, b.x);
+    let e = t.y + a.y + b.y;
+    return df_quick_sum(t.x, e);
+}
+
+fn df_mul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    let t = df_two_prod(a.x, b.x);
+    let e = t.y + (a.x * b.y + a.y * b.x);
+    return df_quick_sum(t.x, e);
+}
+
+fn df_muls(a: vec2<f32>, b: f32) -> vec2<f32> {
+    let t = df_two_prod(a.x, b);
+    let e = t.y + a.y * b;
+    return df_quick_sum(t.x, e);
+}
+
+fn df_neg(a: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(-a.x, -a.y);
+}
+
+// Shared-exponent complex with DF mantissas: value = (hi + lo)·2^e,
+// normalized so max(|hi.x|, |hi.y|) is in [0.5, 1).
+struct CFe2 {
+    hi: vec2<f32>,
+    lo: vec2<f32>,
+    e: i32,
+}
+
+fn cfe2_zero() -> CFe2 {
+    return CFe2(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), CFE_ZERO_E);
+}
+
+fn cfe2_norm(v: CFe2) -> CFe2 {
+    let a = max(abs(v.hi.x), abs(v.hi.y));
+    if (a == 0.0) {
+        let b = max(abs(v.lo.x), abs(v.lo.y));
+        if (b == 0.0) {
+            return cfe2_zero();
+        }
+        // hi vanished: promote lo (keeps the information).
+        let f = frexp(b);
+        let sc = exp2(f32(-f.exp));
+        return CFe2(v.lo * sc, vec2<f32>(0.0, 0.0), v.e + f.exp);
+    }
+    let f = frexp(a);
+    // Power-of-two rescale: exact on both halves.
+    let sc = exp2(f32(-f.exp));
+    return CFe2(v.hi * sc, v.lo * sc, v.e + f.exp);
+}
+
+fn cfe2_from_f32(v: vec2<f32>) -> CFe2 {
+    return cfe2_norm(CFe2(v, vec2<f32>(0.0, 0.0), 0));
+}
+
+fn cfe2_to_f32(v: CFe2) -> vec2<f32> {
+    if (v.e < -126 || v.e == CFE_ZERO_E) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    if (v.e > 127) {
+        return v.hi * 3.0e38;
+    }
+    return v.hi * exp2(f32(v.e));
+}
+
+// w × b where b is a plain f32 complex (the 2Z term, BLA mantissas).
+fn cfe2_mul_c32(a: CFe2, b: vec2<f32>) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    let ax = vec2<f32>(a.hi.x, a.lo.x);
+    let ay = vec2<f32>(a.hi.y, a.lo.y);
+    let re = df_add(df_muls(ax, b.x), df_neg(df_muls(ay, b.y)));
+    let im = df_add(df_muls(ax, b.y), df_muls(ay, b.x));
+    return cfe2_norm(CFe2(vec2<f32>(re.x, im.x), vec2<f32>(re.y, im.y), a.e));
+}
+
+// w × Z where Z itself is DF (hi + lo): the 2Z multiplier at ~2^-48
+// relative — the last 2^-24 reference-noise source on this rung.
+fn cfe2_mul_zdf(a: CFe2, zh: vec2<f32>, zl: vec2<f32>) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    let ax = vec2<f32>(a.hi.x, a.lo.x);
+    let ay = vec2<f32>(a.hi.y, a.lo.y);
+    let bx = vec2<f32>(zh.x, zl.x);
+    let by = vec2<f32>(zh.y, zl.y);
+    let re = df_add(df_mul(ax, bx), df_neg(df_mul(ay, by)));
+    let im = df_add(df_mul(ax, by), df_mul(ay, bx));
+    return cfe2_norm(CFe2(vec2<f32>(re.x, im.x), vec2<f32>(re.y, im.y), a.e));
+}
+
+// As above but the f32 complex carries its own exponent (BLA A/B).
+fn cfe2_mul_cfe32(a: CFe2, m: vec2<f32>, e: i32) -> CFe2 {
+    var r = cfe2_mul_c32(a, m);
+    if (r.e != CFE_ZERO_E) {
+        r.e = r.e + e;
+    }
+    return r;
+}
+
+fn cfe2_mul(a: CFe2, b: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E || b.e == CFE_ZERO_E) {
+        return cfe2_zero();
+    }
+    let ax = vec2<f32>(a.hi.x, a.lo.x);
+    let ay = vec2<f32>(a.hi.y, a.lo.y);
+    let bx = vec2<f32>(b.hi.x, b.lo.x);
+    let by = vec2<f32>(b.hi.y, b.lo.y);
+    let re = df_add(df_mul(ax, bx), df_neg(df_mul(ay, by)));
+    let im = df_add(df_mul(ax, by), df_mul(ay, bx));
+    return cfe2_norm(CFe2(vec2<f32>(re.x, im.x), vec2<f32>(re.y, im.y), a.e + b.e));
+}
+
+fn cfe2_sqr(a: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    let ax = vec2<f32>(a.hi.x, a.lo.x);
+    let ay = vec2<f32>(a.hi.y, a.lo.y);
+    let re = df_add(df_mul(ax, ax), df_neg(df_mul(ay, ay)));
+    let xy = df_mul(ax, ay);
+    let im = df_add(xy, xy);
+    return cfe2_norm(CFe2(vec2<f32>(re.x, im.x), vec2<f32>(re.y, im.y), a.e * 2));
+}
+
+fn cfe2_add(a: CFe2, b: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return b;
+    }
+    if (b.e == CFE_ZERO_E) {
+        return a;
+    }
+    let d = a.e - b.e;
+    // DF carries ~49 mantissa bits: the octave cutoff widens to match
+    // (this is what preserves pixel history through delta-crush
+    // reseeds that the f32 rung truncated).
+    if (d > 49) {
+        return a;
+    }
+    if (d < -49) {
+        return b;
+    }
+    if (d >= 0) {
+        let sc = exp2(f32(-d));
+        let re = df_add(vec2<f32>(a.hi.x, a.lo.x), vec2<f32>(b.hi.x, b.lo.x) * sc);
+        let im = df_add(vec2<f32>(a.hi.y, a.lo.y), vec2<f32>(b.hi.y, b.lo.y) * sc);
+        return cfe2_norm(CFe2(vec2<f32>(re.x, im.x), vec2<f32>(re.y, im.y), a.e));
+    }
+    let sc = exp2(f32(d));
+    let re = df_add(vec2<f32>(a.hi.x, a.lo.x) * sc, vec2<f32>(b.hi.x, b.lo.x));
+    let im = df_add(vec2<f32>(a.hi.y, a.lo.y) * sc, vec2<f32>(b.hi.y, b.lo.y));
+    return cfe2_norm(CFe2(vec2<f32>(re.x, im.x), vec2<f32>(re.y, im.y), b.e));
+}
+
 struct OrbitSummary {
     z: vec2<f32>,
     n: u32,
@@ -891,15 +1091,24 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dpx.x * rot.x - dpx.y * rot.y,
         dpx.x * rot.y + dpx.y * rot.x,
     );
-    let d0 = cfe_norm(CFe((d0px + perturb.ref_offset) * perturb.s_m, perturb.s_e));
+    // d0 in DF: the (pixel + relocation-offset) sum and the s_m
+    // product both keep their low halves — pixel positions resolve to
+    // ~2^-48 relative even against a large offset.
+    let d0xs = df_muls(df_two_sum(d0px.x, perturb.ref_offset.x), perturb.s_m);
+    let d0ys = df_muls(df_two_sum(d0px.y, perturb.ref_offset.y), perturb.s_m);
+    let d0 = cfe2_norm(CFe2(
+        vec2<f32>(d0xs.x, d0ys.x),
+        vec2<f32>(d0xs.y, d0ys.y),
+        perturb.s_e,
+    ));
     let px_index = gid.y * params.width + gid.x;
 
     let is_julia_perturb = (perturb.flags & 2u) != 0u;
-    var w: CFe;
+    var w: CFe2;
     if (is_julia_perturb) {
         w = d0;
     } else {
-        w = CFe(vec2<f32>(0.0, 0.0), CFE_ZERO_E);
+        w = cfe2_zero();
     }
 
     var m = 0u;
@@ -915,7 +1124,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if (perturb.iter_start > 0u) {
         let st = iter_state[px_index];
-        w = CFe(st.w, st.w_e);
+        w = CFe2(st.w, st.w_lo, st.w_e);
         z = st.z;
         m = st.m;
         accum_state = st.accum;
@@ -932,7 +1141,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // application run in full extended range -- no clamps.
         var did_skip = false;
         if (bla.n_levels > 0u && m > 0u) {
-            let aw = length(w.m);
+            let aw = length(w.hi);
             var pick_a = vec2<f32>(0.0, 0.0);
             var pick_b = vec2<f32>(0.0, 0.0);
             var pick_ae = 0;
@@ -962,9 +1171,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 pick_span = span;
             }
             if (pick_span > 0u) {
-                let ta = cfe_mul(CFe(pick_a, pick_ae), w);
-                let tb = cfe_mul(CFe(pick_b, pick_be), d0);
-                w = cfe_add(ta, tb);
+                let ta = cfe2_mul_cfe32(w, pick_a, pick_ae);
+                let tb = cfe2_mul_cfe32(d0, pick_b, pick_be);
+                w = cfe2_add(ta, tb);
                 m = m + pick_span;
                 i = i + pick_span;
                 did_skip = true;
@@ -972,6 +1181,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         if (!did_skip) {
             let z_ref = ref_orbit[m];
+            let z_ref_lo = ref_orbit_lo[m];
             //__DELTA_STEP_FE__
             w = w_new;
             m = m + 1u;
@@ -979,8 +1189,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         let z_before = z;
 
-        let delta = cfe_to_f32(w);
-        let z_full = ref_orbit[min(m, perturb.orbit_len - 1u)] + delta;
+        let delta = cfe2_to_f32(w);
+        let zi = ref_orbit[min(m, perturb.orbit_len - 1u)];
+        let z_full = zi + delta;
         z = z_full;
 
         //__ACCUM_UPDATE__
@@ -992,17 +1203,42 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // Zhuoran rebase against the orbit start (Z_0 = 0 on the
-        // parameter plane, the center on the Julia plane).
+        // parameter plane, the center on the Julia plane). The
+        // CONDITION uses the f32 view; the ASSIGNMENT rebuilds the
+        // delta in DF so the wrap does not truncate pixel history to
+        // f32 (the reseed-precision loss the DF rung exists to fix).
         let rebase_delta = z_full - ref_orbit[0];
         if (m >= perturb.orbit_len - 1u
             || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
-            w = cfe_from_f32(rebase_delta);
+            let z0 = ref_orbit[0];
+            let zi_lo = ref_orbit_lo[min(m, perturb.orbit_len - 1u)];
+            let z0_lo = ref_orbit_lo[0];
+            var dxr = vec2<f32>(0.0, 0.0);
+            var dyr = vec2<f32>(0.0, 0.0);
+            if (w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127) {
+                let sc_w = exp2(f32(w.e));
+                dxr = vec2<f32>(w.hi.x, w.lo.x) * sc_w;
+                dyr = vec2<f32>(w.hi.y, w.lo.y) * sc_w;
+            }
+            let rx = df_add(
+                df_add(vec2<f32>(zi.x, zi_lo.x), df_neg(vec2<f32>(z0.x, z0_lo.x))),
+                dxr,
+            );
+            let ry = df_add(
+                df_add(vec2<f32>(zi.y, zi_lo.y), df_neg(vec2<f32>(z0.y, z0_lo.y))),
+                dyr,
+            );
+            w = cfe2_norm(CFe2(
+                vec2<f32>(rx.x, ry.x),
+                vec2<f32>(rx.y, ry.y),
+                0,
+            ));
             m = 0u;
         }
     }
     if (perturb.iter_end < params.max_iter) {
         iter_state[px_index] = IterState(
-            w.m, z, accum_state, w.e, m,
+            w.hi, z, accum_state, w.lo, w.e, m,
             select(0u, n, escaped),
             select(0u, 1u, escaped),
         );
@@ -1096,10 +1332,10 @@ fn delta_step_ship_fe(variant: u32) -> String {
     let mut out = String::new();
     out.push_str("        let sx = z_ref.x;\n");
     out.push_str("        let sy = z_ref.y;\n");
-    out.push_str("        let dx = sfe_norm(SFe(w.m.x, w.e));\n");
-    out.push_str("        let dy = sfe_norm(SFe(w.m.y, w.e));\n");
-    out.push_str("        let d0x = sfe_norm(SFe(d0.m.x, d0.e));\n");
-    out.push_str("        let d0y = sfe_norm(SFe(d0.m.y, d0.e));\n");
+    out.push_str("        let dx = sfe_norm(SFe(w.hi.x, w.e));\n");
+    out.push_str("        let dy = sfe_norm(SFe(w.hi.y, w.e));\n");
+    out.push_str("        let d0x = sfe_norm(SFe(d0.hi.x, d0.e));\n");
+    out.push_str("        let d0y = sfe_norm(SFe(d0.hi.y, d0.e));\n");
     out.push_str("        let du = sfe_add(sfe_add(sfe_scale(dx, 2.0 * sx), sfe_scale(dy, -2.0 * sy)), sfe_add(sfe_mul(dx, dx), sfe_neg(sfe_mul(dy, dy))));\n");
     match variant {
         0 | 1 | 2 => {
@@ -1130,7 +1366,8 @@ fn delta_step_ship_fe(variant: u32) -> String {
             out.push_str("        let im_s = sfe_add(sfe_scale(cross, 2.0), d0y);\n");
         }
     }
-    out.push_str("        var w_new = cfe_from_sfe(re_s, im_s);");
+    out.push_str("        let w_new_c = cfe_from_sfe(re_s, im_s);\n");
+    out.push_str("        var w_new = CFe2(w_new_c.m, vec2<f32>(0.0, 0.0), w_new_c.e);");
     out
 }
 
@@ -1200,10 +1437,13 @@ fn delta_step_scaled(p: u32) -> String {
 fn delta_step_floatexp(p: u32) -> String {
     if p == 2 {
         return "        // delta' = 2 Z delta + delta^2 (+ delta_c on the parameter\n\
-                \x20       // plane) - all in floatexp.\n\
-                \x20       var w_new = cfe_add(cfe_mul_c32(w, 2.0 * z_ref), cfe_sqr(w));\n\
+                \x20       // plane) - DF mantissas AND DF reference (~2^-48).\n\
+                \x20       var w_new = cfe2_add(\n\
+                \x20           cfe2_mul_zdf(w, 2.0 * z_ref, 2.0 * z_ref_lo),\n\
+                \x20           cfe2_sqr(w),\n\
+                \x20       );\n\
                 \x20       if (!is_julia_perturb) {\n\
-                \x20           w_new = cfe_add(w_new, d0);\n\
+                \x20           w_new = cfe2_add(w_new, d0);\n\
                 \x20       }"
             .to_string();
     }
@@ -1218,20 +1458,20 @@ fn delta_step_floatexp(p: u32) -> String {
     }
     out.push_str("        let u1 = w;\n");
     for k in 2..=p {
-        out.push_str(&format!("        let u{k} = cfe_mul(u{}, w);\n", k - 1));
+        out.push_str(&format!("        let u{k} = cfe2_mul(u{}, w);\n", k - 1));
     }
-    out.push_str("        var w_new = CFe(vec2<f32>(0.0, 0.0), CFE_ZERO_E);\n");
+    out.push_str("        var w_new = cfe2_zero();\n");
     out.push_str("        if (!is_julia_perturb) {\n            w_new = d0;\n        }\n");
     for k in 1..=p {
         let coeff = binomial(p, k);
         if k == p {
             out.push_str(&format!(
-                "        w_new = cfe_add(w_new, cfe_mul_c32(u{k}, vec2<f32>({coeff}.0, 0.0)));\n"
+                "        w_new = cfe2_add(w_new, cfe2_mul_c32(u{k}, vec2<f32>({coeff}.0, 0.0)));\n"
             ));
         } else {
             let zp = p - k;
             out.push_str(&format!(
-                "        w_new = cfe_add(w_new, cfe_mul_c32(u{k}, {coeff}.0 * zr{zp}));\n"
+                "        w_new = cfe2_add(w_new, cfe2_mul_c32(u{k}, {coeff}.0 * zr{zp}));\n"
             ));
         }
     }

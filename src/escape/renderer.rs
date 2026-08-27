@@ -48,7 +48,8 @@ pub const PERTURB_FLOATEXP_ZOOM: f64 = 48.0;
 /// window on a mid-range GPU; the floatexp rung's iterations cost
 /// several times the scaled rung's, so its budget is smaller.
 pub const PERTURB_CHUNK_BUDGET: u64 = 8_000_000_000;
-pub const PERTURB_CHUNK_BUDGET_FE: u64 = 2_000_000_000;
+// DF mantissas cost ~3-5x per iteration vs plain f32 CFe.
+pub const PERTURB_CHUNK_BUDGET_FE: u64 = 600_000_000;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4 arrays start at a
@@ -134,6 +135,8 @@ pub struct EscapeRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     uploaded_epoch: u64,
     orbit_buffer: Option<Buffer>,
+    /// DF residuals, parallel to orbit_buffer (binding 8).
+    orbit_lo_buffer: Option<Buffer>,
     orbit_capacity: u32,
     orbit_uploaded: u32,
     perturb_params_buffer: Buffer,
@@ -293,6 +296,16 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -359,6 +372,7 @@ impl EscapeRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             uploaded_epoch: 0,
             orbit_buffer: None,
+            orbit_lo_buffer: None,
             orbit_capacity: 0,
             orbit_uploaded: 0,
             perturb_params_buffer,
@@ -722,7 +736,7 @@ impl EscapeRenderer {
             zoom_log2: escape.zoom_log2,
             height_px,
         });
-        let (len, done, data) = {
+        let (len, done, data, data_lo) = {
             let p = worker.progress.lock().unwrap();
             if p.epoch == epoch {
                 // Rescale to this view (see the blocking path). The
@@ -739,7 +753,7 @@ impl EscapeRenderer {
                 .unwrap_or([0.0, 0.0]);
             }
             if p.epoch != epoch {
-                (0u32, false, Vec::new())
+                (0u32, false, Vec::new(), Vec::new())
             } else {
                 let start = if self.uploaded_epoch == epoch {
                     self.orbit_uploaded as usize
@@ -750,6 +764,7 @@ impl EscapeRenderer {
                     p.orbit.len() as u32,
                     p.done,
                     p.orbit[start.min(p.orbit.len())..].to_vec(),
+                    p.orbit_lo[start.min(p.orbit_lo.len())..].to_vec(),
                 )
             }
         };
@@ -763,9 +778,18 @@ impl EscapeRenderer {
             if let Some(old) = self.orbit_buffer.take() {
                 old.destroy();
             }
+            if let Some(old) = self.orbit_lo_buffer.take() {
+                old.destroy();
+            }
             let capacity = (len + len / 2).max(1024);
             self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Reference Orbit"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_lo_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit Lo"),
                 size: (capacity as u64) * 8,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -783,6 +807,11 @@ impl EscapeRenderer {
                 0,
                 bytemuck::cast_slice(&p.orbit),
             );
+            queue.write_buffer(
+                self.orbit_lo_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&p.orbit_lo),
+            );
             self.orbit_uploaded = p.orbit.len() as u32;
             self.uploaded_epoch = epoch;
         } else if !data.is_empty() {
@@ -790,6 +819,11 @@ impl EscapeRenderer {
                 self.orbit_buffer.as_ref().unwrap(),
                 (self.orbit_uploaded as u64) * 8,
                 bytemuck::cast_slice(&data),
+            );
+            queue.write_buffer(
+                self.orbit_lo_buffer.as_ref().unwrap(),
+                (self.orbit_uploaded as u64) * 8,
+                bytemuck::cast_slice(&data_lo),
             );
             self.orbit_uploaded += data.len() as u32;
         }
@@ -890,11 +924,20 @@ impl EscapeRenderer {
             if let Some(old) = self.orbit_buffer.take() {
                 old.destroy();
             }
+            if let Some(old) = self.orbit_lo_buffer.take() {
+                old.destroy();
+            }
             // Grow with headroom so deepening doesn't recreate every
             // frame.
             let capacity = (len + len / 2).max(1024);
             self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Reference Orbit"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_lo_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit Lo"),
                 size: (capacity as u64) * 8,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -909,6 +952,11 @@ impl EscapeRenderer {
                 self.orbit_buffer.as_ref().unwrap(),
                 0,
                 bytemuck::cast_slice(&orbit.orbit),
+            );
+            queue.write_buffer(
+                self.orbit_lo_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&orbit.orbit_lo),
             );
             self.orbit_uploaded = len;
         }
@@ -1396,6 +1444,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                                 self.bla_dummy.as_ref().unwrap().as_entire_binding()
                             },
                         },
+                        BindGroupEntry {
+                            binding: 8,
+                            resource: self
+                                .orbit_lo_buffer
+                                .as_ref()
+                                .unwrap()
+                                .as_entire_binding(),
+                        },
                     ],
                 });
                 let pipeline = &self.pipelines[&key];
@@ -1469,6 +1525,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         self.params_buffer.destroy();
         self.perturb_params_buffer.destroy();
         if let Some(b) = &self.orbit_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.orbit_lo_buffer {
             b.destroy();
         }
         if let Some(b) = &self.iter_state_buffer {

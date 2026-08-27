@@ -847,12 +847,42 @@ on the wasm budgeted path. The z900+ interior wall on this location
 is unchanged — that is the documented f32-mantissa crush limit, not
 a reference problem.
 
+DF ("double-f32") tier shipped (2026-08-26/27): error-free
+transforms with BITMASK Dekker splits (integer ops — immune to
+Metal fast-math folding) give the floatexp rung ~2^-48 relative
+precision end to end — CFe2 delta mantissas (hi+lo pairs; the
+26-octave add cutoff widens to 49; d0 carries the pixel+offset sum
+in DF; the rebase rebuilds deltas in DF), and DF REFERENCE STORAGE
+(a parallel orbit_lo array, binding 8, format FFORBIT3) so the 2Z
+multiplier reads ~2^-48 reference values. IterState still fits 48
+B/px; the FE chunk budget drops to 6e8 for the extra per-iteration
+cost. The hint path no longer gets preempted by shallower
+auto-closures during its own verification (a period-142,232 closure
+was stealing the 1,137,764 hint), so f3-style full-period deep
+references now actually build (measured: 53 s once at 197 limbs,
+then persisted). All gates and the 18-scenario agreement suite
+hold.
+
+MEASURED HONESTLY: none of it moved the z700 wall on the field
+location. Two independent exact implementations (fixed-point and
+python-Decimal) agree the window's true escape band is
+[23,638..23,928] with only the exact center interior — while the
+rendered band sits in (41k, 50k], a coherent ~2× lag that is
+IDENTICAL across f32/DF deltas, f32/DF references, shallow/deep
+periodic references, and BLA on/off. The earlier "center escapes at
+40,285" ground truth was itself an artifact of the probe's 15-limb
+truncation (the true center is interior ≥60k). Diagnosis in
+progress: a full-precision Decimal delta-growth trace of the corner
+(−699 octaves → escape across 23,649 iterations, uneven staircase)
+against a bit-faithful DF replica of the shader model, to locate
+the operation where represented growth lags truth.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
 coloring-scale ergonomics at extreme depth (auto-ranging the smooth
-value); DF-mantissa deltas for crush-heavy locations (the remaining
-depth wall); panel surfacing of the auto-detected period.
+value); the z700-class ~2× escape-lag investigation (see above);
+panel surfacing of the auto-detected period.
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as
