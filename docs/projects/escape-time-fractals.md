@@ -1140,6 +1140,141 @@ small bands under-fill the GPU, and this view renders in 20 s
 against ~3 s for one unbounded dispatch. That is the price of not
 gambling the process on a state the user reaches with one zoom-out.
 
+**Orbit logistics, not GPU math, dominated a deep interactive
+session (fixed 2026-08-28).** Reported as the app running "unusually
+slow, like it's still doing something in the background" after
+returning from an f3-depth location toward z15-20, ending in the
+0xc0000409 abort -- and reducing max_iter did not help, because the
+store loads the full stored orbit regardless, so every cost below
+scales with the STORED length (10.1M), not the request. Four
+mechanisms, found by code review of this scenario:
+
+1. Request-epoch churn. `OrbitRequest` equality includes zoom and
+   max_iter, so every wheel notch bumped the epoch; the worker then
+   republished the ENTIRE orbit into the shared progress (hundreds
+   of MB of memcpy at f3 sizes) even when it REUSED the orbit, and
+   the renderer -- keying its upload on the epoch -- re-uploaded all
+   ~200 MB of orbit buffers per notch. `OrbitProgress` now carries a
+   content GENERATION, bumped only when the orbit is actually
+   replaced (fresh compute, truncation republish): reuse skips both
+   the clone and the upload; appends stream under an unchanged
+   generation. The same key fixes a latent staleness bug on the
+   blocking path: a pan at fixed max_iter swaps in a different orbit
+   of the SAME length (both non-escaping orbits are max_iter+1
+   long), which the length-only upload test left stale on the GPU.
+
+2. BLA rebuild on every zoom-OUT tick. The table guard accepted the
+   cache only while the view's |dc| bound sat below the built one,
+   and that bound grows monotonically zooming out -- so every notch
+   paid a full f64 orbit copy (taken under the worker mutex, stalling
+   the worker too) + an O(n) merge tree + a ~half-GB buffer rewrite,
+   on the main thread. A rebuild forced by dc growth now builds with
+   4 octaves of |dc| HEADROOM (further rebuilds at most once per 16x
+   widening; the cost is slightly smaller skip radii via the dc term
+   in the merge -- conservative, never wrong), while a FRESH build
+   keeps the exact bound, so one-shot headless renders are
+   bit-identical to before (verified over the 51-config escape suite;
+   uniform padding moved up to 13% of pixels on the deep
+   parameter-plane frames, so the pad is confined to the interactive
+   case that actually churned). The table is also keyed on the orbit
+   generation, and never (re)built while the reference is still
+   growing: a shorter-prefix table of the same orbit keeps serving
+   (valid -- its spans are a prefix of the appended orbit), otherwise
+   the dummy is bound and per-step iteration carries the frame.
+
+   Two follow-ups after a crash survived the first round (2026-08-28):
+   the build is CAPPED at max_iter + 1 -- entries past the view's
+   iteration budget are unreachable (a pixel's reference index never
+   exceeds its iteration count, and the shader bounds every skip by
+   `max_iter - i`), so a retained 10.1M-entry orbit serving a
+   shallow view with a few thousand max_iter now builds a
+   thousand-entry table instead of paying a ~2 GB transient and a
+   seconds-long main-thread stall per rebuild. And consecutive
+   dc-growth rebuilds DOUBLE the headroom (4 -> 64 octaves): the
+   f3-to-threshold zoom-out crosses ~2300 octaves, which is ~580
+   rebuilds at a fixed 4-octave pad and ~a dozen with backoff.
+
+3. Chunk-state restarts during reference growth. The chunk key
+   included orbit_len, so every worker publication restarted the
+   perturbed render from iteration 0 -- nothing progressed until the
+   reference finished, and the BLA length check re-triggered (2) per
+   frame on top. The key now carries (generation, done): an append
+   leaves per-pixel state valid (rebasing wraps at the published
+   length, and the GPU mirror is append-only under one generation),
+   and the done flip restarts ONCE, so the settled image is computed
+   entirely against the finished reference.
+
+4. Device loss aborted the process with no line of ours in the
+   message: `on_uncaptured_error` never sees device loss.
+   `set_device_lost_callback` now logs the reason -- observability
+   only (recovery needs a full GPU-context rebuild), but it is the
+   difference between "crashed" and knowing whether it was a TDR or
+   a VRAM overcommit.
+
+5. Found via the crash.log breadcrumb that (4) enabled, one session
+   later: the app's full-GPU-reinit recovery dropped flame_renderer,
+   effect_chain and the egui layer before rebuilding the device --
+   but NOT escape_renderer. It survived reinit holding buffers from
+   the dead device, and the next escape frame's write_buffer tripped
+   wgpu-core's dead-buffer assert; the unwind then hit wgpu-hal's
+   swapchain-semaphore Drop assert, and the double panic aborted as
+   0xc0000409. Fixed: the reinit path drops it (lazy recreation
+   against the new device; the orbit worker exits with its channel,
+   the reference reloads from the disk store) and re-marks escape
+   dirty. So the crash sequence was: device loss (logged now),
+   successful reinit, then the forgotten renderer -- not a new
+   escape-pipeline fault.
+
+6. With recovery working, the underlying loss showed itself: a TDR
+   loop, reproduced as "high iterations at low zoom after a deep
+   zoom" (10.1M max_iter at zoom ~1 -- the direct path, as the
+   reporter correctly noted). The row-band budget is a px-iteration
+   bound, but a px-iteration's COST is config-dependent, and the
+   bands over the set INTERIOR run every pixel to full max_iter: one
+   of those exceeded the ~2 s TDR window, and recovery restarted the
+   render from the top into the same fatal band, forever. Fixed with
+   a shrink-only session breaker (`DIRECT_BUDGET_SHIFT`): a device
+   loss during a banded direct render halves the budget (the
+   post-recovery retry cannot repeat the dispatch that killed the
+   device), and a surviving band measured over 700 ms halves it too.
+   It never grows back within a session -- growth is the feedback
+   the band-size ledger above measured losing the device -- and it
+   is free for ordinary renders, which stay one full-height dispatch
+   even at the floor. GPU events (device lost, first 20 uncaptured
+   errors) now also append to crash.log: the GUI build is a
+   windows-subsystem binary, so without CLI arguments there is no
+   console and stderr logging goes nowhere -- which is why "set
+   RUST_LOG=info" showed nothing.
+
+7. Cold and warm renders of the SAME config diverged -- caught by a
+   user comparing a freshly regenerated f3 frame against the next
+   session's store-loaded one ("similar structure, like one is the
+   other rotated"). The configs were byte-identical and so was the
+   orbit (the cold session saved the very file the warm session
+   loaded): the difference was the UPLOAD path. The progressive
+   append streamed the growing orbit to the GPU, and on a capacity
+   crossing (1.5x headroom) the recreated buffer was refilled with
+   only the newest tail -- everything before it stayed garbage, and
+   the settled render was a structurally wrong self-similar sibling.
+   A complete orbit (store hit) uploads whole in one pass, hence
+   correct-warm/wrong-cold. Predates the generation rework (the old
+   epoch compare had the same hole). Fixed: a recreated buffer
+   always refills from scratch; pinned by an app-repro test that
+   renders the same perturbed view progressive and blocking and
+   demands byte-identical output. Two adjacent worker fixes landed
+   with it, both observed in the same session: in-memory reuse now
+   accepts an orbit at HIGHER precision than the request (equality
+   rebuilt a full-depth orbit at every 64-octave limb crossing of a
+   zoom-out -- four 202 MB duplicates of one (-1.5, 0) orbit), and
+   the worker's disk-load filter gained the blocking path's
+   answers_hint + periodic_serves acceptance test, which it had
+   silently lacked.
+
+These four are also most of the desktop-vs-wasm gap the user
+measured at z14+: the wasm path structurally skips the worker
+republish, the nucleus/hint machinery, and the disk-store inheritance
+of 10M-entry orbits, so it never paid (1)-(3).
+
 **Waiting for a slow reference instead of rendering against it.**
 A partial reference does not render as progressive refinement at
 depth: every pixel wraps almost immediately, so the frame is flat
@@ -1243,11 +1378,49 @@ was never progressive) - verified bit-identical output.
    per-chunk downsample pass is redundant for an export where only
    the final image matters.
 
+**Orbit-store compression (FFORBIT6, shipped 2026-08-28).** A
+double-double shadow of the reference runs inside `extend()`; the
+stored file keeps only the shadow's CORRECTIONS (full-precision
+resets, emitted at every index where the shadow's decomposition
+would differ from the true fixed-point one) plus an RLE exponent
+stream, and load replays the shadow to regenerate the arrays
+BYTE-FOR-BYTE -- exactness by construction, not tolerance, so
+renders, cold==warm identity, and the store roundtrip tests are all
+untouched. Measured on the f3 orbit before committing to the design:
+an f64 shadow is useless (corrections every ~1.4 iterations -- the
+48-bit stored triples are not self-consistent under f64 iteration),
+the DD shadow spaces corrections ~216 iterations apart, and the
+retroactive lossy alternative (rebuilding corrections from stored
+48-bit values) measurably moved renders (mean 2.4/255 over 83% of
+pixels on the f3 frame) and was REJECTED for the in-pipeline shadow,
+which resets from the live fixed-point state instead. In-memory and
+GPU formats unchanged; old FFORBIT5 files read as misses (standard
+policy). The array section is dual-mode: an orbit whose corrections
+would OUTWEIGH the raw arrays (dip-dense near-nucleus orbits record
+a 52 B correction almost every entry -- measured 2.6x worse than raw
+on the period-3 antenna) is stored raw instead, tagged by a mode
+byte; whichever encoding is smaller wins, and both are byte-exact. Deep dips below f64 range poison the shadow and degrade
+gracefully to per-entry corrections through the dip.
+
+Two plans split out of this queue on 2026-08-28 (both "later",
+sequenced after the orbit-store compression lands):
+[escape-tdr-safety.md](escape-tdr-safety.md) — the perturbed-path
+TDR breaker, trust-bounded chunk growth, GPU timestamp pacing,
+interior detection, escape-consistent animation playback, and
+retiring Overwrite/live-preview in escape mode; and
+[escape-ntt-reference.md](escape-ntt-reference.md) — GPU reference
+computation with a measurement-gated go/no-go.
+
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
 2×2 real-Jacobian Newton — abs-folds break holomorphy); a wasm
 WORKER as a performance upgrade only (COOP/COEP hosting decision);
 coloring-scale ergonomics at extreme depth (auto-ranging the smooth
-value).
+value); reference-orbit COMPRESSION for the store and the in-memory /
+GPU mirrors (the Imagina/Zhuoran scheme FractalShark ships, its
+FractalShark.pdf S6: store correction anchors where cheap f64
+re-iteration of the reference drifts past tolerance, decompress per
+pixel -- our raw hi/lo/exp layout is 20 B/iteration, 202 MB for the
+f3 orbit, and lives in ~5 copies).
 
 **Phase 5 — mode C, escape-time IFS + the bridges.**
 Status (2026-08-25): the JFA distance-field bridge (§7.3) SHIPPED as
