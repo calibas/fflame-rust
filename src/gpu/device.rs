@@ -3,6 +3,29 @@ use std::mem::ManuallyDrop;
 use winit::window::Window;
 use egui_wgpu::wgpu::*;
 
+/// Append a GPU event to crash.log in the app data directory.
+/// The GUI build is a windows-subsystem binary: without CLI arguments
+/// no console attaches and stderr logging goes nowhere, so the file
+/// is the only record of a device loss that survives the session.
+/// Best-effort; never panics.
+#[cfg(not(target_arch = "wasm32"))]
+fn append_gpu_event(msg: &str) {
+    use std::io::Write;
+    if let Ok(dir) = crate::storage::backend::get_app_data_dir() {
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("crash.log"))
+        {
+            let _ = writeln!(f, "[{stamp}] {msg}");
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn append_gpu_event(_msg: &str) {}
+
 pub struct GpuContext {
     #[allow(dead_code)]
     pub instance: Instance,
@@ -214,7 +237,42 @@ impl GpuContext {
         // culprit, so this is the backstop rather than the explanation.
         device.on_uncaptured_error(std::sync::Arc::new(|e| {
             log::error!("wgpu error (the current render will fail): {e}");
+            // File breadcrumb, capped: a dead device can spray one
+            // validation error per call site per frame, and the log
+            // must not grow without bound.
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static LOGGED: AtomicU32 = AtomicU32::new(0);
+            if LOGGED.fetch_add(1, Ordering::Relaxed) < 20 {
+                append_gpu_event(&format!("wgpu error: {e}"));
+            }
         }));
+
+        // Device LOSS never reaches the uncaptured-error handler --
+        // it has its own callback, and without one the first API call
+        // on the dead device panics deep inside wgpu and takes the
+        // process down as 0xc0000409 (Windows fail-fast) with no line
+        // of ours in the message. Observed in the field: a TDR (a
+        // >2 s dispatch) or a VRAM overcommit surfaces as "Parent
+        // device is lost" and an aborted process. This callback
+        // cannot RECOVER the device (that needs a full GPU-context
+        // rebuild), but it names the reason in the log -- the
+        // difference between a report that says "crashed" and one
+        // that says why.
+        device.set_device_lost_callback(|reason, message| {
+            log::error!(
+                "wgpu DEVICE LOST ({reason:?}): {message} -- the GPU context is gone \
+                 and subsequent GPU calls will fail. A TDR here means a dispatch \
+                 exceeded Windows' ~2 s window; an allocation failure means VRAM \
+                 was overcommitted."
+            );
+            append_gpu_event(&format!("wgpu DEVICE LOST ({reason:?}): {message}"));
+            // Feed the escape direct path's TDR circuit breaker: if a
+            // banded direct render was in flight, its budget halves so
+            // the post-recovery retry cannot repeat the dispatch that
+            // killed the device (the observed failure mode was an
+            // infinite lose/recover/restart loop).
+            crate::escape::renderer::note_device_lost();
+        });
 
         log::info!(
             "Device max_storage_buffer_binding_size: {} bytes ({} MB)",
