@@ -748,6 +748,43 @@ fn apply_config_value(
             }
         }
 
+        // Escape-time parameters (FractalConfig-level, like effects).
+        // Without these arms every Escape.* track fell through to the
+        // per-flame catch-all below and was silently dropped: an
+        // escape animation exported as a STILL image while previewing
+        // correctly in-app (field report on Escape.JuliaIm). Palette
+        // and other FractalConfig-level tracks kept working, which is
+        // what made it look like a partial failure.
+        //
+        // The animatable set is exactly what `json_to_config_value`
+        // accepts (selectors, the reference-period hint and the exact
+        // decimal centers are deliberately not animatable), and the
+        // clamps mirror ConfigManager::apply_value so an exported
+        // frame equals the in-app frame at the same time.
+        (ConfigPath::EscapeJulia, ConfigValue::Bool(v)) => config.escape.julia = *v,
+        (ConfigPath::EscapeJuliaRe, ConfigValue::Float(v)) => config.escape.julia_re = *v,
+        (ConfigPath::EscapeJuliaIm, ConfigValue::Float(v)) => config.escape.julia_im = *v,
+        (ConfigPath::EscapeZoomLog2, ConfigValue::Float(v)) => {
+            // NaN from a wild signal must not poison the view.
+            let v = *v as f64;
+            config.escape.zoom_log2 =
+                if v.is_finite() { v.clamp(-8.0, 100_000_000.0) } else { 0.0 };
+        }
+        (ConfigPath::EscapeRotation, ConfigValue::Float(v)) => config.escape.rotation = *v,
+        (ConfigPath::EscapeBailout, ConfigValue::Float(v)) => config.escape.bailout = *v,
+        (ConfigPath::EscapeDampingRe, ConfigValue::Float(v)) => config.escape.damping_re = *v,
+        (ConfigPath::EscapeDampingIm, ConfigValue::Float(v)) => config.escape.damping_im = *v,
+        (ConfigPath::EscapeMaxIter, ConfigValue::UInt(v)) => config.escape.max_iter = *v,
+        (ConfigPath::EscapeSupersample, ConfigValue::UInt(v)) => {
+            config.escape.supersample = (*v).clamp(1, 3);
+        }
+        (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
+            config.escape.formula_params.insert(param.clone(), *v);
+        }
+        (ConfigPath::EscapeColoringParam { param }, ConfigValue::Float(v)) => {
+            config.escape.coloring_params.insert(param.clone(), *v);
+        }
+
         // Everything else is per-flame. Resolve the target flame and
         // delegate to apply_flame_value. Broken targets (missing
         // subflame) silently drop — UI surfaces these.
@@ -2551,6 +2588,68 @@ mod tests {
     use super::*;
     use crate::config::{ConfigPath, ConfigValue};
     use crate::scene::transforms::{Flame, Transform};
+
+    /// Every animatable escape parameter must survive the export's
+    /// animation-apply path.
+    ///
+    /// `apply_config_value` had no Escape arms at all, so escape
+    /// tracks fell through to the per-flame catch-all and vanished:
+    /// the exported video showed a STILL fractal while the app
+    /// animated correctly (reported on Escape.JuliaIm). Palette
+    /// tracks kept working, which disguised it as a partial failure.
+    /// This drives `apply_animation_values` itself — path parsing and
+    /// JSON conversion included — so a path that stops round-tripping
+    /// fails here too.
+    #[test]
+    fn escape_parameters_survive_the_export_animation_path() {
+        use serde_json::json;
+
+        let mut config = FractalConfig::default();
+        config.escape.supersample = 1;
+        let values = vec![
+            (EditingTarget::Main, "Escape.Julia".to_string(), json!(true)),
+            (EditingTarget::Main, "Escape.JuliaRe".to_string(), json!(0.25)),
+            (EditingTarget::Main, "Escape.JuliaIm".to_string(), json!(-0.62)),
+            (EditingTarget::Main, "Escape.ZoomLog2".to_string(), json!(3.5)),
+            (EditingTarget::Main, "Escape.Rotation".to_string(), json!(0.75)),
+            (EditingTarget::Main, "Escape.Bailout".to_string(), json!(16.0)),
+            (EditingTarget::Main, "Escape.DampingRe".to_string(), json!(0.5)),
+            (EditingTarget::Main, "Escape.DampingIm".to_string(), json!(0.125)),
+            (EditingTarget::Main, "Escape.MaxIter".to_string(), json!(512)),
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(2)),
+            (EditingTarget::Main, "Escape.FormulaParam.variant".to_string(), json!(2.0)),
+            (EditingTarget::Main, "Escape.ColoringParam.offset".to_string(), json!(1.86)),
+        ];
+        apply_animation_values(&mut config, &values);
+
+        assert!(config.escape.julia, "Julia toggle");
+        assert_eq!(config.escape.julia_re, 0.25);
+        assert_eq!(config.escape.julia_im, -0.62, "the reported path");
+        assert_eq!(config.escape.zoom_log2, 3.5);
+        assert_eq!(config.escape.rotation, 0.75);
+        assert_eq!(config.escape.bailout, 16.0);
+        assert_eq!(config.escape.damping_re, 0.5);
+        assert_eq!(config.escape.damping_im, 0.125);
+        assert_eq!(config.escape.max_iter, 512);
+        assert_eq!(config.escape.supersample, 2);
+        assert_eq!(config.escape.formula_params.get("variant"), Some(&2.0));
+        assert_eq!(config.escape.coloring_params.get("offset"), Some(&1.86));
+
+        // Clamps mirror ConfigManager: a wild signal cannot poison
+        // the view or ask for an unsupported supersample factor.
+        // (A literal NaN cannot travel this route at all -- JSON has
+        // no NaN, and serde_json renders it as Null, which fails the
+        // as_f64 conversion and never reaches the arm. A value that
+        // OVERFLOWS f32 does reach it, and is the reachable path to
+        // the non-finite fallback.)
+        let wild = vec![
+            (EditingTarget::Main, "Escape.ZoomLog2".to_string(), json!(1e300)),
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(9)),
+        ];
+        apply_animation_values(&mut config, &wild);
+        assert_eq!(config.escape.zoom_log2, 0.0, "overflowing zoom falls back");
+        assert_eq!(config.escape.supersample, 3, "supersample clamps to 3");
+    }
 
     /// A video frame must not render meaningfully past the
     /// `max_iterations` it was given.
