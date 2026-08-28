@@ -444,6 +444,15 @@ class VisualTestRunner:
             iters = int(text.get("Iterations", "0"))
             if not raw or iters <= 0:
                 return None, None
+            if text.get("RenderMode") == "Escape":
+                # An escape render's `Iterations` is the formula's
+                # max_iter (hundreds), not samples plotted (millions):
+                # iterations/second is meaningless for it, and feeding
+                # it through flagged every escape row as below the
+                # throughput floor (~0.01 Miter/s against a chaos-game
+                # median). Zero excludes the row from the throughput
+                # check entirely; the pixel-hash compare is untouched.
+                return float(raw), 0
             return float(raw), iters
         except Exception:
             return None, None
