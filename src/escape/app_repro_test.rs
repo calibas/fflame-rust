@@ -11,6 +11,103 @@
 mod tests {
     use egui_wgpu::wgpu;
 
+    /// Interior detection must be INVISIBLE, and must pay.
+    ///
+    /// The design claim is stronger than "close enough": the direct
+    /// path's iteration state is exactly z, the arithmetic is
+    /// deterministic, so a bit-exact repeat proves the f32 orbit is
+    /// periodic forever after. Stopping there is the same render, not
+    /// an approximation of it -- which is why it ships always-on with
+    /// no tolerance and no toggle. This asserts that byte for byte on
+    /// an interior-heavy view (the home view is ~1/4 set), and prints
+    /// the speedup, which is the reason the feature exists: those
+    /// pixels used to burn every one of max_iter iterations, and that
+    /// is what drove the row-band budget into Windows' TDR window.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn interior_detection_is_invisible_and_faster() {
+        let (device, queue) = repro_device();
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        // Home view: plenty of interior, direct path (zoom < 14), and
+        // `smooth` does not draw the interior -- the eligibility gate.
+        esc_cfg.zoom_log2 = 0.0;
+        esc_cfg.max_iter = 400_000;
+        assert_eq!(esc_cfg.coloring, "smooth", "the gate assumes this coloring");
+
+        let (w, h) = (256u32, 192u32);
+        let render = |detect: bool| -> (Vec<u8>, std::time::Duration) {
+            let config = crate::config::FractalConfig::default();
+            let mut renderer =
+                crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+                    &device,
+                    &queue,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    w,
+                    h,
+                    &config.flame,
+                    config.palette_size,
+                );
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.disable_interior = !detect;
+            // Warm the pipeline so the timing measures rendering.
+            let t0 = {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("interior warm"),
+                });
+                escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                std::time::Instant::now()
+            };
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("interior frame"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render failed to settle (detect={detect})");
+            }
+            let elapsed = t0.elapsed();
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("interior tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device,
+                &queue,
+                false,
+                config.background_color,
+            ))
+            .expect("readback");
+            (rgba, elapsed)
+        };
+
+        let (off, t_off) = render(false);
+        let (on, t_on) = render(true);
+        let diff = off.iter().zip(on.iter()).filter(|(a, b)| a != b).count();
+        assert_eq!(
+            diff,
+            0,
+            "interior detection changed {diff} of {} bytes -- it must be invisible",
+            off.len()
+        );
+        println!(
+            "interior detection: {:.0} ms -> {:.0} ms ({:.1}x) at max_iter {}",
+            t_off.as_secs_f64() * 1000.0,
+            t_on.as_secs_f64() * 1000.0,
+            t_off.as_secs_f64() / t_on.as_secs_f64().max(1e-9),
+            esc_cfg.max_iter,
+        );
+    }
+
     /// The fixed-chunk mode must not change the image.
     ///
     /// `set_fixed_chunk` exists for callers that submit chunk after

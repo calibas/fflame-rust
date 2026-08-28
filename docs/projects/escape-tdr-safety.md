@@ -90,7 +90,53 @@ Replace the wall-clock inference with actual per-dispatch GPU time:
   timestamps enabled; a headless run comparing paced iterations/sec
   with and without (sanity, not a pin).
 
-## D. Interior detection (medium — the real answer to overkill iterations)
+## D. Interior detection — SHIPPED 2026-08-28, and stronger than planned
+
+The plan below proposed a TOLERANCE check (|z − z_s| within ~1e-6,
+two confirmations, a config toggle, an agreement test allowing
+bounded differences). What shipped is exact-repeat detection, which
+is a different and better bargain:
+
+The direct path's entire iteration state IS z, and the arithmetic is
+deterministic, so a BIT-EXACT repeat of a snapshot proves the f32
+orbit is periodic from that point on. Such a pixel can never escape,
+and every later iterate is a value already seen — so stopping is not
+an approximation of running to max_iter, it is the same render.
+That collapses the whole correctness envelope the plan worried
+about: no tolerance to tune, no confirmation count, no false
+positives to bound (a slow escape that merely LOOKS periodic cannot
+repeat bit-exactly), and no user toggle, because there is nothing to
+trade off. Comparison goes through `bitcast<u32>`, not float `==`:
++0.0 == -0.0 is true while the two continue differently under maps
+that divide or take logs, and integer compares are immune to Metal's
+fast-math.
+
+Spliced only when the coloring cannot draw the interior (and does
+not accumulate, and is not the period coloring, which terminates on
+its own cycle test): for those colorings a non-escaping pixel
+renders the background whatever iteration it stopped on. Brent
+epochs — snapshot at powers of two — so any cycle is caught within
+one period of entering it, from a single stored value and no extra
+per-pixel memory.
+
+Measured on the home view (~1/4 interior), 256x192, `smooth`:
+byte-identical to a detection-off build at every max_iter tested,
+45 ms -> 5 ms (**8.2x**) at max_iter 400,000, 1.2x at 20,000. The
+win scales with max_iter exactly as the theory says (baseline is
+O(max_iter) per interior pixel, detection is O(period)), so the
+field's 10.1M-iteration configs — the ones whose bands were reaching
+Windows' TDR window — gain far more than the measured 8x.
+
+THE PERTURBED PATH IS DEFERRED, deliberately. Its state is (delta,
+reference index), not z: two different (w, m) pairs can reconstruct
+the same z_full and then evolve differently, so a z repeat does NOT
+prove periodicity there and the exactness argument collapses. A
+tolerance check would work but brings back everything above — the
+toggle, the false positives, an accuracy study — for a path that
+already has bounded chunks and a circuit breaker (items A/B). Worth
+doing only if measurement shows deep interior renders still hurt.
+
+### The original plan, for reference
 
 Per-pixel periodicity checking so interior pixels stop after ~one
 cycle period instead of burning all of max_iter. This is the "1M+
