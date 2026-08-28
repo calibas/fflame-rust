@@ -11,6 +11,94 @@
 mod tests {
     use egui_wgpu::wgpu;
 
+    /// The fixed-chunk mode must not change the image.
+    ///
+    /// `set_fixed_chunk` exists for callers that submit chunk after
+    /// chunk without letting the queue drain (the browser export --
+    /// there is no blocking device poll on the web), where the
+    /// adaptive sizer's wall-clock proxy measures CPU encode time,
+    /// reads every chunk as free, and grows into a watchdog-length
+    /// dispatch. Pinning the size is only safe because the render is
+    /// chunk-invariant; this asserts that invariance for the mode
+    /// itself, on a supersampled view (the export's shape) rather
+    /// than the plain one the ESCAPE_CHUNK_MS test covers.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn fixed_chunk_renders_the_same_image_as_adaptive() {
+        let (device, queue) = repro_device();
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        esc_cfg.center_re = "-0.75".to_string();
+        esc_cfg.center_im = "0.1".to_string();
+        esc_cfg.zoom_log2 = 20.0;
+        esc_cfg.max_iter = 4_000;
+        esc_cfg.supersample = 2;
+
+        let (w, h) = (192u32, 128u32);
+        let render = |fixed: bool| -> Vec<u8> {
+            let config = crate::config::FractalConfig::default();
+            let mut renderer =
+                crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+                    &device,
+                    &queue,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    w,
+                    h,
+                    &config.flame,
+                    config.palette_size,
+                );
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.set_fixed_chunk(fixed);
+            escape.resize(&device, w, h, esc_cfg.supersample);
+            let mut guard = 0u32;
+            loop {
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("fixed-chunk frame"),
+                    });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &esc_cfg,
+                    renderer.palette_view(),
+                );
+                queue.submit(std::iter::once(encoder.finish()));
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "chunk loop failed to settle (fixed={fixed})");
+            }
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("fixed-chunk tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut encoder, escape.output_view());
+            queue.submit(std::iter::once(encoder.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device,
+                &queue,
+                false,
+                config.background_color,
+            ))
+            .expect("readback");
+            rgba
+        };
+
+        let adaptive = render(false);
+        let fixed = render(true);
+        let diff = adaptive
+            .iter()
+            .zip(fixed.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            diff,
+            0,
+            "fixed-chunk render differs from adaptive in {diff} of {} bytes",
+            adaptive.len()
+        );
+    }
+
     #[test]
     #[ignore = "needs a GPU"]
     fn progressive_and_blocking_render_the_same_image() {

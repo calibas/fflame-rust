@@ -1572,9 +1572,27 @@ The frame loop now branches: a persistent EscapeRenderer (orbit
 cache and BLA table carry across frames) settles each frame through
 bounded chunked dispatches exactly like the headless single-frame
 path, and the tonemap reads the escape output; load_config already
-kept the shared tail in sync per frame. The WASM in-app custom-size
-export has the sibling gap (single-chunk render, app/mod.rs) -- still
-open, queued.
+kept the shared tail in sync per frame.
+
+**The WASM in-app custom-size export had the sibling gap** (fixed
+2026-08-28): one render() call sharing the tonemap encoder, i.e. a
+single chunk, so a high-iteration export encoded whatever the first
+dispatch reached -- and on wasm, where the reference orbit is sliced
+per call rather than built on a worker, a deep zoom got one slice of
+its reference too. It also never applied `escape.supersample`. It
+now settles (chunk until final, each its own submission) and
+resizes. Browsers have no blocking device poll, so the loop submits
+without waiting, which is precisely where the adaptive chunk sizer's
+wall-clock proxy LIES: with the queue never draining it measures CPU
+encode time, reads every chunk as free, and grows into a
+watchdog-length dispatch -- the browser's version of a TDR.
+`EscapeRenderer::set_fixed_chunk` therefore pins the size to the
+TDR-calibrated seed instead of feeding the feedback loop a bad
+measurement; the render is chunk-invariant, and a GPU test asserts
+adaptive and fixed are byte-identical on a supersampled view. The
+WasmApi/gallery export and the desktop custom-size export both route
+through the unified render API and already settled correctly (which
+is why the wasm suite's escape category passed throughout).
 
 **And the escape PARAMETERS were never applied to exported frames**
 (fixed 2026-08-28, reported as "Escape.JuliaIm animates in-app but

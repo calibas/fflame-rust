@@ -278,6 +278,9 @@ pub struct EscapeRenderer {
     /// Test hook: shrink the chunk to force multi-chunk renders.
     #[cfg(test)]
     pub(crate) chunk_override: Option<u32>,
+    /// Disable the adaptive chunk feedback and use the static seed
+    /// every call (see [`EscapeRenderer::set_fixed_chunk`]).
+    chunk_fixed: bool,
     /// BLA iteration-skip table (binding 7): GPU buffer + what it was
     /// built for. A zeroed dummy (n_levels = 0) is bound whenever the
     /// table is inapplicable, so there is no pipeline permutation.
@@ -543,6 +546,7 @@ impl EscapeRenderer {
                 .filter(|v| *v > 0.0),
             #[cfg(test)]
             chunk_override: None,
+            chunk_fixed: false,
             bla_buffer: None,
             bla_dummy: None,
             bla_built: None,
@@ -816,6 +820,29 @@ impl EscapeRenderer {
         true
     }
 
+    /// Use the static per-dispatch seed for every chunk instead of
+    /// the adaptive feedback loop.
+    ///
+    /// The feedback loop measures WALL-CLOCK TIME BETWEEN CALLS as a
+    /// proxy for GPU cost. That proxy holds for a caller that lets
+    /// the queue drain between chunks (an interactive frame loop, or
+    /// the headless path, which waits). It is a LIE for a caller that
+    /// submits chunk after chunk without waiting -- the measurement
+    /// then covers CPU command-encoding only, every chunk reads as
+    /// free, and the size doubles until it hits the ceiling. That is
+    /// how a browser export earns a GPU-watchdog device loss: the
+    /// same failure mode as a desktop TDR, with the same cause (one
+    /// dispatch too long).
+    ///
+    /// The seed is the TDR-calibrated `budget / pixels`, so a fixed
+    /// chunk is bounded by construction. The cost is loop count: a
+    /// high-iteration export runs many small dispatches rather than
+    /// few large ones. The render is chunk-INVARIANT (pinned by the
+    /// chunk-invariance test), so this cannot change the image.
+    pub fn set_fixed_chunk(&mut self, fixed: bool) {
+        self.chunk_fixed = fixed;
+    }
+
     /// Per-chunk wall-clock target for callers that are not driving a
     /// UI. A headless export only needs the FINAL image, so its chunks
     /// should be big enough that the per-chunk downsample stops
@@ -845,6 +872,9 @@ impl EscapeRenderer {
         let seed = self.chunk_size(floatexp);
         #[cfg(test)]
         if self.chunk_override.is_some() {
+            return seed;
+        }
+        if self.chunk_fixed {
             return seed;
         }
         let now = web_time::Instant::now();
