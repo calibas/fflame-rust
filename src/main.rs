@@ -303,9 +303,42 @@ fn attach_parent_console() {
 #[cfg(not(all(windows, not(debug_assertions))))]
 fn attach_parent_console() {}
 
+/// Crash breadcrumb (desktop): a panic prints to stderr, but a GUI
+/// session launched outside a terminal loses that -- and a fail-fast
+/// abort (exit 0xc0000409) hands the user nothing but the exit code.
+/// Chain the default hook and ALSO append the panic + backtrace to
+/// crash.log in the app data directory, so a crash report can say
+/// WHAT panicked even when the terminal is gone. A panic that then
+/// aborts (unwinding across an FFI boundary, panic-in-drop) still
+/// runs the hook first, so the breadcrumb survives those too; a
+/// fastfail raised inside a driver DLL never reaches Rust and leaves
+/// no breadcrumb -- absence of one is itself a diagnostic. Best
+/// effort: nothing here may mask the panic itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn install_crash_breadcrumb() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        if let Ok(dir) = fractal_flame_wgpu::storage::backend::get_app_data_dir() {
+            use std::io::Write;
+            let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("crash.log"))
+            {
+                let _ = writeln!(f, "[{stamp}] panic: {info}\n{bt}\n");
+            }
+        }
+        default_hook(info);
+    }));
+}
+
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // Panic breadcrumb first: everything after this can crash.
+        install_crash_breadcrumb();
         // Before anything can print, including clap's `--help` and its
         // parse errors.
         if std::env::args_os().len() > 1 {
