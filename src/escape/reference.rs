@@ -854,6 +854,13 @@ pub struct OrbitProgress {
     /// Which request this data belongs to (bumped on every new
     /// request; stale chunks from an abandoned compute are ignored).
     pub epoch: u64,
+    /// Which ORBIT this data is (bumped only when the orbit content
+    /// is replaced -- a fresh compute, a truncation republish --
+    /// never when a request merely reuses the same orbit). The
+    /// render side keys its GPU mirror on this, so a zoom tick that
+    /// reuses the orbit costs no re-upload; appends under an
+    /// unchanged generation extend the mirror in place.
+    pub generation: u64,
     /// Z_n snapshots so far (orbit[0] = the seed).
     pub orbit: Vec<[f32; 2]>,
     /// DF residuals, parallel to `orbit`.
@@ -916,9 +923,14 @@ impl OrbitWorker {
                         // Same orbit, deeper? Keep the live state and
                         // append. Otherwise start fresh.
                         let reuse = current.take().and_then(|(old_req, orbit, _)| {
+                            // n_limbs: >= not == -- an orbit at higher
+                            // precision serves a shallower request (the
+                            // blocking cache's `serves` agrees), and
+                            // equality rebuilt a full-depth orbit at
+                            // every limb crossing of a zoom-out.
                             let same = old_req.center_re == req.center_re
                                 && old_req.center_im == req.center_im
-                                && old_req.n_limbs == req.n_limbs
+                                && old_req.n_limbs >= req.n_limbs
                                 && old_req.julia_c == req.julia_c
                                 && old_req.power == req.power
                                 && old_req.ship == req.ship
@@ -934,16 +946,18 @@ impl OrbitWorker {
                                 None
                             }
                         });
-                        let orbit = match reuse {
-                            Some(o) => o,
+                        let (orbit, reused) = match reuse {
+                            Some(o) => (o, true),
                             None => {
                                 match worker_compute_orbit(&req) {
-                                    Some(o) => o,
+                                    Some(o) => (o, false),
                                     None => {
                                         // Unparseable center: publish an
-                                        // empty done state.
+                                        // empty done state (new -- empty
+                                        // -- content: bump generation).
                                         let mut p = shared.lock().unwrap();
                                         p.epoch = epoch;
+                                        p.generation = p.generation.wrapping_add(1);
                                         p.orbit.clear();
                                         p.orbit_lo.clear();
                                         p.orbit_e.clear();
@@ -953,16 +967,27 @@ impl OrbitWorker {
                                 }
                             }
                         };
-                        // Publish the (possibly reused) prefix.
+                        // Publish. A REUSED orbit already mirrors the
+                        // shared progress exactly (every mutation to it
+                        // is followed by a publish under the lock), so
+                        // only the request-scoped metadata changes --
+                        // cloning a 10M-entry orbit here on every zoom
+                        // tick was hundreds of MB of memcpy per wheel
+                        // notch, for content that had not changed. A
+                        // fresh orbit is new content: bump the
+                        // generation and clone.
                         {
                             let mut p = shared.lock().unwrap();
                             p.epoch = epoch;
-                            p.orbit.clear();
-                            p.orbit.extend_from_slice(&orbit.orbit);
-                            p.orbit_lo.clear();
-                            p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
-                            p.orbit_e.clear();
-                            p.orbit_e.extend_from_slice(&orbit.orbit_e);
+                            if !reused {
+                                p.generation = p.generation.wrapping_add(1);
+                                p.orbit.clear();
+                                p.orbit.extend_from_slice(&orbit.orbit);
+                                p.orbit_lo.clear();
+                                p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+                                p.orbit_e.clear();
+                                p.orbit_e.extend_from_slice(&orbit.orbit_e);
+                            }
                             p.ref_offset = orbit.ref_offset;
                             p.off_zoom_log2 = orbit.off_zoom_log2;
                             p.off_height_px = orbit.off_height_px;
@@ -993,7 +1018,11 @@ impl OrbitWorker {
                                     p.orbit_e.extend_from_slice(&orbit.orbit_e[have..]);
                                 } else {
                                     // Auto-closure truncated the orbit
-                                    // to one period: republish whole.
+                                    // to one period: republish whole,
+                                    // as NEW content (the mirror must
+                                    // not append onto the longer old
+                                    // prefix).
+                                    p.generation = p.generation.wrapping_add(1);
                                     p.orbit.clear();
                                     p.orbit.extend_from_slice(&orbit.orbit);
                                     p.orbit_lo.clear();
@@ -1058,7 +1087,15 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
         req.zoom_log2,
         req.height_px.max(1.0),
     ) {
-        if req.reference_period.is_none() || o.periodic == req.reference_period {
+        // Same acceptance filter as the blocking cache
+        // (`OrbitCache::get`): the orbit must answer the request's
+        // hint AND its periodicity must serve this zoom. Accepting
+        // any stored orbit when no hint is set let a periodic orbit
+        // whose closure cannot serve the zoom through -- its wrap is
+        // inexact at that depth and renders a displaced structure.
+        if o.answers_hint(req.reference_period, req.zoom_log2)
+            && o.periodic_serves(req.zoom_log2)
+        {
             return Some(o);
         }
     }
@@ -1098,7 +1135,7 @@ fn tx_loopback_send(
     let reuse = current.take().and_then(|(old_req, orbit, _)| {
         let same = old_req.center_re == req.center_re
             && old_req.center_im == req.center_im
-            && old_req.n_limbs == req.n_limbs
+            && old_req.n_limbs >= req.n_limbs
             && old_req.julia_c == req.julia_c
             && old_req.power == req.power
                                 && old_req.ship == req.ship
@@ -1111,19 +1148,24 @@ fn tx_loopback_send(
             None
         }
     });
-    let orbit = match reuse {
-        Some(o) => o,
-        None => worker_compute_orbit(&req)?,
+    let (orbit, reused) = match reuse {
+        Some(o) => (o, true),
+        None => (worker_compute_orbit(&req)?, false),
     };
     {
         let mut p = shared.lock().unwrap();
         p.epoch = epoch;
-        p.orbit.clear();
-        p.orbit.extend_from_slice(&orbit.orbit);
-        p.orbit_lo.clear();
-        p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
-        p.orbit_e.clear();
-        p.orbit_e.extend_from_slice(&orbit.orbit_e);
+        if !reused {
+            // See the main loop: a reused orbit already mirrors the
+            // shared progress; only fresh content is cloned.
+            p.generation = p.generation.wrapping_add(1);
+            p.orbit.clear();
+            p.orbit.extend_from_slice(&orbit.orbit);
+            p.orbit_lo.clear();
+            p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+            p.orbit_e.clear();
+            p.orbit_e.extend_from_slice(&orbit.orbit_e);
+        }
         p.ref_offset = orbit.ref_offset;
         p.off_zoom_log2 = orbit.off_zoom_log2;
         p.off_height_px = orbit.off_height_px;
@@ -1303,6 +1345,13 @@ impl ReferenceOrbit {
 #[derive(Default)]
 pub struct OrbitCache {
     slot: Option<ReferenceOrbit>,
+    /// Bumped whenever the SLOT CONTENT is replaced (never on a pure
+    /// extend). The renderer keys its GPU mirror and BLA table on
+    /// this: two different orbits can have the same length (pan at a
+    /// fixed max_iter -- both non-escaping orbits are max_iter+1
+    /// long), so a length compare alone would leave a stale
+    /// reference bound.
+    generation: u64,
     height_px: f64,
     /// Verified-before-use period hint for parameter-plane power
     /// tiers (see [`ReferenceOrbit::try_periodic_from_hint`]).
@@ -1314,6 +1363,11 @@ impl OrbitCache {
     /// construction reads the CPU copy the GPU mirror was built from).
     pub fn peek(&self) -> Option<&ReferenceOrbit> {
         self.slot.as_ref()
+    }
+
+    /// Identity of the current slot content (see the field doc).
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Get (computing or extending as needed) the orbit for a view.
@@ -1383,6 +1437,7 @@ impl OrbitCache {
                     ship_variant,
                 )?
             };
+            self.generation = self.generation.wrapping_add(1);
             self.slot = Some(orbit);
         }
         // Persist anything worth keeping (cost-gated; rewrites only
@@ -1427,6 +1482,7 @@ impl OrbitCache {
             let target = orbit.len().saturating_sub(1).saturating_add(budget).min(max_iter);
             orbit.extend(target);
         } else {
+            self.generation = self.generation.wrapping_add(1);
             self.slot = Some(ReferenceOrbit::compute(
                 center_re,
                 center_im,

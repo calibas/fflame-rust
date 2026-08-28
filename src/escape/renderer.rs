@@ -82,6 +82,54 @@ pub const DIRECT_DISPATCH_BUDGET: u64 = 250_000_000_000;
 // DF mantissas cost ~3-5x per iteration vs plain f32 CFe.
 pub const PERTURB_CHUNK_BUDGET_FE: u64 = 600_000_000;
 
+/// Session-wide halvings of [`DIRECT_DISPATCH_BUDGET`] (clamped to 6).
+///
+/// The budget is a px-iteration bound, but the COST of a px-iteration
+/// is config-dependent (formula + coloring), and a band over the set
+/// interior runs every pixel to full max_iter -- observed in the
+/// field as a band that exceeded Windows' ~2 s TDR window on a config
+/// the calibrated budget survived elsewhere, giving a fatal loop:
+/// device loss -> recovery -> restart from the top -> the same band
+/// dies again. Two SHRINK-ONLY triggers feed this: a device loss
+/// while a banded direct render was in flight (the band is almost
+/// certainly what killed the device), and a surviving band measured
+/// over [`DIRECT_BAND_SLOW_MS`]. It never grows back within a session
+/// -- growth is exactly the feedback the ledger measured losing the
+/// device -- and it only affects renders big enough to be banded at
+/// all: even at shift 6 (~3.9e9 px-iters) an ordinary iteration count
+/// still renders in one full-height dispatch.
+static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// True while a banded (multi-dispatch) direct render still has bands
+/// to go -- the window in which a device loss is attributed to our
+/// band size. (A loss during the LAST band goes uncounted; the next
+/// attempt re-opens the window on its first band.)
+static DIRECT_RENDER_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// A surviving band slower than this still halves the session budget
+/// (shrink only -- see [`DIRECT_BUDGET_SHIFT`]): it is pushing the
+/// ~2 s window, and it is also what "the app hangs between lines" is.
+const DIRECT_BAND_SLOW_MS: u128 = 700;
+
+/// Called by the GPU device-lost callback (`gpu::device`): if a
+/// banded direct render was in flight, halve the direct dispatch
+/// budget for the rest of the session so the post-recovery retry
+/// cannot repeat the fatal dispatch.
+pub fn note_device_lost() {
+    use std::sync::atomic::Ordering;
+    if DIRECT_RENDER_IN_FLIGHT.swap(false, Ordering::Relaxed) {
+        let s = DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed).min(5) + 1;
+        DIRECT_BUDGET_SHIFT.store(s, Ordering::Relaxed);
+        log::warn!(
+            "escape: device lost during a banded direct render -- halving the \
+             direct dispatch budget to {} px-iters for this session",
+            DIRECT_DISPATCH_BUDGET >> s
+        );
+    }
+}
+
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4 arrays start at a
 /// 16-byte boundary, total 192 bytes).
@@ -166,9 +214,14 @@ pub struct EscapeRenderer {
     pub progressive: bool,
     #[cfg(not(target_arch = "wasm32"))]
     orbit_worker: Option<super::reference::OrbitWorker>,
-    /// Epoch of the worker data currently uploaded (progressive).
-    #[cfg(not(target_arch = "wasm32"))]
-    uploaded_epoch: u64,
+    /// Generation of the orbit CONTENT currently uploaded (the
+    /// worker's generation in progressive mode,
+    /// `OrbitCache::generation` otherwise): re-upload only when it
+    /// changes, append when it does not. Keying this on the request
+    /// EPOCH re-uploaded the entire orbit on every request -- ~200 MB
+    /// per wheel notch at f3 orbit sizes, for content that had not
+    /// changed.
+    orbit_generation: u64,
     orbit_buffer: Option<Buffer>,
     /// DF residuals, parallel to orbit_buffer (binding 8).
     orbit_lo_buffer: Option<Buffer>,
@@ -202,6 +255,11 @@ pub struct EscapeRenderer {
     /// First row the next DIRECT dispatch covers (row-band chunking;
     /// the perturbed path chunks by iteration instead).
     direct_tile_y: u32,
+    /// When the previous direct band was dispatched (same render):
+    /// while the escape-dirty loop is saturated the inter-frame gap
+    /// approximates that band's GPU time, and a slow band shrinks the
+    /// session budget (see [`DIRECT_BUDGET_SHIFT`]).
+    direct_last: Option<web_time::Instant>,
 
     /// Running minimum of the observed inter-call time: the cost of a
     /// frame whose chunk work is negligible. Under vsync this settles
@@ -247,7 +305,22 @@ pub struct EscapeRenderer {
 
 /// What the current BLA table was built for (rebuild trigger).
 struct BlaBuilt {
+    /// Orbit-content generation ([`EscapeRenderer`]'s
+    /// `orbit_generation`) the table was built from -- a different
+    /// orbit of the same length must not reuse it.
+    generation: u64,
+    /// EFFECTIVE length the table was built over:
+    /// min(orbit_len, max_iter + 1). A retained deep orbit can be
+    /// thousands of times longer than the view's max_iter, and
+    /// entries past max_iter are unreachable (a pixel's reference
+    /// index never exceeds its iteration count, and the shader
+    /// bounds every skip by `params.max_iter - i`).
     orbit_len: u32,
+    /// Consecutive dc-growth rebuilds against this same orbit: each
+    /// one doubles the |dc| headroom, so a deep-to-shallow zoom
+    /// journey (thousands of octaves) costs ~a dozen rebuilds, not
+    /// one per fixed headroom step.
+    dc_rebuilds: u32,
     power: u32,
     julia: bool,
     /// log2 of the |δc| bound the radii used (finite at ANY zoom).
@@ -444,8 +517,7 @@ impl EscapeRenderer {
             progressive: false,
             #[cfg(not(target_arch = "wasm32"))]
             orbit_worker: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            uploaded_epoch: 0,
+            orbit_generation: 0,
             orbit_buffer: None,
             orbit_lo_buffer: None,
             orbit_e_buffer: None,
@@ -461,6 +533,7 @@ impl EscapeRenderer {
             chunk_iters: 0,
             chunk_count: 0,
             direct_tile_y: 0,
+            direct_last: None,
             chunk_base_ms: f32::MAX,
             chunk_last: None,
             chunk_target_ms: 0.0,
@@ -496,6 +569,7 @@ impl EscapeRenderer {
         orbit_len: u32,
         tier: assembler::PerturbTier,
         progressive: bool,
+        orbit_done: bool,
     ) -> bool {
         #[cfg(test)]
         if self.disable_bla {
@@ -531,14 +605,45 @@ impl EscapeRenderer {
             let off = (self.current_ref_offset[0] as f64).hypot(self.current_ref_offset[1] as f64);
             (half_diag + off).max(1e-30).log2() + (2.0 - escape.zoom_log2 - h.log2())
         };
+        // Entries past the view's max_iter are dead weight: a
+        // pixel's reference index never exceeds its iteration count
+        // (rebasing restarts it at 0), and the shader bounds every
+        // skip by `params.max_iter - i` -- so cap the build there.
+        // A 10.1M-entry orbit retained while the view sits at a few
+        // thousand iterations otherwise pays a ~2 GB transient and a
+        // seconds-long main-thread build for a table it cannot use.
+        let orbit_len_eff = orbit_len.min(escape.max_iter.saturating_add(1));
+        let mut dc_grew = false;
+        let mut dc_streak = 0u32;
         if let Some(b) = &self.bla_built {
-            if b.orbit_len == orbit_len
+            // A table from an earlier, SHORTER prefix of the same
+            // orbit stays valid while the orbit grows (its spans are
+            // a prefix of the appended orbit -- fewer skips, never
+            // wrong), so during growth the length mismatch alone
+            // does not force a rebuild.
+            if b.generation == self.orbit_generation
                 && b.power == power
                 && b.julia == escape.julia
-                && dc_log2 <= b.dc_log2 + 1e-9
+                && (b.orbit_len == orbit_len_eff || !orbit_done)
             {
-                return self.bla_buffer.is_some();
+                if dc_log2 <= b.dc_log2 + 1e-9 {
+                    return self.bla_buffer.is_some();
+                }
+                // Same orbit, same shape -- invalidated ONLY because
+                // the view widened past the built |dc| bound. This is
+                // the rebuild that pads (see below).
+                dc_grew = true;
+                dc_streak = b.dc_rebuilds;
             }
+        }
+        // While the reference is still GROWING, never (re)build:
+        // the table would be rebuilt every frame as the orbit
+        // lengthens -- a full f64 copy of the orbit taken under the
+        // worker mutex plus an O(n) merge tree, per frame -- and
+        // per-step iteration is exact anyway. Build once, when the
+        // orbit completes.
+        if !orbit_done {
+            return false;
         }
         // The CPU copy of the orbit the GPU mirror holds.
         // BLA takes the reference at FULL precision: hi + lo, scaled
@@ -549,8 +654,10 @@ impl EscapeRenderer {
         // rather than the coefficient. f64 also carries the deep dips
         // (2^-183 and below) that f32 flushes to zero, which is what
         // made those steps un-skippable.
+        let cap = orbit_len_eff as usize;
         let with_exp = |hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]| -> Vec<[f64; 2]> {
             hi.iter()
+                .take(cap)
                 .enumerate()
                 .map(|(i, z)| {
                     let l = lo.get(i).copied().unwrap_or([0.0, 0.0]);
@@ -602,14 +709,46 @@ impl EscapeRenderer {
                 break;
             }
         }
-        let dc = if dc_log2 == f64::NEG_INFINITY {
+        // A rebuild forced by |dc| GROWTH builds for a padded bound,
+        // not the view exactly: dc grows monotonically as the view
+        // zooms OUT, so an exact bound forced a full O(n) rebuild on
+        // every zoom-out tick -- at 10M-entry orbits a main-thread
+        // stall and a ~half-GB buffer rewrite per wheel notch. Four
+        // octaves makes further rebuilds a once-per-16x-widening
+        // event; the cost is slightly smaller skip radii (the dc
+        // term in the merge), which is conservative, never wrong.
+        //
+        // A FRESH build (new orbit, new shape -- every one-shot
+        // headless render) keeps the exact bound: padding there would
+        // change settled pixels for no churn benefit, and the visual
+        // suite pins those. Measured: uniform padding moved up to 13%
+        // of pixels on the deep parameter-plane suite frames.
+        const DC_HEADROOM_LOG2: f64 = 4.0;
+        // Each consecutive dc-growth rebuild doubles the headroom
+        // (4, 8, 16, 32, 64 octaves): a zoom-out from an f3-depth
+        // location to the perturbation threshold crosses ~2300
+        // octaves, which at a fixed 4-octave pad is ~580 rebuilds --
+        // with backoff it is ~a dozen. The wider pad only shrinks
+        // skip radii further (conservative), and the streak resets
+        // on any fresh build.
+        let pad = if dc_grew {
+            DC_HEADROOM_LOG2 * f64::from(1u32 << dc_streak.min(4))
+        } else {
+            0.0
+        };
+        let dc_built = if dc_log2 == f64::NEG_INFINITY {
+            f64::NEG_INFINITY
+        } else {
+            dc_log2 + pad
+        };
+        let dc = if dc_built == f64::NEG_INFINITY {
             super::bla::MagFe::zero()
         } else {
-            let e = dc_log2.floor();
-            super::bla::MagFe { m: 2f64.powf(dc_log2 - e), e: e as i64 }
+            let e = dc_built.floor();
+            super::bla::MagFe { m: 2f64.powf(dc_built - e), e: e as i64 }
         };
         let table =
-            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_log2);
+            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_built);
         let n_levels = table.levels.len().min(30);
         let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
         if total == 0 {
@@ -667,10 +806,12 @@ impl EscapeRenderer {
         }
         queue.write_buffer(self.bla_buffer.as_ref().unwrap(), 0, &bytes);
         self.bla_built = Some(BlaBuilt {
-            orbit_len,
+            generation: self.orbit_generation,
+            orbit_len: orbit_len_eff,
             power,
             julia: escape.julia,
-            dc_log2,
+            dc_log2: dc_built,
+            dc_rebuilds: if dc_grew { dc_streak.saturating_add(1) } else { 0 },
         });
         true
     }
@@ -772,9 +913,9 @@ impl EscapeRenderer {
     /// run away into a TDR-length dispatch.
     const CHUNK_ITERS_MAX: u32 = 1_048_576;
 
-    fn chunk_key_for(&self, escape: &EscapeConfig, orbit_len: u32) -> String {
+    fn chunk_key_for(&self, escape: &EscapeConfig, orbit_tag: u64, orbit_done: bool) -> String {
         format!(
-            "{}|{:?}|{}|{}|{}|{}|{}|{}|{:?}|{}x{}|{}",
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{:?}|{}x{}|{}|{}",
             escape.formula,
             escape.formula_params,
             escape.coloring,
@@ -786,7 +927,8 @@ impl EscapeRenderer {
             escape.coloring_params,
             self.width,
             self.height,
-            orbit_len,
+            orbit_tag,
+            orbit_done,
         )
     }
 
@@ -836,7 +978,10 @@ impl EscapeRenderer {
     /// direct path progressive top-to-bottom feedback it never had.
     fn direct_rows_per_dispatch(&self, escape: &EscapeConfig) -> u32 {
         let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
-        let rows = DIRECT_DISPATCH_BUDGET / per_row.max(1);
+        // The session shift only ever shrinks (see DIRECT_BUDGET_SHIFT).
+        let budget = DIRECT_DISPATCH_BUDGET
+            >> DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+        let rows = budget / per_row.max(1);
         (rows.max(1) as u32).min(self.height.max(1))
     }
 
@@ -952,7 +1097,7 @@ impl EscapeRenderer {
             zoom_log2: escape.zoom_log2,
             height_px,
         });
-        let (len, done, data, data_lo, data_e) = {
+        let (len, done, gen, data, data_lo, data_e) = {
             let p = worker.progress.lock().unwrap();
             if p.epoch == epoch {
                 // Rescale to this view (see the blocking path). The
@@ -972,9 +1117,13 @@ impl EscapeRenderer {
                 super::reference::set_live_reference_period(p.detected_period);
             }
             if p.epoch != epoch {
-                (0u32, false, Vec::new(), Vec::new(), Vec::new())
+                (0u32, false, 0u64, Vec::new(), Vec::new(), Vec::new())
             } else {
-                let start = if self.uploaded_epoch == epoch {
+                // Append onto what is already uploaded when the GPU
+                // mirror holds this same orbit CONTENT (generation);
+                // a mere epoch change -- a zoom tick reusing the
+                // orbit -- must not restart the upload.
+                let start = if self.orbit_generation == p.generation {
                     self.orbit_uploaded as usize
                 } else {
                     0
@@ -982,6 +1131,7 @@ impl EscapeRenderer {
                 (
                     p.orbit.len() as u32,
                     p.done,
+                    p.generation,
                     p.orbit[start.min(p.orbit.len())..].to_vec(),
                     p.orbit_lo[start.min(p.orbit_lo.len())..].to_vec(),
                     p.orbit_e[start.min(p.orbit_e.len())..].to_vec(),
@@ -992,8 +1142,17 @@ impl EscapeRenderer {
             return (0, false);
         }
         // (Re)create the buffer as needed, then append the new tail.
-        let fresh = self.uploaded_epoch != epoch;
-        let recreate = self.orbit_buffer.is_none() || len > self.orbit_capacity || fresh && len > self.orbit_capacity;
+        let recreate = self.orbit_buffer.is_none() || len > self.orbit_capacity;
+        // A recreated buffer must be filled FROM SCRATCH even under an
+        // unchanged generation: the append branch writes only the new
+        // tail, so a capacity crossing mid-growth otherwise leaves
+        // everything before that tail garbage in the new buffer. This
+        // was the cold-vs-warm divergence a user caught by eye: a
+        // reference STREAMED over minutes crosses several capacity
+        // boundaries and rendered a structurally wrong (self-similar
+        // sibling) frame, while the same orbit reloaded complete from
+        // the store uploads whole in one pass and renders correctly.
+        let fresh = recreate || self.orbit_generation != gen;
         if recreate {
             if let Some(old) = self.orbit_buffer.take() {
                 old.destroy();
@@ -1027,8 +1186,7 @@ impl EscapeRenderer {
             self.orbit_uploaded = 0;
         }
         if fresh {
-            // Epoch changed: upload from scratch (the worker republished
-            // the full prefix under the new epoch).
+            // New orbit content: upload from scratch.
             let worker = self.orbit_worker.as_ref().unwrap();
             let p = worker.progress.lock().unwrap();
             queue.write_buffer(
@@ -1047,7 +1205,7 @@ impl EscapeRenderer {
                 bytemuck::cast_slice(&p.orbit_e),
             );
             self.orbit_uploaded = p.orbit.len() as u32;
-            self.uploaded_epoch = epoch;
+            self.orbit_generation = p.generation;
         } else if !data.is_empty() {
             queue.write_buffer(
                 self.orbit_buffer.as_ref().unwrap(),
@@ -1118,8 +1276,8 @@ impl EscapeRenderer {
         {
             self.orbit_cache.clear();
         }
-        let (orbit, done) = match budget {
-            None => (
+        let done = match budget {
+            None => {
                 self.orbit_cache.get(
                     &escape.center_re,
                     &escape.center_im,
@@ -1129,21 +1287,29 @@ impl EscapeRenderer {
                     power,
                     ship,
                     ship_variant,
-                )?,
-                true,
-            ),
-            Some(b) => self.orbit_cache.get_budgeted(
-                &escape.center_re,
-                &escape.center_im,
-                escape.zoom_log2,
-                escape.max_iter,
-                julia_c,
-                power,
-                ship,
-                ship_variant,
-                b,
-            )?,
+                )?;
+                true
+            }
+            Some(b) => {
+                self.orbit_cache.get_budgeted(
+                    &escape.center_re,
+                    &escape.center_im,
+                    escape.zoom_log2,
+                    escape.max_iter,
+                    julia_c,
+                    power,
+                    ship,
+                    ship_variant,
+                    b,
+                )?
+                .1
+            }
         };
+        // Re-borrow immutably: the generation read must not overlap
+        // get()'s mutable borrow, and the slot is guaranteed Some
+        // after a successful get.
+        let gen = self.orbit_cache.generation();
+        let orbit = self.orbit_cache.peek()?;
         // The offset's pixel units are rescaled to THIS view (zoom
         // drags and supersampling change the units under a reused
         // orbit). A fresh orbit is always at the current view, so the
@@ -1194,9 +1360,13 @@ impl EscapeRenderer {
             self.orbit_capacity = capacity;
             self.orbit_uploaded = 0;
         }
-        if self.orbit_uploaded != len {
+        if self.orbit_uploaded != len || self.orbit_generation != gen {
             // Upload the whole orbit (append-only uploads are a later
             // optimization; a full orbit at max_iter 100k is 800 KB).
+            // The generation compare matters even at equal length: a
+            // pan at fixed max_iter swaps in a DIFFERENT orbit of the
+            // same length, which a length test alone leaves stale on
+            // the GPU.
             queue.write_buffer(
                 self.orbit_buffer.as_ref().unwrap(),
                 0,
@@ -1213,6 +1383,7 @@ impl EscapeRenderer {
                 bytemuck::cast_slice(&orbit.orbit_e),
             );
             self.orbit_uploaded = len;
+            self.orbit_generation = gen;
         }
         Some((len, done))
     }
@@ -1554,6 +1725,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         #[cfg(not(test))]
         let use_perturbed = Self::wants_perturbation(escape);
         if use_perturbed {
+            // Not a banded direct render: close its loss-attribution
+            // window (a stale one would blame an unrelated loss).
+            DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
             #[cfg(not(target_arch = "wasm32"))]
             let progressive = self.progressive;
             #[cfg(target_arch = "wasm32")]
@@ -1638,7 +1812,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let s_m = 2f64.powf(x - s_e);
                 // Chunk window: restart on any render-state change,
                 // else continue where the last dispatch stopped.
-                let key = self.chunk_key_for(escape, orbit_len);
+                let key = self.chunk_key_for(escape, self.orbit_generation, orbit_done);
                 if self.chunk_key.as_deref() != Some(key.as_str()) {
                     self.chunk_key = Some(key);
                     self.chunk_next = 0;
@@ -1652,8 +1826,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 // else bind the zeroed dummy (n_levels = 0).
                 let tier = Self::perturb_tier(escape)
                     .unwrap_or(assembler::PerturbTier::Power(2));
-                let bla_ready =
-                    self.ensure_bla(device, queue, escape, orbit_len, tier, progressive);
+                let bla_ready = self.ensure_bla(
+                    device, queue, escape, orbit_len, tier, progressive, orbit_done,
+                );
                 if self.bla_dummy.is_none() {
                     self.bla_dummy = Some(device.create_buffer(&BufferDescriptor {
                         label: Some("Escape BLA Dummy"),
@@ -1775,10 +1950,28 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // (direct and field). A band is a complete render of its own
         // rows, so no resume state is needed and the output texture
         // accumulates the frame top to bottom.
-        let key = self.chunk_key_for(escape, 0);
+        let key = self.chunk_key_for(escape, 0, true);
         if self.chunk_key.as_deref() != Some(key.as_str()) {
             self.chunk_key = Some(key);
             self.direct_tile_y = 0;
+            self.direct_last = None;
+        }
+        // Shrink-only pacing: while continuing a banded render, the
+        // gap since the previous band approximates that band's GPU
+        // time (the dirty loop redraws as fast as the GPU drains). A
+        // band that survived but ran long still halves the session
+        // budget; growth is never attempted (measured losing the
+        // device -- see DIRECT_BUDGET_SHIFT).
+        if self.direct_tile_y > 0 {
+            if let Some(t0) = self.direct_last {
+                if t0.elapsed().as_millis() > DIRECT_BAND_SLOW_MS {
+                    use std::sync::atomic::Ordering;
+                    let sh = DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed);
+                    if sh < 6 {
+                        DIRECT_BUDGET_SHIFT.store(sh + 1, Ordering::Relaxed);
+                    }
+                }
+            }
         }
         let rows = self.direct_rows_per_dispatch(escape);
         if self.direct_tile_y >= self.height {
@@ -1829,10 +2022,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         self.run_downsample(device, encoder);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let done = self.direct_tile_y >= self.height;
+        DIRECT_RENDER_IN_FLIGHT.store(
+            !done && band < self.height,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.direct_last = Some(web_time::Instant::now());
         if done {
             // A repeat of the same render starts from the top.
             self.chunk_key = None;
             self.direct_tile_y = 0;
+            self.direct_last = None;
         }
         done
     }
@@ -1909,6 +2108,36 @@ mod tests {
         (rows.max(1) as u32).min(height.max(1))
     }
 
+
+    #[test]
+    fn device_loss_halves_the_direct_budget_only_when_attributable() {
+        use std::sync::atomic::Ordering;
+        DIRECT_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        note_device_lost();
+        assert_eq!(
+            DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+            0,
+            "a loss with no banded render in flight must not shrink"
+        );
+        DIRECT_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+        note_device_lost();
+        assert_eq!(DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed), 1);
+        assert!(
+            !DIRECT_RENDER_IN_FLIGHT.load(Ordering::Relaxed),
+            "attribution consumes the in-flight window"
+        );
+        for _ in 0..10 {
+            DIRECT_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+            note_device_lost();
+        }
+        assert_eq!(
+            DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+            6,
+            "clamped: even the floor is a usable budget"
+        );
+        DIRECT_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+    }
 
     #[test]
     fn perturbation_gate_is_tight() {
