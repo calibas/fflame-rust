@@ -1937,6 +1937,19 @@ pub async fn export_animation_fast(
         &frame_config.flame,
     );
 
+    // Escape-time animation: the generator is the escape renderer --
+    // PERSISTENT across frames so the reference-orbit cache and BLA
+    // table carry from frame to frame (a zoom track re-uses its orbit
+    // instead of recomputing per frame). The flame renderer still
+    // owns the shared tail: load_config keeps palette/tonemap/curve/
+    // levels in sync each frame exactly as the headless single-frame
+    // path does. Before this branch existed the video export ran the
+    // chaos game regardless of render_mode and animated the FLAME
+    // while the app previewed the escape render (field report).
+    let is_escape = export_config.config.render_mode
+        == crate::scene::transforms::RenderMode::Escape;
+    let mut escape_renderer: Option<crate::escape::EscapeRenderer> = None;
+
     // Process frames sequentially
     for frame in 0..total_frames {
         if reporter.is_cancelled() {
@@ -1980,26 +1993,76 @@ pub async fn export_animation_fast(
         );
         queue.submit(std::iter::once(setup_encoder.finish()));
 
-        render_frame_to_completion(
-            &device,
-            &queue,
-            &mut renderer,
-            &frame_config,
-            export_config.iterations_per_thread,
-        )
-        .await;
+        if is_escape {
+            // Settle loop, mirroring the headless escape path
+            // (render.rs): bounded chunked dispatches, each its own
+            // submission, so the driver never sees an unbounded pass.
+            let esc = escape_renderer.get_or_insert_with(|| {
+                let mut e = crate::escape::EscapeRenderer::new(
+                    &device,
+                    export_config.width,
+                    export_config.height,
+                );
+                // Throughput chunking: no UI to keep responsive.
+                e.set_chunk_time_target(200.0);
+                e
+            });
+            esc.resize(
+                &device,
+                export_config.width,
+                export_config.height,
+                frame_config.escape.supersample,
+            );
+            let mut guard = 0u32;
+            loop {
+                let mut esc_encoder =
+                    device.create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("Escape Animation Frame"),
+                    });
+                let settled = esc.render(
+                    &device,
+                    &queue,
+                    &mut esc_encoder,
+                    &frame_config.escape,
+                    renderer.palette_view(),
+                );
+                queue.submit(std::iter::once(esc_encoder.finish()));
+                if settled {
+                    break;
+                }
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                guard += 1;
+                if guard > 4_000_000 {
+                    log::error!(
+                        "escape animation frame failed to settle; encoding what we have"
+                    );
+                    break;
+                }
+            }
+        } else {
+            render_frame_to_completion(
+                &device,
+                &queue,
+                &mut renderer,
+                &frame_config,
+                export_config.iterations_per_thread,
+            )
+            .await;
+        }
 
         // Solid rendering finalize — mirrors the interactive frame and the
         // CLI export: exact brightness renormalization for occluded
         // renders, then the shade pass (lighting/SSAO), then tonemap from
         // the shaded output.
-        renderer.apply_exact_density_fraction(&device, &queue);
+        if !is_escape {
+            renderer.apply_exact_density_fraction(&device, &queue);
+        }
 
         // Tonemap
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Tonemap"),
         });
-        let shade_ran = renderer.run_shade_pass(
+        let shade_ran = !is_escape && renderer.run_shade_pass(
             &device,
             &queue,
             &mut tonemap_encoder,
@@ -2014,7 +2077,12 @@ pub async fn export_animation_fast(
             frame_config.camera_y,
             frame_config.camera_z,
         );
-        if shade_ran {
+        if is_escape {
+            let esc = escape_renderer
+                .as_ref()
+                .expect("escape renderer exists: created in the generator branch");
+            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, esc.output_view());
+        } else if shade_ran {
             renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());
         } else {
             renderer.tonemap_pass(&queue, &mut tonemap_encoder);
