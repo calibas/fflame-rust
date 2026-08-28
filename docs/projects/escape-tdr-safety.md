@@ -69,7 +69,38 @@ Sizing-only change: the render is chunk-invariant (pinned by the
 `ESCAPE_CHUNK_MS` invariance test), so this cannot change images.
 Costs a slower ramp on genuinely-cheap renders (a few extra frames).
 
-## C. GPU timestamp pacing (moderate — the principled fix)
+## C. GPU timestamp pacing — SHIPPED 2026-08-28
+
+Built as planned, with one design change worth recording: what the
+pacer keeps is COST PER ITERATION, not the raw duration. The result
+lands two or three calls after the dispatch it measured, by which
+time the chunk size has moved; the per-iteration cost is the part
+that transfers, and it turns sizing into arithmetic (ideal =
+target / cost) instead of a hill climb.
+
+`TIMESTAMP_QUERY` is requested wherever escape renders — the app
+device, both headless export devices, and the GPU test device — but
+only when the adapter offers it; absent, the wall-clock path is
+unchanged, which is what browsers and SwiftShader get. Results
+travel through a buffer map, so the app now issues one non-blocking
+`poll(Poll)` per frame after present: wgpu delivers map callbacks
+only while the device is polled, and without it the pacer would
+silently sit in the fallback forever.
+
+Growth stays bounded to 2x per call even with honest measurements,
+because the measurement being honest does not make the COST
+stationary: pixels die as a render proceeds and the survivors are
+the expensive ones, which is the cliff this whole plan is about.
+
+Measured on the field's deep-zoom shape (z22, 400k iterations,
+192x128): 1.125e-3 ms per iteration — about 22 Gpx-iterations/s —
+and a render paced by it is byte-identical to a fixed-chunk one. The
+test asserts BOTH, because a silent failure of the map path would
+otherwise look exactly like "the fallback is fine"; it caught
+precisely that during development, when the test view settled in a
+single chunk and no measurement could ever land.
+
+### The original plan, for reference
 
 Replace the wall-clock inference with actual per-dispatch GPU time:
 
