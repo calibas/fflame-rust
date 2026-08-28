@@ -246,6 +246,19 @@ pub struct ReferenceOrbit {
     /// 23,649 out to 41,163 - the "deep zoom renders interior mush"
     /// wall.
     pub orbit_e: Vec<i32>,
+    /// Compression corrections (see [`Correction`]): the places the
+    /// DD shadow was reset to full precision. Everything BETWEEN
+    /// corrections is regenerated on load by replaying the shadow --
+    /// this is the entire content of a stored orbit's array section,
+    /// which is what turns a 202 MB f3 file into a couple of MB.
+    corrections: Vec<Correction>,
+    /// Live DD shadow (re_hi, re_lo, im_hi, im_lo), tracking the
+    /// fixed-point iterate. NaN = poisoned (a truncation or an
+    /// out-of-range dip): every subsequent entry then records a
+    /// correction, which is always safe.
+    shadow: [f64; 4],
+    /// DD of c, derived from the fixed-point c (recomputed on load).
+    c_dd: [f64; 4],
     /// Iteration at which the REFERENCE escaped (|Z|² > 4), if it did.
     /// Pixels needing more iterations rebase (wrap to index 0), so a
     /// short orbit is fine — it just stops growing.
@@ -287,6 +300,185 @@ pub struct ReferenceOrbit {
 /// pixel scale (margin), and never looser than f32 visibility.
 pub fn closure_limit_for_zoom(zoom_log2: f64) -> i64 {
     (-(zoom_log2 + 16.0) as i64).min(-24)
+}
+
+/// Double-double (DD) arithmetic for the compression shadow: ~106-bit
+/// working precision from f64 pairs, IEEE-exact building blocks
+/// (TwoSum / TwoProd-via-FMA), so the shadow replays IDENTICALLY on
+/// every platform -- `f64::mul_add` is a single correctly-rounded
+/// operation everywhere (hardware FMA or libm; wasm lowers to libm).
+/// That determinism is what lets a saved file store only the shadow's
+/// CORRECTIONS and regenerate the orbit arrays bit-for-bit on load.
+mod dd {
+    #[inline]
+    pub fn two_sum(a: f64, b: f64) -> (f64, f64) {
+        let s = a + b;
+        let bb = s - a;
+        (s, (a - (s - bb)) + (b - bb))
+    }
+
+    #[inline]
+    pub fn add(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let (sh, sl) = two_sum(a.0, b.0);
+        two_sum(sh, sl + a.1 + b.1)
+    }
+
+    #[inline]
+    pub fn mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let p = a.0 * b.0;
+        let e = f64::mul_add(a.0, b.0, -p);
+        two_sum(p, e + a.0 * b.1 + a.1 * b.0)
+    }
+
+    #[inline]
+    pub fn neg(a: (f64, f64)) -> (f64, f64) {
+        (-a.0, -a.1)
+    }
+
+    /// The DD value exported the way `FixedPoint::to_f64` exports:
+    /// TRUNCATED toward zero at 53 bits (to_floatexp collects the top
+    /// 53 bits without rounding). Round-to-nearest first, then step
+    /// one ulp toward zero when the discarded tail says nearest
+    /// rounded away from zero.
+    #[inline]
+    pub fn trunc_f64(a: (f64, f64)) -> f64 {
+        let (r, t) = two_sum(a.0, a.1);
+        if r == 0.0 || !r.is_finite() || t == 0.0 {
+            return r;
+        }
+        if (r > 0.0 && t < 0.0) || (r < 0.0 && t > 0.0) {
+            // Exact magnitude sits below |r|: truncation is the next
+            // representable toward zero (bit trick is sign-magnitude
+            // safe: subtracting one from the bits of a nonzero f64
+            // shrinks its magnitude for either sign).
+            return f64::from_bits(r.to_bits() - 1);
+        }
+        r
+    }
+
+    #[inline]
+    pub fn is_neg(a: (f64, f64)) -> bool {
+        a.0 < 0.0 || (a.0 == 0.0 && a.1 < 0.0)
+    }
+
+    #[inline]
+    pub fn abs(a: (f64, f64)) -> (f64, f64) {
+        if is_neg(a) { neg(a) } else { a }
+    }
+}
+
+/// One compression correction: at `idx` the shadow was reset to the
+/// full-precision orbit value (`dd`, natural scale, degenerate when
+/// the value is below f64 range -- the following entries then force
+/// their own corrections, which is exactly right through deep dips),
+/// and the entry's stored triple is carried verbatim (the replay
+/// cannot derive it from a value the shadow could not represent).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Correction {
+    pub idx: u32,
+    pub hi: [f32; 2],
+    pub lo: [f32; 2],
+    pub e: i32,
+    /// Shadow reset value: (re_hi, re_lo, im_hi, im_lo).
+    pub dd: [f64; 4],
+}
+
+/// MSB exponent of an f64 (floor(log2 |v|)), from the bits -- exact,
+/// matching `FixedPoint::to_floatexp`'s exponent convention.
+fn f64_msb_exp(v: f64) -> Option<i64> {
+    if v == 0.0 || !v.is_finite() {
+        return None;
+    }
+    let bits = v.abs().to_bits();
+    let be = (bits >> 52) & 0x7ff;
+    if be != 0 {
+        Some(be as i64 - 1023)
+    } else {
+        let m = bits & ((1u64 << 52) - 1);
+        Some(63 - m.leading_zeros() as i64 - 1074)
+    }
+}
+
+/// The shadow's version of [`split_entry`]: decompose a DD iterate
+/// into the (hi, lo, exponent) storage form using the SAME branch
+/// structure. Compute and replay both call exactly this; whenever it
+/// would disagree with the true fixed-point decomposition, compute
+/// emits a correction instead -- so the replayed arrays are
+/// byte-identical BY CONSTRUCTION, not by tolerance.
+fn shadow_split(sx: (f64, f64), sy: (f64, f64)) -> ([f32; 2], [f32; 2], i32) {
+    let x = dd::trunc_f64(sx);
+    let y = dd::trunc_f64(sy);
+    const DEEP: f64 = 8.077_935_669_463_16e-28; // 2^-90, as split_entry
+    if x.abs().max(y.abs()) >= DEEP {
+        let hix = x as f32;
+        let hiy = y as f32;
+        return (
+            [hix, hiy],
+            [(x - hix as f64) as f32, (y - hiy as f64) as f32],
+            0,
+        );
+    }
+    let e = match (f64_msb_exp(x), f64_msb_exp(y)) {
+        (None, None) => return ([0.0, 0.0], [0.0, 0.0], 0),
+        (None, Some(e)) => e,
+        (Some(e), None) => e,
+        (Some(a), Some(b)) => a.max(b),
+    };
+    let scale = (-(e as f64)).exp2();
+    let mx = if x == 0.0 { 0.0 } else { x * scale };
+    let my = if y == 0.0 { 0.0 } else { y * scale };
+    let hix = mx as f32;
+    let hiy = my as f32;
+    (
+        [hix, hiy],
+        [(mx - hix as f64) as f32, (my - hiy as f64) as f32],
+        e.clamp(-2_000_000_000, 2_000_000_000) as i32,
+    )
+}
+
+/// One shadow iteration step, mirroring the fixed-point step: z^p + c
+/// with square-and-multiply, or the Ship-family fold. Compute and
+/// replay share it (the determinism contract).
+fn shadow_step(
+    sx: (f64, f64),
+    sy: (f64, f64),
+    c: &[f64; 4],
+    power: u32,
+    ship: bool,
+    ship_variant: u32,
+) -> ((f64, f64), (f64, f64)) {
+    let cx = (c[0], c[1]);
+    let cy = (c[2], c[3]);
+    if ship {
+        let x_neg = dd::is_neg(sx);
+        let y_neg = dd::is_neg(sy);
+        // (x^2 - y^2, 2xy), then the variant's sign/abs rearrangement
+        // (mirrors the sign-magnitude folds in extend()).
+        let re = dd::add(dd::mul(sx, sx), dd::neg(dd::mul(sy, sy)));
+        let im = dd::mul(sx, sy); // xy; doubled below
+        let im = (2.0 * im.0, 2.0 * im.1);
+        let (re, im) = match ship_variant {
+            0 => (re, dd::abs(im)),
+            1 => (re, if y_neg { dd::abs(im) } else { dd::neg(dd::abs(im)) }),
+            2 => (re, if x_neg { dd::abs(im) } else { dd::neg(dd::abs(im)) }),
+            3 => (dd::abs(re), im),
+            4 => (dd::abs(re), dd::neg(dd::abs(im))),
+            _ => (dd::abs(re), if y_neg { dd::abs(im) } else { dd::neg(dd::abs(im)) }),
+        };
+        (dd::add(re, cx), dd::add(im, cy))
+    } else {
+        // z^2, then square-and-multiply for higher powers.
+        let mut zx = dd::add(dd::mul(sx, sx), dd::neg(dd::mul(sy, sy)));
+        let xy = dd::mul(sx, sy);
+        let mut zy = (2.0 * xy.0, 2.0 * xy.1);
+        for _ in 2..power {
+            let nx = dd::add(dd::mul(zx, sx), dd::neg(dd::mul(zy, sy)));
+            let ny = dd::add(dd::mul(zx, sy), dd::mul(zy, sx));
+            zx = nx;
+            zy = ny;
+        }
+        (dd::add(zx, cx), dd::add(zy, cy))
+    }
 }
 
 impl ReferenceOrbit {
@@ -349,7 +541,11 @@ impl ReferenceOrbit {
             closure_octave: i64::MAX,
             hint_period: None,
             hint_octave: i64::MAX,
+            corrections: Vec::new(),
+            shadow: [f64::NAN; 4],
+            c_dd: [0.0; 4],
         };
+        orbit.init_shadow();
         orbit.extend(max_iter);
         Some(orbit)
     }
@@ -361,6 +557,73 @@ impl ReferenceOrbit {
 
     pub fn is_empty(&self) -> bool {
         self.orbit.len() <= 1
+    }
+
+    /// DD extraction of a fixed-point value: hi = round-to-f64, lo =
+    /// round-to-f64 of the exact remainder. ~2^-105 total accuracy in
+    /// range; degenerate below f64 range (callers treat that as a
+    /// poisoned shadow).
+    fn fixed_dd(v: &super::fixedpoint::FixedPoint, n: usize) -> (f64, f64) {
+        let hi = v.to_f64();
+        if hi == 0.0 || !hi.is_finite() {
+            return (hi, 0.0);
+        }
+        let lo = v.sub(&super::fixedpoint::FixedPoint::from_f64(hi, n)).to_f64();
+        (hi, lo)
+    }
+
+    /// Seed the shadow + corrections from the CURRENT state (entry 0
+    /// is always a correction; c_dd derives from the fixed c).
+    fn init_shadow(&mut self) {
+        let n = self.n_limbs;
+        let (cx, cxl) = Self::fixed_dd(&self.c.re, n);
+        let (cy, cyl) = Self::fixed_dd(&self.c.im, n);
+        self.c_dd = [cx, cxl, cy, cyl];
+        let (zx, zxl) = Self::fixed_dd(&self.z.re, n);
+        let (zy, zyl) = Self::fixed_dd(&self.z.im, n);
+        self.shadow = [zx, zxl, zy, zyl];
+        self.corrections = vec![Correction {
+            idx: 0,
+            hi: self.orbit[0],
+            lo: self.orbit_lo[0],
+            e: self.orbit_e[0],
+            dd: self.shadow,
+        }];
+    }
+
+    /// Push the just-computed iterate's storage triple, advancing the
+    /// compression shadow: the triple always comes from the TRUE
+    /// fixed-point value (renders are untouched by compression); a
+    /// correction is recorded whenever the shadow's decomposition
+    /// would differ -- so replay-on-load reproduces the arrays
+    /// byte-for-byte, with no tolerance in the loop.
+    fn push_entry(&mut self, x: f64, y: f64) {
+        let (hi, lo, ee) = split_entry(&self.z, x, y);
+        let idx = self.orbit.len() as u32;
+        let (sx, sy) = shadow_step(
+            (self.shadow[0], self.shadow[1]),
+            (self.shadow[2], self.shadow[3]),
+            &self.c_dd,
+            self.power,
+            self.ship,
+            self.ship_variant,
+        );
+        let ok = sx.0.is_finite() && sy.0.is_finite() && {
+            let (shi, slo, se) = shadow_split(sx, sy);
+            shi == hi && slo == lo && se == ee
+        };
+        if ok {
+            self.shadow = [sx.0, sx.1, sy.0, sy.1];
+        } else {
+            let n = self.n_limbs;
+            let (zx, zxl) = Self::fixed_dd(&self.z.re, n);
+            let (zy, zyl) = Self::fixed_dd(&self.z.im, n);
+            self.shadow = [zx, zxl, zy, zyl];
+            self.corrections.push(Correction { idx, hi, lo, e: ee, dd: self.shadow });
+        }
+        self.orbit.push(hi);
+        self.orbit_lo.push(lo);
+        self.orbit_e.push(ee);
     }
 
     /// Extend the orbit so it covers `max_iter` iterations (no-op if
@@ -456,10 +719,7 @@ impl ReferenceOrbit {
                     self.min_octave = oct;
                     self.min_at = idx;
                     if oct <= self.closure_limit_octave && idx > 0 {
-                        let (hi, lo, ee) = split_entry(&self.z, x, y);
-                        self.orbit.push(hi);
-                        self.orbit_lo.push(lo);
-                        self.orbit_e.push(ee);
+                        self.push_entry(x, y);
                         self.periodic = Some(idx);
                         self.closure_octave = oct;
                         log::info!(
@@ -469,10 +729,7 @@ impl ReferenceOrbit {
                     }
                 }
             }
-            let (hi, lo, ee) = split_entry(&self.z, x, y);
-            self.orbit.push(hi);
-            self.orbit_lo.push(lo);
-            self.orbit_e.push(ee);
+            self.push_entry(x, y);
             if x * x + y * y > 4.0 {
                 self.escaped_at = Some(self.orbit.len() as u32 - 1);
                 break;
@@ -597,16 +854,62 @@ impl ReferenceOrbit {
                 out.extend_from_slice(&e.to_le_bytes());
             }
         }
-        for z in &self.orbit {
-            out.extend_from_slice(&z[0].to_le_bytes());
-            out.extend_from_slice(&z[1].to_le_bytes());
+        // FFORBIT6 array section, tagged by a mode byte:
+        //   1 = COMPRESSED -- shadow corrections + an RLE exponent
+        //       stream; the hi/lo arrays are NOT stored, load replays
+        //       the DD shadow between corrections and regenerates
+        //       them byte-for-byte (measured: a chaotic 20k orbit is
+        //       50x smaller; the f3 orbit ~2.5 MB from 202 MB).
+        //   0 = RAW -- the FFORBIT5-style arrays. Chosen when the
+        //       corrections would be LARGER than the arrays: an orbit
+        //       dipping near zero every few iterations (a periodic
+        //       nucleus at a cascade -- exactly the orbits the store
+        //       marks precious) records a 52 B correction per entry,
+        //       2.6x worse than 20 B/iteration raw. Whichever is
+        //       smaller wins; both are byte-exact.
+        let mut runs: Vec<(u32, i32)> = Vec::new();
+        for &e in &self.orbit_e {
+            match runs.last_mut() {
+                Some((n, v)) if *v == e => *n += 1,
+                _ => runs.push((1, e)),
+            }
         }
-        for z in &self.orbit_lo {
-            out.extend_from_slice(&z[0].to_le_bytes());
-            out.extend_from_slice(&z[1].to_le_bytes());
-        }
-        for e in &self.orbit_e {
-            out.extend_from_slice(&e.to_le_bytes());
+        let compressed_bytes = 4 + self.corrections.len() * 52 + 4 + runs.len() * 8;
+        let raw_bytes = self.orbit.len() * 20;
+        if compressed_bytes < raw_bytes {
+            out.push(1);
+            out.extend_from_slice(&(self.corrections.len() as u32).to_le_bytes());
+            for c in &self.corrections {
+                out.extend_from_slice(&c.idx.to_le_bytes());
+                out.extend_from_slice(&c.hi[0].to_le_bytes());
+                out.extend_from_slice(&c.hi[1].to_le_bytes());
+                out.extend_from_slice(&c.lo[0].to_le_bytes());
+                out.extend_from_slice(&c.lo[1].to_le_bytes());
+                out.extend_from_slice(&c.e.to_le_bytes());
+                for d in c.dd {
+                    out.extend_from_slice(&d.to_le_bytes());
+                }
+            }
+            // e-stream RLE: (count, value) runs -- e is zero away
+            // from deep dips, so this is a handful of runs.
+            out.extend_from_slice(&(runs.len() as u32).to_le_bytes());
+            for (n, v) in runs {
+                out.extend_from_slice(&n.to_le_bytes());
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        } else {
+            out.push(0);
+            for z in &self.orbit {
+                out.extend_from_slice(&z[0].to_le_bytes());
+                out.extend_from_slice(&z[1].to_le_bytes());
+            }
+            for z in &self.orbit_lo {
+                out.extend_from_slice(&z[0].to_le_bytes());
+                out.extend_from_slice(&z[1].to_le_bytes());
+            }
+            for e in &self.orbit_e {
+                out.extend_from_slice(&e.to_le_bytes());
+            }
         }
         for f in [&self.z.re, &self.z.im, &self.c.re, &self.c.im] {
             put_fixed(&mut out, f);
@@ -698,20 +1001,157 @@ impl ReferenceOrbit {
             0 => None,
             _ => Some(r.u32()?),
         };
-        let mut orbit = Vec::with_capacity(orbit_len);
-        for _ in 0..orbit_len {
-            orbit.push([r.f32()?, r.f32()?]);
+        let mode = r.u8()?;
+        if mode == 0 {
+            // RAW mode: FFORBIT5-style arrays (the dip-dense case).
+            let mut orbit = Vec::with_capacity(orbit_len);
+            for _ in 0..orbit_len {
+                orbit.push([r.f32()?, r.f32()?]);
+            }
+            let mut orbit_lo = Vec::with_capacity(orbit_len);
+            for _ in 0..orbit_len {
+                orbit_lo.push([r.f32()?, r.f32()?]);
+            }
+            let mut orbit_e = Vec::with_capacity(orbit_len);
+            for _ in 0..orbit_len {
+                orbit_e.push(r.u32()? as i32);
+            }
+            let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+            let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+            let c_dd = {
+                let (cx, cxl) = Self::fixed_dd(&c.re, n_limbs);
+                let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
+                [cx, cxl, cy, cyl]
+            };
+            // A poisoned shadow makes any future extend record plain
+            // corrections -- always safe, and this orbit's shape is
+            // correction-dense anyway (that is why it is raw).
+            let seed = Correction {
+                idx: 0,
+                hi: orbit[0],
+                lo: orbit_lo[0],
+                e: orbit_e[0],
+                dd: [f64::NAN; 4],
+            };
+            return Some(
+                Self {
+                    center_re,
+                    center_im,
+                    julia_c,
+                    power,
+                    ship,
+                    ship_variant,
+                    periodic,
+                    ref_offset,
+                    off_zoom_log2: off_zoom,
+                    off_height_px: off_height,
+                    n_limbs,
+                    orbit,
+                    orbit_lo,
+                    orbit_e,
+                    escaped_at,
+                    z,
+                    c,
+                    min_octave: i64::MAX,
+                    min_at: 0,
+                    closure_limit_octave: closure_limit_for_zoom(off_zoom),
+                    closure_octave,
+                    hint_period,
+                    hint_octave,
+                    corrections: vec![seed],
+                    shadow: [f64::NAN; 4],
+                    c_dd,
+                }
+                .with_rescanned_min(),
+            );
         }
-        let mut orbit_lo = Vec::with_capacity(orbit_len);
-        for _ in 0..orbit_len {
-            orbit_lo.push([r.f32()?, r.f32()?]);
+        if mode != 1 {
+            return None;
+        }
+        // COMPRESSED mode: corrections, then the RLE exponent stream,
+        // then REPLAY the DD shadow to regenerate the hi/lo arrays.
+        // `shadow_step` and `shadow_split` are the same functions
+        // compute() ran, and compute() emitted a correction at every
+        // index where they would disagree with the true decomposition
+        // -- so this reproduces the arrays byte-for-byte.
+        let n_corr = r.u32()? as usize;
+        if n_corr == 0 || n_corr > orbit_len {
+            return None;
+        }
+        let mut corrections = Vec::with_capacity(n_corr);
+        for _ in 0..n_corr {
+            corrections.push(Correction {
+                idx: r.u32()?,
+                hi: [r.f32()?, r.f32()?],
+                lo: [r.f32()?, r.f32()?],
+                e: r.u32()? as i32,
+                dd: [r.f64()?, r.f64()?, r.f64()?, r.f64()?],
+            });
+        }
+        if corrections[0].idx != 0 {
+            return None;
+        }
+        let n_runs = r.u32()? as usize;
+        if n_runs > orbit_len {
+            return None;
         }
         let mut orbit_e = Vec::with_capacity(orbit_len);
-        for _ in 0..orbit_len {
-            orbit_e.push(r.u32()? as i32);
+        for _ in 0..n_runs {
+            let count = r.u32()? as usize;
+            let v = r.u32()? as i32;
+            if orbit_e.len() + count > orbit_len {
+                return None;
+            }
+            orbit_e.extend(std::iter::repeat(v).take(count));
+        }
+        if orbit_e.len() != orbit_len {
+            return None;
         }
         let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+        let c_dd = {
+            let (cx, cxl) = Self::fixed_dd(&c.re, n_limbs);
+            let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
+            [cx, cxl, cy, cyl]
+        };
+        let mut orbit = Vec::with_capacity(orbit_len);
+        let mut orbit_lo = Vec::with_capacity(orbit_len);
+        let mut shadow = [f64::NAN; 4];
+        let mut next_corr = 0usize;
+        for i in 0..orbit_len {
+            if next_corr < corrections.len() && corrections[next_corr].idx as usize == i {
+                let cc = &corrections[next_corr];
+                if cc.e != orbit_e[i] {
+                    return None;
+                }
+                orbit.push(cc.hi);
+                orbit_lo.push(cc.lo);
+                shadow = cc.dd;
+                next_corr += 1;
+            } else {
+                if i == 0 {
+                    return None; // entry 0 must be a correction
+                }
+                let (sx, sy) = shadow_step(
+                    (shadow[0], shadow[1]),
+                    (shadow[2], shadow[3]),
+                    &c_dd,
+                    power,
+                    ship,
+                    ship_variant,
+                );
+                shadow = [sx.0, sx.1, sy.0, sy.1];
+                let (hi, lo, ee) = shadow_split(sx, sy);
+                if ee != orbit_e[i] {
+                    return None;
+                }
+                orbit.push(hi);
+                orbit_lo.push(lo);
+            }
+        }
+        if next_corr != corrections.len() {
+            return None;
+        }
         Some(Self {
             center_re,
             center_im,
@@ -736,6 +1176,9 @@ impl ReferenceOrbit {
             closure_octave,
             hint_period,
             hint_octave,
+            corrections,
+            shadow,
+            c_dd,
         }
         .with_rescanned_min())
     }
@@ -1227,6 +1670,11 @@ impl ReferenceOrbit {
         orbit.orbit.truncate(period as usize + 1);
         orbit.orbit_lo.truncate(period as usize + 1);
         orbit.orbit_e.truncate(period as usize + 1);
+        // Compression state past the truncation is void; a periodic
+        // orbit never extends, and a poisoned shadow would record
+        // corrections if it somehow did (always safe).
+        orbit.corrections.retain(|c| (c.idx as usize) < period as usize + 1);
+        orbit.shadow = [f64::NAN; 4];
         {
             let fx = orbit.z.re.to_floatexp();
             let fy = orbit.z.im.to_floatexp();
