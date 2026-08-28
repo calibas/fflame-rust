@@ -113,21 +113,187 @@ static DIRECT_RENDER_IN_FLIGHT: std::sync::atomic::AtomicBool =
 /// ~2 s window, and it is also what "the app hangs between lines" is.
 const DIRECT_BAND_SLOW_MS: u128 = 700;
 
-/// Called by the GPU device-lost callback (`gpu::device`): if a
-/// banded direct render was in flight, halve the direct dispatch
-/// budget for the rest of the session so the post-recovery retry
-/// cannot repeat the fatal dispatch.
+/// Halvings of the PERTURBED path's chunk budget and ceiling, the
+/// mirror of [`DIRECT_BUDGET_SHIFT`] for the other generator.
+///
+/// The perturbed path chunks by ITERATION, and its adaptive sizer has
+/// a structural blind spot: at high max_iter over a view containing
+/// set interior the early chunks are nearly free (most pixels escape
+/// at once, BLA skips the rest), so the size doubles to the ceiling
+/// -- and then the cost profile flips, because the pixels still alive
+/// are exactly the ones where skips stop applying and they grind
+/// per-step. Cost per iteration is violently non-stationary, so no
+/// feedback loop can see that cliff coming; this bounds what happens
+/// when it arrives.
+static PERTURB_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// True while a perturbed render still has chunks to go -- the window
+/// in which a device loss is attributed to our chunk size. Mutually
+/// exclusive with [`DIRECT_RENDER_IN_FLIGHT`] by construction: a
+/// render is one path or the other, and each closes the other's flag.
+static PERTURB_RENDER_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Ceiling on an adaptively grown chunk, before the session shift.
+/// The feedback loop stops well below this on any real configuration;
+/// it exists so a pathological measurement (a frame that reports
+/// ~0 ms) cannot run away into a TDR-length dispatch.
+const CHUNK_ITERS_MAX_BASE: u32 = 1_048_576;
+
+/// Both session shifts, persisted across runs.
+///
+/// Without persistence every session re-learns the same lesson by
+/// losing the device one to four times, and each loss is a spin of
+/// the driver-state roulette (the field crash.log shows losses
+/// ~10 s apart while a user hunted for a working setting). The file
+/// sits next to the orbit cache rather than in SystemSettings: this
+/// is renderer-side state written from a device-lost callback with no
+/// ConfigManager in reach, and it is machine tuning, not a user
+/// preference -- it should not travel with a synced profile.
+#[cfg(not(target_arch = "wasm32"))]
+mod tuning {
+    use std::sync::atomic::Ordering;
+
+    fn path() -> Option<std::path::PathBuf> {
+        Some(crate::storage::backend::get_app_data_dir().ok()?.join("gpu_tuning.json"))
+    }
+
+    /// The file's contents for a pair of shifts.
+    pub(super) fn encode(direct: u32, perturb: u32) -> String {
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb }).to_string()
+    }
+
+    /// Shifts from file contents. Anything unreadable, missing or out
+    /// of range reads as zero-to-six: a hand-edited or corrupted file
+    /// must never be able to shrink a budget into uselessness, and a
+    /// missing key just means that generator never lost a device.
+    pub(super) fn decode(text: &str) -> (u32, u32) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+            return (0, 0);
+        };
+        let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
+        (get("direct_shift"), get("perturb_shift"))
+    }
+
+    /// Load once per process, before the first read of either shift.
+    ///
+    /// Inert under `cfg(test)`: the shifts are process-global, so a
+    /// developer whose real machine has learned a shift would
+    /// otherwise get different test results than one whose has not.
+    /// [`decode`] carries the parsing, and is tested directly.
+    pub(super) fn ensure_loaded() {
+        #[cfg(test)]
+        {
+            // See above: tests start from an unshifted, deterministic
+            // state and never consult the machine's tuning file.
+        }
+        #[cfg(not(test))]
+        {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
+                let Some(p) = path() else { return };
+                let Ok(text) = std::fs::read_to_string(&p) else { return };
+                let (d, pt) = decode(&text);
+                super::DIRECT_BUDGET_SHIFT.store(d, Ordering::Relaxed);
+                super::PERTURB_BUDGET_SHIFT.store(pt, Ordering::Relaxed);
+                if d > 0 || pt > 0 {
+                    log::info!(
+                        "escape: restored GPU tuning from a previous session \
+                         (direct shift {d}, perturbed shift {pt}) -- this machine \
+                         lost the device at the unshifted budgets"
+                    );
+                }
+            });
+        }
+    }
+
+    /// Best effort: tuning is an optimization, never a correctness
+    /// input, so a write failure is silent.
+    ///
+    /// Inert under `cfg(test)` for a blunter reason than [`ensure_loaded`]:
+    /// the breaker tests drive the shift to its clamp, and writing that
+    /// to the developer's real tuning file would quietly cripple their
+    /// app's chunk budgets from then on.
+    pub(super) fn save() {
+        #[cfg(not(test))]
+        {
+            let Some(p) = path() else { return };
+            let _ = std::fs::write(
+                p,
+                encode(
+                    super::DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+                    super::PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+                ),
+            );
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod tuning {
+    pub(super) fn ensure_loaded() {}
+    pub(super) fn save() {}
+}
+
+/// Called by the GPU device-lost callback (`gpu::device`): halve the
+/// budget of whichever generator was mid-render, so the
+/// post-recovery retry cannot repeat the fatal dispatch. The flags
+/// are mutually exclusive, and a loss with neither open (an
+/// unrelated cause -- a driver update, another app's fault) shifts
+/// nothing: this only learns from losses it can attribute.
 pub fn note_device_lost() {
     use std::sync::atomic::Ordering;
+    tuning::ensure_loaded();
+    let mut changed = false;
     if DIRECT_RENDER_IN_FLIGHT.swap(false, Ordering::Relaxed) {
         let s = DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed).min(5) + 1;
         DIRECT_BUDGET_SHIFT.store(s, Ordering::Relaxed);
+        changed = true;
         log::warn!(
             "escape: device lost during a banded direct render -- halving the \
              direct dispatch budget to {} px-iters for this session",
             DIRECT_DISPATCH_BUDGET >> s
         );
     }
+    if PERTURB_RENDER_IN_FLIGHT.swap(false, Ordering::Relaxed) {
+        let s = PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed).min(5) + 1;
+        PERTURB_BUDGET_SHIFT.store(s, Ordering::Relaxed);
+        changed = true;
+        log::warn!(
+            "escape: device lost during a perturbed render -- halving the \
+             perturbed chunk budget (ceiling now {} iterations) for this session",
+            CHUNK_ITERS_MAX_BASE >> s
+        );
+    }
+    if changed {
+        tuning::save();
+    }
+}
+
+/// The perturbed path's seed chunk for a pixel count, after the
+/// session shift. Free function so the sizing is testable without a
+/// GPU (the renderer method just supplies its own dimensions).
+fn perturb_chunk_seed(floatexp: bool, px: u64) -> u32 {
+    tuning::ensure_loaded();
+    let budget = if floatexp {
+        PERTURB_CHUNK_BUDGET_FE
+    } else {
+        PERTURB_CHUNK_BUDGET
+    };
+    let shift = PERTURB_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+    // Floor 16, not 256: at supersampled resolutions (or plain 4K+),
+    // 256 iterations x tens of megapixels is a multi-second dispatch --
+    // the TDR class of crash the budget exists to prevent. 16 still
+    // makes visible progress every frame.
+    ((budget >> shift) / px.max(1)).clamp(16, 65_536) as u32
+}
+
+/// The adaptively-grown ceiling, after the session shift.
+fn perturb_chunk_ceiling() -> u32 {
+    tuning::ensure_loaded();
+    let shift = PERTURB_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+    (CHUNK_ITERS_MAX_BASE >> shift).max(64)
 }
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
@@ -260,6 +426,17 @@ pub struct EscapeRenderer {
     /// approximates that band's GPU time, and a slow band shrinks the
     /// session budget (see [`DIRECT_BUDGET_SHIFT`]).
     direct_last: Option<web_time::Instant>,
+
+    /// Largest chunk that PROVABLY completed inside the target: the
+    /// next call after it came in on time. Growth is capped at a
+    /// multiple of this rather than at the raw ceiling, so a cliff
+    /// costs one honest doubling over proven ground instead of a jump
+    /// to the maximum (see [`GROWTH_HEADROOM`]).
+    chunk_proven: u32,
+    /// Calls since the last doubling. Growth waits for
+    /// [`GROWTH_INTERVAL`] of them so the measurement is not taken
+    /// while earlier submissions are still in flight.
+    chunk_since_growth: u32,
 
     /// Running minimum of the observed inter-call time: the cost of a
     /// frame whose chunk work is negligible. Under vsync this settles
@@ -535,6 +712,8 @@ impl EscapeRenderer {
             chunk_key: None,
             chunk_iters: 0,
             chunk_count: 0,
+            chunk_proven: 0,
+            chunk_since_growth: 0,
             direct_tile_y: 0,
             direct_last: None,
             chunk_base_ms: f32::MAX,
@@ -858,7 +1037,27 @@ impl EscapeRenderer {
         self.chunk_base_ms = f32::MAX;
         self.chunk_last = None;
         self.chunk_count = 0;
+        self.chunk_proven = 0;
+        self.chunk_since_growth = 0;
     }
+
+    /// Calls a doubling must wait between attempts.
+    ///
+    /// The wall-clock gap is only an honest proxy for GPU cost once
+    /// the queue has drained. With two or three submissions in flight
+    /// it reads short -- so doubling on every call hands out several
+    /// free passes before backpressure tells the truth, and the size
+    /// is already at the ceiling when the first real measurement
+    /// lands. Waiting three calls costs a slower ramp on genuinely
+    /// cheap renders and nothing else.
+    const GROWTH_INTERVAL: u32 = 3;
+
+    /// How far past PROVEN work a chunk may grow (see
+    /// [`Self::chunk_proven`]). Five doublings: enough to ramp
+    /// quickly on a cheap render, small enough that arriving at a
+    /// cost cliff overshoots by a bounded factor rather than by the
+    /// whole ceiling.
+    const GROWTH_HEADROOM: u32 = 32;
 
     /// The next chunk's iteration count, grown or shrunk to hold the
     /// caller's per-call time near its target.
@@ -902,10 +1101,23 @@ impl EscapeRenderer {
             (self.chunk_base_ms + 8.0).clamp(12.0, 33.0)
         };
         let mut chunk = self.chunk_iters.max(seed);
+        self.chunk_since_growth = self.chunk_since_growth.saturating_add(1);
         if elapsed_ms < target {
-            chunk = chunk.saturating_mul(2).min(Self::CHUNK_ITERS_MAX);
+            // The chunk just measured came in on time, so it is
+            // proven-completable work: growth may build on it.
+            self.chunk_proven = self.chunk_proven.max(chunk);
+            let cap = self
+                .chunk_proven
+                .max(seed)
+                .saturating_mul(Self::GROWTH_HEADROOM)
+                .min(perturb_chunk_ceiling());
+            if self.chunk_since_growth >= Self::GROWTH_INTERVAL && chunk < cap {
+                chunk = chunk.saturating_mul(2).min(cap);
+                self.chunk_since_growth = 0;
+            }
         } else if elapsed_ms > target * 1.4 {
             chunk = (chunk / 2).max(16);
+            self.chunk_since_growth = 0;
         }
         self.chunk_iters = chunk;
         chunk
@@ -916,17 +1128,7 @@ impl EscapeRenderer {
         if let Some(c) = self.chunk_override {
             return c;
         }
-        let budget = if floatexp {
-            PERTURB_CHUNK_BUDGET_FE
-        } else {
-            PERTURB_CHUNK_BUDGET
-        };
-        let px = (self.width as u64 * self.height as u64).max(1);
-        // Floor 16, not 256: at supersampled resolutions (or plain
-        // 4K+), 256 iterations x tens of megapixels is a multi-second
-        // dispatch — the TDR class of crash the budget exists to
-        // prevent. 16 still makes visible progress every frame.
-        (budget / px).clamp(16, 65_536) as u32
+        perturb_chunk_seed(floatexp, self.width as u64 * self.height as u64)
     }
 
     /// Everything that invalidates in-flight chunk state.
@@ -936,12 +1138,6 @@ impl EscapeRenderer {
     /// enough that a minutes-long build does not flash flat colour
     /// the whole time.
     const ORBIT_WAIT_SECONDS: f64 = 0.75;
-
-    /// Ceiling on an adaptively grown chunk. The feedback loop stops
-    /// well below this on any real configuration; it exists so a
-    /// pathological measurement (a frame that reports ~0 ms) cannot
-    /// run away into a TDR-length dispatch.
-    const CHUNK_ITERS_MAX: u32 = 1_048_576;
 
     fn chunk_key_for(&self, escape: &EscapeConfig, orbit_tag: u64, orbit_done: bool) -> String {
         format!(
@@ -1008,7 +1204,9 @@ impl EscapeRenderer {
     /// direct path progressive top-to-bottom feedback it never had.
     fn direct_rows_per_dispatch(&self, escape: &EscapeConfig) -> u32 {
         let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
-        // The session shift only ever shrinks (see DIRECT_BUDGET_SHIFT).
+        // The session shift only ever shrinks (see DIRECT_BUDGET_SHIFT),
+        // and carries over from previous sessions.
+        tuning::ensure_loaded();
         let budget = DIRECT_DISPATCH_BUDGET
             >> DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
         let rows = budget / per_row.max(1);
@@ -1958,6 +2156,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 // progressive refinement stays visible under AA.
                 self.run_downsample(device, encoder);
                 let iterations_done = iter_end >= escape.max_iter;
+                // Attribution window for the device-lost callback: open
+                // while this render still has chunks to submit.
+                PERTURB_RENDER_IN_FLIGHT.store(
+                    !(orbit_done && iterations_done),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 self.chunk_next = if iterations_done { 0 } else { iter_end };
                 if iterations_done {
                     log::debug!(
@@ -1975,6 +2179,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             }
             log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
         }
+
+        // Not a perturbed render: close its loss-attribution window
+        // (a stale one would blame an unrelated loss).
+        PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Row-band chunking for the unchunkable-by-iteration templates
         // (direct and field). A band is a complete render of its own
@@ -2100,6 +2308,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 mod tests {
     use super::*;
 
+    /// The budget shifts and in-flight flags are process-global, so
+    /// the tests that drive them must not run concurrently.
+    static BREAKER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_direct_render_is_split_into_bands_it_can_survive() {
         // Zooming a 10M-iteration config OUT past the perturbation
@@ -2140,10 +2352,54 @@ mod tests {
 
 
     #[test]
+    fn device_loss_halves_the_perturbed_budget_only_when_attributable() {
+        use std::sync::atomic::Ordering;
+        let _guard = BREAKER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        PERTURB_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        PERTURB_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        let seed0 = perturb_chunk_seed(false, 1920 * 1080);
+        let ceil0 = perturb_chunk_ceiling();
+
+        note_device_lost();
+        assert_eq!(
+            PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+            0,
+            "a loss with no perturbed render in flight must not shrink"
+        );
+
+        PERTURB_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+        note_device_lost();
+        assert_eq!(PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed), 1);
+        assert!(
+            !PERTURB_RENDER_IN_FLIGHT.load(Ordering::Relaxed),
+            "attribution consumes the in-flight window"
+        );
+        // Both the seed and the ceiling must actually shrink -- the
+        // ceiling is what a runaway growth loop would otherwise reach.
+        assert_eq!(perturb_chunk_seed(false, 1920 * 1080), seed0 / 2);
+        assert_eq!(perturb_chunk_ceiling(), ceil0 / 2);
+
+        for _ in 0..10 {
+            PERTURB_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+            note_device_lost();
+        }
+        assert_eq!(
+            PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+            6,
+            "clamped: even the floor is a usable budget"
+        );
+        assert!(perturb_chunk_seed(false, 1920 * 1080) >= 16, "floor holds");
+        PERTURB_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
     fn device_loss_halves_the_direct_budget_only_when_attributable() {
         use std::sync::atomic::Ordering;
+        let _guard = BREAKER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         DIRECT_BUDGET_SHIFT.store(0, Ordering::Relaxed);
         DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        PERTURB_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
         note_device_lost();
         assert_eq!(
             DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
@@ -2167,6 +2423,25 @@ mod tests {
             "clamped: even the floor is a usable budget"
         );
         DIRECT_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+    }
+
+    /// The persisted tuning file: round-trip, and refuse to let a
+    /// broken one do damage. Persistence is the whole point of the
+    /// breaker -- without it every session re-learns by losing the
+    /// device -- but a file that says "shift 40" must not be believed.
+    #[test]
+    fn tuning_file_round_trips_and_clamps_hostile_input() {
+        assert_eq!(tuning::decode(&tuning::encode(0, 0)), (0, 0));
+        assert_eq!(tuning::decode(&tuning::encode(2, 5)), (2, 5));
+        assert_eq!(tuning::decode(&tuning::encode(6, 6)), (6, 6));
+        // Out of range, wrong types, missing keys, and outright
+        // garbage all read as "no tuning learned" or a clamp.
+        assert_eq!(tuning::decode(r#"{"direct_shift":40,"perturb_shift":99}"#), (6, 6));
+        assert_eq!(tuning::decode(r#"{"direct_shift":"lots"}"#), (0, 0));
+        assert_eq!(tuning::decode("{}"), (0, 0));
+        assert_eq!(tuning::decode("not json at all"), (0, 0));
+        assert_eq!(tuning::decode(""), (0, 0));
     }
 
     #[test]
