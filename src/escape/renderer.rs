@@ -467,6 +467,10 @@ pub struct EscapeRenderer {
     /// Test hook: force per-step iteration to compare against skips.
     #[cfg(test)]
     pub(crate) disable_bla: bool,
+    /// Test hook: build the direct shader WITHOUT interior detection,
+    /// so the agreement test can render a view both ways.
+    #[cfg(test)]
+    pub(crate) disable_interior: bool,
     /// Display (output) size. `width`/`height` are the RENDER size =
     /// display × supersample; everything internal keys off those, so
     /// the whole pipeline (pixel spacing, iteration state, chunk
@@ -731,6 +735,8 @@ impl EscapeRenderer {
             bla_built: None,
             #[cfg(test)]
             disable_bla: false,
+            #[cfg(test)]
+            disable_interior: false,
             out_width: width,
             out_height: height,
             supersample: 1,
@@ -1856,9 +1862,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let formula = super::get_formula(&escape.formula);
         let coloring = super::get_coloring(&escape.coloring);
         let damped = escape.is_damped();
-        let key = format!("{}|{}|{}", formula.name, coloring.name, damped);
+        #[cfg(test)]
+        let interior = !self.disable_interior;
+        #[cfg(not(test))]
+        let interior = true;
+        let key = format!("{}|{}|{}|{}", formula.name, coloring.name, damped, interior);
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble(formula, coloring, damped);
+            let source = assembler::assemble_with(formula, coloring, damped, interior);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),

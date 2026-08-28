@@ -179,12 +179,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // dead-code-eliminated unless the coloring uses it.
     var dz = select(vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), is_julia);
     //__PERIOD_DECL__
+    //__INTERIOR_DECL__
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
         //__STEP__
         //__ACCUM_UPDATE__
         //__CONVERGE_TEST__
         //__PERIOD_TEST__
         //__ESCAPE_TEST__
+        //__INTERIOR_TEST__
     }
     if (!escaped) {
         n = params.max_iter;
@@ -1800,7 +1802,21 @@ pub fn assemble_field(field: &FieldDef, coloring: &FieldColoringDef) -> String {
     out.join("\n")
 }
 
+/// Assemble the direct template, with interior detection enabled --
+/// the production entry point.
 pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> String {
+    assemble_with(formula, coloring, damped, true)
+}
+
+/// As [`assemble`], with interior detection switchable. Disabling it
+/// exists for the agreement test (which asserts the two produce the
+/// SAME image); production always enables it.
+pub fn assemble_with(
+    formula: &FormulaDef,
+    coloring: &ColoringDef,
+    damped: bool,
+    interior_detect: bool,
+) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
@@ -1808,6 +1824,18 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
     let needs_period = coloring.has_feature(ColoringFeature::NeedsPeriod);
+    // Interior detection may only stop an orbit where stopping is
+    // INVISIBLE. A coloring that draws the interior reads the final z
+    // (and its accumulator, and its derivative) for exactly those
+    // pixels, so an early stop would change their colour; a period
+    // coloring already terminates on its own cycle test and wants the
+    // period it measured. Where none of that holds, a non-escaping
+    // pixel renders the background no matter which iteration it
+    // stopped on.
+    let interior_ok = interior_detect
+        && !colors_interior
+        && !needs_accum
+        && !needs_period;
     let needs_derivative = coloring.has_feature(ColoringFeature::NeedsDerivative)
         && !formula.wgsl_derivative.is_empty();
     let param_seed = if formula.wgsl_param_seed.is_empty() {
@@ -1892,6 +1920,52 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
                     out.push("        if (((i + 1u) & i) == 0u) {".to_string());
                     out.push("            chk_z = z;".to_string());
                     out.push("            chk_i = i + 1u;".to_string());
+                    out.push("        }".to_string());
+                }
+            }
+            "//__INTERIOR_DECL__" => {
+                if interior_ok {
+                    out.push("    var isnap = z;".to_string());
+                }
+            }
+            "//__INTERIOR_TEST__" => {
+                if interior_ok {
+                    // Exact-repeat interior detection (Brent epochs).
+                    //
+                    // The direct path's whole iteration state IS z, and
+                    // the arithmetic is deterministic, so a BIT-EXACT
+                    // repeat proves the f32 orbit is periodic from here
+                    // on: it can never escape, and every later iterate
+                    // is a value already seen. Stopping is therefore
+                    // not an approximation of running to max_iter -- it
+                    // is the same render, which is why this needs no
+                    // tolerance, no confirmation count, and no user
+                    // toggle. (A tolerance-based check would have to
+                    // defend against slow escapes that merely LOOK
+                    // periodic; an exact one cannot see them.)
+                    //
+                    // Compared through bitcast, not float ==, for two
+                    // reasons: +0.0 == -0.0 is true while the two can
+                    // continue differently under maps that divide or
+                    // take logs, and integer comparison is immune to
+                    // Metal's fast-math (CLAUDE.md).
+                    //
+                    // Only spliced when the coloring cannot draw the
+                    // interior, so a stopped pixel renders exactly what
+                    // an exhausted one would: the background.
+                    out.push(
+                        "        if (bitcast<u32>(z.x) == bitcast<u32>(isnap.x)".to_string(),
+                    );
+                    out.push(
+                        "            && bitcast<u32>(z.y) == bitcast<u32>(isnap.y)) {".to_string(),
+                    );
+                    out.push("            break;".to_string());
+                    out.push("        }".to_string());
+                    // Brent: advance the snapshot at powers of two, so
+                    // any cycle is caught within one period of entering
+                    // it, with a single stored value.
+                    out.push("        if (((i + 1u) & i) == 0u) {".to_string());
+                    out.push("            isnap = z;".to_string());
                     out.push("        }".to_string());
                 }
             }
