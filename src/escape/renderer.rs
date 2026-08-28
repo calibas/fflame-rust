@@ -452,6 +452,13 @@ pub struct EscapeRenderer {
     /// time target. The render must be IDENTICAL at every setting -
     /// that is the property the chunk-invariance test checks.
     chunk_target_env: Option<f32>,
+    /// GPU-time pacing, when the device supports timestamp queries.
+    timestamps: Option<TimestampPacer>,
+    /// Milliseconds per iteration measured on the GPU by the most
+    /// recent completed query. None until the first result lands, and
+    /// on devices without the feature -- the wall-clock path then
+    /// carries the pacing unchanged.
+    gpu_ms_per_iter: Option<f32>,
     /// Test hook: shrink the chunk to force multi-chunk renders.
     #[cfg(test)]
     pub(crate) chunk_override: Option<u32>,
@@ -485,6 +492,83 @@ pub struct EscapeRenderer {
     /// (factor, pipeline, layout) — the factor is spliced into the
     /// WGSL, so a factor change recompiles (rare).
     downsample: Option<(u32, wgpu::ComputePipeline, BindGroupLayout)>,
+}
+
+/// GPU-time pacing for the perturbed path (TDR-safety plan item C).
+///
+/// The fallback proxy for chunk cost is the wall-clock gap between
+/// calls, which is honest only once the queue has drained: with
+/// submissions in flight it reads short, so the size doubles on
+/// measurements that have not happened yet. A timestamp query around
+/// the dispatch measures the work itself.
+///
+/// The result returns through a buffer map, landing two or three
+/// calls later -- fine, since pacing is a trailing control loop
+/// either way. One measurement is in flight at a time; frames in
+/// between simply do not measure. What is kept is COST PER ITERATION
+/// rather than the raw duration, because the chunk size changes
+/// between a measurement and its use and the per-iteration cost is
+/// the part that transfers.
+struct TimestampPacer {
+    query_set: wgpu::QuerySet,
+    /// Resolve target for the two timestamps (u64 each).
+    resolve: Buffer,
+    /// Mappable copy of `resolve`.
+    staging: Buffer,
+    /// Nanoseconds per timestamp tick.
+    period_ns: f32,
+    phase: TsPhase,
+    /// Iterations the in-flight measurement covers.
+    iters: u32,
+    /// Map completion, set from the callback: 0 pending, 1 mapped,
+    /// 2 failed.
+    done: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TsPhase {
+    /// Nothing in flight: the next dispatch may be measured.
+    Idle,
+    /// Timestamps written and copied, but the caller has not
+    /// submitted that encoder yet -- so the map cannot be requested
+    /// until the next call.
+    Encoded,
+    /// Map requested; waiting on the callback.
+    Mapping,
+}
+
+impl TimestampPacer {
+    /// Two timestamps: 16 bytes resolved, 16 copied back.
+    const BYTES: u64 = 16;
+
+    fn new(device: &Device, period_ns: f32) -> Self {
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("Escape Chunk Timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolve = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Timestamp Resolve"),
+            size: Self::BYTES,
+            usage: BufferUsages::QUERY_RESOLVE | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Timestamp Staging"),
+            size: Self::BYTES,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            query_set,
+            resolve,
+            staging,
+            period_ns,
+            phase: TsPhase::Idle,
+            iters: 0,
+            done: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
 }
 
 /// What the current BLA table was built for (rebuild trigger).
@@ -714,6 +798,8 @@ impl EscapeRenderer {
             iter_state_px: 0,
             chunk_next: 0,
             chunk_key: None,
+            timestamps: None,
+            gpu_ms_per_iter: None,
             chunk_iters: 0,
             chunk_count: 0,
             chunk_proven: 0,
@@ -1037,6 +1123,88 @@ impl EscapeRenderer {
         self.chunk_target_ms = ms.max(0.0);
     }
 
+    /// Consume a landed timestamp result, and advance the pacer's
+    /// phase. Call once per render, before deciding to measure.
+    fn ts_poll(&mut self) {
+        use std::sync::atomic::Ordering;
+        let Some(ts) = self.timestamps.as_mut() else {
+            return;
+        };
+        if ts.phase != TsPhase::Mapping {
+            return;
+        }
+        match ts.done.load(Ordering::Relaxed) {
+            0 => {}
+            1 => {
+                let elapsed = {
+                    let view = ts.staging.slice(..).get_mapped_range();
+                    let start = u64::from_le_bytes(view[0..8].try_into().unwrap_or_default());
+                    let end = u64::from_le_bytes(view[8..16].try_into().unwrap_or_default());
+                    end.saturating_sub(start)
+                };
+                ts.staging.unmap();
+                ts.phase = TsPhase::Idle;
+                let ms = elapsed as f32 * ts.period_ns * 1e-6;
+                if ms > 0.0 && ts.iters > 0 {
+                    self.gpu_ms_per_iter = Some(ms / ts.iters as f32);
+                }
+            }
+            _ => {
+                // Map failed: nothing is mapped, so nothing to unmap.
+                ts.phase = TsPhase::Idle;
+            }
+        }
+    }
+
+    /// The most recent GPU-measured cost per iteration, if the device
+    /// supports timestamps and a result has landed (test observation
+    /// point: the pacer is otherwise invisible by design).
+    #[cfg(test)]
+    pub(crate) fn gpu_ms_per_iter(&self) -> Option<f32> {
+        self.gpu_ms_per_iter
+    }
+
+    /// Whether this dispatch should carry timestamp writes. Creates
+    /// the pacer on first use (the queue supplies the tick period),
+    /// and moves a previously-encoded measurement into its map -- by
+    /// now the caller has submitted the encoder that produced it.
+    fn ts_prepare(&mut self, device: &Device, queue: &Queue) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.timestamps.is_none() {
+            if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+                return false;
+            }
+            self.timestamps = Some(TimestampPacer::new(device, queue.get_timestamp_period()));
+        }
+        let ts = self.timestamps.as_mut().expect("created above");
+        if ts.phase == TsPhase::Encoded {
+            ts.done.store(0, Ordering::Relaxed);
+            let done = ts.done.clone();
+            ts.staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                done.store(if r.is_ok() { 1 } else { 2 }, Ordering::Relaxed);
+            });
+            ts.phase = TsPhase::Mapping;
+        }
+        ts.phase == TsPhase::Idle
+    }
+
+    /// Resolve the pair this dispatch just wrote, and remember how
+    /// many iterations it covered.
+    fn ts_after_dispatch(&mut self, encoder: &mut CommandEncoder, iters: u32) {
+        let Some(ts) = self.timestamps.as_mut() else {
+            return;
+        };
+        encoder.resolve_query_set(&ts.query_set, 0..2, &ts.resolve, 0);
+        encoder.copy_buffer_to_buffer(&ts.resolve, 0, &ts.staging, 0, TimestampPacer::BYTES);
+        ts.iters = iters;
+        ts.phase = TsPhase::Encoded;
+    }
+
+    /// Per-chunk GPU-time target when timestamps are driving the
+    /// pacing. Well inside a 60 Hz frame, and an order of magnitude
+    /// inside the ~2 s window a driver reset watches.
+    const GPU_TARGET_MS: f32 = 10.0;
+
     /// Reset the size feedback (new render state, or a finished one).
     fn reset_chunk_pacing(&mut self) {
         self.chunk_iters = 0;
@@ -1082,6 +1250,37 @@ impl EscapeRenderer {
         if self.chunk_fixed {
             return seed;
         }
+        // Measured GPU cost, when a timestamp result has landed: size
+        // the chunk directly from cost per iteration instead of
+        // inferring it from call spacing. Growth stays bounded to 2x
+        // per call even here -- the measurement is honest, but the
+        // cost itself is non-stationary (pixels die as a render
+        // proceeds, and the survivors are the expensive ones).
+        if let Some(mspi) = self.gpu_ms_per_iter {
+            if mspi > 0.0 {
+                let now = web_time::Instant::now();
+                self.chunk_last = Some(now);
+                self.chunk_count = self.chunk_count.saturating_add(1);
+                let target = if let Some(forced) = self.chunk_target_env {
+                    forced
+                } else if self.chunk_target_ms > 0.0 {
+                    self.chunk_target_ms
+                } else {
+                    Self::GPU_TARGET_MS
+                };
+                let current = self.chunk_iters.max(seed);
+                let ideal = (target / mspi).clamp(16.0, perturb_chunk_ceiling() as f32) as u32;
+                let chunk = ideal
+                    .clamp(
+                        (current / 2).max(16),
+                        current.saturating_mul(2),
+                    )
+                    .clamp(16, perturb_chunk_ceiling());
+                self.chunk_iters = chunk;
+                return chunk;
+            }
+        }
+
         let now = web_time::Instant::now();
         self.chunk_count = self.chunk_count.saturating_add(1);
         let Some(last) = self.chunk_last.replace(now) else {
@@ -2056,6 +2255,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     self.chunk_next = 0;
                     self.reset_chunk_pacing();
                 }
+                // Consume any landed GPU measurement first: next_chunk
+                // sizes from it.
+                self.ts_poll();
+                let measure_gpu = self.ts_prepare(device, queue);
                 let chunk = self.next_chunk(floatexp);
                 let iter_start = self.chunk_next.min(escape.max_iter);
                 let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
@@ -2153,15 +2356,27 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         },
                     ],
                 });
+                let ts_qs = if measure_gpu {
+                    self.timestamps.as_ref().map(|t| &t.query_set)
+                } else {
+                    None
+                };
                 let pipeline = &self.pipelines[&key];
                 let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
                     label: Some("Escape Perturbed Pass"),
-                    timestamp_writes: None,
+                    timestamp_writes: ts_qs.map(|qs| wgpu::ComputePassTimestampWrites {
+                        query_set: qs,
+                        beginning_of_pass_write_index: Some(0),
+                        end_of_pass_write_index: Some(1),
+                    }),
                 });
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
                 drop(pass);
+                if measure_gpu {
+                    self.ts_after_dispatch(encoder, iter_end.saturating_sub(iter_start));
+                }
                 // Every chunk refreshes the display image, so
                 // progressive refinement stays visible under AA.
                 self.run_downsample(device, encoder);
@@ -2310,6 +2525,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
         if let Some(t) = &self.final_texture {
             t.destroy();
+        }
+        if let Some(ts) = &self.timestamps {
+            ts.resolve.destroy();
+            ts.staging.destroy();
         }
     }
 }

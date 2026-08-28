@@ -2812,6 +2812,15 @@ impl App {
 
         frame.present();
 
+        // Non-blocking maintain. wgpu delivers buffer-map callbacks
+        // only while the device is polled, and the escape renderer
+        // reads its GPU timestamps through one. Poll, never Wait: this
+        // must not stall the frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = self.gpu.device.poll(egui_wgpu::wgpu::PollType::Poll);
+        }
+
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);

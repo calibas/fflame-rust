@@ -213,6 +213,15 @@ impl GpuContext {
         if adapter_features.contains(Features::FLOAT32_FILTERABLE) {
             required_features |= Features::FLOAT32_FILTERABLE;
         }
+        // TIMESTAMP_QUERY lets the escape renderer pace its chunks on
+        // MEASURED GPU time instead of inferring cost from the gap
+        // between calls -- an inference that lies whenever submissions
+        // are still in flight. Optional everywhere: absent (SwiftShader,
+        // some mobile, most browsers today) the renderer keeps the
+        // wall-clock path.
+        if adapter_features.contains(Features::TIMESTAMP_QUERY) {
+            required_features |= Features::TIMESTAMP_QUERY;
+        }
 
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {

@@ -108,6 +108,107 @@ mod tests {
         );
     }
 
+    /// GPU-time pacing must engage, and must not change the image.
+    ///
+    /// The wall-clock proxy it replaces is honest only once the queue
+    /// has drained; with submissions in flight it reads short and the
+    /// chunk doubles on measurements that have not happened yet. This
+    /// asserts the timestamp path actually lands a measurement (it
+    /// travels through a buffer map, so a silent failure would just
+    /// look like "the fallback is fine"), and that a render paced by
+    /// it is byte-identical to a fixed-chunk one -- pacing may cost
+    /// time, never pixels.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn gpu_timestamps_pace_without_changing_the_image() {
+        let (device, queue) = repro_device();
+        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            println!("adapter has no TIMESTAMP_QUERY: wall-clock pacing covers this device");
+            return;
+        }
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        esc_cfg.center_re = "-0.743643887037151".to_string();
+        esc_cfg.center_im = "0.131825904205330".to_string();
+        esc_cfg.zoom_log2 = 22.0;
+        // Enough iterations to need SEVERAL chunks: a measurement
+        // travels Idle -> Encoded -> Mapping -> result, so a render
+        // that settles in one dispatch can never produce one.
+        esc_cfg.max_iter = 400_000;
+
+        let (w, h) = (192u32, 128u32);
+        let render = |fixed: bool| -> (Vec<u8>, Option<f32>) {
+            let config = crate::config::FractalConfig::default();
+            let mut renderer =
+                crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+                    &device,
+                    &queue,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    w,
+                    h,
+                    &config.flame,
+                    config.palette_size,
+                );
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.set_fixed_chunk(fixed);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("ts frame"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                // Wait, so map callbacks are delivered: the app does
+                // this with a non-blocking Poll once a frame.
+                let _ = device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render failed to settle (fixed={fixed})");
+            }
+            let measured = escape.gpu_ms_per_iter();
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ts tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device,
+                &queue,
+                false,
+                config.background_color,
+            ))
+            .expect("readback");
+            (rgba, measured)
+        };
+
+        let (fixed, _) = render(true);
+        let (paced, measured) = render(false);
+        let mspi = measured.expect(
+            "no GPU timestamp result landed -- the pacer silently fell back to wall clock",
+        );
+        assert!(
+            mspi > 0.0 && mspi.is_finite(),
+            "implausible measured cost per iteration: {mspi}"
+        );
+        let diff = fixed
+            .iter()
+            .zip(paced.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            diff,
+            0,
+            "GPU-paced render differs from fixed-chunk in {diff} of {} bytes",
+            fixed.len()
+        );
+        println!("GPU pacing measured {:.3e} ms/iteration", mspi);
+    }
+
     /// The fixed-chunk mode must not change the image.
     ///
     /// `set_fixed_chunk` exists for callers that submit chunk after
@@ -305,9 +406,15 @@ mod tests {
             adapter_limits.max_storage_buffers_per_shader_stage;
         limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
         limits.max_buffer_size = adapter_limits.max_buffer_size;
+        // TIMESTAMP_QUERY when the adapter has it: the GPU-time pacer
+        // is only exercised on a device that requested the feature.
+        let mut feats = wgpu::Features::CLEAR_TEXTURE;
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            feats |= wgpu::Features::TIMESTAMP_QUERY;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("escape repro"),
-            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_features: feats,
             required_limits: limits,
             memory_hints: wgpu::MemoryHints::Performance,
             experimental_features: Default::default(),
@@ -342,9 +449,15 @@ mod tests {
             adapter_limits.max_storage_buffers_per_shader_stage;
         limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
         limits.max_buffer_size = adapter_limits.max_buffer_size;
+        // TIMESTAMP_QUERY when the adapter has it: the GPU-time pacer
+        // is only exercised on a device that requested the feature.
+        let mut feats = wgpu::Features::CLEAR_TEXTURE;
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            feats |= wgpu::Features::TIMESTAMP_QUERY;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("escape repro"),
-            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_features: feats,
             required_limits: limits,
             memory_hints: wgpu::MemoryHints::Performance,
             experimental_features: Default::default(),

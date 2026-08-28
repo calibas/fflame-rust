@@ -85,6 +85,10 @@ pub async fn export_headless_wasm(
     if adapter.features().contains(egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE) {
         required_features |= egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE;
     }
+    // See gpu/device.rs: optional GPU-time pacing for escape chunks.
+    if adapter.features().contains(egui_wgpu::wgpu::Features::TIMESTAMP_QUERY) {
+        required_features |= egui_wgpu::wgpu::Features::TIMESTAMP_QUERY;
+    }
 
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
@@ -317,6 +321,10 @@ async fn export_headless_gpu(
     let mut required_features = egui_wgpu::wgpu::Features::CLEAR_TEXTURE;
     if adapter.features().contains(egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE) {
         required_features |= egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE;
+    }
+    // See gpu/device.rs: optional GPU-time pacing for escape chunks.
+    if adapter.features().contains(egui_wgpu::wgpu::Features::TIMESTAMP_QUERY) {
+        required_features |= egui_wgpu::wgpu::Features::TIMESTAMP_QUERY;
     }
 
     let (device, queue) = adapter
