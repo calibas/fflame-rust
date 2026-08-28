@@ -1797,29 +1797,69 @@ impl App {
                         temp_renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
                     }
 
-                    // Final tonemap pass. In escape mode the generator is a
-                    // single dispatch here instead of the loop above; the
-                    // temp renderer still supplies palette + tonemap tail.
-                    let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                        label: Some("WASM Export Final Tonemap"),
-                    });
+                    // Escape generator. This used to be ONE render() call
+                    // sharing the tonemap encoder -- i.e. a single chunk --
+                    // so a high-iteration export encoded whatever the first
+                    // dispatch had reached, and on wasm (where the reference
+                    // orbit is sliced per call rather than built on a worker)
+                    // a deep zoom got one slice of its reference too. It also
+                    // never applied `escape.supersample`, which every other
+                    // path honours so a saved file reproduces exactly.
+                    //
+                    // Settle properly instead: chunk until render() reports
+                    // final, each chunk its own submission. Browsers have no
+                    // blocking device poll, so the loop submits without
+                    // waiting -- which is exactly the case where the adaptive
+                    // chunk sizer's wall-clock proxy lies (it would measure
+                    // CPU encode time, read every chunk as free, and grow
+                    // into a watchdog-length dispatch). set_fixed_chunk pins
+                    // the size to the TDR-calibrated seed; the render is
+                    // chunk-invariant, so the image is unchanged.
                     let escape_export = if is_escape_export {
                         let mut esc = crate::escape::EscapeRenderer::new(
                             &self.gpu.device,
                             export_width,
                             export_height,
                         );
-                        esc.render(
+                        esc.set_fixed_chunk(true);
+                        esc.resize(
                             &self.gpu.device,
-                            &self.gpu.queue,
-                            &mut final_encoder,
-                            &export_config.escape,
-                            temp_renderer.palette_view(),
+                            export_width,
+                            export_height,
+                            export_config.escape.supersample,
                         );
+                        let mut guard = 0u32;
+                        loop {
+                            let mut esc_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                                label: Some("WASM Export Escape Chunk"),
+                            });
+                            let settled = esc.render(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut esc_encoder,
+                                &export_config.escape,
+                                temp_renderer.palette_view(),
+                            );
+                            self.gpu.queue.submit(std::iter::once(esc_encoder.finish()));
+                            if settled {
+                                break;
+                            }
+                            guard += 1;
+                            if guard > 4_000_000 {
+                                log::error!("WASM escape export failed to settle; encoding what we have");
+                                break;
+                            }
+                        }
                         Some(esc)
                     } else {
                         None
                     };
+
+                    // Final tonemap pass; the temp renderer supplies the
+                    // palette + tonemap tail for both modes.
+                    let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                        label: Some("WASM Export Final Tonemap"),
+                    });
                     if let Some(ref esc) = escape_export {
                         temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, esc.output_view());
                     } else {
