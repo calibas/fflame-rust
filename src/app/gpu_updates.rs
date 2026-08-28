@@ -433,7 +433,19 @@ impl App {
         // Check if animation is currently playing
         let is_animation_playing = self.animation_controller.state == PlaybackState::Playing;
 
-        if had_changes && !actions.reset_accumulation {
+        // Escape mode has no accumulation buffer and no chaos game:
+        // `should_iterate` is forced false for it, so Overwrite -- the
+        // FLAME live-preview, which trades accumulated samples for
+        // immediate feedback -- has nothing to act on. Leaving it
+        // running meant escape param edits drove FSM transitions and a
+        // brightness-boost state machine that could never apply. Escape
+        // edits already re-render through `rerender_escape`, which is
+        // the escape-native live preview.
+        let is_escape = self.config_manager.active_config().render_mode
+            == crate::scene::transforms::RenderMode::Escape;
+        if is_escape {
+            self.use_overwrite_next_frame = false;
+        } else if had_changes && !actions.reset_accumulation {
             // Changes happened → enable overwrite mode and update timestamp
             self.use_overwrite_next_frame = true;
             self.last_param_change_time = Some(now);
@@ -533,6 +545,16 @@ impl App {
     /// input via `update_overwrite_mode`.
     pub(super) fn should_use_overwrite(&self) -> bool {
         use crate::animation::PlaybackState;
+
+        // See the escape gate in the config-update handler: Overwrite
+        // is the flame live-preview and cannot apply to a mode with no
+        // accumulation. Animation playback would otherwise force it on
+        // regardless of the flag.
+        if self.config_manager.active_config().render_mode
+            == crate::scene::transforms::RenderMode::Escape
+        {
+            return false;
+        }
 
         let is_animation_playing = self.animation_controller.state == PlaybackState::Playing;
 

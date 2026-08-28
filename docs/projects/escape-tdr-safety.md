@@ -179,7 +179,23 @@ changes escape counts and images); an advisory hint in the escape
 panel when max_iter looks orders past the zoom's plausible need is
 fine and cheap.
 
-## Animation playback in escape mode (frame-consistent, not frame-racing)
+## Animation playback in escape mode — SHIPPED 2026-08-28
+
+Settle-then-jump, as designed below. `escape_playback_tick` banks
+wall time while `escape_dirty` says the frame is still rendering, and
+hands it over in one piece the moment it settles; the controller is
+then advanced by everything that elapsed and re-sampled. Playback may
+run at 1 fps or slower, but every displayed frame is a real frame at
+a real timestamp instead of a smear of partial renders of successive
+configs. Both stop paths clear the bank, so resuming never jumps by
+the time a never-sampled frame accrued. The rule is a free function
+with a CPU test rather than a method, because the rule is the design.
+
+Audio sync holds as predicted: audio runs on wall time and the
+controller jumps to wall time at each sample, so drift is bounded by
+one settled frame.
+
+### The original plan, for reference
 
 Mechanism today (`app/animation_update.rs`): every display frame,
 `update_animation` advances `animation_controller.current_time` by
@@ -211,7 +227,17 @@ Design — settle-then-jump:
   sampled timestamp exactly (no frame renders a blend of two
   configs' chunks).
 
-## Live preview (Overwrite mode) in escape mode
+## Live preview (Overwrite mode) in escape mode — SHIPPED 2026-08-28
+
+Overwrite is now inert in escape mode, at both entry points: the
+config-update handler no longer opens the overwrite window (nor
+drives the FSM into Overwrite) for escape edits, and
+`should_use_overwrite` returns false outright -- which also stops
+animation playback from forcing it on regardless of the flag. Escape
+edits already re-render through `rerender_escape`, the escape-native
+live preview.
+
+### The original plan, for reference
 
 `render_mode.rs` Overwrite is the flame live-preview: rapid
 parameter changes reset accumulation each frame for immediate

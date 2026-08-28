@@ -392,6 +392,12 @@ pub struct App {
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
     pub(super) escape_dirty: bool,
+    /// Wall time accumulated while an escape animation frame is still
+    /// rendering. Escape playback is SETTLE-THEN-JUMP: the controller
+    /// is sampled once per completed frame and advanced by everything
+    /// that elapsed meanwhile, rather than every display frame (see
+    /// `escape_playback_tick`).
+    pub(super) escape_anim_pending: f64,
     pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
 
     // UI state (not saved in config)
@@ -720,6 +726,7 @@ impl App {
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
             escape_dirty: true,
+            escape_anim_pending: 0.0,
             flame,
             workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
