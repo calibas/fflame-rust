@@ -1576,6 +1576,25 @@ kept the shared tail in sync per frame. The WASM in-app custom-size
 export has the sibling gap (single-chunk render, app/mod.rs) -- still
 open, queued.
 
+**And the escape PARAMETERS were never applied to exported frames**
+(fixed 2026-08-28, reported as "Escape.JuliaIm animates in-app but
+the exported video doesn't morph"). `apply_config_value` -- the
+export's own animation-apply path, separate from ConfigManager --
+had no Escape arms at all, so every Escape.* track fell through to
+its per-flame catch-all and was silently dropped. Palette and other
+FractalConfig-level tracks kept working, which disguised it as a
+partial failure. All animatable escape paths now have arms (Julia
+toggle and seed, zoom, rotation, bailout, damping, max_iter,
+supersample, formula/coloring params -- exactly what
+`json_to_config_value` accepts), with ConfigManager's clamps
+mirrored so an exported frame equals the in-app frame at the same
+time. Both exporters share the function, so the RenderJob-based one
+is fixed too. Pinned by a CPU-only test driving
+`apply_animation_values` end to end: removing a single arm fails it.
+Same bug family as the CameraX/CameraY and depth-effect arms whose
+comments already sit in that function -- worth a sweep if another
+config surface grows animatable paths.
+
 **Corrected 2026-08-28 against the references** (Monnier's post
 2011-02-27; Softology's variations post 2011-04-06), after a user
 compared: c belongs INSIDE the log -- `z = log(Iabs(z) + c)`, not
