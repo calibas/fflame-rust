@@ -1555,7 +1555,45 @@ Perturbation: **none** (self-similar at every depth). Convention
 (sign, abs placement) pinned against reference images during
 implementation.
 
-### 5.13 Ducks / Kali-log (Monnier) — `z ← log(Re z + i·|Im z|) + c`
+### 5.13 Ducks / Kali-log (Monnier)
+
+**Variants added 2026-08-28**: Softology's four variations (the
+2011-04-06 post), as a `variant` parameter on the formula (0 classic;
+1 log(sin(f+c)); 2 log(f+c - sec(f+c)); 3 log(sin(f)+c) -- the
+reordered one; 4 log((f+c)^2)), all on the canonical upper fold.
+Each variant's mean-|z| field sits at a different level, so the
+coloring offset must be re-derived per variant (the sec variant at
+the showcase c: field 1.86..2.05). `ducks-sec.fflame` pins variant 2.
+
+**Animation export fixed 2026-08-28**: the video exporter ran the
+flame chaos game regardless of render_mode -- an escape animation
+previewed correctly in-app and exported the FLAME (field report).
+The frame loop now branches: a persistent EscapeRenderer (orbit
+cache and BLA table carry across frames) settles each frame through
+bounded chunked dispatches exactly like the headless single-frame
+path, and the tonemap reads the escape output; load_config already
+kept the shared tail in sync per frame. The WASM in-app custom-size
+export has the sibling gap (single-chunk render, app/mod.rs) -- still
+open, queued.
+
+**Corrected 2026-08-28 against the references** (Monnier's post
+2011-02-27; Softology's variations post 2011-04-06), after a user
+compared: c belongs INSIDE the log -- `z = log(Iabs(z) + c)`, not
+`log(Iabs(z)) + c` as first shipped -- and the parameter plane seeds
+z0 = 0, not the pixel. Monnier folds the lower half-plane UP
+(Im <- |Im|); Softology's pseudocode folds down, the mirror image --
+the author's fold is canonical. The reference coloring is the MEAN
+OF |z| over the orbit (50-100 iterations), which no existing
+coloring computed: `magnitude_average` (append-registered) is that
+statistic, with an `offset` parameter because a Ducks julia field
+can span ~0.2 around a mean of ~1.7 -- offset to the floor, scale
+up, exactly the contrast normalization the reference images use.
+Verified against an f64 numpy ground-truth probe of the reference
+algorithm: our renders match its field structure (including the
+genuinely-chaotic speckle zones -- not an f32 artifact), and the
+showcase julia at c = (0.10, -0.62) reproduces the classic beaded
+scaly look (`ducks-julia.fflame` pins it; `ducks-param.fflame` keeps
+the home-view spiral/feather composition). — `z ← log(Re z + i·|Im z|) + c`
 Half-fold then complex log (`NeedsComplexExpLog`, `AbsFold`).
 Non-escaping; average colorings; spectacular with stripe-average.
 Perturbation: **none**. Phase 2.
