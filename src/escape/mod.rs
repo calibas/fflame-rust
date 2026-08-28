@@ -24,6 +24,8 @@
 pub mod assembler;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod app_repro_test;
+#[cfg(test)]
+mod gpu_bignum_probe;
 pub mod colorings;
 pub mod bigfloat;
 pub mod bla;
