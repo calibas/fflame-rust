@@ -13,6 +13,130 @@ mod tests {
 
     #[test]
     #[ignore = "needs a GPU"]
+    fn progressive_and_blocking_render_the_same_image() {
+        // The cold-vs-warm bug, pinned: a reference orbit STREAMED
+        // from the worker crosses GPU-buffer capacity boundaries as
+        // it grows, and the upload path used to refill a recreated
+        // buffer with only the newest tail -- the settled render was
+        // then structurally wrong, while the same orbit reloaded
+        // complete from the store rendered correctly. Rendering the
+        // same perturbed view both ways must give the SAME bytes.
+        let (device, queue) = repro_device();
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        // (-1.5, 0): bounded, chaotic (no early auto-closure), so the
+        // reference grows to full max_iter -- 30k iterations at the
+        // worker's 4096-iteration publish chunks crosses several
+        // 1.5x-headroom capacity boundaries.
+        esc_cfg.center_re = "-1.5".to_string();
+        esc_cfg.center_im = "0".to_string();
+        esc_cfg.zoom_log2 = 20.0;
+        esc_cfg.max_iter = 30_000;
+
+        let (w, h) = (320u32, 200u32);
+        let render = |progressive: bool| -> Vec<u8> {
+            let config = crate::config::FractalConfig::default();
+            let mut renderer =
+                crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+                    &device,
+                    &queue,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    w,
+                    h,
+                    &config.flame,
+                    config.palette_size,
+                );
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.progressive = progressive;
+            // Frame loop: render until settled (the progressive side
+            // streams the orbit; the blocking side finishes when its
+            // chunked iterations complete).
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            loop {
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("prog-vs-block frame"),
+                    });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &esc_cfg,
+                    renderer.palette_view(),
+                );
+                queue.submit(std::iter::once(encoder.finish()));
+                if settled {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "render did not settle (progressive={progressive})"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("prog-vs-block tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut encoder, escape.output_view());
+            queue.submit(std::iter::once(encoder.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device,
+                &queue,
+                false,
+                config.background_color,
+            ))
+            .expect("readback");
+            rgba
+        };
+
+        let blocking = render(false);
+        let progressive = render(true);
+        let diff = blocking
+            .iter()
+            .zip(progressive.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            diff, 0,
+            "progressive and blocking renders differ in {diff} of {} bytes",
+            blocking.len()
+        );
+    }
+
+    /// Device + queue with the repro tests' standard setup.
+    fn repro_device() -> (wgpu::Device, wgpu::Queue) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        let adapter_limits = adapter.limits();
+        let mut limits = wgpu::Limits::default();
+        limits.max_storage_buffers_per_shader_stage =
+            adapter_limits.max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+        limits.max_buffer_size = adapter_limits.max_buffer_size;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("escape repro"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
+        .expect("device");
+        device.on_uncaptured_error(std::sync::Arc::new(|e| {
+            panic!("wgpu error during repro: {e}");
+        }));
+        (device, queue)
+    }
+
+    #[test]
+    #[ignore = "needs a GPU"]
     fn app_style_escape_frame_produces_pixels() {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),

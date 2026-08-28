@@ -969,6 +969,23 @@ impl App {
                                 // Drop GPU-dependent resources BEFORE reinit
                                 // (they hold Arc refs to the dead device)
                                 app.flame_renderer = None;
+                                // The escape renderer too: it was forgotten
+                                // here once, survived a reinit holding
+                                // buffers from the DEAD device, and the next
+                                // escape frame's write_buffer tripped
+                                // wgpu-core's dead-buffer assert -- whose
+                                // unwind then hit the swapchain-semaphore
+                                // Drop assert, and the double panic aborted
+                                // the process as 0xc0000409 (from a user
+                                // crash.log backtrace). Plain drop, not
+                                // destroy(): the device is dead and this
+                                // path is desktop-only, where Drop frees.
+                                // The frame loop lazily recreates it against
+                                // the new device (get_or_insert_with), and
+                                // its orbit worker thread exits cleanly when
+                                // its channel drops; the reference reloads
+                                // from the disk orbit store.
+                                app.escape_renderer = None;
 
                                 match app.gpu.reinit(window.clone()) {
                                     Ok(()) => {
@@ -996,6 +1013,10 @@ impl App {
                                         app.config_manager.request_full_resync();
                                         // Force viewport resize on next frame to fix aspect ratio
                                         app.fractal_viewport_size = (0, 0);
+                                        // The recreated escape renderer must
+                                        // render before it has anything to
+                                        // show.
+                                        app.escape_dirty = true;
                                         app.needs_surface_recreate = false;
                                         log::info!("GPU reinitialized successfully");
                                     }
