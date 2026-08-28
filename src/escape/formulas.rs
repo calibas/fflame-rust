@@ -475,20 +475,63 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_derivative: "",
 };
 
-/// Ducks / Kali-log (Monnier) — `z ← log(Re z + i·|Im z|) + c`
-/// (plan §5.13): half-fold then complex log. Non-escaping; the
-/// average colorings are the point (stripe-average especially).
+/// Ducks / Kali-log (Monnier) — `z ← log(Iabs(z) + c)` where
+/// Iabs folds the lower half-plane up (Im ← |Im|), i.e. the ADDITION
+/// OF C SITS INSIDE THE LOG (plan §5.13; Monnier's post 2011-02-27
+/// gives `z = log(Iabs(z)+p)` and Softology's variations post shows
+/// fold, add c, then log). We shipped `log(Iabs(z)) + c` at first —
+/// a different map that a user caught against the references.
+/// Monnier seeds z₀ = 0 on the parameter plane. Softology's
+/// pseudocode folds DOWN (Im ← −|Im|), the mirror image; Monnier is
+/// the author, so the upper fold is canonical. Non-escaping: the
+/// characteristic scaly look is the mean-|z| coloring
+/// (`magnitude_average`), per the reference.
+/// The variant set is Softology's (2011-04-06 post), ported onto the
+/// canonical upper fold: 0 = classic `log(f + c)`; 1 = `log(sin(f + c))`;
+/// 2 = `log((f+c) − sec(f+c))`; 3 = sin BEFORE the add,
+/// `log(sin(f) + c)`; 4 = `log((f+c)²)` — where f = fold(z).
+/// (Softology's pseudocode folds DOWN; the mirror image. Monnier's
+/// upper fold stays canonical across all variants.)
 pub static DUCKS: FormulaDef = FormulaDef {
     name: "ducks",
     display_name: "Ducks (Kali-log)",
     features: &[FormulaFeature::NonEscaping],
-    parameters: &[],
+    parameters: &[EscapeParamDef {
+        name: "variant",
+        display_name: "Variant",
+        default: 0.0,
+        min: 0.0,
+        max: 4.0,
+        tooltip: "0 classic log(f+c); 1 log(sin(f+c)); 2 log(f+c - sec(f+c)); \
+                  3 log(sin(f)+c); 4 log((f+c)^2). Softology's variation set.",
+    }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
-    return esc_clog(vec2<f32>(z.x, abs(z.y))) + c;
+    let f = vec2<f32>(z.x, abs(z.y));
+    let v = u32(clamp(fparam(0u), 0.0, 4.0));
+    if (v == 3u) {
+        // Variation 3 reorders: sin BEFORE the constant.
+        return esc_clog(esc_csin(f) + c);
+    }
+    let t = f + c;
+    switch v {
+        case 1u: {
+            return esc_clog(esc_csin(t));
+        }
+        case 2u: {
+            let sec = esc_cdiv(vec2<f32>(1.0, 0.0), esc_ccos(t));
+            return esc_clog(t - sec);
+        }
+        case 4u: {
+            return esc_clog(esc_cmul(t, t));
+        }
+        default: {
+            return esc_clog(t);
+        }
+    }
 }
 "#,
-    wgsl_param_seed: "pixel",
+    wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
     wgsl_derivative: "",

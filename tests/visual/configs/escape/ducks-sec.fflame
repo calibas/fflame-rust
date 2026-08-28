@@ -1,6 +1,6 @@
 {
   "flame": {
-    "name": "Escape ducks-param",
+    "name": "Escape ducks-sec",
     "transforms": [
       {
         "a": 0.5,
@@ -44,62 +44,38 @@
   "color_mode": "Palette",
   "palette_index": 0,
   "palette": {
-    "name": "Rainbow (Custom)",
+    "name": "Ducks Soft",
     "stops": [
       {
-        "position": 0.4509804,
+        "position": 0.0,
         "color": [
-          1.0,
-          0.0,
-          0.0
+          0.03,
+          0.02,
+          0.1
         ]
       },
       {
-        "position": 0.627451,
+        "position": 0.35,
         "color": [
-          1.0,
-          0.5,
-          0.0
+          0.2,
+          0.35,
+          0.65
         ]
       },
       {
-        "position": 0.7254902,
+        "position": 0.7,
         "color": [
-          1.0,
-          1.0,
-          0.0
-        ]
-      },
-      {
-        "position": 0.77254903,
-        "color": [
-          0.0,
-          1.0,
-          0.0
-        ]
-      },
-      {
-        "position": 0.8627451,
-        "color": [
-          0.0,
-          0.5,
-          1.0
-        ]
-      },
-      {
-        "position": 0.8901961,
-        "color": [
-          0.5,
-          0.0,
-          1.0
+          0.85,
+          0.75,
+          0.55
         ]
       },
       {
         "position": 1.0,
         "color": [
           1.0,
-          0.0,
-          0.5
+          0.98,
+          0.92
         ]
       }
     ],
@@ -142,9 +118,17 @@
     "max_iter": 80,
     "center_re": "0",
     "center_im": "0",
-    "zoom_log2": -0.5,
+    "zoom_log2": 0.2,
     "coloring_params": {
-      "scale": 2.0
+      "scale": 5.17,
+      "offset": 1.857
+    },
+    "supersample": 2,
+    "julia": true,
+    "julia_re": 0.1,
+    "julia_im": -0.62,
+    "formula_params": {
+      "variant": 2.0
     }
   }
 }

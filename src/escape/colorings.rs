@@ -183,6 +183,48 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
 "#,
 };
 
+/// Magnitude average — mean of |z| over the orbit. THE Ducks
+/// coloring: Monnier's post colors "according to the mean of the
+/// magnitude of z, summed over all iterations", and the scaly
+/// paisley look is this statistic on a non-escaping log map. Soft
+/// luminance wash on escaping formulas.
+pub static MAGNITUDE_AVERAGE: ColoringDef = ColoringDef {
+    name: "magnitude_average",
+    display_name: "Magnitude Average",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 100.0,
+            tooltip: "Palette distance per unit of averaged |z| (above the offset).",
+        },
+        EscapeParamDef {
+            name: "offset",
+            display_name: "Offset",
+            default: 0.0,
+            min: -10.0,
+            max: 10.0,
+            tooltip: "Baseline subtracted from the mean before scaling. A Ducks                       julia field can span only ~0.2 around a large mean -- offset                       to the field's floor, then scale up, to stretch that range                       across the palette (the reference images normalize contrast                       this way).",
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+    // state.x = sum of |z| over the orbit, state.y = count.
+    let mean = state.x / max(state.y, 1.0);
+    return (mean - cparam(1u)) * cparam(0u);
+}
+"#,
+    accum_init: "vec2<f32>(0.0, 0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+    return state + vec2<f32>(length(z), 1.0);
+}
+"#,
+};
+
 /// Root basin — for Convergent formulas over `zᵖ − 1`: which root the
 /// orbit landed on (angle-bucketed final z) shaded by convergence
 /// speed. On anything else it degrades to an angle-of-final-z wash.

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "724fce44",
+  "git_hash": "92f59421",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -609,6 +609,18 @@
     "variations-xtrb-smoke.png": {
       "bytes": 4934,
       "sha256": "aedd1d356a46c2e1f66b8b8cb916c9ef3b54a3540433c5f03743823ddd18de24"
+    },
+    "escape-ducks-julia.png": {
+      "bytes": 40025,
+      "sha256": "bd861c170421f9a233bbffa1a4b6236709dd5984742b811db3d255a0f8c13312"
+    },
+    "escape-ducks-param.png": {
+      "bytes": 23277,
+      "sha256": "90f326f06d9b05c726be5222a49da6c99e6eb6146fa9c4957816bfbc1ba8c154"
+    },
+    "escape-ducks-sec.png": {
+      "bytes": 41300,
+      "sha256": "b928ec08717bc50fe19319348b03471e54be7b1a7d777ed5cbbe0fcb30a4e5fa"
     }
   },
   "tolerance_max": 40.0,

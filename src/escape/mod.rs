@@ -242,6 +242,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::TRIANGLE_INEQUALITY,
     &colorings::PERIOD,
     &colorings::DISTANCE_ESTIMATE,
+    &colorings::MAGNITUDE_AVERAGE,
 ];
 
 /// Look up a formula by name. An unknown name renders the default
