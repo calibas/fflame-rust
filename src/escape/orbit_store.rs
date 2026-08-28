@@ -26,7 +26,7 @@ use super::reference::ReferenceOrbit;
 use std::path::{Path, PathBuf};
 
 /// Bump on any layout change: old files then read as misses.
-pub const MAGIC: &[u8; 8] = b"FFORBIT5";
+pub const MAGIC: &[u8; 8] = b"FFORBIT6";
 
 /// Save when recomputing would actually hurt: orbit length times
 /// limbs² is proportional to the fixed-point work done. ~2e6 is a
@@ -394,6 +394,107 @@ mod tests {
             .unwrap()
             .len();
         assert_eq!(still, len_600);
+    }
+
+    #[test]
+    fn compressed_files_are_small_and_exact() {
+        // The array section is corrections + an RLE e-stream; on a
+        // bounded chaotic orbit the corrections are sparse, so the
+        // file must be far below the raw 20 B/iteration -- while the
+        // roundtrip stays BYTE-exact (the roundtrip test above pins
+        // exactness; this pins that we actually compressed).
+        let dir = test_dir("compressed_small");
+        let orbit =
+            ReferenceOrbit::compute("-1.5", "0", 60.0, None, 20_000, None, 2, false, 0)
+                .unwrap();
+        assert_eq!(orbit.len(), 20_001, "(-1.5, 0) is bounded");
+        assert!(save_to(&dir, &orbit));
+        let name = key_for("-1.5", "0", orbit.n_limbs, None, 2, false, 0);
+        let size = std::fs::metadata(dir.join(name)).unwrap().len();
+        let raw = 20u64 * 20_001;
+        assert!(
+            size < raw / 4,
+            "compressed file is {size} B vs {raw} B raw -- compression regressed"
+        );
+        let loaded =
+            load_from(&dir, "-1.5", "0", orbit.n_limbs, None, 2, false, 0, 60.0, 320.0)
+                .expect("hit");
+        assert_eq!(loaded.orbit, orbit.orbit);
+        assert_eq!(loaded.orbit_lo, orbit.orbit_lo);
+        assert_eq!(loaded.orbit_e, orbit.orbit_e);
+    }
+
+    #[test]
+    fn deep_dip_orbit_roundtrips_exactly() {
+        // The period-3 antenna nucleus: |Z| dips toward zero every 3
+        // iterations, driving nonzero per-entry exponents and dense
+        // corrections -- the compression scheme's worst case. Byte
+        // exactness must hold anyway.
+        let orbit = ReferenceOrbit::compute(
+            "-1.7548776662466927600495088963585286918946",
+            "0",
+            120.0,
+            None,
+            2_000,
+            None,
+            2,
+            false,
+            0,
+        )
+        .unwrap();
+        assert!(
+            orbit.orbit_e.iter().any(|&e| e != 0),
+            "the dip case must actually exercise nonzero exponents"
+        );
+        let dir = test_dir("deep_dip");
+        assert!(save_to(&dir, &orbit));
+        let loaded = load_from(
+            &dir,
+            "-1.7548776662466927600495088963585286918946",
+            "0",
+            orbit.n_limbs,
+            None,
+            2,
+            false,
+            0,
+            120.0,
+            320.0,
+        )
+        .expect("hit");
+        assert_eq!(loaded.orbit, orbit.orbit);
+        assert_eq!(loaded.orbit_lo, orbit.orbit_lo);
+        assert_eq!(loaded.orbit_e, orbit.orbit_e);
+        // Dip-dense orbits must fall back to RAW encoding rather
+        // than ballooning past the FFORBIT5 size (52 B/correction on
+        // nearly every entry is 2.6x worse than 20 B/iteration).
+        let name = key_for(
+            "-1.7548776662466927600495088963585286918946",
+            "0",
+            orbit.n_limbs,
+            None,
+            2,
+            false,
+            0,
+        );
+        let size = std::fs::metadata(dir.join(name)).unwrap().len();
+        let raw = 20u64 * orbit.len() as u64 + 4 * 1024;
+        assert!(size <= raw, "dip case ballooned: {size} B");
+        // And the resumed live state still deepens identically.
+        let mut deep = loaded;
+        deep.extend(2_500);
+        let fresh = ReferenceOrbit::compute(
+            "-1.7548776662466927600495088963585286918946",
+            "0",
+            120.0,
+            None,
+            2_500,
+            None,
+            2,
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(deep.orbit, fresh.orbit, "post-load deepening diverged");
     }
 
     #[test]
