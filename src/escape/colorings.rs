@@ -63,6 +63,12 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 /// (plan §8 — "composable with any formula; small SDF enum").
 /// Colors interior pixels too — trapped orbits are the interesting
 /// ones.
+///
+/// Shape 3 is a logarithmic spiral, golden by default:
+/// `r = log|z| / (4 log g) - arg(z)/2pi`, distance `|r - round(r)|`
+/// (after Nylander's golden-ratio spiral trap). Unlike the other
+/// three it is not a distance in z-units but in TURNS, doubled to
+/// span 0..1; `scale` maps it onto the palette as before.
 pub static ORBIT_TRAP: ColoringDef = ColoringDef {
     name: "orbit_trap",
     display_name: "Orbit Trap",
@@ -73,8 +79,9 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
             display_name: "Trap shape",
             default: 0.0,
             min: 0.0,
-            max: 2.0,
-            tooltip: "0: point at origin, 1: coordinate axes (cross), 2: unit circle.",
+            max: 3.0,
+            tooltip: "0: point at origin, 1: coordinate axes (cross), 2: unit circle, \
+                      3: logarithmic spiral (golden by default).",
         },
         EscapeParamDef {
             name: "scale",
@@ -83,6 +90,17 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
             min: 0.01,
             max: 20.0,
             tooltip: "Palette distance per unit of trap distance.",
+        },
+        EscapeParamDef {
+            name: "growth",
+            display_name: "Spiral growth",
+            default: 1.618_034,
+            min: 1.05,
+            max: 8.0,
+            tooltip: "Spiral shape 3 only: the factor the spiral widens by per \
+                      QUARTER turn. The default is the golden ratio, which makes \
+                      it the golden spiral; 2 gives a doubling-per-quarter-turn \
+                      spiral, and values near 1 wind tightly.",
         },
     ],
     wgsl: r#"
@@ -93,12 +111,40 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "vec2<f32>(1e30, 0.0)",
     wgsl_accum: r#"
 fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
-    let shape = u32(clamp(cparam(0u), 0.0, 2.0));
+    let shape = u32(clamp(cparam(0u), 0.0, 3.0));
     var d: f32;
     switch shape {
         case 0u: { d = length(z); }
         case 1u: { d = min(abs(z.x), abs(z.y)); }
-        default: { d = abs(length(z) - 1.0); }
+        case 2u: { d = abs(length(z) - 1.0); }
+        default: {
+            // Logarithmic spiral, golden by default.
+            //
+            //   r = log|z| / (4 log g)  -  arg(z) / 2pi
+            //
+            // is "how many turns out along the spiral this point sits"
+            // — g per QUARTER turn is the golden spiral's definition,
+            // hence the 4 — so the distance to the nearest arm is how
+            // far r sits from a whole number. Halved turns are the
+            // farthest a point can be, so the result is doubled to
+            // span 0..1 like the other shapes' distances.
+            let r2 = dot(z, z);
+            if (r2 < 1e-30) {
+                // The spiral winds infinitely at the origin, so there
+                // is no finite distance to report — and atan2 at a
+                // zero pair is the Metal fast-math hazard (pi/4 for
+                // same-sign zeros, NaN for mixed; see CLAUDE.md). A
+                // huge value leaves the running minimum untouched,
+                // which is exactly "this sample says nothing".
+                d = 1e30;
+            } else {
+                let g = max(cparam(2u), 1.05);
+                // log|z| = 0.5*log(r2), so the 4 log g below is 8.
+                let turns = log(r2) / (8.0 * log(g))
+                    - atan2(z.y, z.x) * 0.159154943;
+                d = 2.0 * abs(turns - round(turns));
+            }
+        }
     }
     return vec2<f32>(min(state.x, d), state.y);
 }

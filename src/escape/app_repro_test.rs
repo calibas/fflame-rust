@@ -866,6 +866,159 @@ mod tests {
         }
     }
 
+    /// The golden spiral trap must be the spiral it claims to be.
+    ///
+    /// Rendered at `max_iter = 1` the orbit is exactly {0, c}, and the
+    /// origin sample is skipped, so the IMAGE IS THE TRAP DISTANCE
+    /// FIELD — a closed form that can be checked against
+    /// `r = log|z| / (4 log phi) - arg(z)/2pi` directly, with no
+    /// iteration in the way. Measured 0.40/255 spread when this went
+    /// in.
+    ///
+    /// The comparison is a colour spread WITHIN a distance bin rather
+    /// than a pixel diff: it does not care about the palette, only
+    /// that the render is a FUNCTION of the true distance. A spiral
+    /// with the wrong growth, or arms half a turn out, fails it while
+    /// still looking like a perfectly good spiral to the eye — which
+    /// is exactly the failure a screenshot cannot catch.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_golden_spiral_trap_matches_its_closed_form() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 160u32);
+        let (cx, cy, zoom) = (-0.5f64, 0.0f64, -1.0f64);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "ramp".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "orbit_trap".to_string();
+        esc.zoom_log2 = zoom;
+        esc.max_iter = 1;
+        esc.coloring_params.insert("shape".to_string(), 3.0);
+        esc.coloring_params.insert("scale".to_string(), 1.0);
+        esc.coloring_params.insert("growth".to_string(), 1.618_034);
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("spiral trap"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 10_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("spiral trap tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        // The closed form, in f64.
+        let phi = (1.0 + 5f64.sqrt()) / 2.0;
+        let span = 4.0 / zoom.exp2();
+        const BINS: usize = 256;
+        let mut sums = vec![0f64; BINS];
+        let mut sqs = vec![0f64; BINS];
+        let mut counts = vec![0usize; BINS];
+        for py in 0..h {
+            for px in 0..w {
+                let re = ((px as f64 + 0.5) / w as f64 - 0.5) * span + cx;
+                let im = -(((py as f64 + 0.5) / h as f64 - 0.5) * span) + cy;
+                let r2 = re * re + im * im;
+                if r2 < 1e-30 {
+                    continue;
+                }
+                let turns = r2.ln() / (8.0 * phi.ln()) - im.atan2(re) / std::f64::consts::TAU;
+                let d = 2.0 * (turns - turns.round()).abs();
+                let b = ((d * (BINS - 1) as f64).round() as usize).min(BINS - 1);
+                let i = ((py * w + px) * 4) as usize;
+                let lum = rgba[i] as f64;
+                counts[b] += 1;
+                sums[b] += lum;
+                sqs[b] += lum * lum;
+            }
+        }
+        let (mut spread, mut total) = (0f64, 0usize);
+        for b in 0..BINS {
+            if counts[b] < 50 {
+                continue;
+            }
+            let n = counts[b] as f64;
+            let sd = (sqs[b] / n - (sums[b] / n).powi(2)).max(0.0).sqrt();
+            spread += sd * n;
+            total += counts[b];
+        }
+        let spread = spread / total as f64;
+        println!("golden spiral trap: colour spread within a distance bin {spread:.2}/255");
+        assert!(
+            spread < 6.0,
+            "the rendered trap is not a function of the closed-form distance \
+             ({spread:.2}/255) -- check the growth factor and the arg() term"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
