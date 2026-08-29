@@ -615,6 +615,105 @@ mod tests {
         );
     }
 
+    /// The two rungs must agree on a DEEP Julia view.
+    ///
+    /// This asks one specific question. The scaled rung's rebase does
+    /// `z_full - ref_z(0u)` in f32, and on the Julia plane Z_0 is the
+    /// CENTRE -- an O(1) number, so that is the same catastrophic
+    /// cancellation that broke Phoenix, whose blocks were ulp(c)
+    /// wide. The deep rung rebuilds the same quantity in double-float
+    /// from the reference's own DF entries and is immune to it. If
+    /// the f32 subtraction were corrupting the image, the two rungs
+    /// would disagree here, and by more the deeper it goes.
+    ///
+    /// (An external oracle cannot settle this cheaply: at these
+    /// depths a binary escape-set comparison lands in the max_iter
+    /// cliff -- 93% of the disagreeing pixels sat within ten
+    /// iterations of the cap -- and a colour comparison is confounded
+    /// by the palette cycling once per 100 smooth units.)
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn julia_rebase_agrees_across_rungs_at_depth() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut shot = |zoom: f64, deep: bool| -> Vec<u8> {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.julia = true;
+            esc.julia_re = -0.8;
+            esc.julia_im = 0.156;
+            // A centre that still carries structure at zoom 32 (found
+            // by descending on local variance of the smooth field).
+            esc.center_re = "1.52750302293644413254".to_string();
+            esc.center_im = "-0.07591226956711649709".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 2000;
+            esc.coloring_params.insert("scale".to_string(), 0.01);
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.force_floatexp = deep;
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("julia rung"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("julia rung tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+            rgba
+        };
+        for zoom in [18.5, 24.0, 28.0, 32.0] {
+            let scaled = shot(zoom, false);
+            let deep = shot(zoom, true);
+            let mut bad = 0usize;
+            let mut total = 0usize;
+            for by in 0..(h as usize) / 8 {
+                for bx in 0..(w as usize) / 8 {
+                    let (mut sa, mut sb) = ([0i64; 3], [0i64; 3]);
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let i = ((by * 8 + y) * w as usize + bx * 8 + x) * 4;
+                            for ch in 0..3 {
+                                sa[ch] += scaled[i + ch] as i64;
+                                sb[ch] += deep[i + ch] as i64;
+                            }
+                        }
+                    }
+                    total += 1;
+                    if (0..3).map(|ch| (sa[ch] - sb[ch]).abs() / 64).sum::<i64>() > 48 {
+                        bad += 1;
+                    }
+                }
+            }
+            println!("julia zoom {zoom}: {bad}/{total} blocks differ between the rungs");
+            assert!(
+                bad < total / 25,
+                "at zoom {zoom} the scaled and floatexp rungs render different pictures                  ({bad}/{total} blocks) -- the f32 rebase subtraction against Z_0 = centre"
+            );
+        }
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
