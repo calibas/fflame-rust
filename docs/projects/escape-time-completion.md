@@ -56,6 +56,45 @@ verified depth, notes) and regression configs for anything that
 moves. Expect this to find real bugs -- Ducks had two, and it was
 the formula someone happened to look at closely.
 
+## 2. Perturbation tiers — IN PROGRESS
+
+Shipped since this plan was written, each verified against an
+independent oracle and pinned by a visual config:
+
+| tier | rungs | verified |
+|---|---|---|
+| Tricorn / multicorn | both | 0/768 vs direct, powers 2/3/5 |
+| Phoenix | both | 0.00% vs an exact orbit at zoom 20 and 28 |
+| Manowar | DEEP ONLY, by measurement | 1.6-2.1% vs an exact orbit at zoom 20-34; 18-27% on the scaled rung |
+
+Plus 8 new `wgsl_derivative` blocks (tricorn, mcmullen, lambda,
+cactus, exponential, trig, tetration, barnsley).
+
+Still open, in the order the survey judged tractable:
+
+- **Kaliset / Ducks** — blocked, with the reason measured rather than
+  assumed: Kaliset needs a fixed-point reciprocal and about 37
+  integer bits (|Z| reaches 1.8e11), Ducks needs delta forms for
+  `ln` and `atan2`.
+- **Lambda, Feather, McMullen, Magnet** — polynomial or rational;
+  perturbation works, division needs care near poles. Untouched.
+- **Tetration / exponential / trig / Collatz** — transcendental
+  deltas exist but the error analysis is its own study.
+- **Newton / Nova** — convergent, not escaping; deep zoom there wants
+  root-basin refinement, a different project.
+- **Series approximation** — still absent, still unmeasured against
+  BLA. Worth a Phase-0 measurement before building.
+
+What the three shipped tiers taught, in case a fourth is attempted:
+a two-term recurrence needs its history rebased WITH the current
+delta and gated on the pair; the rebase target must be a reference
+state that subtracts to zero, or the f32 subtraction quantises the
+delta to ulp(c) (~80 pixels at zoom 22); and whether a tier needs the
+deep rung is a question for MEASUREMENT, not for the zoom threshold —
+Manowar needs it everywhere, Phoenix does not.
+
+### The original scope, for reference
+
 ## 2. Mandelbrot tricks for the other formulas
 
 **What the survey found.** Only 3 of 23 formulas define
