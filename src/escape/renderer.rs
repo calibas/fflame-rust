@@ -1423,6 +1423,21 @@ impl EscapeRenderer {
     }
 
 
+    /// The map's continuous parameter, which is part of the reference
+    /// orbit's identity (a different `p` is a different orbit, so a
+    /// cache keyed without it would silently reuse a stale one).
+    /// Zero for every family that has no such parameter.
+    fn map_params_for(escape: &EscapeConfig) -> [f32; 2] {
+        if escape.formula == "phoenix" {
+            [
+                escape.formula_params.get("p_re").copied().unwrap_or(0.0),
+                escape.formula_params.get("p_im").copied().unwrap_or(0.0),
+            ]
+        } else {
+            [0.0, 0.0]
+        }
+    }
+
     /// The delta tier this view can use, if any: Mandelbrot (p = 2)
     /// and integer-power Multibrot (the binomial expansion needs an
     /// integer exponent), plus the plain Burning Ship variant via
@@ -1540,6 +1555,7 @@ impl EscapeRenderer {
             power,
             ship,
             ship_variant,
+            map_params: Self::map_params_for(escape),
             reference_period: if julia_c.is_none() && !ship {
                 escape.reference_period.filter(|&p| p > 0)
             } else {
@@ -1741,6 +1757,7 @@ impl EscapeRenderer {
                     power,
                     ship,
                     ship_variant,
+                    Self::map_params_for(escape),
                 )?;
                 true
             }
@@ -1754,6 +1771,7 @@ impl EscapeRenderer {
                     power,
                     ship,
                     ship_variant,
+                    Self::map_params_for(escape),
                     b,
                 )?
                 .1
