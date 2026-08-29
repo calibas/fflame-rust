@@ -108,6 +108,189 @@ mod tests {
         );
     }
 
+    /// A perturbed render must match an EXACT orbit at a depth the
+    /// direct path cannot reach.
+    ///
+    /// The direct-vs-perturbed agreement test runs shallow, where
+    /// rebasing fires almost every iteration and the reference barely
+    /// matters -- so it passes even when the REFERENCE ITSELF is the
+    /// wrong map. That is not hypothetical: Phoenix shipped with the
+    /// reference built for p = 0 while the delta step used p = -0.5,
+    /// the agreement test read 0/768, and the first deep render in
+    /// the app was visibly a different fractal. This compares against
+    /// an f64 orbit computed here, at a zoom where the reference is
+    /// what carries the signal.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_phoenix_matches_an_exact_orbit_at_depth() {
+        let (device, queue) = repro_device();
+        let (cx, cy) = (-0.76143253429068480f64, 0.66677904046244096f64);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "phoenix".to_string();
+        esc.center_re = format!("{cx:.17}");
+        esc.center_im = format!("{cy:.17}");
+        esc.zoom_log2 = 20.0;
+        // Headroom above the escape times: a view compared at its own
+        // iteration cap disagrees on the pixels finishing right at it.
+        esc.max_iter = 4000;
+        // Deliberately UNSET: the defaults are the case that broke.
+        assert!(esc.formula_params.is_empty());
+        let p = {
+            let defs = crate::escape::get_formula("phoenix").parameters;
+            (defs[0].default as f64, defs[1].default as f64)
+        };
+
+        let (w, h) = (96u32, 72u32);
+        let mut config = crate::config::FractalConfig::default();
+        // A BINARY image, so the comparison reads escaped-or-not and
+        // nothing else. The default palette is grayscale, whose low
+        // end is black -- under it a genuinely escaped pixel with a
+        // small smooth value is indistinguishable from the interior,
+        // and this comparison reported 63% disagreement on a render
+        // the CLI measured at 1.2%.
+        config.palette = crate::scene::palette::Palette {
+            name: "white".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop {
+                    position: 0.0,
+                    color: [1.0, 1.0, 1.0],
+                },
+                crate::scene::palette::ColorStop {
+                    position: 1.0,
+                    color: [1.0, 1.0, 1.0],
+                },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+            &config.flame,
+            config.palette_size,
+        );
+        renderer.update_palette(
+            &device,
+            &queue,
+            &config.palette,
+            config.palette_rotation,
+            config.palette_squeeze,
+            config.palette_squeeze_mode,
+            config.palette_squeeze_falloff,
+            config.palette_log_strength,
+            config.palette_reverse,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("phoenix depth"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("phoenix depth tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device,
+            &queue,
+            false,
+            config.background_color,
+        ))
+        .expect("readback");
+
+        // f64 oracle over the same view: z' = z^2 + c + p*z_prev.
+        let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let mut differ = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                let ci = (
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                );
+                let (mut zx, mut zy) = (0.0f64, 0.0f64);
+                let (mut qx, mut qy) = (0.0f64, 0.0f64);
+                let mut escaped = false;
+                for _ in 0..esc.max_iter {
+                    let nx = zx * zx - zy * zy + ci.0 + p.0 * qx - p.1 * qy;
+                    let ny = 2.0 * zx * zy + ci.1 + p.0 * qy + p.1 * qx;
+                    qx = zx;
+                    qy = zy;
+                    zx = nx;
+                    zy = ny;
+                    if zx * zx + zy * zy > 4.0 {
+                        escaped = true;
+                        break;
+                    }
+                }
+                let i = ((py * w + px) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit != escaped {
+                    differ += 1;
+                }
+            }
+        }
+        let frac = differ as f64 / (w * h) as f64;
+        println!(
+            "phoenix at zoom {}: {:.2}% differ from the exact orbit",
+            esc.zoom_log2,
+            100.0 * frac
+        );
+        assert!(
+            frac < 0.03,
+            "perturbed Phoenix disagrees with an exact orbit on {:.1}% of pixels --              the reference and the delta step describe different maps",
+            100.0 * frac
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
@@ -829,6 +1012,11 @@ mod tests {
         ph_cfg.zoom_log2 = 1.0;
         ph_cfg.max_iter = 300;
         ph_cfg.coloring_params.insert("scale".to_string(), 0.02);
+        // FIRST with no formula_params at all: an unedited config is
+        // what the app actually renders, and it is the case where the
+        // reference and the shader once resolved different defaults.
+        assert!(ph_cfg.formula_params.is_empty());
+        check("phoenix-defaults", &ph_cfg, false);
         for (pr, pi) in [(-0.5f32, 0.0f32), (0.25, 0.1)] {
             ph_cfg.formula_params.insert("p_re".to_string(), pr);
             ph_cfg.formula_params.insert("p_im".to_string(), pi);

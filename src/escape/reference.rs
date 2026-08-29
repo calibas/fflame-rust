@@ -1668,6 +1668,7 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
         req.power,
         req.ship,
         req.ship_variant,
+        req.map_params,
         req.zoom_log2,
         req.height_px.max(1.0),
     ) {
@@ -2009,6 +2010,7 @@ impl OrbitCache {
                 power,
                 ship,
                 ship_variant.min(5),
+                map_params,
                 zoom_log2,
                 self.height_px.max(1.0),
             );
