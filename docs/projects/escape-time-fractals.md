@@ -1402,13 +1402,23 @@ on the period-3 antenna) is stored raw instead, tagged by a mode
 byte; whichever encoding is smaller wins, and both are byte-exact. Deep dips below f64 range poison the shadow and degrade
 gracefully to per-entry corrections through the dip.
 
+**What remains before this branch is done** is scoped in
+[escape-time-completion.md](escape-time-completion.md): per-formula
+accuracy against references (only 3 of 23 formulas can perturb --
+the other 20 stop at the direct path's ~2^14 ceiling), extending the
+Mandelbrot deep-zoom machinery to more formulas (only 3 define a
+derivative, which is what BLA, distance estimation and nucleus
+finding all need), a UI/UX pass, splitting the WASM builds by
+engine, online-API support, and scripting (the script API mentions
+escape zero times today).
+
 Two plans split out of this queue on 2026-08-28 (both "later",
 sequenced after the orbit-store compression lands):
-[escape-tdr-safety.md](escape-tdr-safety.md) — the perturbed-path
+[escape-tdr-safety.md](../archive/escape-tdr-safety.md) — the perturbed-path
 TDR breaker, trust-bounded chunk growth, GPU timestamp pacing,
 interior detection, escape-consistent animation playback, and
 retiring Overwrite/live-preview in escape mode; and
-[escape-ntt-reference.md](escape-ntt-reference.md) — GPU reference
+[escape-ntt-reference.md](../experimental/escape-ntt-reference.md) — GPU reference
 computation with a measurement-gated go/no-go.
 
 Still open within phase 4/5: nucleus math for the Ship tier (needs a
