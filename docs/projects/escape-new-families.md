@@ -187,11 +187,104 @@ built on a guess.
 
 ---
 
+## 5. Analytic normal shading — the "fake 3D" look
+
+Two different techniques get called this, they fail differently, and
+the difference decides which one this engine should carry.
+
+**Finite-difference slopes.** Treat the smooth iteration count as a
+heightfield and light its gradient. Kalles Fraktaler describes its own
+as *"the shading is based on the angle at which the iteration count is
+increasing"*. Works with all 23 formulas, needs no derivative — but it
+reads NEIGHBOURING PIXELS, which a per-pixel escape shader does not
+have. Its home is a post-pass over the finished value field, where the
+effects chain's full-resolution ping-pong is the precedent.
+
+**Analytic normals from the derivative.**
+[Chéritat](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set)
+derives it: the normal is *"the vector of coordinates (x,y,1)/√2 where
+(x,y) is the normal to the potential line through the point"*, and
+since the potential is `2^(-n) log|z_n|`, one *"pull[s] back the
+radial direction by the derivative of c ↦ z_n"*. That is `z/dz`,
+normalised, against a light direction. O(1) per pixel, no neighbours,
+and **11 of 23 formulas already carry `wgsl_derivative`** with
+`distance_estimate` already consuming it.
+
+**Which one, and why it is not just architecture.** KF's changelog for
+2.14.8 records adding directional DE *"used for slopes colouring with
+`Analytic` differences (requires derivatives, fixing noisy texture
+when jitter is enabled)"*. Finite-difference shading goes NOISY the
+moment samples are jittered — neighbouring pixels stop being at
+neighbouring positions, so the gradient picks up sampling noise.
+Analytic normals are immune. Anyone adding the temporal sampling in §7
+would hit exactly that, so the derivative version is both the
+architectural fit and the one that survives what comes next.
+
+Plan: analytic first, gated on the existing `NeedsDerivative`
+coloring feature; finite-difference later as the fallback covering the
+12 formulas with no derivative, as a post-pass rather than a coloring.
+
+**Verify the convention before shipping.** The derivation above is
+sourced; the exact height/normalisation convention in the common
+implementations is not, and could not be fetched in the research
+session (Chéritat's server refused the connection, Shadertoy returned
+403, Wikibooks only describes the method). Pin it against a reference
+implementation rather than writing it from memory — the whole reason
+this project ports formulas by quoting sources.
+
+## 6. Finite-difference slope shading
+
+The fallback for the 12 formulas with no derivative, and the reason
+§5 says "post-pass": it needs the finished value field, not the
+per-pixel loop. Same shape as the existing effects chain.
+
+Worth noting it also gives the classic embossed look on formulas that
+DO have derivatives, so it is not purely a fallback — but it is the
+one that breaks under jitter, and that is a real cost if §7 lands.
+
+## 7. Temporal anti-aliasing and spectral rendering — PLANNED, not scheduled
+
+Sampling TIME within a frame (motion blur), and correlating the time
+and wavelength dimensions so moving detail smears into colour fringes.
+On a zoom everything moves radially, so the fringing is radial.
+
+**Nothing of this exists today** — there is no motion blur, shutter or
+sub-frame sampling anywhere in the video export path. It is an
+export-loop feature, not a shader one: render N sub-frames per output
+frame and combine them. The cheap version puts R at `t-d`, G at `t`
+and B at `t+d`; the honest version samples N wavelengths, weights them
+through CIE colour-matching functions and converts XYZ to sRGB, with
+the time offset a function of wavelength.
+
+Two properties this engine brings, both worth knowing before costing
+it:
+
+- **Renders are deterministic**, so temporal sampling is pure
+  supersampling in time. There is no variance to fight, unlike a
+  stochastic renderer where more samples buy noise reduction.
+- **Sub-frames share the expensive part.** Between sub-frames of one
+  output frame the view barely moves, so the reference orbit AND the
+  BLA table are reused — the orbit cache already does this. N
+  sub-frames of a deep zoom therefore cost far less than N independent
+  deep renders, which is not true of most deep-zoom renderers, and is
+  what makes motion blur affordable here at all.
+
+It touches the animation pipeline rather than the escape engine, so it
+wants its own plan when it is scheduled. Note the interaction with §5
+and §6: jittered sampling is what makes finite-difference shading
+noisy, so shipping this makes the analytic path the only usable one.
+
 ## Order
 
-1. **Golden spiral trap.** Smallest, improves all 23 formulas, and
-   the two hazards are known in advance.
-2. **λ·sin(z).** One formula, reusing an existing escape metric.
-3. **Origami Butterfly.** One formula plus a seeded line hash.
-4. **Turing / BZ.** Its own plan, its own render mode, and a
+1. ~~**Golden spiral trap.**~~ Done 2026-08-29.
+2. **Analytic normal shading** (§5). Fits the per-pixel architecture,
+   11 formulas ready, and it is the shading that survives §7.
+3. **λ·sin(z).** One formula, reusing an existing escape metric.
+4. **Origami Butterfly.** One formula plus a seeded line hash.
+5. **Finite-difference slopes** (§6). Covers the remaining 12
+   formulas, as a post-pass.
+6. **Turing / BZ.** Its own plan, its own render mode, and a
    measurement before any of it.
+
+Unscheduled: **§7 temporal / spectral**, when the animation pipeline
+is next opened.
