@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "63165b24",
+  "git_hash": "9423cb1b",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -449,6 +449,10 @@
     "escape-phoenix-deep.png": {
       "bytes": 136,
       "sha256": "c72274a22cba2dcef62e0f62834446ee39b0cd95ad0faa27a89b3b49f48aa390"
+    },
+    "escape-phoenix-short-orbit.png": {
+      "bytes": 43434,
+      "sha256": "8234f3cd4819c7f00e9e306645ffe2ca1cefaef5c3352badb97b1044e2df3eb2"
     },
     "escape-ship-celtic.png": {
       "bytes": 5910,

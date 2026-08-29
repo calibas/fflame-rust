@@ -132,6 +132,8 @@ mod tests {
         esc.zoom_log2 = 20.0;
         // Headroom above the escape times: a view compared at its own
         // iteration cap disagrees on the pixels finishing right at it.
+        // Note this also means almost nothing here REBASES -- see the
+        // short-orbit test below for that regime.
         esc.max_iter = 4000;
         // Deliberately UNSET: the defaults are the case that broke.
         assert!(esc.formula_params.is_empty());
@@ -284,10 +286,175 @@ mod tests {
             esc.zoom_log2,
             100.0 * frac
         );
+        // Tight on purpose: a correct render reads 0.00% here. The
+        // 3% this started at was slack enough to sit through the
+        // index-1 rebase bug (1.23%) without complaining.
         assert!(
-            frac < 0.03,
+            frac < 0.005,
             "perturbed Phoenix disagrees with an exact orbit on {:.1}% of pixels --              the reference and the delta step describe different maps",
             100.0 * frac
+        );
+    }
+
+    /// A perturbed render must agree with an exact orbit's SMOOTH
+    /// FIELD, on a view whose reference orbit is short.
+    ///
+    /// The zoom-20 test above compares escaped-or-not with 4000
+    /// iterations of headroom, so its pixels escape long before the
+    /// reference runs out and almost none of them ever rebase. This
+    /// view is the opposite: 256 iterations, every pixel escapes, and
+    /// the orbit's end forces a rebase on nearly all of them. That is
+    /// the regime where Phoenix's two-term rebase shipped broken --
+    /// it restarted the reference at index 1, and Z_1 = c, so
+    /// `z_full - Z_1` in f32 cancelled down to ulp(c): about eighty
+    /// PIXELS wide at this zoom. The image came apart into displaced
+    /// rectangular blocks while every existing test stayed green.
+    ///
+    /// The metric is palette-agnostic: bin the pixels by the f64
+    /// smooth value and measure the colour spread WITHIN a bin. If
+    /// the render is a function of the true field, pixels sharing a
+    /// value share a colour. Measured 5.8/255 correct, 38.8/255 with
+    /// the index-1 rebase.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_phoenix_matches_an_exact_smooth_field_on_a_short_orbit() {
+        let (device, queue) = repro_device();
+        let (cx, cy) = (-1.1543534481639833789918460777111f64, 0.6293282132782021964135047790493f64);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "phoenix".to_string();
+        esc.center_re = "-1.1543534481639833789918460777111".to_string();
+        esc.center_im = "0.6293282132782021964135047790493".to_string();
+        esc.zoom_log2 = 22.436075;
+        esc.max_iter = 256;
+        let p = {
+            let defs = crate::escape::get_formula("phoenix").parameters;
+            (defs[0].default as f64, defs[1].default as f64)
+        };
+
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("phoenix short orbit"),
+            });
+            let settled =
+                escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("phoenix short orbit tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+
+        // f64 smooth field over the same view.
+        let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let mut smooth = vec![esc.max_iter as f64; (w * h) as usize];
+        for py in 0..h {
+            for px in 0..w {
+                let ci = (
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                );
+                let (mut zx, mut zy) = (0.0f64, 0.0f64);
+                let (mut qx, mut qy) = (0.0f64, 0.0f64);
+                for k in 0..esc.max_iter {
+                    let nx = zx * zx - zy * zy + ci.0 + p.0 * qx - p.1 * qy;
+                    let ny = 2.0 * zx * zy + ci.1 + p.0 * qy + p.1 * qx;
+                    qx = zx;
+                    qy = zy;
+                    zx = nx;
+                    zy = ny;
+                    let r2 = zx * zx + zy * zy;
+                    if r2 > 4.0 {
+                        smooth[(py * w + px) as usize] =
+                            k as f64 + 1.0 - (r2.sqrt().ln() / 2f64.ln()).log2();
+                        break;
+                    }
+                }
+            }
+        }
+        let (lo, hi) = smooth.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        const BINS: usize = 256;
+        let mut sums = vec![[0f64; 3]; BINS];
+        let mut sqs = vec![[0f64; 3]; BINS];
+        let mut counts = vec![0usize; BINS];
+        for (i, &v) in smooth.iter().enumerate() {
+            let b = (((v - lo) / (hi - lo)) * (BINS - 1) as f64).round() as usize;
+            counts[b] += 1;
+            for ch in 0..3 {
+                let c = rgba[i * 4 + ch] as f64;
+                sums[b][ch] += c;
+                sqs[b][ch] += c * c;
+            }
+        }
+        let (mut spread, mut total) = (0f64, 0usize);
+        for b in 0..BINS {
+            if counts[b] < 20 {
+                continue;
+            }
+            let n = counts[b] as f64;
+            let sd: f64 = (0..3)
+                .map(|ch| (sqs[b][ch] / n - (sums[b][ch] / n).powi(2)).max(0.0).sqrt())
+                .sum::<f64>()
+                / 3.0;
+            spread += sd * n;
+            total += counts[b];
+        }
+        let spread = spread / total as f64;
+        println!("phoenix short-orbit: colour spread within a smooth bin {spread:.2}/255");
+        assert!(
+            spread < 15.0,
+            "perturbed Phoenix does not track the exact smooth field ({spread:.2}/255) --              the render is not a function of the true escape value"
         );
     }
 

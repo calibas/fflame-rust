@@ -1603,8 +1603,24 @@ BLA wants 2x2 coefficients.
 
 Verified: 0/768 blocks differ from the direct render for two
 parameter values, and against an f64 oracle at depth, 0.00% of pixels
-at zoom 28 (1.23% at zoom 20, marginal pixels in that framing).
-`phoenix-deep.fflame` pins the zoom-28 view.
+at zoom 28 and at zoom 20. `phoenix-deep.fflame` pins the zoom-28
+view, `phoenix-short-orbit.fflame` the rebase-heavy one below.
+
+**The rebase target is index 0, and getting that wrong is invisible
+to every cheap test.** Index 1 looks like the natural choice for a
+two-term recurrence -- it is the earliest index whose PREDECESSOR
+exists in the array -- but `Z_1 = c`, so `z_full - Z_1` is a
+difference of two O(1) f32 numbers. The delta survives only to
+ulp(c), which at zoom 22 is about EIGHTY PIXELS across, and the image
+comes apart into displaced rectangular blocks (twice as wide as tall
+when the centre's two components straddle a binade -- that ratio is
+how the cause was identified). Index 0's state is the pair
+(Z_0, Z_-1) = (Z_0, 0): the reference began with no history and so
+did the pixel, so on the parameter plane the rebase subtracts zero,
+exactly like every one-term tier. Both deltas move together and the
+gate weighs the PAIR's norm -- shrinking z while leaving z_prev far
+from the reference would blow up the `p*w_prev` term on the next
+step.
 
 **And it shipped broken anyway, which is the useful part.** In the
 app the first deep Phoenix render was visibly a DIFFERENT FRACTAL the
@@ -1622,6 +1638,17 @@ Two lessons, both now enforced by tests:
   arithmetic. `reference_parameters_match_the_shader_uniform`
   (renderer.rs) asserts the two resolvers agree, with and without the
   keys present, and fails in under a second.
+- **Depth alone is not the regime that matters; REBASING is.** The
+  zoom-20 oracle test ran with 4000 iterations of headroom, so its
+  pixels escaped long before the reference ran out and almost none
+  ever rebased -- it read 1.23% through the index-1 rebase bug and
+  its threshold was slack enough to pass. The view that broke had 256
+  iterations, where the orbit's end forces a rebase on nearly every
+  pixel. `perturbed_phoenix_matches_an_exact_smooth_field_on_a_short_orbit`
+  covers that regime with a palette-agnostic metric: bin pixels by the
+  f64 smooth value, measure the colour spread WITHIN a bin (3.05/255
+  correct, 41.34/255 broken). The zoom-20 threshold is now 0.5%, which
+  the same bug would also trip.
 - **The direct-vs-perturbed agreement test cannot catch this class.**
   It runs shallow, where rebasing fires almost every iteration and
   the reference contributes almost nothing -- it read 0/768 with the
