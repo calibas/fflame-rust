@@ -713,6 +713,7 @@ struct IterState {
     // iter_start. Without this the legal skip length would depend on
     // where chunk boundaries fell, and the rendered image with it.
     i_at: u32,
+    //__ITER_STATE_TAIL__
 }
 const ITER_ESCAPED_BIT: u32 = 0x80000000u;
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
@@ -1192,6 +1193,47 @@ struct OrbitSummary {
     dz: vec2<f32>,
 }
 
+// Rebuild a delta against a DIFFERENT reference index, in double
+// float. The rebase target is the orbit start, so the new delta is
+// (Z_from - Z_0) + delta -- and computing that difference through the
+// reference's own DF entries is the point: an f32 subtraction of two
+// O(1) iterates would truncate the pixel's history to f32, which is
+// the reseed-precision loss this rung exists to fix.
+fn fe_rebase_delta(w: CFe2, at: u32) -> CFe2 {
+    let zi = ref_z(at);
+    let z0 = ref_z(0u);
+    let zi_lo = ref_z_lo(at);
+    let z0_lo = ref_z_lo(0u);
+    var dxr = vec2<f32>(0.0, 0.0);
+    var dyr = vec2<f32>(0.0, 0.0);
+    if (w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127) {
+        let sc_w = exp2(f32(w.e));
+        dxr = vec2<f32>(w.hi.x, w.lo.x) * sc_w;
+        dyr = vec2<f32>(w.hi.y, w.lo.y) * sc_w;
+    }
+    let rx = df_add(df_add(vec2<f32>(zi.x, zi_lo.x), df_neg(vec2<f32>(z0.x, z0_lo.x))), dxr);
+    let ry = df_add(df_add(vec2<f32>(zi.y, zi_lo.y), df_neg(vec2<f32>(z0.y, z0_lo.y))), dyr);
+    return cfe2_norm(CFe2(vec2<f32>(rx.x, ry.x), vec2<f32>(rx.y, ry.y), 0));
+}
+
+// The same, against a reference of ZERO: a two-term recurrence's
+// history rebases onto Z_-1, which is zero for both the reference and
+// the pixel, so the whole previous iterate becomes the new delta.
+fn fe_rebase_from_zero(w: CFe2, at: u32) -> CFe2 {
+    let zi = ref_z(at);
+    let zi_lo = ref_z_lo(at);
+    var dxr = vec2<f32>(0.0, 0.0);
+    var dyr = vec2<f32>(0.0, 0.0);
+    if (w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127) {
+        let sc_w = exp2(f32(w.e));
+        dxr = vec2<f32>(w.hi.x, w.lo.x) * sc_w;
+        dyr = vec2<f32>(w.hi.y, w.lo.y) * sc_w;
+    }
+    let rx = df_add(vec2<f32>(zi.x, zi_lo.x), dxr);
+    let ry = df_add(vec2<f32>(zi.y, zi_lo.y), dyr);
+    return cfe2_norm(CFe2(vec2<f32>(rx.x, ry.x), vec2<f32>(rx.y, ry.y), 0));
+}
+
 //__COLORING__
 
 //__COLORING_ACCUM__
@@ -1244,10 +1286,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     //__ACCUM_DECL__
 
+    // Previous-iteration delta, for two-term recurrences (Phoenix).
+    var w_prev = cfe2_zero();
     var i = perturb.iter_start;
     if (perturb.iter_start > 0u) {
         let st = iter_state[px_index];
         w = CFe2(st.w, st.w_lo, st.w_e);
+        //__STATE_RESUME_TAIL__
         z = st.z;
         m = st.m;
         accum_state = st.accum;
@@ -1335,45 +1380,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
 
-        // Zhuoran rebase against the orbit start (Z_0 = 0 on the
-        // parameter plane, the center on the Julia plane). The
-        // CONDITION uses the f32 view; the ASSIGNMENT rebuilds the
-        // delta in DF so the wrap does not truncate pixel history to
-        // f32 (the reseed-precision loss the DF rung exists to fix).
-        let rebase_delta = z_full - ref_z(0u);
-        if (m >= perturb.orbit_len - 1u
-            || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
-            let z0 = ref_z(0u);
-            let zi_lo = ref_z_lo(min(m, perturb.orbit_len - 1u));
-            let z0_lo = ref_z_lo(0u);
-            var dxr = vec2<f32>(0.0, 0.0);
-            var dyr = vec2<f32>(0.0, 0.0);
-            if (w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127) {
-                let sc_w = exp2(f32(w.e));
-                dxr = vec2<f32>(w.hi.x, w.lo.x) * sc_w;
-                dyr = vec2<f32>(w.hi.y, w.lo.y) * sc_w;
-            }
-            let rx = df_add(
-                df_add(vec2<f32>(zi.x, zi_lo.x), df_neg(vec2<f32>(z0.x, z0_lo.x))),
-                dxr,
-            );
-            let ry = df_add(
-                df_add(vec2<f32>(zi.y, zi_lo.y), df_neg(vec2<f32>(z0.y, z0_lo.y))),
-                dyr,
-            );
-            w = cfe2_norm(CFe2(
-                vec2<f32>(rx.x, ry.x),
-                vec2<f32>(rx.y, ry.y),
-                0,
-            ));
-            m = 0u;
-        }
+        //__REBASE__
     }
     if (perturb.iter_end < params.max_iter) {
         iter_state[px_index] = IterState(
             w.hi, z, accum_state, w.lo, w.e, m,
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
+            //__STATE_SAVE_TAIL__
         );
     }
     if (!escaped) {
@@ -1403,12 +1417,12 @@ pub enum PerturbTier {
     /// the map is anti-holomorphic, so the linear A*delta + B*delta_c
     /// model has no matching derivation.
     Tricorn(u32),
-    /// Phoenix: `z^2 + c + p*z_prev`. SCALED RUNG ONLY -- the deep
-    /// rung's IterState has no free field for the second delta (this
-    /// rung reuses `w_lo`, which is dead here), so the renderer keeps
-    /// Phoenix below the floatexp threshold. Carries the map's
-    /// continuous parameter, which is part of the reference orbit's
-    /// identity.
+    /// Phoenix: `z^2 + c + p*z_prev`. A TWO-TERM recurrence, so both
+    /// rungs carry a second delta and rebase the pair together. The
+    /// scaled rung hides the history in `w_lo`, which is dead there;
+    /// the deep rung has no spare field, so its IterState genuinely
+    /// grows (see [`iter_state_bytes`]). Carries the map's continuous
+    /// parameter, which is part of the reference orbit's identity.
     Phoenix,
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
@@ -1604,6 +1618,141 @@ fn rebase_default() -> String {
         .to_string()
 }
 
+/// Bytes of per-pixel iteration state the assembled deep-rung shader
+/// declares, per tier.
+///
+/// The renderer allocates `iter_state` from this, so it is the single
+/// place the Rust buffer and the WGSL struct agree -- and
+/// `iter_state_stride_matches_the_shader` measures the assembled
+/// struct against it rather than trusting the arithmetic.
+pub const ITER_STATE_BYTES: u64 = 48;
+
+/// Phoenix carries a second delta in full floatexp: +hi +lo +e, and
+/// a pad word to keep the struct 8-byte aligned.
+pub const ITER_STATE_BYTES_PHOENIX: u64 = 72;
+
+/// The widest state any tier declares. The render-pixel cap uses this
+/// so a tier switch can never need a buffer the device will not bind.
+pub const ITER_STATE_BYTES_MAX: u64 = ITER_STATE_BYTES_PHOENIX;
+
+/// Per-pixel state a given tier needs.
+pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool) -> u64 {
+    match (tier, floatexp) {
+        // The scaled rung hides Phoenix's history in `w_lo`, which is
+        // dead there, so only the deep rung actually grows.
+        (PerturbTier::Phoenix, true) => ITER_STATE_BYTES_PHOENIX,
+        _ => ITER_STATE_BYTES,
+    }
+}
+
+/// The struct tail, resume and save splices for a tier. They are
+/// returned together because they are only ever correct together.
+fn state_tail(tier: PerturbTier) -> (String, String, String) {
+    match tier {
+        PerturbTier::Phoenix => state_tail_phoenix(),
+        _ => state_tail_default(),
+    }
+}
+
+/// The deep rung's default state tail: nothing.
+///
+/// Only a two-term recurrence needs more per-pixel state than the
+/// 48 B every tier carries, and the buffer is sized to match (see
+/// [`iter_state_bytes`]), so these three splices move together.
+fn state_tail_default() -> (String, String, String) {
+    (String::new(), String::new(), String::new())
+}
+
+/// Phoenix's deep state tail: the previous delta, in full floatexp.
+///
+/// The scaled rung hides this in `w_lo`, which is dead there. On the
+/// deep rung every field is live, so the struct genuinely grows --
+/// 48 B/px to 72 B/px, for Phoenix renders only. The mantissa keeps
+/// its LOW half: the history feeds `p * w_prev` straight into the
+/// next delta, and truncating it to single f32 would inject exactly
+/// the 2^-24 reseed error the DF rung exists to avoid.
+fn state_tail_phoenix() -> (String, String, String) {
+    (
+        "    wp: vec2<f32>,     // Phoenix: previous delta, DF mantissa hi
+             wp_lo: vec2<f32>,  // ... mantissa lo
+             wp_e: i32,         // ... exponent
+             wp_pad: u32,       // keeps the struct 8-byte aligned at 72 B"
+            .to_string(),
+        "        w_prev = CFe2(st.wp, st.wp_lo, st.wp_e);".to_string(),
+        "            w_prev.hi, w_prev.lo, w_prev.e, 0u,".to_string(),
+    )
+}
+
+/// Phoenix, floatexp rung: the scaled step's two-term recurrence with
+/// every delta in extended range.
+///
+/// `p` is a plain f32 pair from the formula uniform -- an O(1)
+/// number, so it multiplies the extended-range history directly.
+fn delta_step_phoenix_fe() -> String {
+    // The quadratic part is the CANONICAL p = 2 floatexp step, reused
+    // rather than restated: it owns the reference's variable names and
+    // the with-its-own-exponent multiply, and a copy here drifted from
+    // them within the hour.
+    let mut out = delta_step_floatexp(2);
+    out.push_str(
+        "
+        // ... plus the history term, p * w_prev. p is an O(1)
+                 // number from the formula uniform, so it multiplies the
+                 // extended-range history directly.
+                 let pp = vec2<f32>(params.fparams[0][0], params.fparams[0][1]);
+                 w_new = cfe2_add(w_new, cfe2_mul_c32(w_prev, pp));
+                 // The history advances to the delta being left behind;
+                 // the template assigns w = w_new right after this.
+                 w_prev = w;",
+    );
+    out
+}
+
+/// The deep rung's default rebase: restart the reference at index 0.
+///
+/// The CONDITION uses the f32 view; the ASSIGNMENT rebuilds the delta
+/// in double-float from the reference's own DF entries, so the wrap
+/// does not truncate a pixel's history to f32 -- the reseed-precision
+/// loss this rung exists to fix.
+fn rebase_default_fe() -> String {
+    "        let rebase_delta = z_full - ref_z(0u);
+             if (m >= perturb.orbit_len - 1u
+                 || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
+                 w = fe_rebase_delta(w, min(m, perturb.orbit_len - 1u));
+                 m = 0u;
+             }"
+        .to_string()
+}
+
+/// Phoenix, floatexp rung: rebase the PAIR onto the orbit start.
+///
+/// Same target and same gate as the scaled rung (see
+/// [`rebase_phoenix`]) -- index 0, whose state is the pair
+/// (Z_0, Z_-1) = (Z_0, 0) -- with both deltas rebuilt in double-float
+/// rather than through an f32 subtraction.
+fn rebase_phoenix_fe() -> String {
+    "        let delta_prev = cfe2_to_f32(w_prev);
+             let mp = min(max(m, 1u) - 1u, perturb.orbit_len - 1u);
+             let z_prev_full = select(vec2<f32>(0.0, 0.0), ref_z(mp), m > 0u)
+                 + delta_prev;
+             let rebase_delta = z_full - ref_z(0u);
+             // Z_-1 is zero: the previous iterate rebases against
+             // nothing at all, so it keeps its full value.
+             if (m >= perturb.orbit_len - 1u
+                 || dot(rebase_delta, rebase_delta) + dot(z_prev_full, z_prev_full)
+                     < dot(delta, delta) + dot(delta_prev, delta_prev)) {
+                 // (select takes no struct arguments in WGSL.)
+                 var wp_new = w_prev;
+                 if (m > 0u) {
+                     wp_new = fe_rebase_from_zero(w_prev, mp);
+                 }
+                 w = fe_rebase_delta(w, min(m, perturb.orbit_len - 1u));
+                 w_prev = wp_new;
+                 m = 0u;
+             }"
+        .to_string()
+}
+
 /// Phoenix rebases onto the orbit's START, as a PAIR.
 ///
 /// A two-term recurrence's state is (z, z_prev), so a rebase has to
@@ -1788,18 +1937,22 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship_fe(v.min(5)),
                 PerturbTier::Tricorn(p) => delta_step_conj_fe(p.clamp(2, 12)),
-                // Deliberately the scaled step, which does not compile
-                // against this template's CFe2 registers. Phoenix is
-                // never routed to the deep rung (the renderer pins it
-                // below the threshold); if that guarantee ever breaks,
-                // the shader fails to build and the render fails
-                // VISIBLY, rather than quietly using the wrong delta.
-                PerturbTier::Phoenix => delta_step_phoenix(),
+                PerturbTier::Phoenix => delta_step_phoenix_fe(),
             }),
-            "//__REBASE__" => out.push(match tier {
-                PerturbTier::Phoenix => rebase_phoenix(),
-                _ => rebase_default(),
+            "//__REBASE__" => out.push(match (tier, floatexp) {
+                (PerturbTier::Phoenix, false) => rebase_phoenix(),
+                (PerturbTier::Phoenix, true) => rebase_phoenix_fe(),
+                (_, false) => rebase_default(),
+                (_, true) => rebase_default_fe(),
             }),
+            // The deep rung's per-pixel state grows for a two-term
+            // recurrence. These three move together, and the buffer
+            // the renderer allocates must match: see
+            // `iter_state_bytes`, and the test that measures the
+            // assembled struct against it.
+            "//__ITER_STATE_TAIL__" => out.push(state_tail(tier).0),
+            "//__STATE_RESUME_TAIL__" => out.push(state_tail(tier).1),
+            "//__STATE_SAVE_TAIL__" => out.push(state_tail(tier).2),
             "//__COLORING__" => {
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
@@ -2401,6 +2554,50 @@ mod tests {
     /// The Phoenix tier compiles on the scaled rung and carries the
     /// pieces its recurrence needs: the parameter, the history term,
     /// the history advance, and a rebase to index ONE.
+    /// The buffer the renderer allocates must be exactly as wide as
+    /// the struct the shader declares.
+    ///
+    /// These live in different languages and are wired together by
+    /// hand, so this measures the ASSEMBLED struct with naga's own
+    /// layout rules rather than re-deriving the arithmetic. A tier
+    /// that grows its state and forgets `iter_state_bytes` would
+    /// otherwise read and write past its slot -- silent corruption of
+    /// a neighbouring pixel's history, which no image comparison
+    /// attributes to the right cause.
+    #[test]
+    fn iter_state_stride_matches_the_shader() {
+        use crate::escape::colorings;
+        for (tier, floatexp) in [
+            (PerturbTier::Power(2), false),
+            (PerturbTier::Power(2), true),
+            (PerturbTier::Ship(0), true),
+            (PerturbTier::Tricorn(2), true),
+            (PerturbTier::Phoenix, false),
+            (PerturbTier::Phoenix, true),
+        ] {
+            let src = assemble_perturbed(&colorings::SMOOTH, floatexp, tier);
+            let module = naga::front::wgsl::parse_str(&src)
+                .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} parse: {e}"));
+            let mut layouter = naga::proc::Layouter::default();
+            layouter
+                .update(module.to_ctx())
+                .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} layout: {e}"));
+            let handle = module
+                .types
+                .iter()
+                .find(|(_, t)| t.name.as_deref() == Some("IterState"))
+                .map(|(h, _)| h)
+                .expect("IterState must exist");
+            let shader_bytes = layouter[handle].size as u64;
+            assert_eq!(
+                shader_bytes,
+                iter_state_bytes(tier, floatexp),
+                "{tier:?} fe={floatexp}: the shader's IterState is {shader_bytes} B but the                  renderer allocates {} B per pixel",
+                iter_state_bytes(tier, floatexp)
+            );
+        }
+    }
+
     #[test]
     fn phoenix_tier_compiles_with_history_and_rebases_onto_the_orbit_start() {
         use crate::escape::colorings;

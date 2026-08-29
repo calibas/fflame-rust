@@ -1667,11 +1667,59 @@ hash `map_params`, so two Phoenix `p` values shared one orbit file;
 and `load_from` passed `orbit.map_params` to `serves()`, comparing
 the file against itself so the guard could never fire.
 
+### Phoenix gets a deep rung (2026-08-29)
+
+Phoenix shipped scaled-rung-only, and `wants_perturbation` refused the
+perturbed path above `PERTURB_FLOATEXP_ZOOM`. The view then fell
+through to the DIRECT path, whose f32 pixel mapping resolves nothing
+past zoom 14: 5035 distinct colours at zoom 48.000, exactly **1** at
+48.001. "Falls back to the direct path's honest mush" reads fine in a
+comment and is a solid block of colour on screen.
+
+The deep rung carries the second delta in real struct fields rather
+than the scaled rung's spare `w_lo`, so `IterState` genuinely grows,
+48 B/px to 72 B/px, for Phoenix renders only:
+
+- `iter_state_bytes(tier, floatexp)` is the single place the Rust
+  buffer and the WGSL struct agree, and `iter_state_stride_matches_
+  the_shader` measures the ASSEMBLED struct with naga's own layout
+  rules rather than re-deriving the arithmetic. A tier that grows its
+  state and forgets the constant would read and write past its slot —
+  silent corruption of a neighbouring pixel's history, which no image
+  comparison attributes to the right cause.
+- The mantissa keeps its LOW half. The history feeds `p * w_prev`
+  straight into the next delta, so truncating it to a single f32
+  would inject exactly the 2^-24 reseed error the DF rung exists to
+  avoid.
+- The render-pixel cap at resize now divides by the WIDEST tier's
+  stride, because resize does not know which formula will be rendered
+  into the surface afterwards.
+- The step DELEGATES to the canonical p = 2 floatexp generator and
+  appends the history term. A hand-copied version drifted from the
+  reference's variable names within the hour.
+
+Verified: 0/768 blocks differ from the direct render on the deep rung
+for all three parameter values, 0.00% from an exact orbit at zoom 20
+and 3.05/255 on the short-orbit smooth field — the same numbers the
+scaled rung posts, because both are compared against the same ground
+truth. `crossing_the_floatexp_threshold_keeps_the_phoenix_image`
+renders 47.999 and 48.001 and compares them: 0/108 blocks differ.
+
+What that test deliberately does NOT assert is that some deeper zoom
+still shows detail. Whether a centre has structure at zoom 60 is a
+property of the FRACTAL: checked at 80 digits with mpmath, the
+reported centre's neighbourhood is uniform by zoom 55 (every pixel
+escaping at iteration 171), and a boundary-hugging centre found by
+descent turned out to be uniform too — all of it escaping within one
+iteration of the cap, which is the same max_iter cliff that made
+Tricorn look 9-13% wrong. A "still has detail at zoom 60" assertion
+would be a claim about Phoenix, not about this renderer.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
-(integer powers) and the `burning_ship` variants perturb and reach
-z9316+; the other twenty render through the DIRECT path and stop
-where its f32 pixel mapping does, at about zoom 14 -- which is why
-`PERTURB_MIN_ZOOM` sits there. Extending that set is item 2 of the
+(integer powers), the `burning_ship` variants, `tricorn`/multicorn
+and `phoenix` perturb on both rungs and reach z9316+; the rest render
+through the DIRECT path and stop where its f32 pixel mapping does, at
+about zoom 14 -- which is why `PERTURB_MIN_ZOOM` sits there. Extending that set is item 2 of the
 completion plan.
 
 **What remains before this branch is done** is scoped in

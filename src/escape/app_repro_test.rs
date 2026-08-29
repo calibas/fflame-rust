@@ -123,6 +123,15 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn perturbed_phoenix_matches_an_exact_orbit_at_depth() {
+        // BOTH rungs: the deep one carries its two-term history in
+        // real struct fields and rebases the pair in double-float --
+        // a separate implementation, owed the same ground truth.
+        for deep in [false, true] {
+            phoenix_exact_orbit_case(deep);
+        }
+    }
+
+    fn phoenix_exact_orbit_case(deep: bool) {
         let (device, queue) = repro_device();
         let (cx, cy) = (-0.76143253429068480f64, 0.66677904046244096f64);
         let mut esc = crate::config::escape::EscapeConfig::default();
@@ -189,6 +198,7 @@ mod tests {
             config.palette_reverse,
         );
         let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_floatexp = deep;
         let mut guard = 0u32;
         loop {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -282,8 +292,9 @@ mod tests {
         }
         let frac = differ as f64 / (w * h) as f64;
         println!(
-            "phoenix at zoom {}: {:.2}% differ from the exact orbit",
+            "phoenix at zoom {} on the {} rung: {:.2}% differ from the exact orbit",
             esc.zoom_log2,
+            if deep { "floatexp" } else { "scaled" },
             100.0 * frac
         );
         // Tight on purpose: a correct render reads 0.00% here. The
@@ -318,6 +329,12 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn perturbed_phoenix_matches_an_exact_smooth_field_on_a_short_orbit() {
+        for deep in [false, true] {
+            phoenix_smooth_field_case(deep);
+        }
+    }
+
+    fn phoenix_smooth_field_case(deep: bool) {
         let (device, queue) = repro_device();
         let (cx, cy) = (-1.1543534481639833789918460777111f64, 0.6293282132782021964135047790493f64);
         let mut esc = crate::config::escape::EscapeConfig::default();
@@ -341,6 +358,7 @@ mod tests {
             &config.flame, config.palette_size,
         );
         let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_floatexp = deep;
         let mut guard = 0u32;
         loop {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -451,10 +469,149 @@ mod tests {
             total += counts[b];
         }
         let spread = spread / total as f64;
-        println!("phoenix short-orbit: colour spread within a smooth bin {spread:.2}/255");
+        let rung = if deep { "floatexp" } else { "scaled" };
+        println!("phoenix short-orbit, {rung} rung: colour spread within a smooth bin {spread:.2}/255");
         assert!(
             spread < 15.0,
             "perturbed Phoenix does not track the exact smooth field ({spread:.2}/255) --              the render is not a function of the true escape value"
+        );
+    }
+
+    /// Crossing the floatexp threshold must not change the image.
+    ///
+    /// Phoenix had no deep rung, so above zoom 48 `wants_perturbation`
+    /// refused the perturbed path and the view fell through to the
+    /// direct one, whose f32 pixel mapping resolves nothing that
+    /// deep. The reported symptom was a single flat colour: 5035
+    /// distinct colours at zoom 48.000, exactly 1 at 48.001.
+    ///
+    /// Two views this close are the same picture, so the two rungs
+    /// must agree on it -- and the scaled side is independently
+    /// pinned against an exact orbit by the tests above. Note what
+    /// this deliberately does NOT assert: that some deeper zoom shows
+    /// detail. Whether a given centre still has structure at zoom 60
+    /// is a property of the fractal, not of the renderer -- checked
+    /// at 80 digits with mpmath, this centre's neighbourhood is
+    /// genuinely uniform by zoom 55, and a "still has detail" test
+    /// would be asserting the fractal's shape.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn crossing_the_floatexp_threshold_keeps_the_phoenix_image() {
+        let (device, queue) = repro_device();
+        let (w, h) = (96u32, 72u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut shot = |zoom: f64| -> Vec<u8> {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "phoenix".to_string();
+            esc.center_re = "-0.87671486633428493249082525350857894792".to_string();
+            esc.center_im = "0.68253971831422086306603135717477825677".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 256;
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("phoenix threshold"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle at zoom {zoom}");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("phoenix threshold tonemap"),
+            });
+            // Escape output is Linear-mapped; the flame default is a
+            // Log curve that flattens it whatever it contains.
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                config.use_curve,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                config.brightness,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                config.levels_enabled,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+            rgba
+        };
+
+        let below = shot(47.999);
+        let above = shot(48.001);
+        let colours = |px: &Vec<u8>| {
+            px.chunks_exact(4)
+                .map(|p| [p[0], p[1], p[2]])
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        };
+        let (cb, ca) = (colours(&below), colours(&above));
+        println!("phoenix across the threshold: {cb} colours below, {ca} above");
+        assert!(
+            ca > 50,
+            "above the threshold the image collapsed to {ca} distinct colours --              that is what falling off the perturbed path looks like"
+        );
+        // Same picture, so compare 8x8 block means: band flips at the
+        // boundary average out, a rung that renders something else
+        // does not.
+        let mut bad = 0usize;
+        let mut total = 0usize;
+        for by in 0..(h as usize) / 8 {
+            for bx in 0..(w as usize) / 8 {
+                let (mut sa, mut sb) = ([0i64; 3], [0i64; 3]);
+                for y in 0..8 {
+                    for x in 0..8 {
+                        let i = ((by * 8 + y) * w as usize + bx * 8 + x) * 4;
+                        for ch in 0..3 {
+                            sa[ch] += below[i + ch] as i64;
+                            sb[ch] += above[i + ch] as i64;
+                        }
+                    }
+                }
+                total += 1;
+                if (0..3).map(|ch| (sa[ch] - sb[ch]).abs() / 64).sum::<i64>() > 48 {
+                    bad += 1;
+                }
+            }
+        }
+        println!("phoenix across the threshold: {bad}/{total} blocks differ");
+        assert!(
+            bad < total / 25,
+            "the two rungs render different pictures of the same view ({bad}/{total} blocks)"
         );
     }
 
@@ -1184,10 +1341,18 @@ mod tests {
         // reference and the shader once resolved different defaults.
         assert!(ph_cfg.formula_params.is_empty());
         check("phoenix-defaults", &ph_cfg, false);
+        // ... and on the DEEP rung, whose two-term state is a genuinely
+        // different implementation: the history lives in real struct
+        // fields rather than the scaled rung's spare `w_lo`, and the
+        // pair rebase rebuilds both deltas in double-float. Before it
+        // existed, Phoenix past zoom 48 fell through to the direct
+        // path and rendered a single flat colour.
+        check("phoenix-defaults-floatexp", &ph_cfg, true);
         for (pr, pi) in [(-0.5f32, 0.0f32), (0.25, 0.1)] {
             ph_cfg.formula_params.insert("p_re".to_string(), pr);
             ph_cfg.formula_params.insert("p_im".to_string(), pi);
             check(&format!("phoenix{pr}_{pi}"), &ph_cfg, false);
+            check(&format!("phoenix{pr}_{pi}-floatexp"), &ph_cfg, true);
         }
 
         // Burning Ship (plain variant) over its home view: every
