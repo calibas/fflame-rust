@@ -714,6 +714,158 @@ mod tests {
         }
     }
 
+    /// Manowar must match an exact orbit at a depth the direct path
+    /// cannot reach.
+    ///
+    /// Manowar is Phoenix's recurrence with p = 1 and a pixel seed,
+    /// and that p is what makes it need the DEEP rung at every
+    /// depth: the history term carries the delta forward with
+    /// coefficient 1, so where a one-term map's delta decays near the
+    /// reference, Manowar's persists and f32 mantissa error piles up
+    /// over hundreds of iterations. Measured here against the exact
+    /// orbit: 18.4% of pixels wrong at zoom 20 and 27.0% at zoom 26
+    /// on the scaled rung, 1.6% and 2.1% on the deep one. The
+    /// renderer pins the tier to floatexp for that reason, and this
+    /// test is what says so.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_manowar_matches_an_exact_orbit_at_depth() {
+        let (device, queue) = repro_device();
+        // A centre whose own orbit stays BOUNDED for the iteration
+        // budget: a reference that nearly escapes is a hostile test
+        // of the pixel, not of the renderer.
+        let (cx, cy) = (-0.03909223238627110991f64, 0.00103869199752806211f64);
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "white".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+        for zoom in [20.0f64, 26.0, 34.0] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "manowar".to_string();
+            esc.center_re = "-0.03909223238627110991".to_string();
+            esc.center_im = "0.00103869199752806211".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 3000;
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("manowar depth"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle at zoom {zoom}");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("manowar depth tonemap"),
+            });
+            renderer.update_background_color(&queue, config.background_color);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                config.use_curve,
+                config.exposure,
+                config.gamma,
+                config.gamma_threshold,
+                config.brightness,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                config.levels_enabled,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+
+            // f64 oracle: z' = z^2 + z_prev + c, seeded z_0 = z_-1 = c.
+            // Checked against 60-digit arithmetic at these depths --
+            // no sampled pixel disagreed, so f64 is a valid reference
+            // here despite the map's error amplification.
+            let span_y = 4.0 / zoom.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let mut differ = 0usize;
+            for py in 0..h {
+                for px in 0..w {
+                    let c = (
+                        ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                        -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                    );
+                    let (mut zx, mut zy) = c;
+                    let (mut qx, mut qy) = c;
+                    let mut escaped = false;
+                    for _ in 0..esc.max_iter {
+                        let nx = zx * zx - zy * zy + qx + c.0;
+                        let ny = 2.0 * zx * zy + qy + c.1;
+                        qx = zx;
+                        qy = zy;
+                        zx = nx;
+                        zy = ny;
+                        if zx * zx + zy * zy > 4.0 {
+                            escaped = true;
+                            break;
+                        }
+                    }
+                    let i = ((py * w + px) * 4) as usize;
+                    let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                    if lit != escaped {
+                        differ += 1;
+                    }
+                }
+            }
+            let frac = differ as f64 / (w * h) as f64;
+            println!("manowar at zoom {zoom}: {:.2}% differ from the exact orbit", 100.0 * frac);
+            assert!(
+                frac < 0.05,
+                "perturbed Manowar disagrees with an exact orbit on {:.1}% of pixels at                  zoom {zoom} -- the scaled rung reads 18-27% here, so check the tier is                  still pinned to floatexp",
+                100.0 * frac
+            );
+        }
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
@@ -1453,6 +1605,26 @@ mod tests {
             check(&format!("phoenix{pr}_{pi}"), &ph_cfg, false);
             check(&format!("phoenix{pr}_{pi}-floatexp"), &ph_cfg, true);
         }
+
+        // Manowar: the same two-term recurrence with p = 1, but
+        // seeded z_0 = z_-1 = c. That seed is the whole difference,
+        // and it is exactly what a delta pipeline gets wrong quietly:
+        // start both deltas at zero instead of d0 and the picture is
+        // still a fractal, just not this one.
+        let mut mw_cfg = crate::config::escape::EscapeConfig::default();
+        mw_cfg.formula = "manowar".to_string();
+        mw_cfg.center_re = "0".to_string();
+        mw_cfg.center_im = "0".to_string();
+        mw_cfg.zoom_log2 = 1.0;
+        mw_cfg.max_iter = 300;
+        mw_cfg.coloring_params.insert("scale".to_string(), 0.02);
+        check("manowar", &mw_cfg, false);
+        check("manowar-floatexp", &mw_cfg, true);
+        mw_cfg.center_re = "-0.15".to_string();
+        mw_cfg.center_im = "0.65".to_string();
+        mw_cfg.zoom_log2 = 8.0;
+        check("manowar-z8", &mw_cfg, false);
+        check("manowar-z8-floatexp", &mw_cfg, true);
 
         // Burning Ship (plain variant) over its home view: every
         // boundary pixel exercises the diffabs case analysis, for every

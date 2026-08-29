@@ -109,6 +109,11 @@ impl MapId {
     pub fn phoenix(p: [f32; 2]) -> Self {
         Self { power: 2, ship: false, variant: MAP_PHOENIX, params: p }
     }
+
+    /// Manowar: Phoenix's recurrence with p = 1 and a pixel seed.
+    pub fn manowar() -> Self {
+        Self { power: 2, ship: false, variant: MAP_MANOWAR, params: [1.0, 0.0] }
+    }
     /// Bytes for the on-disk key and the serialized identity.
     pub fn key_bytes(&self) -> [u8; 17] {
         let mut b = [0u8; 17];
@@ -137,6 +142,12 @@ pub const MAP_CONJ: u32 = 1;
 /// `z^2 + c + p*z_prev` -- carries a second live state and a
 /// continuous parameter, so it is the family that forced [`MapId`].
 pub const MAP_PHOENIX: u32 = 2;
+/// `z^2 + z_prev + c` seeded at z_0 = z_-1 = c (Manowar). The same
+/// two-term recurrence as Phoenix with p = 1, so it shares the step,
+/// the second delta and the pair rebase -- it differs ONLY in the
+/// seed, which is why it is a variant here rather than its own tier
+/// everywhere downstream.
+pub const MAP_MANOWAR: u32 = 3;
 
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
@@ -583,7 +594,7 @@ impl ReferenceOrbit {
         // Parameter plane: z0 = 0, c = center. Julia (dynamical)
         // plane: z0 = center, c = the fixed Julia constant (f32
         // config values — exact in fixed-point).
-        let (z0, c, first) = match julia_c {
+        let (mut z0, c, mut first) = match julia_c {
             None => {
                 (FixedComplex::zero(n), center, [0.0f32, 0.0f32])
             }
@@ -596,6 +607,19 @@ impl ReferenceOrbit {
                 (center, c, first)
             }
         };
+        // Manowar seeds z_0 = z_-1 = c rather than zero. Everything
+        // downstream (the delta step, the pair rebase) is Phoenix's;
+        // this seed is the whole difference.
+        let mut z_prev0 = FixedComplex::zero(n);
+        // `ship_variant` only names a map family when `ship` is
+        // false; with `ship` true it is the FOLD variant, and fold
+        // variant 3 collides with MAP_MANOWAR. Missing this guard
+        // reseeded Burning Ship v3 at c and moved 160/768 blocks.
+        if !ship && ship_variant == MAP_MANOWAR {
+            z0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            z_prev0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
+        }
         let mut orbit = Self {
             center_re: center_re.to_string(),
             center_im: center_im.to_string(),
@@ -608,7 +632,7 @@ impl ReferenceOrbit {
             off_zoom_log2: zoom_log2,
             off_height_px: 1.0,
             n_limbs: n,
-            z_prev: FixedComplex::zero(n),
+            z_prev: z_prev0,
             map_params,
             p_fixed: FixedComplex {
                 re: FixedPoint::from_f64(map_params[0] as f64, n),
@@ -774,9 +798,10 @@ impl ReferenceOrbit {
                 // z^p, or conj(z)^p for the Tricorn family. See
                 // MAP_CONJ: with `ship` false, `ship_variant` selects
                 // which non-fold map this is.
-                if self.ship_variant == MAP_PHOENIX {
+                if self.ship_variant == MAP_PHOENIX || self.ship_variant == MAP_MANOWAR {
                     // z' = z^2 + c + p*z_prev, and z_prev advances to
-                    // the iterate we just left.
+                    // the iterate we just left. Manowar is p = 1 (set
+                    // in its MapId), seeded at c by the constructor.
                     let sq = self.z.sqr();
                     let term = self.p_fixed.mul(&self.z_prev);
                     let next = sq.add(&self.c).add(&term);

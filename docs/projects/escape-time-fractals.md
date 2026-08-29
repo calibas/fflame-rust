@@ -1715,9 +1715,50 @@ iteration of the cap, which is the same max_iter cliff that made
 Tricorn look 9-13% wrong. A "still has detail at zoom 60" assertion
 would be a claim about Phoenix, not about this renderer.
 
+### Manowar joins the two-term tier (2026-08-29)
+
+`z^2 + z_prev + c` is Phoenix's recurrence with p = 1, so it reuses
+the second delta, the step and the pair rebase. It differs in two
+places, and both matter:
+
+- **The seed.** Manowar starts z_0 = z_-1 = c, so BOTH deltas start
+  at d0 rather than at zero -- a parameter-plane map with a Julia
+  plane's initial delta. The history's initialiser is a separate
+  splice from the current delta's because the template declares them
+  in that order; emitting the seed only for `w` left `w_prev` at zero
+  and moved 19% of the pixels.
+- **The rebase target.** Its history rebases against Z_-1 = Z_0 = c,
+  not against zero.
+
+**It is pinned to the DEEP rung at every depth**, which is the
+opposite of the Phoenix story and the interesting part. Manowar's
+history term carries the delta forward with coefficient 1, so where a
+one-term map's delta decays near the reference, Manowar's persists
+and f32 mantissa error accumulates over hundreds of iterations.
+Measured against an exact orbit at a centre whose own orbit stays
+bounded: **18.4%** of pixels wrong at zoom 20 and **27.0%** at zoom
+26 on the scaled rung, against **1.6%** and **2.1%** on the deep one
+-- the latter matching the direct path's own boundary noise (1.2% at
+zoom 12), with the escaped fraction exact to a tenth of a percent.
+`perturbed_manowar_matches_an_exact_orbit_at_depth` asserts it and
+reads 18.37% if the pin is removed.
+
+Two measurement notes worth keeping, since both cost time here:
+
+- `ship_variant` names a map family ONLY when `ship` is false. With
+  `ship` true it is the fold variant, and fold variant 3 collides
+  with `MAP_MANOWAR` -- a seeding guard that forgot `!ship` reseeded
+  Burning Ship v3 at c and moved 160/768 blocks in the agreement
+  test.
+- A centre found by maximising local variance sits where the
+  reference NEARLY escapes (1704 iterations against a 1500 budget),
+  which is a hostile test of the pixel rather than of the renderer.
+  The comparison centre is chosen for a bounded reference instead.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
-(integer powers), the `burning_ship` variants, `tricorn`/multicorn
-and `phoenix` perturb on both rungs and reach z9316+; the rest render
+(integer powers), the `burning_ship` variants, `tricorn`/multicorn,
+`phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep
+rung only, by measurement -- see above); the rest render
 through the DIRECT path and stop where its f32 pixel mapping does, at
 about zoom 14 -- which is why `PERTURB_MIN_ZOOM` sits there. Extending that set is item 2 of the
 completion plan.
