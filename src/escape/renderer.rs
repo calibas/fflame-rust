@@ -46,6 +46,36 @@ pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 /// colour one thousandth of an octave past this line.
 pub const PERTURB_FLOATEXP_ZOOM: f64 = 48.0;
 
+/// How far through its iteration budget the current escape render is:
+/// (iterations done, iterations wanted).
+///
+/// Reported through a static for the same reason reference-build
+/// progress is: the panel has no handle on the renderer, and threading
+/// one through the whole UI to display a number would be a worse
+/// trade than two atomics. Both zero means nothing is in flight.
+static RENDER_DONE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static RENDER_WANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// (done, wanted) while an escape render still has chunks to submit,
+/// else None. A settled render reports nothing -- there is no progress
+/// to watch, which is itself the answer the panel shows.
+pub fn render_progress() -> Option<(u32, u32)> {
+    let want = RENDER_WANT.load(std::sync::atomic::Ordering::Relaxed);
+    if want == 0 {
+        return None;
+    }
+    Some((RENDER_DONE.load(std::sync::atomic::Ordering::Relaxed), want))
+}
+
+/// What depth a config can reach, for the panel to report.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UsableDepth {
+    /// Deltas against a fixed-point reference: no practical limit.
+    Perturbed,
+    /// The direct path, which stops resolving past this zoom.
+    Direct(f64),
+}
+
 /// Iteration budget per perturbed dispatch, in pixel-iterations
 /// (pixels x iterations). One unbounded dispatch at high max_iter is
 /// a Windows TDR (driver reset; observed in the field as a 0xc0000409
@@ -1404,6 +1434,27 @@ impl EscapeRenderer {
         }
     }
 
+    /// How deep this config can usefully go, for the UI to say so.
+    ///
+    /// Two tiers, and the difference is four thousand octaves: a
+    /// formula with a perturbation tier iterates deltas against a
+    /// fixed-point reference and keeps resolving essentially without
+    /// limit, while the rest run the direct path, whose f32 pixel
+    /// mapping stops separating neighbouring pixels at about zoom 14.
+    /// Past that the image is honest mush, and the panel should say
+    /// which case the user is in rather than letting them zoom into a
+    /// wash and wonder what broke.
+    pub fn usable_depth(escape: &EscapeConfig) -> UsableDepth {
+        if Self::perturb_tier(escape).is_some()
+            && !escape.is_damped()
+            && escape.biomorph == crate::config::escape::BiomorphMode::Off
+        {
+            UsableDepth::Perturbed
+        } else {
+            UsableDepth::Direct(PERTURB_MIN_ZOOM)
+        }
+    }
+
     /// Whether this view renders through the perturbation path:
     /// Mandelbrot parameter plane, plain iteration, past the direct
     /// path's f32 ceiling. Everything else stays direct (and deep
@@ -1487,7 +1538,7 @@ impl EscapeRenderer {
     /// all — a tier missing its deep rung silently becomes the direct
     /// path's f32 mush at the threshold, which is how Phoenix came to
     /// render one flat colour past zoom 48.
-    fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
+    pub(crate) fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
         match escape.formula.as_str() {
             "mandelbrot" => Some(assembler::PerturbTier::Power(2)),
             "multibrot" => {
@@ -2507,6 +2558,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     std::sync::atomic::Ordering::Relaxed,
                 );
                 self.chunk_next = if iterations_done { 0 } else { iter_end };
+                // Progress for the panel: cleared the moment the last
+                // chunk lands, so "settled" needs no separate signal.
+                RENDER_WANT.store(
+                    if orbit_done && iterations_done { 0 } else { escape.max_iter },
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                RENDER_DONE.store(iter_end, std::sync::atomic::Ordering::Relaxed);
                 if iterations_done {
                     log::debug!(
                         "escape: {} iterations in {} chunks (final chunk {}, baseline {:.1} ms)",

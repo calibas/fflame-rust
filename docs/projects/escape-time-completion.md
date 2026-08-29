@@ -129,6 +129,42 @@ every pixel at once". We have perturbation, rebasing and BLA but not
 SA. Whether it still pays given BLA is an open question worth
 measuring before building (the same discipline as Phase 0).
 
+## 3. UI/UX pass — DONE 2026-08-29
+
+All four of the rough edges the survey listed, plus the tests that
+keep them honest:
+
+- **Depth is stated.** `EscapeRenderer::usable_depth` is now public and
+  the panel reports "unlimited (perturbed)" or "to about 2^14", and
+  colours the label when the current zoom is PAST that. 17 of the 23
+  formulas stop resolving there, and nothing in the panel said so --
+  which leaves a user zooming into a flat wash with no way to tell a
+  limitation from a bug. The hint follows the SETTINGS, not just the
+  formula: biomorph and damping take a config off the perturbed path.
+- **The coloring scale has an Auto button.** The scale/offset pair was
+  the least guessable control in the panel (picking the Ducks
+  showcase's 1.86/11.6 took a numpy probe). This is honestly labelled
+  as a starting point rather than a measurement -- the real version
+  reads the rendered value distribution back off the GPU, which does
+  not exist yet.
+- **A settled indicator.** Escape renders arrive in chunks, and a
+  screenshot of an unsettled frame has been reported as a render bug.
+  Progress rides a static, the same way reference-build progress
+  already does, rather than threading a renderer handle through the UI
+  to display one number.
+- **Engine internals are collapsed.** The reference-orbit controls
+  (period, detection, minibrot search) are 227 lines of machinery that
+  change nothing about how the fractal looks; they now sit in a
+  collapsed "Reference orbit (engine)" section.
+
+Five tests, including two that LAY THE PANEL OUT headlessly for every
+formula and every coloring. A panel that compiles can still panic at
+layout on a duplicate widget id or an empty slider range, and neither
+shows up in a build nor in the visual suite, which renders fractals
+and not panels.
+
+### The original scope, for reference
+
 ## 3. UI/UX pass
 
 `src/ui/escape_panel.rs` is 692 lines grown feature by feature. It

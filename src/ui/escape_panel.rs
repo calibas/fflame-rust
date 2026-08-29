@@ -41,6 +41,33 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         return;
     }
 
+    // Whether the picture on screen is finished. An escape render
+    // arrives in chunks, and a screenshot of an unsettled frame has
+    // been reported as a render bug more than once -- the panel should
+    // say which it is rather than leaving the user to guess from the
+    // noise level.
+    match crate::escape::renderer::render_progress() {
+        Some((done, want)) if want > 0 => {
+            let pct = (done as f32 / want as f32 * 100.0).clamp(0.0, 100.0);
+            ui.label(
+                egui::RichText::new(t!(
+                    "escape_panel.rendering",
+                    percent = format!("{pct:.0}")
+                ))
+                .small()
+                .weak(),
+            );
+        }
+        _ => {
+            ui.label(
+                egui::RichText::new(t!("escape_panel.settled"))
+                    .small()
+                    .weak(),
+            )
+            .on_hover_text(t!("escape_panel.settled_tip"));
+        }
+    }
+
     ui.separator();
 
     // ---- Formula ----
@@ -90,6 +117,39 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                 }
             });
     });
+
+    // How deep this formula goes, said out loud. 17 of the 23
+    // formulas stop resolving around zoom 14 -- the direct path's f32
+    // pixel mapping runs out -- and nothing in the panel used to say
+    // so, which leaves the user zooming into a flat wash with no way
+    // to tell a limitation from a bug.
+    match crate::escape::EscapeRenderer::usable_depth(&esc) {
+        crate::escape::UsableDepth::Perturbed => {
+            ui.label(
+                egui::RichText::new(t!("escape_panel.depth_deep"))
+                    .small()
+                    .weak(),
+            )
+            .on_hover_text(t!("escape_panel.depth_deep_tip"));
+        }
+        crate::escape::UsableDepth::Direct(limit) => {
+            let past = esc.zoom_log2 > limit;
+            let text = egui::RichText::new(t!(
+                "escape_panel.depth_direct",
+                zoom = format!("{limit:.0}")
+            ))
+            .small();
+            ui.label(if past { text.color(egui::Color32::from_rgb(220, 160, 60)) } else { text.weak() })
+                .on_hover_text(t!("escape_panel.depth_direct_tip"));
+            if past {
+                ui.label(
+                    egui::RichText::new(t!("escape_panel.depth_exceeded"))
+                        .small()
+                        .color(egui::Color32::from_rgb(220, 160, 60)),
+                );
+            }
+        }
+    }
 
     // Formula parameters, straight from the def (slider bounds and
     // tooltips included). Values read def defaults when unset — the
@@ -179,192 +239,230 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
     // the nucleus references: z^p + c at integer powers, parameter
     // plane. The search runs on a background thread (six-figure
     // periods take seconds) and the result lands on a later frame.
-    // ---- Reference period (deep dives) ----
-    // f3's reference.period: the governing nucleus's period. Verified
-    // before use; 0 = none. Detect runs the ball method at the
-    // center's intrinsic depth on a background thread (minutes at
-    // large periods).
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.reference_period"));
-        let mut period = esc.reference_period.unwrap_or(0);
-        if ui
-            .add(egui::DragValue::new(&mut period).speed(10).range(0..=100_000_000))
-            .on_hover_text(t!("escape_panel.tooltip_reference_period"))
-            .changed()
-        {
-            let _ = config_manager
-                .update_param(ConfigPath::EscapeReferencePeriod, ConfigValue::UInt(period));
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let slot = period_search_slot();
-            let running = matches!(*slot.lock().unwrap(), PeriodSearch::Running);
-            if running {
-                ui.spinner();
-                ui.label(t!("escape_panel.searching_period"));
-                ui.ctx().request_repaint();
-            } else if ui
-                .button(t!("escape_panel.detect_period").as_ref())
-                .on_hover_text(t!("escape_panel.tooltip_detect_period"))
-                .clicked()
-            {
-                let re = esc.center_re.clone();
-                let im = esc.center_im.clone();
-                let power = match esc.formula.as_str() {
-                    "multibrot" => esc
-                        .formula_params
-                        .get("power")
-                        .map(|p| p.round() as u32)
-                        .unwrap_or(3),
-                    _ => 2,
-                };
-                *slot.lock().unwrap() = PeriodSearch::Running;
-                let out = slot.clone();
-                // The view's depth decides which period is USEFUL: the
-                // smallest closing period is the wrong answer at depth,
-                // because a shallow atom's wrap is not exact there.
-                let zoom = esc.zoom_log2;
-                std::thread::spawn(move || {
-                    let found = crate::escape::nucleus::detect_period_for_zoom(
-                        &re, &im, power, 8_000_000, zoom,
-                    );
-                    *out.lock().unwrap() = PeriodSearch::Done(found);
-                });
-            }
-            let done = {
-                let mut s = slot.lock().unwrap();
-                if let PeriodSearch::Done(found) = &*s {
-                    let f = *found;
-                    *s = PeriodSearch::Idle;
-                    Some(f)
-                } else {
-                    None
-                }
-            };
-            if let Some(found) = done {
-                let note = period_note_slot();
-                match found {
-                    Some((p, oct)) => {
-                        let _ = config_manager.update_param(
-                            ConfigPath::EscapeReferencePeriod,
-                            ConfigValue::UInt(p),
-                        );
-                        // -oct - 16 inverts closure_limit_for_zoom: the
-                        // deepest view this wrap stays exact for.
-                        *note.lock().unwrap() = Some(
-                            t!(
-                                "escape_panel.period_found",
-                                period = p,
-                                octave = -oct,
-                                zoom = (-oct - 16).max(0)
-                            )
-                            .to_string(),
-                        );
-                    }
-                    None => {
-                        log::warn!(
-                            "period detection: nothing within 8,000,000 wraps at zoom {:.0}",
-                            esc.zoom_log2
-                        );
-                        *note.lock().unwrap() =
-                            Some(t!("escape_panel.period_none").to_string());
-                    }
-                }
-            }
-            if let Some(msg) = period_note_slot().lock().unwrap().as_ref() {
-                ui.label(egui::RichText::new(msg).small().weak());
-            }
-        }
-    });
-
-    // What the renderer is ACTUALLY using. Progressive detection
-    // finds its own periods while zooming (and retires them as the
-    // view deepens), so this can differ from the field above - and
-    // when the field is empty it is the only way to see that a
-    // periodic reference is in play at all.
-    if let Some(live) = crate::escape::reference::live_reference_period() {
+    // The reference-orbit controls are ENGINE INTERNALS: they
+    // decide how the deep-zoom machinery finds and reuses a
+    // reference, and none of them change what the fractal looks
+    // like. Collapsed by default so the panel opens on the
+    // controls that do.
+    egui::CollapsingHeader::new(t!("escape_panel.reference_section"))
+        .id_salt("escape_reference_section")
+        .default_open(false)
+        .show(ui, |ui| {
+        // ---- Reference period (deep dives) ----
+        // f3's reference.period: the governing nucleus's period. Verified
+        // before use; 0 = none. Detect runs the ball method at the
+        // center's intrinsic depth on a background thread (minutes at
+        // large periods).
         ui.horizontal(|ui| {
-            ui.label(t!("escape_panel.detected_period", period = live))
-                .on_hover_text(t!("escape_panel.tooltip_detected_period"));
-            if esc.reference_period.unwrap_or(0) != live
-                && ui
-                    .small_button(t!("escape_panel.use_detected_period").as_ref())
-                    .clicked()
+            ui.label(t!("escape_panel.reference_period"));
+            let mut period = esc.reference_period.unwrap_or(0);
+            if ui
+                .add(egui::DragValue::new(&mut period).speed(10).range(0..=100_000_000))
+                .on_hover_text(t!("escape_panel.tooltip_reference_period"))
+                .changed()
             {
-                let _ = config_manager.update_param(
-                    ConfigPath::EscapeReferencePeriod,
-                    ConfigValue::UInt(live),
-                );
+                let _ = config_manager
+                    .update_param(ConfigPath::EscapeReferencePeriod, ConfigValue::UInt(period));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let slot = period_search_slot();
+                let running = matches!(*slot.lock().unwrap(), PeriodSearch::Running);
+                if running {
+                    ui.spinner();
+                    ui.label(t!("escape_panel.searching_period"));
+                    ui.ctx().request_repaint();
+                } else if ui
+                    .button(t!("escape_panel.detect_period").as_ref())
+                    .on_hover_text(t!("escape_panel.tooltip_detect_period"))
+                    .clicked()
+                {
+                    let re = esc.center_re.clone();
+                    let im = esc.center_im.clone();
+                    let power = match esc.formula.as_str() {
+                        "multibrot" => esc
+                            .formula_params
+                            .get("power")
+                            .map(|p| p.round() as u32)
+                            .unwrap_or(3),
+                        _ => 2,
+                    };
+                    *slot.lock().unwrap() = PeriodSearch::Running;
+                    let out = slot.clone();
+                    // The view's depth decides which period is USEFUL: the
+                    // smallest closing period is the wrong answer at depth,
+                    // because a shallow atom's wrap is not exact there.
+                    let zoom = esc.zoom_log2;
+                    std::thread::spawn(move || {
+                        let found = crate::escape::nucleus::detect_period_for_zoom(
+                            &re, &im, power, 8_000_000, zoom,
+                        );
+                        *out.lock().unwrap() = PeriodSearch::Done(found);
+                    });
+                }
+                let done = {
+                    let mut s = slot.lock().unwrap();
+                    if let PeriodSearch::Done(found) = &*s {
+                        let f = *found;
+                        *s = PeriodSearch::Idle;
+                        Some(f)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(found) = done {
+                    let note = period_note_slot();
+                    match found {
+                        Some((p, oct)) => {
+                            let _ = config_manager.update_param(
+                                ConfigPath::EscapeReferencePeriod,
+                                ConfigValue::UInt(p),
+                            );
+                            // -oct - 16 inverts closure_limit_for_zoom: the
+                            // deepest view this wrap stays exact for.
+                            *note.lock().unwrap() = Some(
+                                t!(
+                                    "escape_panel.period_found",
+                                    period = p,
+                                    octave = -oct,
+                                    zoom = (-oct - 16).max(0)
+                                )
+                                .to_string(),
+                            );
+                        }
+                        None => {
+                            log::warn!(
+                                "period detection: nothing within 8,000,000 wraps at zoom {:.0}",
+                                esc.zoom_log2
+                            );
+                            *note.lock().unwrap() =
+                                Some(t!("escape_panel.period_none").to_string());
+                        }
+                    }
+                }
+                if let Some(msg) = period_note_slot().lock().unwrap().as_ref() {
+                    ui.label(egui::RichText::new(msg).small().weak());
+                }
             }
         });
-    }
 
-    let nav_power: Option<u32> = if esc.julia {
-        None
-    } else {
-        match esc.formula.as_str() {
-            "mandelbrot" => Some(2),
-            "multibrot" => {
-                let p = esc.formula_params.get("power").copied().unwrap_or(3.0);
-                let r = p.round();
-                if (p - r).abs() < 1e-6 && (2.0..=12.0).contains(&r) {
-                    Some(r as u32)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    };
-    if let Some(power) = nav_power {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let pending = minibrot_search_slot();
-            let in_flight = {
-                let s = pending.lock().unwrap();
-                matches!(*s, MinibrotSearch::Running)
-            };
-            if in_flight {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(t!("escape_panel.searching_minibrot"));
-                });
-                ui.ctx().request_repaint();
-            } else if ui
-                .button(t!("escape_panel.center_minibrot").as_ref())
-                .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
-                .clicked()
-            {
-                let re = esc.center_re.clone();
-                let im = esc.center_im.clone();
-                let zoom = esc.zoom_log2;
-                *pending.lock().unwrap() = MinibrotSearch::Running;
-                let slot = pending.clone();
-                std::thread::spawn(move || {
-                    let hit = crate::escape::nucleus::locate_minibrot(
-                        &re, &im, zoom, 100_000, power, 100_000,
+        // What the renderer is ACTUALLY using. Progressive detection
+        // finds its own periods while zooming (and retires them as the
+        // view deepens), so this can differ from the field above - and
+        // when the field is empty it is the only way to see that a
+        // periodic reference is in play at all.
+        if let Some(live) = crate::escape::reference::live_reference_period() {
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.detected_period", period = live))
+                    .on_hover_text(t!("escape_panel.tooltip_detected_period"));
+                if esc.reference_period.unwrap_or(0) != live
+                    && ui
+                        .small_button(t!("escape_panel.use_detected_period").as_ref())
+                        .clicked()
+                {
+                    let _ = config_manager.update_param(
+                        ConfigPath::EscapeReferencePeriod,
+                        ConfigValue::UInt(live),
                     );
-                    *slot.lock().unwrap() = MinibrotSearch::Done(hit);
-                });
-            }
-            // Poll: a finished search applies on this frame.
-            let done = {
-                let mut s = pending.lock().unwrap();
-                if matches!(*s, MinibrotSearch::Done(_)) {
-                    std::mem::replace(&mut *s, MinibrotSearch::Idle)
-                } else {
-                    MinibrotSearch::Idle
                 }
-            };
-            if let MinibrotSearch::Done(result) = done {
-                match result {
-                    Some(hit) => {
-                        log::info!(
-                            "Minibrot found: period {} at ({}, {})",
-                            hit.period,
-                            hit.re,
-                            hit.im
+            });
+        }
+
+        let nav_power: Option<u32> = if esc.julia {
+            None
+        } else {
+            match esc.formula.as_str() {
+                "mandelbrot" => Some(2),
+                "multibrot" => {
+                    let p = esc.formula_params.get("power").copied().unwrap_or(3.0);
+                    let r = p.round();
+                    if (p - r).abs() < 1e-6 && (2.0..=12.0).contains(&r) {
+                        Some(r as u32)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        };
+        if let Some(power) = nav_power {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let pending = minibrot_search_slot();
+                let in_flight = {
+                    let s = pending.lock().unwrap();
+                    matches!(*s, MinibrotSearch::Running)
+                };
+                if in_flight {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(t!("escape_panel.searching_minibrot"));
+                    });
+                    ui.ctx().request_repaint();
+                } else if ui
+                    .button(t!("escape_panel.center_minibrot").as_ref())
+                    .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
+                    .clicked()
+                {
+                    let re = esc.center_re.clone();
+                    let im = esc.center_im.clone();
+                    let zoom = esc.zoom_log2;
+                    *pending.lock().unwrap() = MinibrotSearch::Running;
+                    let slot = pending.clone();
+                    std::thread::spawn(move || {
+                        let hit = crate::escape::nucleus::locate_minibrot(
+                            &re, &im, zoom, 100_000, power, 100_000,
                         );
+                        *slot.lock().unwrap() = MinibrotSearch::Done(hit);
+                    });
+                }
+                // Poll: a finished search applies on this frame.
+                let done = {
+                    let mut s = pending.lock().unwrap();
+                    if matches!(*s, MinibrotSearch::Done(_)) {
+                        std::mem::replace(&mut *s, MinibrotSearch::Idle)
+                    } else {
+                        MinibrotSearch::Idle
+                    }
+                };
+                if let MinibrotSearch::Done(result) = done {
+                    match result {
+                        Some(hit) => {
+                            log::info!(
+                                "Minibrot found: period {} at ({}, {})",
+                                hit.period,
+                                hit.re,
+                                hit.im
+                            );
+                            let _ = config_manager.update_batch(
+                                vec![
+                                    (ConfigPath::EscapeCenterRe, ConfigValue::String(hit.re)),
+                                    (ConfigPath::EscapeCenterIm, ConfigValue::String(hit.im)),
+                                ],
+                                "history.action.center_minibrot".to_string(),
+                            );
+                        }
+                        None => log::info!("No minibrot found governing this view"),
+                    }
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                // No threads in the browser build: synchronous with a
+                // modest budget.
+                if ui
+                    .button(t!("escape_panel.center_minibrot").as_ref())
+                    .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
+                    .clicked()
+                {
+                    if let Some(hit) = crate::escape::nucleus::locate_minibrot(
+                        &esc.center_re,
+                        &esc.center_im,
+                        esc.zoom_log2,
+                        20_000,
+                        power,
+                        5_000,
+                    ) {
                         let _ = config_manager.update_batch(
                             vec![
                                 (ConfigPath::EscapeCenterRe, ConfigValue::String(hit.re)),
@@ -373,38 +471,11 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                             "history.action.center_minibrot".to_string(),
                         );
                     }
-                    None => log::info!("No minibrot found governing this view"),
                 }
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            // No threads in the browser build: synchronous with a
-            // modest budget.
-            if ui
-                .button(t!("escape_panel.center_minibrot").as_ref())
-                .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
-                .clicked()
-            {
-                if let Some(hit) = crate::escape::nucleus::locate_minibrot(
-                    &esc.center_re,
-                    &esc.center_im,
-                    esc.zoom_log2,
-                    20_000,
-                    power,
-                    5_000,
-                ) {
-                    let _ = config_manager.update_batch(
-                        vec![
-                            (ConfigPath::EscapeCenterRe, ConfigValue::String(hit.re)),
-                            (ConfigPath::EscapeCenterIm, ConfigValue::String(hit.im)),
-                        ],
-                        "history.action.center_minibrot".to_string(),
-                    );
-                }
-            }
-        }
-    }
+
+        });
 
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.rotation"));
@@ -510,6 +581,34 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
     show_coloring_section(ui, config_manager, &esc, field);
 }
 
+/// A starting `scale` for a coloring, from the iteration cap.
+///
+/// The scale/offset pair is the panel's least guessable control: it
+/// maps an escape value onto the palette, and the useful range depends
+/// on how long pixels actually take to escape -- which the user cannot
+/// see. Picking the Ducks showcase's 1.86/11.6 took a numpy probe.
+///
+/// This is a STARTING POINT, not a measurement. The honest version
+/// reads the rendered value distribution back off the GPU; until that
+/// exists, this puts a few palette cycles across the range typical of
+/// a view at this iteration cap, which is what the shipped configs
+/// use. Smooth and escape-count colorings scale with the COUNT (most
+/// pixels escape in a few hundred iterations however high the cap is),
+/// while the orbit-trap and average families produce O(1) values and
+/// want a scale near 1.
+fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
+    match coloring {
+        "smooth" | "escape_count" | "period" => {
+            // A few cycles over a typical escape range, floored so a
+            // huge cap does not flatten the image to one band.
+            (8.0 / (max_iter as f32).max(1.0)).clamp(0.005, 0.5)
+        }
+        "distance_estimate" | "triangle_inequality" | "root_basin" => 1.0,
+        // Orbit traps and the averaging family already live at O(1).
+        _ => 1.0,
+    }
+}
+
 /// Coloring dropdown + params. `field` = Some routes to the mode-B
 /// coloring registry (with the def's fallback resolution — the
 /// stored name usually still says "smooth" right after a switch).
@@ -540,6 +639,34 @@ fn show_coloring_section(
                     }
                 });
         });
+    // The scale/offset pair is the hardest control here to guess at;
+        // offer a starting point rather than leaving the user to probe.
+            if coloring.parameters.iter().any(|p| p.name == "scale") {
+            let suggested = suggested_coloring_scale(coloring.name, esc.max_iter);
+            let current = esc.coloring_params.get("scale").copied();
+            ui.horizontal(|ui| {
+                if ui
+                    .button(t!("escape_panel.auto_scale"))
+                    .on_hover_text(t!("escape_panel.auto_scale_tip", value = format!("{suggested:.4}")))
+                    .clicked()
+                {
+                    let _ = config_manager.update_param(
+                        ConfigPath::EscapeColoringParam { param: "scale".to_string() },
+                        suggested.into(),
+                    );
+                }
+                if current.is_some_and(|c| (c - suggested).abs() > suggested * 0.5) {
+                    ui.label(
+                        egui::RichText::new(t!(
+                            "escape_panel.auto_scale_hint",
+                            value = format!("{suggested:.4}")
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+            });
+        }
         for p in coloring.parameters {
             let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
             let resp = ui
@@ -574,6 +701,34 @@ fn show_coloring_section(
                 }
             });
     });
+    // The scale/offset pair is the hardest control here to guess at;
+    // offer a starting point rather than leaving the user to probe.
+    if coloring.parameters.iter().any(|p| p.name == "scale") {
+        let suggested = suggested_coloring_scale(coloring.name, esc.max_iter);
+        let current = esc.coloring_params.get("scale").copied();
+        ui.horizontal(|ui| {
+            if ui
+                .button(t!("escape_panel.auto_scale"))
+                .on_hover_text(t!("escape_panel.auto_scale_tip", value = format!("{suggested:.4}")))
+                .clicked()
+            {
+                let _ = config_manager.update_param(
+                    ConfigPath::EscapeColoringParam { param: "scale".to_string() },
+                    suggested.into(),
+                );
+            }
+            if current.is_some_and(|c| (c - suggested).abs() > suggested * 0.5) {
+                ui.label(
+                    egui::RichText::new(t!(
+                        "escape_panel.auto_scale_hint",
+                        value = format!("{suggested:.4}")
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+        });
+    }
     for p in coloring.parameters {
         let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
         let resp = ui
@@ -689,4 +844,125 @@ fn minibrot_search_slot() -> std::sync::Arc<std::sync::Mutex<MinibrotSearch>> {
     static SLOT: OnceLock<Arc<Mutex<MinibrotSearch>>> = OnceLock::new();
     SLOT.get_or_init(|| Arc::new(Mutex::new(MinibrotSearch::Idle)))
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_dock::egui;
+
+    /// Lay the panel out for real, for every formula.
+    ///
+    /// A panel that compiles can still panic at layout (a duplicate
+    /// widget id, a slider whose range is empty because a def's min
+    /// equals its max) or quietly render a translation KEY where a
+    /// label belongs. Neither shows up in a build, and neither shows
+    /// up in the visual suite, which renders fractals and not panels.
+    fn lay_out(config: crate::config::FractalConfig) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let mut manager = ConfigManager::new(config);
+        let mut labels = Vec::new();
+        // Two frames: the first populates egui's memory, the second
+        // takes the "widget already exists" path where id collisions
+        // surface.
+        for _ in 0..2 {
+            let out = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_escape_content(ui, &mut manager);
+                });
+            });
+            labels = out
+                .textures_delta
+                .set
+                .iter()
+                .map(|(id, _)| format!("{id:?}"))
+                .collect();
+        }
+        labels
+    }
+
+    #[test]
+    fn the_panel_lays_out_for_every_formula() {
+        for f in crate::escape::FORMULAS {
+            let mut config = crate::config::FractalConfig::default();
+            config.render_mode = RenderMode::Escape;
+            config.escape.formula = f.name.to_string();
+            let _ = lay_out(config);
+        }
+    }
+
+    #[test]
+    fn the_panel_lays_out_for_every_coloring() {
+        for c in crate::escape::COLORINGS {
+            let mut config = crate::config::FractalConfig::default();
+            config.render_mode = RenderMode::Escape;
+            config.escape.coloring = c.name.to_string();
+            let _ = lay_out(config);
+        }
+    }
+
+    /// The depth hint must say the right thing for each tier.
+    ///
+    /// This is the panel's answer to "why has zooming stopped
+    /// helping", so a formula that perturbs must not be labelled as
+    /// stopping at 2^14, and vice versa.
+    #[test]
+    fn the_depth_hint_matches_the_engine() {
+        use crate::escape::{EscapeRenderer, UsableDepth};
+        for (formula, deep) in [
+            ("mandelbrot", true),
+            ("multibrot", true),
+            ("burning_ship", true),
+            ("tricorn", true),
+            ("phoenix", true),
+            ("manowar", true),
+            ("kaliset", false),
+            ("newton", false),
+            ("tetration", false),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.to_string();
+            let depth = EscapeRenderer::usable_depth(&esc);
+            assert_eq!(
+                matches!(depth, UsableDepth::Perturbed),
+                deep,
+                "{formula}: the panel would tell the user the wrong depth ({depth:?})"
+            );
+        }
+    }
+
+    /// Damping and biomorph take a config OFF the perturbed path, so
+    /// the hint has to follow them rather than the formula name.
+    #[test]
+    fn the_depth_hint_follows_the_settings_that_disable_perturbation() {
+        use crate::escape::{EscapeRenderer, UsableDepth};
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        assert!(matches!(EscapeRenderer::usable_depth(&esc), UsableDepth::Perturbed));
+        esc.biomorph = crate::config::escape::BiomorphMode::Re;
+        assert!(
+            matches!(EscapeRenderer::usable_depth(&esc), UsableDepth::Direct(_)),
+            "biomorph disables perturbation, so the hint must stop promising depth"
+        );
+    }
+
+    /// The suggested scale has to be usable, not just present.
+    #[test]
+    fn the_suggested_scale_is_in_the_slider_range() {
+        for c in crate::escape::COLORINGS {
+            let Some(p) = c.parameters.iter().find(|p| p.name == "scale") else {
+                continue;
+            };
+            for max_iter in [64u32, 256, 4000, 60_000] {
+                let v = suggested_coloring_scale(c.name, max_iter);
+                assert!(
+                    v >= p.min && v <= p.max,
+                    "{}: suggested scale {v} is outside the slider's {}..={}",
+                    c.name,
+                    p.min,
+                    p.max
+                );
+            }
+        }
+    }
 }
