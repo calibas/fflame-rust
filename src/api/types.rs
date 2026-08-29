@@ -269,11 +269,16 @@ pub struct FlameResponse {
     /// Root flame transforms (all three pools, flat).
     #[serde(default)]
     pub transforms: Vec<ApiTransformWire>,
-    // Server-derived display metadata (`render_mode`, `transform_count`,
-    // `variation_names`, `has_3d`) is no longer carried on the single-flame
-    // response — `render_mode` lives in the config blob's flame, and the rest
-    // are recoverable from `transforms` / the blob when needed. The list
-    // endpoint (`FlameListItem`) still surfaces them for the browser.
+    // `transform_count`, `variation_names` and `has_3d` are not carried on
+    // the single-flame response — they are recoverable from `transforms` /
+    // the blob when needed, and the list endpoint (`FlameListItem`) still
+    // surfaces them for the browser.
+    //
+    // `render_mode` IS carried, as a top-level mirror of the blob's value
+    // (openapi: "so list + detail responses have a consistent shape"). This
+    // struct deliberately does not bind it: the config blob is the source
+    // this client reads, and a second copy of the same fact is a second
+    // thing that can disagree. Serde ignores the extra field.
     #[serde(default)]
     pub animation_count: u32,
     #[serde(default)]
