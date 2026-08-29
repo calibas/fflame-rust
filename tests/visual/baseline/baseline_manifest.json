@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "92f59421",
+  "git_hash": "2f9b69c7",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -90,9 +90,677 @@
       "bytes": 892,
       "sha256": "e8bc31ce5af5761fda5263d7aca2f10fb3f3e16974f93e7560b912f5afb9c893"
     },
+    "affine3d-smoke.png": {
+      "bytes": 839,
+      "sha256": "31c187845923cb7ca9ba8da759fdd701f6c5bb7ead426a862978abdb8a48fc0a"
+    },
+    "apo-misc-smoke.png": {
+      "bytes": 25885,
+      "sha256": "f3c3ec36b846711f8bfad4609868f2162afa104b79ea63a7e467d7a04a5dd54f"
+    },
+    "apo-misc10-smoke.png": {
+      "bytes": 34946,
+      "sha256": "6ece684fbb588fa7386137ef0e56ddeb1160e4b22bb723634a163b2442202a6b"
+    },
+    "apo-misc11-smoke.png": {
+      "bytes": 36488,
+      "sha256": "df111991f082b4aab74ef14ac500ebacd5a6f9fd97a589b59ab02b8b7cb4acb9"
+    },
+    "apo-misc12-smoke.png": {
+      "bytes": 6245,
+      "sha256": "2a1ba37495f4e41083202ba1fd89a08a05b25f8895b8f0e759647ac68d271f0a"
+    },
+    "apo-misc13-smoke.png": {
+      "bytes": 3336,
+      "sha256": "f3917f323d55f15649f3e94b5950cb762143195ddea02f7265b61e2d0b8e3090"
+    },
+    "apo-misc14-smoke.png": {
+      "bytes": 2526,
+      "sha256": "3f6c16e0356563643083b101fec836a7638d3a0d47f9322f13e913801740a990"
+    },
+    "apo-misc15-smoke.png": {
+      "bytes": 4594,
+      "sha256": "bb125b037c4730d2b0bb8765afaf5214f1a1a6d4dcfe017a03387d046212fad9"
+    },
+    "apo-misc16-smoke.png": {
+      "bytes": 1981,
+      "sha256": "723461ee0877865fbe83b0da8e7e9e90ad4c98ee46d34e8ed28909afc7eb4646"
+    },
+    "apo-misc17-smoke.png": {
+      "bytes": 8173,
+      "sha256": "265b6d32e3b04566a2b45543dd8e2ad48153a6253cece13b834ab8672085299c"
+    },
+    "apo-misc7-smoke.png": {
+      "bytes": 18743,
+      "sha256": "dc0d475489cb35a62cba08db71c26023834612564586e9a8544005e329ace71b"
+    },
+    "apo-misc8-smoke.png": {
+      "bytes": 6821,
+      "sha256": "6319a9d13d215ceafadcdfd8d21fec1aee23720b26ff48518bd32691c7d0ca76"
+    },
+    "apo-misc9-smoke.png": {
+      "bytes": 3103,
+      "sha256": "663f88b169351ecc0e88e931330041eeb07049733bd8a9844a07b86dc6810619"
+    },
+    "apo_misc18-smoke.png": {
+      "bytes": 6393,
+      "sha256": "ff1a4187b1ecb2373ac1bee230b994ab371202e357bc10760d74e0ba1c8ac195"
+    },
+    "apo_misc19-smoke.png": {
+      "bytes": 4783,
+      "sha256": "1a99ceb82d659332eba82683758a52aea28cdc7fcf48f9a835ab1370747abb31"
+    },
+    "apo_misc20-smoke.png": {
+      "bytes": 30789,
+      "sha256": "42b3ac6439de6fe4849e3d1d2887e7512c68c8fe2c8960f088c9e405e4e5afd9"
+    },
+    "apo_misc21-smoke.png": {
+      "bytes": 9878,
+      "sha256": "b968ed1152422719578977122c32cf47e760ebca483eef814bf82a9365e566e8"
+    },
+    "apo_misc22-smoke.png": {
+      "bytes": 9857,
+      "sha256": "6fc1f231aabff0f4383f86b7315514dc2ff794789cee7214cd45fa5181fae958"
+    },
+    "bipolar-series-smoke.png": {
+      "bytes": 20362,
+      "sha256": "ebeb7a877464ed743c7ce10c7c052b4f23f6b0bb130e24e8e3212efca01c964b"
+    },
+    "black-curve.png": {
+      "bytes": 136,
+      "sha256": "c72274a22cba2dcef62e0f62834446ee39b0cd95ad0faa27a89b3b49f48aa390"
+    },
+    "blur-extras-smoke.png": {
+      "bytes": 4632,
+      "sha256": "a7cf1869c9a7b6102a119340c979b481c24381fff3707ae5fc864c6cabadbfb2"
+    },
+    "boarders-smoke.png": {
+      "bytes": 25707,
+      "sha256": "51a881e7ca0eab6e4b9d3e0e233cae181eb7f0a5b47cecf112ccb89c817bcabf"
+    },
+    "bubble-3d.png": {
+      "bytes": 27181,
+      "sha256": "6e4743ad6818cd9c38609a52d03b45e7fc312f7bb9ee13b1ae31f092eda91589"
+    },
+    "bubblet3d-smoke.png": {
+      "bytes": 1300,
+      "sha256": "0af9f43622d54c0511f012c8c44a61559812b59e1c759dba34b4ee8adfc8ed54"
+    },
+    "butterfly-fay-smoke.png": {
+      "bytes": 7628,
+      "sha256": "e6f13d0ecda3c685073bb119a67fd717035911648a87f3df8c996898587a5f2f"
+    },
+    "bwraps2-phase-smoke.png": {
+      "bytes": 562,
+      "sha256": "0d5ef5d26466f69caa9e6ccc1551c779194d870ced5dec0f6d6e045d6aa727bb"
+    },
+    "bwraps7-smoke.png": {
+      "bytes": 1298,
+      "sha256": "7058a5058b6adf133d4c4b21e2d4597301683f10d0da80dd8a2ae93b497a9b40"
+    },
+    "circle-blur-smoke.png": {
+      "bytes": 4473,
+      "sha256": "d6dc08f2a1236b1a13ca0d38cd580b4e021ce536e1f212a7f41249cd0793ad0f"
+    },
+    "circle_rand_misc-smoke.png": {
+      "bytes": 34795,
+      "sha256": "8b6684c38183ecfe58ea473f1bee04970ba9fd674f30bf29e7f9ae0874e744f4"
+    },
+    "circlecrop-exblur-smoke.png": {
+      "bytes": 478,
+      "sha256": "779fa76f693b7b4816780ff9ff4ac06df98d1d867380c42578dd68efe56f8b32"
+    },
+    "circlecrop-phase-smoke.png": {
+      "bytes": 286,
+      "sha256": "a66a0c46395b571c87f5cf927e0f1304fbbec224eddd7a0cbcdb8064699e9da9"
+    },
+    "classic-2d-smoke.png": {
+      "bytes": 4446,
+      "sha256": "369c085822c130c4f63e33e7304f5fbdcaff4439aab9c958e7dae60e7903b9ca"
+    },
+    "classic-blades-misc-smoke.png": {
+      "bytes": 26242,
+      "sha256": "eea9e02a9af82a4a1e0db6c78566e481e2fe55001668b10a79a7fe1846c72bcf"
+    },
+    "complex-smoke.png": {
+      "bytes": 582,
+      "sha256": "4fae5b21e1990118c4a25913069a568bef57cca83d114ff8101718a79087ea36"
+    },
+    "cpow3_wf-smoke.png": {
+      "bytes": 30928,
+      "sha256": "568735a69eef011f32ec898d576f92541241c0ace6567f05ff31482d344c0804"
+    },
+    "crackle-distort-smoke.png": {
+      "bytes": 6565,
+      "sha256": "4350505219b0020872dbba28810e07d05a414ff691ab3f49699d4464f633c173"
+    },
+    "crackle-fast-smoke.png": {
+      "bytes": 9534,
+      "sha256": "66d3d3a463dbd264f55492c54164cf03131ad40fe93f5cfa654b577d7dcb9da6"
+    },
+    "crackle-smoke.png": {
+      "bytes": 6123,
+      "sha256": "e9f2ef714ee295b9ff0b86784c28911d32e431559e8d63ce256bd8a764ec61cd"
+    },
+    "curl-sp-smoke.png": {
+      "bytes": 959,
+      "sha256": "5c7e950855bc34c1631d0d9fb940a4b2e23c9725f832bb8030ab05d222e35547"
+    },
+    "curliecue2-smoke.png": {
+      "bytes": 27387,
+      "sha256": "2f438a73180ddb383fd915caed542be0e8bd0ae2fda640127e107a221dfdba1c"
+    },
+    "dc-smoke.png": {
+      "bytes": 583,
+      "sha256": "bc5112ce143dc83033ef0f1571c618c9253d1bc91b93b6f58008528766ed9ba8"
+    },
+    "dc_carpet3d-smoke.png": {
+      "bytes": 4708,
+      "sha256": "ed02404b097d0c04296f0e6bff3477c99e178dd9db18cfa3ea5bcbd337bf462d"
+    },
+    "dc_misc-smoke.png": {
+      "bytes": 4616,
+      "sha256": "1e1fce80656fba4324861e52d6e2dc3ef0de67b85953705ca4061fa3ff6e6b79"
+    },
+    "dc_misc2-smoke.png": {
+      "bytes": 4252,
+      "sha256": "f946331268d84a2cd862e3084d1bac40142f540197ae257b409b51342acee18e"
+    },
+    "erf-misc-smoke.png": {
+      "bytes": 21766,
+      "sha256": "96994b40fc407b8778988c2b9cc68fbb2410107fe6b06c8ede20c848cd047b66"
+    },
+    "escape-barnsley-m1-julia.png": {
+      "bytes": 31268,
+      "sha256": "a0d771a176724a0edab12adc8fc72d75caddbe08a04a6eb3abfdbf5dc578d47a"
+    },
+    "escape-barnsley-m3.png": {
+      "bytes": 3226,
+      "sha256": "a73cf1da80e038f960353a98f419012d0f8eadc478a0d7c42615add492a9dc8f"
+    },
+    "escape-burning-ship.png": {
+      "bytes": 4043,
+      "sha256": "968b7c80199549f8e8bea53de52c17b4ace06af89edd29039c07bea90a9260b8"
+    },
+    "escape-cactus.png": {
+      "bytes": 2491,
+      "sha256": "e2f91bf8bddcc41970b9e7c5cacdffd2fd78625fde4f4a903d69dd64261d1ce1"
+    },
+    "escape-collatz.png": {
+      "bytes": 38653,
+      "sha256": "838d103b70d74885745c315424146ceebb7ce69f897f6211a76bd9e8443a3663"
+    },
+    "escape-deep-threshold-direct.png": {
+      "bytes": 42510,
+      "sha256": "fe226e582f4605a0654ead23489487f071af47a4e3f80de8908a3d638166fc40"
+    },
+    "escape-deep-threshold-perturbed.png": {
+      "bytes": 38810,
+      "sha256": "0d38329acb8c9ba8a487c5d9e7cff5795d3007b5a2714fbd7e422a82a0c78319"
+    },
+    "escape-deep-zoom-30.png": {
+      "bytes": 36463,
+      "sha256": "5b0afab7a73e985093b387150d6db2df91bfdbf1bfe9c6de4da726bf147e41d8"
+    },
+    "escape-deep-zoom-42.png": {
+      "bytes": 32420,
+      "sha256": "d1f0ed6a5afb0e342aa7487d18d8bb0d7295729860d18f0b530f6bec19c0eb84"
+    },
+    "escape-ducks-julia.png": {
+      "bytes": 40025,
+      "sha256": "bd861c170421f9a233bbffa1a4b6236709dd5984742b811db3d255a0f8c13312"
+    },
+    "escape-ducks-param.png": {
+      "bytes": 23277,
+      "sha256": "90f326f06d9b05c726be5222a49da6c99e6eb6146fa9c4957816bfbc1ba8c154"
+    },
+    "escape-ducks-sec.png": {
+      "bytes": 41300,
+      "sha256": "b928ec08717bc50fe19319348b03471e54be7b1a7d777ed5cbbe0fcb30a4e5fa"
+    },
+    "escape-exponential.png": {
+      "bytes": 7625,
+      "sha256": "4437da9a7ea49ae3a76af849a7f962306dafe7f255da522bb324d2bd27b3cf42"
+    },
+    "escape-fe-threshold-floatexp.png": {
+      "bytes": 49479,
+      "sha256": "6c13cc801f1b4a0c933d2d255de2ae05fe34718dba284102aded35e609b9dd4c"
+    },
+    "escape-fe-threshold-scaled.png": {
+      "bytes": 49080,
+      "sha256": "9b8989db582d8614938dc10a21a64622dcbf4f357bc7b16cb924ff1ac3f5145d"
+    },
+    "escape-fe-zoom-60-edge.png": {
+      "bytes": 15944,
+      "sha256": "56b149e4277403e3cc4f0f4c53cbc77086c73073d50faf81f72f8b7c7e4b731e"
+    },
+    "escape-feather.png": {
+      "bytes": 11665,
+      "sha256": "6fb96b097dcdadc224b0031d93ac98e8ba29b62a7898513815077dbf0aaa43d4"
+    },
+    "escape-julia-deep-perturbed.png": {
+      "bytes": 8056,
+      "sha256": "7884a689172148b78297dcd2fc46f83cc9c3be4137ae00ab925fa2f1cb78fc33"
+    },
+    "escape-julia-dragon.png": {
+      "bytes": 6467,
+      "sha256": "6b368d907fb83062dedb916fea1299b163b1dc303efd3fdb05e2bf55e174363a"
+    },
+    "escape-kaliset-glow.png": {
+      "bytes": 19839,
+      "sha256": "075faf36f5770786d52aefc9da5fb781f0fb7f7b98a11cd6c77536ecfcf1341c"
+    },
+    "escape-lambda-de-julia.png": {
+      "bytes": 9356,
+      "sha256": "af4b90c2657fd9be1bb70d40b70949615e3dab9242db95a72cc7785e0e6df26d"
+    },
+    "escape-lambda-plane.png": {
+      "bytes": 5411,
+      "sha256": "fe242efe64b9907010579cebd22cf69a8a7b6c086554e60aa01a02f9df987c65"
+    },
+    "escape-littlewood.png": {
+      "bytes": 14682,
+      "sha256": "9cd25b898aba2cd36a5f6c250d15d20a8f979a63c58626e8649ae67275064124"
+    },
+    "escape-magnet-1.png": {
+      "bytes": 4572,
+      "sha256": "4b55c42fa15c8014e6bdb4be482aa320841bfe788ac1ecee6089ac695391223c"
+    },
+    "escape-mandelbrot-biomorph-re.png": {
+      "bytes": 4211,
+      "sha256": "2906d6118bfc4a575800968ef2ac4ec8ebc5fe6e0c0f5c7fdeefb0a1a4caa007"
+    },
+    "escape-mandelbrot-damped.png": {
+      "bytes": 4148,
+      "sha256": "a1343da3a4eb1cc4717bdcdfb92384eb5c0f1af0c2164d77992b86ab654d3b23"
+    },
+    "escape-mandelbrot-de.png": {
+      "bytes": 11140,
+      "sha256": "c2f24d04a83beb589bbe901548eab25a0eb47022883eafa3b31f633cf33d978e"
+    },
+    "escape-mandelbrot-escape-count.png": {
+      "bytes": 4393,
+      "sha256": "8c8d5d47ce6f555631806d140fff5970e74db6439fae24eacede45b0b17c3c2e"
+    },
+    "escape-mandelbrot-orbit-trap.png": {
+      "bytes": 20238,
+      "sha256": "1c5f8884b25bec68a4425af666742854972ea781ba7d5d4a7b99b81234f500f1"
+    },
+    "escape-mandelbrot-seahorse-zoom.png": {
+      "bytes": 11055,
+      "sha256": "8a2acb7f6d29ded735da3e1818a9ead5cd2849be685850cd0c41dba4a0dee6c6"
+    },
+    "escape-mandelbrot-smooth.png": {
+      "bytes": 3848,
+      "sha256": "52a76b8a0e00a3493074b3738c295778edfe0ea5347aebbfce7c895afe156700"
+    },
+    "escape-mandelbrot-stripe.png": {
+      "bytes": 24472,
+      "sha256": "25e3377789cf7e6019c354c3545f58e07f5bfe6ed715d46a33dbc6d42f790f5f"
+    },
+    "escape-mandelbrot-tia.png": {
+      "bytes": 14970,
+      "sha256": "97b0034afd92ab60d08378bb97d283ed7b1632cc1c81b3f96bf04df847e95aab"
+    },
+    "escape-manowar.png": {
+      "bytes": 2321,
+      "sha256": "cbb1701ed623f87bb4708d0c89045ba7ac1d7b3012ea1f94d347ac58b62d43a6"
+    },
+    "escape-markus-lyapunov-ab.png": {
+      "bytes": 17695,
+      "sha256": "1ce0539be697ed826e1bc3f80711dc5b9d23a3e34a24498b0b3094554d05e6ad"
+    },
+    "escape-mcmullen-carpet.png": {
+      "bytes": 11711,
+      "sha256": "70a36ef778e917024c2d315e6496013cae940f9feb7fb7666063ceb9b1b82dd9"
+    },
+    "escape-multibrot-4.png": {
+      "bytes": 3536,
+      "sha256": "64590dd657725e31b972f142a39fc3136cd8cad53c07ed8471451c8fd2f9f610"
+    },
+    "escape-newton-3.png": {
+      "bytes": 9063,
+      "sha256": "9185a58f498fbcb85f0be3a30ef438ebcd77c4917de6668e1832e4140c0a0f50"
+    },
+    "escape-newton-relaxed.png": {
+      "bytes": 17071,
+      "sha256": "43a051c4cf5363644e9c22a2045352fe0e9c2a5ee667f32167b92456151fd99a"
+    },
+    "escape-nova-3.png": {
+      "bytes": 6089,
+      "sha256": "9ad6bd2ea2ee133d3a5010db42443b57642f6eb14ecf3fbcb9c7727cf8249e68"
+    },
+    "escape-novaretti-julia.png": {
+      "bytes": 32594,
+      "sha256": "7ef88f98aae6d6b139682eb2d6390a78b8a831f8f494f801708c075433e6bd25"
+    },
+    "escape-novaretti-period.png": {
+      "bytes": 19348,
+      "sha256": "5530610c8e3ca4e2357281dc5cce3beafbcce15b5caeb859c9b48be2368c4dbe"
+    },
+    "escape-novaretti.png": {
+      "bytes": 24372,
+      "sha256": "142ad8963845c3490cdaa66549d63c2cd640e1397d3cd1be6b6c99a776e2854f"
+    },
+    "escape-phoenix-classic.png": {
+      "bytes": 4187,
+      "sha256": "57879f51a9e4614c82f46d3d86c982980ba76cca752b673b59bee196f60e7629"
+    },
+    "escape-ship-celtic.png": {
+      "bytes": 5910,
+      "sha256": "d97ec26312b50362c154706e80fb523bdbda41e6df7f49887d74b2a437fe5e50"
+    },
+    "escape-ship-deep-floatexp.png": {
+      "bytes": 40199,
+      "sha256": "de04c243a47095f00cdf6210a84e552674e3d0d54c4654b2eeb022c54685e77a"
+    },
+    "escape-ship-deep-perturbed.png": {
+      "bytes": 14679,
+      "sha256": "6209497c050523c68965291e17323e427bf92b833fe73e8e30274988f88720e7"
+    },
+    "escape-spider.png": {
+      "bytes": 4433,
+      "sha256": "831e50156991cee4375185c58f1f31d285acd38347880a97b02003af6ab702a8"
+    },
+    "escape-standard-map-ftle.png": {
+      "bytes": 38302,
+      "sha256": "2f9b491c5b0ce55924e477c2a385f5b5feb878d5017e7cbd63a57adde006b1a5"
+    },
+    "escape-tetration-period.png": {
+      "bytes": 11866,
+      "sha256": "0231417a33bc3657e06d818ee48626de7ef159117be8cc191e08aef1f70400af"
+    },
+    "escape-tetration.png": {
+      "bytes": 12783,
+      "sha256": "2c824a2a8ffcdbd854ea68f78bee2577314b66b12e903bf41083998ea900a27b"
+    },
+    "escape-tricorn.png": {
+      "bytes": 3765,
+      "sha256": "e9278cb53f7e5f38bb037ae304bd6b997077b9a74ca6fc67cf57fd697f682136"
+    },
+    "escape-trig-sin.png": {
+      "bytes": 24595,
+      "sha256": "84a2713f6fedb713bdefe34998a31e82a4850e130a0f03809c99c365a60fb350"
+    },
+    "escape-weierstrass-hillshade.png": {
+      "bytes": 38325,
+      "sha256": "8c8fc2ee35ee4a85153d7daa57723151da578bfe9a89e1a40c33d7a6178f648f"
+    },
+    "extrude-smoke.png": {
+      "bytes": 274,
+      "sha256": "9250446653e22fd1163a9ba65881fed0c1aeb6af32a2b5d4f45355fbff2b6544"
+    },
+    "farblur-smoke.png": {
+      "bytes": 1764,
+      "sha256": "8993397defe5af1dc93a6722ac468b0dc5cc679a427a47865baa8353bf04da03"
+    },
+    "flatten-smoke.png": {
+      "bytes": 4496,
+      "sha256": "68a42e18d30b56b306f228fb4e24cae087e4c391a5e2055d312d3fd28de71239"
+    },
+    "flower_db-smoke.png": {
+      "bytes": 1182,
+      "sha256": "a4d29009cef60d622720ed7cdeeabe3f9b6cf960650ee0b32803ac8a90a8ca11"
+    },
+    "gamma-smoke.png": {
+      "bytes": 6040,
+      "sha256": "59906787c75a5ae2b77defb7d6ee12f50d9e7c42bd10f8d36d78ef88aef84817"
+    },
     "general-warmup.png": {
       "bytes": 35605,
       "sha256": "b7237c6474131dd9ef1651fb040bd10daf254fbc9578641c8fb906eeb11ac459"
+    },
+    "glynn-smoke.png": {
+      "bytes": 24166,
+      "sha256": "dbf0231a59f1786c8db600d1d69d32aa52da033c822714358cb9cc7f5dc6acb6"
+    },
+    "glynnlissa-smoke.png": {
+      "bytes": 3485,
+      "sha256": "3348dde52185547d0c459d3be4282bcb60faaf07e5d87a11abf6ed01519c4d6a"
+    },
+    "glynnspiro-smoke.png": {
+      "bytes": 3156,
+      "sha256": "0dba906c7e530ea3950adbb44c17a89fb4a7dbc90c15154fe034188d391212d8"
+    },
+    "glynnsshape-smoke.png": {
+      "bytes": 3133,
+      "sha256": "4cd8e9a35bc03dc2150450aa7ea0f68c05d341713bd9f32768915d13fe4a2322"
+    },
+    "gridout3d-jubiq-smoke.png": {
+      "bytes": 1109,
+      "sha256": "0316edf3e1bbee50a79ce752e273ab2402f8fd0af32cabd822bb7f9ce317e940"
+    },
+    "harmonograph-smoke.png": {
+      "bytes": 2436,
+      "sha256": "ebb558f71d5520e486fc13019c4f1c7176ed28eaa5d18237f412f344b28340e8"
+    },
+    "hexaplay3d-smoke.png": {
+      "bytes": 873,
+      "sha256": "a4f59d502b0a22840bb4609afa18aba4eee94abfe484adf8959631bcad1a9c08"
+    },
+    "hexnix3d-smoke.png": {
+      "bytes": 4197,
+      "sha256": "50878bcbeac1c01a9f644578de753f703f7e7dbad3af0d8467290efbd918934f"
+    },
+    "hypercrop-smoke.png": {
+      "bytes": 10472,
+      "sha256": "f074fc8a5a0b97005ebc4b215cd4f066471337addf00b35c4b4f438fb5c2f322"
+    },
+    "hypertile-poincare.png": {
+      "bytes": 22646,
+      "sha256": "a474fd724a93c6d9afbec9b2409f2f4cee295b0fb9f2d495f68c65a463b5c1d3"
+    },
+    "hypertile-smoke.png": {
+      "bytes": 4023,
+      "sha256": "0e5e328e3a125c487f62d9a340477753b27949ba1847f927b60673b1dc5df3d7"
+    },
+    "hypertile3d-smoke.png": {
+      "bytes": 1800,
+      "sha256": "2a46fe563126b051a8a8d8a38ef24dcd3b3172c7272c6c2aba085b563803cd91"
+    },
+    "iconattractor_js-smoke.png": {
+      "bytes": 8199,
+      "sha256": "7cc382ebcc6ce7ffe72b2756afce1ec9367cf6eee8252a4a8ae27affffa5a5c4"
+    },
+    "inflate-z-smoke.png": {
+      "bytes": 10335,
+      "sha256": "c8e5fcd377fbc3a979cf7bcc067d439d9677e0ed0cec43c7b337f683e28dc820"
+    },
+    "init-migration-smoke.png": {
+      "bytes": 602,
+      "sha256": "0735ff00ef7d4e26c473bc8a5a67353a4511abdd13f1840e93dd3535f78088c3"
+    },
+    "internal-weight-smoke.png": {
+      "bytes": 8770,
+      "sha256": "a674a98fe3ec6ed355937c42af32ab5551dd41df6ee12e5337beece85f850c20"
+    },
+    "jac_asn-smoke.png": {
+      "bytes": 2825,
+      "sha256": "b535438b46da900a61fcffdf3f868d0bc729b22470dcdb8d99ad870ab81d1382"
+    },
+    "jacobi-elliptic-smoke.png": {
+      "bytes": 353,
+      "sha256": "9a02602c672279c200444f4ffbee7cbd1c5adf22470ae68c86efb2909ec3f35c"
+    },
+    "klein-grandma-smoke.png": {
+      "bytes": 4747,
+      "sha256": "323f4d6952a86691db56811465ece56b9efc79a9fbc9a45f8f700b2883b19703"
+    },
+    "klein-maskit-smoke.png": {
+      "bytes": 6989,
+      "sha256": "6d2e600534290950917befb7483643e0534a3aaa752228fd14b42cb120073f26"
+    },
+    "klein-riley-smoke.png": {
+      "bytes": 1348,
+      "sha256": "16d7bf8280c4e226835a517d19e04ce90493b724f22c17d7a1003dd810983017"
+    },
+    "lazy-family-smoke.png": {
+      "bytes": 354,
+      "sha256": "07fab68668f71f328bf74e5a8b63baa251a7bb0093b334058f86ac903836523c"
+    },
+    "macmillan-smoke.png": {
+      "bytes": 2587,
+      "sha256": "387db718d1078c2f1f3fe4d73df16c1bfce3d1c25729159cca2c08218f639073"
+    },
+    "maurer-hyper-smoke.png": {
+      "bytes": 6753,
+      "sha256": "e2c3ecc0e54b48f0aaaa82d21824515d81d47d4d65c009c35fd60729b5023e23"
+    },
+    "maurer_rose-smoke.png": {
+      "bytes": 691,
+      "sha256": "f654b16795898ea00fe984e14cafec6ff9c7bb84700000a3149af8d05861514f"
+    },
+    "minkowskope-smoke.png": {
+      "bytes": 346,
+      "sha256": "c3fe5825bd985b3397e502fc700350c19c1b47eb376144347a2474727dc7d6a9"
+    },
+    "misc-2d-smoke.png": {
+      "bytes": 29994,
+      "sha256": "353aeaea8cb6adb84093a7b3d4b02b97bd3877c29d20c9dd00d9c8a94a09c9e7"
+    },
+    "misc-extras-smoke.png": {
+      "bytes": 30327,
+      "sha256": "0f999220658b8861a2cf28ea94d9803178e68f6e538f0860e4f0c71a62da5ac6"
+    },
+    "misc-extras2-smoke.png": {
+      "bytes": 11406,
+      "sha256": "d97cd9f517771b2e0bb952c8579f2341aff743c70ec151f9d234ba84c1d3ca66"
+    },
+    "misc-extras3-smoke.png": {
+      "bytes": 10254,
+      "sha256": "4a3ebfcd61fbbe64bb4dc31263f7d9a124e1f314afb998c333b09b6f561b0931"
+    },
+    "misc-extras4-smoke.png": {
+      "bytes": 11431,
+      "sha256": "f1c6f16d30cd05d2828cc986ab11bc4ecc6aeab76e0127dd7c510ece2c8d077f"
+    },
+    "misc-variations.png": {
+      "bytes": 30031,
+      "sha256": "a5bc2252ed5c9bbbf4e301ba8d019186a9b4a5de440080bd604568ac5d543947"
+    },
+    "misc-variations2.png": {
+      "bytes": 28368,
+      "sha256": "120da6bdfa30256be4328020149beb3f4fb6acbe84ce904fc41829137d732db8"
+    },
+    "mobius-extended-smoke.png": {
+      "bytes": 7187,
+      "sha256": "c5d8f76d25f4237174142e371ffe2263760f432f7366584c6c40d025e64bbbd1"
+    },
+    "multi_kaleidoscope-smoke.png": {
+      "bytes": 1825,
+      "sha256": "64d266ffbddc3bf6b0d52ad23d2444ab2b7aa15cdf78ee900f3068faa68ff176"
+    },
+    "murl-smoke.png": {
+      "bytes": 10837,
+      "sha256": "38c85b35ccaed2b55d0a83198627c8bbd7641de857ddda381641a9d60a19784a"
+    },
+    "numbered-extras-smoke.png": {
+      "bytes": 7289,
+      "sha256": "f014c91839ababd2ff5edcbeb0ed2d0479c7bdd30cea998e1b9449bc087d5003"
+    },
+    "onion2-smoke.png": {
+      "bytes": 642,
+      "sha256": "a71dbbeb3130d3bc8b23d6e0a929b54a63d4a272081a1bf57f85956054d9e6b0"
+    },
+    "parametric-curves-smoke.png": {
+      "bytes": 30735,
+      "sha256": "29758b5d1b0f06db1388cfebaacdf8f4b54c9893d6dfbee364d22f55485552a1"
+    },
+    "plastic-sierpinski.png": {
+      "bytes": 34924,
+      "sha256": "766914686bd5555d2df4d5a7139c688cc02b0f09bd4465349945408fec5c4a8e"
+    },
+    "plusrecip-smoke.png": {
+      "bytes": 3038,
+      "sha256": "216b641c8763d4170af03b8a437e5a8363d3a4a4b2111f8d3a24f7659eac5426"
+    },
+    "pointgrid_misc-smoke.png": {
+      "bytes": 34745,
+      "sha256": "3684ac02ead1ef184c8116c869b47c1c82065b7c61735a9f46a430bc95a12819"
+    },
+    "popcorn2_3d-smoke.png": {
+      "bytes": 584,
+      "sha256": "e46914663b61090d350725a82006f252b78b8c31e0edf9dc83952af2d9a1a5f1"
+    },
+    "post-heat-smoke.png": {
+      "bytes": 20402,
+      "sha256": "c2f7f4017afac8fba311e6182d2a68164e2babfee84de919de0869f87cdee69a"
+    },
+    "post-rblur-smoke.png": {
+      "bytes": 14622,
+      "sha256": "bdc884dc9472aa57440369b1d097149ac228990ff99451cc842ef59383c13e45"
+    },
+    "post_axis_symmetry-smoke.png": {
+      "bytes": 5537,
+      "sha256": "557facbb04b8f6e3f80ecfbf1fecfe2d8586457144a0246b051114be74ac1d5c"
+    },
+    "pre-post-bridges-smoke.png": {
+      "bytes": 8225,
+      "sha256": "7860f3d4c010b05d7fbb45f3c2287ce19719c56e8135cc4e2b2e36408c30ef0a"
+    },
+    "pre_wave3d-smoke.png": {
+      "bytes": 664,
+      "sha256": "add1f6e4906e42db384f1e6d25de2179e04250ae651e20d66756fa9beb4e6d8c"
+    },
+    "quaternion-smoke.png": {
+      "bytes": 1965,
+      "sha256": "238fee5844a492ec0e08fc8721c760c8c63417a380a86a3ceeb06d6586a9923e"
+    },
+    "radial-extras-smoke.png": {
+      "bytes": 2853,
+      "sha256": "fd19c651f2f93ed6f0cd218d5f536641544487f6d7e7071c5987cc3cd8d9d922"
+    },
+    "rhodonea-smoke.png": {
+      "bytes": 1530,
+      "sha256": "0e3cb5ba2c2c3ac7ee94dca07e1fb53feee4c8cd35036e34be5b99e9d7142485"
+    },
+    "rosoni-smoke.png": {
+      "bytes": 423,
+      "sha256": "c2bca7717c06ce13c12430abe54dbc7458c66b09a0445936886a630f05c72250"
+    },
+    "shapes3-smoke.png": {
+      "bytes": 36711,
+      "sha256": "1e14a8233c8621e4633979f620c0f9db52aef4fb9dedc6ffc5042ad487162d94"
+    },
+    "siercarpet_js-smoke.png": {
+      "bytes": 14490,
+      "sha256": "4039f4c916eefda89a2ad6e4371451c68f9e6e34519147a059c96020e6f19e07"
+    },
+    "simple-classics-smoke.png": {
+      "bytes": 32645,
+      "sha256": "ea3549ff761488df806c31b44ed83f0ba9d615954ba24374c764313b27afebd1"
+    },
+    "simple-linear.png": {
+      "bytes": 4033,
+      "sha256": "f5acd153903ba38970719a78d7bcca6bf9486a961f0e8461306027b6c3c2d6e2"
+    },
+    "simple-zcone.png": {
+      "bytes": 270,
+      "sha256": "1e87854b04093a96221e04434649b5857e77fd4d7e9daee2dce2d2eba15b4fa1"
+    },
+    "singleton-misc-smoke.png": {
+      "bytes": 24268,
+      "sha256": "02612669b80111d025f6127a0fc6af878849ba5115101bedf7d753d2d70d3535"
+    },
+    "solid-depth-effects.png": {
+      "bytes": 15307,
+      "sha256": "57094504b86d50d0f12074349cbeee016bd5fb7654fab69f53d463ca1b8bbfa3"
+    },
+    "solid-hard.png": {
+      "bytes": 21318,
+      "sha256": "559b58acbae9c8a736d563a9c2509c2b6bd86d355bd53b6280bbe2e59c9c04b8"
+    },
+    "solid-lit-transparent.png": {
+      "bytes": 21565,
+      "sha256": "61232f46ac963726bf25217e98c4587aa6263b3b761190028a95a16a6a3c6712"
+    },
+    "solid-lit.png": {
+      "bytes": 22712,
+      "sha256": "53ed08b955abacb2d932ef8426a93f743177891bb036668a2cdd4a6d2b3f343e"
+    },
+    "solid-shadows.png": {
+      "bytes": 22475,
+      "sha256": "ec5cc8d85e7fb1921f27076f73f2cc41d54a74c5dc7c64d1e15b391c16f47c3c"
     },
     "solid-solid-depth-effects.png": {
       "bytes": 15892,
@@ -118,6 +786,86 @@
       "bytes": 21236,
       "sha256": "196ed501fe15d9959ee91e41af004bdbb456897bc414652d34dabc834a545086"
     },
+    "solid-translucent.png": {
+      "bytes": 20638,
+      "sha256": "6364c8cb2c8c2cbd135ca5753519c827c78397069910ef2f306e126c659e5eb6"
+    },
+    "sosa_attractors-smoke.png": {
+      "bytes": 27784,
+      "sha256": "10e2a5024c6ecbd525f603f961303d6ea4597d396dfd3c7b16c5015f5b8d2676"
+    },
+    "sosa_attractors2-smoke.png": {
+      "bytes": 3402,
+      "sha256": "0f92bde44191fb791439e2cd80171b083e24841725143e543c7db6cf2a954ab6"
+    },
+    "sosa_attractors3-smoke.png": {
+      "bytes": 15181,
+      "sha256": "01deb0990a07d4a1aec1cbc6367c7f1a1ab7e30a1e8d6d8203d1c2124244a91f"
+    },
+    "sosa_attractors4-smoke.png": {
+      "bytes": 31308,
+      "sha256": "776e486c086bc893e62275dc8ab4c9046eb50c8d08a1e5b026ea9a951a9d650f"
+    },
+    "spin-phase-smoke.png": {
+      "bytes": 19304,
+      "sha256": "e22b9031a88086f183c15b5a828f54ccbf78764ef95bb8fe57fef782219c2596"
+    },
+    "spray_blur-normal-xform-smoke.png": {
+      "bytes": 2432,
+      "sha256": "b2b31ed5559e280300cfcede181d3a98f9d5751c310d0698a17cff7b65d92b68"
+    },
+    "spray_blur-smoke.png": {
+      "bytes": 5653,
+      "sha256": "022d9b133646c6eefbfc5a74c7cfef2d0aeb4531c438af511a6799e2d1beb99a"
+    },
+    "standalone-exotics-smoke.png": {
+      "bytes": 27605,
+      "sha256": "390147f2a806a74277ccdbe0aef174645c23acf7ba8103cb2e8556dd1c6e7752"
+    },
+    "stereogram-smoke.png": {
+      "bytes": 12557,
+      "sha256": "bc21de70fc33d672a5d5d90371f133128c857b65f265456a6aef567c15c40f3d"
+    },
+    "stub-recoveries-smoke.png": {
+      "bytes": 22989,
+      "sha256": "8d3ea51f0a037fc304d7cf9297642fd663af025c42cd3cb95da58d20515de8c3"
+    },
+    "stub-recoveries2-smoke.png": {
+      "bytes": 35232,
+      "sha256": "88e25c4d71a82109c747ff09b1447ca72e8f9f6ee56118284c0b0d7d47521dd1"
+    },
+    "subflame-blob.png": {
+      "bytes": 1119,
+      "sha256": "02ddb9dbc611c52ae74083d16f31fb7f44d0702294a93eef6f1e9b71e0a8f7dc"
+    },
+    "subflame-julian.png": {
+      "bytes": 474,
+      "sha256": "b2dcaec4d160878b39c32bdf9d1ea40e8cece5dac5d2ba0d6d238edd382a610a"
+    },
+    "subflame-klein.png": {
+      "bytes": 973,
+      "sha256": "570ba35555001b1e18744e843798905bbe6d1dc7c1b5f55c09a6ab2f468a63a0"
+    },
+    "subflame-smoke-2d.png": {
+      "bytes": 544,
+      "sha256": "b8ef25f54bf2a7486c0b9f4ed932d00c5192f9857aaf7f3c341ec0c9c9dbb54e"
+    },
+    "subflame-smoke.png": {
+      "bytes": 544,
+      "sha256": "92c12c1fc1e0fa22a14766a039df7d7aa1b1b6e0ec4b6f083028e7d7e361cb67"
+    },
+    "supershape3d-smoke.png": {
+      "bytes": 4041,
+      "sha256": "0767a93dd1e6fc5fd75479fa07eb2dc6f0dda8da392475d120fed6c796153ef4"
+    },
+    "swirl3-smoke.png": {
+      "bytes": 10155,
+      "sha256": "db179d57d6dec5cf63af4bdee1bb2b1e2a9128ce1d384e10853dd81d75903492"
+    },
+    "swirl3D_wf-smoke.png": {
+      "bytes": 11145,
+      "sha256": "1e52cc21de39f9b3814281388f80feeeec558801ad2446b9e9c1c36e5367e469"
+    },
     "tonemap-black-curve.png": {
       "bytes": 136,
       "sha256": "c72274a22cba2dcef62e0f62834446ee39b0cd95ad0faa27a89b3b49f48aa390"
@@ -125,6 +873,18 @@
     "tonemap-white-curve.png": {
       "bytes": 25969,
       "sha256": "e7acd7fa082ca5ea681fb10f678869cb963544a941572eaf4d1400adb4c69445"
+    },
+    "truchet-smoke.png": {
+      "bytes": 640,
+      "sha256": "cf86269ba8f38cf765524a776f2e64c5a15b020fe565e8a2a7827c88cf18fc24"
+    },
+    "truchet-tw-smoke.png": {
+      "bytes": 356,
+      "sha256": "026dbe82a56854b365b46bc0c80751e281007ea00bda8023325c4bcffa24910f"
+    },
+    "truchet2-smoke.png": {
+      "bytes": 7179,
+      "sha256": "d368d6d32c9710834d859ffbc9730b66c4c744500765db1a4e93d8fa3a7d2595"
     },
     "variations-affine3d-smoke.png": {
       "bytes": 838,
@@ -610,17 +1370,57 @@
       "bytes": 4934,
       "sha256": "aedd1d356a46c2e1f66b8b8cb916c9ef3b54a3540433c5f03743823ddd18de24"
     },
-    "escape-ducks-julia.png": {
-      "bytes": 40025,
-      "sha256": "bd861c170421f9a233bbffa1a4b6236709dd5984742b811db3d255a0f8c13312"
+    "vibration2-smoke.png": {
+      "bytes": 1611,
+      "sha256": "359aa3f1961074a66895a6cb39dd23e2b254463b551741338866062e4095b82f"
     },
-    "escape-ducks-param.png": {
-      "bytes": 23277,
-      "sha256": "90f326f06d9b05c726be5222a49da6c99e6eb6146fa9c4957816bfbc1ba8c154"
+    "watchlist-misc-smoke.png": {
+      "bytes": 34559,
+      "sha256": "abe04fb270e16e993b07ff9e98ee627003bc3b0f752e6ad430b8bb7dfc0a3462"
     },
-    "escape-ducks-sec.png": {
-      "bytes": 41300,
-      "sha256": "b928ec08717bc50fe19319348b03471e54be7b1a7d777ed5cbbe0fcb30a4e5fa"
+    "waveblur_wf-smoke.png": {
+      "bytes": 5036,
+      "sha256": "6d13226bf949e36b560646f3afa0b5cedef04bea67f3367b252d84413f155ceb"
+    },
+    "waves2b-smoke.png": {
+      "bytes": 575,
+      "sha256": "4f25074fc03e7150affbeaee1d26a267ce5072e968b86844d4e6d470968c42d0"
+    },
+    "waves_wf_family-smoke.png": {
+      "bytes": 6280,
+      "sha256": "ee0e3889df16bd1c433328f787cfdc387bbbf5fd10588cd95cd94a88053bdf8f"
+    },
+    "wedge-extended-smoke.png": {
+      "bytes": 32971,
+      "sha256": "e643d9af7f96ee57ab99ed534842f4b3f7b508cbe77e6a3ae6e01397f49148ac"
+    },
+    "weight-hack-smoke.png": {
+      "bytes": 19914,
+      "sha256": "a835f5279129666a08880d8c7fd79ee766e8729ebb5c47cab0fba04a680d8ed4"
+    },
+    "wf_curves-smoke.png": {
+      "bytes": 9683,
+      "sha256": "2d87d38941bea08cf00e2c221a7f82231a0c1fde0ef0f389328729140cd3671b"
+    },
+    "white-curve.png": {
+      "bytes": 26106,
+      "sha256": "da7a901628b707eea3a7895d70b2256617124ee0732e46ef5dfd201de46c8d6f"
+    },
+    "wz-lost-smoke.png": {
+      "bytes": 2267,
+      "sha256": "4e7e79c8b961a03662a81f42b924405e50ad9aacb904196bc1ec740cbfeaa135"
+    },
+    "xtrb-smoke.png": {
+      "bytes": 4936,
+      "sha256": "0e0fb3d88445dd32d445acea4fe44e31ec5530604e259e34078f77b88a250173"
+    },
+    "zcone-smoke.png": {
+      "bytes": 597,
+      "sha256": "15d3048f004b67cef391259ce1add399137069e7c258247a5f571b5c01f63979"
+    },
+    "zscale-smoke.png": {
+      "bytes": 592,
+      "sha256": "9c6ebe2eb79cfd23e9a77c531477be90a1502141b39bd4f63f7e177301d47a70"
     }
   },
   "tolerance_max": 40.0,
