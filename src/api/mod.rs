@@ -152,27 +152,6 @@ impl ApiState {
         self.auth.set_token(token.to_string());
     }
 
-    /// Refuse configs the server cannot store yet, BEFORE anything is
-    /// sent — and before the token check, so the refusal is the same
-    /// signed in or out.
-    ///
-    /// The server casts `render_mode` into a Postgres enum with no
-    /// "escape" value; uploading one would be a 500 on their side
-    /// instead of a sentence on ours. Nothing forces this coordination
-    /// (verified: the engine contract carries no render-mode
-    /// vocabulary), so this guard is the only seatbelt. Remove it when
-    /// the API adds the value.
-    fn refuse_unsupported_online(config: &FractalConfig) -> FetchResult<()> {
-        if config.render_mode == crate::scene::transforms::RenderMode::Escape {
-            return Err(FetchError::Unsupported(
-                "Escape-time fractals can't be saved online yet — the server \
-                 doesn't know this render mode. Save locally for now."
-                    .to_string(),
-            ));
-        }
-        Ok(())
-    }
-
     /// Clear auth state (sign out).
     pub fn clear_auth(&mut self) {
         self.auth.clear();
@@ -237,7 +216,6 @@ impl ApiState {
         visibility: Option<ApiVisibility>,
         thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<String> {
-        Self::refuse_unsupported_online(config)?;
         let token = self.require_token()?;
 
         let mut flame_req = sync::config_to_create_request(config, name)?;
@@ -294,7 +272,6 @@ impl ApiState {
         visibility: Option<ApiVisibility>,
         thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<FlameResponse> {
-        Self::refuse_unsupported_online(config)?;
         let token = self.require_token()?;
 
         let effective_visibility = match visibility {
