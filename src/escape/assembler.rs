@@ -1396,6 +1396,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 pub enum PerturbTier {
     /// z^p + c, integer p — the clean binomial expansion.
     Power(u32),
+    /// Tricorn / Multicorn: `conj(z)^p + c`, the power binomial over
+    /// conjugated operands -- on BOTH rungs, since conjugation is only
+    /// a sign flip in either representation. BLA stays unavailable:
+    /// the map is anti-holomorphic, so the linear A*delta + B*delta_c
+    /// model has no matching derivation.
+    Tricorn(u32),
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
@@ -1519,33 +1525,46 @@ fn binomial(p: u32, k: u32) -> u64 {
 /// S-folded w powers (`u_k = S^(k-1) w^k`, underflow of S legitimately
 /// zeroing the high terms in the deep-linear regime).
 fn delta_step_scaled(p: u32) -> String {
+    delta_step_scaled_on(p, "z_ref", "w")
+}
+
+/// The binomial delta step, over NAMED operands.
+///
+/// Tricorn's map is `conj(z)^p + c`, whose delta expansion is
+/// this same binomial with Z and w replaced by their conjugates
+/// (conj is an involution and distributes over products, so
+/// `conj(Z+d)^p - conj(Z)^p` expands exactly like the plain
+/// power in conj(Z), conj(d)). Naming the operands is all it
+/// takes to share the derivation instead of copying it.
+fn delta_step_scaled_on(p: u32, zr: &str, w: &str) -> String {
     if p == 2 {
-        return "        // w' = 2 Z w + S w^2 + d0 (quadratic term hoisted out in the\n\
-                \x20       // deep-linear regime).\n\
-                \x20       var w_new = 2.0 * vec2<f32>(\n\
-                \x20           z_ref.x * w.x - z_ref.y * w.y,\n\
-                \x20           z_ref.x * w.y + z_ref.y * w.x,\n\
-                \x20       ) + d0_term;\n\
-                \x20       if ((perturb.flags & 1u) == 0u) {\n\
-                \x20           w_new = w_new + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);\n\
-                \x20       }"
-            .to_string();
+        return format!(
+            "        // w' = 2 Z w + S w^2 + d0 (quadratic term hoisted out in the\n\
+             \x20       // deep-linear regime).\n\
+             \x20       var w_new = 2.0 * vec2<f32>(\n\
+             \x20           {zr}.x * {w}.x - {zr}.y * {w}.y,\n\
+             \x20           {zr}.x * {w}.y + {zr}.y * {w}.x,\n\
+             \x20       ) + d0_term;\n\
+             \x20       if ((perturb.flags & 1u) == 0u) {{\n\
+             \x20           w_new = w_new + perturb.s * vec2<f32>({w}.x * {w}.x - {w}.y * {w}.y, 2.0 * {w}.x * {w}.y);\n\
+             \x20       }}"
+        );
     }
     let mut out = String::new();
     out.push_str(&format!("        // Binomial delta step for z^{p} + c.\n"));
     // Powers of the reference Z up to p-1.
-    out.push_str("        let zr1 = z_ref;\n");
+    out.push_str(&format!("        let zr1 = {zr};\n"));
     for k in 2..p {
         out.push_str(&format!(
-            "        let zr{k} = vec2<f32>(zr{}.x * z_ref.x - zr{}.y * z_ref.y, zr{}.x * z_ref.y + zr{}.y * z_ref.x);\n",
+            "        let zr{k} = vec2<f32>(zr{}.x * {zr}.x - zr{}.y * {zr}.y, zr{}.x * {zr}.y + zr{}.y * {zr}.x);\n",
             k - 1, k - 1, k - 1, k - 1
         ));
     }
     // S-folded powers of w: u1 = w, u(k) = S * u(k-1) * w.
-    out.push_str("        let u1 = w;\n");
+    out.push_str(&format!("        let u1 = {w};\n"));
     for k in 2..=p {
         out.push_str(&format!(
-            "        let u{k} = perturb.s * vec2<f32>(u{}.x * w.x - u{}.y * w.y, u{}.x * w.y + u{}.y * w.x);\n",
+            "        let u{k} = perturb.s * vec2<f32>(u{}.x * {w}.x - u{}.y * {w}.y, u{}.x * {w}.y + u{}.y * {w}.x);\n",
             k - 1, k - 1, k - 1, k - 1
         ));
     }
@@ -1566,21 +1585,56 @@ fn delta_step_scaled(p: u32) -> String {
 }
 
 /// The floatexp flavor of the same step.
+/// Tricorn / Multicorn, floatexp rung: the same conjugation, applied
+/// to the DF mantissa pair and to the delta's hi/lo halves. The
+/// exponent is untouched -- conjugation only flips a sign.
+fn delta_step_conj_fe(p: u32) -> String {
+    format!(
+        "        // Anti-holomorphic: conj(z)^p + c, deep rung.\n\
+         \x20       let zcm = vec2<f32>(z_ref_m.x, -z_ref_m.y);\n\
+         \x20       let zclo = vec2<f32>(z_ref_lo_m.x, -z_ref_lo_m.y);\n\
+         \x20       let wc = CFe2(vec2<f32>(w.hi.x, -w.hi.y), vec2<f32>(w.lo.x, -w.lo.y), w.e);\n{}",
+        delta_step_floatexp_on(p, "zcm", "zclo", "wc")
+    )
+}
+
+/// Tricorn / Multicorn, scaled rung: the power step over conjugated
+/// operands. The reference and the delta are conjugated on entry; the
+/// RESULT is not, because `conj(Z+d)^p - conj(Z)^p` is already the
+/// new delta rather than its conjugate.
+fn delta_step_conj(p: u32) -> String {
+    format!(
+        "        // Anti-holomorphic: conj(z)^p + c. Same binomial as the\n\
+         \x20       // power tier, over conj(Z) and conj(w).\n\
+         \x20       let zc = vec2<f32>(z_ref.x, -z_ref.y);\n\
+         \x20       let wc = vec2<f32>(w.x, -w.y);\n{}",
+        delta_step_scaled_on(p, "zc", "wc")
+    )
+}
+
 fn delta_step_floatexp(p: u32) -> String {
+    delta_step_floatexp_on(p, "z_ref_m", "z_ref_lo_m", "w")
+}
+
+/// The floatexp binomial step over NAMED operands -- the deep-rung
+/// twin of [`delta_step_scaled_on`], so the Tricorn family can feed
+/// it conjugates instead of duplicating the derivation.
+fn delta_step_floatexp_on(p: u32, zm: &str, zlo: &str, w: &str) -> String {
     if p == 2 {
-        return "        // delta' = 2 Z delta + delta^2 (+ delta_c on the parameter\n\
-                \x20       // plane) - DF mantissas AND DF reference (~2^-48),\n\
-                \x20       // the reference read with its own exponent so a\n\
-                \x20       // near-nucleus iterate cannot underflow out of the\n\
-                \x20       // multiplier.\n\
-                \x20       var w_new = cfe2_add(\n\
-                \x20           cfe2_mul_zdfe(w, 2.0 * z_ref_m, 2.0 * z_ref_lo_m, z_ref_e),\n\
-                \x20           cfe2_sqr(w),\n\
-                \x20       );\n\
-                \x20       if (!is_julia_perturb) {\n\
-                \x20           w_new = cfe2_add(w_new, d0);\n\
-                \x20       }"
-            .to_string();
+        return format!(
+            "        // delta' = 2 Z delta + delta^2 (+ delta_c on the parameter\n\
+             \x20       // plane) - DF mantissas AND DF reference (~2^-48),\n\
+             \x20       // the reference read with its own exponent so a\n\
+             \x20       // near-nucleus iterate cannot underflow out of the\n\
+             \x20       // multiplier.\n\
+             \x20       var w_new = cfe2_add(\n\
+             \x20           cfe2_mul_zdfe({w}, 2.0 * {zm}, 2.0 * {zlo}, z_ref_e),\n\
+             \x20           cfe2_sqr({w}),\n\
+             \x20       );\n\
+             \x20       if (!is_julia_perturb) {{\n\
+             \x20           w_new = cfe2_add(w_new, d0);\n\
+             \x20       }}"
+        );
     }
     let mut out = String::new();
     out.push_str(&format!("        // Binomial delta step for z^{p} + c (floatexp).\n"));
@@ -1588,16 +1642,16 @@ fn delta_step_floatexp(p: u32) -> String {
     // exponent k*z_ref_e is applied at the term multiply below. The
     // mantissa stays in [1,4), so no power of it underflows even when
     // the iterate itself is far below f32's range.
-    out.push_str("        let zr1 = z_ref_m;\n");
+    out.push_str(&format!("        let zr1 = {zm};\n"));
     for k in 2..p {
         out.push_str(&format!(
-            "        let zr{k} = vec2<f32>(zr{}.x * z_ref_m.x - zr{}.y * z_ref_m.y, zr{}.x * z_ref_m.y + zr{}.y * z_ref_m.x);\n",
+            "        let zr{k} = vec2<f32>(zr{}.x * {zm}.x - zr{}.y * {zm}.y, zr{}.x * {zm}.y + zr{}.y * {zm}.x);\n",
             k - 1, k - 1, k - 1, k - 1
         ));
     }
-    out.push_str("        let u1 = w;\n");
+    out.push_str(&format!("        let u1 = {w};\n"));
     for k in 2..=p {
-        out.push_str(&format!("        let u{k} = cfe2_mul(u{}, w);\n", k - 1));
+        out.push_str(&format!("        let u{k} = cfe2_mul(u{}, {w});\n", k - 1));
     }
     out.push_str("        var w_new = cfe2_zero();\n");
     out.push_str("        if (!is_julia_perturb) {\n            w_new = d0;\n        }\n");
@@ -1638,10 +1692,12 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship(v.min(5)),
+                PerturbTier::Tricorn(p) => delta_step_conj(p.clamp(2, 12)),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship_fe(v.min(5)),
+                PerturbTier::Tricorn(p) => delta_step_conj_fe(p.clamp(2, 12)),
             }),
             "//__COLORING__" => {
                 out.push(format!(
@@ -2190,6 +2246,55 @@ mod tests {
         assert!(spider.contains("formula_step(z, &c)"));
         let plain = assemble(&formulas::MANDELBROT, &colorings::SMOOTH, false);
         assert!(plain.contains("let c = select"));
+    }
+
+    /// The Tricorn tier compiles on both rungs, for every integer
+    /// power, and actually carries the conjugation (a wrapper that
+    /// silently emitted the plain power would render the Multibrot
+    /// while claiming to be the Tricorn).
+    #[test]
+    fn tricorn_tier_compiles_and_conjugates() {
+        use crate::escape::colorings;
+        for p in 2..=12u32 {
+            for floatexp in [false, true] {
+                let src = assemble_perturbed(
+                    &colorings::SMOOTH, floatexp, PerturbTier::Tricorn(p));
+                let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| {
+                    panic!("Tricorn p={p} floatexp={floatexp} failed to parse: {e}")
+                });
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| {
+                    panic!("Tricorn p={p} floatexp={floatexp} failed validation: {e}")
+                });
+                // The conjugation must be present, and the step must
+                // consume it rather than the raw operands.
+                if floatexp {
+                    assert!(src.contains("let zcm = vec2<f32>(z_ref_m.x, -z_ref_m.y);"));
+                    if p == 2 {
+                        // The p=2 fast path has no zr1; it consumes the
+                        // conjugated mantissa and delta directly.
+                        assert!(
+                            src.contains("cfe2_mul_zdfe(wc, 2.0 * zcm"),
+                            "p=2 deep fast path must use the conjugates"
+                        );
+                    } else {
+                        assert!(src.contains("let zr1 = zcm;"));
+                    }
+                } else {
+                    assert!(src.contains("let zc = vec2<f32>(z_ref.x, -z_ref.y);"));
+                    assert!(src.contains("let wc = vec2<f32>(w.x, -w.y);"));
+                    if p == 2 {
+                        assert!(src.contains("zc.x * wc.x"), "p=2 fast path must use conjugates");
+                    } else {
+                        assert!(src.contains("let zr1 = zc;"));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

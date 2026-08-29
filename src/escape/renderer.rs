@@ -858,6 +858,10 @@ impl EscapeRenderer {
         let power = match tier {
             assembler::PerturbTier::Power(p) => p.clamp(2, 12),
             assembler::PerturbTier::Ship(_) => return false,
+            // Anti-holomorphic: `conj` is not complex-linear, so the
+            // A*delta + B*delta_c model BLA is built on does not hold.
+            // Per-step iteration carries the Tricorn family.
+            assembler::PerturbTier::Tricorn(_) => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -1437,6 +1441,17 @@ impl EscapeRenderer {
                     None
                 }
             }
+            "tricorn" => {
+                // conj(z)^p: the binomial expansion needs an integer
+                // exponent, exactly as Multibrot does.
+                let p = escape.formula_params.get("power").copied().unwrap_or(2.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=12.0).contains(&rounded) {
+                    Some(assembler::PerturbTier::Tricorn(rounded as u32))
+                } else {
+                    None
+                }
+            }
             "burning_ship" => {
                 let variant = escape.formula_params.get("variant").copied().unwrap_or(0.0);
                 let v = variant.round();
@@ -1506,6 +1521,9 @@ impl EscapeRenderer {
         let (power, ship, ship_variant) = match tier {
             assembler::PerturbTier::Power(p) => (p, false, 0),
             assembler::PerturbTier::Ship(v) => (2, true, v),
+            assembler::PerturbTier::Tricorn(p) => {
+                (p, false, super::reference::MAP_CONJ)
+            }
         };
         let height_px = self.height.max(1) as f64;
         let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
@@ -1690,6 +1708,9 @@ impl EscapeRenderer {
         let (power, ship, ship_variant) = match tier {
             assembler::PerturbTier::Power(p) => (p, false, 0),
             assembler::PerturbTier::Ship(v) => (2, true, v),
+            assembler::PerturbTier::Tricorn(p) => {
+                (p, false, super::reference::MAP_CONJ)
+            }
         };
         let period_hint = if julia_c.is_none() && !ship {
             escape.reference_period.filter(|&p| p > 0)

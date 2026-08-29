@@ -800,6 +800,24 @@ mod tests {
         check("multibrot3", &multi_cfg, false);
         check("multibrot3-floatexp", &multi_cfg, true);
 
+        // Tricorn (and a Multicorn) over the home view: the
+        // anti-holomorphic tier is the power binomial over conjugated
+        // operands, so a dropped or doubled conjugate renders the
+        // MULTIBROT instead -- a mirror image, which block means catch
+        // immediately.
+        let mut tri_cfg = crate::config::escape::EscapeConfig::default();
+        tri_cfg.formula = "tricorn".to_string();
+        tri_cfg.center_re = "0".to_string();
+        tri_cfg.center_im = "0".to_string();
+        tri_cfg.zoom_log2 = 1.0;
+        tri_cfg.max_iter = 300;
+        tri_cfg.coloring_params.insert("scale".to_string(), 0.02);
+        for p in [2.0f32, 3.0, 5.0] {
+            tri_cfg.formula_params.insert("power".to_string(), p);
+            check(&format!("tricorn{p}"), &tri_cfg, false);
+            check(&format!("tricorn{p}-floatexp"), &tri_cfg, true);
+        }
+
         // Burning Ship (plain variant) over its home view: every
         // boundary pixel exercises the diffabs case analysis, for every
         // fold variant, on both rungs.

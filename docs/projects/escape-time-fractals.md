@@ -1512,6 +1512,63 @@ scaling; that is the leading remaining suspect for the MEASUREMENT
 rather than the map. Recorded here so the next person starts from the
 excluded list rather than re-deriving it.
 
+### Tricorn joins the perturbation tiers (2026-08-28)
+
+The first formula added to the deep-zoom machinery since the Ship
+family, and the one that shows what "extending it" actually costs.
+
+The MAP is anti-holomorphic (`conj(z)^p + c`), but its delta
+expansion is not new mathematics: `conj(Z+d)^p - conj(Z)^p` expands
+by the same binomial as the plain power, in conj(Z) and conj(d),
+because conjugation is an involution that distributes over products.
+So both rungs' codegen was PARAMETERISED on its operand names rather
+than copied, and the tier is a four-line wrapper binding conjugated
+operands -- on the deep rung too, since conjugating a DF pair is also
+just a sign flip. Powers 2..12, both rungs, verified against the
+direct render at 0/768 differing blocks.
+
+What does NOT come along, and why:
+
+- **BLA.** The skip table models a step as `A*delta + B*delta_c`,
+  and conjugation is antilinear, so no such A exists. Tricorn renders
+  per-step; the deep-zoom speedups BLA buys elsewhere are unavailable
+  until someone derives an antilinear analogue.
+- **Nucleus relocation and period detection.** Both are derived for
+  `f_c^p(0)` -- Newton on the polynomial, the ball method, the
+  closure test. Tricorn takes the plain view-centre reference.
+
+The orbit's map identity is carried in the existing `ship_variant`
+field, which is unused when `ship` is false: 0 is the plain power, 1
+is the conjugate family (`MAP_PLAIN` / `MAP_CONJ`). That field
+already threads through every orbit signature, the disk key and
+`serves()`, so a parallel `conj` flag would have put the same fact in
+two places and allowed a cache key to disagree with itself. When a
+third non-fold family lands, the honest refactor is a small `MapId`
+struct carrying (power, ship, variant) -- recorded here rather than
+done now.
+
+Verified at depth, not just where the direct path can argue: against
+an f64 oracle at the same centre, our perturbed tricorn disagrees on
+0.33% of pixels at zoom 20 and 0.40% at zoom 28 -- the same quality
+as the known-good mandelbrot control measured the same way (0.00 to
+0.04%). `tricorn-deep.fflame` pins the zoom-28 view. Note this needed
+a control: the first measurement said 9-13%, which looked like a
+depth-only defect until the mandelbrot control came back clean and
+the cause turned out to be the MEASUREMENT -- the view had been
+walked to the slowest-escaping pixel, so it was packed with orbits
+finishing within 10% of max_iter, where a one-iteration difference
+flips set membership. With iteration headroom the disagreement
+collapsed to 0.4%. A deep view centred on a near-max_iter pixel
+cannot be compared by set membership at that max_iter.
+
+One trap worth remembering for the next tier: the nucleus-aware
+route had to exclude the new family MECHANICALLY, not just
+mathematically. A nucleus orbit is built tagged variant 0, which a
+variant-1 request can never be served by, so leaving it in place made
+the cache rebuild the reference every frame and the render never
+settle -- which is what "chunk loop failed to settle" meant when the
+agreement test first ran.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers) and the `burning_ship` variants perturb and reach
 z9316+; the other twenty render through the DIRECT path and stop
