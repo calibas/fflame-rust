@@ -1461,6 +1461,32 @@ identical-looking guard is safe because that formula ESCAPES: its
 sentinel trips the bailout immediately instead of having to survive
 another step.
 
+**Novaretti closed 2026-08-28, against a third-party implementation.**
+A user supplied an independent Shadertoy of the same map (component-
+unrolled real arithmetic, dynamical plane, its own bailouts). Two
+results:
+
+- The MAP is confirmed. Transcribed literally, its field disagrees
+  with ours by 6.5% under its own bailout policy and by **0.51%**
+  once that policy is matched to ours -- so the difference was never
+  the formula, only the conventions: it breaks on |z|^2 > 1e4 or
+  < 1e-4 and freezes its orbit trap there, while ours is
+  NonEscaping and keeps iterating (justified: for large |z| the map
+  gives z' ~ -1.5/z^2, so infinity maps back toward 0 and orbits do
+  not truly escape). Its pole guard is also looser, 1e-7 against our
+  1e-24, and it breaks where we substitute and continue. Those are
+  the bright blobs visible in a side-by-side: pixels whose trap it
+  froze early and ours refined further.
+- The SEED is confirmed, and it was the one thing the audit could not
+  check independently (the oracle copied it from our own WGSL).
+  Solving f'(z) = 0 numerically for several c gives critical points
+  satisfying z^3/c in {-0.0729490168, -3.4270509832} -- the two roots
+  of t^2 + 3.5t + 0.25 -- and our seed constant is the first of them
+  to ten digits. The parameter plane is therefore seeded at a genuine
+  critical point, as Mandelbrot's z0 = 0 is.
+
+`novaretti-julia.fflame` pins the verified view.
+
 **OPEN: kaliset and novaretti fine-grained fields.** Side-by-side
 renders show the SAME structure as the oracle (novaretti's star
 field, kaliset's arc system, in the same places), and the algebra is
