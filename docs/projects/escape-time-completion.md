@@ -1,8 +1,8 @@
 # Escape-time: what is left before the branch is done
 
 Agreed 2026-08-28, after the TDR-safety plan shipped and the NTT
-project was measured and parked. Six work items, each with what the
-survey actually found rather than what it was assumed to be.
+project was measured and parked. Seven work items, each with what
+the survey actually found rather than what it was assumed to be.
 
 The survey's headline: **the engine is in far better shape than its
 surface**. Rendering, deep zoom, orbit caching and crash-safety have
@@ -146,6 +146,52 @@ fails the build if a registered name is missing from
 optional here, and `export_scripts_json` publishes built-ins to the
 API.
 
+## 7. Reference-build CPU performance (rescued from the shelved NTT doc)
+
+The GPU measurement parked one approach; it did not make reference
+builds fast. The f3-class target is ~8 minutes of arithmetic, cold.
+What the queue already MEASURED, so nobody re-derives it:
+
+- a reference iteration at 197 limbs is 48.9 us, and 44.6 us of that
+  (**91%**) is the two `mul_trunc` calls;
+- removing essentially every heap allocation from the step won
+  **1.03x** -- the allocator was never the problem;
+- **Karatsuba does not pay at 197 limbs**: the truncated high-window
+  product already costs ~n^2/2 MACs, about what Karatsuba on the
+  FULL product would cost at that size. It is worth revisiting only
+  well above this limb count.
+
+So the honest remaining lever is **SIMD**, and it aims squarely at
+the 91%: 32-bit limbs through AVX2 `vpmuludq`, or 52-bit limbs
+through AVX-512 IFMA, against the current scalar 64x64->128 chain
+(measured at ~1.15 ns per limb MAC, i.e. 3-4 cycles -- about what
+well-scheduled scalar `mulx`/`adc` achieves, so there is no scalar
+win hiding here). A 2-4x cut would take the f3 cold build from eight
+minutes to two or three.
+
+Two caveats to design around before starting:
+
+- the representation is the interface. `fixedpoint.rs`'s u64 limbs
+  are load-bearing for the orbit store's format, the DF shadow's
+  bit-exactness and every determinism guarantee in this project. A
+  SIMD-friendly relimbing is a change to all of them, and the
+  cold==warm identity test is the thing that must not break.
+- **it must stay portable**: x86 SIMD needs a scalar fallback for
+  ARM and wasm, and the two paths must agree BIT-EXACTLY or saved
+  orbits stop being portable between machines -- the same
+  requirement the NTT plan's Phase 1 identified, for the same
+  reason.
+
+Multithreading one multiply is plausible but fiddly: 44.6 us split
+four ways needs a persistent spin-barrier pool, because dispatching
+through a work queue ten million times would cost more than it
+saves. Worth measuring only after SIMD, and probably only above
+~1,000 limbs.
+
+Perspective on priority: the orbit store already turns the second
+visit to a location into seconds, and FFORBIT6 made those files ~100x
+smaller. This item is about the FIRST visit only.
+
 ## Suggested order, and why
 
 1. **Accuracy audit (1)** — it is foundational: optimizing or
@@ -163,3 +209,9 @@ API.
    cost is permanent and the benefit is a number nobody has yet.
 6. **API (5)** — gated on the server; prepare the client and hand
    the schema over.
+
+Item **7 (CPU reference performance)** is deliberately outside that
+sequence: it is independent of every other item, it is the only one
+that shortens the eight-minute cold build, and its cost is dominated
+by a representation change nobody should start casually. Schedule it
+when a deep dive actually hurts, not because it is on the list.

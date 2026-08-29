@@ -115,10 +115,30 @@ decision: re-run `cargo test --lib gpu_bignum -- --ignored
 integer multiply, and the numbers answer the question again without
 re-deriving any of this.
 
-What this does NOT close: the CPU side has real headroom nobody has
-spent yet — SIMD limb multiplication, Karatsuba above a few hundred
-limbs, and multithreading a single multiply. Those are the moves
-worth making if reference builds need to be faster.
+What this does NOT close, stated more carefully than the first draft
+of this line did: the CPU side has SOME headroom, but less than
+"nobody has tried" implies, and the escape queue already measured
+part of it. A reference iteration at 197 limbs is 48.9 us, of which
+44.6 us (91%) is the two `mul_trunc` calls; stripping essentially
+every heap allocation out of the step won 1.03x, and **Karatsuba
+does not pay at this limb count** -- the truncated high-window
+product already costs about n^2/2 MACs, roughly what Karatsuba on
+the FULL product would cost at n = 197. It becomes interesting well
+above that, which is the same direction everything else in this
+document points.
+
+What is genuinely unspent is SIMD, and it aims at the right target:
+the 91% is limb multiply-accumulate, which is exactly what 32-bit
+limbs through AVX2 `vpmuludq`, or 52-bit limbs through AVX-512
+IFMA, attack. Multithreading a single multiply is plausible but
+fiddly at this size -- 44.6 us of work split four ways needs a
+persistent spin-barrier pool, because dispatching through a work
+queue 10 million times would cost more than it saves.
+
+Tracked as an item in
+[escape-time-completion.md](../projects/escape-time-completion.md),
+where it can be scheduled; it does not depend on anything in this
+shelved document.
 
 ### The original plan, for reference
 
