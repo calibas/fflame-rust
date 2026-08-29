@@ -368,6 +368,7 @@ impl ConfigManager {
         // the saved preference has to be pushed into it here as well
         // as on every later edit.
         #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(feature = "engine-escape")]
         crate::escape::orbit_store::set_max_total_mb(system_settings.orbit_cache_mb);
 
         Self {
@@ -914,6 +915,7 @@ impl ConfigManager {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.orbit_cache_mb = value;
                 #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(feature = "engine-escape")]
                 crate::escape::orbit_store::set_max_total_mb(value);
             }
             ConfigPath::SystemVsyncEnabled => {

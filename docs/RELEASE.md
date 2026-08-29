@@ -25,7 +25,7 @@ Four artifacts, built four different ways, from one repository.
 |---|---|---|---|
 | Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
-| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
+| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
 | Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |
 
 ### The version problem
@@ -233,7 +233,7 @@ Host-specific packaging runs automatically as the second step — the
 | macOS bundle | `python3 scripts/make_macos_app.py --zip` | macOS |
 | Windows zip | `python scripts/make_windows_zip.py` | Windows |
 | web app | `./build-wasm.sh` / `build-wasm.bat` (they build `--profile dist`) | either |
-| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/script` | either |
+| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/script` | either |
 | python wheel | `maturin build --release` in `python/` | per-platform wheel |
 
 `--profile dist`, never `--release`, for **desktop and web alike** — §4c
@@ -552,6 +552,9 @@ they are the one surface that does **not** use `build-wasm.sh`:
 
 ```bash
 cd wasm/render && wasm-pack build --target web --release   # -> wasm/render/pkg/
+# ...and the engine-specific pair, same source, different Cargo features:
+cd wasm/flame  && wasm-pack build --target web --release   # flame only,  0.73 MB gzip
+cd wasm/escape && wasm-pack build --target web --release   # escape only, 0.41 MB gzip
 cd wasm/script && wasm-pack build --target web --release   # -> wasm/script/pkg/
 ```
 

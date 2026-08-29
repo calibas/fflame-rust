@@ -91,6 +91,7 @@ pub struct ConfigHandle {
 /// The CENTRE IS A STRING on purpose. It is the deep-zoom payload:
 /// zoom 60 needs about 20 significant digits and an f64 carries 15,
 /// so every accessor here keeps it as text end to end.
+#[cfg(feature = "engine-escape")]
 #[derive(Clone)]
 pub struct EscapeHandle {
     cfg: Rc<RefCell<FractalConfig>>,
@@ -345,6 +346,7 @@ pub(crate) fn push_globals(
     state: Rc<RefCell<ScriptState>>,
 ) {
     scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
+    #[cfg(feature = "engine-escape")]
     scope.push("escape", EscapeHandle { cfg: Rc::clone(&cfg) });
     scope.push("config", ConfigHandle { cfg });
     scope.push("anim", AnimHandle { state });
@@ -359,6 +361,7 @@ pub(crate) fn register(
     engine.register_type_with_name::<TransformHandle>("Transform");
     engine.register_type_with_name::<ConfigHandle>("Config");
     engine.register_type_with_name::<AnimHandle>("Anim");
+    #[cfg(feature = "engine-escape")]
     engine.register_type_with_name::<EscapeHandle>("Escape");
     register_anim(engine, Rc::clone(&state));
 
@@ -367,6 +370,7 @@ pub(crate) fn register(
     register_flame(engine);
     register_transform(engine);
     register_config(engine, Rc::clone(&state));
+    #[cfg(feature = "engine-escape")]
     register_escape(engine);
     register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
@@ -1422,6 +1426,7 @@ fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltRes
 /// alternative is a config carrying escape settings while rendering a
 /// flame, which reads as a bug in the script rather than a missing
 /// line.
+#[cfg(feature = "engine-escape")]
 fn register_escape(engine: &mut Engine) {
     use crate::scene::transforms::RenderMode;
 

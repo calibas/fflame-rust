@@ -1619,6 +1619,8 @@ fn a_script_can_define_an_animation_the_app_can_play() {
 /// Animation is opt-in: a script produces one exactly when it asks for
 /// one. Checked against the source rather than a hand-kept list, so
 /// adding a script can't quietly make this vacuous.
+// Runs every shipped script, one of which needs the escape engine.
+#[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
 #[test]
 fn scripts_produce_an_animation_only_when_they_ask_for_one() {
     let host = ScriptHost::new();
@@ -1802,6 +1804,8 @@ fn unknown_script_flags_are_reported_by_the_collect_pass() {
 /// `norng` is a claim about behaviour, not just a UI hint: a script that
 /// declares it must genuinely produce the same flame for any seed. This
 /// checks the claim against the shipped scripts rather than trusting it.
+// Runs every shipped script, one of which needs the escape engine.
+#[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
 #[test]
 fn scripts_declaring_norng_really_ignore_the_seed() {
     let host = ScriptHost::new();
@@ -4001,6 +4005,8 @@ fn post_rotate_matches_pre_rotate_math() {
 /// runtime — the host defaults to generator and says so — which is
 /// right for a script someone is editing and wrong for one we ship,
 /// where it would put a modifier in the corpus as a generator.
+// Runs every shipped script, one of which needs the escape engine.
+#[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
 #[test]
 fn every_shipped_script_declares_a_kind_and_serialisable_params() {
     let base = FractalConfig::default();
@@ -4041,6 +4047,7 @@ fn every_shipped_script_declares_a_kind_and_serialisable_params() {
 
 /// A script can build an escape-time config, and building one puts the
 /// config in escape mode without the author saying so.
+#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_script_sets_the_formula_and_the_mode() {
     let out = run(
@@ -4077,6 +4084,7 @@ fn escape_script_sets_the_formula_and_the_mode() {
 /// This is the whole reason `center` takes strings: 31 significant
 /// digits is a zoom-100 payload, and an f64 round trip would silently
 /// truncate it to 15 and cap the script at about zoom 50.
+#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_centre_keeps_every_digit() {
     const RE: &str = "-1.99999999999999999999999999999123456789";
@@ -4099,6 +4107,7 @@ fn escape_centre_keeps_every_digit() {
 }
 
 /// Unknown names fail loudly rather than sitting in the config.
+#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_rejects_names_that_do_not_exist() {
     for (src, expect) in [
@@ -4129,6 +4138,7 @@ fn escape_rejects_names_that_do_not_exist() {
 /// They are keyed by name and belong to the formula that declared
 /// them; carrying `p_re` into a map that has no such parameter leaves
 /// a value in the config that nothing reads and the UI cannot show.
+#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_switching_formula_clears_its_parameters() {
     let out = run(
@@ -4147,6 +4157,7 @@ fn escape_switching_formula_clears_its_parameters() {
 /// The catalog is reachable from a script, which is what makes the
 /// formula set programmatically explorable rather than a list to copy
 /// out of the docs.
+#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_lists_its_formulas_and_colorings() {
     let out = run(
@@ -4168,6 +4179,7 @@ fn escape_lists_its_formulas_and_colorings() {
 }
 
 /// Same script + same seed = same escape config, exactly as for flames.
+#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_scripts_are_reproducible() {
     const SRC: &str = r#"

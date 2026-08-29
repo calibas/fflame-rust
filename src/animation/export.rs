@@ -1983,8 +1983,16 @@ pub async fn export_animation_fast(
     // path does. Before this branch existed the video export ran the
     // chaos game regardless of render_mode and animated the FLAME
     // while the app previewed the escape render (field report).
+    // Without the engine there is nothing to draw these frames
+     // with; the flag stays false and the single-frame render call
+     // reports the missing engine rather than this loop exporting a
+     // flame the config never described.
+    #[cfg(feature = "engine-escape")]
     let is_escape = export_config.config.render_mode
         == crate::scene::transforms::RenderMode::Escape;
+    #[cfg(not(feature = "engine-escape"))]
+    let is_escape = false;
+    #[cfg(feature = "engine-escape")]
     let mut escape_renderer: Option<crate::escape::EscapeRenderer> = None;
 
     // Process frames sequentially
@@ -2030,6 +2038,7 @@ pub async fn export_animation_fast(
         );
         queue.submit(std::iter::once(setup_encoder.finish()));
 
+        #[cfg(feature = "engine-escape")]
         if is_escape {
             // Settle loop, mirroring the headless escape path
             // (render.rs): bounded chunked dispatches, each its own
@@ -2114,11 +2123,25 @@ pub async fn export_animation_fast(
             frame_config.camera_y,
             frame_config.camera_z,
         );
-        if is_escape {
-            let esc = escape_renderer
-                .as_ref()
-                .expect("escape renderer exists: created in the generator branch");
-            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, esc.output_view());
+        // The escape arm resolves to an Option FIRST: a cfg cannot
+        // sit on one arm of an if/else chain, and putting it on the
+        // whole chain would delete the FLAME arms with it -- which
+        // compiles clean and ships frames that were never tone-mapped.
+        #[cfg(feature = "engine-escape")]
+        let escape_view = if is_escape {
+            Some(
+                escape_renderer
+                    .as_ref()
+                    .expect("escape renderer exists: created in the generator branch")
+                    .output_view(),
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "engine-escape"))]
+        let escape_view: Option<&wgpu::TextureView> = None;
+        if let Some(view) = escape_view {
+            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, view);
         } else if shade_ran {
             renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());
         } else {

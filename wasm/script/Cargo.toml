@@ -20,7 +20,12 @@ crate-type = ["cdylib", "rlib"]
 # default-features = false turns off `web-app`: without that, this
 # module would inherit the full application's wasm-bindgen exports
 # (wasm_main boots egui and all).
-fractal_flame_wgpu = { path = "../..", default-features = false }
+# BOTH engines: a script writes flames and escape configs alike,
+# and `cli_parity` requires this module to produce byte-identical
+# output to the desktop CLI. Dropping an engine here would not
+# shrink a script -- it would make scripts that name a variation
+# or an escape formula fail in the browser and nowhere else.
+fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame", "engine-escape"] }
 serde_json = "1.0"
 wasm-bindgen = "0.2"
 

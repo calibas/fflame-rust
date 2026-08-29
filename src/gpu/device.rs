@@ -280,6 +280,7 @@ impl GpuContext {
             // the post-recovery retry cannot repeat the dispatch that
             // killed the device (the observed failure mode was an
             // infinite lose/recover/restart loop).
+            #[cfg(feature = "engine-escape")]
             crate::escape::renderer::note_device_lost();
         });
 

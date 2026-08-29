@@ -1,0 +1,58 @@
+# fflame-escape — the escape-time renderer alone, as a standalone WASM
+# module.
+#
+# The SAME SOURCE as ../render (see [lib] path below): the module's job
+# is identical, config JSON in and RGBA out, and duplicating 400 lines
+# to change a dependency feature would guarantee the two drift.
+#
+# What differs is one Cargo feature. Without `engine-flame` the
+# variation catalog is `linear` alone, the other 646 defs are
+# unreachable, and the linker drops them along with 1.1 MB of inline
+# WGSL. That is the entire saving, and it is why this crate exists.
+#
+# Loading a FLAME config here renders whatever a catalog of one
+# variation can express -- which is not the flame the file describes.
+# This module is for escape-time configs; ../render is the one that
+# renders both.
+
+[package]
+name = "fflame-escape"
+version = "0.5.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "../render/src/lib.rs"
+
+[dependencies]
+fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-escape"] }
+egui-wgpu = { version = "0.34", default-features = false }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+log = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+pollster = { version = "0.4", features = ["macro"] }
+
+[profile.gallery-test]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+strip = false
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
