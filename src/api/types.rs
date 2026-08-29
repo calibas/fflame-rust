@@ -53,6 +53,18 @@ pub enum ApiRenderMode {
     TwoD,
     #[serde(rename = "3d")]
     ThreeD,
+    /// Escape-time fractals. Stored as FLAMES -- same endpoints, ids
+    /// and access control -- and told apart by this value alone, so a
+    /// consumer groups by `render_mode` rather than looking for a
+    /// second resource type.
+    ///
+    /// Two consequences the server confirmed by measurement:
+    /// `transform_count` is 0 and `variation_names` is empty for these,
+    /// legitimately (the formula IS the fractal), and `has_3d` is
+    /// false, so a `has_3d=false` filter returns escape fractals
+    /// alongside 2D flames.
+    #[serde(rename = "escape")]
+    Escape,
 }
 
 /// Visibility for flames and palettes (private/unlisted/public).
@@ -209,8 +221,16 @@ pub struct ApiVariation {
 /// **opaque blob** — the same JSON a `.fflame` file holds, minus the root
 /// flame's transforms (split into `transforms` below) and minus the palette
 /// (sent inline via `palette`). New config fields need zero API/DB work; the
-/// server stores `config` verbatim and extracts only `render_mode` (at
-/// `config.flame.render_mode`) into a typed column for catalog queries.
+/// server stores `config` verbatim and extracts only `render_mode` (at the
+/// blob's ROOT, `config.pointer("/render_mode")`) into a typed column for
+/// catalog queries.
+///
+/// The root is where config v3 put it, and where current clients write it;
+/// they do not write `flame.render_mode` at all. This comment said `flame`
+/// until 2026-08-29, when the API measured all three shapes: root-only is
+/// catalogued correctly, inner-only is a 400 (`config.render_mode_missing`),
+/// and a pre-v3 blob carrying both catalogues by the ROOT. So no flame was
+/// ever mis-catalogued by the stale wording -- but it was wrong.
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateFlameRequest {
     /// Flame name. Single field — the old `flame_name`/cloud-title split is

@@ -1851,6 +1851,23 @@ pub enum RenderMode {
     Escape,
 }
 
+impl RenderMode {
+    /// Every mode, in wire order — the vocabulary the engine contract
+    /// publishes as `render_modes.known`.
+    ///
+    /// It exists because adding a value to an enum adds an ARRAY
+    /// ELEMENT to the contract, not a key path, so the shape
+    /// fingerprint cannot see it: `escape` had to be told to the API
+    /// by hand, with no automatic signal. Publishing the list gives
+    /// their conformance test something to check from now on.
+    ///
+    /// Keeping it in step with the enum is enforced below by an
+    /// exhaustive match plus a length assertion, which is the closest
+    /// Rust gets to iterating a plain enum.
+    pub const ALL: &'static [RenderMode] =
+        &[RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Escape];
+}
+
 impl Default for RenderMode {
     fn default() -> Self {
         Self::TwoD

@@ -18,12 +18,7 @@ impl From<RenderMode> for ApiRenderMode {
         match mode {
             RenderMode::TwoD => ApiRenderMode::TwoD,
             RenderMode::ThreeD => ApiRenderMode::ThreeD,
-            // The server's Postgres render_mode enum has no "escape"
-            // value yet, so escape configs are REFUSED before this
-            // conversion runs (see the guard in config_to_*_request).
-            // If one slips through anyway, "2d" at least parses
-            // server-side instead of 500ing the upload.
-            RenderMode::Escape => ApiRenderMode::TwoD,
+            RenderMode::Escape => ApiRenderMode::Escape,
         }
     }
 }
@@ -33,6 +28,7 @@ impl From<ApiRenderMode> for RenderMode {
         match mode {
             ApiRenderMode::TwoD => RenderMode::TwoD,
             ApiRenderMode::ThreeD => RenderMode::ThreeD,
+            ApiRenderMode::Escape => RenderMode::Escape,
         }
     }
 }
@@ -342,16 +338,18 @@ mod tests {
     fn test_render_mode_roundtrip() {
         assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::TwoD)), RenderMode::TwoD);
         assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::ThreeD)), RenderMode::ThreeD);
-        // Escape does NOT round-trip: the server has no such enum value
-        // yet, so the conversion documents its fallback while the
-        // save/update guard keeps it from ever being sent.
-        assert_eq!(ApiRenderMode::from(RenderMode::Escape), ApiRenderMode::TwoD);
+        // Escape round-trips too since the API added the value
+        // (2026-08-29). It used to fall back to "2d" here, guarded by a
+        // client-side refusal, because the server's Postgres enum knew
+        // only two values.
+        assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::Escape)), RenderMode::Escape);
     }
 
     #[test]
     fn test_render_mode_serialization() {
         assert_eq!(serde_json::to_string(&ApiRenderMode::TwoD).unwrap(), "\"2d\"");
         assert_eq!(serde_json::to_string(&ApiRenderMode::ThreeD).unwrap(), "\"3d\"");
+        assert_eq!(serde_json::to_string(&ApiRenderMode::Escape).unwrap(), "\"escape\"");
         // The app-side enum's wire form for the new mode — what an
         // .fflame carries, and what the server will eventually accept.
         assert_eq!(serde_json::to_string(&RenderMode::Escape).unwrap(), "\"escape\"");
@@ -361,26 +359,47 @@ mod tests {
         );
     }
 
-    /// The Save Online seatbelt: an escape config is refused before
-    /// anything is sent — and before the token check, so it fires the
-    /// same signed in or out (which is also what makes it testable
-    /// without auth).
+    /// An escape config survives the round trip — INCLUDING the centre
+    /// strings, which are the deep-zoom payload.
+    ///
+    /// This replaced a test that pinned the opposite: until the API
+    /// added the `escape` value, Save Online refused these
+    /// client-side, because the server cast `render_mode` into a
+    /// Postgres enum that had no such value.
+    ///
+    /// The centre assertion is the one with teeth. Those strings carry
+    /// 20-30 significant digits, and ANY step that treats them as JSON
+    /// numbers — including `JSON.parse` → `JSON.stringify` in a
+    /// browser — truncates them to f64 and a deep location silently
+    /// stops sharpening, with no error anywhere. The API measured the
+    /// same thing from their side (a bare number went
+    /// 1.234567890123456789e-40 → 1.2345678901234562e-40); this is the
+    /// client half of that guarantee.
     #[test]
-    fn escape_configs_are_refused_by_save_and_update() {
-        use crate::api::ApiState;
-        use crate::resources::FetchError;
+    fn an_escape_config_round_trips_with_its_centre_intact() {
+        const RE: &str = "-1.99999999999999999999999999999123456789012345678";
+        const IM: &str = "0.00000000000000000000000000000987654321098765432";
 
         let mut config = crate::config::FractalConfig::default();
         config.render_mode = RenderMode::Escape;
-        let api = ApiState::default();
+        config.escape.formula = "phoenix".to_string();
+        config.escape.center_re = RE.to_string();
+        config.escape.center_im = IM.to_string();
+        config.escape.zoom_log2 = 96.5;
 
-        let save = pollster::block_on(api.save_flame(&config, Some("x"), None, None));
-        assert!(
-            matches!(save, Err(FetchError::Unsupported(_))),
-            "save must refuse client-side: {save:?}"
+        let req = config_to_create_request(&config, Some("Deep")).expect("request");
+        assert_eq!(
+            req.config.pointer("/render_mode").and_then(|v| v.as_str()),
+            Some("escape"),
+            "the server reads the blob's ROOT render_mode"
         );
-        let update = pollster::block_on(api.update_flame("id", &config, None, None, None));
-        assert!(matches!(update, Err(FetchError::Unsupported(_))));
+
+        let back = flame_response_to_config(&mirror_as_response(req)).expect("round trip");
+        assert_eq!(back.render_mode, RenderMode::Escape);
+        assert_eq!(back.escape.formula, "phoenix");
+        assert_eq!(back.escape.zoom_log2, 96.5);
+        assert_eq!(back.escape.center_re, RE, "centre truncated in transit");
+        assert_eq!(back.escape.center_im, IM, "centre truncated in transit");
     }
 
     /// Mirror a `CreateFlameRequest` back the way the server would on read:
