@@ -38,6 +38,12 @@ pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 /// Above this zoom the scaled-f32 delta rung approaches its w-squared
 /// overflow (~zoom 54) and the floatexp rung takes over. Below it the
 /// scaled rung is preferred: same images, several times faster.
+///
+/// Every tier has a deep rung, so crossing this is a change of
+/// REPRESENTATION and nothing else. A tier that lacked one used to
+/// fall through to the direct path here, which past zoom 14 resolves
+/// nothing -- Phoenix shipped that way and rendered a single flat
+/// colour one thousandth of an octave past this line.
 pub const PERTURB_FLOATEXP_ZOOM: f64 = 48.0;
 
 /// Iteration budget per perturbed dispatch, in pixel-iterations
@@ -405,6 +411,10 @@ pub struct EscapeRenderer {
     /// (48 B/px, created on demand, explicit destroy).
     iter_state_buffer: Option<Buffer>,
     iter_state_px: u32,
+    /// Bytes per pixel the live buffer was built for. Phoenix's deep
+    /// rung carries a second delta and needs a wider one, so a tier
+    /// switch reallocates just as a resize does.
+    iter_state_stride: u64,
     /// Next chunk's starting iteration and the render it belongs to;
     /// a key change restarts from chunk 0.
     chunk_next: u32,
@@ -796,6 +806,7 @@ impl EscapeRenderer {
             current_ref_offset: [0.0, 0.0],
             iter_state_buffer: None,
             iter_state_px: 0,
+            iter_state_stride: 0,
             chunk_next: 0,
             chunk_key: None,
             timestamps: None,
@@ -1373,19 +1384,23 @@ impl EscapeRenderer {
         )
     }
 
-    fn ensure_iter_state(&mut self, device: &Device) {
+    fn ensure_iter_state(&mut self, device: &Device, stride: u64) {
         let px = self.width * self.height;
-        if self.iter_state_px != px || self.iter_state_buffer.is_none() {
+        if self.iter_state_px != px
+            || self.iter_state_stride != stride
+            || self.iter_state_buffer.is_none()
+        {
             if let Some(old) = self.iter_state_buffer.take() {
                 old.destroy();
             }
             self.iter_state_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Iter State"),
-                size: (px as u64) * 48,
+                size: (px as u64) * stride,
                 usage: BufferUsages::STORAGE,
                 mapped_at_creation: false,
             }));
             self.iter_state_px = px;
+            self.iter_state_stride = stride;
         }
     }
 
@@ -1395,15 +1410,6 @@ impl EscapeRenderer {
     /// zooms of unsupported combinations render the direct path's
     /// f32 mush honestly rather than wrong perturbation math).
     fn wants_perturbation(escape: &EscapeConfig) -> bool {
-        // Phoenix has no deep rung (its second delta rides the scaled
-        // rung's spare field), so past the floatexp threshold it falls
-        // back to the direct path's honest mush rather than to a step
-        // that cannot be assembled.
-        if matches!(Self::perturb_tier(escape), Some(assembler::PerturbTier::Phoenix))
-            && escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
-        {
-            return false;
-        }
         escape.zoom_log2 > PERTURB_MIN_ZOOM
             && Self::perturb_tier(escape).is_some()
             && !escape.is_damped()
@@ -1469,10 +1475,13 @@ impl EscapeRenderer {
 
     /// The delta tier this view can use, if any: Mandelbrot (p = 2)
     /// and integer-power Multibrot (the binomial expansion needs an
-    /// integer exponent), plus the plain Burning Ship variant via
-    /// diffabs — SCALED RUNG ONLY (a floatexp diffabs is deferred, so
-    /// Ship past the floatexp threshold falls back to the direct
-    /// path's honest mush rather than wrong math).
+    /// integer exponent), the Burning Ship variants via diffabs,
+    /// Tricorn/Multicorn via the conjugated binomial, and Phoenix's
+    /// two-term recurrence. Every one of them has BOTH rungs, so a
+    /// tier is either supported at all depths or not supported at
+    /// all — a tier missing its deep rung silently becomes the direct
+    /// path's f32 mush at the threshold, which is how Phoenix came to
+    /// render one flat colour past zoom 48.
     fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
         match escape.formula.as_str() {
             "mandelbrot" => Some(assembler::PerturbTier::Power(2)),
@@ -1931,17 +1940,21 @@ impl EscapeRenderer {
     /// next `render`.
     pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
         let mut ss = supersample.clamp(1, 3);
-        // Cap the RENDER pixel count: the perturbed path carries
-        // 48 B/px of iteration state (plus the 16 B/px accumulator),
+        // Cap the RENDER pixel count: the perturbed path carries up
+        // to ITER_STATE_BYTES_MAX per pixel of iteration state (plus
+        // the 16 B/px accumulator),
         // and an unbounded supersample x display product is a device
         // OOM (observed as a device-loss abort). 32 Mpx ~ 1.5 GB of
         // state — reduce the factor until it fits rather than crash.
         const MAX_RENDER_PX: u64 = 32 * 1024 * 1024;
-        // The perturbed path binds 48 B/px of iteration state as ONE
-        // storage buffer; the device's binding limit (browsers often
-        // grant far less than desktop adapters) caps render pixels
-        // harder than the fixed ceiling.
-        let device_px_cap = device.limits().max_storage_buffer_binding_size as u64 / 48;
+        // The perturbed path binds its iteration state as ONE storage
+        // buffer; the device's binding limit (browsers often grant far
+        // less than desktop adapters) caps render pixels harder than
+        // the fixed ceiling. Sized for the WIDEST tier: the cap is
+        // computed at resize, which does not know which formula will
+        // be rendered into the surface afterwards.
+        let device_px_cap = device.limits().max_storage_buffer_binding_size as u64
+            / assembler::ITER_STATE_BYTES_MAX;
         let px_cap = MAX_RENDER_PX.min(device_px_cap.max(1))
             .min({
                 let d = device.limits().max_texture_dimension_2d as u64;
@@ -2308,16 +2321,6 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
                 #[cfg(not(test))]
                 let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
-                // Phoenix is scaled-rung only (see PerturbTier::Phoenix).
-                // Belt to wants_perturbation's braces: the test hook can
-                // force the deep rung, and that combination has no
-                // assemblable step.
-                if matches!(
-                    Self::perturb_tier(escape),
-                    Some(assembler::PerturbTier::Phoenix)
-                ) {
-                    floatexp = false;
-                }
                 // Pixel spacing S = 2^(2 - zoom) / height. The scaled
                 // rung takes it as f64->f32 (normal down to ~zoom 119,
                 // past its own ceiling); the floatexp rung takes it
@@ -2347,11 +2350,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let chunk = self.next_chunk(floatexp);
                 let iter_start = self.chunk_next.min(escape.max_iter);
                 let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
-                self.ensure_iter_state(device);
-                // BLA table: build/refresh when skipping applies,
-                // else bind the zeroed dummy (n_levels = 0).
                 let tier = Self::perturb_tier(escape)
                     .unwrap_or(assembler::PerturbTier::Power(2));
+                self.ensure_iter_state(
+                    device,
+                    assembler::iter_state_bytes(tier, floatexp),
+                );
+                // BLA table: build/refresh when skipping applies,
+                // else bind the zeroed dummy (n_levels = 0).
                 let bla_ready = self.ensure_bla(
                     device, queue, escape, orbit_len, tier, progressive, orbit_done,
                 );
