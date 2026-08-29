@@ -11,6 +11,20 @@ all, and 20 of 23 formulas cannot zoom past the f32 direct path.
 
 ---
 
+## 1. Accuracy against a reference — DONE 2026-08-28
+
+Ran, results and the open item recorded in
+[escape-time-fractals.md](escape-time-fractals.md) ("Formula accuracy
+audit"), reproducible via `scripts/audit_escape_formulas.py`.
+21 of 23 formulas verified against independent numpy oracles; one
+real bug found and fixed (novaretti's pole sentinel overflowed f32 on
+the next step, giving NaN on Vulkan and a plausible wrong number on
+Metal); kaliset and novaretti's fine-grained fields remain open with
+their excluded causes documented. Depth is confirmed as two tiers:
+z9316+ for the three perturbing families, ~2^14 for the other twenty.
+
+### The original scope, for reference
+
 ## 1. Accuracy against a reference, as deep as each formula goes
 
 **What the survey found.** 23 formulas are registered. Exactly three

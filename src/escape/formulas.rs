@@ -803,8 +803,25 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     let den_root = 2.0 * z3 - c;
     let den = esc_cmul(den_root, den_root);
     if (dot(den, den) < 1e-24) {
-        // Double pole: feeds infinity, which maps to 0 next step.
-        return vec2<f32>(1e10, 0.0);
+        // Double pole: feed a large value, which the next step maps
+        // back toward 0 (-6z*z^3 / (2z^3)^2 ~ -1.5/z^3).
+        //
+        // The sentinel must SURVIVE that next step in f32, which
+        // 1e10 does not: (2*(1e10)^3)^2 = 4e60 overflows f32's 3.4e38
+        // ceiling, so den and num both become inf and the step
+        // returns inf/inf. On Vulkan that is NaN, which then poisons
+        // the pixel for every remaining iteration; on Metal, whose
+        // fast-math folds inf/inf to 1.0 (see CLAUDE.md), it silently
+        // returns a plausible finite number instead -- the same
+        // formula rendering differently on two platforms. Novaretti is
+        // NON-ESCAPING, so unlike McMullen's identical-looking guard
+        // there is no bailout to catch the huge value first: it has to
+        // stay representable. 1e6 keeps den at 4e36, two orders inside
+        // the ceiling, and reaches ~1.5e-12 next step. Found by the
+        // formula audit: 14% of pixels disagreed with an exact oracle
+        // at four iterations, and an f32 oracle disagreed identically,
+        // which ruled out precision and pointed here.
+        return vec2<f32>(1e6, 0.0);
     }
     let num = -6.0 * esc_cmul(z, z3 + c);
     return esc_cdiv(num, den);
