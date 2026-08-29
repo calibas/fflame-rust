@@ -1604,27 +1604,45 @@ fn rebase_default() -> String {
         .to_string()
 }
 
-/// Phoenix rebases to reference index ONE, not zero.
+/// Phoenix rebases onto the orbit's START, as a PAIR.
 ///
-/// A two-term recurrence needs a previous reference iterate, and
-/// there is no Z_-1: the earliest state a pixel can be rebased onto
-/// is the PAIR (Z_1, Z_0). Both deltas move together -- rebasing only
-/// the current one would leave the history measured against a
-/// different reference index, which is a wrong orbit rather than a
-/// noisy one.
+/// A two-term recurrence's state is (z, z_prev), so a rebase has to
+/// move both deltas onto the same reference index or the history is
+/// measured against a different iterate -- a wrong orbit, not a noisy
+/// one. The index to move them onto is 0, whose state is the pair
+/// (Z_0, Z_-1) = (Z_0, 0): the reference began with no history, and
+/// so did the pixel.
+///
+/// Index 1 is the trap. It looks like the natural choice -- the
+/// earliest index whose PREDECESSOR exists in the array -- but
+/// Z_1 = c, an O(1) number, and `z_full - Z_1` in f32 is
+/// catastrophic cancellation. The surviving delta quantises to
+/// ulp(c), which at zoom 22 is about EIGHTY PIXELS across, and the
+/// image breaks into displaced rectangular blocks (twice as wide as
+/// tall whenever the two centre components straddle a binade). Index
+/// 0 subtracts zero on the parameter plane, exactly like every
+/// one-term tier.
+///
+/// The gate is the pair's norm, not the current delta's alone. A
+/// rebase that shrinks z while leaving z_prev far from the reference
+/// would blow up the p*w_prev term on the very next step.
 fn rebase_phoenix() -> String {
-    "        // Previous full iterate: Z_(m-1) + S*w_prev, with Z_-1 = 0\n\
-     \x20       // (the reference and the pixel both start with no history).\n\
-     \x20       let zp_ref = select(vec2<f32>(0.0, 0.0),\n\
-     \x20           ref_z(min(max(m, 1u) - 1u, perturb.orbit_len - 1u)), m > 0u);\n\
-     \x20       let z_prev_full = zp_ref + perturb.s * w_prev;\n\
-     \x20       let rebase_delta = z_full - ref_z(1u);\n\
-     \x20       if (m + 1u >= perturb.orbit_len - 1u\n\
-     \x20           || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {\n\
-     \x20           w = rebase_delta * perturb.inv_s;\n\
-     \x20           w_prev = (z_prev_full - ref_z(0u)) * perturb.inv_s;\n\
-     \x20           m = 1u;\n\
-     \x20       }"
+    "        // Previous full iterate: Z_(m-1) + S*w_prev, with Z_-1 = 0.
+             let zp_ref = select(vec2<f32>(0.0, 0.0),
+                 ref_z(min(max(m, 1u) - 1u, perturb.orbit_len - 1u)), m > 0u);
+             let z_prev_full = zp_ref + perturb.s * w_prev;
+             let delta_prev = perturb.s * w_prev;
+             let rebase_delta = z_full - ref_z(0u);
+             let rebase_prev = z_prev_full;
+             // At m == 0 both sides are equal by construction, so
+             // this cannot loop.
+             if (m >= perturb.orbit_len - 1u
+                 || dot(rebase_delta, rebase_delta) + dot(rebase_prev, rebase_prev)
+                     < dot(delta, delta) + dot(delta_prev, delta_prev)) {
+                 w = rebase_delta * perturb.inv_s;
+                 w_prev = rebase_prev * perturb.inv_s;
+                 m = 0u;
+             }"
         .to_string()
 }
 
@@ -2384,7 +2402,7 @@ mod tests {
     /// pieces its recurrence needs: the parameter, the history term,
     /// the history advance, and a rebase to index ONE.
     #[test]
-    fn phoenix_tier_compiles_with_history_and_index_one_rebase() {
+    fn phoenix_tier_compiles_with_history_and_rebases_onto_the_orbit_start() {
         use crate::escape::colorings;
         let src = assemble_perturbed(&colorings::SMOOTH, false, PerturbTier::Phoenix);
         let module = naga::front::wgsl::parse_str(&src)
@@ -2398,16 +2416,24 @@ mod tests {
         assert!(src.contains("params.fparams[0][0]"), "p must reach the step");
         assert!(src.contains("pp.x * w_prev.x"), "the history term must be applied");
         assert!(src.contains("w_prev = w;"), "the history must advance");
-        assert!(src.contains("m = 1u;"), "Phoenix rebases to index 1, not 0");
-        // The DEFAULT rebase (against Z_0) must be gone -- matching on
-        // its distinctive first line, since `var m = 0u;` declares the
-        // reference index and is present in every tier.
+        // The rebase target is index 0, whose state is the pair
+        // (Z_0, Z_-1) = (Z_0, 0). Rebasing onto index 1 subtracts
+        // Z_1 = c from an O(1) z_full in f32 and quantises the delta
+        // to ulp(c) -- ~80 pixels wide at zoom 22, which showed up as
+        // displaced rectangular blocks.
+        assert!(src.contains("m = 0u;"), "Phoenix rebases onto the orbit start");
         assert!(
-            !src.contains("let rebase_delta = z_full - ref_z(0u);"),
-            "the index-0 rebase must not survive: there is no Z_-1 to rebase history onto"
+            !src.contains("ref_z(1u)"),
+            "rebasing against Z_1 is catastrophic cancellation in f32"
         );
-        assert!(src.contains("z_full - ref_z(1u)"), "Phoenix rebases against Z_1");
-        // Every OTHER tier keeps the plain rebase.
+        assert!(src.contains("let rebase_delta = z_full - ref_z(0u);"));
+        // Both deltas move together, gated on the PAIR's norm.
+        assert!(src.contains("w_prev = rebase_prev * perturb.inv_s;"), "history rebases too");
+        assert!(
+            src.contains("dot(rebase_prev, rebase_prev)"),
+            "the gate must weigh the history, or the p*w_prev term explodes"
+        );
+        // Every OTHER tier keeps the plain rebase, with no history.
         let plain = assemble_perturbed(&colorings::SMOOTH, false, PerturbTier::Power(2));
         assert!(plain.contains("let rebase_delta = z_full - ref_z(0u);"));
         assert!(!plain.contains("w_prev.x"), "one-term tiers must not gain a history term");
