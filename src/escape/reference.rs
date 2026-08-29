@@ -69,6 +69,58 @@ fn nucleus_for_view(
     Some((hit.re, hit.im, hit.period, off))
 }
 
+/// Which map a reference orbit iterates -- everything that changes
+/// the ORBIT, and therefore everything its cache key must cover.
+///
+/// Collapses what used to be three loose arguments threaded through
+/// every orbit signature, and adds the piece Phoenix needs: a
+/// continuous formula parameter. That cannot ride a variant enum the
+/// way the Tricorn fold selector does, and a reference cached without
+/// it would be silently reused after the user changed it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MapId {
+    /// Exponent of the power map (2 for the Ship and Phoenix families).
+    pub power: u32,
+    /// Burning Ship family: the fold step, with `variant` selecting
+    /// the arrangement.
+    pub ship: bool,
+    /// Ship fold variant when `ship`; otherwise which NON-fold family
+    /// this is (`MAP_PLAIN`, `MAP_CONJ`, `MAP_PHOENIX`).
+    pub variant: u32,
+    /// Continuous parameter that changes the map. Phoenix's `p`
+    /// (re, im); zero for every other family.
+    pub params: [f32; 2],
+}
+
+impl MapId {
+    /// The plain power map `z^p + c`.
+    pub fn power(p: u32) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_PLAIN, params: [0.0, 0.0] }
+    }
+    /// A Burning Ship fold variant.
+    pub fn ship(variant: u32) -> Self {
+        Self { power: 2, ship: true, variant: variant.min(5), params: [0.0, 0.0] }
+    }
+    /// `conj(z)^p + c`.
+    pub fn conj(p: u32) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_CONJ, params: [0.0, 0.0] }
+    }
+    /// `z^2 + c + p*z_prev`.
+    pub fn phoenix(p: [f32; 2]) -> Self {
+        Self { power: 2, ship: false, variant: MAP_PHOENIX, params: p }
+    }
+    /// Bytes for the on-disk key and the serialized identity.
+    pub fn key_bytes(&self) -> [u8; 17] {
+        let mut b = [0u8; 17];
+        b[0..4].copy_from_slice(&self.power.to_le_bytes());
+        b[4] = self.ship as u8;
+        b[5..9].copy_from_slice(&self.variant.to_le_bytes());
+        b[9..13].copy_from_slice(&self.params[0].to_le_bytes());
+        b[13..17].copy_from_slice(&self.params[1].to_le_bytes());
+        b
+    }
+}
+
 /// `ship_variant` when `ship` is FALSE: which non-fold map the
 /// reference iterates. 0 is the plain power `z^p`; 1 is `conj(z)^p`,
 /// the Tricorn/Multicorn family.
@@ -82,6 +134,9 @@ fn nucleus_for_view(
 /// (power, ship, variant); this is deliberately the cheaper step.
 pub const MAP_PLAIN: u32 = 0;
 pub const MAP_CONJ: u32 = 1;
+/// `z^2 + c + p*z_prev` -- carries a second live state and a
+/// continuous parameter, so it is the family that forced [`MapId`].
+pub const MAP_PHOENIX: u32 = 2;
 
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
@@ -280,6 +335,15 @@ pub struct ReferenceOrbit {
     /// Live fixed-point state (c and current Z) for append-on-deepen.
     c: FixedComplex,
     z: FixedComplex,
+    /// The PREVIOUS iterate, for two-term recurrences (Phoenix). Zero
+    /// and unread for every other family; carried in the live state
+    /// so a reloaded orbit deepens identically.
+    z_prev: FixedComplex,
+    /// Phoenix's `p`. Part of the orbit's IDENTITY:
+    /// a different p is a different orbit, so it is hashed into the
+    /// cache key and compared by `serves`.
+    pub map_params: [f32; 2],
+    p_fixed: FixedComplex,
     /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
     /// f64 magnitudes underflow at 2^-537 and would falsely read as
     /// closures) and its index — the ball-method candidate tracker.
@@ -509,6 +573,7 @@ impl ReferenceOrbit {
         power: u32,
         ship: bool,
         ship_variant: u32,
+        map_params: [f32; 2],
     ) -> Option<Self> {
         let n = n_limbs.unwrap_or_else(|| limbs_for_zoom(zoom_log2));
         let center = FixedComplex {
@@ -543,6 +608,12 @@ impl ReferenceOrbit {
             off_zoom_log2: zoom_log2,
             off_height_px: 1.0,
             n_limbs: n,
+            z_prev: FixedComplex::zero(n),
+            map_params,
+            p_fixed: FixedComplex {
+                re: FixedPoint::from_f64(map_params[0] as f64, n),
+                im: FixedPoint::from_f64(map_params[1] as f64, n),
+            },
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
             orbit_e: vec![0],
@@ -703,6 +774,22 @@ impl ReferenceOrbit {
                 // z^p, or conj(z)^p for the Tricorn family. See
                 // MAP_CONJ: with `ship` false, `ship_variant` selects
                 // which non-fold map this is.
+                if self.ship_variant == MAP_PHOENIX {
+                    // z' = z^2 + c + p*z_prev, and z_prev advances to
+                    // the iterate we just left.
+                    let sq = self.z.sqr();
+                    let term = self.p_fixed.mul(&self.z_prev);
+                    let next = sq.add(&self.c).add(&term);
+                    self.z_prev = std::mem::replace(&mut self.z, next);
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
                 let mut base = FixedComplex {
                     re: self.z.re.clone(),
                     im: self.z.im.clone(),
@@ -786,6 +873,7 @@ impl ReferenceOrbit {
         power: u32,
         ship: bool,
         ship_variant: u32,
+        map_params: [f32; 2],
     ) -> bool {
         self.center_re == center_re
             && self.center_im == center_im
@@ -794,6 +882,7 @@ impl ReferenceOrbit {
             && self.power == power.max(2)
             && self.ship == ship
             && self.ship_variant == ship_variant.min(5)
+            && self.map_params == map_params
     }
 
     /// The relocation offset in the PIXEL UNITS of a given view.
@@ -859,6 +948,8 @@ impl ReferenceOrbit {
         out.extend_from_slice(&self.power.to_le_bytes());
         out.push(self.ship as u8);
         out.extend_from_slice(&self.ship_variant.to_le_bytes());
+        out.extend_from_slice(&self.map_params[0].to_le_bytes());
+        out.extend_from_slice(&self.map_params[1].to_le_bytes());
         match self.periodic {
             None => out.push(0),
             Some(p) => {
@@ -936,7 +1027,14 @@ impl ReferenceOrbit {
                 out.extend_from_slice(&e.to_le_bytes());
             }
         }
-        for f in [&self.z.re, &self.z.im, &self.c.re, &self.c.im] {
+        for f in [
+            &self.z.re,
+            &self.z.im,
+            &self.c.re,
+            &self.c.im,
+            &self.z_prev.re,
+            &self.z_prev.im,
+        ] {
             put_fixed(&mut out, f);
         }
         out
@@ -1010,6 +1108,7 @@ impl ReferenceOrbit {
         let power = r.u32()?;
         let ship = r.u8()? != 0;
         let ship_variant = r.u32()?;
+        let map_params = [r.f32()?, r.f32()?];
         let periodic = match r.u8()? {
             0 => None,
             _ => Some(r.u32()?),
@@ -1083,6 +1182,12 @@ impl ReferenceOrbit {
                     closure_octave,
                     hint_period,
                     hint_octave,
+                    z_prev: FixedComplex::zero(n_limbs),
+                    map_params,
+                    p_fixed: FixedComplex {
+                        re: FixedPoint::from_f64(map_params[0] as f64, n_limbs),
+                        im: FixedPoint::from_f64(map_params[1] as f64, n_limbs),
+                    },
                     corrections: vec![seed],
                     shadow: [f64::NAN; 4],
                     c_dd,
@@ -1134,6 +1239,7 @@ impl ReferenceOrbit {
         }
         let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+        let z_prev = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
         let c_dd = {
             let (cx, cxl) = Self::fixed_dd(&c.re, n_limbs);
             let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
@@ -1201,6 +1307,12 @@ impl ReferenceOrbit {
             closure_octave,
             hint_period,
             hint_octave,
+            z_prev,
+            map_params,
+            p_fixed: FixedComplex {
+                re: FixedPoint::from_f64(map_params[0] as f64, n_limbs),
+                im: FixedPoint::from_f64(map_params[1] as f64, n_limbs),
+            },
             corrections,
             shadow,
             c_dd,
@@ -1298,6 +1410,9 @@ pub struct OrbitRequest {
     pub ship_variant: u32,
     /// Verified-before-use period hint (parameter-plane power tiers).
     pub reference_period: Option<u32>,
+    /// Continuous map parameter (Phoenix's p); zero elsewhere. Part
+    /// of the orbit identity, so it takes part in request dedup.
+    pub map_params: [f32; 2],
     /// Zoom (for nucleus search precision) and viewport height (for
     /// the relocation offset's pixel units).
     pub zoom_log2: f64,
@@ -1404,6 +1519,7 @@ impl OrbitWorker {
                                 && old_req.ship == req.ship
                                 && old_req.ship_variant == req.ship_variant
                                 && old_req.reference_period == req.reference_period
+                                && old_req.map_params == req.map_params
                                 && orbit.periodic_serves(req.zoom_log2);
                             if same
                                 && orbit
@@ -1595,6 +1711,7 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
             req.power,
             req.ship,
             req.ship_variant,
+            req.map_params,
         )
     }
 }
@@ -1616,6 +1733,7 @@ fn tx_loopback_send(
                                 && old_req.ship == req.ship
                                 && old_req.ship_variant == req.ship_variant
                                 && old_req.reference_period == req.reference_period
+                                && old_req.map_params == req.map_params
                                 && orbit.periodic_serves(req.zoom_log2);
         if same && orbit.relocation_serves(req.zoom_log2, req.height_px.max(1.0)) {
             Some(orbit)
@@ -1679,7 +1797,7 @@ impl ReferenceOrbit {
         // 1,137,764 hint). The hint asks for exactly this period; the
         // closure check below is the arbiter.
         let mut orbit = Self::compute(
-            center_re, center_im, zoom_log2, Some(n), 0, None, power, false, 0,
+            center_re, center_im, zoom_log2, Some(n), 0, None, power, false, 0, [0.0, 0.0],
         )?;
         orbit.closure_limit_octave = i64::MIN / 4;
         orbit.extend(period);
@@ -1797,6 +1915,7 @@ impl ReferenceOrbit {
                 power,
                 false,
                 0,
+                [0.0, 0.0],
             ) {
                 if orbit.escaped_at.is_none() && orbit.len() > period {
                     // Store under the VIEW key (the cache is keyed on
@@ -1815,6 +1934,7 @@ impl ReferenceOrbit {
         let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         Self::compute(
             center_re, center_im, zoom_log2, Some(n), max_iter, None, power, false, 0,
+            [0.0, 0.0],
         )
     }
 }
@@ -1862,6 +1982,7 @@ impl OrbitCache {
         power: u32,
         ship: bool,
         ship_variant: u32,
+        map_params: [f32; 2],
     ) -> Option<&ReferenceOrbit> {
         // The center's own digits set a precision FLOOR: a truncated
         // deep center is a different (shallow, early-escaping) point,
@@ -1869,7 +1990,7 @@ impl OrbitCache {
         // onto it (the zoom-685 uniform-frame bug).
         let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         let hit = self.slot.as_ref().is_some_and(|o| {
-            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
+            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant, map_params)
                 && o.periodic_serves(zoom_log2)
         });
         if hit {
@@ -1914,7 +2035,7 @@ impl OrbitCache {
             } else {
                 ReferenceOrbit::compute(
                     center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power, ship,
-                    ship_variant,
+                    ship_variant, map_params,
                 )?
             };
             self.generation = self.generation.wrapping_add(1);
@@ -1948,11 +2069,12 @@ impl OrbitCache {
         power: u32,
         ship: bool,
         ship_variant: u32,
+        map_params: [f32; 2],
         budget: u32,
     ) -> Option<(&ReferenceOrbit, bool)> {
         let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
         let hit = self.slot.as_ref().is_some_and(|o| {
-            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant)
+            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant, map_params)
                 && o.periodic_serves(zoom_log2)
         });
         let budget = budget.max(64);
@@ -1973,6 +2095,7 @@ impl OrbitCache {
                 power,
                 ship,
                 ship_variant,
+                map_params,
             )?);
         }
         let orbit = self.slot.as_ref().unwrap();
@@ -2013,7 +2136,7 @@ mod tests {
     fn shallow_orbit_matches_f64_iteration() {
         // c = -0.5 + 0.1i is inside the main cardioid: never escapes,
         // so the orbit length is exactly what we asked for.
-        let orbit = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 100, None, 2, false, 0).unwrap();
+        let orbit = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 100, None, 2, false, 0, [0.0, 0.0]).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=100usize {
             let t = zx * zx - zy * zy + -0.5;
@@ -2030,10 +2153,69 @@ mod tests {
 
     #[test]
     fn escaping_reference_stops_early() {
-        let orbit = ReferenceOrbit::compute("1", "1", 5.0, None, 1000, None, 2, false, 0).unwrap();
+        let orbit = ReferenceOrbit::compute("1", "1", 5.0, None, 1000, None, 2, false, 0, [0.0, 0.0]).unwrap();
         let at = orbit.escaped_at.expect("c = 1+i escapes fast");
         assert!(at < 10);
         assert_eq!(orbit.len() - 1, at);
+    }
+
+    /// Phoenix's reference is a TWO-TERM recurrence, and its
+    /// parameter is part of the orbit's identity.
+    ///
+    /// Both halves matter: an orbit that ignored z_prev would be the
+    /// plain quadratic, and one cached without `p` would be silently
+    /// reused after the user changed it -- the second is the failure
+    /// that cannot be seen in a single render, only in the next one.
+    #[test]
+    fn phoenix_reference_carries_history_and_its_parameter() {
+        let p = [-0.5f32, 0.1];
+        let orbit = ReferenceOrbit::compute(
+            "-0.2", "0.35", 20.0, None, 150, None, 2, false, MAP_PHOENIX, p,
+        )
+        .expect("orbit");
+        // f64 shadow of z' = z^2 + c + p*z_prev.
+        let (cx, cy) = (-0.2f64, 0.35f64);
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        let (mut px, mut py) = (0.0f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for i in 1..(orbit.len() as usize).min(150) {
+            let (nx, ny) = (
+                zx * zx - zy * zy + cx + (p[0] as f64) * px - (p[1] as f64) * py,
+                2.0 * zx * zy + cy + (p[0] as f64) * py + (p[1] as f64) * px,
+            );
+            px = zx;
+            py = zy;
+            zx = nx;
+            zy = ny;
+            let got = orbit.z_f32(i);
+            worst = worst.max(
+                ((got[0] as f64 - zx).powi(2) + (got[1] as f64 - zy).powi(2)).sqrt(),
+            );
+        }
+        assert!(worst < 1e-4, "phoenix reference diverges from z^2 + c + p*z_prev: {worst:e}");
+
+        // A different p is a DIFFERENT orbit, and `serves` must say so
+        // -- otherwise the cache hands back the wrong reference.
+        let other = ReferenceOrbit::compute(
+            "-0.2", "0.35", 20.0, None, 150, None, 2, false, MAP_PHOENIX, [0.25, 0.1],
+        )
+        .expect("orbit");
+        let n = orbit.n_limbs;
+        assert!(
+            orbit.serves("-0.2", "0.35", n, None, 2, false, MAP_PHOENIX, p),
+            "an orbit must serve its own identity"
+        );
+        assert!(
+            !orbit.serves("-0.2", "0.35", n, None, 2, false, MAP_PHOENIX, [0.25, 0.1]),
+            "a different p must MISS, or the cache returns a stale reference"
+        );
+        let d = (1..(other.len() as usize).min(150))
+            .map(|i| {
+                let (a, b) = (orbit.z_f32(i), other.z_f32(i));
+                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+            })
+            .fold(0.0f32, f32::max);
+        assert!(d > 1e-3, "different p produced the same orbit: {d:e}");
     }
 
     /// The conjugate family's REFERENCE must actually conjugate.
@@ -2047,7 +2229,7 @@ mod tests {
     fn conjugate_reference_iterates_the_conjugate_map() {
         let orbit = ReferenceOrbit::compute(
             "-0.90755797705302632", "0.10050898208800299",
-            30.0, None, 200, None, 2, false, MAP_CONJ,
+            30.0, None, 200, None, 2, false, MAP_CONJ, [0.0, 0.0]
         )
         .expect("orbit");
         let (cx, cy) = (-0.90755797705302632f64, 0.10050898208800299f64);
@@ -2068,7 +2250,7 @@ mod tests {
         // And it must NOT be the plain power.
         let plain = ReferenceOrbit::compute(
             "-0.90755797705302632", "0.10050898208800299",
-            30.0, None, 200, None, 2, false, MAP_PLAIN,
+            30.0, None, 200, None, 2, false, MAP_PLAIN, [0.0, 0.0]
         )
         .expect("orbit");
         let d = (0..(plain.len() as usize).min(200))
@@ -2082,9 +2264,9 @@ mod tests {
 
     #[test]
     fn deepen_is_an_append_and_matches_fresh_compute() {
-        let mut a = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 50, None, 2, false, 0).unwrap();
+        let mut a = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 50, None, 2, false, 0, [0.0, 0.0]).unwrap();
         a.extend(120);
-        let b = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 120, None, 2, false, 0).unwrap();
+        let b = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 120, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert_eq!(a.orbit.len(), b.orbit.len());
         for (i, (x, y)) in a.orbit.iter().zip(b.orbit.iter()).enumerate() {
             assert_eq!(x, y, "diverged at iteration {i}");
@@ -2099,29 +2281,29 @@ mod tests {
         let jc = Some((0.0f32, 0.0f32));
         let mut cache = OrbitCache::default();
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 50, jc, 2, false, 0).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 50, jc, 2, false, 0, [0.0, 0.0]).unwrap();
             assert_eq!(o.len(), 51);
         }
         // Same view, deeper iterations: extend in place.
         {
-            let o = cache.get("-0.5", "0.1", 10.0, 80, jc, 2, false, 0).unwrap();
+            let o = cache.get("-0.5", "0.1", 10.0, 80, jc, 2, false, 0, [0.0, 0.0]).unwrap();
             assert_eq!(o.len(), 81);
         }
         // Different center: replace.
         {
-            let o = cache.get("-0.75", "0.1", 10.0, 10, jc, 2, false, 0).unwrap();
+            let o = cache.get("-0.75", "0.1", 10.0, 10, jc, 2, false, 0, [0.0, 0.0]).unwrap();
             assert_eq!(o.center_re, "-0.75");
             assert_eq!(o.len(), 11);
         }
         // Parameter-plane Mandelbrot goes nucleus-aware: an interior
         // view relocates to a periodic reference.
         {
-            let o = cache.get("-1.0", "0.0", 10.0, 100, None, 2, false, 0).unwrap();
+            let o = cache.get("-1.0", "0.0", 10.0, 100, None, 2, false, 0, [0.0, 0.0]).unwrap();
             assert_eq!(o.periodic, Some(2), "the period-2 nucleus governs c = -1");
             assert_eq!(o.len(), 3);
         }
         // Unparseable center: None.
-        assert!(cache.get("not a number", "0", 10.0, 10, None, 2, false, 0).is_none());
+        assert!(cache.get("not a number", "0", 10.0, 10, None, 2, false, 0, [0.0, 0.0]).is_none());
     }
 
     #[test]
@@ -2129,7 +2311,7 @@ mod tests {
         // Julia: z0 = center, c fixed. First entry must be the center,
         // then iterate z^2 + c.
         let orbit = ReferenceOrbit::compute(
-            "0.25", "0.5", 10.0, None, 20, Some((-0.8, 0.156)), 2, false, 0,
+            "0.25", "0.5", 10.0, None, 20, Some((-0.8, 0.156)), 2, false, 0, [0.0, 0.0]
         )
         .unwrap();
         assert_eq!(orbit.orbit[0], [0.25, 0.5]);
@@ -2148,8 +2330,8 @@ mod tests {
         }
         // And the cache distinguishes julia from param-plane orbits.
         let mut cache = OrbitCache::default();
-        cache.get("0.25", "0.5", 10.0, 20, Some((-0.8, 0.156)), 2, false, 0).unwrap();
-        let replaced = cache.get("0.25", "0.5", 10.0, 20, None, 2, false, 0).unwrap();
+        cache.get("0.25", "0.5", 10.0, 20, Some((-0.8, 0.156)), 2, false, 0, [0.0, 0.0]).unwrap();
+        let replaced = cache.get("0.25", "0.5", 10.0, 20, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert_eq!(replaced.julia_c, None);
     }
 
@@ -2157,7 +2339,7 @@ mod tests {
     fn cubic_orbit_matches_f64_iteration() {
         // power 3: z^3 + c against a plain f64 loop.
         let orbit =
-            ReferenceOrbit::compute("-0.2", "0.4", 10.0, None, 60, None, 3, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.2", "0.4", 10.0, None, 60, None, 3, false, 0, [0.0, 0.0]).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=60usize {
             let (x2, y2) = (zx * zx - zy * zy, 2.0 * zx * zy);
@@ -2189,6 +2371,7 @@ mod tests {
             ship: false,
             ship_variant: 0,
             reference_period: None,
+            map_params: [0.0, 0.0],
             zoom_log2: 5.0,
             height_px: 320.0,
         };
@@ -2225,6 +2408,7 @@ mod tests {
             ship: false,
             ship_variant: 0,
             reference_period: None,
+            map_params: [0.0, 0.0],
             zoom_log2: 5.0,
             height_px: 320.0,
         });
@@ -2245,7 +2429,7 @@ mod tests {
     #[test]
     fn ship_orbit_matches_f64_iteration() {
         let orbit =
-            ReferenceOrbit::compute("-0.6", "-0.4", 10.0, None, 60, None, 2, true, 0).unwrap();
+            ReferenceOrbit::compute("-0.6", "-0.4", 10.0, None, 60, None, 2, true, 0, [0.0, 0.0]).unwrap();
         let (mut zx, mut zy) = (0.0f64, 0.0f64);
         for i in 1..=60usize {
             let (ax, ay) = (zx.abs(), zy.abs());
@@ -2293,7 +2477,7 @@ mod tests {
         // and recomputes it (measured: 8 minutes, observed by a user
         // at zoom 9316 with period 71,100).
         let mut orbit =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0, [0.0, 0.0]).unwrap();
         orbit.hint_period = Some(4242);
         orbit.hint_octave = -100; // the hint closes only at 2^-100
 
@@ -2310,7 +2494,7 @@ mod tests {
 
         // A genuinely periodic orbit answers its own period.
         let mut periodic =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0, [0.0, 0.0]).unwrap();
         periodic.periodic = Some(4242);
         assert!(periodic.answers_hint(Some(4242), 200.0));
 
@@ -2439,7 +2623,7 @@ mod tests {
         };
         for v in 0..=5u32 {
             let orbit = ReferenceOrbit::compute(
-                "-0.55", "-0.4", 10.0, None, 40, None, 2, true, v,
+                "-0.55", "-0.4", 10.0, None, 40, None, 2, true, v, [0.0, 0.0]
             )
             .unwrap();
             let (mut zx, mut zy) = (0.0f64, 0.0f64);
@@ -2467,7 +2651,7 @@ mod tests {
         let jc = Some((-0.8f32, 0.156f32));
         let mut blocking = OrbitCache::default();
         let full = blocking
-            .get("0.1", "0.2", 12.0, 500, jc, 2, false, 0)
+            .get("0.1", "0.2", 12.0, 500, jc, 2, false, 0, [0.0, 0.0])
             .unwrap()
             .orbit
             .clone();
@@ -2475,7 +2659,7 @@ mod tests {
         let mut steps = 0;
         loop {
             let (orbit, done) = sliced
-                .get_budgeted("0.1", "0.2", 12.0, 500, jc, 2, false, 0, 64)
+                .get_budgeted("0.1", "0.2", 12.0, 500, jc, 2, false, 0, [0.0, 0.0], 64)
                 .unwrap();
             steps += 1;
             assert!(steps < 100, "failed to converge");
@@ -2512,7 +2696,7 @@ mod tests {
             None,
             2,
             false,
-            0,
+            0, [0.0, 0.0]
         )
         .unwrap();
         assert_eq!(orbit.periodic, Some(3), "auto-detection missed the closure");
@@ -2529,7 +2713,7 @@ mod tests {
             None,
             2,
             false,
-            0,
+            0, [0.0, 0.0]
         )
         .unwrap();
         assert_eq!(
@@ -2544,7 +2728,7 @@ mod tests {
 
         // A generic exterior center must NEVER auto-close.
         let plain =
-            ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 500, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 500, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert_eq!(plain.periodic, None);
         // Julia references are exempt (their wrap returns to Z_0, not 0).
         let julia = ReferenceOrbit::compute(
@@ -2556,7 +2740,7 @@ mod tests {
             Some((-0.1, 0.05)),
             2,
             false,
-            0,
+            0, [0.0, 0.0]
         )
         .unwrap();
         assert_eq!(julia.periodic, None, "Julia must not auto-close");
@@ -2565,7 +2749,7 @@ mod tests {
     #[test]
     fn relocation_offset_rescales_with_the_view() {
         let mut orbit =
-            ReferenceOrbit::compute("-0.5", "0.1", 30.0, None, 50, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 30.0, None, 50, None, 2, false, 0, [0.0, 0.0]).unwrap();
         orbit.ref_offset = [12.0, -3.0];
         orbit.off_zoom_log2 = 30.0;
         orbit.off_height_px = 480.0;
@@ -2602,7 +2786,7 @@ mod tests {
             None,
             2,
             false,
-            0,
+            0, [0.0, 0.0]
         )
         .unwrap();
         let b = ReferenceOrbit::compute(
@@ -2614,7 +2798,7 @@ mod tests {
             None,
             2,
             false,
-            0,
+            0, [0.0, 0.0]
         )
         .unwrap();
         let (are, _) = a.z_state();

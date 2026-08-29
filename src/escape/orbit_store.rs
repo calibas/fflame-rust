@@ -26,7 +26,7 @@ use super::reference::ReferenceOrbit;
 use std::path::{Path, PathBuf};
 
 /// Bump on any layout change: old files then read as misses.
-pub const MAGIC: &[u8; 8] = b"FFORBIT6";
+pub const MAGIC: &[u8; 8] = b"FFORBIT7";
 
 /// Save when recomputing would actually hurt: orbit length times
 /// limbs² is proportional to the fixed-point work done. ~2e6 is a
@@ -207,7 +207,9 @@ pub fn load_from(
     let orbit = ReferenceOrbit::from_bytes(&bytes)?;
     // Defense in depth: the deserialized identity must serve the
     // request (hash collisions, hand-edited files).
-    if !orbit.serves(center_re, center_im, n_limbs, julia_c, power, ship, ship_variant)
+    if !orbit.serves(
+        center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, orbit.map_params,
+    )
         || orbit.n_limbs != n_limbs
     {
         return None;
@@ -298,12 +300,12 @@ mod tests {
         // the next session repeating the whole computation.
         let dir = test_dir("hint_rewrite");
         let plain =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert!(save_to(&dir, &plain));
         // Rebuilt rather than cloned: ReferenceOrbit is deliberately
         // not Clone (these reach hundreds of megabytes).
         let mut with_hint =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0, [0.0, 0.0]).unwrap();
         with_hint.hint_period = Some(4242);
         with_hint.hint_octave = -100;
         assert!(save_to(&dir, &with_hint));
@@ -328,7 +330,7 @@ mod tests {
     fn roundtrip_serves_and_deepens_like_the_original() {
         let dir = test_dir("roundtrip");
         let orbit =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert!(save_to(&dir, &orbit));
         let mut loaded =
             load_from(&dir, "-0.5", "0.1", orbit.n_limbs, None, 2, false, 0, 60.0, 320.0)
@@ -339,7 +341,7 @@ mod tests {
         // loaded orbit matches a fresh full compute exactly.
         loaded.extend(800);
         let fresh =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 800, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 800, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert_eq!(loaded.orbit, fresh.orbit, "resumed deepening diverged");
     }
 
@@ -347,7 +349,7 @@ mod tests {
     fn misses_on_identity_and_view_mismatches() {
         let dir = test_dir("miss");
         let orbit =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0, [0.0, 0.0]).unwrap();
         let n = orbit.n_limbs;
         assert!(save_to(&dir, &orbit));
         // Different center / power / plane: different key, miss.
@@ -373,7 +375,7 @@ mod tests {
     fn shallower_file_is_not_rewritten_deeper_is() {
         let dir = test_dir("depth");
         let mut orbit =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0, [0.0, 0.0]).unwrap();
         let n = orbit.n_limbs;
         assert!(save_to(&dir, &orbit));
         let len_300 = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
@@ -388,7 +390,7 @@ mod tests {
         assert!(len_600 > len_300, "{len_600} vs {len_300}");
         // Saving the SHALLOW state again must not clobber the deep file.
         let shallow =
-            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0).unwrap();
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert!(save_to(&dir, &shallow));
         let still = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
             .unwrap()
@@ -405,7 +407,7 @@ mod tests {
         // exactness; this pins that we actually compressed).
         let dir = test_dir("compressed_small");
         let orbit =
-            ReferenceOrbit::compute("-1.5", "0", 60.0, None, 20_000, None, 2, false, 0)
+            ReferenceOrbit::compute("-1.5", "0", 60.0, None, 20_000, None, 2, false, 0, [0.0, 0.0])
                 .unwrap();
         assert_eq!(orbit.len(), 20_001, "(-1.5, 0) is bounded");
         assert!(save_to(&dir, &orbit));
@@ -439,7 +441,7 @@ mod tests {
             None,
             2,
             false,
-            0,
+            0, [0.0, 0.0]
         )
         .unwrap();
         assert!(
@@ -491,7 +493,7 @@ mod tests {
             None,
             2,
             false,
-            0,
+            0, [0.0, 0.0]
         )
         .unwrap();
         assert_eq!(deep.orbit, fresh.orbit, "post-load deepening diverged");
@@ -504,7 +506,7 @@ mod tests {
         for i in 0..(MAX_FILES + 4) {
             let re = format!("-0.5000{i}");
             let orbit =
-                ReferenceOrbit::compute(&re, "0.1", 60.0, None, 50, None, 2, false, 0).unwrap();
+                ReferenceOrbit::compute(&re, "0.1", 60.0, None, 50, None, 2, false, 0, [0.0, 0.0]).unwrap();
             assert!(save_to(&dir, &orbit));
         }
         let count = std::fs::read_dir(&dir)
