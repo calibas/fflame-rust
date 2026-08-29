@@ -1755,6 +1755,46 @@ Two measurement notes worth keeping, since both cost time here:
   which is a hostile test of the pixel rather than of the renderer.
   The comparison centre is chosen for a bounded reference instead.
 
+### A golden spiral orbit trap (2026-08-29)
+
+`orbit_trap` gains shape 3, a logarithmic spiral, golden by default —
+the first trap here that is not a point, a cross or a circle. It
+composes with all 23 formulas, which is why it was worth doing before
+adding a 24th (see
+[escape-new-families.md](escape-new-families.md)).
+
+The form is Nylander's:
+
+```
+r = log|z| / (4 log g)  -  arg(z) / 2pi        d = |r - round(r)|
+```
+
+`g` per QUARTER turn is what makes a logarithmic spiral golden when
+`g = phi`, hence the 4; `r` is "how many turns out along the spiral
+this point sits", so the distance to the nearest arm is how far `r`
+sits from a whole number. `growth` exposes `g`, so the golden spiral
+is a default rather than a hardcoded constant. Unlike the other three
+shapes the result is in TURNS, not z-units, doubled to span 0..1.
+
+Both hazards were known in advance and are guarded at the origin,
+where `atan2` is the Metal fast-math trap (pi/4 for same-sign zeros,
+NaN for mixed) and `log|z|` is minus infinity. The escape engine's
+idiom for this is an explicit `dot(z,z) < 1e-30` branch rather than
+the flame side's `ff_atan2`, matching `esc_clog` and
+`stripe_average`; the branch returns a huge distance, which leaves the
+running minimum untouched — "this sample says nothing".
+
+**How it was verified, which is the reusable part.** At
+`max_iter = 1` the orbit is exactly {0, c} and the origin sample is
+skipped, so THE IMAGE IS THE TRAP DISTANCE FIELD: a closed form,
+checkable with no iteration in the way. The test bins pixels by the
+f64 distance and measures colour spread WITHIN a bin, which ignores
+the palette and asks only whether the render is a function of the true
+distance. It reads 0.40/255. Changing the quarter-turn 4 to a
+half-turn 2 sends it to 68.39/255 — and that version still looks like
+a perfectly good spiral, which is exactly the failure a screenshot
+cannot catch.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep

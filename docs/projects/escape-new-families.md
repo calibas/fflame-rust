@@ -27,6 +27,24 @@ Worth stating first, because two of the four requests are partly built:
 
 ---
 
+## 1. Golden spiral orbit trap — DONE 2026-08-29
+
+Shipped as `orbit_trap` shape 3 with a `growth` parameter (golden by
+default). Verified against the closed form at `max_iter = 1`, where
+the image IS the distance field: 0.40/255 colour spread within a
+distance bin, against 68.39 for a deliberately wrong quarter-turn
+factor. Details in
+[escape-time-fractals.md](escape-time-fractals.md).
+
+One thing the plan below got wrong: it says to use `ff_atan2`. That
+helper belongs to the FLAME shader's `utilities.wgsl` and is not in
+scope for an assembled escape shader. The escape engine's own idiom
+for the same hazard is an explicit `dot(z,z) < 1e-30` branch so
+`atan2` is never evaluated at a zero pair, which is what `esc_clog`
+and `stripe_average` already do, and what shipped here.
+
+### The original plan, for reference
+
 ## 1. Golden spiral orbit trap — do this first
 
 A fourth `shape` for the existing `orbit_trap` coloring. It is the

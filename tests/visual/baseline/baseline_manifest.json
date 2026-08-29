@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "f84dce28",
+  "git_hash": "e52f8882",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -477,6 +477,10 @@
     "escape-spider.png": {
       "bytes": 4433,
       "sha256": "831e50156991cee4375185c58f1f31d285acd38347880a97b02003af6ab702a8"
+    },
+    "escape-spiral-trap-golden.png": {
+      "bytes": 9821,
+      "sha256": "c928023874b5a46dadbfa8f28b473688823ffc4f1a2726001d13675f3c3a9289"
     },
     "escape-standard-map-ftle.png": {
       "bytes": 38302,
