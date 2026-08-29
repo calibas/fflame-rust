@@ -5,7 +5,9 @@
 //
 // A full turn ends exactly where it started, so the video loops
 // seamlessly. In 3D that means orbiting the camera; in 2D there is no
-// camera to orbit, so the image itself spins.
+// camera to orbit, so the image itself spins. An escape-time view has
+// its own rotation, separate from the flame's — same radians, same
+// seamless turn, different setting.
 //
 // Run it, then open the Animation panel and press play.
 
@@ -17,24 +19,40 @@ let easing = param_choice("motion", ["Constant speed", "Ease in and out"], 0);
 
 // A turntable spins whatever axis actually turns the picture. In 3D
 // that's the camera's yaw; in 2D there is no camera, so it's the image
-// rotation. Reading the mode rather than assuming keeps one script
-// useful for both.
-let is_3d = false;
+// rotation; in escape-time mode the view carries its own rotation and
+// the flame's is not read at all. Reading the mode rather than
+// assuming keeps one script useful for all three.
+let mode = "2d";
 try {
-    is_3d = config.get("render_mode") == "3d";
+    mode = config.get("render_mode");
 } catch {
     // render_mode is skipped when it's at its default (2d).
 }
+let is_3d = mode == "3d";
+let is_escape = mode == "escape";
 
-let target = if is_3d { "camera_rotation_y" } else { "rotation" };
+let target = if is_escape {
+    "Escape.Rotation"
+} else if is_3d {
+    "camera_rotation_y"
+} else {
+    "rotation"
+};
 
-// Start from wherever the flame already sits, so the first frame is the
+// Start from wherever the view already sits, so the first frame is the
 // image you were just looking at rather than a jump to zero.
 let start = 0.0;
-try {
-    start = config.get(target);
-} catch {
-    // Absent means it's at the default of 0.
+if is_escape {
+    // Read through the escape object: config.get takes a JSON path,
+    // and the whole escape group is omitted from storage while it sits
+    // at its defaults.
+    start = escape.rotation;
+} else {
+    try {
+        start = config.get(target);
+    } catch {
+        // Absent means it's at the default of 0.
+    }
 }
 
 anim.name = "Turntable";
@@ -44,11 +62,14 @@ anim.duration = seconds;
 // separately would stall at every quarter turn.
 let ease = if easing == "Ease in and out" { "ease_in_out" } else { "linear" };
 anim.key(target, 0.0, start, ease);
-// Angles are stored in RADIANS (the View panel converts for display),
-// so a turn is 2*PI, not 360. Exact, so the loop closes on itself.
+// Angles are stored in RADIANS (the panels convert for display), and
+// the escape view uses the same convention as the flame — so a turn is
+// 2*PI on every path, not 360. Exact, so the loop closes on itself.
 anim.key(target, seconds, start + 2.0 * PI() * turns, ease);
 
-if is_3d {
+if is_escape {
+    print("escape view: rotating " + turns + " turn(s) over " + seconds + "s.");
+} else if is_3d {
     print("3D flame: orbiting the camera (yaw) " + turns + " turn(s) over " + seconds + "s.");
 } else {
     print("2D flame: rotating the image " + turns + " turn(s) over " + seconds + "s.");
