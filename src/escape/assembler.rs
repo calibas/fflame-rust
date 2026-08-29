@@ -173,11 +173,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var converged = false;
     var period = 0u;
     var n = 0u;
-    // Derivative-orbit seed: d z0/dz0 = 1 on the dynamical plane,
-    // d z0/dc = 0 on the parameter plane (z0 is c-independent for
-    // every formula that supplies a derivative). Unread and
+    // Derivative-orbit seed: d z0/dz0 = 1 on the dynamical plane. On
+    // the PARAMETER plane it is d z0/dc, which is 0 for a formula
+    // seeded at a constant (Mandelbrot's z0 = 0) and 1 for one seeded
+    // AT THE PIXEL, since there z0 IS c. Getting this wrong is not
+    // subtle: a pixel-seeded formula would carry dz = 0 forever and
+    // distance estimation would divide by 1e-30. Unread and
     // dead-code-eliminated unless the coloring uses it.
-    var dz = select(vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), is_julia);
+    var dz = select(DZ0_PARAM, vec2<f32>(1.0, 0.0), is_julia);
     //__PERIOD_DECL__
     //__INTERIOR_DECL__
     for (var i = 0u; i < params.max_iter; i = i + 1u) {
@@ -1843,6 +1846,13 @@ pub fn assemble_with(
     } else {
         formula.wgsl_param_seed
     };
+    // See the seed comment in the template: z0 = pixel means z0 = c,
+    // hence dz0/dc = 1. Any other seed is a constant, hence 0.
+    let dz0_param = if formula.wgsl_param_seed == "pixel" {
+        "vec2<f32>(1.0, 0.0)"
+    } else {
+        "vec2<f32>(0.0, 0.0)"
+    };
 
     let mut out = Vec::new();
     for line in TEMPLATE.lines() {
@@ -2029,7 +2039,10 @@ pub fn assemble_with(
                     out.push(format!("        z = {call};"));
                 }
             }
-            _ => out.push(line.replace("PARAM_PLANE_SEED", param_seed)),
+            _ => out.push(
+                line.replace("PARAM_PLANE_SEED", param_seed)
+                    .replace("DZ0_PARAM", dz0_param),
+            ),
         }
     }
     out.join("\n")
