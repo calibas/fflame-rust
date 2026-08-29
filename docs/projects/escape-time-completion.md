@@ -181,6 +181,54 @@ edges, to be confirmed by using it:
 - no "render settled" indicator, which is how a viewport screenshot
   of an unsettled frame got reported as a render bug.
 
+## 4. Splitting the WASM builds three ways — MEASURED, NOT BUILT (2026-08-29)
+
+The plan said to measure the three sizes before committing to the
+maintenance cost. The measurement was taken by actually implementing
+the `engine-escape` gate (there is no other way to get the number),
+and it says no.
+
+| build | raw | gzip (what a browser downloads) |
+|---|---|---|
+| both engines, today | 15.60 MB | **4.64 MB** |
+| flames only, escape engine gated out | 15.31 MB | **4.56 MB** |
+| flames, 639 of 647 variations removed | 13.23 MB | **4.18 MB** |
+
+Removing the ENTIRE escape engine saves **80 KB compressed, 1.7% of
+the download**. The 639 variation defs are worth 380 KB (8.2%) by
+comparison, and everything else -- wgpu, egui, naga, the app itself --
+is a **~4.2 MB gzip floor that neither split touches**. An escape-only
+artifact, which is where nearly all the available win lives, would
+land near 4.1 MB: about 11% smaller, for a gate through the flame
+engine that the whole application is built around.
+
+The cost is no longer a prediction either. The escape gate needed
+**~30 `#[cfg]` attributes across 14 files** -- config, app loop, three
+export paths, five UI files, the script API, the renderer, the device
+callback -- and writing them produced a real bug within the hour: a
+`#[cfg]` on an `if is_escape {…} else if shade_ran {…} else {…}` chain
+deletes the FLAME arms along with the escape one. It compiled clean
+and would have shipped video frames that were never tone-mapped. That
+is precisely the "permanent tax on every future change that crosses
+the seam" this plan warned about, demonstrated.
+
+So: reverted, deliberately. If the question returns, the numbers above
+are the answer, and the honest target for a smaller download is the
+4.2 MB floor -- not the engine split.
+
+Two things worth keeping from the exercise:
+
+- **The seam is genuinely shallow**, as the survey said: gating
+  `mod escape` produced 47 errors in exactly 10 files. Whoever needs
+  this later will not be fighting the architecture, just paying the
+  cfg tax.
+- **The gallery renderer already works this way without features.**
+  `wasm/render` is a thin crate that calls the unified `render_with`,
+  so it carries what it uses; a caller who needs a smaller artifact
+  has that route today without a feature flag in the main crate.
+
+### The original scope, for reference
+
 ## 4. Splitting the WASM builds three ways
 
 **What the survey found.** Only 10 files outside `src/escape/`
