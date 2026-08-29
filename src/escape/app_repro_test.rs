@@ -1019,6 +1019,216 @@ mod tests {
         );
     }
 
+    /// Normal-map shading must match the reference implementation.
+    ///
+    /// Ported verbatim from the C behind Wikibooks' bump-mapping
+    /// article (Wikimedia Commons,
+    /// `File:Mandelbrot_set_-_Normal_mapping.png`):
+    ///
+    /// ```c
+    /// u = Z / dC;  u = u / cabs(u);
+    /// reflection = cdot(u, v) + h2;          // v = exp(2 pi i angle)
+    /// reflection = reflection / (1.0 + h2);
+    /// if (reflection < 0.0) reflection = 0.0;
+    /// ```
+    ///
+    /// The oracle below is that C, in f64. The comparison bins pixels
+    /// by the reference reflection and measures colour spread WITHIN a
+    /// bin, so it ignores the palette and asks only whether the render
+    /// is a function of the true reflection — 3.18/255 when this went
+    /// in, over ~185k escaped pixels.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn normal_map_shading_matches_the_reference() {
+        let (device, queue) = repro_device();
+        let (w, h) = (240u32, 180u32);
+        let (cx, cy, zoom) = (-0.5f64, 0.0f64, 0.0f64);
+        const MAX_ITER: u32 = 512;
+        const ANGLE: f64 = 0.125;
+        const HEIGHT: f64 = 1.5;
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "ramp".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "normal_map".to_string();
+        esc.zoom_log2 = zoom;
+        esc.max_iter = MAX_ITER;
+        esc.coloring_params.insert("angle".to_string(), ANGLE as f32);
+        esc.coloring_params.insert("height".to_string(), HEIGHT as f32);
+        esc.coloring_params.insert("scale".to_string(), 1.0);
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("normal map"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 10_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("normal map tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        let span_y = 4.0 / zoom.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let (lx, ly) = (
+            (std::f64::consts::TAU * ANGLE).cos(),
+            (std::f64::consts::TAU * ANGLE).sin(),
+        );
+        const BINS: usize = 256;
+        let mut sums = vec![0f64; BINS];
+        let mut sqs = vec![0f64; BINS];
+        let mut counts = vec![0usize; BINS];
+        let mut compared = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                let cre = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx;
+                let cim = -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy;
+                let (mut zr, mut zi) = (0.0f64, 0.0f64);
+                let (mut dr, mut di) = (0.0f64, 0.0f64);
+                let mut escaped = false;
+                for _ in 0..MAX_ITER {
+                    // dC = 2*dC*Z + 1, then Z = Z*Z + C.
+                    let ndr = 2.0 * (dr * zr - di * zi) + 1.0;
+                    let ndi = 2.0 * (dr * zi + di * zr);
+                    dr = ndr;
+                    di = ndi;
+                    let nzr = zr * zr - zi * zi + cre;
+                    let nzi = 2.0 * zr * zi + cim;
+                    zr = nzr;
+                    zi = nzi;
+                    if zr * zr + zi * zi > 4.0 {
+                        escaped = true;
+                        break;
+                    }
+                }
+                if !escaped {
+                    continue;
+                }
+                let dl = dr * dr + di * di;
+                if dl < 1e-30 {
+                    continue;
+                }
+                // u = z / dz
+                let ur = (zr * dr + zi * di) / dl;
+                let ui = (zi * dr - zr * di) / dl;
+                let ul = (ur * ur + ui * ui).sqrt();
+                if !(ul > 1e-30) {
+                    continue;
+                }
+                let refl = (((ur / ul) * lx + (ui / ul) * ly) + HEIGHT) / (1.0 + HEIGHT);
+                let refl = refl.max(0.0).min(1.0);
+                let b = ((refl * (BINS - 1) as f64).round() as usize).min(BINS - 1);
+                let i = ((py * w + px) * 4) as usize;
+                let lum = rgba[i] as f64;
+                counts[b] += 1;
+                sums[b] += lum;
+                sqs[b] += lum * lum;
+                compared += 1;
+            }
+        }
+        let (mut spread, mut total) = (0f64, 0usize);
+        for b in 0..BINS {
+            if counts[b] < 40 {
+                continue;
+            }
+            let n = counts[b] as f64;
+            let sd = (sqs[b] / n - (sums[b] / n).powi(2)).max(0.0).sqrt();
+            spread += sd * n;
+            total += counts[b];
+        }
+        let spread = spread / total as f64;
+        println!(
+            "normal map: {compared} escaped pixels, colour spread within a reflection bin {spread:.2}/255"
+        );
+        assert!(
+            spread < 10.0,
+            "the render is not a function of the reference reflection ({spread:.2}/255)"
+        );
+
+        // The seam this coloring was born with: a bounded value of
+        // exactly 1.0 wrapping to the palette's bottom. Nothing in the
+        // lit region may be black.
+        let mut darkest_lit = 255u8;
+        for (i, px) in rgba.chunks_exact(4).enumerate() {
+            let (x, y) = ((i as u32) % w, (i as u32) / w);
+            // Sample the bright quadrant, away from the set itself.
+            if x > w * 3 / 4 && y < h / 3 {
+                darkest_lit = darkest_lit.min(px[0]);
+            }
+        }
+        assert!(
+            darkest_lit > 100,
+            "a lit region contains near-black pixels ({darkest_lit}) — the bounded \
+             value is wrapping at 1.0 again"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

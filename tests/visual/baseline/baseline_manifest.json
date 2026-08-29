@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "e52f8882",
+  "git_hash": "7045fd53",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -429,6 +429,10 @@
     "escape-newton-relaxed.png": {
       "bytes": 17071,
       "sha256": "43a051c4cf5363644e9c22a2045352fe0e9c2a5ee667f32167b92456151fd99a"
+    },
+    "escape-normal-map-relief.png": {
+      "bytes": 14011,
+      "sha256": "c90a0047e11d2b86d9740f6979c7ce36a65739d13a2fae2fc1a55405a6e3bcb6"
     },
     "escape-nova-3.png": {
       "bytes": 6089,

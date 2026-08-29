@@ -198,7 +198,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
-        let t = fract(coloring_map(summary, accum_state));
+        // `fract` so unbounded colorings cycle as they grow; a
+        // bounded one clamps instead, or its top value (1.0) wraps to
+        // the palette's bottom and the brightest points render
+        // darkest. See ColoringFeature::Bounded.
+        let raw = coloring_map(summary, accum_state);
+        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
         // textureSampleLevel: explicit LOD, legal in non-uniform
         // control flow (unlike textureSample) -- WASM-safe.
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
@@ -626,7 +631,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
-        let t = fract(coloring_map(summary, accum_state));
+        // `fract` so unbounded colorings cycle as they grow; a
+        // bounded one clamps instead, or its top value (1.0) wraps to
+        // the palette's bottom and the brightest points render
+        // darkest. See ColoringFeature::Bounded.
+        let raw = coloring_map(summary, accum_state);
+        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
@@ -1393,7 +1403,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
-        let t = fract(coloring_map(summary, accum_state));
+        // `fract` so unbounded colorings cycle as they grow; a
+        // bounded one clamps instead, or its top value (1.0) wraps to
+        // the palette's bottom and the brightest points render
+        // darkest. See ColoringFeature::Bounded.
+        let raw = coloring_map(summary, accum_state);
+        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
@@ -2003,6 +2018,7 @@ fn delta_step_floatexp_on(p: u32, zm: &str, zlo: &str, w: &str) -> String {
 pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbTier) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
+    let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let template = if floatexp {
         PERTURBED_FE_TEMPLATE
     } else {
@@ -2048,6 +2064,12 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
                 ));
+                // The perturbed rungs never iterate a derivative: `dz`
+                // is a constant seed there. A coloring built on dz has
+                // to KNOW that, or it renders something plausible from
+                // a derivative that is really the number 1.
+                out.push("const HAS_DERIVATIVE: bool = false;".to_string());
+                out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }
@@ -2223,6 +2245,7 @@ pub fn assemble_with(
 ) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
+    let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
@@ -2269,6 +2292,8 @@ pub fn assemble_with(
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
                 ));
+                out.push(format!("const HAS_DERIVATIVE: bool = {needs_derivative};"));
+                out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }
@@ -2655,6 +2680,90 @@ mod tests {
     /// otherwise read and write past its slot -- silent corruption of
     /// a neighbouring pixel's history, which no image comparison
     /// attributes to the right cause.
+    /// A bounded coloring must CLAMP, not wrap.
+    ///
+    /// The template wraps every coloring's value with `fract` so that
+    /// unbounded ones cycle. For a bounded one that is a bug at
+    /// exactly one input: 1.0 wraps to 0.0, so the brightest points
+    /// render as the palette's darkest colour. It showed up as a thin
+    /// black seam through the highlight of a normal-map render, along
+    /// the curve where the surface normal aims straight at the light
+    /// — one value out of a continuum, which is why it survived the
+    /// numerical check that said the shading matched its reference to
+    /// 3.18/255.
+    #[test]
+    fn a_bounded_coloring_clamps_where_an_unbounded_one_wraps() {
+        use crate::escape::colorings;
+        for (coloring, expect_bounded) in [
+            (&colorings::NORMAL_MAP, true),
+            (&colorings::SMOOTH, false),
+            (&colorings::ESCAPE_COUNT, false),
+        ] {
+            for floatexp in [false, true] {
+                let src = assemble_perturbed(coloring, floatexp, PerturbTier::Power(2));
+                assert!(
+                    src.contains(&format!("const COLORING_IS_BOUNDED: bool = {expect_bounded};")),
+                    "{} (fe={floatexp}) did not declare bounded={expect_bounded}",
+                    coloring.name
+                );
+            }
+            let direct = assemble_with(
+                crate::escape::get_formula("mandelbrot"),
+                coloring,
+                false,
+                false,
+            );
+            assert!(
+                direct.contains(&format!("const COLORING_IS_BOUNDED: bool = {expect_bounded};")),
+                "{} (direct) did not declare bounded={expect_bounded}",
+                coloring.name
+            );
+            // And the template must actually consult it.
+            assert!(
+                direct.contains("clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED"),
+                "the palette lookup ignores the bounded flag"
+            );
+        }
+    }
+
+    /// The perturbed rungs never iterate a derivative, and a coloring
+    /// built on one has to know.
+    ///
+    /// `dz` is a constant seed there, so `z/dz` is `z` and the shading
+    /// would be a smooth function of arg(z) — convincing relief that
+    /// encodes nothing. The flag lets the coloring return flat light
+    /// instead, which is visibly unshaded rather than plausibly wrong.
+    #[test]
+    fn the_perturbed_rungs_declare_no_derivative() {
+        use crate::escape::colorings;
+        for floatexp in [false, true] {
+            let src = assemble_perturbed(&colorings::NORMAL_MAP, floatexp, PerturbTier::Power(2));
+            assert!(
+                src.contains("const HAS_DERIVATIVE: bool = false;"),
+                "perturbed (fe={floatexp}) must declare no derivative"
+            );
+        }
+        // Direct + a formula that HAS one: true.
+        let with = assemble_with(
+            crate::escape::get_formula("mandelbrot"),
+            &colorings::NORMAL_MAP,
+            false,
+            false,
+        );
+        assert!(with.contains("const HAS_DERIVATIVE: bool = true;"));
+        // Direct + a formula that does NOT: false.
+        let without = assemble_with(
+            crate::escape::get_formula("kaliset"),
+            &colorings::NORMAL_MAP,
+            false,
+            false,
+        );
+        assert!(
+            without.contains("const HAS_DERIVATIVE: bool = false;"),
+            "a formula with no derivative must not claim one"
+        );
+    }
+
     #[test]
     fn iter_state_stride_matches_the_shader() {
         use crate::escape::colorings;
