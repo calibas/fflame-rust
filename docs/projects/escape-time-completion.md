@@ -182,6 +182,33 @@ Two halves, one of which is not ours:
   thumbnails already work through `render_with`), and lifting the
   refusal once the server answers.
 
+## 6. Scripting support — DONE 2026-08-29
+
+An `escape` handle mirroring `flame`/`config`: formula and coloring by
+name (validated against the registry, with the alternatives listed on
+a typo), the catalog reachable via `formulas()`/`colorings()`/
+`params()`, the view (`center`, `zoom`, `max_iter`, `bailout`,
+`supersample`, `rotation`), the Julia plane, and both parameter maps.
+Documented in [SCRIPTING.md](../main/SCRIPTING.md), which the existing
+staleness test enforces, and covered by six tests.
+
+Two decisions that are load-bearing rather than stylistic:
+
+- **The centre takes STRINGS.** Zoom 60 needs about 20 significant
+  digits and an f64 carries 15, so a float parameter would have capped
+  every script near zoom 50 without saying so.
+- **Touching `escape` switches the render mode** and resets tone
+  mapping to Linear. A config carrying escape settings while rendering
+  a flame is a silent no-op that reads as a bug in the script.
+
+Ships `escape_deep.rhai` (five deep-capable formulas, each at a
+verified location). It found a real bug on its first run: an escape
+config has no transforms, and a zero-transform flame emitted
+`array<f32, 0>` -- invalid WGSL -- so script-generated escape configs
+could not export at all.
+
+### The original scope, for reference
+
 ## 6. Scripting support
 
 **What the survey found.** `src/script/api.rs` is 2,911 lines and
