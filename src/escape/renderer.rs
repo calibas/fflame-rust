@@ -878,7 +878,7 @@ impl EscapeRenderer {
             // HISTORY -- w_prev would be left measured against the
             // wrong iterate. A two-term BLA needs 2x2 coefficients;
             // until then Phoenix iterates per-step.
-            assembler::PerturbTier::Phoenix => return false,
+            assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -1449,6 +1449,11 @@ impl EscapeRenderer {
     /// cache keyed without it would silently reuse a stale one).
     /// Zero for every family that has no such parameter.
     fn map_params_for(escape: &EscapeConfig) -> [f32; 2] {
+        // Manowar is the same two-term map with p = 1, fixed by the
+        // formula rather than by a parameter.
+        if escape.formula == "manowar" {
+            return [1.0, 0.0];
+        }
         if escape.formula != "phoenix" {
             return [0.0, 0.0];
         }
@@ -1495,6 +1500,9 @@ impl EscapeRenderer {
                 }
             }
             "phoenix" => Some(assembler::PerturbTier::Phoenix),
+            // z^2 + z_prev + c: Phoenix's recurrence with p = 1 and a
+            // pixel seed, so it rides the same two-term machinery.
+            "manowar" => Some(assembler::PerturbTier::Manowar),
             "tricorn" => {
                 // conj(z)^p: the binomial expansion needs an integer
                 // exponent, exactly as Multibrot does.
@@ -1580,6 +1588,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Phoenix => {
                 (2, false, super::reference::MAP_PHOENIX)
+            }
+            assembler::PerturbTier::Manowar => {
+                (2, false, super::reference::MAP_MANOWAR)
             }
         };
         let height_px = self.height.max(1) as f64;
@@ -1771,6 +1782,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Phoenix => {
                 (2, false, super::reference::MAP_PHOENIX)
+            }
+            assembler::PerturbTier::Manowar => {
+                (2, false, super::reference::MAP_MANOWAR)
             }
         };
         let period_hint = if julia_c.is_none() && !ship {
@@ -2321,6 +2335,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
                 #[cfg(not(test))]
                 let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+                // Manowar perturbs on the DEEP rung at every depth.
+                // Its history term carries the delta forward with
+                // coefficient 1, so where a one-term map's delta
+                // decays near the reference, Manowar's persists and
+                // f32 mantissa error accumulates across hundreds of
+                // iterations. Measured against an exact orbit: 18.4%
+                // of pixels wrong at zoom 20 and 27.0% at zoom 26 on
+                // the scaled rung, against 1.6% and 2.1% on this one.
+                if matches!(
+                    Self::perturb_tier(escape),
+                    Some(assembler::PerturbTier::Manowar)
+                ) {
+                    floatexp = true;
+                }
                 // Pixel spacing S = 2^(2 - zoom) / height. The scaled
                 // rung takes it as f64->f32 (normal down to ~zoom 119,
                 // past its own ceiling); the floatexp rung takes it

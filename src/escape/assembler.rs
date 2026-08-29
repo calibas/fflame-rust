@@ -491,9 +491,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Chunk resume: after the first chunk every register comes from
     // the state buffer; an already-escaped pixel just rewrites its
     // (final) color.
-    // Previous-iteration delta, for two-term recurrences (Phoenix).
+    // Previous-iteration delta, for two-term recurrences.
     // Unused, and dead-code-eliminated, for every other tier.
-    var w_prev = vec2<f32>(0.0, 0.0);
+    //__W_PREV_INIT__
     var i = perturb.iter_start;
     if (perturb.iter_start > 0u) {
         let st = iter_state[px_index];
@@ -1269,11 +1269,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let is_julia_perturb = (perturb.flags & 2u) != 0u;
     var w: CFe2;
-    if (is_julia_perturb) {
-        w = d0;
-    } else {
-        w = cfe2_zero();
-    }
+    //__W_INIT__
 
     var m = 0u;
     var z = vec2<f32>(0.0, 0.0);
@@ -1286,8 +1282,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     //__ACCUM_DECL__
 
-    // Previous-iteration delta, for two-term recurrences (Phoenix).
-    var w_prev = cfe2_zero();
+    // Previous-iteration delta, for two-term recurrences.
+    //__W_PREV_INIT__
     var i = perturb.iter_start;
     if (perturb.iter_start > 0u) {
         let st = iter_state[px_index];
@@ -1424,6 +1420,12 @@ pub enum PerturbTier {
     /// grows (see [`iter_state_bytes`]). Carries the map's continuous
     /// parameter, which is part of the reference orbit's identity.
     Phoenix,
+    /// Manowar: `z^2 + z_prev + c`, seeded at z_0 = z_-1 = c. The
+    /// same two-term recurrence as Phoenix with p = 1, so it shares
+    /// the second delta, the step and the pair rebase. It differs in
+    /// the SEED -- both deltas start at d0, not zero -- and in what
+    /// the history rebases against: Z_-1 = Z_0 = c here, zero there.
+    Manowar,
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
@@ -1640,7 +1642,7 @@ pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool) -> u64 {
     match (tier, floatexp) {
         // The scaled rung hides Phoenix's history in `w_lo`, which is
         // dead there, so only the deep rung actually grows.
-        (PerturbTier::Phoenix, true) => ITER_STATE_BYTES_PHOENIX,
+        (PerturbTier::Phoenix, true) | (PerturbTier::Manowar, true) => ITER_STATE_BYTES_PHOENIX,
         _ => ITER_STATE_BYTES,
     }
 }
@@ -1649,8 +1651,41 @@ pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool) -> u64 {
 /// returned together because they are only ever correct together.
 fn state_tail(tier: PerturbTier) -> (String, String, String) {
     match tier {
-        PerturbTier::Phoenix => state_tail_phoenix(),
+        PerturbTier::Phoenix | PerturbTier::Manowar => state_tail_phoenix(),
         _ => state_tail_default(),
+    }
+}
+
+/// How the pixel's delta STARTS, per tier and rung.
+///
+/// The parameter plane starts a pixel at z_0 = 0, which is the
+/// reference's own start, so its delta is zero. The Julia plane
+/// starts it at the pixel itself, so its delta is d0. Manowar seeds
+/// z_0 = z_-1 = c -- the pixel again -- so BOTH of its deltas start
+/// at d0 even though it is a parameter-plane map.
+fn w_init(tier: PerturbTier, floatexp: bool) -> String {
+    match (tier, floatexp) {
+        (PerturbTier::Manowar, false) => "    var w = d0;".to_string(),
+        (PerturbTier::Manowar, true) => "    w = d0;".to_string(),
+        (_, false) => "    var w = select(vec2<f32>(0.0, 0.0), d0, is_julia_perturb);".to_string(),
+        (_, true) => "    if (is_julia_perturb) {
+        w = d0;
+    } else {
+        w = cfe2_zero();
+    }"
+            .to_string(),
+    }
+}
+
+/// The history's initial value. Manowar seeds z_-1 = c, so its
+/// previous delta starts at d0 exactly as its current one does;
+/// every other tier starts with no history at all.
+fn w_prev_init(tier: PerturbTier, floatexp: bool) -> String {
+    match (tier, floatexp) {
+        (PerturbTier::Manowar, false) => "    var w_prev = d0;".to_string(),
+        (PerturbTier::Manowar, true) => "    var w_prev = d0;".to_string(),
+        (_, false) => "    var w_prev = vec2<f32>(0.0, 0.0);".to_string(),
+        (_, true) => "    var w_prev = cfe2_zero();".to_string(),
     }
 }
 
@@ -1688,23 +1723,34 @@ fn state_tail_phoenix() -> (String, String, String) {
 ///
 /// `p` is a plain f32 pair from the formula uniform -- an O(1)
 /// number, so it multiplies the extended-range history directly.
+/// Manowar on the deep rung: the same two-term step with p = 1.
+fn delta_step_manowar_fe() -> String {
+    delta_step_two_term_fe("vec2<f32>(1.0, 0.0)")
+}
+
 fn delta_step_phoenix_fe() -> String {
+    delta_step_two_term_fe("vec2<f32>(params.fparams[0][0], params.fparams[0][1])")
+}
+
+/// The shared deep-rung two-term step: the canonical p = 2
+/// floatexp step, plus a term in the previous delta.
+fn delta_step_two_term_fe(p_expr: &str) -> String {
     // The quadratic part is the CANONICAL p = 2 floatexp step, reused
     // rather than restated: it owns the reference's variable names and
     // the with-its-own-exponent multiply, and a copy here drifted from
     // them within the hour.
     let mut out = delta_step_floatexp(2);
-    out.push_str(
+    out.push_str(&format!(
         "
         // ... plus the history term, p * w_prev. p is an O(1)
                  // number from the formula uniform, so it multiplies the
                  // extended-range history directly.
-                 let pp = vec2<f32>(params.fparams[0][0], params.fparams[0][1]);
+                 let pp = {p_expr};
                  w_new = cfe2_add(w_new, cfe2_mul_c32(w_prev, pp));
                  // The history advances to the delta being left behind;
                  // the template assigns w = w_new right after this.
-                 w_prev = w;",
-    );
+                 w_prev = w;"));
+
     out
 }
 
@@ -1731,6 +1777,20 @@ fn rebase_default_fe() -> String {
 /// (Z_0, Z_-1) = (Z_0, 0) -- with both deltas rebuilt in double-float
 /// rather than through an f32 subtraction.
 fn rebase_phoenix_fe() -> String {
+    rebase_two_term_fe("vec2<f32>(0.0, 0.0)", "fe_rebase_from_zero(w_prev, mp)")
+}
+
+/// Manowar: the history rebases against Z_0, so its delta is
+/// rebuilt against the orbit start exactly as the current one is.
+fn rebase_manowar_fe() -> String {
+    rebase_two_term_fe("ref_z(0u)", "fe_rebase_delta(w_prev, mp)")
+}
+
+/// The shared deep-rung pair rebase. Both deltas are rebuilt in
+/// double-float from the reference's own DF entries, never by an
+/// f32 subtraction of two O(1) iterates.
+fn rebase_two_term_fe(prev_target: &str, prev_rebase: &str) -> String {
+    format!(
     "        let delta_prev = cfe2_to_f32(w_prev);
              let mp = min(max(m, 1u) - 1u, perturb.orbit_len - 1u);
              let z_prev_full = select(vec2<f32>(0.0, 0.0), ref_z(mp), m > 0u)
@@ -1740,17 +1800,16 @@ fn rebase_phoenix_fe() -> String {
              // nothing at all, so it keeps its full value.
              if (m >= perturb.orbit_len - 1u
                  || dot(rebase_delta, rebase_delta) + dot(z_prev_full, z_prev_full)
-                     < dot(delta, delta) + dot(delta_prev, delta_prev)) {
+                     < dot(delta, delta) + dot(delta_prev, delta_prev)) {{
                  // (select takes no struct arguments in WGSL.)
                  var wp_new = w_prev;
-                 if (m > 0u) {
-                     wp_new = fe_rebase_from_zero(w_prev, mp);
-                 }
+                 if (m > 0u) {{
+                     wp_new = {prev_rebase};
+                 }}
                  w = fe_rebase_delta(w, min(m, perturb.orbit_len - 1u));
                  w_prev = wp_new;
                  m = 0u;
-             }"
-        .to_string()
+             }}")
 }
 
 /// Phoenix rebases onto the orbit's START, as a PAIR.
@@ -1776,23 +1835,36 @@ fn rebase_phoenix_fe() -> String {
 /// rebase that shrinks z while leaving z_prev far from the reference
 /// would blow up the p*w_prev term on the very next step.
 fn rebase_phoenix() -> String {
-    "        // Previous full iterate: Z_(m-1) + S*w_prev, with Z_-1 = 0.
+    // Phoenix's reference begins with no history: Z_-1 = 0.
+    rebase_two_term("vec2<f32>(0.0, 0.0)")
+}
+
+/// Manowar seeds z_0 = z_-1 = c, so its history rebases against
+/// Z_0 rather than against zero.
+fn rebase_manowar() -> String {
+    rebase_two_term("ref_z(0u)")
+}
+
+/// The shared two-term rebase: both deltas move onto reference
+/// index 0 together, gated on the PAIR's norm.
+fn rebase_two_term(prev_target: &str) -> String {
+    format!(
+    "        // Previous full iterate: Z_(m-1) + S*w_prev, against the target below.
              let zp_ref = select(vec2<f32>(0.0, 0.0),
                  ref_z(min(max(m, 1u) - 1u, perturb.orbit_len - 1u)), m > 0u);
              let z_prev_full = zp_ref + perturb.s * w_prev;
              let delta_prev = perturb.s * w_prev;
              let rebase_delta = z_full - ref_z(0u);
-             let rebase_prev = z_prev_full;
+             let rebase_prev = z_prev_full - {prev_target};
              // At m == 0 both sides are equal by construction, so
              // this cannot loop.
              if (m >= perturb.orbit_len - 1u
                  || dot(rebase_delta, rebase_delta) + dot(rebase_prev, rebase_prev)
-                     < dot(delta, delta) + dot(delta_prev, delta_prev)) {
+                     < dot(delta, delta) + dot(delta_prev, delta_prev)) {{
                  w = rebase_delta * perturb.inv_s;
                  w_prev = rebase_prev * perturb.inv_s;
                  m = 0u;
-             }"
-        .to_string()
+             }}")
 }
 
 /// Phoenix: z' = z^2 + c + p*z_prev, so the delta step is the
@@ -1804,8 +1876,22 @@ fn rebase_phoenix() -> String {
 /// reference orbit's identity (see MapId), so the reference this runs
 /// against was built with the same value.
 fn delta_step_phoenix() -> String {
+    delta_step_two_term("vec2<f32>(params.fparams[0][0], params.fparams[0][1])")
+}
+
+/// Manowar is the same step with p pinned to 1 -- a literal,
+/// because the formula has no parameters and there is no uniform
+/// slot to read it from.
+fn delta_step_manowar() -> String {
+    delta_step_two_term("vec2<f32>(1.0, 0.0)")
+}
+
+/// The shared two-term delta step: the quadratic part, plus a
+/// term in the PREVIOUS delta, plus the history advancing.
+fn delta_step_two_term(p_expr: &str) -> String {
+    format!(
     "        // w' = 2 Z w + S w^2 + p w_prev + d0\n\
-     \x20       let pp = vec2<f32>(params.fparams[0][0], params.fparams[0][1]);\n\
+     \x20       let pp = {p_expr};\n\
      \x20       var w_new = 2.0 * vec2<f32>(\n\
      \x20           z_ref.x * w.x - z_ref.y * w.y,\n\
      \x20           z_ref.x * w.y + z_ref.y * w.x,\n\
@@ -1813,14 +1899,13 @@ fn delta_step_phoenix() -> String {
      \x20           pp.x * w_prev.x - pp.y * w_prev.y,\n\
      \x20           pp.x * w_prev.y + pp.y * w_prev.x,\n\
      \x20       );\n\
-     \x20       if ((perturb.flags & 1u) == 0u) {\n\
+     \x20       if ((perturb.flags & 1u) == 0u) {{\n\
      \x20           w_new = w_new + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);\n\
-     \x20       }\n\
+     \x20       }}\n\
      \x20       // History advances to the delta we are leaving; `w` is\n\
      \x20       // still the old value here, and the template assigns\n\
      \x20       // w = w_new immediately after this splice.\n\
-     \x20       w_prev = w;"
-        .to_string()
+     \x20       w_prev = w;")
 }
 
 /// Tricorn / Multicorn, floatexp rung: the same conjugation, applied
@@ -1932,16 +2017,20 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Ship(v) => delta_step_ship(v.min(5)),
                 PerturbTier::Tricorn(p) => delta_step_conj(p.clamp(2, 12)),
                 PerturbTier::Phoenix => delta_step_phoenix(),
+                PerturbTier::Manowar => delta_step_manowar(),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship_fe(v.min(5)),
                 PerturbTier::Tricorn(p) => delta_step_conj_fe(p.clamp(2, 12)),
                 PerturbTier::Phoenix => delta_step_phoenix_fe(),
+                PerturbTier::Manowar => delta_step_manowar_fe(),
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
                 (PerturbTier::Phoenix, true) => rebase_phoenix_fe(),
+                (PerturbTier::Manowar, false) => rebase_manowar(),
+                (PerturbTier::Manowar, true) => rebase_manowar_fe(),
                 (_, false) => rebase_default(),
                 (_, true) => rebase_default_fe(),
             }),
@@ -1950,6 +2039,8 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
             // the renderer allocates must match: see
             // `iter_state_bytes`, and the test that measures the
             // assembled struct against it.
+            "//__W_INIT__" => out.push(w_init(tier, floatexp)),
+            "//__W_PREV_INIT__" => out.push(w_prev_init(tier, floatexp)),
             "//__ITER_STATE_TAIL__" => out.push(state_tail(tier).0),
             "//__STATE_RESUME_TAIL__" => out.push(state_tail(tier).1),
             "//__STATE_SAVE_TAIL__" => out.push(state_tail(tier).2),
