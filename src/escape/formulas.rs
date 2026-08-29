@@ -94,7 +94,19 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // conj(z)^p is ANTI-holomorphic: the chain rule carries the
+    // conjugate of dz, not dz. (So this is the standard
+    // anti-holomorphic distance estimate, not a complex derivative --
+    // |dz| is still the growth factor the estimate needs.)
+    let p = fparam(0u);
+    let zc = vec2<f32>(z.x, -z.y);
+    let dzc = vec2<f32>(dz.x, -dz.y);
+    let d = p * esc_cmul(esc_cpow(zc, p - 1.0), dzc);
+    return select(d + vec2<f32>(1.0, 0.0), d, is_julia);
+}
+"#,
 };
 
 /// Burning Ship family (plan §5.3): one formula, a `variant` enum of
@@ -209,7 +221,20 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // d/dz [z^n + c z^-m] = n z^(n-1) - m c z^(-m-1);  d/dc = z^-m.
+    let n = fparam(0u);
+    let m = fparam(1u);
+    if (dot(z, z) < 1e-20) {
+        return vec2<f32>(0.0, 0.0);   // at the pole the estimate is void
+    }
+    let dfz = n * esc_cpow(z, n - 1.0)
+            - m * esc_cmul(c, esc_cpow(z, -m - 1.0));
+    let d = esc_cmul(dfz, dz);
+    return select(d + esc_cpow(z, -m), d, is_julia);
+}
+"#,
 };
 
 /// Kaliset `z ← |z| / ⟨z,z⟩ − c` (component abs; plan §5.12).
@@ -335,7 +360,14 @@ fn formula_step(z: vec2<f32>, c: ptr<function, vec2<f32>>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // f = c z (1 - z):  df/dz = c (1 - 2z),  df/dc = z (1 - z).
+    let one = vec2<f32>(1.0, 0.0);
+    let d = esc_cmul(esc_cmul(c, one - 2.0 * z), dz);
+    return select(d + esc_cmul(z, one - z), d, is_julia);
+}
+"#,
 };
 
 /// Fractint Manowar — `z ← z² + m + c; m ← z(old)` (plan §5.16),
@@ -405,7 +437,38 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // Piecewise-linear in z, so the derivative follows the SAME branch
+    // the step took (the branch boundary itself is measure-zero).
+    let one = vec2<f32>(1.0, 0.0);
+    let v = u32(clamp(fparam(0u), 0.0, 2.0));
+    if (v == 2u) {
+        // Type 3 is z^2 - 1, plus c*Re(z) on the left half-plane.
+        // Re(z) is NOT holomorphic, so that branch has no complex
+        // derivative; we take the real-direction one (d Re(z)/dz -> 1),
+        // which is the usual choice for distance estimation on
+        // fold-type maps and is exact wherever the branch is inactive.
+        var dfz = 2.0 * z;
+        var dfc = vec2<f32>(0.0, 0.0);
+        if (z.x <= 0.0) {
+            dfz = dfz + c;
+            dfc = vec2<f32>(z.x, 0.0);
+        }
+        let d = esc_cmul(dfz, dz);
+        return select(d + dfc, d, is_julia);
+    }
+    // Types 1 and 2: f = (z -/+ 1) * c, so df/dz = c and df/dc = z -/+ 1.
+    var shifted = z - one;
+    if (v == 0u) {
+        if (z.x < 0.0) { shifted = z + one; }
+    } else {
+        if (z.x * c.y + c.x * z.y < 0.0) { shifted = z + one; }
+    }
+    let d = esc_cmul(c, dz);
+    return select(d + shifted, d, is_julia);
+}
+"#,
 };
 
 /// Fractint Cactus — `z ← z³ + (c−1)·z − c` (plan §5.16). Fractint
@@ -425,7 +488,15 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // f = z^3 + (c-1) z - c:  df/dz = 3z^2 + (c-1),  df/dc = z - 1.
+    let one = vec2<f32>(1.0, 0.0);
+    let dfz = 3.0 * esc_cmul(z, z) + (c - one);
+    let d = esc_cmul(dfz, dz);
+    return select(d + (z - one), d, is_julia);
+}
+"#,
 };
 
 /// Exponential map `z ← e^z + c` (plan §5.9): Cantor bouquets.
@@ -444,7 +515,13 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // f = e^z + c:  df/dz = e^z,  df/dc = 1.
+    let d = esc_cmul(esc_cexp(z), dz);
+    return select(d + vec2<f32>(1.0, 0.0), d, is_julia);
+}
+"#,
 };
 
 /// Trig family `z ← sin z + c` / `cos z + c` (plan §5.9). Escape
@@ -472,7 +549,17 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // sin z + c -> cos z;  cos z + c -> -sin z.  df/dc = 1.
+    var dfz = esc_ccos(z);
+    if (fparam(0u) >= 0.5) {
+        dfz = -esc_csin(z);
+    }
+    let d = esc_cmul(dfz, dz);
+    return select(d + vec2<f32>(1.0, 0.0), d, is_julia);
+}
+"#,
 };
 
 /// Ducks / Kali-log (Monnier) — `z ← log(Iabs(z) + c)` where
@@ -556,7 +643,19 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
-    wgsl_derivative: "",
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // f = c^z = exp(z log c):  df/dz = log(c) * f,
+    // df/dc = z * c^(z-1) = z * f / c.
+    let logc = esc_clog(c);
+    let f = esc_cexp(esc_cmul(z, logc));
+    let d = esc_cmul(esc_cmul(logc, f), dz);
+    if (is_julia) {
+        return d;
+    }
+    return d + esc_cdiv(esc_cmul(z, f), c);
+}
+"#,
 };
 
 /// Collatz — the standard interpolation
