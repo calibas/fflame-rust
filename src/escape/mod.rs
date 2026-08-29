@@ -105,6 +105,21 @@ pub enum ColoringFeature {
     /// is the periodic(k) channel §5.8/§5.17 call for; without the
     /// flag no detection code exists.
     NeedsPeriod,
+    /// The coloring's value is BOUNDED to 0..1 and means a level, not
+    /// a position along a repeating ramp — a lighting term, say.
+    ///
+    /// The template wraps a coloring's value with `fract` so that
+    /// unbounded ones (escape count, smooth iteration) cycle through
+    /// the palette as they grow. For a bounded one that wrap is a bug
+    /// at exactly one value: 1.0 wraps to 0.0, so the brightest points
+    /// come out the darkest colour. It shows as a thin dark seam
+    /// through the highlight — which is how it was found, in the
+    /// normal-map shading where the seam traces the points whose
+    /// normal aims straight at the light.
+    ///
+    /// With this flag the value is CLAMPED instead, so out-of-range
+    /// values saturate the way an exposure control does.
+    Bounded,
     /// The coloring produces a palette position for interior
     /// (never-escaped) pixels too. Without it the template paints
     /// interior black — right for escape-count/smooth, wrong for
@@ -245,6 +260,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::PERIOD,
     &colorings::DISTANCE_ESTIMATE,
     &colorings::MAGNITUDE_AVERAGE,
+    &colorings::NORMAL_MAP,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

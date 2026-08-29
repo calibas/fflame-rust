@@ -187,6 +187,30 @@ built on a guess.
 
 ---
 
+## 5. Analytic normal shading — DONE 2026-08-29
+
+Shipped as the `normal_map` coloring, ported verbatim from the
+reference C rather than from memory (the convention this plan flagged
+as unverified was pinned to Wikimedia Commons'
+`File:Mandelbrot_set_-_Normal_mapping.png`, the source behind
+Wikibooks' bump-mapping article). Matches that reference to 1.38/255.
+
+Two things the plan did not anticipate:
+
+- **Where it cannot work needed a mechanism.** The perturbed rungs
+  iterate no derivative and 12 formulas define none, so a
+  `HAS_DERIVATIVE` constant now tells the coloring to return flat
+  light rather than shade from `z/1`.
+- **A bounded coloring cannot use the template's `fract`.** A value of
+  exactly 1.0 wrapped to the palette's bottom and put a black seam
+  through the highlight; `ColoringFeature::Bounded` clamps instead.
+  The numerical check could not see it (1.74/255 with the bug, 1.38
+  without) — a person looking at the image could.
+
+Details in [escape-time-fractals.md](escape-time-fractals.md).
+
+### The original plan, for reference
+
 ## 5. Analytic normal shading — the "fake 3D" look
 
 Two different techniques get called this, they fail differently, and

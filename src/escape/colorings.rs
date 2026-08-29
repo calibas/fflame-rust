@@ -427,3 +427,111 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "",
     wgsl_accum: "",
 };
+
+/// Analytic normal shading — the "fake 3D" relief.
+///
+/// The normal comes from the derivative rather than from neighbouring
+/// pixels. [Chéritat's derivation](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set):
+/// the normal is `(x, y, 1)/sqrt(2)` where `(x, y)` is normal to the
+/// potential line, and since the potential is `2^-n log|z_n|` one
+/// pulls the radial direction back through `dz/dc`. That is `z/dz`.
+///
+/// Verbatim from the reference implementation on
+/// [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Mandelbrot_set_-_Normal_mapping.png)
+/// (the source behind Wikibooks' bump-mapping article):
+///
+/// ```c
+/// u = Z / dC;  u = u / cabs(u);
+/// double h2 = 1.5;                      // height of the light
+/// double angle = 45.0 / 360.0;          // direction, in turns
+/// double complex v = cexp(2.0 * angle * M_PI * I);
+/// reflection = cdot(u, v) + h2;
+/// reflection = reflection / (1.0 + h2);
+/// if (reflection < 0.0) reflection = 0.0;
+/// ```
+///
+/// Ported unchanged, with `angle` and `height` exposed. The defaults
+/// are that snippet's own 45 degrees and 1.5.
+///
+/// WHY NOT FINITE DIFFERENCES: the other way to fake relief is to
+/// light the gradient of the iteration count across neighbouring
+/// pixels, which works for every formula rather than the 11 with a
+/// derivative. It also goes noisy the moment sampling is jittered,
+/// which is what Kalles Fraktaler's changelog records fixing by adding
+/// analytic differences. This is the version that survives temporal
+/// or stochastic sampling; see docs/projects/escape-new-families.md.
+pub static NORMAL_MAP: ColoringDef = ColoringDef {
+    name: "normal_map",
+    display_name: "Normal Map (3D relief)",
+    features: &[ColoringFeature::NeedsDerivative, ColoringFeature::Bounded],
+    parameters: &[
+        EscapeParamDef {
+            name: "angle",
+            display_name: "Light angle",
+            default: 0.125,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Direction the light comes from, in TURNS (0.125 = 45°), \
+                      measured counter-clockwise from the +x axis.",
+        },
+        EscapeParamDef {
+            name: "height",
+            display_name: "Light height",
+            default: 1.5,
+            min: 0.0,
+            max: 8.0,
+            tooltip: "How high the light sits above the plane. Low values rake \
+                      across the surface and exaggerate relief; high values \
+                      flatten it toward even illumination.",
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette distance per unit of reflection (reflection runs 0..1).",
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+    // Without a compiled derivative `dz` is the constant seed, so
+    // `z/dz` would be `z` and the shading would be a smooth function
+    // of arg(z): plausible relief that encodes nothing about the
+    // surface. Return flat illumination instead — an obviously
+    // unshaded image beats a convincing wrong one. This is the case on
+    // every perturbed render (the deep rungs do not iterate a
+    // derivative) and on the 12 formulas that define no derivative.
+    if (!HAS_DERIVATIVE) {
+        return cparam(2u);
+    }
+    let dzl = dot(sum.dz, sum.dz);
+    if (dzl < 1e-30) {
+        return cparam(2u);
+    }
+    // u = z / dz, normalised. Complex division by hand: the escape
+    // helpers are not in scope inside a coloring.
+    let inv = 1.0 / dzl;
+    var u = vec2<f32>(
+        (sum.z.x * sum.dz.x + sum.z.y * sum.dz.y) * inv,
+        (sum.z.y * sum.dz.x - sum.z.x * sum.dz.y) * inv,
+    );
+    let ul = length(u);
+    if (ul < 1e-30) {
+        return cparam(2u);
+    }
+    u = u / ul;
+    // Light direction from an angle in TURNS, so no atan2 anywhere:
+    // this coloring never evaluates one, and the Metal zero-pair
+    // hazard cannot arise.
+    let a = cparam(0u) * 6.283185307;
+    let v = vec2<f32>(cos(a), sin(a));
+    let h2 = cparam(1u);
+    var reflection = dot(u, v) + h2;
+    reflection = reflection / (1.0 + h2);
+    return max(reflection, 0.0) * cparam(2u);
+}
+"#,
+    accum_init: "",
+    wgsl_accum: "",
+};

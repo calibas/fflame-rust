@@ -1795,6 +1795,52 @@ half-turn 2 sends it to 68.39/255 — and that version still looks like
 a perfectly good spiral, which is exactly the failure a screenshot
 cannot catch.
 
+### Normal-map shading, and a wrap that only the eye caught (2026-08-29)
+
+`normal_map` lights the set like a relief. The normal comes from the
+DERIVATIVE rather than from neighbouring pixels: Chéritat's
+construction pulls the radial direction back through `dz/dc`, giving
+`u = z/dz`, and the reference C (Wikimedia Commons, behind Wikibooks'
+bump-mapping article) is ported unchanged:
+
+```c
+u = Z / dC;  u = u / cabs(u);
+reflection = cdot(u, v) + h2;          // v = exp(2 pi i angle)
+reflection = reflection / (1.0 + h2);
+if (reflection < 0.0) reflection = 0.0;
+```
+
+`angle` and `height` are exposed; the defaults are that snippet's own
+45 degrees and 1.5. Nothing here calls `atan2` — the light direction
+comes from an angle in turns — so the Metal zero-pair hazard cannot
+arise at all.
+
+**Where it does NOT work, said out loud.** The perturbed rungs never
+iterate a derivative (`dz` is a constant seed there), and 12 of the 23
+formulas define none. In both cases `z/dz` would be `z`, and the
+shading would be a smooth function of `arg(z)`: convincing relief that
+encodes nothing about the surface. A new `HAS_DERIVATIVE` constant
+tells the coloring which case it is in, and it returns FLAT light
+instead — visibly unshaded beats plausibly wrong. `distance_estimate`
+has the same exposure and still degrades silently; it predates the
+flag and changing it would move baselines, so it is left for a
+deliberate pass.
+
+**The bug worth remembering.** The first render had a thin black seam
+through the bright quadrant. The template wraps every coloring's value
+with `fract` so unbounded ones (escape count, smooth) cycle through
+the palette as they grow — but a bounded value of exactly 1.0 wraps to
+0.0, so the points whose normal aims straight at the light rendered as
+the palette's darkest colour. A new `ColoringFeature::Bounded` clamps
+instead of wrapping.
+
+It is worth noticing what caught it. The numerical check — bin pixels
+by the reference reflection, measure colour spread within a bin — read
+1.74/255 WITH the bug and 1.38 without: it could not see a defect at
+one value out of a continuum. A person looking at the picture saw it
+immediately. The test now asserts both: the shading matches its
+reference, AND no lit pixel is near-black.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep
