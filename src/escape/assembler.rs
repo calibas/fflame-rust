@@ -491,10 +491,16 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Chunk resume: after the first chunk every register comes from
     // the state buffer; an already-escaped pixel just rewrites its
     // (final) color.
+    // Previous-iteration delta, for two-term recurrences (Phoenix).
+    // Unused, and dead-code-eliminated, for every other tier.
+    var w_prev = vec2<f32>(0.0, 0.0);
     var i = perturb.iter_start;
     if (perturb.iter_start > 0u) {
         let st = iter_state[px_index];
         w = st.w;
+        // See the declaration: w_lo is the deep rung's field and is
+        // free here, so the two-term history resumes through it.
+        w_prev = st.w_lo;
         z = st.z;
         m = st.m;
         accum_state = st.accum;
@@ -603,17 +609,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // start at Z_0 = center and MUST subtract it (found the hard
         // way: without the subtraction a rebase teleports z to
         // center + z_full and every pixel escapes instantly).
-        let rebase_delta = z_full - ref_z(0u);
-        if (m >= perturb.orbit_len - 1u
-            || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {
-            w = rebase_delta * perturb.inv_s;
-            m = 0u;
-        }
+        //__REBASE__
     }
     if (perturb.iter_end < params.max_iter) {
         // More chunks follow: persist the registers.
         iter_state[px_index] = IterState(
-            w, z, accum_state, vec2<f32>(0.0, 0.0), 0, m,
+            w, z, accum_state, w_prev, 0, m,
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
         );
@@ -1402,6 +1403,13 @@ pub enum PerturbTier {
     /// the map is anti-holomorphic, so the linear A*delta + B*delta_c
     /// model has no matching derivation.
     Tricorn(u32),
+    /// Phoenix: `z^2 + c + p*z_prev`. SCALED RUNG ONLY -- the deep
+    /// rung's IterState has no free field for the second delta (this
+    /// rung reuses `w_lo`, which is dead here), so the renderer keeps
+    /// Phoenix below the floatexp threshold. Carries the map's
+    /// continuous parameter, which is part of the reference orbit's
+    /// identity.
+    Phoenix,
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
@@ -1585,6 +1593,69 @@ fn delta_step_scaled_on(p: u32, zr: &str, w: &str) -> String {
 }
 
 /// The floatexp flavor of the same step.
+/// The default Zhuoran rebase: restart the reference at index 0.
+fn rebase_default() -> String {
+    "        let rebase_delta = z_full - ref_z(0u);\n\
+     \x20       if (m >= perturb.orbit_len - 1u\n\
+     \x20           || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {\n\
+     \x20           w = rebase_delta * perturb.inv_s;\n\
+     \x20           m = 0u;\n\
+     \x20       }"
+        .to_string()
+}
+
+/// Phoenix rebases to reference index ONE, not zero.
+///
+/// A two-term recurrence needs a previous reference iterate, and
+/// there is no Z_-1: the earliest state a pixel can be rebased onto
+/// is the PAIR (Z_1, Z_0). Both deltas move together -- rebasing only
+/// the current one would leave the history measured against a
+/// different reference index, which is a wrong orbit rather than a
+/// noisy one.
+fn rebase_phoenix() -> String {
+    "        // Previous full iterate: Z_(m-1) + S*w_prev, with Z_-1 = 0\n\
+     \x20       // (the reference and the pixel both start with no history).\n\
+     \x20       let zp_ref = select(vec2<f32>(0.0, 0.0),\n\
+     \x20           ref_z(min(max(m, 1u) - 1u, perturb.orbit_len - 1u)), m > 0u);\n\
+     \x20       let z_prev_full = zp_ref + perturb.s * w_prev;\n\
+     \x20       let rebase_delta = z_full - ref_z(1u);\n\
+     \x20       if (m + 1u >= perturb.orbit_len - 1u\n\
+     \x20           || dot(rebase_delta, rebase_delta) < dot(delta, delta)) {\n\
+     \x20           w = rebase_delta * perturb.inv_s;\n\
+     \x20           w_prev = (z_prev_full - ref_z(0u)) * perturb.inv_s;\n\
+     \x20           m = 1u;\n\
+     \x20       }"
+        .to_string()
+}
+
+/// Phoenix: z' = z^2 + c + p*z_prev, so the delta step is the
+/// quadratic one plus a term in the PREVIOUS delta, and the history
+/// advances with it.
+///
+/// `p` is read straight from the formula-parameter uniform, which the
+/// perturbed templates already carry; it is also part of the
+/// reference orbit's identity (see MapId), so the reference this runs
+/// against was built with the same value.
+fn delta_step_phoenix() -> String {
+    "        // w' = 2 Z w + S w^2 + p w_prev + d0\n\
+     \x20       let pp = vec2<f32>(params.fparams[0][0], params.fparams[0][1]);\n\
+     \x20       var w_new = 2.0 * vec2<f32>(\n\
+     \x20           z_ref.x * w.x - z_ref.y * w.y,\n\
+     \x20           z_ref.x * w.y + z_ref.y * w.x,\n\
+     \x20       ) + d0_term + vec2<f32>(\n\
+     \x20           pp.x * w_prev.x - pp.y * w_prev.y,\n\
+     \x20           pp.x * w_prev.y + pp.y * w_prev.x,\n\
+     \x20       );\n\
+     \x20       if ((perturb.flags & 1u) == 0u) {\n\
+     \x20           w_new = w_new + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);\n\
+     \x20       }\n\
+     \x20       // History advances to the delta we are leaving; `w` is\n\
+     \x20       // still the old value here, and the template assigns\n\
+     \x20       // w = w_new immediately after this splice.\n\
+     \x20       w_prev = w;"
+        .to_string()
+}
+
 /// Tricorn / Multicorn, floatexp rung: the same conjugation, applied
 /// to the DF mantissa pair and to the delta's hi/lo halves. The
 /// exponent is untouched -- conjugation only flips a sign.
@@ -1693,11 +1764,23 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship(v.min(5)),
                 PerturbTier::Tricorn(p) => delta_step_conj(p.clamp(2, 12)),
+                PerturbTier::Phoenix => delta_step_phoenix(),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship_fe(v.min(5)),
                 PerturbTier::Tricorn(p) => delta_step_conj_fe(p.clamp(2, 12)),
+                // Deliberately the scaled step, which does not compile
+                // against this template's CFe2 registers. Phoenix is
+                // never routed to the deep rung (the renderer pins it
+                // below the threshold); if that guarantee ever breaks,
+                // the shader fails to build and the render fails
+                // VISIBLY, rather than quietly using the wrong delta.
+                PerturbTier::Phoenix => delta_step_phoenix(),
+            }),
+            "//__REBASE__" => out.push(match tier {
+                PerturbTier::Phoenix => rebase_phoenix(),
+                _ => rebase_default(),
             }),
             "//__COLORING__" => {
                 out.push(format!(
@@ -2295,6 +2378,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The Phoenix tier compiles on the scaled rung and carries the
+    /// pieces its recurrence needs: the parameter, the history term,
+    /// the history advance, and a rebase to index ONE.
+    #[test]
+    fn phoenix_tier_compiles_with_history_and_index_one_rebase() {
+        use crate::escape::colorings;
+        let src = assemble_perturbed(&colorings::SMOOTH, false, PerturbTier::Phoenix);
+        let module = naga::front::wgsl::parse_str(&src)
+            .unwrap_or_else(|e| panic!("Phoenix failed to parse: {e}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("Phoenix failed validation: {e}"));
+        assert!(src.contains("params.fparams[0][0]"), "p must reach the step");
+        assert!(src.contains("pp.x * w_prev.x"), "the history term must be applied");
+        assert!(src.contains("w_prev = w;"), "the history must advance");
+        assert!(src.contains("m = 1u;"), "Phoenix rebases to index 1, not 0");
+        // The DEFAULT rebase (against Z_0) must be gone -- matching on
+        // its distinctive first line, since `var m = 0u;` declares the
+        // reference index and is present in every tier.
+        assert!(
+            !src.contains("let rebase_delta = z_full - ref_z(0u);"),
+            "the index-0 rebase must not survive: there is no Z_-1 to rebase history onto"
+        );
+        assert!(src.contains("z_full - ref_z(1u)"), "Phoenix rebases against Z_1");
+        // Every OTHER tier keeps the plain rebase.
+        let plain = assemble_perturbed(&colorings::SMOOTH, false, PerturbTier::Power(2));
+        assert!(plain.contains("let rebase_delta = z_full - ref_z(0u);"));
+        assert!(!plain.contains("w_prev.x"), "one-term tiers must not gain a history term");
     }
 
     #[test]

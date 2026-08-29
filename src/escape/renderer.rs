@@ -862,6 +862,12 @@ impl EscapeRenderer {
             // A*delta + B*delta_c model BLA is built on does not hold.
             // Per-step iteration carries the Tricorn family.
             assembler::PerturbTier::Tricorn(_) => return false,
+            // A skip advances the reference index without running the
+            // steps in between, but Phoenix's step also ADVANCES ITS
+            // HISTORY -- w_prev would be left measured against the
+            // wrong iterate. A two-term BLA needs 2x2 coefficients;
+            // until then Phoenix iterates per-step.
+            assembler::PerturbTier::Phoenix => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -1389,6 +1395,15 @@ impl EscapeRenderer {
     /// zooms of unsupported combinations render the direct path's
     /// f32 mush honestly rather than wrong perturbation math).
     fn wants_perturbation(escape: &EscapeConfig) -> bool {
+        // Phoenix has no deep rung (its second delta rides the scaled
+        // rung's spare field), so past the floatexp threshold it falls
+        // back to the direct path's honest mush rather than to a step
+        // that cannot be assembled.
+        if matches!(Self::perturb_tier(escape), Some(assembler::PerturbTier::Phoenix))
+            && escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
+        {
+            return false;
+        }
         escape.zoom_log2 > PERTURB_MIN_ZOOM
             && Self::perturb_tier(escape).is_some()
             && !escape.is_damped()
@@ -1456,6 +1471,7 @@ impl EscapeRenderer {
                     None
                 }
             }
+            "phoenix" => Some(assembler::PerturbTier::Phoenix),
             "tricorn" => {
                 // conj(z)^p: the binomial expansion needs an integer
                 // exponent, exactly as Multibrot does.
@@ -1538,6 +1554,9 @@ impl EscapeRenderer {
             assembler::PerturbTier::Ship(v) => (2, true, v),
             assembler::PerturbTier::Tricorn(p) => {
                 (p, false, super::reference::MAP_CONJ)
+            }
+            assembler::PerturbTier::Phoenix => {
+                (2, false, super::reference::MAP_PHOENIX)
             }
         };
         let height_px = self.height.max(1) as f64;
@@ -1726,6 +1745,9 @@ impl EscapeRenderer {
             assembler::PerturbTier::Ship(v) => (2, true, v),
             assembler::PerturbTier::Tricorn(p) => {
                 (p, false, super::reference::MAP_CONJ)
+            }
+            assembler::PerturbTier::Phoenix => {
+                (2, false, super::reference::MAP_PHOENIX)
             }
         };
         let period_hint = if julia_c.is_none() && !ship {
@@ -2269,9 +2291,19 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             };
             if let Some((orbit_len, orbit_done)) = orbit_state {
                 #[cfg(test)]
-                let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
+                let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
                 #[cfg(not(test))]
-                let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+                let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+                // Phoenix is scaled-rung only (see PerturbTier::Phoenix).
+                // Belt to wants_perturbation's braces: the test hook can
+                // force the deep rung, and that combination has no
+                // assemblable step.
+                if matches!(
+                    Self::perturb_tier(escape),
+                    Some(assembler::PerturbTier::Phoenix)
+                ) {
+                    floatexp = false;
+                }
                 // Pixel spacing S = 2^(2 - zoom) / height. The scaled
                 // rung takes it as f64->f32 (normal down to ~zoom 119,
                 // past its own ceiling); the floatexp rung takes it
