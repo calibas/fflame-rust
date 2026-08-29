@@ -1569,6 +1569,43 @@ the cache rebuild the reference every frame and the render never
 settle -- which is what "chunk loop failed to settle" meant when the
 agreement test first ran.
 
+### Phoenix joins the perturbation tiers (2026-08-28)
+
+The second family added, and the one that broke the mould the first
+two fit. `z' = z^2 + c + p*z_prev` is a TWO-TERM recurrence with a
+CONTINUOUS parameter, so it needed three things Tricorn did not:
+
+- **A second delta.** The step is `w' = 2Zw + Sw^2 + p*w_prev + d0`,
+  with the history advancing to the delta just left. It rides the
+  scaled rung's `w_lo` field, which is the deep rung's and dead here
+  -- so IterState does not grow and no perturbed render pays 8 B/px
+  for a family it does not use. That is also why Phoenix is
+  SCALED-RUNG ONLY: on the deep rung `w_lo` is live, so there is no
+  free slot, and the renderer pins Phoenix below the floatexp
+  threshold (twice: in `wants_perturbation`, and again where the rung
+  is chosen, because the test hook can force it).
+- **A rebase to index ONE.** The pixel's history must be measured
+  against a reference iterate too, and there is no Z_-1: the earliest
+  state to rebase onto is the PAIR (Z_1, Z_0), with both deltas moved
+  together. Rebasing only the current delta would leave the history
+  against a different index -- a wrong orbit, not a noisy one.
+- **The parameter in the orbit IDENTITY.** A different `p` is a
+  different reference, so it reaches the cache key, `serves`, the
+  worker's dedup and the on-disk format (FFORBIT7). Unlike Tricorn's
+  fold selector it cannot ride a variant enum, which is what forced
+  `MapId`.
+
+BLA is off for the same shape of reason as Tricorn's, but a different
+mechanism: a skip advances the reference index without running the
+intervening steps, and Phoenix's step also advances its HISTORY, so
+`w_prev` would end up measured against the wrong iterate. A two-term
+BLA wants 2x2 coefficients.
+
+Verified: 0/768 blocks differ from the direct render for two
+parameter values, and against an f64 oracle at depth, 0.00% of pixels
+at zoom 28 (1.23% at zoom 20, marginal pixels in that framing).
+`phoenix-deep.fflame` pins the zoom-28 view.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers) and the `burning_ship` variants perturb and reach
 z9316+; the other twenty render through the DIRECT path and stop

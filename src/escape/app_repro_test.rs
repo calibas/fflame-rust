@@ -818,6 +818,23 @@ mod tests {
             check(&format!("tricorn{p}-floatexp"), &tri_cfg, true);
         }
 
+        // Phoenix: a TWO-TERM recurrence, so the perturbed path has to
+        // carry a second delta and rebase the pair together. A dropped
+        // history term, or a rebase that moves only the current delta,
+        // renders a different map -- which the direct comparison sees.
+        let mut ph_cfg = crate::config::escape::EscapeConfig::default();
+        ph_cfg.formula = "phoenix".to_string();
+        ph_cfg.center_re = "0".to_string();
+        ph_cfg.center_im = "0".to_string();
+        ph_cfg.zoom_log2 = 1.0;
+        ph_cfg.max_iter = 300;
+        ph_cfg.coloring_params.insert("scale".to_string(), 0.02);
+        for (pr, pi) in [(-0.5f32, 0.0f32), (0.25, 0.1)] {
+            ph_cfg.formula_params.insert("p_re".to_string(), pr);
+            ph_cfg.formula_params.insert("p_im".to_string(), pi);
+            check(&format!("phoenix{pr}_{pi}"), &ph_cfg, false);
+        }
+
         // Burning Ship (plain variant) over its home view: every
         // boundary pixel exercises the diffabs case analysis, for every
         // fold variant, on both rungs.
