@@ -69,6 +69,20 @@ fn nucleus_for_view(
     Some((hit.re, hit.im, hit.period, off))
 }
 
+/// `ship_variant` when `ship` is FALSE: which non-fold map the
+/// reference iterates. 0 is the plain power `z^p`; 1 is `conj(z)^p`,
+/// the Tricorn/Multicorn family.
+///
+/// Encoded in the existing variant rather than as a parallel `conj`
+/// flag because that field already threads through every orbit
+/// signature, the on-disk key and `serves()` -- so a new flag would
+/// mean the same fact in two places, and a cache key that could
+/// disagree with itself. When a third non-fold family lands, the
+/// honest refactor is a small `MapId` struct carrying all of
+/// (power, ship, variant); this is deliberately the cheaper step.
+pub const MAP_PLAIN: u32 = 0;
+pub const MAP_CONJ: u32 = 1;
+
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
 /// detection finds deeper periods as a dive continues and retires
@@ -686,10 +700,21 @@ impl ReferenceOrbit {
                 }
                 self.z = sq.add(&self.c);
             } else {
-                // z^p: square-and-multiply from the two-mul square.
-                let mut zp = self.z.sqr();
+                // z^p, or conj(z)^p for the Tricorn family. See
+                // MAP_CONJ: with `ship` false, `ship_variant` selects
+                // which non-fold map this is.
+                let mut base = FixedComplex {
+                    re: self.z.re.clone(),
+                    im: self.z.im.clone(),
+                };
+                if self.ship_variant == MAP_CONJ {
+                    // conj: flip the sign bit. Zero stays canonical
+                    // (a zero magnitude is non-negative by contract).
+                    base.im.neg = !base.im.neg && !base.im.limbs.iter().all(|l| *l == 0);
+                }
+                let mut zp = base.sqr();
                 for _ in 2..self.power {
-                    zp = zp.mul(&self.z);
+                    zp = zp.mul(&base);
                 }
                 self.z = zp.add(&self.c);
             }
@@ -699,7 +724,7 @@ impl ReferenceOrbit {
             // tiers): a new |Z| minimum is a ball-method period
             // candidate; below f32 visibility the orbit has PROVEN
             // its period — become the periodic reference on the spot.
-            if self.julia_c.is_none() && !self.ship {
+            if self.julia_c.is_none() && !self.ship && self.ship_variant == MAP_PLAIN {
                 // |Z| octave from the LIVE fixed-point state —
                 // extended range, because f64 magnitudes underflow at
                 // 2^-537 and intermediate cascade passes go far
@@ -1542,7 +1567,14 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
             return Some(o);
         }
     }
-    if req.julia_c.is_none() && !req.ship {
+    // Nucleus relocation is derived for the plain power map (Newton on
+    // f_c^p(0), ball-method periods, the closure test): the
+    // anti-holomorphic family needs its own derivation, so it takes
+    // the plain reference path. It ALSO has to, mechanically -- a
+    // nucleus orbit is built with ship_variant 0, which a MAP_CONJ
+    // request can never be served by, so routing it here made the
+    // cache rebuild every frame and the render never settle.
+    if req.julia_c.is_none() && !req.ship && req.ship_variant == MAP_PLAIN {
         ReferenceOrbit::compute_nucleus_aware(
             &req.center_re,
             &req.center_im,
@@ -1869,7 +1901,7 @@ impl OrbitCache {
             let orbit = if let Some(mut o) = loaded {
                 o.extend(max_iter);
                 o
-            } else if julia_c.is_none() && !ship {
+            } else if julia_c.is_none() && !ship && ship_variant == MAP_PLAIN {
                 ReferenceOrbit::compute_nucleus_aware(
                     center_re,
                     center_im,
@@ -2002,6 +2034,50 @@ mod tests {
         let at = orbit.escaped_at.expect("c = 1+i escapes fast");
         assert!(at < 10);
         assert_eq!(orbit.len() - 1, at);
+    }
+
+    /// The conjugate family's REFERENCE must actually conjugate.
+    ///
+    /// The delta step assumes the reference iterates conj(Z)^p + C. If
+    /// the orbit were the plain power instead, shallow views would
+    /// still look right -- deltas dominate there and rebasing hides it
+    /// -- while deep views, where the reference carries the signal,
+    /// would be wrong. So this checks the orbit against the map.
+    #[test]
+    fn conjugate_reference_iterates_the_conjugate_map() {
+        let orbit = ReferenceOrbit::compute(
+            "-0.90755797705302632", "0.10050898208800299",
+            30.0, None, 200, None, 2, false, MAP_CONJ,
+        )
+        .expect("orbit");
+        let (cx, cy) = (-0.90755797705302632f64, 0.10050898208800299f64);
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for i in 1..(orbit.len() as usize).min(200) {
+            let (px, py) = (zx, -zy); // conjugate
+            let (nx, ny) = (px * px - py * py + cx, 2.0 * px * py + cy);
+            zx = nx;
+            zy = ny;
+            let got = orbit.z_f32(i);
+            worst = worst.max(
+                ((got[0] as f64 - zx).powi(2) + (got[1] as f64 - zy).powi(2)).sqrt(),
+            );
+        }
+        assert!(worst < 1e-4, "conjugate reference diverges from conj(z)^2 + c: {worst:e}");
+
+        // And it must NOT be the plain power.
+        let plain = ReferenceOrbit::compute(
+            "-0.90755797705302632", "0.10050898208800299",
+            30.0, None, 200, None, 2, false, MAP_PLAIN,
+        )
+        .expect("orbit");
+        let d = (0..(plain.len() as usize).min(200))
+            .map(|i| {
+                let (a, b) = (orbit.z_f32(i), plain.z_f32(i));
+                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+            })
+            .fold(0.0f32, f32::max);
+        assert!(d > 1e-3, "conjugate and plain references are identical: {d:e}");
     }
 
     #[test]
