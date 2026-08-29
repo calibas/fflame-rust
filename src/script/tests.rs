@@ -4036,3 +4036,149 @@ fn every_shipped_script_declares_a_kind_and_serialisable_params() {
         }
     }
 }
+
+// ------------------------------------------------------------- escape
+
+/// A script can build an escape-time config, and building one puts the
+/// config in escape mode without the author saying so.
+#[test]
+fn escape_script_sets_the_formula_and_the_mode() {
+    let out = run(
+        r#"
+        script("Deep", "generator");
+        escape.formula("phoenix");
+        escape.coloring("smooth");
+        escape.center("-1.1543534481639833789918460777111",
+                      "0.6293282132782021964135047790493");
+        escape.zoom = 22.4;
+        escape.max_iter = 512;
+        escape.param("p_re", -0.5);
+        escape.coloring_param("scale", 0.02);
+        "#,
+        7,
+    )
+    .expect("script ran");
+    let cfg = out.config;
+    assert_eq!(cfg.render_mode, crate::scene::transforms::RenderMode::Escape);
+    assert_eq!(cfg.escape.formula, "phoenix");
+    assert_eq!(cfg.escape.coloring, "smooth");
+    assert_eq!(cfg.escape.max_iter, 512);
+    assert_eq!(cfg.escape.zoom_log2, 22.4);
+    assert_eq!(cfg.escape.formula_params.get("p_re"), Some(&-0.5));
+    assert_eq!(cfg.escape.coloring_params.get("scale"), Some(&0.02));
+    // Entering escape mode must also make the output visible: flame
+    // presets carry Log tone mapping, under which Linear escape output
+    // renders black.
+    assert_eq!(cfg.tonemap_mode, crate::scene::tonemap::ToneMapMode::Linear);
+}
+
+/// The centre survives as TEXT.
+///
+/// This is the whole reason `center` takes strings: 31 significant
+/// digits is a zoom-100 payload, and an f64 round trip would silently
+/// truncate it to 15 and cap the script at about zoom 50.
+#[test]
+fn escape_centre_keeps_every_digit() {
+    const RE: &str = "-1.99999999999999999999999999999123456789";
+    let out = run(
+        &format!(
+            r#"
+            script("Precise", "generator");
+            escape.formula("mandelbrot");
+            escape.center("{RE}", "0");
+            "#
+        ),
+        1,
+    )
+    .expect("script ran");
+    assert_eq!(out.config.escape.center_re, RE);
+    // And a round trip through the config format keeps it.
+    let json = serde_json::to_string(&out.config).unwrap();
+    let back: FractalConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.escape.center_re, RE);
+}
+
+/// Unknown names fail loudly rather than sitting in the config.
+#[test]
+fn escape_rejects_names_that_do_not_exist() {
+    for (src, expect) in [
+        (r#"escape.formula("mandelbrat");"#, "unknown escape formula"),
+        (r#"escape.coloring("smoothe");"#, "unknown escape coloring"),
+        (
+            r#"escape.formula("phoenix"); escape.param("p_reel", 1.0);"#,
+            "has no parameter",
+        ),
+        (
+            r#"escape.coloring("smooth"); escape.coloring_param("scail", 1.0);"#,
+            "has no parameter",
+        ),
+        (r#"escape.center("not a number", "0");"#, "is not a decimal number"),
+    ] {
+        let text = format!("script(\"X\", \"generator\");\n{src}");
+        let e = run(&text, 1).expect_err("must fail");
+        let msg = format!("{e:?}");
+        assert!(
+            msg.contains(expect),
+            "expected `{expect}` in the error, got: {msg}"
+        );
+    }
+}
+
+/// Switching formula drops the previous formula's parameters.
+///
+/// They are keyed by name and belong to the formula that declared
+/// them; carrying `p_re` into a map that has no such parameter leaves
+/// a value in the config that nothing reads and the UI cannot show.
+#[test]
+fn escape_switching_formula_clears_its_parameters() {
+    let out = run(
+        r#"
+        script("Switch", "generator");
+        escape.formula("phoenix");
+        escape.param("p_re", 0.25);
+        escape.formula("mandelbrot");
+        "#,
+        1,
+    )
+    .expect("script ran");
+    assert!(out.config.escape.formula_params.is_empty());
+}
+
+/// The catalog is reachable from a script, which is what makes the
+/// formula set programmatically explorable rather than a list to copy
+/// out of the docs.
+#[test]
+fn escape_lists_its_formulas_and_colorings() {
+    let out = run(
+        r#"
+        script("List", "generator");
+        escape.formula("phoenix");
+        print(escape.formulas().len);
+        print(escape.colorings().len);
+        print(escape.params().len);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let msgs = out.messages.join(",");
+    let counts: Vec<usize> = msgs.split(',').map(|m| m.trim().parse().unwrap()).collect();
+    assert_eq!(counts[0], crate::escape::FORMULAS.len());
+    assert_eq!(counts[1], crate::escape::COLORINGS.len());
+    assert_eq!(counts[2], crate::escape::get_formula("phoenix").parameters.len());
+}
+
+/// Same script + same seed = same escape config, exactly as for flames.
+#[test]
+fn escape_scripts_are_reproducible() {
+    const SRC: &str = r#"
+        script("Rand", "generator");
+        escape.formula("mandelbrot");
+        escape.zoom = 5.0 + rand() * 10.0;
+        escape.max_iter = rand_int(100, 900);
+        "#;
+    let a = run(SRC, 42).expect("a");
+    let b = run(SRC, 42).expect("b");
+    assert_eq!(a.config.escape.zoom_log2, b.config.escape.zoom_log2);
+    assert_eq!(a.config.escape.max_iter, b.config.escape.max_iter);
+}
+

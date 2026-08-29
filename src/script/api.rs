@@ -80,6 +80,22 @@ pub struct ConfigHandle {
     cfg: Rc<RefCell<FractalConfig>>,
 }
 
+/// The escape-time side of a config: formula, coloring, and the view.
+///
+/// Separate from `config` for the same reason `flame` is: these are a
+/// coherent object with their own vocabulary, and routing them
+/// through `config.set("escape.center_re", ...)` would hand the
+/// author a JSON path AND fail silently while the group sits at its
+/// default, since skip-if-default omits it from the JSON entirely.
+///
+/// The CENTRE IS A STRING on purpose. It is the deep-zoom payload:
+/// zoom 60 needs about 20 significant digits and an f64 carries 15,
+/// so every accessor here keeps it as text end to end.
+#[derive(Clone)]
+pub struct EscapeHandle {
+    cfg: Rc<RefCell<FractalConfig>>,
+}
+
 use crate::animation::EasingFunction;
 
 /// The optional animation a script may define alongside its flame.
@@ -329,6 +345,7 @@ pub(crate) fn push_globals(
     state: Rc<RefCell<ScriptState>>,
 ) {
     scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
+    scope.push("escape", EscapeHandle { cfg: Rc::clone(&cfg) });
     scope.push("config", ConfigHandle { cfg });
     scope.push("anim", AnimHandle { state });
 }
@@ -342,6 +359,7 @@ pub(crate) fn register(
     engine.register_type_with_name::<TransformHandle>("Transform");
     engine.register_type_with_name::<ConfigHandle>("Config");
     engine.register_type_with_name::<AnimHandle>("Anim");
+    engine.register_type_with_name::<EscapeHandle>("Escape");
     register_anim(engine, Rc::clone(&state));
 
     register_meta(engine, Rc::clone(&state));
@@ -349,6 +367,7 @@ pub(crate) fn register(
     register_flame(engine);
     register_transform(engine);
     register_config(engine, Rc::clone(&state));
+    register_escape(engine);
     register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
     register_palette_slots(engine);
@@ -1391,6 +1410,238 @@ fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltRes
         )));
     }
     Ok(())
+}
+
+// ------------------------------------------------------------------ escape
+
+/// Escape-time settings: `escape.formula(...)`, `escape.center(...)`.
+///
+/// Setting anything here switches the config to escape rendering, so
+/// a script never has to remember the render mode as well. That is
+/// the one piece of magic in this object, and it earns its place: the
+/// alternative is a config carrying escape settings while rendering a
+/// flame, which reads as a bug in the script rather than a missing
+/// line.
+fn register_escape(engine: &mut Engine) {
+    use crate::scene::transforms::RenderMode;
+
+    fn enter(cfg: &mut FractalConfig) {
+        if cfg.render_mode != RenderMode::Escape {
+            cfg.render_mode = RenderMode::Escape;
+            // Flame presets carry Log-calibrated tone mapping, which
+            // renders Linear escape output invisibly. The app does the
+            // same on entering escape mode; without it a script that
+            // set only a formula would produce a black image.
+            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            cfg.exposure = 1.0;
+            cfg.gamma = 1.0;
+        }
+    }
+
+    engine.register_fn(
+        "formula",
+        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            if crate::escape::FORMULAS.iter().all(|f| f.name != name) {
+                return Err(err(format!(
+                    "unknown escape formula `{name}` - see escape.formulas()"
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.escape.formula != name {
+                // Parameters belong to the formula that declared them.
+                cfg.escape.formula_params.clear();
+            }
+            cfg.escape.formula = name.to_string();
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "coloring",
+        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            if crate::escape::COLORINGS.iter().all(|c| c.name != name) {
+                return Err(err(format!(
+                    "unknown escape coloring `{name}` - see escape.colorings()"
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.escape.coloring != name {
+                cfg.escape.coloring_params.clear();
+            }
+            cfg.escape.coloring = name.to_string();
+            Ok(())
+        },
+    );
+
+    engine.register_fn("formulas", |_e: &mut EscapeHandle| -> Array {
+        crate::escape::FORMULAS
+            .iter()
+            .map(|f| Dynamic::from(f.name.to_string()))
+            .collect()
+    });
+    engine.register_fn("colorings", |_e: &mut EscapeHandle| -> Array {
+        crate::escape::COLORINGS
+            .iter()
+            .map(|c| Dynamic::from(c.name.to_string()))
+            .collect()
+    });
+
+    // Strings, not floats: see EscapeHandle. Taking an f64 here would
+    // cap every script at about zoom 50 without saying so.
+    engine.register_fn(
+        "center",
+        |e: &mut EscapeHandle, re: &str, im: &str| -> Result<(), Box<EvalAltResult>> {
+            for (label, v) in [("re", re), ("im", im)] {
+                if v.trim().parse::<f64>().is_err() {
+                    return Err(err(format!(
+                        "centre {label} `{v}` is not a decimal number"
+                    )));
+                }
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.center_re = re.trim().to_string();
+            cfg.escape.center_im = im.trim().to_string();
+            Ok(())
+        },
+    );
+    engine.register_get("center_re", |e: &mut EscapeHandle| {
+        e.cfg.borrow().escape.center_re.clone()
+    });
+    engine.register_get("center_im", |e: &mut EscapeHandle| {
+        e.cfg.borrow().escape.center_im.clone()
+    });
+
+    engine.register_get_set(
+        "zoom",
+        |e: &mut EscapeHandle| e.cfg.borrow().escape.zoom_log2,
+        |e: &mut EscapeHandle, v: f64| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.zoom_log2 = v;
+        },
+    );
+    engine.register_get_set(
+        "max_iter",
+        |e: &mut EscapeHandle| e.cfg.borrow().escape.max_iter as i64,
+        |e: &mut EscapeHandle, v: i64| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.max_iter = v.clamp(1, 10_000_000) as u32;
+        },
+    );
+    engine.register_get_set(
+        "bailout",
+        |e: &mut EscapeHandle| e.cfg.borrow().escape.bailout as f64,
+        |e: &mut EscapeHandle, v: f64| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.bailout = v as f32;
+        },
+    );
+    engine.register_get_set(
+        "supersample",
+        |e: &mut EscapeHandle| e.cfg.borrow().escape.supersample as i64,
+        |e: &mut EscapeHandle, v: i64| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.supersample = v.clamp(1, 3) as u32;
+        },
+    );
+    engine.register_get_set(
+        "rotation",
+        |e: &mut EscapeHandle| e.cfg.borrow().escape.rotation as f64,
+        |e: &mut EscapeHandle, v: f64| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.rotation = v as f32;
+        },
+    );
+
+    engine.register_fn("julia", |e: &mut EscapeHandle, re: f64, im: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.julia = true;
+        cfg.escape.julia_re = re as f32;
+        cfg.escape.julia_im = im as f32;
+    });
+    engine.register_fn("no_julia", |e: &mut EscapeHandle| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.julia = false;
+    });
+
+    // Parameter names are checked against the registry: an unknown one
+    // is a typo that would otherwise sit in the config doing nothing.
+    engine.register_fn(
+        "param",
+        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = e.cfg.borrow_mut();
+            let def = crate::escape::FORMULAS
+                .iter()
+                .find(|f| f.name == cfg.escape.formula)
+                .ok_or_else(|| err(format!("no such formula `{}`", cfg.escape.formula)))?;
+            if !def.parameters.iter().any(|p| p.name == name) {
+                let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+                return Err(err(format!(
+                    "`{}` has no parameter `{name}` (it has: {})",
+                    def.name,
+                    if known.is_empty() { "none".to_string() } else { known.join(", ") }
+                )));
+            }
+            enter(&mut cfg);
+            cfg.escape.formula_params.insert(name.to_string(), value as f32);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "coloring_param",
+        |e: &mut EscapeHandle, name: &str, value: f64| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = e.cfg.borrow_mut();
+            let def = crate::escape::COLORINGS
+                .iter()
+                .find(|c| c.name == cfg.escape.coloring)
+                .ok_or_else(|| err(format!("no such coloring `{}`", cfg.escape.coloring)))?;
+            if !def.parameters.iter().any(|p| p.name == name) {
+                let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+                return Err(err(format!(
+                    "coloring `{}` has no parameter `{name}` (it has: {})",
+                    def.name,
+                    if known.is_empty() { "none".to_string() } else { known.join(", ") }
+                )));
+            }
+            enter(&mut cfg);
+            cfg.escape.coloring_params.insert(name.to_string(), value as f32);
+            Ok(())
+        },
+    );
+    engine.register_fn("params", |e: &mut EscapeHandle| -> Array {
+        let cfg = e.cfg.borrow();
+        crate::escape::FORMULAS
+            .iter()
+            .find(|f| f.name == cfg.escape.formula)
+            .map(|d| {
+                d.parameters
+                    .iter()
+                    .map(|p| Dynamic::from(p.name.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    engine.register_fn("coloring_params", |e: &mut EscapeHandle| -> Array {
+        let cfg = e.cfg.borrow();
+        crate::escape::COLORINGS
+            .iter()
+            .find(|c| c.name == cfg.escape.coloring)
+            .map(|d| {
+                d.parameters
+                    .iter()
+                    .map(|p| Dynamic::from(p.name.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
 }
 
 // ------------------------------------------------------------------ config
