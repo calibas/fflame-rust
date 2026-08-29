@@ -54,6 +54,10 @@ pub const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/gnarls.rhai"),
     ),
     (
+        "escape_deep.rhai",
+        include_str!("../../assets/scripts/generators/escape_deep.rhai"),
+    ),
+    (
         "iq_palette.rhai",
         include_str!("../../assets/scripts/modifiers/iq_palette.rhai"),
     ),
