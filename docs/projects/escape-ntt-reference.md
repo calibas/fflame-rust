@@ -83,6 +83,32 @@ Phase 4 (wasm), the phase with the best relative case, does not
 survive either: the browser's CPU path is a few times slower than
 native, which moves 0.13x to roughly 0.5x — still a loss.
 
+### Corroborated by FractalShark's own report (v0.5, Dec 2025)
+
+The author's release notes for the GPU reference orbit say the win
+arrives "at a precision of 16384 32-bit limbs (~158,000 decimal
+digits)" -- and, tellingly: "The only built-in View that shows a
+clear benefit to the GPU-accelerated approach is View #30, which
+uses 16384 32-bit limbs internally." One view, out of a built-in
+set. In the project that BUILT the thing.
+
+Converting to this project's units (we count 64-bit limbs, they
+count 32-bit): their 16,384 limbs are 8,192 of ours. Fitting our
+three measurements gives ratio ~ limbs^0.72, which extrapolates our
+plain schoolbook kernel to about **2x** at that precision -- against
+their reported 10x with NTT on an RTX 4090. Those two numbers agree
+rather than conflict: NTT replaces O(D^2) with O(D log D), which is
+worth roughly the remaining 5x at 8k limbs, on a much larger GPU
+than the one measured here. The same fit puts our schoolbook at
+parity around 3,200 of our limbs and 3x around 14,600.
+
+The decisive part is what 8,192 limbs MEANS as a view. Precision
+that deep corresponds to a zoom of roughly **2^524,000**. The
+deepest location this project has ever rendered is z9,316, at 197
+limbs -- and that one already takes eight minutes of reference
+build. FractalShark's GPU pipeline is real, correct, and pays off
+about fifty times deeper than anywhere this renderer has been.
+
 The probe stays in the tree. It is the reproducible form of this
 decision: re-run `cargo test --lib gpu_bignum -- --ignored
 --nocapture` on different hardware, or after WGSL grows 64-bit
