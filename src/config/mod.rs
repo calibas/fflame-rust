@@ -15,6 +15,9 @@ pub mod delta;
 pub mod escape;
 pub mod fractal_config;
 pub mod manager;
+// An egui widget, so it belongs to the editor surface rather
+// than to config: a rendering module has no sliders.
+#[cfg(feature = "web-app")]
 pub mod slider;
 
 pub use defaults::*;
@@ -25,4 +28,5 @@ pub use delta::{
 };
 pub use fractal_config::{FractalConfig, SolidLight, SolidShadingSettings, CURRENT_CONFIG_VERSION};
 pub use manager::{ConfigError, ConfigManager, EditingTarget, UpdateAction};
+#[cfg(feature = "web-app")]
 pub use slider::{ConfigSlider, ConfigSliderResult, ConfigSliderUi, LazyUndoUi};

@@ -115,6 +115,13 @@ pub enum RenderError {
     NoPaletteFound,
     PixelReadFailed(String),
     Cancelled,
+    /// The config asks for an engine this build does not carry.
+    ///
+    /// A module without the escape engine still PARSES an escape
+    /// config -- the mode round-trips, so a file is never silently
+    /// rewritten -- and reports this rather than rendering a flame the
+    /// file never described.
+    EngineMissing(&'static str),
 }
 
 impl std::fmt::Display for RenderError {
@@ -123,6 +130,9 @@ impl std::fmt::Display for RenderError {
             RenderError::NoPaletteFound => write!(f, "No palette found"),
             RenderError::PixelReadFailed(msg) => write!(f, "Failed to read pixels: {}", msg),
             RenderError::Cancelled => write!(f, "Render cancelled"),
+            RenderError::EngineMissing(what) => {
+                write!(f, "this build has no {what} engine")
+            }
         }
     }
 }
@@ -222,8 +232,13 @@ pub async fn render_with(
     // density-effects → tonemap → color-effects → readback pipeline.
     // Dispatching here is what gives thumbnails, CLI export, video and
     // the gallery escape rendering for free (plan: integration map).
+    #[cfg(feature = "engine-escape")]
     if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
         return render_escape(renderer, device, queue, job, progress, start_time).await;
+    }
+    #[cfg(not(feature = "engine-escape"))]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
+        return Err(RenderError::EngineMissing("escape-time"));
     }
 
     let target = job.target_iterations.unwrap_or(job.config.max_iterations);
@@ -565,6 +580,7 @@ pub async fn render_with(
 /// itself is created per call and destroyed after readback, the same
 /// one-shot discipline as `EffectChainRunner` — the interactive app
 /// will hold a persistent one instead.
+#[cfg(feature = "engine-escape")]
 async fn render_escape(
     renderer: &mut FlameRenderer,
     device: &Device,

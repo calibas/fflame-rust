@@ -5,8 +5,10 @@ extern crate rust_i18n;
 // Initialize rust-i18n with the locales directory
 i18n!("locales", fallback = "en");
 
+#[cfg(feature = "web-app")]
 mod app;
 pub mod gpu;
+#[cfg(feature = "web-app")]
 mod ui;
 mod util;
 pub mod scene;
@@ -31,6 +33,7 @@ pub mod api;
 pub mod script;
 pub mod probe;
 pub mod census;
+#[cfg(feature = "engine-escape")]
 pub mod escape;
 #[cfg(not(target_arch = "wasm32"))]
 pub use script::cli::generate_mode;
@@ -38,7 +41,8 @@ pub use script::cli::generate_mode;
 mod shader_builder_v2;
 mod shader_cache;
 /// Golden-file dumps of the generated WGSL (see `tests/shader_dumps/`).
-#[cfg(test)]
+// Canonical WGSL for the SHIPPED flame catalog.
+#[cfg(all(test, feature = "engine-flame"))]
 mod shader_dumps;
 
 // Gated on `web-app`, not just wasm32: its `#[wasm_bindgen]` exports
@@ -60,11 +64,12 @@ pub mod prelude {
     pub use crate::config::FractalConfig;
 }
 
+#[cfg(feature = "web-app")]
 use app::App;
 use winit::dpi::PhysicalSize;
 
 /// Force a specific export engine from the CLI (`export --engine`); see app::export.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "web-app"))]
 pub use app::export::ExportEngine;
 
 #[cfg(target_arch = "wasm32")]
@@ -106,7 +111,7 @@ fn window_icon() -> Option<winit::window::Icon> {
     let (w, h) = img.dimensions();
     winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
 }
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "web-app"))]
 pub fn desktop_main() {
     env_logger::init();
     pollster::block_on(run()).expect("Failed to run app");
@@ -128,7 +133,7 @@ fn report_installed_resources() {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "web-app"))]
 pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, dump_shader: bool, transparent: bool, premultiplied: bool, engine: crate::app::export::ExportEngine, supersample: bool) {
     env_logger::init();
     if dump_shader {
@@ -187,7 +192,7 @@ pub fn export_animation_mode(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "web-app"))]
 async fn export_async(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, transparent: bool, premultiplied: bool, engine: crate::app::export::ExportEngine, supersample: bool) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
 
@@ -376,6 +381,7 @@ fn parse_url_load_params() -> (Option<String>, Option<String>) {
     (flame_id, animation_id)
 }
 
+#[cfg(feature = "web-app")]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = winit::event_loop::EventLoop::new()?;
 

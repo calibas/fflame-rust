@@ -181,51 +181,81 @@ edges, to be confirmed by using it:
 - no "render settled" indicator, which is how a viewport screenshot
   of an unsettled frame got reported as a render bug.
 
-## 4. Splitting the WASM builds three ways — MEASURED, NOT BUILT (2026-08-29)
+## 4. Splitting the WASM modules — DONE 2026-08-29
 
-The plan said to measure the three sizes before committing to the
-maintenance cost. The measurement was taken by actually implementing
-the `engine-escape` gate (there is no other way to get the number),
-and it says no.
+Three shipping modules, from one source file and two Cargo features:
 
-| build | raw | gzip (what a browser downloads) |
-|---|---|---|
-| both engines, today | 15.60 MB | **4.64 MB** |
-| flames only, escape engine gated out | 15.31 MB | **4.56 MB** |
-| flames, 639 of 647 variations removed | 13.23 MB | **4.18 MB** |
+| module | engines | raw | gzip | vs `render` |
+|---|---|---|---|---|
+| `wasm/render` | both | 3.29 MB | **0.80 MB** | — |
+| `wasm/flame` | flame only | 3.12 MB | **0.73 MB** | −8% |
+| `wasm/escape` | escape only | 1.22 MB | **0.41 MB** | **−49%** |
 
-Removing the ENTIRE escape engine saves **80 KB compressed, 1.7% of
-the download**. The 639 variation defs are worth 380 KB (8.2%) by
-comparison, and everything else -- wgpu, egui, naga, the app itself --
-is a **~4.2 MB gzip floor that neither split touches**. An escape-only
-artifact, which is where nearly all the available win lives, would
-land near 4.1 MB: about 11% smaller, for a gate through the flame
-engine that the whole application is built around.
+### What the first attempt got wrong
 
-The cost is no longer a prediction either. The escape gate needed
-**~30 `#[cfg]` attributes across 14 files** -- config, app loop, three
-export paths, five UI files, the script API, the renderer, the device
-callback -- and writing them produced a real bug within the hour: a
-`#[cfg]` on an `if is_escape {…} else if shade_ran {…} else {…}` chain
-deletes the FLAME arms along with the escape one. It compiled clean
-and would have shipped video frames that were never tone-mapped. That
-is precisely the "permanent tax on every future change that crosses
-the seam" this plan warned about, demonstrated.
+The measurement before this one was of the FULL APPLICATION -- editor,
+egui, the lot -- where every split looked marginal because a 4.2 MB
+gzip floor swamped it. That was the wrong artifact. The gallery
+modules carry no editor, so the same absolute savings are an order of
+magnitude larger as a share: escape is 1.7% of the app and 10% of a
+module; the variation catalog is 8% of the app and **half of a
+module**.
 
-So: reverted, deliberately. If the question returns, the numbers above
-are the answer, and the honest target for a smaller download is the
-4.2 MB floor -- not the engine split.
+### Why it was cheap
 
-Two things worth keeping from the exercise:
+`ALL_VARIATIONS` is the only thing that reaches the 647 definitions,
+so gating that ONE array drops the catalog and its 1.1 MB of inline
+WGSL. `engine-flame` is a single `#[cfg]` on a single static.
 
-- **The seam is genuinely shallow**, as the survey said: gating
-  `mod escape` produced 47 errors in exactly 10 files. Whoever needs
-  this later will not be fighting the architecture, just paying the
-  cfg tax.
-- **The gallery renderer already works this way without features.**
-  `wasm/render` is a thin crate that calls the unified `render_with`,
-  so it carries what it uses; a caller who needs a smaller artifact
-  has that route today without a feature flag in the main crate.
+`engine-escape` cost more (~15 sites) but far less than the 47 the
+first attempt hit, because gating `mod app` and `mod ui` on the
+existing `web-app` feature removed the editor from module builds
+first. Those files are compiled even when nothing links them, and
+being compiled is what made them the bulk of every engine seam.
+
+The three modules SHARE ONE SOURCE FILE: `wasm/escape` and
+`wasm/flame` both point `[lib] path` at `../render/src/lib.rs`. The
+module's job is identical in all three -- config JSON in, RGBA out --
+so duplicating 400 lines to vary a Cargo feature would guarantee
+drift.
+
+### What each module promises, and the tests that hold it
+
+- `wasm/render` renders both, including an escape config.
+- `wasm/flame` renders flames, carries the whole catalog, and
+  REFUSES an escape config (`RenderError::EngineMissing`) rather than
+  drawing the flame that config happens to also carry.
+- `wasm/escape` renders escape configs and provably has no catalog:
+  the test asserts the registry holds at most two variations, not
+  that the file is small.
+
+`the_catalog_matches_the_engine_feature` (in the main crate) is the
+one that matters most. A module that forgets the feature does not
+fail to build -- it builds a renderer whose catalog is `linear` alone,
+and every config naming anything else renders WRONG rather than
+erroring. That happened during this work: `wasm/script` inherited
+`default-features = false` and its scripts started failing on
+`spherical`, caught by CLI parity rather than by anything local.
+Scripting now pins both engines, because a script that runs on the
+desktop must run in the browser.
+
+All four feature combinations pass the suite (852 / 681 / 546 / 453
+tests). Test modules that assert on the shipped catalog -- flame XML
+import, the shader dumps, the script corpus -- are gated to the
+configuration they describe rather than being weakened.
+
+### Not done, deliberately
+
+**2D-only and 3D-only.** Worth about 25% each (`wgsl_2d` is 0.54 MB
+of source against `wgsl_3d`'s 0.57 MB, so the catalog splits nearly in
+half), but the seam is not a module boundary -- it is a FIELD on every
+one of 647 defs, and every future variation would have to respect it.
+Middling payoff, worst maintenance profile of the options.
+
+**Animation.** A string scan says it is already absent from these
+modules, so there is nothing to extract for size. A separate animation
+module would be additive -- a new artifact driving a renderer -- and
+belongs to its own plan.
 
 ### The original scope, for reference
 

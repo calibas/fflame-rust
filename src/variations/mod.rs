@@ -899,6 +899,41 @@ pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<Str
 }
 
 #[cfg(test)]
+mod engine_feature_tests {
+    /// The catalog is complete when the flame engine is on, and is
+    /// down to `linear` when it is off.
+    ///
+    /// This is the whole `engine-flame` contract in one place. A
+    /// module that forgets the feature does not fail to build -- it
+    /// builds a renderer whose catalog is one variation, and every
+    /// config naming anything else renders WRONG rather than
+    /// erroring. That already happened once: the scripting module
+    /// inherited `default-features = false` and its scripts started
+    /// failing on `spherical`, caught by CLI parity rather than by
+    /// anything here.
+    #[test]
+    fn the_catalog_matches_the_engine_feature() {
+        let n = crate::variations::global_registry().names().len();
+        if cfg!(feature = "engine-flame") {
+            assert!(
+                n > 500,
+                "engine-flame is on but the catalog holds {n} variations"
+            );
+        } else {
+            assert!(
+                n <= 2,
+                "engine-flame is off but the catalog still holds {n} variations -- \
+                 the module is paying for a catalog it cannot use"
+            );
+            assert!(
+                crate::variations::global_registry().get("linear").is_some(),
+                "`linear` must survive: a default config's transforms name it"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod category_wire_tests {
     use super::VariationCategory as C;
 

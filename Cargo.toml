@@ -174,15 +174,40 @@ aes-gcm = "0.10"
 base64 = "0.22"
 
 [features]
-# `web-app`: the browser application's wasm-bindgen export surface
+# `web-app`: the EDITOR -- its wasm-bindgen export surface
 # (`wasm_main` boot + the `WasmApi` bindings). ON by default so the
 # desktop app, the wasm-pack app build and pyfflame are unchanged.
 # wasm-bindgen collects `#[wasm_bindgen]` exports from the ENTIRE
 # dependency graph, so the thin gallery crates (wasm/render,
 # wasm/script) depend on this crate with default-features = false —
 # without the gate they would silently inherit the whole application.
-default = ["web-app"]
+#
+# It also gates `mod app` and `mod ui` themselves. Those are compiled
+# even for a module that links none of them, and being compiled is
+# what makes them count: they are most of the surface any
+# engine-level feature has to thread `#[cfg]` through. Off, a
+# rendering module compiles the engine and nothing else.
+default = ["web-app", "engine-flame", "engine-escape"]
 web-app = []
+# The flame engine's VARIATION CATALOG. On by default, so the app and
+# every existing build are unchanged.
+#
+# Off, the registry holds `linear` alone and the other 646 defs become
+# unreachable, so the linker drops them: measured at HALF the gallery
+# renderer's download (0.80 MB gzip to 0.41 MB). That is the entire
+# point of the flag -- an escape-time module has no use for 1.1 MB of
+# flame shader source.
+#
+# One entry rather than none: a default FractalConfig carries a flame
+# whose transforms name `linear`, and code that resolves it should
+# find a variation rather than a hole. Nothing in an escape render
+# reaches it.
+engine-flame = []
+# The escape-time engine: formulas, colorings, and the perturbation
+# machinery (fixed point, reference orbits, the double-double shadow,
+# the orbit store). Its shader source is under 1% of a module's
+# download; the deep-zoom code is the weight.
+engine-escape = []
 
 [build-dependencies]
 chrono = "0.4"
