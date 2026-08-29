@@ -1443,14 +1443,28 @@ impl EscapeRenderer {
     /// cache keyed without it would silently reuse a stale one).
     /// Zero for every family that has no such parameter.
     fn map_params_for(escape: &EscapeConfig) -> [f32; 2] {
-        if escape.formula == "phoenix" {
-            [
-                escape.formula_params.get("p_re").copied().unwrap_or(0.0),
-                escape.formula_params.get("p_im").copied().unwrap_or(0.0),
-            ]
-        } else {
-            [0.0, 0.0]
+        if escape.formula != "phoenix" {
+            return [0.0, 0.0];
         }
+        // Resolve through the REGISTRY DEFAULTS, exactly as
+        // `pack_params` does when filling the shader's uniform. An
+        // absent key means "the default", not zero -- and reading it
+        // as zero here built the reference for p = 0, i.e. the plain
+        // quadratic, while the delta step used the real p. The two
+        // then describe different maps and the perturbed render is a
+        // different fractal, which is precisely what a fresh Phoenix
+        // config did (a config that had been edited carried the keys
+        // and worked, which is why the agreement test missed it).
+        let defs = super::get_formula("phoenix").parameters;
+        let mut out = [0.0f32; 2];
+        for (i, def) in defs.iter().take(2).enumerate() {
+            out[i] = escape
+                .formula_params
+                .get(def.name)
+                .copied()
+                .unwrap_or(def.default);
+        }
+        out
     }
 
     /// The delta tier this view can use, if any: Mandelbrot (p = 2)
@@ -2742,6 +2756,46 @@ mod tests {
         assert_eq!(tuning::decode("{}"), (0, 0));
         assert_eq!(tuning::decode("not json at all"), (0, 0));
         assert_eq!(tuning::decode(""), (0, 0));
+    }
+
+    /// The reference orbit's parameter must be the SAME VALUE the
+    /// shader's uniform gets.
+    ///
+    /// They are resolved by different code (`map_params_for` here,
+    /// `pack_params` for the uniform), and they disagreed: an absent
+    /// key meant "the registry default" to one and "zero" to the
+    /// other. A fresh Phoenix config therefore iterated deltas for
+    /// p = -0.5 against a reference built for p = 0 -- the plain
+    /// quadratic -- so the perturbed render was a different fractal
+    /// entirely, while an EDITED config carried the keys and worked.
+    /// That is why the agreement test missed it: it set the
+    /// parameters explicitly.
+    #[test]
+    fn reference_parameters_match_the_shader_uniform() {
+        for (formula, edited) in [("phoenix", false), ("phoenix", true), ("mandelbrot", false)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.to_string();
+            if edited {
+                esc.formula_params.insert("p_re".to_string(), 0.25);
+                esc.formula_params.insert("p_im".to_string(), -0.1);
+            }
+            let mine = EscapeRenderer::map_params_for(&esc);
+            let mut packed = [0.0f32; 16];
+            super::super::pack_params(
+                super::super::get_formula(formula).parameters,
+                &esc.formula_params,
+                &mut packed,
+            );
+            if formula == "phoenix" {
+                assert_eq!(
+                    [mine[0], mine[1]],
+                    [packed[0], packed[1]],
+                    "{formula} (edited={edited}): the reference and the shader                      must resolve the same parameter"
+                );
+            } else {
+                assert_eq!(mine, [0.0, 0.0], "maps without a parameter carry zero");
+            }
+        }
     }
 
     #[test]

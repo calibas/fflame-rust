@@ -103,6 +103,7 @@ pub fn key_for(
     power: u32,
     ship: bool,
     ship_variant: u32,
+    map_params: [f32; 2],
 ) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -122,6 +123,8 @@ pub fn key_for(
     h.update(power.to_le_bytes());
     h.update([ship as u8]);
     h.update(ship_variant.to_le_bytes());
+    h.update(map_params[0].to_le_bytes());
+    h.update(map_params[1].to_le_bytes());
     let digest = h.finalize();
     let mut name = String::with_capacity(36);
     for b in &digest[..16] {
@@ -159,6 +162,7 @@ pub fn save_to(dir: &Path, orbit: &ReferenceOrbit) -> bool {
         orbit.power,
         orbit.ship,
         orbit.ship_variant,
+        orbit.map_params,
     );
     let path = dir.join(name);
     // Don't rewrite a file that is already at least as deep AND
@@ -198,17 +202,20 @@ pub fn load_from(
     power: u32,
     ship: bool,
     ship_variant: u32,
+    map_params: [f32; 2],
     zoom_log2: f64,
     height_px: f64,
 ) -> Option<ReferenceOrbit> {
-    let name = key_for(center_re, center_im, n_limbs, julia_c, power, ship, ship_variant);
+    let name = key_for(
+        center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, map_params,
+    );
     let path = dir.join(name);
     let bytes = std::fs::read(&path).ok()?;
     let orbit = ReferenceOrbit::from_bytes(&bytes)?;
     // Defense in depth: the deserialized identity must serve the
     // request (hash collisions, hand-edited files).
     if !orbit.serves(
-        center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, orbit.map_params,
+        center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, map_params,
     )
         || orbit.n_limbs != n_limbs
     {
@@ -245,13 +252,14 @@ pub fn load(
     power: u32,
     ship: bool,
     ship_variant: u32,
+    map_params: [f32; 2],
     zoom_log2: f64,
     height_px: f64,
 ) -> Option<ReferenceOrbit> {
     let dir = default_dir()?;
     load_from(
-        &dir, center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, zoom_log2,
-        height_px,
+        &dir, center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, map_params,
+        zoom_log2, height_px,
     )
 }
 
@@ -310,7 +318,9 @@ mod tests {
         with_hint.hint_octave = -100;
         assert!(save_to(&dir, &with_hint));
         let loaded =
-            load_from(&dir, "-0.5", "0.1", plain.n_limbs, None, 2, false, 0, 60.0, 320.0)
+            load_from(
+                &dir, "-0.5", "0.1", plain.n_limbs, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0
+            )
                 .expect("hit");
         assert_eq!(
             loaded.hint_period,
@@ -321,7 +331,9 @@ mod tests {
         // ...and the same save again is a no-op (nothing new to add).
         assert!(save_to(&dir, &with_hint));
         let again =
-            load_from(&dir, "-0.5", "0.1", plain.n_limbs, None, 2, false, 0, 60.0, 320.0)
+            load_from(
+                &dir, "-0.5", "0.1", plain.n_limbs, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0
+            )
                 .expect("hit");
         assert_eq!(again.hint_period, Some(4242));
     }
@@ -333,7 +345,9 @@ mod tests {
             ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 500, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert!(save_to(&dir, &orbit));
         let mut loaded =
-            load_from(&dir, "-0.5", "0.1", orbit.n_limbs, None, 2, false, 0, 60.0, 320.0)
+            load_from(
+                &dir, "-0.5", "0.1", orbit.n_limbs, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0
+            )
                 .expect("hit");
         assert_eq!(loaded.len(), orbit.len());
         assert_eq!(loaded.orbit, orbit.orbit);
@@ -353,22 +367,32 @@ mod tests {
         let n = orbit.n_limbs;
         assert!(save_to(&dir, &orbit));
         // Different center / power / plane: different key, miss.
-        assert!(load_from(&dir, "-0.6", "0.1", n, None, 2, false, 0, 60.0, 320.0).is_none());
-        assert!(load_from(&dir, "-0.5", "0.1", n, None, 3, false, 0, 60.0, 320.0).is_none());
+        assert!(load_from(
+            &dir, "-0.6", "0.1", n, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0).is_none()
+        );
+        assert!(load_from(
+            &dir, "-0.5", "0.1", n, None, 3, false, 0, [0.0, 0.0], 60.0, 320.0).is_none()
+        );
         assert!(
-            load_from(&dir, "-0.5", "0.1", n, Some((0.1, 0.2)), 2, false, 0, 60.0, 320.0)
+            load_from(
+                &dir, "-0.5", "0.1", n, Some((0.1, 0.2)), 2, false, 0, [0.0, 0.0], 60.0, 320.0
+            )
                 .is_none()
         );
         // Offset-free orbit: a DIFFERENT view still hits (precision
         // is the key, the offset is zero).
-        assert!(load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 55.0, 640.0).is_some());
+        assert!(load_from(
+            &dir, "-0.5", "0.1", n, None, 2, false, 0, [0.0, 0.0], 55.0, 640.0).is_some()
+        );
         // Corrupt magic: miss, not error.
-        let name = key_for("-0.5", "0.1", n, None, 2, false, 0);
+        let name = key_for("-0.5", "0.1", n, None, 2, false, 0, [0.0, 0.0]);
         let path = dir.join(name);
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[0] ^= 0xFF;
         std::fs::write(&path, &bytes).unwrap();
-        assert!(load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0).is_none());
+        assert!(load_from(
+            &dir, "-0.5", "0.1", n, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0).is_none()
+        );
     }
 
     #[test]
@@ -378,13 +402,13 @@ mod tests {
             ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0, [0.0, 0.0]).unwrap();
         let n = orbit.n_limbs;
         assert!(save_to(&dir, &orbit));
-        let len_300 = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
+        let len_300 = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0)
             .unwrap()
             .len();
         // Deepen and re-save: the file must pick up the new depth.
         orbit.extend(600);
         assert!(save_to(&dir, &orbit));
-        let len_600 = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
+        let len_600 = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0)
             .unwrap()
             .len();
         assert!(len_600 > len_300, "{len_600} vs {len_300}");
@@ -392,7 +416,7 @@ mod tests {
         let shallow =
             ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 300, None, 2, false, 0, [0.0, 0.0]).unwrap();
         assert!(save_to(&dir, &shallow));
-        let still = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, 60.0, 320.0)
+        let still = load_from(&dir, "-0.5", "0.1", n, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0)
             .unwrap()
             .len();
         assert_eq!(still, len_600);
@@ -411,7 +435,7 @@ mod tests {
                 .unwrap();
         assert_eq!(orbit.len(), 20_001, "(-1.5, 0) is bounded");
         assert!(save_to(&dir, &orbit));
-        let name = key_for("-1.5", "0", orbit.n_limbs, None, 2, false, 0);
+        let name = key_for("-1.5", "0", orbit.n_limbs, None, 2, false, 0, [0.0, 0.0]);
         let size = std::fs::metadata(dir.join(name)).unwrap().len();
         let raw = 20u64 * 20_001;
         assert!(
@@ -419,7 +443,7 @@ mod tests {
             "compressed file is {size} B vs {raw} B raw -- compression regressed"
         );
         let loaded =
-            load_from(&dir, "-1.5", "0", orbit.n_limbs, None, 2, false, 0, 60.0, 320.0)
+            load_from(&dir, "-1.5", "0", orbit.n_limbs, None, 2, false, 0, [0.0, 0.0], 60.0, 320.0)
                 .expect("hit");
         assert_eq!(loaded.orbit, orbit.orbit);
         assert_eq!(loaded.orbit_lo, orbit.orbit_lo);
@@ -458,10 +482,9 @@ mod tests {
             None,
             2,
             false,
-            0,
+            0, [0.0, 0.0],
             120.0,
-            320.0,
-        )
+            320.0)
         .expect("hit");
         assert_eq!(loaded.orbit, orbit.orbit);
         assert_eq!(loaded.orbit_lo, orbit.orbit_lo);
@@ -476,8 +499,7 @@ mod tests {
             None,
             2,
             false,
-            0,
-        );
+            0, [0.0, 0.0]);
         let size = std::fs::metadata(dir.join(name)).unwrap().len();
         let raw = 20u64 * orbit.len() as u64 + 4 * 1024;
         assert!(size <= raw, "dip case ballooned: {size} B");
@@ -497,6 +519,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(deep.orbit, fresh.orbit, "post-load deepening diverged");
+    }
+
+    /// Two orbits that differ only in the map's continuous parameter
+    /// must not share a file. The key hashes the whole map identity;
+    /// without the parameter, a second Phoenix `p` would load the
+    /// first one's orbit and render the wrong fractal from cache.
+    #[test]
+    fn different_map_parameters_get_different_files() {
+        let a = key_for("-0.2", "0.35", 8, None, 2, false, 2, [-0.5, 0.0]);
+        let b = key_for("-0.2", "0.35", 8, None, 2, false, 2, [0.25, 0.1]);
+        let c = key_for("-0.2", "0.35", 8, None, 2, false, 2, [-0.5, 0.0]);
+        assert_ne!(a, b, "different p must not collide");
+        assert_eq!(a, c, "the same identity must be stable");
     }
 
     #[test]

@@ -1606,6 +1606,40 @@ parameter values, and against an f64 oracle at depth, 0.00% of pixels
 at zoom 28 (1.23% at zoom 20, marginal pixels in that framing).
 `phoenix-deep.fflame` pins the zoom-28 view.
 
+**And it shipped broken anyway, which is the useful part.** In the
+app the first deep Phoenix render was visibly a DIFFERENT FRACTAL the
+moment perturbation engaged. The reference orbit's `p` was resolved
+by `map_params_for` with `unwrap_or(0.0)` while the shader's uniform
+was resolved by `pack_params` with `unwrap_or(def.default)`: an
+absent key meant "the registry default" to one and "zero" to the
+other, so a FRESH config iterated deltas for p = -0.5 against a
+reference built for the plain quadratic. A config that had been
+edited in the UI carried the keys explicitly and worked.
+
+Two lessons, both now enforced by tests:
+
+- **Two code paths resolving the same value is the bug**, not the
+  arithmetic. `reference_parameters_match_the_shader_uniform`
+  (renderer.rs) asserts the two resolvers agree, with and without the
+  keys present, and fails in under a second.
+- **The direct-vs-perturbed agreement test cannot catch this class.**
+  It runs shallow, where rebasing fires almost every iteration and
+  the reference contributes almost nothing -- it read 0/768 with the
+  bug in place. A comparison that exercises the reference has to run
+  at DEPTH, against an exact orbit:
+  `perturbed_phoenix_matches_an_exact_orbit_at_depth` renders zoom 20
+  and compares escaped-or-not against an f64 orbit computed in the
+  test (1.23% agreed, 35.9% with the bug reintroduced). It renders
+  through a WHITE palette on purpose -- under the default grayscale
+  the low end is black, so an escaped pixel with a small smooth value
+  is indistinguishable from the interior and the comparison reads 63%
+  disagreement on a correct render.
+
+Two cache defects rode along and are fixed with it: `key_for` did not
+hash `map_params`, so two Phoenix `p` values shared one orbit file;
+and `load_from` passed `orbit.map_params` to `serves()`, comparing
+the file against itself so the guard could never fire.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers) and the `burning_ship` variants perturb and reach
 z9316+; the other twenty render through the DIRECT path and stop
