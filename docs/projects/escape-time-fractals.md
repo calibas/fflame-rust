@@ -1402,6 +1402,97 @@ on the period-3 antenna) is stored raw instead, tagged by a mode
 byte; whichever encoding is smaller wins, and both are byte-exact. Deep dips below f64 range poison the shadow and degrade
 gracefully to per-entry corrections through the dip.
 
+### Formula accuracy audit (2026-08-28)
+
+Every registered formula checked against an INDEPENDENT oracle --
+numpy transcriptions written from the published definitions, not from
+our WGSL (transcribing our own code proves only that it equals
+itself, which is how Ducks shipped for months with `c` outside the
+log). Reproduce with `python scripts/audit_escape_formulas.py`.
+
+Two observables, because one does not fit every formula:
+
+- **Set membership** for escaping maps: an all-white palette on black
+  makes "escaped" exactly "not background", with no dependence on
+  palette shape or tone mapping. A wrong map moves that boundary
+  everywhere.
+- **Equal-area field thresholds** where the set is uniform (Manowar
+  escapes everywhere; convergent maps converge everywhere; the
+  non-escaping trio never escapes at all). Both fields are monotone
+  in the same quantity, so thresholding each at the same AREA
+  fraction must select the same region -- a comparison gamma,
+  exposure and palette cannot affect.
+
+A vacuum guard reports any formula whose mask is >98% one class as
+UNINFORMATIVE rather than counting it as agreement, so the audit
+cannot pass by comparing two blank images.
+
+**21 of 23 verified.** Disagreement is boundary-pixel noise
+(f32 render vs f64 oracle), worst 0.24% on tetration:
+
+| result | formulas |
+|---|---|
+| set matches (<0.25%) | mandelbrot, multibrot, tricorn, burning_ship, mcmullen*, phoenix, lambda, spider, barnsley, cactus, exponential, trig, tetration, collatz, feather, newton†, nova†, magnet†, littlewood |
+| escape-time field matches | manowar (its set is uniform -- everything escapes) |
+| mean-\|z\| field matches | ducks |
+| structure verified, field UNEXPLAINED | kaliset, novaretti |
+
+\* McMullen is audited in JULIA mode: its parameter plane escapes
+everywhere, because the critical point IS the pole -- which the
+registry doc already says, and which the shipped carpet config
+already does. The audit confirms the caveat rather than contradicting
+it.
+† Convergent maps need a low iteration cap (10-14) to be informative:
+uncapped they converge everywhere and the mask is uniform by
+construction. Capped, the mask is "converged fast", whose boundary is
+the basin structure.
+
+**The bug it found.** Novaretti's double-pole guard returned the
+sentinel `1e10`, documented as "feeds infinity, which maps to 0 next
+step". True in exact arithmetic; false in f32, where the next step
+computes `(2*(1e10)^3)^2 = 4e60` and overflows the 3.4e38 ceiling, so
+num and den both become inf and the step returns inf/inf. On Vulkan
+that is NaN, which poisons the pixel for every remaining iteration;
+on Metal, whose fast-math folds inf/inf to 1.0, it silently returns a
+plausible finite number instead -- the same formula rendering
+differently on two platforms. The sentinel is now 1e6, which keeps
+den at 4e36 and reaches ~1.5e-12 next step, as intended. McMullen's
+identical-looking guard is safe because that formula ESCAPES: its
+sentinel trips the bailout immediately instead of having to survive
+another step.
+
+**OPEN: kaliset and novaretti fine-grained fields.** Side-by-side
+renders show the SAME structure as the oracle (novaretti's star
+field, kaliset's arc system, in the same places), and the algebra is
+verified by inspection and by a match at one iteration. But the
+mean-|z| fields disagree 16% / 23% under equal-area thresholds, and
+the cause is none of the candidates, all measured and excluded:
+
+- not formula transcription (inspection; novaretti matches at
+  iteration 1, before any amplification);
+- not f32-vs-f64 precision -- an f32 ORACLE disagrees with our render
+  identically (14.0% vs 14.0%), which is the discriminating test;
+- not overflow (max |z^3| reaches 6.9e17, inside f32) and not
+  cancellation in `2z^3 - c` (0% of pixels lose even 3 digits);
+- not the pole sentinel above (fixing it left the numbers
+  bit-identical, so that guard is not hit in these views);
+- not 8-bit quantization alone, and not `fract()` wrap on the tail
+  (tested by excluding clipped pixels, by true-range scaling, and by
+  excluding the wrapping tail -- all three leave it).
+
+Both are chaotic, heavy-tailed maps whose fields span five orders of
+magnitude, which an 8-bit linear render carries badly in either
+scaling; that is the leading remaining suspect for the MEASUREMENT
+rather than the map. Recorded here so the next person starts from the
+excluded list rather than re-deriving it.
+
+**Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
+(integer powers) and the `burning_ship` variants perturb and reach
+z9316+; the other twenty render through the DIRECT path and stop
+where its f32 pixel mapping does, at about zoom 14 -- which is why
+`PERTURB_MIN_ZOOM` sits there. Extending that set is item 2 of the
+completion plan.
+
 **What remains before this branch is done** is scoped in
 [escape-time-completion.md](escape-time-completion.md): per-formula
 accuracy against references (only 3 of 23 formulas can perturb --
