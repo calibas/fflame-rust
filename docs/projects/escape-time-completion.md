@@ -82,11 +82,38 @@ Still open, in the order the survey judged tractable:
   parameter-plane term picks up `Z(1-Z)` rather than a bare `+ dc`.
   Both rungs. Details in
   [escape-time-fractals.md](escape-time-fractals.md).
-- **Feather, McMullen, Magnet** — rational or component-wise;
-  perturbation works, division needs care near poles. All three have a
-  clean delta form (for a quotient, `dq = (dN - q*dD)/(D + dD)` with
-  `q = N/D` the reference quotient — small over full-size, no
-  cancellation). Untouched.
+- **Feather — foundation shipped, tier NOT enabled 2026-08-30.** The
+  blocker for all three rational families turned out not to be "care
+  near poles" but something more basic: the fixed-point layer had **no
+  division at all** ("the core never divides", per its own header), so
+  none of them could even build a reference orbit.
+
+  That is now fixed — `FixedPoint::recip` (Newton, full width) and
+  `FixedComplex::div`, both tested — and Feather has a working
+  `MAP_FEATHER` reference branch, a `Feather(p)` tier and both delta
+  rungs. Feather could go first because its denominator's real part is
+  `1 + x^2`, so `|D| >= 1` always: the reciprocal is bounded by 1 and
+  fits fixed point's ±128 range, where the pole-bearing families would
+  overflow it. `recip` REFUSES out-of-range input rather than
+  saturating, which is the guard that keeps Magnet and McMullen from
+  being wired up carelessly.
+
+  The tier is verified at zoom 15 (0.00% against an exact orbit) and
+  20 (0.49%), and degrades past that — 26% at 25, and by 30 the delta
+  stops iterating entirely. `perturb_tier` therefore declines to
+  select it. The cause is NOT the algebra: an f64 simulation of the
+  same recurrence, including the rebase and the scaled rung's `w = d/S`
+  with every intermediate rounded to f32, matches the exact orbit at
+  0.0% for zooms 10 through 30, and the generated WGSL matches that
+  simulation line for line. The fault is in the shader environment,
+  and it is unexplained.
+
+- **McMullen, Magnet** — both need a reciprocal of a quantity that
+  VANISHES at a pole, which is exactly what `FixedPoint::recip`
+  refuses. Wiring them up needs a range strategy first (extend
+  INT_BITS, carry an exponent, or detect near-pole references and
+  decline the location) — a design question, not just code. The delta
+  form itself is the same quotient one Feather uses.
 - **Tetration / exponential / trig / Collatz** — transcendental
   deltas exist but the error analysis is its own study.
 - **Newton / Nova** — convergent, not escaping; deep zoom there wants

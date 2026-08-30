@@ -115,6 +115,11 @@ impl MapId {
         Self { power: 2, ship: false, variant: MAP_LAMBDA, params: [0.0, 0.0] }
     }
 
+    /// Feather: `z^p / (1 + x^2 - i*y^2) + c`.
+    pub fn feather(p: u32) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_FEATHER, params: [0.0, 0.0] }
+    }
+
     /// Manowar: Phoenix's recurrence with p = 1 and a pixel seed.
     pub fn manowar() -> Self {
         Self { power: 2, ship: false, variant: MAP_MANOWAR, params: [1.0, 0.0] }
@@ -166,6 +171,20 @@ pub const MAP_MANOWAR: u32 = 3;
 /// MAP_MANOWAR collides with Celtic; `ship` disambiguates, and every
 /// read of `ship_variant` as a map family must be guarded by `!ship`.
 pub const MAP_LAMBDA: u32 = 4;
+
+/// Feather — `z' = z^p / (1 + x^2 - i*y^2) + c`.
+///
+/// The first RATIONAL reference map, and the reason
+/// [`FixedPoint::recip`] exists. Its denominator's real part is
+/// `1 + x^2`, so `|D| >= 1` for every z: the reciprocal is bounded by
+/// 1 and always fits fixed point's +-128 range. That is what makes
+/// Feather the rational family that could ship before the
+/// pole-bearing ones (Magnet, McMullen), whose denominators vanish.
+///
+/// The denominator is also NOT holomorphic — it reads the components
+/// of z separately — which costs BLA but not perturbation: the delta
+/// of each component is its own cancellation-free binomial.
+pub const MAP_FEATHER: u32 = 5;
 
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
@@ -655,7 +674,11 @@ impl ReferenceOrbit {
             julia_c,
             power: power.max(2),
             ship,
-            ship_variant: ship_variant.min(5),
+            // Clamp only the FOLD variants. `ship_variant` doubles as
+            // the non-fold map family, and MAP_FEATHER = 5 was the
+            // last slot the old blanket `.min(5)` allowed; a sixth
+            // family would have been silently rewritten to Feather.
+            ship_variant: if ship { ship_variant.min(5) } else { ship_variant },
             periodic: None,
             ref_offset: [0.0, 0.0],
             off_zoom_log2: zoom_log2,
@@ -827,6 +850,39 @@ impl ReferenceOrbit {
                 // z^p, or conj(z)^p for the Tricorn family. See
                 // MAP_CONJ: with `ship` false, `ship_variant` selects
                 // which non-fold map this is.
+                if self.ship_variant == MAP_FEATHER {
+                    // z' = z^p / (1 + x^2 - i*y^2) + c. The division
+                    // is real work in fixed point (Newton reciprocal),
+                    // but it can never fail here: Re(D) = 1 + x^2 >= 1
+                    // so |D|^2 >= 1, which is exactly the range
+                    // FixedComplex::div guarantees for.
+                    let mut zp = self.z.sqr();
+                    for _ in 2..self.power {
+                        zp = zp.mul(&self.z);
+                    }
+                    let one = FixedPoint::from_f64(1.0, self.n_limbs);
+                    let mut den_im = self.z.im.sqr();
+                    den_im.neg = !den_im.is_zero();
+                    let den = FixedComplex {
+                        re: one.add(&self.z.re.sqr()),
+                        im: den_im,
+                    };
+                    let Some(quot) = zp.div(&den) else {
+                        // Unreachable by the bound above; refuse
+                        // rather than continue with a wrong orbit.
+                        log::error!("feather reference: |D| < 1, which should be impossible");
+                        break;
+                    };
+                    self.z = quot.add(&self.c);
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
                 if self.ship_variant == MAP_LAMBDA {
                     // z' = c*z*(1-z). No cancellation to worry about
                     // here -- this is the full-precision reference, so
@@ -960,7 +1016,7 @@ impl ReferenceOrbit {
             && self.julia_c == julia_c
             && self.power == power.max(2)
             && self.ship == ship
-            && self.ship_variant == ship_variant.min(5)
+            && self.ship_variant == if ship { ship_variant.min(5) } else { ship_variant }
             && self.map_params == map_params
     }
 
@@ -2297,6 +2353,73 @@ mod tests {
             })
             .fold(0.0f32, f32::max);
         assert!(d > 1e-3, "different p produced the same orbit: {d:e}");
+    }
+
+    /// The feather reference must iterate the rational map, which is
+    /// the first one that DIVIDES in fixed point.
+    #[test]
+    fn feather_reference_iterates_the_rational_map() {
+        let orbit = ReferenceOrbit::compute(
+            "-0.35", "0.62", 8.0, None, 60, None, 3, false, MAP_FEATHER, [0.0, 0.0],
+        )
+        .expect("reference");
+        println!("feather reference length {}", orbit.len());
+        assert!(orbit.len() > 10, "feather reference is {} long", orbit.len());
+        let (cr, ci) = (-0.35f64, 0.62f64);
+        let (mut zr, mut zi) = (0.0f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for k in 1..30u32 {
+            let (mut nr, mut ni) = (zr, zi);
+            for _ in 1..3 {
+                let t = nr * zr - ni * zi;
+                ni = nr * zi + ni * zr;
+                nr = t;
+            }
+            let (dr, di) = (1.0 + zr * zr, -(zi * zi));
+            let d2 = dr * dr + di * di;
+            zr = (nr * dr + ni * di) / d2 + cr;
+            zi = (ni * dr - nr * di) / d2 + ci;
+            if k >= orbit.len() { break; }
+            let got = orbit.z_f32(k as usize);
+            let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+            worst = worst.max(e);
+        }
+        println!("feather reference: worst |error| vs f64 = {worst:.3e}");
+        assert!(worst < 1e-5, "the fixed-point feather reference does not track the map ({worst:.3e})");
+    }
+
+    /// The feather reference must stay exact at DEEP-zoom limb counts
+    /// and over hundreds of iterations -- the regime the render uses.
+    #[test]
+    fn feather_reference_stays_exact_at_depth() {
+        for zoom in [10.0f64, 20.0, 30.0, 40.0] {
+            let orbit = ReferenceOrbit::compute(
+                "-0.77291940505873225", "-1.83786610577385723",
+                zoom, None, 600, None, 3, false, MAP_FEATHER, [0.0, 0.0],
+            )
+            .expect("reference");
+            let (cr, ci) = (-0.77291940505873225f64, -1.83786610577385723f64);
+            let (mut zr, mut zi) = (0.0f64, 0.0f64);
+            let mut worst = 0.0f64;
+            for k in 1..200u32 {
+                let (mut nr, mut ni) = (zr, zi);
+                for _ in 1..3 {
+                    let t = nr * zr - ni * zi;
+                    ni = nr * zi + ni * zr;
+                    nr = t;
+                }
+                let (dr, di) = (1.0 + zr * zr, -(zi * zi));
+                let d2 = dr * dr + di * di;
+                zr = (nr * dr + ni * di) / d2 + cr;
+                zi = (ni * dr - nr * di) / d2 + ci;
+                if k >= orbit.len() { break; }
+                let got = orbit.z_f32(k as usize);
+                let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+                worst = worst.max(e);
+            }
+            println!("feather ref at zoom {zoom}: len {} worst {worst:.3e}", orbit.len());
+            assert!(worst < 1e-4, "zoom {zoom}: reference drifts ({worst:.3e})");
+        }
     }
 
     /// The lambda reference must iterate `c*z*(1-z)` from the

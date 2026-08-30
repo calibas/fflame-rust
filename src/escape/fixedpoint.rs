@@ -286,6 +286,83 @@ impl FixedPoint {
         out
     }
 
+    /// Reciprocal by Newton iteration, for `|self| >= 1`.
+    ///
+    /// The module header says the core never divides, and that stayed
+    /// true while every reference map was a polynomial. The RATIONAL
+    /// families need it: Feather iterates `z^p / (1 + x^2 - i*y^2)`,
+    /// and its reference orbit cannot be built without dividing.
+    ///
+    /// **Restricted to `|self| >= 1` on purpose.** This is fixed point
+    /// with [`INT_BITS`] = 8 integer bits, so the representable range
+    /// is about +-128; a reciprocal of anything smaller than 1/128
+    /// simply does not fit, and near a pole it would not fit by a wide
+    /// margin. Rather than saturate — which would put a quietly wrong
+    /// reference orbit into the cache — this returns `None` and lets
+    /// the caller decline. Feather is safe by construction (its
+    /// denominator's real part is `1 + x^2`, so `|D| >= 1` always),
+    /// which is exactly why it is the rational family that could ship
+    /// first.
+    ///
+    /// Newton doubles the correct bits each step: `x <- x*(2 - a*x)`,
+    /// seeded from f64 (53 bits) and run to cover the full limb width.
+    /// Cost is two full-width multiplies per step, so a reference
+    /// iteration that divides is several times a polynomial one. The
+    /// standard fix — run the early steps at reduced precision, since
+    /// they only need to be right to their own width — is left for
+    /// when a profile says it matters; reference orbits are cached to
+    /// disk, so this is a one-off per location.
+    pub fn recip(&self) -> Option<Self> {
+        let n = self.n_limbs();
+        if self.is_zero() {
+            return None;
+        }
+        let a = self.to_f64();
+        // 1/|a| must fit the +-2^INT_BITS range with room to spare.
+        if !(a.abs() >= 1.0) || !a.is_finite() {
+            return None;
+        }
+        let mut x = Self::from_f64(1.0 / a, n);
+        let two = Self::from_f64(2.0, n);
+        // 53 correct bits doubling each step, to the full width.
+        let target_bits = frac_bits(n) + INT_BITS;
+        let mut good = 50u32;
+        while good < target_bits {
+            // x <- x * (2 - a*x)
+            let ax = self.mul(&x);
+            let corr = two.sub(&ax);
+            x = x.mul(&corr);
+            good = good.saturating_mul(2);
+        }
+        Some(x)
+    }
+}
+
+impl FixedComplex {
+    /// Complex division `self / other`, via `conj` over the squared
+    /// magnitude — so the only reciprocal taken is of a REAL value,
+    /// which is where [`FixedPoint::recip`]'s range guarantee lives.
+    ///
+    /// `None` when `|other|^2 < 1`, i.e. exactly when the reciprocal
+    /// would leave the fixed-point range. Callers whose denominator is
+    /// bounded below by construction (Feather) can treat that as
+    /// unreachable; callers whose denominator has a pole (Magnet,
+    /// McMullen) must handle it, which is why those families are not
+    /// wired up yet.
+    pub fn div(&self, other: &Self) -> Option<Self> {
+        let d2 = other.re.sqr().add(&other.im.sqr());
+        let inv = d2.recip()?;
+        let mut conj_im = other.im.clone();
+        conj_im.neg = !conj_im.neg && !conj_im.is_zero();
+        let num = self.mul(&FixedComplex { re: other.re.clone(), im: conj_im });
+        Some(FixedComplex {
+            re: num.re.mul(&inv),
+            im: num.im.mul(&inv),
+        })
+    }
+}
+
+impl FixedPoint {
     // --------------------------------------------------------
     // Conversions
     // --------------------------------------------------------
@@ -710,6 +787,106 @@ impl FixedComplex {
         let x = self.re.to_f64();
         let y = self.im.to_f64();
         x * x + y * y
+    }
+}
+
+#[cfg(test)]
+mod recip_tests {
+    use super::*;
+
+    /// The Newton reciprocal must be exact to the FULL limb width,
+    /// not merely to f64 — that is the whole reason it exists.
+    ///
+    /// Checked without a bignum library: `a * (1/a)` must come back as
+    /// 1 to within a few ulps of the fixed-point representation. A
+    /// reciprocal that merely converted through f64 would be right to
+    /// 2^-53 and fail this by hundreds of digits.
+    #[test]
+    fn reciprocal_is_exact_to_the_full_width() {
+        for n in [4usize, 12, 40] {
+            let one = FixedPoint::from_f64(1.0, n);
+            for v in [1.0f64, 1.5, 2.0, 3.14159265358979, 7.0, 99.5, -1.25, -64.0] {
+                let a = FixedPoint::from_f64(v, n);
+                let inv = a.recip().expect("in range");
+                let prod = a.mul(&inv);
+                let err = prod.sub(&one);
+                // Allowed: a handful of ulps at the bottom limb, from
+                // the truncating multiplies inside Newton.
+                // limbs[0] is LEAST significant, so a full-width
+                // reciprocal leaves error only in the bottom limb or
+                // two (the truncating multiplies inside Newton).
+                let top = err.limbs.iter().rposition(|&l| l != 0);
+                assert!(
+                    top.map_or(true, |i| i <= 1),
+                    "1/{v} at {n} limbs: a*(1/a) - 1 is nonzero up to limb {top:?} of \
+                     {n}, so the reciprocal is not full-width"
+                );
+            }
+        }
+    }
+
+    /// Out of range must REFUSE, not saturate.
+    ///
+    /// With 8 integer bits the representable range is about +-128, so
+    /// 1/a for |a| < 1 can overflow it. Saturating there would write a
+    /// quietly wrong reference orbit into the on-disk cache, which is
+    /// the failure this project least wants; `None` makes the caller
+    /// decide.
+    #[test]
+    fn reciprocal_refuses_what_it_cannot_represent() {
+        let n = 8;
+        for v in [0.5f64, 0.01, 1e-9, -0.25] {
+            let a = FixedPoint::from_f64(v, n);
+            assert!(
+                a.recip().is_none(),
+                "recip({v}) should refuse: 1/{v} does not fit {} integer bits",
+                INT_BITS
+            );
+        }
+        assert!(FixedPoint::zero(n).recip().is_none(), "1/0 must refuse");
+    }
+
+    /// Complex division must match an f64 oracle, and must refuse
+    /// exactly when the magnitude is below the representable range.
+    #[test]
+    fn complex_division_matches_f64_and_refuses_poles() {
+        let n = 16;
+        let cases = [
+            ((1.0f64, 2.0f64), (3.0f64, -1.0f64)),
+            ((-0.75, 0.5), (1.0, 0.0)),
+            ((2.5, -3.25), (-2.0, 1.5)),
+        ];
+        for ((ar, ai), (br, bi)) in cases {
+            let a = FixedComplex {
+                re: FixedPoint::from_f64(ar, n),
+                im: FixedPoint::from_f64(ai, n),
+            };
+            let b = FixedComplex {
+                re: FixedPoint::from_f64(br, n),
+                im: FixedPoint::from_f64(bi, n),
+            };
+            let q = a.div(&b).expect("in range");
+            let d = br * br + bi * bi;
+            let (wr, wi) = ((ar * br + ai * bi) / d, (ai * br - ar * bi) / d);
+            assert!(
+                (q.re.to_f64() - wr).abs() < 1e-12 && (q.im.to_f64() - wi).abs() < 1e-12,
+                "({ar}+{ai}i)/({br}+{bi}i) = {}+{}i, want {wr}+{wi}i",
+                q.re.to_f64(),
+                q.im.to_f64()
+            );
+        }
+        // |b|^2 < 1 is out of range and must refuse rather than
+        // saturate — this is the guard that keeps the pole-bearing
+        // families (Magnet, McMullen) from being wired up by accident.
+        let small = FixedComplex {
+            re: FixedPoint::from_f64(0.1, n),
+            im: FixedPoint::from_f64(0.2, n),
+        };
+        let a = FixedComplex {
+            re: FixedPoint::from_f64(1.0, n),
+            im: FixedPoint::zero(n),
+        };
+        assert!(a.div(&small).is_none(), "a near-pole divisor must refuse");
     }
 }
 

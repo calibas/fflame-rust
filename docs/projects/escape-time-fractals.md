@@ -2275,6 +2275,76 @@ generally: the first center tried was entirely interior, and an
 all-interior view agrees with ANY oracle. The test now refuses to draw
 a conclusion unless between 10% and 90% of pixels escaped.
 
+### Fixed-point division, and Feather's unfinished tier (2026-08-30)
+
+The completion plan listed Feather, McMullen and Magnet as tractable
+with the note "division needs care near poles". The actual blocker was
+one level down: **the fixed-point layer had no division at all.** Its
+own header says so — "the core never divides (only small-scalar
+division for decimal I/O)" — which was true while every reference map
+was a polynomial. Every rational family needs it to build a reference
+orbit, so none of them could start.
+
+`FixedPoint::recip` now provides it: Newton's `x <- x*(2 - a*x)`,
+seeded from f64 and run to the full limb width, with
+`FixedComplex::div` on top (via `conj` over the squared magnitude, so
+the only reciprocal taken is of a real). Tested three ways —
+`a*(1/a)` returns 1 to within the bottom limb at 4, 12 and 40 limbs;
+complex division matches an f64 oracle; and out-of-range input is
+REFUSED rather than saturated.
+
+**That refusal is the load-bearing part.** With `INT_BITS = 8` the
+representable range is about ±128, so `1/a` for `|a| < 1` does not
+fit, and near a pole it does not fit by a wide margin. Saturating
+there would write a quietly wrong reference orbit into the on-disk
+cache — the failure mode this engine keeps refusing — so `recip`
+returns `None` and the caller decides. It is also what decides which
+rational family could ship first: Feather's denominator is
+`1 + x^2 - i*y^2`, whose real part is at least 1, so `|D| >= 1` for
+every z and the reciprocal is always in range. Magnet and McMullen
+have genuine poles and need a range strategy before they can be wired
+up at all.
+
+**Feather's tier is built and gated off.** `MAP_FEATHER` (reference,
+tracking f64 to 5.9e-8 at every limb count), a `Feather(p)` tier and
+both delta rungs exist and assemble. They introduce the quotient delta
+form the other rationals will reuse:
+
+    dq = (dN - q*dD) / (D + dD)
+
+with `q = N/D` the REFERENCE quotient. Written the obvious way
+instead — `(dN*D - N*dD)/(D*(D+dD))` — it differences two full-size
+products and loses the delta to cancellation. `dD` is component-wise,
+because this denominator is not holomorphic, which also costs BLA.
+
+It is verified at zoom 15 (0.00% against an exact orbit) and 20
+(0.49%), and degrades past that: 26% at 25, and by zoom 30 the delta
+stops iterating altogether — escape becomes a linear function of pixel
+position, which renders as hard straight diagonals
+(`output/origami/fe-zooms.png`). So `perturb_tier` returns `None` for
+`feather`, and the panel's depth hint says 2^14 rather than promising
+depth the engine will not deliver.
+
+**What the cause is not.** An f64 simulation of the same recurrence —
+including the Zhuoran rebase, and including a faithful model of the
+scaled rung with `w = d/S` and every intermediate rounded to f32 —
+reproduces the exact orbit at **0.0% disagreement for zooms 10, 20, 25
+and 30**. The generated WGSL matches that simulation line for line,
+the fixed-point reference is exact at every limb count, and rounding
+the reference to f32 inside the simulation changes nothing. Two
+hypotheses were tested and killed this way (f32 reference
+coefficients; f32 delta arithmetic). The fault is somewhere in the
+shader environment the simulation does not model, and it has not been
+found.
+
+**A harness footgun found on the way out**, worth knowing before the
+next tier: `force_perturbed` on a formula whose `perturb_tier` returns
+`None` does not fail — it falls back to `PerturbTier::Power(2)` and
+renders the MANDELBROT delta step against that formula's reference.
+The result looks like a broken render of the formula under test rather
+than what it is. That is how gating Feather off turned its passing
+zoom-15 test into "6912/6912 pixels escaped".
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep

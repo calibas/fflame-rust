@@ -2422,6 +2422,25 @@ mod tests {
         );
     }
 
+    /// Perturbed Feather must match an exact orbit at depth, on both
+    /// rungs.
+    ///
+    /// The first RATIONAL tier, so this is the first test of the
+    /// quotient delta form `dq = (dN - q*dD)/(D + dD)`. Writing that
+    /// the obvious way instead — `(dN*D - N*dD)/(D*(D+dD))` —
+    /// differences two full-size products and loses the delta to
+    /// cancellation, which would show up here and nowhere else.
+    ///
+    /// It also exercises a NON-HOLOMORPHIC denominator: `1 + x^2 -
+    /// i*y^2` reads the components of z separately, so `dD` is two
+    /// independent component binomials rather than one complex one. A
+    /// port that treated it as holomorphic still renders a plausible
+    /// Feather.
+    ///
+    /// The view is chosen for a SHORT escape horizon (median 8
+    /// iterations) after the lambda tier taught this suite that an f64
+    /// oracle stops being ground truth once orbits linger — see
+    /// `lambda_exact_orbit_case`.
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
