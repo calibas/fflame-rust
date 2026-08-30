@@ -68,6 +68,7 @@ independent oracle and pinned by a visual config:
 | Manowar | DEEP ONLY, by measurement | 1.6-2.1% vs an exact orbit at zoom 20-34; 18-27% on the scaled rung |
 | Lambda | both | 0.23% / 0.26% vs an exact orbit at zoom 30 — see the note on why the CAP is part of that number |
 | Feather | both | 0.00% / 0.00% vs an exact orbit at zoom 30, on the view that exposed the escape test's delta-blindness |
+| McMullen | both | 0.22% / 0.19% vs an exact orbit at zoom 30 (Julia plane; the parameter plane has no interior) |
 
 Plus 8 new `wgsl_derivative` blocks (tricorn, mcmullen, lambda,
 cactus, exponential, trig, tetration, barnsley).
@@ -116,12 +117,27 @@ Still open, in the order the survey judged tractable:
   simulation line for line. The fault is in the shader environment,
   and it is unexplained.
 
-- **McMullen, Magnet** — both need a reciprocal of a quantity that
-  VANISHES at a pole, which is exactly what `FixedPoint::recip`
-  refuses. Wiring them up needs a range strategy first (extend
-  INT_BITS, carry an exponent, or detect near-pole references and
-  decline the location) — a design question, not just code. The delta
-  form itself is the same quotient one Feather uses.
+- **McMullen — DONE 2026-08-30, Julia mode only.** The range
+  question is answered: `FixedPoint::recip_scaled` normalizes before
+  inverting, so a SMALL denominator is fine and only an out-of-range
+  QUOTIENT is refused — which for a pole-bearing map is the same event
+  as "this orbit escaped". 0.22% / 0.19% against an exact orbit at
+  zoom 30 on both rungs.
+
+  Julia-only because of a finding about our own formula: McMullen
+  seeds its parameter plane at `z_0 = c`, which is not a critical
+  point of this map (`z = 0` is the POLE; the real critical points sit
+  at `z^(n+m) = (m/n)c`). Measured, **0 of 4000 sampled parameters
+  have a bounded orbit** — that plane has no interior to zoom into.
+  The Sierpinski-carpet pictures the family is known for are Julia
+  sets. Re-seeding the parameter plane at a proper critical point is a
+  separate, visible formula change and is NOT done here.
+
+- **Magnet** — the remaining one. Its denominator vanishes too, which
+  `recip_scaled` now handles, but `c` appears in BOTH numerator and
+  denominator and the map is a SQUARED quotient, so the delta form is
+  the quotient one composed with `d(q^2) = 2q*dq + dq^2`. No blocker
+  known; just not written.
 - **Tetration / exponential / trig / Collatz** — transcendental
   deltas exist but the error analysis is its own study.
 - **Newton / Nova** — convergent, not escaping; deep zoom there wants

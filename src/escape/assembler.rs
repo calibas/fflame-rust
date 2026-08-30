@@ -1614,6 +1614,34 @@ pub enum PerturbTier {
     /// it is too small to change an f32 O(1) value, which is the
     /// correct answer rather than an approximation.
     Feather(u32),
+    /// McMullen: `z^n + c/z^m`, integer n and m — the first tier with
+    /// a genuine POLE, and the first that is JULIA-ONLY.
+    ///
+    /// The delta form splits the two terms and never divides a small
+    /// number by a small number:
+    ///
+    ///   dA = (Z+d)^n - Z^n                    (binomial, exact)
+    ///   dM = (Z+d)^m - Z^m                    (binomial, exact)
+    ///   d' = dA - C*dM / [ (Z+d)^m * Z^m ]    (+ dc/(Z+d)^m on the
+    ///                                          parameter plane)
+    ///
+    /// The pole term's delta is written as
+    /// `1/(Z+d)^m - 1/Z^m = -dM / ((Z+d)^m Z^m)`: numerator small and
+    /// cancellation-free, denominator a product of FULL values. Formed
+    /// the direct way instead, it would subtract two large nearly-equal
+    /// reciprocals and lose the delta entirely.
+    ///
+    /// JULIA-ONLY, and that is a statement about the formula rather
+    /// than the tier. Our McMullen seeds its parameter plane at
+    /// `z_0 = c`, which is not a critical point of this map (`z = 0`
+    /// is the POLE, and the real critical points sit at
+    /// `z^(n+m) = (m/n)c`) — measured, 0 of 4000 sampled parameters
+    /// have a bounded orbit, so that plane has no interior to zoom
+    /// into and perturbing it would be machinery for nothing. The
+    /// classic Sierpinski-carpet pictures are Julia sets, which is
+    /// where this works. Seeding the parameter plane at a proper
+    /// critical point is a separate, visible formula change.
+    McMullen(u32, u32),
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
@@ -1909,6 +1937,90 @@ fn delta_step_feather(p: u32) -> String {
     out
 }
 
+/// `((Z+d)^p - Z^p)/S` with `d = S*w`, over named operands and with a
+/// name prefix, so a formula needing TWO different binomials in one
+/// step (McMullen's `z^n` and its pole's `z^m`) can emit both without
+/// colliding. Same derivation as [`delta_step_scaled_on`]; that one
+/// writes straight into `w_new` for the single-binomial tiers.
+fn binom_scaled(p: u32, zvar: &str, wvar: &str, prefix: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("        let {prefix}z1 = {zvar};\n"));
+    for k in 2..p {
+        out.push_str(&format!(
+            "        let {prefix}z{k} = vec2<f32>({prefix}z{}.x * {zvar}.x - {prefix}z{}.y * {zvar}.y, {prefix}z{}.x * {zvar}.y + {prefix}z{}.y * {zvar}.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    out.push_str(&format!("        let {prefix}u1 = {wvar};\n"));
+    for k in 2..=p {
+        out.push_str(&format!(
+            "        let {prefix}u{k} = perturb.s * vec2<f32>({prefix}u{}.x * {wvar}.x - {prefix}u{}.y * {wvar}.y, {prefix}u{}.x * {wvar}.y + {prefix}u{}.y * {wvar}.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    out.push_str(&format!("        var {prefix}d = vec2<f32>(0.0, 0.0);\n"));
+    for k in 1..=p {
+        let c = binomial(p, k);
+        let term = if k == p {
+            format!("{c}.0 * {prefix}u{k}")
+        } else {
+            let zp = p - k;
+            format!(
+                "{c}.0 * vec2<f32>({prefix}z{zp}.x * {prefix}u{k}.x - {prefix}z{zp}.y * {prefix}u{k}.y, {prefix}z{zp}.x * {prefix}u{k}.y + {prefix}z{zp}.y * {prefix}u{k}.x)"
+            )
+        };
+        out.push_str(&format!("        {prefix}d = {prefix}d + {term};\n"));
+    }
+    out
+}
+
+/// McMullen's scaled-rung delta step.
+fn delta_step_mcmullen(n: u32, m: u32) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "        // McMullen z^{n} + c/z^{m}: w' = dA/S - C*(dM/S)/((Z+d)^{m} Z^{m}).\n"
+    ));
+    out.push_str(&binom_scaled(n, "z_ref", "w", "a"));
+    out.push_str(&binom_scaled(m, "z_ref", "w", "b"));
+    out.push_str(
+        r#"        // Full pixel value and the two full-size powers the
+        // pole term divides by. Computing (Z+d) in f32 is fine: it is
+        // a COEFFICIENT here, not the delta.
+        let zf = z_ref + perturb.s * w;
+        var zf_m = zf;
+"#,
+    );
+    for _ in 1..m {
+        out.push_str("        zf_m = vec2<f32>(zf_m.x * zf.x - zf_m.y * zf.y, zf_m.x * zf.y + zf_m.y * zf.x);\n");
+    }
+    out.push_str("        var zr_m = z_ref;\n");
+    for _ in 1..m {
+        out.push_str("        zr_m = vec2<f32>(zr_m.x * z_ref.x - zr_m.y * z_ref.y, zr_m.x * z_ref.y + zr_m.y * z_ref.x);\n");
+    }
+    out.push_str(
+        r#"        let den = vec2<f32>(zf_m.x * zr_m.x - zf_m.y * zr_m.y, zf_m.x * zr_m.y + zf_m.y * zr_m.x);
+        let den2 = max(dot(den, den), 1e-30);
+        let cref = perturb.ref_c;
+        let cb = vec2<f32>(cref.x * bd.x - cref.y * bd.y, cref.x * bd.y + cref.y * bd.x);
+        // -C*dM/S divided by the full-size denominator.
+        var w_new = ad - vec2<f32>(
+            (cb.x * den.x + cb.y * den.y) / den2,
+            (cb.y * den.x - cb.x * den.y) / den2,
+        );
+        if (!is_julia_perturb) {
+            // Parameter plane: + dc/(Z+d)^m. Unused today -- the tier
+            // is Julia-only -- but the term belongs to the derivation.
+            let zf2 = max(dot(zf_m, zf_m), 1e-30);
+            w_new = w_new + vec2<f32>(
+                (d0_term.x * zf_m.x + d0_term.y * zf_m.y) / zf2,
+                (d0_term.y * zf_m.x - d0_term.x * zf_m.y) / zf2,
+            );
+        }
+"#,
+    );
+    out
+}
+
 /// The floatexp flavor of the same step.
 /// The default Zhuoran rebase: restart the reference at index 0.
 fn rebase_default() -> String {
@@ -2159,6 +2271,76 @@ fn delta_step_feather_fe(p: u32) -> String {
         var w_new = cfe2_mul_c32(top, inv);
         if (!is_julia_perturb) {
             w_new = cfe2_add(w_new, d0);
+        }
+"#,
+    );
+    out
+}
+
+/// McMullen on the deep rung.
+///
+/// The binomials run in floatexp; the two full-size powers and the
+/// division stay in f32, because they are O(1) COEFFICIENTS and the
+/// delta never passes through them.
+fn delta_step_mcmullen_fe(n: u32, m: u32) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("        // McMullen z^{n} + c/z^{m} (floatexp).\n"));
+    for (p, prefix) in [(n, "a"), (m, "b")] {
+        out.push_str(&format!("        let {prefix}z1 = z_ref_m;\n"));
+        for k in 2..p {
+            out.push_str(&format!(
+                "        let {prefix}z{k} = vec2<f32>({prefix}z{}.x * z_ref_m.x - {prefix}z{}.y * z_ref_m.y, {prefix}z{}.x * z_ref_m.y + {prefix}z{}.y * z_ref_m.x);\n",
+                k - 1, k - 1, k - 1, k - 1
+            ));
+        }
+        out.push_str(&format!("        let {prefix}u1 = w;\n"));
+        for k in 2..=p {
+            out.push_str(&format!("        let {prefix}u{k} = cfe2_mul({prefix}u{}, w);\n", k - 1));
+        }
+        out.push_str(&format!("        var {prefix}d = cfe2_zero();\n"));
+        for k in 1..=p {
+            let c = binomial(p, k);
+            if k == p {
+                out.push_str(&format!(
+                    "        {prefix}d = cfe2_add({prefix}d, cfe2_mul_c32({prefix}u{k}, vec2<f32>({c}.0, 0.0)));\n"
+                ));
+            } else {
+                let zp = p - k;
+                out.push_str(&format!(
+                    "        {prefix}d = cfe2_add({prefix}d, cfe2_mul_cfe32(cfe2_mul_c32({prefix}u{k}, vec2<f32>({c}.0, 0.0)), {prefix}z{zp}, {zp} * z_ref_e));\n"
+                ));
+            }
+        }
+    }
+    out.push_str(
+        r#"        let zr32 = z_ref_m * exp2(f32(z_ref_e));
+        let zf = zr32 + cfe2_to_f32(w);
+        var zf_m = zf;
+"#,
+    );
+    for _ in 1..m {
+        out.push_str("        zf_m = vec2<f32>(zf_m.x * zf.x - zf_m.y * zf.y, zf_m.x * zf.y + zf_m.y * zf.x);\n");
+    }
+    out.push_str("        var zr_m = zr32;\n");
+    for _ in 1..m {
+        out.push_str("        zr_m = vec2<f32>(zr_m.x * zr32.x - zr_m.y * zr32.y, zr_m.x * zr32.y + zr_m.y * zr32.x);\n");
+    }
+    out.push_str(
+        r#"        let den = vec2<f32>(zf_m.x * zr_m.x - zf_m.y * zr_m.y, zf_m.x * zr_m.y + zf_m.y * zr_m.x);
+        let den2 = max(dot(den, den), 1e-30);
+        let cref = perturb.ref_c;
+        // Multiply the floatexp dM by the f32 factor -C/den, formed at
+        // O(1) where an f32 reciprocal is exact enough.
+        let inv = vec2<f32>(den.x / den2, -den.y / den2);
+        let fac = vec2<f32>(
+            -(cref.x * inv.x - cref.y * inv.y),
+            -(cref.x * inv.y + cref.y * inv.x),
+        );
+        var w_new = cfe2_add(ad, cfe2_mul_c32(bd, fac));
+        if (!is_julia_perturb) {
+            let zf2 = max(dot(zf_m, zf_m), 1e-30);
+            let invm = vec2<f32>(zf_m.x / zf2, -zf_m.y / zf2);
+            w_new = cfe2_add(w_new, cfe2_mul_c32(d0, invm));
         }
 "#,
     );
@@ -2426,6 +2608,9 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Manowar => delta_step_manowar(),
                 PerturbTier::Lambda => delta_step_lambda(),
                 PerturbTier::Feather(p) => delta_step_feather(p.clamp(2, 8)),
+                PerturbTier::McMullen(n, m) => {
+                    delta_step_mcmullen(n.clamp(2, 8), m.clamp(1, 8))
+                }
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
@@ -2435,6 +2620,9 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Manowar => delta_step_manowar_fe(),
                 PerturbTier::Lambda => delta_step_lambda_fe(),
                 PerturbTier::Feather(p) => delta_step_feather_fe(p.clamp(2, 8)),
+                PerturbTier::McMullen(n, m) => {
+                    delta_step_mcmullen_fe(n.clamp(2, 8), m.clamp(1, 8))
+                }
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
@@ -3198,6 +3386,8 @@ mod tests {
             (PerturbTier::Lambda, true),
             (PerturbTier::Feather(3), false),
             (PerturbTier::Feather(3), true),
+            (PerturbTier::McMullen(2, 3), false),
+            (PerturbTier::McMullen(2, 3), true),
         ] {
             let src = assemble_perturbed(&colorings::SMOOTH, floatexp, tier);
             let module = naga::front::wgsl::parse_str(&src)
