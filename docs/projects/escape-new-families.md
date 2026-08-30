@@ -351,6 +351,65 @@ Worth noting it also gives the classic embossed look on formulas that
 DO have derivatives, so it is not purely a fallback — but it is the
 one that breaks under jitter, and that is a real cost if §7 lands.
 
+## 8. Lattès maps and the sphere average — DONE 2026-08-30
+
+Two additions from
+[algorithmic-worlds](https://algorithmic-worlds.net/blog/blog.php?Post=20130428),
+one formula and one coloring, both of which fell straight into the
+existing registries.
+
+**`lattes`** carries the post's three maps as variants:
+`(z^2-a)^2/(4z(z-1)(z-a))`, `(z + 1/z)/2i`, and `(z^3+a)/(a z^3+1)`
+at `a = exp(2*pi*i/3)`. A Lattès map is covered by an EXPANDING affine
+map of a torus, so every orbit is chaotic and the Julia set is the
+whole sphere — no Fatou set, no attracting cycle, nothing to escape
+to. `NonEscaping`, seeded at the pixel, no `c`.
+
+**`sphere_average`** is
+[the other post's](https://www.algorithmic-worlds.net/blog/blog.php?Post=20141005)
+colouring: the orbit's mean CHORDAL distance to a chosen point of the
+Riemann sphere,
+`d(z,t) = 2|z-t| / (sqrt(1+|z|^2) sqrt(1+|t|^2))`, which is closed
+form in the plane and needs no 3-vector. Infinity is an ordinary
+target (`2/sqrt(1+|z|^2)`), which is the point of using it: these
+orbits pass arbitrarily far out and a plane metric would saturate.
+It also carries the post's `stride` idea — average every nth iterate
+to see `f^n` instead of `f`.
+
+Worth noting the source is vague ("essentially colored", no metric,
+no iteration count), so this is a reading rather than a port, and it
+says so in the code.
+
+### The finding: `max_iter` runs BACKWARDS here
+
+On every other formula more iterations means more detail. A Lattès
+map is ERGODIC on the sphere: iterate long enough and almost every
+orbit visits everywhere with the same statistics, so an orbit average
+converges to the SAME value for almost every start and the image
+flattens. Before that it passes through a noisy middle where
+neighbouring pixels have decorrelated but the average has not
+settled. **All the structure is in the transient.** Measured on
+variant 2 with `sphere_average`: rich smooth structure at 4-5
+iterations, grainy by 8, indistinguishable from noise by 32
+(`output/origami/lat-iters.png` is that sweep). The formula's doc and
+its variant tooltip both say so, because the natural instinct —
+crank the iterations — destroys the picture.
+
+The same property bounds the TEST. An f32 render separates from an
+f64 oracle once chaos amplifies rounding, so the oracle comparison is
+only meaningful on a short horizon; measured spread against the
+oracle is 0.48/255 at 16 iterations, 2.89 at 24 and 10.78 at 40. The
+shipped test runs at 16 and carries those numbers.
+
+Infinity handling is the other thing that needed care. These orbits
+pass close to poles, where `(z^2-a)^2` overflows f32 by |z| ~ 1e10 and
+the orbit dies as NaN. Each variant is written twice: the direct form,
+and the leading-order form beyond |z| > 1e6 (`z/4`, `-iz/2`, `1/a`),
+where dividing through by the dominant power is exact to better than
+f32 resolution. The oracle applies the same forms at the same
+threshold, so a mismatch fails the test rather than showing up as an
+occasional dead pixel.
+
 ## 7. Temporal anti-aliasing and spectral rendering — PLANNED, not scheduled
 
 Sampling TIME within a frame (motion blur), and correlating the time

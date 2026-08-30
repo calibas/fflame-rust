@@ -266,6 +266,7 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::LITTLEWOOD,
     &formulas::LAMBDA_SINE,
     &formulas::ORIGAMI,
+    &formulas::LATTES,
 ];
 
 /// Ordered coloring registry. **Append-only.**
@@ -283,6 +284,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::NORMAL_MAP,
     &colorings::POSITION_AVERAGE,
     &colorings::POSITION_MAP,
+    &colorings::SPHERE_AVERAGE,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

@@ -3231,6 +3231,256 @@ mod tests {
         );
     }
 
+    /// Lattès under the sphere average must track an f64 oracle — all
+    /// three variants, and with the iterate stride engaged.
+    ///
+    /// Two new things at once, so the oracle covers both: a rational
+    /// map whose Julia set is the WHOLE sphere (so every pixel
+    /// iterates forever and there is nothing to escape to), and a
+    /// coloring measuring CHORDAL distance, in which infinity is an
+    /// ordinary point.
+    ///
+    /// The comparison bins rendered luminance against the oracle's
+    /// mean distance and measures the spread WITHIN a bin, which
+    /// asserts only that equal values render equally — it never
+    /// assumes what colour a value maps to, so the palette and
+    /// tonemap are free.
+    ///
+    /// The far-field guard is the part most likely to be wrong:
+    /// these orbits pass close to poles, and `(z^2-a)^2` overflows f32
+    /// around |z| ~ 1e10. The oracle applies the same leading-order
+    /// forms at the same threshold, so a mismatch in either the
+    /// threshold or the limits shows up here rather than as an
+    /// occasional NaN pixel.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn lattes_under_the_sphere_average_matches_an_exact_orbit() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        // SIXTEEN iterations, and the number is measured rather than
+        // chosen for speed. A Lattès Julia set is the whole sphere, so
+        // every orbit is chaotic by construction and an f32 render
+        // separates from an f64 oracle once rounding has amplified --
+        // the same limit the lambda tier ran into. Measured spread
+        // against the oracle, for the four cases below:
+        //
+        //     max_iter 16   0.48  0.48  0.48  0.48
+        //     max_iter 24   2.89  0.48  0.73  0.76
+        //     max_iter 40   7.03  0.52  5.09 10.78
+        //
+        // Past ~16 the comparison measures chaos rather than the
+        // implementation. Sixteen is plenty to exercise the map, the
+        // metric, the stride and the far-field guard.
+        const MAX_ITER: u32 = 16;
+        const A: (f64, f64) = (-0.5, 0.8660254);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "ramp".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        for (variant, stride) in [(0u32, 1u32), (1, 1), (2, 1), (2, 3)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "lattes".to_string();
+            esc.coloring = "sphere_average".to_string();
+            esc.center_re = "0.0".to_string();
+            esc.center_im = "0.0".to_string();
+            esc.zoom_log2 = -1.0;
+            esc.max_iter = MAX_ITER;
+            esc.formula_params.insert("variant".to_string(), variant as f32);
+            esc.formula_params.insert("a_re".to_string(), A.0 as f32);
+            esc.formula_params.insert("a_im".to_string(), A.1 as f32);
+            esc.coloring_params.insert("target_re".to_string(), 0.35);
+            esc.coloring_params.insert("target_im".to_string(), -0.2);
+            esc.coloring_params.insert("at_infinity".to_string(), 0.0);
+            esc.coloring_params.insert("stride".to_string(), stride as f32);
+            esc.coloring_params.insert("scale".to_string(), 0.5);
+
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("lattes"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lattes tonemap"),
+            });
+            renderer.update_background_color(&queue, config.background_color);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                config.use_curve,
+                config.exposure,
+                config.gamma,
+                config.gamma_threshold,
+                config.brightness,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                config.levels_enabled,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+
+            // --- f64 oracle: the same map and the same metric ---
+            fn cmul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+                (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+            }
+            fn cdiv(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+                let d = b.0 * b.0 + b.1 * b.1;
+                ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
+            }
+            let step = |z: (f64, f64)| -> (f64, f64) {
+                let r2 = z.0 * z.0 + z.1 * z.1;
+                if r2 > 1.0e12 {
+                    return match variant {
+                        0 => (z.0 * 0.25, z.1 * 0.25),
+                        1 => (z.1 * 0.5, -z.0 * 0.5),
+                        _ => cdiv((1.0, 0.0), A),
+                    };
+                }
+                if variant == 1 {
+                    if r2 < 1.0e-30 {
+                        return (1.0e7, 0.0);
+                    }
+                    let s = {
+                        let inv = cdiv((1.0, 0.0), z);
+                        (z.0 + inv.0, z.1 + inv.1)
+                    };
+                    return (s.1 * 0.5, -s.0 * 0.5);
+                }
+                let (num, den) = if variant == 0 {
+                    let z2 = cmul(z, z);
+                    let t = (z2.0 - A.0, z2.1 - A.1);
+                    (
+                        cmul(t, t),
+                        {
+                            let p = cmul(cmul(z, (z.0 - 1.0, z.1)), (z.0 - A.0, z.1 - A.1));
+                            (4.0 * p.0, 4.0 * p.1)
+                        },
+                    )
+                } else {
+                    let z3 = cmul(cmul(z, z), z);
+                    let az3 = cmul(A, z3);
+                    ((z3.0 + A.0, z3.1 + A.1), (az3.0 + 1.0, az3.1))
+                };
+                if den.0 * den.0 + den.1 * den.1 < 1.0e-30 {
+                    return (1.0e7, 0.0);
+                }
+                cdiv(num, den)
+            };
+
+            let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let t = (0.35f64, -0.2f64);
+            const BINS: usize = 192;
+            let mut sums = vec![0f64; BINS];
+            let mut sqs = vec![0f64; BINS];
+            let mut counts = vec![0usize; BINS];
+            for py in 0..h {
+                for px in 0..w {
+                    let mut z = (
+                        ((px as f64 + 0.5) / w as f64 - 0.5) * span_x,
+                        -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y),
+                    );
+                    let mut sum = 0.0f64;
+                    let mut samples = 0f64;
+                    for call in 0..MAX_ITER {
+                        z = step(z);
+                        if stride > 1 && call % stride != 0 {
+                            continue;
+                        }
+                        let zz = z.0 * z.0 + z.1 * z.1;
+                        let dz = (z.0 - t.0, z.1 - t.1);
+                        let d = 2.0 * (dz.0 * dz.0 + dz.1 * dz.1).sqrt()
+                            / ((1.0 + zz) * (1.0 + t.0 * t.0 + t.1 * t.1)).sqrt();
+                        sum += d;
+                        samples += 1.0;
+                    }
+                    let mean = sum / samples.max(1.0);
+                    // The palette coordinate the shader would compute.
+                    let v = (mean * 0.5).rem_euclid(1.0);
+                    let b = ((v * (BINS - 1) as f64).round() as usize).min(BINS - 1);
+                    let i = ((py * w + px) * 4) as usize;
+                    let lum = rgba[i] as f64;
+                    counts[b] += 1;
+                    sums[b] += lum;
+                    sqs[b] += lum * lum;
+                }
+            }
+            let (mut spread, mut total) = (0f64, 0usize);
+            for b in 0..BINS {
+                if counts[b] < 20 {
+                    continue;
+                }
+                let n = counts[b] as f64;
+                spread += (sqs[b] / n - (sums[b] / n).powi(2)).max(0.0).sqrt() * n;
+                total += counts[b];
+            }
+            let spread = spread / total.max(1) as f64;
+            println!(
+                "lattes v{variant} stride {stride}: colour spread within a value bin \
+                 {spread:.2}/255"
+            );
+            assert!(
+                // Calibrated: every case reads 0.48/255 here, and the
+                // chaos-limited values above start at 2.89.
+                spread < 1.5,
+                "lattes v{variant} stride {stride}: the render does not track an f64 \
+                 oracle of the map and the chordal metric ({spread:.2}/255)"
+            );
+        }
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
