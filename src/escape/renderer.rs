@@ -1055,6 +1055,9 @@ impl EscapeRenderer {
             // A*delta + B*delta_c model has no derivation -- the same
             // reason the Tricorn family has no BLA.
             assembler::PerturbTier::Feather(_) => return false,
+            // Rational with a pole: a BLA bound would have to model the
+            // pole term's growth, which the power-tier builder does not.
+            assembler::PerturbTier::McMullen(_, _) => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -1678,6 +1681,26 @@ impl EscapeRenderer {
         if escape.formula == "manowar" {
             return [1.0, 0.0];
         }
+        // McMullen carries its POLE POWER here: a MapId has one
+        // integer exponent (n) and this family needs two. Resolved
+        // through the registry defaults for the same reason Phoenix's
+        // p is, below -- an absent key means "the default", and
+        // reading it as zero built the reference for c/z^1 while the
+        // delta step used c/z^3. Measured: every pixel escaped.
+        if escape.formula == "mcmullen" {
+            let m = escape
+                .formula_params
+                .get("m")
+                .copied()
+                .unwrap_or_else(|| {
+                    super::get_formula("mcmullen")
+                        .parameters
+                        .iter()
+                        .find(|d| d.name == "m")
+                        .map_or(3.0, |d| d.default)
+                });
+            return [m, 0.0];
+        }
         if escape.formula != "phoenix" {
             return [0.0, 0.0];
         }
@@ -1733,6 +1756,25 @@ impl EscapeRenderer {
             // same day once the delta-aware margin (ref_r2 + the
             // margin test in both rung templates) resolved it -- the
             // full story is in escape-time-fractals.md.
+            // JULIA ONLY. Our McMullen seeds its parameter plane at
+            // z_0 = c, which is not a critical point of this map --
+            // measured, 0 of 4000 sampled parameters have a bounded
+            // orbit, so that plane has no interior to zoom into. The
+            // classic Sierpinski-carpet pictures are Julia sets.
+            "mcmullen" if escape.julia => {
+                let n = escape.formula_params.get("n").copied().unwrap_or(2.0);
+                let m = escape.formula_params.get("m").copied().unwrap_or(3.0);
+                let (rn, rm) = (n.round(), m.round());
+                if (n - rn).abs() < 1e-6
+                    && (m - rm).abs() < 1e-6
+                    && (2.0..=8.0).contains(&rn)
+                    && (1.0..=8.0).contains(&rm)
+                {
+                    Some(assembler::PerturbTier::McMullen(rn as u32, rm as u32))
+                } else {
+                    None
+                }
+            }
             "feather" => {
                 let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
                 let rounded = p.round();
@@ -1839,6 +1881,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Feather(p) => {
                 (p, false, super::reference::MAP_FEATHER)
+            }
+            assembler::PerturbTier::McMullen(n, _) => {
+                (n, false, super::reference::MAP_MCMULLEN)
             }
         };
         let height_px = self.height.max(1) as f64;
@@ -2058,6 +2103,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Feather(p) => {
                 (p, false, super::reference::MAP_FEATHER)
+            }
+            assembler::PerturbTier::McMullen(n, _) => {
+                (n, false, super::reference::MAP_MCMULLEN)
             }
         };
         let period_hint = if julia_c.is_none() && !ship {
@@ -3370,28 +3418,99 @@ mod tests {
     /// parameters explicitly.
     #[test]
     fn reference_parameters_match_the_shader_uniform() {
-        for (formula, edited) in [("phoenix", false), ("phoenix", true), ("mandelbrot", false)] {
-            let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.formula = formula.to_string();
-            if edited {
-                esc.formula_params.insert("p_re".to_string(), 0.25);
-                esc.formula_params.insert("p_im".to_string(), -0.1);
-            }
-            let mine = EscapeRenderer::map_params_for(&esc);
-            let mut packed = [0.0f32; 16];
-            super::super::pack_params(
-                super::super::get_formula(formula).parameters,
-                &esc.formula_params,
-                &mut packed,
-            );
-            if formula == "phoenix" {
-                assert_eq!(
-                    [mine[0], mine[1]],
-                    [packed[0], packed[1]],
-                    "{formula} (edited={edited}): the reference and the shader                      must resolve the same parameter"
+        // Which of a formula's own parameters ride `map_params` into
+        // the reference orbit's identity. EVERY formula that can
+        // perturb needs an entry, and the assertion below enforces
+        // that — a new tier whose parameters change the MAP but never
+        // reach the reference is exactly the bug this table exists to
+        // stop, and it has now happened twice (Phoenix's p, then
+        // McMullen's pole power m, which built the reference for
+        // c/z^1 while the delta step used c/z^3; every pixel escaped).
+        let carried: &[(&str, &[&str])] = &[
+            ("mandelbrot", &[]),
+            ("multibrot", &[]),
+            ("tricorn", &[]),
+            ("burning_ship", &[]),
+            ("lambda", &[]),
+            ("feather", &[]),
+            ("phoenix", &["p_re", "p_im"]),
+            // Manowar's p = 1 is fixed by the formula, not a parameter.
+            ("manowar", &[]),
+            ("mcmullen", &["m"]),
+        ];
+
+        for (formula, names) in carried {
+            for edited in [false, true] {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = (*formula).to_string();
+                // McMullen only perturbs on the dynamical plane.
+                esc.julia = *formula == "mcmullen";
+                if edited {
+                    // Push every parameter off its default, so a
+                    // resolver that silently returns zero (or the
+                    // default) is caught.
+                    for (i, d) in super::super::get_formula(formula).parameters.iter().enumerate() {
+                        let v = if d.name == "m" || d.name == "n" {
+                            (d.default + 1.0).min(d.max)
+                        } else {
+                            d.default + 0.125 * (i as f32 + 1.0)
+                        };
+                        esc.formula_params.insert(d.name.to_string(), v);
+                    }
+                }
+                let mine = EscapeRenderer::map_params_for(&esc);
+                let mut packed = [0.0f32; 16];
+                super::super::pack_params(
+                    super::super::get_formula(formula).parameters,
+                    &esc.formula_params,
+                    &mut packed,
                 );
-            } else {
-                assert_eq!(mine, [0.0, 0.0], "maps without a parameter carry zero");
+                for (slot, name) in names.iter().enumerate() {
+                    let idx = super::super::get_formula(formula)
+                        .parameters
+                        .iter()
+                        .position(|d| d.name == *name)
+                        .expect("named parameter exists");
+                    assert_eq!(
+                        mine[slot], packed[idx],
+                        "{formula} (edited={edited}): the reference resolved \
+                         {name} as {} but the shader got {} -- they describe \
+                         different maps",
+                        mine[slot], packed[idx]
+                    );
+                }
+                for slot in names.len()..2 {
+                    // Manowar's fixed p = 1 is the one legitimate
+                    // nonzero that is not a config parameter.
+                    if *formula == "manowar" {
+                        continue;
+                    }
+                    assert_eq!(
+                        mine[slot], 0.0,
+                        "{formula}: map_params[{slot}] carries {} but the table \
+                         declares nothing there",
+                        mine[slot]
+                    );
+                }
+            }
+        }
+
+        // The table must cover every formula that can actually
+        // perturb. This is the half that catches the NEXT tier.
+        for f in crate::escape::FORMULAS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = f.name.to_string();
+            let plain = EscapeRenderer::perturb_tier(&esc).is_some();
+            esc.julia = true;
+            let julia = EscapeRenderer::perturb_tier(&esc).is_some();
+            if plain || julia {
+                assert!(
+                    carried.iter().any(|(n, _)| *n == f.name),
+                    "{} perturbs but is missing from the map_params table -- \
+                     declare which of its parameters reach the reference orbit \
+                     (an empty list is a valid answer, and saying so is the point)",
+                    f.name
+                );
             }
         }
     }

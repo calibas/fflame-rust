@@ -120,6 +120,16 @@ impl MapId {
         Self { power: p.max(2), ship: false, variant: MAP_FEATHER, params: [0.0, 0.0] }
     }
 
+    /// McMullen: `z^n + c/z^m`, seeded at c.
+    pub fn mcmullen(n: u32, m: u32) -> Self {
+        Self {
+            power: n.max(2),
+            ship: false,
+            variant: MAP_MCMULLEN,
+            params: [m.max(1) as f32, 0.0],
+        }
+    }
+
     /// Manowar: Phoenix's recurrence with p = 1 and a pixel seed.
     pub fn manowar() -> Self {
         Self { power: 2, ship: false, variant: MAP_MANOWAR, params: [1.0, 0.0] }
@@ -185,6 +195,19 @@ pub const MAP_LAMBDA: u32 = 4;
 /// of z separately — which costs BLA but not perturbation: the delta
 /// of each component is its own cancellation-free binomial.
 pub const MAP_FEATHER: u32 = 5;
+
+/// McMullen — `z' = z^n + c/z^m`, seeded at `z_0 = c`.
+///
+/// The first reference map with a genuine POLE: `z = 0` sends the
+/// iterate to infinity. [`FixedComplex::div`] refuses when the
+/// quotient leaves fixed point's ±128 range, and this branch treats
+/// that refusal as ESCAPE — which is what it physically is, and what
+/// the shader's own pole sentinel says by feeding a large value into
+/// the bailout.
+///
+/// `n` rides `power`; `m` rides `map_params[0]`, since a MapId has
+/// one integer exponent and this family needs two.
+pub const MAP_MCMULLEN: u32 = 6;
 
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
@@ -657,6 +680,12 @@ impl ReferenceOrbit {
             z_prev0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
             first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
         }
+        // McMullen also seeds at c: zero is its POLE, not a sensible
+        // critical point, so the pixel itself starts the orbit.
+        if !ship && ship_variant == MAP_MCMULLEN && julia_c.is_none() {
+            z0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
+        }
         // Lambda's parameter plane seeds at the CRITICAL POINT 1/2,
         // not at zero -- zero is a fixed point of c*z*(1-z) for every
         // c, so a zero-seeded plane would be one flat colour. In Julia
@@ -850,6 +879,34 @@ impl ReferenceOrbit {
                 // z^p, or conj(z)^p for the Tricorn family. See
                 // MAP_CONJ: with `ship` false, `ship_variant` selects
                 // which non-fold map this is.
+                if self.ship_variant == MAP_MCMULLEN {
+                    // z' = z^n + c/z^m. The division REFUSES when the
+                    // quotient will not fit, which for this map is the
+                    // pole -- so a refusal is an escape, recorded the
+                    // same way the bailout would.
+                    let m_pow = (self.map_params[0].max(1.0)) as u32;
+                    let mut zn = self.z.clone();
+                    for _ in 1..self.power {
+                        zn = zn.mul(&self.z);
+                    }
+                    let mut zm = self.z.clone();
+                    for _ in 1..m_pow {
+                        zm = zm.mul(&self.z);
+                    }
+                    let Some(pole_term) = self.c.div(&zm) else {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    };
+                    self.z = zn.add(&pole_term);
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
                 if self.ship_variant == MAP_FEATHER {
                     // z' = z^p / (1 + x^2 - i*y^2) + c. The division
                     // is real work in fixed point (Newton reciprocal),
@@ -2353,6 +2410,42 @@ mod tests {
             })
             .fold(0.0f32, f32::max);
         assert!(d > 1e-3, "different p produced the same orbit: {d:e}");
+    }
+
+    /// The McMullen reference must iterate `z^n + c/z^m` from z_0 = c,
+    /// and must report the POLE as an escape rather than as a number.
+    #[test]
+    fn mcmullen_reference_iterates_and_reports_the_pole() {
+        let (cr, ci) = (0.35f64, 0.28f64);
+        let orbit = ReferenceOrbit::compute(
+            "0.35", "0.28", 8.0, None, 60, None, 2, false, MAP_MCMULLEN, [3.0, 0.0],
+        )
+        .expect("reference");
+        // Seeded at c, not at zero (zero is the pole).
+        let first = orbit.z_f32(0);
+        assert!(
+            (first[0] as f64 - cr).abs() < 1e-6 && (first[1] as f64 - ci).abs() < 1e-6,
+            "mcmullen seeded at {first:?}, not at c"
+        );
+        let (mut zr, mut zi) = (cr, ci);
+        let mut worst = 0.0f64;
+        for k in 1..25u32 {
+            // z^2
+            let (nr, ni) = (zr * zr - zi * zi, 2.0 * zr * zi);
+            // z^3
+            let (mr, mi) = (nr * zr - ni * zi, nr * zi + ni * zr);
+            let d = mr * mr + mi * mi;
+            if d < 1e-30 { break; }
+            zr = nr + (cr * mr + ci * mi) / d;
+            zi = ni + (ci * mr - cr * mi) / d;
+            if k >= orbit.len() { break; }
+            let got = orbit.z_f32(k as usize);
+            let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+            worst = worst.max(e);
+            if zr * zr + zi * zi > 4.0 { break; }
+        }
+        println!("mcmullen reference: len {} worst {worst:.3e}", orbit.len());
+        assert!(worst < 1e-4, "the fixed-point mcmullen reference drifts ({worst:.3e})");
     }
 
     /// The feather reference must iterate the rational map, which is

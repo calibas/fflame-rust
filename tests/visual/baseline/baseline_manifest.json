@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "324aa975",
+  "git_hash": "2d5b7fa1",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -433,6 +433,10 @@
     "escape-mcmullen-carpet.png": {
       "bytes": 11711,
       "sha256": "70a36ef778e917024c2d315e6496013cae940f9feb7fb7666063ceb9b1b82dd9"
+    },
+    "escape-mcmullen-deep.png": {
+      "bytes": 25102,
+      "sha256": "3782d9bc394c6b60486b37297290f589d95e1cab62b2b29c5a47805469249722"
     },
     "escape-multibrot-4.png": {
       "bytes": 3536,

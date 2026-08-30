@@ -2628,6 +2628,196 @@ mod tests {
         );
     }
 
+    /// Perturbed McMullen must match an exact orbit at depth, on both
+    /// rungs.
+    ///
+    /// The first tier with a genuine POLE. Its delta form has to write
+    /// the pole term's difference as
+    /// `1/(Z+d)^m - 1/Z^m = -dM/((Z+d)^m Z^m)` — small numerator over
+    /// a product of FULL values. Formed the direct way it subtracts
+    /// two large nearly-equal reciprocals and loses the delta, which
+    /// is the failure this test exists to catch.
+    ///
+    /// JULIA MODE, because that is the only mode this tier is selected
+    /// in: our McMullen seeds its parameter plane at `z_0 = c`, which
+    /// is not a critical point of the map, and measurement found 0 of
+    /// 4000 sampled parameters with a bounded orbit — that plane has
+    /// no interior to zoom into. The Sierpinski-carpet pictures this
+    /// family is known for are Julia sets.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_mcmullen_matches_an_exact_orbit_at_depth() {
+        for deep in [false, true] {
+            mcmullen_exact_orbit_case(deep);
+        }
+    }
+
+    fn mcmullen_exact_orbit_case(deep: bool) {
+        let (device, queue) = repro_device();
+        // On the Julia set of c = 0.05 + 0.03i, on the INTERIOR side of
+        // the boundary so the reference runs its full length.
+        let (cx, cy) = (-0.12291872044575830f64, -0.36795489251636515f64);
+        let (jr, ji) = (0.05f32, 0.03f32);
+        const N: u32 = 2;
+        const M: u32 = 3;
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mcmullen".to_string();
+        esc.julia = true;
+        esc.julia_re = jr;
+        esc.julia_im = ji;
+        esc.center_re = format!("{cx:.17}");
+        esc.center_im = format!("{cy:.17}");
+        esc.zoom_log2 = 30.0;
+        // Short horizon: median escape here is 26 iterations, so f64
+        // is still an authority (see lambda_exact_orbit_case).
+        esc.max_iter = 400;
+        esc.formula_params.insert("n".to_string(), N as f32);
+        esc.formula_params.insert("m".to_string(), M as f32);
+
+        let (w, h) = (96u32, 72u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "white".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_floatexp = deep;
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("mcmullen depth"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("mcmullen depth tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let (cr, ci) = (jr as f64, ji as f64);
+        let mut differ = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                // Julia: the PIXEL is z0, c is the fixed constant.
+                let mut zx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx;
+                let mut zy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy;
+                let mut escaped = false;
+                for _ in 0..esc.max_iter {
+                    let (mut nr, mut ni) = (zx, zy);
+                    for _ in 1..N {
+                        let t = nr * zx - ni * zy;
+                        ni = nr * zy + ni * zx;
+                        nr = t;
+                    }
+                    let (mut mr, mut mi) = (zx, zy);
+                    for _ in 1..M {
+                        let t = mr * zx - mi * zy;
+                        mi = mr * zy + mi * zx;
+                        mr = t;
+                    }
+                    let d = mr * mr + mi * mi;
+                    if d < 1e-300 {
+                        escaped = true;
+                        break;
+                    }
+                    zx = nr + (cr * mr + ci * mi) / d;
+                    zy = ni + (ci * mr - cr * mi) / d;
+                    if zx * zx + zy * zy > 4.0 {
+                        escaped = true;
+                        break;
+                    }
+                }
+                let i = ((py * w + px) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit != escaped {
+                    differ += 1;
+                }
+            }
+        }
+        let escaped_px = rgba
+            .chunks(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+            .count();
+        let total = (w * h) as usize;
+        assert!(
+            escaped_px > total / 20 && escaped_px < total * 19 / 20,
+            "degenerate view: {escaped_px}/{total} pixels escaped"
+        );
+        let frac = differ as f64 / (w * h) as f64;
+        println!(
+            "mcmullen at zoom {} on the {} rung: {:.2}% differ from the exact orbit",
+            esc.zoom_log2,
+            if deep { "floatexp" } else { "scaled" },
+            100.0 * frac
+        );
+        assert!(
+            frac < 0.01,
+            "perturbed McMullen disagrees with an exact orbit on {:.1}% of pixels -- the pole term's delta form is wrong",
+            100.0 * frac
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

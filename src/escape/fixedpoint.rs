@@ -338,27 +338,82 @@ impl FixedPoint {
     }
 }
 
+impl FixedPoint {
+    /// Reciprocal with an explicit power-of-two scale: returns `(r, k)`
+    /// with `1/self == r * 2^k` and `|r|` in `(0.5, 1]`.
+    ///
+    /// This is what lets the POLE-BEARING families divide at all.
+    /// [`Self::recip`] can only invert `|a| >= 1`, because fixed point
+    /// with [`INT_BITS`] = 8 stops at ±128 — but a map like McMullen's
+    /// `z^n + c/z^m` legitimately visits `|z| < 1`, where the plain
+    /// reciprocal is out of range and the QUOTIENT is still perfectly
+    /// representable. Normalizing first separates the two questions:
+    /// the reciprocal is always taken of a value in [1,2), and whether
+    /// the answer fits is decided on the answer.
+    ///
+    /// The normalizing shift is exact — `to_floatexp` finds the MSB by
+    /// leading-zero count, with no rounding — and left-shifting cannot
+    /// lose bits here, because the MSB lands at exponent 0. What a
+    /// tiny input does cost is SIGNIFICANCE: a value whose MSB sits k
+    /// bits below the binary point carries only `frac_bits - k`
+    /// meaningful bits, and the quotient inherits that. Near a genuine
+    /// pole that is severe — and there the orbit is about to escape,
+    /// which is the honest answer anyway.
+    pub fn recip_scaled(&self) -> Option<(Self, i64)> {
+        if self.is_zero() {
+            return None;
+        }
+        let fe = self.to_floatexp();
+        // self == m * 2^e with m in [1,2), so self * 2^-e is in [1,2)
+        // and 1/self == recip(self * 2^-e) * 2^-e.
+        let k = -fe.e;
+        let mut scaled = self.clone();
+        scaled.shift_pow2(k);
+        let r = scaled.recip()?;
+        Some((r, k))
+    }
+}
+
 impl FixedComplex {
     /// Complex division `self / other`, via `conj` over the squared
     /// magnitude — so the only reciprocal taken is of a REAL value,
     /// which is where [`FixedPoint::recip`]'s range guarantee lives.
     ///
-    /// `None` when `|other|^2 < 1`, i.e. exactly when the reciprocal
-    /// would leave the fixed-point range. Callers whose denominator is
-    /// bounded below by construction (Feather) can treat that as
-    /// unreachable; callers whose denominator has a pole (Magnet,
-    /// McMullen) must handle it, which is why those families are not
-    /// wired up yet.
+    /// `None` exactly when the QUOTIENT does not fit the fixed-point
+    /// range (±2^[`INT_BITS`]), which for a pole-bearing map is the
+    /// same event as "this orbit has escaped" — `z^n + c/z^m` at tiny
+    /// `z` produces a huge iterate, and the shader's own pole sentinel
+    /// says the same thing by feeding a large value into the bailout.
+    ///
+    /// Note what this does NOT refuse: a small denominator. Dividing
+    /// by 0.1 is fine as long as the answer fits, which
+    /// [`FixedPoint::recip_scaled`] arranges by normalizing before
+    /// inverting. An earlier version refused `|other|^2 < 1` outright
+    /// — a statement about the implementation rather than the
+    /// requirement, and one that would have kept McMullen and Magnet
+    /// out for no reason.
     pub fn div(&self, other: &Self) -> Option<Self> {
         let d2 = other.re.sqr().add(&other.im.sqr());
-        let inv = d2.recip()?;
+        let (inv, k) = d2.recip_scaled()?;
         let mut conj_im = other.im.clone();
         conj_im.neg = !conj_im.neg && !conj_im.is_zero();
         let num = self.mul(&FixedComplex { re: other.re.clone(), im: conj_im });
-        Some(FixedComplex {
-            re: num.re.mul(&inv),
-            im: num.im.mul(&inv),
-        })
+        let mut re = num.re.mul(&inv);
+        let mut im = num.im.mul(&inv);
+        // The scale is applied last, so overflow is decided on the
+        // answer. Checked BEFORE shifting: shift_pow2 drops bits off
+        // the top silently, which would turn an escaped orbit into a
+        // plausible small one.
+        if k > 0 {
+            for v in [&re, &im] {
+                if !v.is_zero() && v.to_floatexp().e + k >= INT_BITS as i64 {
+                    return None;
+                }
+            }
+        }
+        re.shift_pow2(k);
+        im.shift_pow2(k);
+        Some(FixedComplex { re, im })
     }
 }
 
@@ -875,18 +930,62 @@ mod recip_tests {
                 q.im.to_f64()
             );
         }
-        // |b|^2 < 1 is out of range and must refuse rather than
-        // saturate — this is the guard that keeps the pole-bearing
-        // families (Magnet, McMullen) from being wired up by accident.
+        // A SMALL denominator is fine as long as the answer fits —
+        // this is what recip_scaled buys, and what the pole-bearing
+        // families need. 1/(0.1+0.2i) = 2 - 4i, comfortably in range.
         let small = FixedComplex {
             re: FixedPoint::from_f64(0.1, n),
             im: FixedPoint::from_f64(0.2, n),
         };
-        let a = FixedComplex {
+        let one = FixedComplex {
             re: FixedPoint::from_f64(1.0, n),
             im: FixedPoint::zero(n),
         };
-        assert!(a.div(&small).is_none(), "a near-pole divisor must refuse");
+        let q = one.div(&small).expect("small divisor, in-range quotient");
+        assert!(
+            (q.re.to_f64() - 2.0).abs() < 1e-12 && (q.im.to_f64() + 4.0).abs() < 1e-12,
+            "1/(0.1+0.2i) = {}+{}i, want 2-4i",
+            q.re.to_f64(),
+            q.im.to_f64()
+        );
+
+        // What it MUST refuse is a quotient that does not fit: with 8
+        // integer bits the range stops at ±128, and for a map with a
+        // pole that refusal IS the escape signal. Saturating instead
+        // would turn an escaped orbit into a plausible small one and
+        // write it to the on-disk cache.
+        let tiny = FixedComplex {
+            re: FixedPoint::from_f64(1.0 / 4096.0, n),
+            im: FixedPoint::zero(n),
+        };
+        assert!(
+            one.div(&tiny).is_none(),
+            "1/(1/4096) = 4096 is out of range and must refuse, not wrap"
+        );
+    }
+
+    /// The scaled reciprocal must be right BELOW 1, where the plain
+    /// one cannot reach — that is its whole reason for existing.
+    #[test]
+    fn scaled_reciprocal_reaches_below_one() {
+        let n = 16;
+        for v in [0.5f64, 0.1, 0.01, 1.0 / 1024.0, -0.125, 3.0, 100.0] {
+            let a = FixedPoint::from_f64(v, n);
+            let (r, k) = a.recip_scaled().expect("nonzero");
+            // Contract: 1/self == r * 2^k.
+            let got = r.to_f64() * (k as f64).exp2();
+            let want = 1.0 / v;
+            assert!(
+                (got - want).abs() <= want.abs() * 1e-12,
+                "recip_scaled({v}) = {} * 2^{k} = {got}, want {want}",
+                r.to_f64()
+            );
+            // And the mantissa it inverted was normalized, so |r| is
+            // in (0.5, 1] whatever the input's magnitude.
+            let m = r.to_f64().abs();
+            assert!(m > 0.5 - 1e-12 && m <= 1.0 + 1e-12, "recip_scaled({v}) mantissa {m}");
+        }
+        assert!(FixedPoint::zero(8).recip_scaled().is_none(), "1/0 must refuse");
     }
 }
 

@@ -2401,6 +2401,67 @@ configs. Feather's tier is re-enabled, the panel's depth hint says
 deep again, and `escape-feather-deep.fflame` pins the view that found
 the bug.
 
+### McMullen perturbs, and what its parameter plane turned out to be (2026-08-30)
+
+`z^n + c/z^m` now perturbs on both rungs — 0.22% and 0.19% against an
+exact orbit at zoom 30 — making it the first tier with a genuine POLE.
+
+**The pole is handled by normalizing, not by refusing.**
+`FixedPoint::recip` could only invert `|a| >= 1`, which would have
+blocked this family outright. `recip_scaled` finds the exact
+normalizing shift with `to_floatexp` (leading-zero count, no
+rounding), inverts a mantissa in [1,2), and returns the scale
+separately — so a small denominator is fine and only an out-of-range
+QUOTIENT is refused. For a map with a pole that refusal is not an
+error: it is the orbit escaping, and the reference branch records it
+exactly as the bailout would. The earlier "refuse `|D|^2 < 1`" rule
+was a statement about the implementation rather than the requirement,
+and it would have kept this family out for no reason.
+
+**The delta form never divides small by small:**
+
+    dA = (Z+d)^n - Z^n                  (binomial, exact)
+    dM = (Z+d)^m - Z^m                  (binomial, exact)
+    d' = dA - C*dM / [ (Z+d)^m * Z^m ]
+
+The pole term's difference is written as
+`1/(Z+d)^m - 1/Z^m = -dM/((Z+d)^m Z^m)` — small numerator over a
+product of FULL values. Formed directly it would subtract two large
+nearly-equal reciprocals and lose the delta entirely.
+
+**JULIA ONLY, and that is a finding about our formula rather than a
+limitation of the tier.** Our McMullen seeds its parameter plane at
+`z_0 = c`. That is not a critical point of this map: `z = 0` is the
+POLE, and the actual critical points sit at `z^(n+m) = (m/n)c`. The
+consequence is measurable — **0 of 4000 sampled parameters have a
+bounded orbit**, so the parameter plane has no interior at all and
+perturbing it would be machinery for nothing. The formula's own doc
+comment already flagged the seed as provisional ("the pixel-seeded
+parameter plane is the exploratory map until the proper critical-orbit
+seed lands"); this is the measurement behind that note. The classic
+Sierpinski-carpet pictures are Julia sets, which is where the tier is
+selected. Re-seeding the parameter plane is a separate, visible
+formula change.
+
+**The bug worth remembering, because it was the same one twice.** The
+first perturbed render escaped on every pixel. The cause was not the
+delta algebra — an f64 simulation matched the exact orbit at 0.0% for
+zooms 10, 20 and 30 — but `map_params_for`, which had no McMullen
+arm and so returned zero for the pole power. The reference was built
+for `c/z^1` while the delta step used `c/z^3`: two different maps. That
+is precisely the failure its own doc comment describes for Phoenix's
+`p`, a year of code earlier.
+
+So the guard was generalized rather than patched. The
+`reference_parameters_match_the_shader_uniform` test now carries a
+TABLE of which parameters ride `map_params` into the reference's
+identity, checks each against `pack_params` for both default and
+edited configs, and — the half that catches the next tier — asserts
+that **every formula which can perturb has an entry**. An empty list
+is a valid answer; being forced to say so is the point. Reverting the
+McMullen arm now fails that test in milliseconds, on the CPU, instead
+of costing a GPU debugging session.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep
