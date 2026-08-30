@@ -1229,6 +1229,157 @@ mod tests {
         );
     }
 
+    /// `lambda_sine` must iterate the map the literature names.
+    ///
+    /// The Cantor bouquet family is `λ·sin(z)` with the parameter
+    /// MULTIPLYING — not `sin(z) + c`, which is the separate `trig`
+    /// formula. Getting that wrong produces a perfectly attractive
+    /// fractal that is simply a different one, so this compares the
+    /// escape set against an f64 orbit at λ = 0.5, inside the
+    /// (0,1) range where the bouquet lives.
+    ///
+    /// Escape is `|Im z| > bailout` RAW: sin grows like sinh in the
+    /// imaginary direction, so orbits leave through ±i∞.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn lambda_sine_matches_the_map_it_names() {
+        let (device, queue) = repro_device();
+        let (w, h) = (200u32, 160u32);
+        const LAMBDA: f64 = 0.5;
+        const BAILOUT: f64 = 50.0;
+        const MAX_ITER: u32 = 400;
+        let zoom = -2.0f64;
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "white".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "lambda_sine".to_string();
+        esc.julia = true;
+        esc.julia_re = LAMBDA as f32;
+        esc.julia_im = 0.0;
+        esc.center_re = "0.0".to_string();
+        esc.center_im = "0.0".to_string();
+        esc.zoom_log2 = zoom;
+        esc.max_iter = MAX_ITER;
+        esc.bailout = BAILOUT as f32;
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lambda sine"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 10_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("lambda sine tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        let span_y = 4.0 / zoom.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let mut differ = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                // Julia: z0 is the pixel, lambda is fixed.
+                let mut zr = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let mut zi = -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                let mut escaped = false;
+                for _ in 0..MAX_ITER {
+                    // lambda * sin(z), lambda real here.
+                    let sr = zr.sin() * zi.cosh();
+                    let si = zr.cos() * zi.sinh();
+                    zr = LAMBDA * sr;
+                    zi = LAMBDA * si;
+                    if zi.abs() > BAILOUT {
+                        escaped = true;
+                        break;
+                    }
+                    if !zr.is_finite() || !zi.is_finite() {
+                        escaped = true;
+                        break;
+                    }
+                }
+                let i = ((py * w + px) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit != escaped {
+                    differ += 1;
+                }
+            }
+        }
+        let frac = differ as f64 / (w * h) as f64;
+        println!("lambda_sine at lambda={LAMBDA}: {:.2}% differ from the exact orbit", 100.0 * frac);
+        assert!(
+            frac < 0.01,
+            "the render disagrees with lambda*sin(z) on {:.1}% of pixels -- \
+             check the parameter is MULTIPLYING, not added",
+            100.0 * frac
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
