@@ -1978,7 +1978,9 @@ no depth. The prose descriptions of the algorithm were exhausted, so
 the fix came from code archaeology: the only public implementation
 found is **Kyle McDonald's Processing port** (OpenProcessing sketch
 1185; the modern page hides source behind a membership, but the
-2012 Wayback snapshot embeds it in full). It contains the one detail
+[2012 Wayback
+snapshot](https://web.archive.org/web/20120209174422/http://www.openprocessing.org/visuals/?visualID=1185)
+embeds it in full). It contains the one detail
 every prose description omits:
 
 ```java

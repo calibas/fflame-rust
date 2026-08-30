@@ -139,7 +139,8 @@ prototyping in numpy before writing Rust:
 
 - **The fold lines belong on the WAD, not the sheet.** The final
   correction, recovered from Kyle McDonald's Processing port (the
-  2012 Wayback snapshot of OpenProcessing 1185): each line's
+  [2012 Wayback snapshot of OpenProcessing
+  1185](https://web.archive.org/web/20120209174422/http://www.openprocessing.org/visuals/?visualID=1185)): each line's
   endpoints are folded through all previous folds before the line is
   used. Fixed-in-the-plane lines go dead as the wad shrinks (0% of
   pixels moving); wad-relative lines keep every fold active and the
