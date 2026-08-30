@@ -356,7 +356,13 @@ struct EscapeParamsGpu {
     damping: [f32; 2],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
+    /// CPU-derived formula data (`FormulaDef::derived_data`),
+    /// vec4-packed; zero for formulas without the hook.
+    fdata: [[f32; 4]; FDATA_VEC4S],
 }
+
+/// 64 vec4s = 256 floats — Origami's 64 fold lines exactly.
+const FDATA_VEC4S: usize = 64;
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
 /// in the WGSL template.
@@ -2252,6 +2258,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
+        let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
         if let Some(field) = super::fields::get_field(&escape.formula) {
             // Mode B: pack the field's params + its resolved coloring's.
             let coloring = super::fields::get_field_coloring(&escape.coloring, field);
@@ -2262,6 +2269,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let coloring = super::get_coloring(&escape.coloring);
             super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
             super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+            if let Some(derive) = formula.derived_data {
+                let flat = fdata.as_flattened_mut();
+                for (slot, v) in flat.iter_mut().zip(derive(fparams.as_flattened())) {
+                    *slot = v;
+                }
+            }
         }
 
         EscapeParamsGpu {
@@ -2286,6 +2299,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             damping: [escape.damping_re, escape.damping_im],
             fparams,
             cparams,
+            fdata,
         }
     }
 
@@ -2940,9 +2954,11 @@ mod tests {
     #[test]
     fn params_struct_matches_wgsl_layout() {
         // 4 vec2 (32) + 4 u32 (16) + f32 + 3 pad (16) + 2 param arrays
-        // (128) = 192, and the arrays must start 16-byte aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 192);
+        // (128) + the derived-data table (1024) = 1216, and the
+        // arrays must start 16-byte aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1216);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 64);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 128);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 192);
     }
 }

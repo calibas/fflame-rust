@@ -48,6 +48,13 @@ struct EscapeParams {
     damping: vec2<f32>,    // Mann alpha (re, im); read only when compiled damped
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
+    // CPU-derived formula data (FormulaDef::derived_data), vec4-packed.
+    // Zero for formulas without the hook. Origami's fold-line table
+    // lives here: identical for every pixel, so computing it per
+    // thread was pure waste — and the var<private> line cache it
+    // replaced cost enough occupancy to trip the TDR watchdog under
+    // supersampling.
+    fdata: array<vec4<f32>, 64>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -57,6 +64,11 @@ struct EscapeParams {
 
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
+}
+
+// One vec4 of CPU-derived formula data (FormulaDef::derived_data).
+fn fdata4(i: u32) -> vec4<f32> {
+    return params.fdata[i];
 }
 
 fn cparam(i: u32) -> f32 {
@@ -275,6 +287,8 @@ struct EscapeParams {
     damping: vec2<f32>,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    // CPU-derived formula data — see the direct template's header.
+    fdata: array<vec4<f32>, 64>,
 }
 
 struct PerturbParams {
@@ -676,6 +690,8 @@ struct EscapeParams {
     damping: vec2<f32>,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    // CPU-derived formula data — see the direct template's header.
+    fdata: array<vec4<f32>, 64>,
 }
 
 struct PerturbParams {
@@ -2133,6 +2149,8 @@ struct EscapeParams {
     damping: vec2<f32>,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
+    // CPU-derived formula data — see the direct template's header.
+    fdata: array<vec4<f32>, 64>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -2142,6 +2160,11 @@ struct EscapeParams {
 
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
+}
+
+// One vec4 of CPU-derived formula data (FormulaDef::derived_data).
+fn fdata4(i: u32) -> vec4<f32> {
+    return params.fdata[i];
 }
 
 fn cparam(i: u32) -> f32 {

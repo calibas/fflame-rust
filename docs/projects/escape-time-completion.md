@@ -409,3 +409,16 @@ sequence: it is independent of every other item, it is the only one
 that shortens the eight-minute cold build, and its cost is dominated
 by a representation change nobody should start casually. Schedule it
 when a deep dive actually hurts, not because it is on the list.
+
+## Known gap, found 2026-08-29: no recovery from DEVICE LOST
+
+A TDR watchdog kill (observed when origami's first fold-table
+implementation ran per-thread under 3x supersampling) leaves the app
+hung: wgpu reports `DEVICE LOST (Unknown)` and nothing re-creates the
+device, so the only way out is a restart. The trigger was fixed by
+moving the table to the CPU, but any sufficiently expensive dispatch
+on a slow GPU can still hit the watchdog, and the app should survive
+it -- re-create the device and surfaces, rebuild the renderers, and
+carry on with the current config. Non-trivial (every GPU resource is
+owned somewhere) and low urgency now, but it is the difference between
+"that render was too heavy" and "restart the app".

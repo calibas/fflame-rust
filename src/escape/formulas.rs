@@ -33,6 +33,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     let d = 2.0 * esc_cmul(z, dz);
@@ -63,6 +64,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     let p = fparam(0u);
@@ -94,6 +96,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // conj(z)^p is ANTI-holomorphic: the chain rule carries the
@@ -174,6 +177,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -221,6 +225,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // d/dz [z^n + c z^-m] = n z^(n-1) - m c z^(-m-1);  d/dc = z^-m.
@@ -274,6 +279,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -312,6 +318,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -332,6 +339,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(0.5, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     let d = esc_cmul(c, esc_cmul(vec2<f32>(1.0, 0.0) - 2.0 * z, dz));
@@ -360,6 +368,7 @@ fn formula_step(z: vec2<f32>, c: ptr<function, vec2<f32>>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // f = c z (1 - z):  df/dz = c (1 - 2z),  df/dc = z (1 - z).
@@ -386,6 +395,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "z",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -437,6 +447,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // Piecewise-linear in z, so the derivative follows the SAME branch
@@ -488,6 +499,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // f = z^3 + (c-1) z - c:  df/dz = 3z^2 + (c-1),  df/dc = z - 1.
@@ -515,6 +527,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // f = e^z + c:  df/dz = e^z,  df/dc = 1.
@@ -549,6 +562,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // sin z + c -> cos z;  cos z + c -> -sin z.  df/dc = 1.
@@ -596,6 +610,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.5707964, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // f = c·sin z, so df/dz = c·cos z. On the parameter plane the
@@ -697,27 +712,6 @@ pub static ORIGAMI: FormulaDef = FormulaDef {
         },
     ],
     wgsl: r#"
-// An INTEGER hash, deliberately. The usual `fract(sin(x) * 43758.5)`
-// trick multiplies a sine by a large constant, which amplifies
-// rounding: f32 and f64 disagree, and so can two GPUs. That would
-// make the line arrangement — and therefore the whole image —
-// device-dependent. Integer ops are exact and immune to fast-math
-// (CLAUDE.md), and 24 bits is precisely what an f32 mantissa holds.
-fn origami_hash(x: u32) -> u32 {
-    var h = x;
-    h = h ^ (h >> 16u);
-    h = h * 0x7feb352du;
-    h = h ^ (h >> 15u);
-    h = h * 0x846ca68bu;
-    h = h ^ (h >> 16u);
-    return h;
-}
-
-fn origami_unit(x: u32) -> f32 {
-    // Top 24 bits -> [0,1), exactly representable.
-    return f32(origami_hash(x) >> 8u) * (1.0 / 16777216.0);
-}
-
 // The fold: reflect p about the line through a-b, but ONLY from the
 // negative-determinant side — the other side is the part of the paper
 // that does not move. A degenerate segment (endpoints folded onto
@@ -732,51 +726,87 @@ fn origami_fold(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return (a + ab * t) * 2.0 - p;
 }
 
-// Fold lines, cached per invocation. WGSL zero-initializes private
-// variables, so origami_built starts at 0 in every dispatch —
-// including resumed iteration chunks, which rebuild from scratch.
-var<private> origami_lines: array<vec4<f32>, 64>;
-var<private> origami_built: u32;
-
-// Line j's endpoints are two seeded random points FOLDED THROUGH
-// LINES 0..j-1, so every new crease lands on the current wad. This is
-// the detail that separates folding paper from slicing the plane:
-// without it, later folds miss the shrinking wad and go dead.
-fn origami_ensure(upto: u32) {
-    let s = u32(clamp(fparam(0u), 0.0, 4096.0)) * 2654435761u;
-    let spread = fparam(1u);
-    while (origami_built <= upto) {
-        let j = origami_built;
-        var a = vec2<f32>(
-            (origami_unit(j * 4u + 0u + s) * 2.0 - 1.0) * spread,
-            (origami_unit(j * 4u + 1u + s) * 2.0 - 1.0) * spread,
-        );
-        var b = vec2<f32>(
-            (origami_unit(j * 4u + 2u + s) * 2.0 - 1.0) * spread,
-            (origami_unit(j * 4u + 3u + s) * 2.0 - 1.0) * spread,
-        );
-        for (var k = 0u; k < j; k = k + 1u) {
-            a = origami_fold(a, origami_lines[k].xy, origami_lines[k].zw);
-            b = origami_fold(b, origami_lines[k].xy, origami_lines[k].zw);
-        }
-        origami_lines[j] = vec4<f32>(a, b);
-        origami_built = j + 1u;
-    }
-}
-
+// The fold lines arrive PRECOMPUTED in the uniform's fdata table
+// (origami_derived_lines, on the CPU): line j's endpoints are two
+// seeded random points folded through lines 0..j-1, so every new
+// crease lands on the current wad. Every pixel folds against the
+// same table, so building it per thread — the first version here —
+// was pure waste: ~1000 fold ops plus a 1 KB var<private> array per
+// pixel, slow everywhere and a TDR device-loss under supersampling.
 fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
     if (i >= 64u) {
         return z;
     }
-    origami_ensure(i);
-    return origami_fold(z, origami_lines[i].xy, origami_lines[i].zw);
+    let l = fdata4(i);
+    return origami_fold(z, l.xy, l.zw);
 }
 "#,
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: Some(origami_derived_lines),
     wgsl_derivative: "",
 };
+
+/// The fold-line table, built ONCE per render on the CPU and uploaded
+/// as `fdata` — every pixel folds against the same lines, so per-
+/// thread construction (the first shipped version) was pure waste:
+/// ~1000 fold ops plus a 1 KB `var<private>` array per pixel, which
+/// cost enough occupancy to turn a 0.5 s render into seconds and to
+/// trip the TDR watchdog (measured DEVICE LOST) under 3x
+/// supersampling.
+///
+/// f32 arithmetic throughout, deliberately: CPU f32 is IEEE-exact and
+/// identical on every machine, so the line table — and therefore the
+/// whole image — is now MORE deterministic than the in-shader
+/// construction it replaces (GPU FMA contraction varied by driver).
+/// The integer hash matches the WGSL one bit-for-bit.
+fn origami_derived_lines(params: &[f32]) -> Vec<f32> {
+    fn hash(x: u32) -> u32 {
+        let mut h = x;
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x7feb_352d);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x846c_a68b);
+        h ^= h >> 16;
+        h
+    }
+    fn unit(x: u32) -> f32 {
+        (hash(x) >> 8) as f32 * (1.0 / 16_777_216.0)
+    }
+    fn fold(p: [f32; 2], l: &[f32; 4]) -> [f32; 2] {
+        let (ab_x, ab_y) = (l[2] - l[0], l[3] - l[1]);
+        let d2 = ab_x * ab_x + ab_y * ab_y;
+        if ab_x * (p[1] - l[1]) - ab_y * (p[0] - l[0]) > 0.0 || d2 < 1e-12 {
+            return p;
+        }
+        let t = ((p[0] - l[0]) * ab_x + (p[1] - l[1]) * ab_y) / d2;
+        [(l[0] + ab_x * t) * 2.0 - p[0], (l[1] + ab_y * t) * 2.0 - p[1]]
+    }
+    let seed = params.first().copied().unwrap_or(7.0);
+    let spread = params.get(1).copied().unwrap_or(2.0);
+    let s = (seed.clamp(0.0, 4096.0) as u32).wrapping_mul(2_654_435_761);
+    let mut lines: Vec<[f32; 4]> = Vec::with_capacity(ORIGAMI_MAX_FOLDS);
+    for j in 0..ORIGAMI_MAX_FOLDS as u32 {
+        let mut a = [
+            (unit(j.wrapping_mul(4).wrapping_add(s)) * 2.0 - 1.0) * spread,
+            (unit(j.wrapping_mul(4).wrapping_add(1).wrapping_add(s)) * 2.0 - 1.0) * spread,
+        ];
+        let mut b = [
+            (unit(j.wrapping_mul(4).wrapping_add(2).wrapping_add(s)) * 2.0 - 1.0) * spread,
+            (unit(j.wrapping_mul(4).wrapping_add(3).wrapping_add(s)) * 2.0 - 1.0) * spread,
+        ];
+        for l in &lines {
+            a = fold(a, l);
+            b = fold(b, l);
+        }
+        lines.push([a[0], a[1], b[0], b[1]]);
+    }
+    lines.into_iter().flatten().collect()
+}
+
+/// 64 lines x vec4 fills the whole `fdata` array.
+pub(crate) const ORIGAMI_MAX_FOLDS: usize = 64;
 
 /// Ducks / Kali-log (Monnier) — `z ← log(Iabs(z) + c)` where
 /// Iabs folds the lower half-plane up (Im ← |Im|), i.e. the ADDITION
@@ -837,6 +867,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -859,6 +890,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::Re,
+    derived_data: None,
     wgsl_derivative: r#"
 fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
     // f = c^z = exp(z log c):  df/dz = log(c) * f,
@@ -893,6 +925,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::AbsIm,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -928,6 +961,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -1006,6 +1040,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -1054,6 +1089,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -1096,6 +1132,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -1145,6 +1182,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "esc_cpow(pixel * -0.0729490168, 0.3333333333)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
@@ -1203,6 +1241,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_param_seed: "vec2<f32>(1.0, 0.0)",
     wgsl_prev_init: "",
     escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
     wgsl_derivative: "",
 };
 
