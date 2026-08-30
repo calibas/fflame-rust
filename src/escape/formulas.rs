@@ -648,9 +648,30 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 /// from parameters: N lines would be 2N sliders, and the source
 /// describes them as random. Scrub `seed` to explore the family.
 ///
-/// Non-escaping, like Ducks: use `magnitude_average` or
-/// `orbit_average`, and expect the creases to show as sharp turns in
-/// the palette's contour bands rather than as edges in a smooth ramp.
+/// COLOUR FROM THE AVERAGE POSITION, not the average magnitude.
+/// McCabe colours each point by "a weighted average of that list of
+/// positions" — a 2-D vector, whose ANGLE is the half that carries the
+/// creased, layered-paper structure. Collapsing the orbit to a mean
+/// |z| first (`magnitude_average`) throws that away and renders the
+/// same folds as concentric contour rings: a kaleidoscope, which is
+/// exactly what it looked like before this was corrected. Prefer
+/// `position_average`, and raise its `scale` — the average position
+/// sweeps only a narrow arc across a typical view (0.09 of a turn on
+/// the shipped config), so at scale 1.0 the whole image lands in one
+/// slice of the palette and reads as flat.
+///
+/// ZOOMING IN DOES NOT REVEAL MORE DETAIL, and cannot. Each fold is a
+/// piecewise isometry, so a sequence of F folds cuts the plane into at
+/// most O(F) affine pieces and there is no expansion anywhere to
+/// manufacture finer ones — unlike an escape-time map, where the
+/// derivative grows without bound. Measured on this formula with the
+/// creases counted as second-difference kinks along each row: density
+/// 0.80 at zoom -1, 0.0103 at zoom 2, and 0.000 at both zoom 5 and
+/// zoom 9 — with the fold count and line count raised to 256, which
+/// did not help. The value range collapses with it, 5.17 to 0.009.
+/// The structure is all at one scale, first fold coarsest and last
+/// finest, and that is a property of folding rather than a limitation
+/// of this port.
 pub static ORIGAMI: FormulaDef = FormulaDef {
     name: "origami",
     display_name: "Origami (Butterfly)",

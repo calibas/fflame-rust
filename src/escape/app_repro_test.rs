@@ -1595,6 +1595,220 @@ mod tests {
         );
     }
 
+    /// `position_average` must average POSITIONS, not magnitudes.
+    ///
+    /// The distinction is the whole point of the coloring and it is
+    /// invisible to a casual look: both produce a smooth, plausible
+    /// picture. McCabe colours each folded point by "a weighted
+    /// average of that list of positions", and the ANGLE of that 2-D
+    /// mean is what carries the creased, layered-paper structure.
+    /// Averaging |z| first renders the same orbit as concentric rings
+    /// -- a kaleidoscope -- which is what shipped until a user said the
+    /// image did not look like the published work.
+    ///
+    /// So this asserts BOTH directions: the render must track an f64
+    /// average-position oracle, AND must not be explained by the mean
+    /// magnitude. Without the second half, swapping the accumulator
+    /// back would still pass on any view where the two happen to
+    /// correlate.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn position_average_averages_positions_not_magnitudes() {
+        let (device, queue) = repro_device();
+        let (w, h) = (200u32, 200u32);
+        let zoom = -0.7f64;
+        const MAX_ITER: u32 = 32;
+        const LINES: u32 = 32;
+        const SEED: f32 = 11.0;
+        const SPREAD: f32 = 1.2;
+        // The mean position sweeps a narrow arc here, so spread it
+        // across the palette -- otherwise every bin holds the same
+        // colour and the comparison below says nothing.
+        const SCALE: f32 = 11.6;
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "ramp".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "origami".to_string();
+        esc.coloring = "position_average".to_string();
+        esc.center_re = "0.0".to_string();
+        esc.center_im = "0.0".to_string();
+        esc.zoom_log2 = zoom;
+        esc.max_iter = MAX_ITER;
+        esc.formula_params.insert("seed".to_string(), SEED);
+        esc.formula_params.insert("lines".to_string(), LINES as f32);
+        esc.formula_params.insert("spread".to_string(), SPREAD);
+        esc.coloring_params.insert("mode".to_string(), 0.0);
+        esc.coloring_params.insert("scale".to_string(), SCALE);
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("position average"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 10_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("position average tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        fn hash(x: u32) -> u32 {
+            let mut h = x;
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7feb_352d);
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x846c_a68b);
+            h ^= h >> 16;
+            h
+        }
+        fn unit(x: u32) -> f64 {
+            (hash(x) >> 8) as f64 / 16_777_216.0
+        }
+        let s = (SEED as u32).wrapping_mul(2_654_435_761);
+        let lines: Vec<(f64, f64, f64)> = (0..LINES)
+            .map(|k| {
+                let a = unit(k.wrapping_mul(2).wrapping_add(s)) * std::f64::consts::PI;
+                let o = (unit(k.wrapping_mul(2).wrapping_add(1).wrapping_add(s)) * 2.0 - 1.0)
+                    * SPREAD as f64;
+                (a.cos(), a.sin(), o)
+            })
+            .collect();
+
+        let span = 4.0 / zoom.exp2();
+        // Two candidate explanations of the same image, binned the
+        // same way: the mean POSITION's angle, and the mean MAGNITUDE.
+        let mut angle_t = Vec::with_capacity((w * h) as usize);
+        let mut mag_t = Vec::with_capacity((w * h) as usize);
+        for py in 0..h {
+            for px in 0..w {
+                let mut zx = ((px as f64 + 0.5) / w as f64 - 0.5) * span;
+                let mut zy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span);
+                let (mut sx, mut sy, mut smag) = (0.0f64, 0.0f64, 0.0f64);
+                for i in 0..MAX_ITER {
+                    let (nx, ny, o) = lines[(i % LINES) as usize];
+                    let d = zx * nx + zy * ny - o;
+                    if d > 0.0 {
+                        zx -= 2.0 * d * nx;
+                        zy -= 2.0 * d * ny;
+                    }
+                    sx += zx;
+                    sy += zy;
+                    smag += (zx * zx + zy * zy).sqrt();
+                }
+                let n = MAX_ITER as f64;
+                let ang = (sy / n).atan2(sx / n) / std::f64::consts::TAU + 0.5;
+                angle_t.push((ang * SCALE as f64).rem_euclid(1.0));
+                mag_t.push(((smag / n) * SCALE as f64).rem_euclid(1.0));
+            }
+        }
+
+        // Spread of rendered luminance WITHIN a bin of the candidate
+        // value: small means the candidate explains the image. This is
+        // palette-agnostic -- it never assumes what colour a value maps
+        // to, only that equal values must render equally.
+        let spread_of = |ts: &[f64]| -> f64 {
+            const BINS: usize = 256;
+            let mut sums = vec![0f64; BINS];
+            let mut sqs = vec![0f64; BINS];
+            let mut counts = vec![0usize; BINS];
+            for (idx, t) in ts.iter().enumerate() {
+                let b = ((t * (BINS - 1) as f64).round() as usize).min(BINS - 1);
+                let lum = rgba[idx * 4] as f64;
+                counts[b] += 1;
+                sums[b] += lum;
+                sqs[b] += lum * lum;
+            }
+            let (mut acc, mut total) = (0f64, 0usize);
+            for b in 0..BINS {
+                if counts[b] < 50 {
+                    continue;
+                }
+                let n = counts[b] as f64;
+                acc += (sqs[b] / n - (sums[b] / n).powi(2)).max(0.0).sqrt() * n;
+                total += counts[b];
+            }
+            acc / total.max(1) as f64
+        };
+        let by_angle = spread_of(&angle_t);
+        let by_magnitude = spread_of(&mag_t);
+        println!(
+            "position_average: spread within a bin -- mean position {by_angle:.2}/255, mean magnitude {by_magnitude:.2}/255"
+        );
+        assert!(
+            by_angle < 8.0,
+            "the render does not track an f64 average-POSITION oracle ({by_angle:.2}/255)"
+        );
+        assert!(
+            by_magnitude > 3.0 * by_angle,
+            "the mean MAGNITUDE explains this image about as well as the mean position ({by_magnitude:.2} vs {by_angle:.2}) -- either the accumulator is summing |z| again, or this view cannot tell the two apart and the test needs a different one"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
