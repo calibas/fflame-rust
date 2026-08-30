@@ -673,6 +673,133 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32
 "#,
 };
 
+/// Sphere average — the orbit's mean CHORDAL distance to a chosen
+/// point of the Riemann sphere.
+///
+/// From [algorithmic-worlds](https://www.algorithmic-worlds.net/blog/blog.php?Post=20141005):
+/// *"Each point on the sphere corresponds to an orbit, and is
+/// essentially colored according to the mean distance of the orbit to
+/// a given point on the sphere."* The images there iterate a Nova map
+/// at exponent 4, which this engine already ships — so that pairing
+/// needs only this coloring.
+///
+/// The distance is the CHORDAL metric, which is the natural one on the
+/// sphere and has a closed form in the plane:
+///
+/// ```text
+///   d(z, t) = 2 |z - t| / (sqrt(1+|z|^2) sqrt(1+|t|^2))
+/// ```
+///
+/// so no 3-vector is ever built. It is bounded by 2 and treats
+/// infinity as an ordinary point — `d(z, inf) = 2/sqrt(1+|z|^2)` —
+/// which is the whole reason to use it here rather than `|z - t|`:
+/// on a map whose Julia set is the entire sphere (Lattès), orbits pass
+/// arbitrarily far out, and a plane metric would saturate on them
+/// while the sphere metric stays honest.
+///
+/// THE SOURCE IS VAGUE, AND THIS IS NOT A PORT. It says "essentially
+/// colored" and states no metric, iteration count or normalization;
+/// those are choices made here. Chordal distance and a plain mean are
+/// the natural readings, and the result matches the published look,
+/// but nothing about this is pinned to his implementation.
+///
+/// `stride` is his other idea, generalized: *"One can picture the nth
+/// iteration of the map by taking into account only every nth point in
+/// the orbit when computing the average distance."* Sampling every
+/// nth iterate shows the dynamics of `f^n` instead of `f`. It needs
+/// the iteration index inside the ACCUMULATOR, which no coloring has
+/// — so the index rides the spare state slot, counted per call.
+pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
+    name: "sphere_average",
+    display_name: "Sphere Average",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "target_re",
+            display_name: "Target (re)",
+            default: 0.0,
+            min: -8.0,
+            max: 8.0,
+            tooltip: "The sphere point distances are measured to, as a complex number. \
+                      The origin and 1 are the usual choices; a point ON the attractor \
+                      picks out where the orbit spends its time.",
+        },
+        EscapeParamDef {
+            name: "target_im",
+            display_name: "Target (im)",
+            default: 0.0,
+            min: -8.0,
+            max: 8.0,
+            tooltip: "Imaginary part of the target point.",
+        },
+        EscapeParamDef {
+            name: "at_infinity",
+            display_name: "Target infinity",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Measure to the sphere's north pole instead: d = 2/sqrt(1+|z|^2). \
+                      Infinity is an ordinary point in the chordal metric, so this is a \
+                      legitimate target rather than a special case.",
+        },
+        EscapeParamDef {
+            name: "stride",
+            display_name: "Iterate stride",
+            default: 1.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Average over every nth orbit point only, which shows the dynamics \
+                      of f^n rather than f. 1 is the plain orbit.",
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 64.0,
+            tooltip: "Palette distance per unit of mean chordal distance. The metric is \
+                      bounded by 2, so the whole useful range lands inside one palette \
+                      turn at 1.0.",
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+    // state.x sums the accepted distances; state.y counts CALLS, not
+    // accepted samples -- with a stride those differ, and dividing by
+    // the wrong one scales the mean by the stride. The accepted count
+    // is exactly how many k in [0, calls) satisfy k % stride == 0.
+    let stride = max(cparam(3u), 1.0);
+    let samples = max(ceil(max(state.y, 0.0) / stride), 1.0);
+    return (state.x / samples) * cparam(4u);
+}
+"#,
+    accum_init: "vec2<f32>(0.0, 0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+    // state.y counts CALLS, which is what the stride test needs; the
+    // accepted-sample count is derived in coloring_map. Two floats of
+    // state cannot hold both, and the call index is the one that
+    // cannot be reconstructed afterwards.
+    let stride = max(u32(cparam(3u)), 1u);
+    let calls = u32(state.y);
+    if (stride > 1u && (calls % stride) != 0u) {
+        return vec2<f32>(state.x, state.y + 1.0);
+    }
+    let zz = dot(z, z);
+    var d: f32;
+    if (cparam(2u) >= 0.5) {
+        // Chordal distance to infinity (the north pole).
+        d = 2.0 * inverseSqrt(1.0 + zz);
+    } else {
+        let t = vec2<f32>(cparam(0u), cparam(1u));
+        let dz = z - t;
+        d = 2.0 * sqrt(dot(dz, dz)) * inverseSqrt((1.0 + zz) * (1.0 + dot(t, t)));
+    }
+    return vec2<f32>(state.x + d, state.y + 1.0);
+}
+"#,
+};
+
 pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
     name: "position_average",
     display_name: "Position Average",

@@ -808,6 +808,134 @@ fn origami_derived_lines(params: &[f32]) -> Vec<f32> {
 /// 64 lines x vec4 fills the whole `fdata` array.
 pub(crate) const ORIGAMI_MAX_FOLDS: usize = 64;
 
+/// Lattès maps — rational maps whose Julia set is the WHOLE sphere.
+///
+/// From [algorithmic-worlds](https://algorithmic-worlds.net/blog/blog.php?Post=20130428),
+/// which gives three:
+///
+/// ```text
+///   0:  z -> (z^2 - a)^2 / (4 z (z - 1) (z - a))
+///   1:  z -> (z + 1/z) / 2i
+///   2:  z -> (z^3 + a) / (a z^3 + 1),   a = exp(2*pi*i/3)
+/// ```
+///
+/// A Lattès map is a sphere map covered by an EXPANDING affine map of
+/// a torus. Because the covering map expands, any two nearby points on
+/// the torus separate under iteration, so every orbit is chaotic and
+/// the Julia set is the entire sphere — there is no Fatou set, no
+/// attracting cycle, and nothing to escape to. That is why this is
+/// `NonEscaping` and why the interesting colorings are the averages
+/// and traps (`sphere_average`, `orbit_average`, `position_map`)
+/// rather than escape counts.
+///
+/// SEEDED AT THE PIXEL, and there is no `c`: these are fixed maps, so
+/// the picture is the dynamical plane whichever mode the panel is in.
+///
+/// **Infinity is an ordinary point here, and the arithmetic has to
+/// respect that.** These orbits wander the whole sphere, which in
+/// finite coordinates means they pass arbitrarily close to poles and
+/// come back. Evaluated naively, `(z^2-a)^2` overflows f32 by
+/// |z| ~ 1e10 and the orbit dies as Inf/NaN. Each variant is
+/// therefore written twice: the direct form near the origin, and the
+/// leading-order form beyond |z| > 1e6, where dividing numerator and
+/// denominator by the dominant power gives
+///
+/// ```text
+///   0:  f -> z/4        1:  f -> -i z/2        2:  f -> 1/a
+/// ```
+///
+/// with relative error below 1e-6 — far under f32's own resolution
+/// there. A pole (denominator underflow) returns a large finite value
+/// instead of Inf, which the same guard maps onward on the next step.
+pub static LATTES: FormulaDef = FormulaDef {
+    name: "lattes",
+    display_name: "Lattès",
+    features: &[FormulaFeature::NonEscaping],
+    parameters: &[
+        EscapeParamDef {
+            name: "variant",
+            display_name: "Variant",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "0: (z^2-a)^2 / 4z(z-1)(z-a). 1: (z + 1/z)/2i, which uses no a. \
+                      2: (z^3+a)/(a z^3+1). All three are ergodic on the sphere, so \
+                      keep the iteration count LOW (around 5) -- the structure is in \
+                      the transient and long orbits average it away.",
+        },
+        EscapeParamDef {
+            name: "a_re",
+            display_name: "a (re)",
+            default: -0.5,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The map's modulus. Variant 2 is a Lattès map at the cube root of \
+                      unity exp(2*pi*i/3) = -0.5 + 0.866i, which is the default; variant \
+                      0 is one for any a outside {0, 1}.",
+        },
+        EscapeParamDef {
+            name: "a_im",
+            display_name: "a (im)",
+            default: 0.8660254,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "Imaginary part of the modulus.",
+        },
+    ],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    let v = u32(clamp(fparam(0u), 0.0, 2.0));
+    let a = vec2<f32>(fparam(1u), fparam(2u));
+    let r2 = dot(z, z);
+    // Far field: the leading-order image, so a near-pole excursion
+    // returns to the finite sphere instead of overflowing.
+    if (r2 > 1.0e12) {
+        if (v == 0u) {
+            return z * 0.25;
+        }
+        if (v == 1u) {
+            // z / 2i = -i z / 2.
+            return vec2<f32>(z.y, -z.x) * 0.5;
+        }
+        // (z^3 + a)/(a z^3 + 1) -> 1/a.
+        return esc_cdiv(vec2<f32>(1.0, 0.0), a);
+    }
+    if (v == 1u) {
+        // (z + 1/z)/2i, written as the sum so neither term is ever
+        // squared: stable for large AND small |z| alike.
+        if (r2 < 1.0e-30) {
+            return vec2<f32>(1.0e7, 0.0);
+        }
+        let s = z + esc_cdiv(vec2<f32>(1.0, 0.0), z);
+        return vec2<f32>(s.y, -s.x) * 0.5;
+    }
+    var num: vec2<f32>;
+    var den: vec2<f32>;
+    if (v == 0u) {
+        let z2 = esc_cmul(z, z);
+        let t = z2 - a;
+        num = esc_cmul(t, t);
+        den = 4.0 * esc_cmul(esc_cmul(z, z - vec2<f32>(1.0, 0.0)), z - a);
+    } else {
+        let z3 = esc_cmul(esc_cmul(z, z), z);
+        num = z3 + a;
+        den = esc_cmul(a, z3) + vec2<f32>(1.0, 0.0);
+    }
+    if (dot(den, den) < 1.0e-30) {
+        // A pole: the image is infinity. Hand back a large finite
+        // value and let the far-field branch carry it on next step.
+        return vec2<f32>(1.0e7, 0.0);
+    }
+    return esc_cdiv(num, den);
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+    derived_data: None,
+    wgsl_derivative: "",
+};
+
 /// Ducks / Kali-log (Monnier) — `z ← log(Iabs(z) + c)` where
 /// Iabs folds the lower half-plane up (Im ← |Im|), i.e. the ADDITION
 /// OF C SITS INSIDE THE LOG (plan §5.13; Monnier's post 2011-02-27

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "48fb4ff9",
+  "git_hash": "2c6db232",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -374,6 +374,14 @@
       "bytes": 23375,
       "sha256": "f44349f9faf92667e8617e77664a31c46086cbd8439cee49b02ac74046f333ae"
     },
+    "escape-lattes-v0.png": {
+      "bytes": 42632,
+      "sha256": "32380707280924bb7408676089740c5d575910213e391241bd4154dd7188c6b2"
+    },
+    "escape-lattes-v2.png": {
+      "bytes": 30802,
+      "sha256": "6ae83d6f086fa48eedbbc1d0aa874d02b0879c316490d8dbf8471c5705f5f151"
+    },
     "escape-littlewood.png": {
       "bytes": 14682,
       "sha256": "9cd25b898aba2cd36a5f6c250d15d20a8f979a63c58626e8649ae67275064124"
@@ -461,6 +469,10 @@
     "escape-nova-3.png": {
       "bytes": 6089,
       "sha256": "9ad6bd2ea2ee133d3a5010db42443b57642f6eb14ecf3fbcb9c7727cf8249e68"
+    },
+    "escape-nova4-sphere.png": {
+      "bytes": 24818,
+      "sha256": "4203c06703942c4a75384b47aed37e349a94549a4452a0d39949a59a4ef44ea9"
     },
     "escape-novaretti-julia.png": {
       "bytes": 32594,
