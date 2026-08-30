@@ -609,7 +609,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 };
 
 /// Origami — McCabe's Butterfly Origami: fold the plane along a
-/// sequence of lines and average over the image points.
+/// sequence of lines and colour by where each point lands.
 ///
 /// [algorithmic-worlds](https://www.algorithmic-worlds.net/expo/work.php?work=20110204-ds7)
 /// records the algorithm: *"Take a square, and choose a number of
@@ -617,61 +617,59 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 /// the square, compute its images under the sequence of mirror
 /// symmetries about the sequence of random lines. Then color the
 /// result by performing an average over all the image points."* The
-/// same page notes the results are "very similar to the Duck-like
-/// algorithms", and indeed the shape here is Ducks': iterate, and let
-/// an averaging coloring do the rest.
+/// only public implementation found is Kyle McDonald's Processing
+/// port (OpenProcessing sketch 1185, recovered via the Wayback
+/// Machine), and it contains the detail neither prose description
+/// mentions:
 ///
-/// THE REFLECTIONS ARE CONDITIONAL — folds, not mirrors — and that is
-/// a correction to the wording, made on evidence rather than taste.
-/// An unconditional reflection is an isometry, so a composition of
-/// them is affine and the average of |z| over the sequence is a
-/// smooth function: prototyped, it renders as plain concentric rings
-/// with no structure at all. Reflecting only the points on one side
-/// (folding the paper, which is what "origami" means, and what the
-/// commonly repeated paraphrase — "fold a piece of paper, project an
-/// image onto it, unfold" — describes) makes the map piecewise
-/// isometric, and the creases appear. The prototypes are in the
-/// project doc.
+/// **EACH FOLD LINE'S ENDPOINTS ARE THEMSELVES FOLDED THROUGH ALL
+/// PREVIOUS FOLDS** — `randomPosition(i)` returns
+/// `foldPoint(random(w), random(h), i)`. Every new crease therefore
+/// lands on the current folded wad, the way real paper is folded: you
+/// fold the wad you are holding, not the original flat sheet. This is
+/// load-bearing. With lines fixed in the plane (the first version
+/// here) the wad shrinks away from them, later folds go dead —
+/// measured, 0% of pixels moving — and the crease count stays O(F).
+/// With wad-relative lines every fold stays active (measured 8%–92%
+/// of pixels reflected on every one of 32 folds) and the crease count
+/// compounds toward 2^F: the folds-on-folds-on-folds look of McCabe's
+/// published images.
 ///
-/// ONE FOLD PER ITERATION, along line `i mod lines`, so `max_iter` IS
-/// the length of McCabe's sequence and the accumulator sees every
-/// image point — which is what "average over all the image points"
-/// asks for. Folding K lines inside a single step instead would show
-/// the coloring only every Kth point, and the orbit would freeze the
-/// moment it reached the region every fold leaves alone.
+/// The fold itself is a CONDITIONAL reflection — side chosen by the
+/// orientation determinant against the directed segment, reflect
+/// about the closest point on the line — exactly McDonald's
+/// `foldPoint`. One fold per iteration, so `max_iter` is the fold
+/// count; 32 is McCabe's number, and more is SMOOTHER, not more
+/// detailed (measured: 96 folds reads softer than 32, because the wad
+/// keeps shrinking). Iterations past 64 return the point unchanged.
 ///
-/// THE PIXEL IS THE POINT BEING FOLDED, so it seeds z0 rather than
-/// entering as `c`: McCabe folds "each point of the square", and the
-/// algorithm has no `c` at all. The map ignores it.
+/// **ZOOM STILL BOTTOMS OUT, and now we know the true reason** (the
+/// first version's doc blamed an O(F) piece count, which was wrong —
+/// the piece count is exponential). Every fold is an isometry, so the
+/// final-position field is Lipschitz-1: within a window of size w the
+/// landing positions vary by at most w, and creases are DERIVATIVE
+/// kinks, not value jumps. Any fixed smooth colour source therefore
+/// washes to a constant as the window shrinks, regardless of the fold
+/// geometry. What survives zooming is the discrete part — WHICH folds
+/// reflected the point — which is piecewise-constant with a jump at
+/// every crease. `position_map`'s `address_mix` mixes that channel
+/// in; with it, structure was still visible at zoom 22 (measured,
+/// following crease intersections), versus zoom ~5 without.
 ///
-/// The lines come from `seed` through an in-shader hash rather than
-/// from parameters: N lines would be 2N sliders, and the source
-/// describes them as random. Scrub `seed` to explore the family.
+/// The lines come from `seed` through an in-shader integer hash
+/// (precision-exact and fast-math-immune — the usual
+/// `fract(sin(x)*43758.5)` idiom would make the arrangement
+/// device-dependent). They are cached in a `var<private>` array,
+/// built incrementally: line j needs lines 0..j-1 to fold its
+/// endpoints, so construction is O(F²) once per pixel per dispatch,
+/// which is trivial next to the iteration loop. WGSL zero-initializes
+/// private variables, so the cache is correctly empty at the start of
+/// every invocation, including resumed chunks.
 ///
-/// COLOUR FROM THE AVERAGE POSITION, not the average magnitude.
-/// McCabe colours each point by "a weighted average of that list of
-/// positions" — a 2-D vector, whose ANGLE is the half that carries the
-/// creased, layered-paper structure. Collapsing the orbit to a mean
-/// |z| first (`magnitude_average`) throws that away and renders the
-/// same folds as concentric contour rings: a kaleidoscope, which is
-/// exactly what it looked like before this was corrected. Prefer
-/// `position_average`, and raise its `scale` — the average position
-/// sweeps only a narrow arc across a typical view (0.09 of a turn on
-/// the shipped config), so at scale 1.0 the whole image lands in one
-/// slice of the palette and reads as flat.
-///
-/// ZOOMING IN DOES NOT REVEAL MORE DETAIL, and cannot. Each fold is a
-/// piecewise isometry, so a sequence of F folds cuts the plane into at
-/// most O(F) affine pieces and there is no expansion anywhere to
-/// manufacture finer ones — unlike an escape-time map, where the
-/// derivative grows without bound. Measured on this formula with the
-/// creases counted as second-difference kinks along each row: density
-/// 0.80 at zoom -1, 0.0103 at zoom 2, and 0.000 at both zoom 5 and
-/// zoom 9 — with the fold count and line count raised to 256, which
-/// did not help. The value range collapses with it, 5.17 to 0.009.
-/// The structure is all at one scale, first fold coarsest and last
-/// finest, and that is a property of folding rather than a limitation
-/// of this port.
+/// Non-escaping. Pair with `position_map` (projects a colour source
+/// onto the folded paper — McDonald's "project an image, unfold" —
+/// with the address channel for zoom) or `position_average`
+/// (McCabe's stated mean-of-positions).
 pub static ORIGAMI: FormulaDef = FormulaDef {
     name: "origami",
     display_name: "Origami (Butterfly)",
@@ -683,28 +681,18 @@ pub static ORIGAMI: FormulaDef = FormulaDef {
             default: 7.0,
             min: 0.0,
             max: 512.0,
-            tooltip: "Chooses the random line arrangement. Every value is a \
+            tooltip: "Chooses the random fold arrangement. Every value is a \
                       different folding; scrub it to explore the family.",
-        },
-        EscapeParamDef {
-            name: "lines",
-            display_name: "Lines",
-            default: 16.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "How many distinct lines the sequence cycles through. Once \
-                      the fold count (max iterations) passes this, the sequence \
-                      repeats and the orbit settles.",
         },
         EscapeParamDef {
             name: "spread",
             display_name: "Line spread",
-            default: 1.0,
+            default: 2.0,
             min: 0.05,
             max: 4.0,
-            tooltip: "How far the lines sit from the origin. Small values crowd \
-                      the creases together; large ones push most folds off the \
-                      view.",
+            tooltip: "Half-size of the square the fold endpoints are drawn \
+                      from, before being folded onto the wad. 2.0 matches the \
+                      default view.",
         },
     ],
     wgsl: r#"
@@ -712,9 +700,8 @@ pub static ORIGAMI: FormulaDef = FormulaDef {
 // trick multiplies a sine by a large constant, which amplifies
 // rounding: f32 and f64 disagree, and so can two GPUs. That would
 // make the line arrangement — and therefore the whole image —
-// device-dependent, which this project does not accept anywhere else
-// either. Integer ops are exact and immune to fast-math (CLAUDE.md),
-// and 24 bits is precisely what an f32 mantissa holds.
+// device-dependent. Integer ops are exact and immune to fast-math
+// (CLAUDE.md), and 24 bits is precisely what an f32 mantissa holds.
 fn origami_hash(x: u32) -> u32 {
     var h = x;
     h = h ^ (h >> 16u);
@@ -730,27 +717,58 @@ fn origami_unit(x: u32) -> f32 {
     return f32(origami_hash(x) >> 8u) * (1.0 / 16777216.0);
 }
 
-// One line of the arrangement, as (normal.x, normal.y, offset). The
-// whole arrangement lives in two parameters rather than two sliders
-// per line.
-fn origami_line(seed: f32, k: u32) -> vec3<f32> {
-    let s = u32(clamp(seed, 0.0, 4096.0)) * 2654435761u;
-    let a = origami_unit(k * 2u + s) * 3.14159265;
-    let o = (origami_unit(k * 2u + 1u + s) * 2.0 - 1.0) * fparam(2u);
-    return vec3<f32>(cos(a), sin(a), o);
+// The fold: reflect p about the line through a-b, but ONLY from the
+// negative-determinant side — the other side is the part of the paper
+// that does not move. A degenerate segment (endpoints folded onto
+// each other) folds nothing.
+fn origami_fold(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    let ab = b - a;
+    let d2 = dot(ab, ab);
+    if (ab.x * (p.y - a.y) - ab.y * (p.x - a.x) > 0.0 || d2 < 1e-12) {
+        return p;
+    }
+    let t = dot(p - a, ab) / d2;
+    return (a + ab * t) * 2.0 - p;
+}
+
+// Fold lines, cached per invocation. WGSL zero-initializes private
+// variables, so origami_built starts at 0 in every dispatch —
+// including resumed iteration chunks, which rebuild from scratch.
+var<private> origami_lines: array<vec4<f32>, 64>;
+var<private> origami_built: u32;
+
+// Line j's endpoints are two seeded random points FOLDED THROUGH
+// LINES 0..j-1, so every new crease lands on the current wad. This is
+// the detail that separates folding paper from slicing the plane:
+// without it, later folds miss the shrinking wad and go dead.
+fn origami_ensure(upto: u32) {
+    let s = u32(clamp(fparam(0u), 0.0, 4096.0)) * 2654435761u;
+    let spread = fparam(1u);
+    while (origami_built <= upto) {
+        let j = origami_built;
+        var a = vec2<f32>(
+            (origami_unit(j * 4u + 0u + s) * 2.0 - 1.0) * spread,
+            (origami_unit(j * 4u + 1u + s) * 2.0 - 1.0) * spread,
+        );
+        var b = vec2<f32>(
+            (origami_unit(j * 4u + 2u + s) * 2.0 - 1.0) * spread,
+            (origami_unit(j * 4u + 3u + s) * 2.0 - 1.0) * spread,
+        );
+        for (var k = 0u; k < j; k = k + 1u) {
+            a = origami_fold(a, origami_lines[k].xy, origami_lines[k].zw);
+            b = origami_fold(b, origami_lines[k].xy, origami_lines[k].zw);
+        }
+        origami_lines[j] = vec4<f32>(a, b);
+        origami_built = j + 1u;
+    }
 }
 
 fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
-    let count = max(u32(fparam(1u)), 1u);
-    let line = origami_line(fparam(0u), i % count);
-    let n = line.xy;
-    let d = dot(z, n) - line.z;
-    // The FOLD: only the far side moves. An unconditional reflection
-    // here makes the whole composition affine and the picture smooth.
-    if (d > 0.0) {
-        return z - 2.0 * d * n;
+    if (i >= 64u) {
+        return z;
     }
-    return z;
+    origami_ensure(i);
+    return origami_fold(z, origami_lines[i].xy, origami_lines[i].zw);
 }
 "#,
     wgsl_param_seed: "pixel",

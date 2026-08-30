@@ -1380,6 +1380,65 @@ mod tests {
         );
     }
 
+    /// The fold-line construction both origami oracles share: line j's
+    /// endpoints are seeded random points FOLDED THROUGH LINES 0..j-1,
+    /// so every crease lands on the current wad (Kyle McDonald's
+    /// OpenProcessing 1185, recovered via the Wayback Machine — the
+    /// detail the prose descriptions of McCabe's algorithm omit).
+    fn origami_oracle_lines(seed: u32, folds: usize, spread: f64) -> Vec<[f64; 4]> {
+        fn hash(x: u32) -> u32 {
+            let mut h = x;
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7feb_352d);
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x846c_a68b);
+            h ^= h >> 16;
+            h
+        }
+        fn unit(x: u32) -> f64 {
+            (hash(x) >> 8) as f64 / 16_777_216.0
+        }
+        fn fold(p: [f64; 2], l: &[f64; 4]) -> [f64; 2] {
+            let (ax, ay, bx, by) = (l[0], l[1], l[2], l[3]);
+            let (abx, aby) = (bx - ax, by - ay);
+            let d2 = abx * abx + aby * aby;
+            if abx * (p[1] - ay) - aby * (p[0] - ax) > 0.0 || d2 < 1e-12 {
+                return p;
+            }
+            let t = ((p[0] - ax) * abx + (p[1] - ay) * aby) / d2;
+            [(ax + abx * t) * 2.0 - p[0], (ay + aby * t) * 2.0 - p[1]]
+        }
+        let s = seed.wrapping_mul(2_654_435_761);
+        let mut lines: Vec<[f64; 4]> = Vec::with_capacity(folds);
+        for j in 0..folds as u32 {
+            let mut a = [
+                (unit(j.wrapping_mul(4).wrapping_add(s)) * 2.0 - 1.0) * spread,
+                (unit(j.wrapping_mul(4).wrapping_add(1).wrapping_add(s)) * 2.0 - 1.0) * spread,
+            ];
+            let mut b = [
+                (unit(j.wrapping_mul(4).wrapping_add(2).wrapping_add(s)) * 2.0 - 1.0) * spread,
+                (unit(j.wrapping_mul(4).wrapping_add(3).wrapping_add(s)) * 2.0 - 1.0) * spread,
+            ];
+            for l in &lines {
+                a = fold(a, l);
+                b = fold(b, l);
+            }
+            lines.push([a[0], a[1], b[0], b[1]]);
+        }
+        lines
+    }
+
+    fn origami_oracle_fold(p: [f64; 2], l: &[f64; 4]) -> [f64; 2] {
+        let (ax, ay, bx, by) = (l[0], l[1], l[2], l[3]);
+        let (abx, aby) = (bx - ax, by - ay);
+        let d2 = abx * abx + aby * aby;
+        if abx * (p[1] - ay) - aby * (p[0] - ax) > 0.0 || d2 < 1e-12 {
+            return p;
+        }
+        let t = ((p[0] - ax) * abx + (p[1] - ay) * aby) / d2;
+        [(ax + abx * t) * 2.0 - p[0], (ay + aby * t) * 2.0 - p[1]]
+    }
+
     /// Origami must fold the plane the way the algorithm says.
     ///
     /// The oracle below is an independent reimplementation of the
@@ -1403,9 +1462,8 @@ mod tests {
         let (w, h) = (200u32, 200u32);
         let zoom = -1.0f64;
         const MAX_ITER: u32 = 32;
-        const LINES: u32 = 24;
-        const SEED: f32 = 7.0;
-        const SPREAD: f32 = 1.0;
+        const SEED: f32 = 8.0;
+        const SPREAD: f32 = 2.0;
         const SCALE: f32 = 1.2;
 
         let mut config = crate::config::FractalConfig::default();
@@ -1439,7 +1497,6 @@ mod tests {
         esc.zoom_log2 = zoom;
         esc.max_iter = MAX_ITER;
         esc.formula_params.insert("seed".to_string(), SEED);
-        esc.formula_params.insert("lines".to_string(), LINES as f32);
         esc.formula_params.insert("spread".to_string(), SPREAD);
         esc.coloring_params.insert("scale".to_string(), SCALE);
         esc.coloring_params.insert("offset".to_string(), 0.0);
@@ -1500,27 +1557,7 @@ mod tests {
         escape.destroy();
 
         // --- the independent reimplementation ---
-        fn hash(x: u32) -> u32 {
-            let mut h = x;
-            h ^= h >> 16;
-            h = h.wrapping_mul(0x7feb_352d);
-            h ^= h >> 15;
-            h = h.wrapping_mul(0x846c_a68b);
-            h ^= h >> 16;
-            h
-        }
-        fn unit(x: u32) -> f64 {
-            (hash(x) >> 8) as f64 / 16_777_216.0
-        }
-        let s = (SEED as u32).wrapping_mul(2_654_435_761);
-        let lines: Vec<(f64, f64, f64)> = (0..LINES)
-            .map(|k| {
-                let a = unit(k.wrapping_mul(2).wrapping_add(s)) * std::f64::consts::PI;
-                let o = (unit(k.wrapping_mul(2).wrapping_add(1).wrapping_add(s)) * 2.0 - 1.0)
-                    * SPREAD as f64;
-                (a.cos(), a.sin(), o)
-            })
-            .collect();
+        let lines = origami_oracle_lines(SEED as u32, MAX_ITER as usize, SPREAD as f64);
 
         let span = 4.0 / zoom.exp2();
         const BINS: usize = 256;
@@ -1531,17 +1568,14 @@ mod tests {
         for py in 0..h {
             for px in 0..w {
                 // The PIXEL is the point being folded: it seeds z0.
-                let mut zx = ((px as f64 + 0.5) / w as f64 - 0.5) * span;
-                let mut zy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span);
+                let mut z = [
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span),
+                ];
                 let mut acc = 0.0f64;
-                for i in 0..MAX_ITER {
-                    let (nx, ny, o) = lines[(i % LINES) as usize];
-                    let d = zx * nx + zy * ny - o;
-                    if d > 0.0 {
-                        zx -= 2.0 * d * nx;
-                        zy -= 2.0 * d * ny;
-                    }
-                    acc += (zx * zx + zy * zy).sqrt();
+                for l in &lines {
+                    z = origami_oracle_fold(z, l);
+                    acc += (z[0] * z[0] + z[1] * z[1]).sqrt();
                 }
                 let val = acc / MAX_ITER as f64;
                 values.push(val);
@@ -1618,13 +1652,12 @@ mod tests {
         let (w, h) = (200u32, 200u32);
         let zoom = -0.7f64;
         const MAX_ITER: u32 = 32;
-        const LINES: u32 = 32;
-        const SEED: f32 = 11.0;
-        const SPREAD: f32 = 1.2;
+        const SEED: f32 = 8.0;
+        const SPREAD: f32 = 2.0;
         // The mean position sweeps a narrow arc here, so spread it
         // across the palette -- otherwise every bin holds the same
         // colour and the comparison below says nothing.
-        const SCALE: f32 = 11.6;
+        const SCALE: f32 = 19.6;
 
         let mut config = crate::config::FractalConfig::default();
         config.palette = crate::scene::palette::Palette {
@@ -1657,7 +1690,6 @@ mod tests {
         esc.zoom_log2 = zoom;
         esc.max_iter = MAX_ITER;
         esc.formula_params.insert("seed".to_string(), SEED);
-        esc.formula_params.insert("lines".to_string(), LINES as f32);
         esc.formula_params.insert("spread".to_string(), SPREAD);
         esc.coloring_params.insert("mode".to_string(), 0.0);
         esc.coloring_params.insert("scale".to_string(), SCALE);
@@ -1717,27 +1749,7 @@ mod tests {
         .expect("readback");
         escape.destroy();
 
-        fn hash(x: u32) -> u32 {
-            let mut h = x;
-            h ^= h >> 16;
-            h = h.wrapping_mul(0x7feb_352d);
-            h ^= h >> 15;
-            h = h.wrapping_mul(0x846c_a68b);
-            h ^= h >> 16;
-            h
-        }
-        fn unit(x: u32) -> f64 {
-            (hash(x) >> 8) as f64 / 16_777_216.0
-        }
-        let s = (SEED as u32).wrapping_mul(2_654_435_761);
-        let lines: Vec<(f64, f64, f64)> = (0..LINES)
-            .map(|k| {
-                let a = unit(k.wrapping_mul(2).wrapping_add(s)) * std::f64::consts::PI;
-                let o = (unit(k.wrapping_mul(2).wrapping_add(1).wrapping_add(s)) * 2.0 - 1.0)
-                    * SPREAD as f64;
-                (a.cos(), a.sin(), o)
-            })
-            .collect();
+        let lines = origami_oracle_lines(SEED as u32, MAX_ITER as usize, SPREAD as f64);
 
         let span = 4.0 / zoom.exp2();
         // Two candidate explanations of the same image, binned the
@@ -1746,19 +1758,16 @@ mod tests {
         let mut mag_t = Vec::with_capacity((w * h) as usize);
         for py in 0..h {
             for px in 0..w {
-                let mut zx = ((px as f64 + 0.5) / w as f64 - 0.5) * span;
-                let mut zy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span);
+                let mut z = [
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span),
+                ];
                 let (mut sx, mut sy, mut smag) = (0.0f64, 0.0f64, 0.0f64);
-                for i in 0..MAX_ITER {
-                    let (nx, ny, o) = lines[(i % LINES) as usize];
-                    let d = zx * nx + zy * ny - o;
-                    if d > 0.0 {
-                        zx -= 2.0 * d * nx;
-                        zy -= 2.0 * d * ny;
-                    }
-                    sx += zx;
-                    sy += zy;
-                    smag += (zx * zx + zy * zy).sqrt();
+                for l in &lines {
+                    z = origami_oracle_fold(z, l);
+                    sx += z[0];
+                    sy += z[1];
+                    smag += (z[0] * z[0] + z[1] * z[1]).sqrt();
                 }
                 let n = MAX_ITER as f64;
                 let ang = (sy / n).atan2(sx / n) / std::f64::consts::TAU + 0.5;
