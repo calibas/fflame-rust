@@ -1924,6 +1924,62 @@ the test separately asserts the creases EXIST, because "matches the
 oracle" would pass if both were smooth washes. Making the reflection
 unconditional sends the agreement to 73.32/255.
 
+**A third correction, from a user looking at the render: colour comes
+from the average POSITION, not the average magnitude.** McCabe colours
+each point by "a weighted average of that list of positions" — a 2-D
+vector — and the report was that our image "seem[ed] kinda like a
+kaleidoscope", not like the published work. It was: `magnitude_average`
+collapses the orbit to a mean |z| first, and concentric contour rings
+are what that produces. Reprototyped both in numpy side by side
+(`output/origami/c-magnitude.png` vs `c-angle.png`): the ANGLE of the
+mean position carries the creased, layered-paper seams, and the
+magnitude carries the rings. Shipped `position_average` — accumulates
+`state + z`, divides by the iteration count, and maps either the angle
+(default) or the length. The shipped config moved to it.
+
+Two things about it are worth writing down. The average is
+UNWEIGHTED, where McCabe weights each fold; a per-step weight needs the
+iteration index inside the coloring accumulator, and only the formula
+side has that today (`FormulaFeature::NeedsIndex`). And the source's
+full mapping drives hue AND brightness from the one vector, which a
+1-D palette cannot do — reaching it needs a coloring that writes RGB
+directly, which the escape template has no path for.
+
+Its `scale` matters more than for other colorings: the mean position
+sweeps only a narrow arc across a typical view — measured at **0.09 of
+a turn** on the shipped config — so at `scale = 1.0` the whole image
+lands in one slice of the palette and reads as flat. The shipped
+config uses 11.6, which is 1/0.086.
+
+The GPU test asserts BOTH directions, because either alone is weak: the
+render must track an f64 average-position oracle (**0.37/255**), and
+must NOT be explained by the mean magnitude (**58.66/255**, a 158x
+separation). Reintroducing the bug — accumulating `length(z)` again —
+flattens the image so completely that the first assertion passes on a
+constant picture; it is the ratio that catches it.
+
+**Zooming in does not reveal more detail, and cannot.** The other
+report was that "zooming also doesn't work very well, you don't get
+any more detail past zoom 1". That is a property of folding, not a
+limitation of the port: each fold is a piecewise isometry, so a
+sequence of F folds cuts the plane into at most O(F) affine pieces,
+and nothing anywhere expands — unlike an escape-time map, whose
+derivative grows without bound and manufactures structure at every
+scale. Measured, counting creases as second-difference kinks along
+each row:
+
+| zoom | crease density | value range |
+|-----:|---------------:|------------:|
+| −1   | 0.80           | 5.17        |
+| 2    | 0.0103         | —           |
+| 5    | 0.000          | —           |
+| 9    | 0.000          | 0.009       |
+
+Raising the fold count and the line count to 256 did not change it.
+The structure is all at one scale — first fold coarsest, last finest,
+inverted from escape-time, where the first iterations set the coarse
+shape. Origami is a formula to scrub `seed` on, not one to dive into.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep

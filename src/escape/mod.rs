@@ -272,6 +272,7 @@ pub static COLORINGS: &[&ColoringDef] = &[
     &colorings::DISTANCE_ESTIMATE,
     &colorings::MAGNITUDE_AVERAGE,
     &colorings::NORMAL_MAP,
+    &colorings::POSITION_AVERAGE,
 ];
 
 /// Look up a formula by name. An unknown name renders the default

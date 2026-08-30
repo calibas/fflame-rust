@@ -535,3 +535,79 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
     accum_init: "",
     wgsl_accum: "",
 };
+
+/// Position average — the mean POSITION of the orbit, not the mean
+/// magnitude.
+///
+/// The distinction matters for folding maps. McCabe's Butterfly
+/// Origami colours each point by *"a weighted average of that list of
+/// positions"* — the orbit points themselves — and that average is a
+/// 2-D vector whose ANGLE carries the creased, layered-paper
+/// structure. Averaging |z| instead (see [`MAGNITUDE_AVERAGE`])
+/// collapses that vector to a length and renders the same orbit as
+/// concentric contour rings: a kaleidoscope rather than folded paper.
+/// Prototyped side by side before this was written.
+///
+/// `mode` picks which component of the average position becomes the
+/// palette coordinate. The source's full mapping is hue AND
+/// brightness from the one vector; a palette here is one-dimensional,
+/// so the angle is offered as the default (it is the half that
+/// carries the seams) and the magnitude as the alternative. Reaching
+/// the full 2-D mapping would need a coloring that writes RGB
+/// directly, which the escape template does not have.
+///
+/// The average is UNWEIGHTED. McCabe weights each fold, but a weight
+/// per step needs the iteration index inside the accumulator, and
+/// only the formula side has that today (`FormulaFeature::NeedsIndex`).
+pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
+    name: "position_average",
+    display_name: "Position Average",
+    features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
+    parameters: &[
+        EscapeParamDef {
+            name: "mode",
+            display_name: "Component",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "0: angle of the average position (carries the fold seams), \
+                      1: its distance from the origin.",
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 64.0,
+            tooltip: "Palette distance per unit. A whole turn of the angle \
+                      spans the palette once at 1.0, but the average position \
+                      often sweeps only a narrow arc across a given view -- \
+                      0.09 of a turn on the shipped Origami -- so raising this \
+                      is how the structure becomes visible.",
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+    // state is the running SUM of orbit positions; n is how many.
+    let n = max(f32(sum.n), 1.0);
+    let avg = state / n;
+    if (cparam(0u) < 0.5) {
+        // Angle. The origin guard matters: atan2 at a zero pair is
+        // the Metal fast-math hazard (pi/4 for same-sign zeros, NaN
+        // for mixed), and an average position of exactly zero is
+        // reachable wherever the orbit is symmetric about it.
+        if (dot(avg, avg) < 1e-30) {
+            return 0.0;
+        }
+        return (atan2(avg.y, avg.x) * 0.159154943 + 0.5) * cparam(1u);
+    }
+    return length(avg) * cparam(1u);
+}
+"#,
+    accum_init: "vec2<f32>(0.0, 0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+    return state + z;
+}
+"#,
+};

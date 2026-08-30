@@ -130,6 +130,19 @@ prototyping in numpy before writing Rust:
   engine maps values anyway — do they appear. The first greyscale
   prototype looked like a featureless wash and nearly got this
   abandoned.
+- **The colour is a weighted average of POSITIONS, not of
+  magnitudes.** Missed on the first pass, and caught by a user
+  looking at the render rather than by any measurement: with
+  `magnitude_average` it "seem[ed] kinda like a kaleidoscope". The
+  angle of the mean position carries the creased seams; the mean |z|
+  carries concentric rings. Shipped `position_average` for it.
+
+And one thing the plan did not anticipate at all: **zoom buys
+nothing.** Folds are piecewise isometries, so F of them cut the plane
+into O(F) affine pieces and there is no expansion to make finer ones.
+Measured crease density fell 0.80 at zoom −1 to 0.000 by zoom 5, with
+the fold and line counts raised to 256. The family is a `seed` to
+scrub, not a place to dive.
 
 The plan's "seeded line hash" survived, but with an integer hash
 rather than the usual `fract(sin(x)*k)`, which is precision-sensitive
