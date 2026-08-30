@@ -181,6 +181,15 @@ pub struct FormulaDef {
     pub wgsl_prev_init: &'static str,
     /// Which quantity the escape test compares (see [`EscapeMetric`]).
     pub escape_metric: EscapeMetric,
+    /// Computes per-render data on the CPU from the RESOLVED formula
+    /// params (slot-ordered, defaults applied) and uploads it into the
+    /// uniform's `fdata` array — read in WGSL via `fdata4(i)`. At most
+    /// 256 floats (64 vec4s); shorter output is zero-padded. For
+    /// tables every pixel would otherwise recompute identically:
+    /// Origami's fold lines are the reason this exists — building
+    /// them per thread cost ~1000 fold ops and a 1 KB private array
+    /// per pixel, slow everywhere and a TDR hang under supersampling.
+    pub derived_data: Option<fn(&[f32]) -> Vec<f32>>,
     /// WGSL defining
     /// `fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32>`
     /// — the derivative-orbit update evaluated at the PRE-step iterate
