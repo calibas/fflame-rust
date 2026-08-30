@@ -618,9 +618,10 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 /// symmetries about the sequence of random lines. Then color the
 /// result by performing an average over all the image points."* The
 /// only public implementation found is Kyle McDonald's Processing
-/// port (OpenProcessing sketch 1185, recovered via the Wayback
-/// Machine), and it contains the detail neither prose description
-/// mentions:
+/// port (OpenProcessing sketch 1185 — source member-locked today,
+/// embedded in full in the 2012 Wayback snapshot:
+/// <https://web.archive.org/web/20120209174422/http://www.openprocessing.org/visuals/?visualID=1185>),
+/// and it contains the detail neither prose description mentions:
 ///
 /// **EACH FOLD LINE'S ENDPOINTS ARE THEMSELVES FOLDED THROUGH ALL
 /// PREVIOUS FOLDS** — `randomPosition(i)` returns

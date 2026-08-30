@@ -1383,7 +1383,8 @@ mod tests {
     /// The fold-line construction both origami oracles share: line j's
     /// endpoints are seeded random points FOLDED THROUGH LINES 0..j-1,
     /// so every crease lands on the current wad (Kyle McDonald's
-    /// OpenProcessing 1185, recovered via the Wayback Machine — the
+    /// OpenProcessing 1185, recovered via the Wayback Machine,
+    /// <https://web.archive.org/web/20120209174422/http://www.openprocessing.org/visuals/?visualID=1185> — the
     /// detail the prose descriptions of McCabe's algorithm omit).
     fn origami_oracle_lines(seed: u32, folds: usize, spread: f64) -> Vec<[f64; 4]> {
         fn hash(x: u32) -> u32 {
