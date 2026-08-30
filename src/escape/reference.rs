@@ -110,6 +110,11 @@ impl MapId {
         Self { power: 2, ship: false, variant: MAP_PHOENIX, params: p }
     }
 
+    /// Lambda: `c*z*(1-z)`, seeded at the critical point 1/2.
+    pub fn lambda() -> Self {
+        Self { power: 2, ship: false, variant: MAP_LAMBDA, params: [0.0, 0.0] }
+    }
+
     /// Manowar: Phoenix's recurrence with p = 1 and a pixel seed.
     pub fn manowar() -> Self {
         Self { power: 2, ship: false, variant: MAP_MANOWAR, params: [1.0, 0.0] }
@@ -148,6 +153,19 @@ pub const MAP_PHOENIX: u32 = 2;
 /// seed, which is why it is a variant here rather than its own tier
 /// everywhere downstream.
 pub const MAP_MANOWAR: u32 = 3;
+
+/// Lambda (logistic) — `z' = c*z*(1 - z)`, seeded at the CRITICAL
+/// POINT z_0 = 1/2 rather than at zero.
+///
+/// The seed is the whole reason this cannot ride `MAP_PLAIN`:
+/// `d/dz [z(1-z)]` vanishes at 1/2, so 1/2 is the critical point whose
+/// orbit decides the parameter plane. Zero is a FIXED POINT of the map
+/// for every c, so a zero-seeded lambda plane is one flat colour.
+///
+/// The value 4 collides with Burning Ship's Buffalo fold, exactly as
+/// MAP_MANOWAR collides with Celtic; `ship` disambiguates, and every
+/// read of `ship_variant` as a map family must be guarded by `!ship`.
+pub const MAP_LAMBDA: u32 = 4;
 
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
@@ -620,6 +638,17 @@ impl ReferenceOrbit {
             z_prev0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
             first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
         }
+        // Lambda's parameter plane seeds at the CRITICAL POINT 1/2,
+        // not at zero -- zero is a fixed point of c*z*(1-z) for every
+        // c, so a zero-seeded plane would be one flat colour. In Julia
+        // mode the seed is the pixel, as everywhere else.
+        if !ship && ship_variant == MAP_LAMBDA && julia_c.is_none() {
+            z0 = FixedComplex {
+                re: FixedPoint::from_f64(0.5, n),
+                im: FixedPoint::zero(n),
+            };
+            first = [0.5, 0.0];
+        }
         let mut orbit = Self {
             center_re: center_re.to_string(),
             center_im: center_im.to_string(),
@@ -798,6 +827,31 @@ impl ReferenceOrbit {
                 // z^p, or conj(z)^p for the Tricorn family. See
                 // MAP_CONJ: with `ship` false, `ship_variant` selects
                 // which non-fold map this is.
+                if self.ship_variant == MAP_LAMBDA {
+                    // z' = c*z*(1-z). No cancellation to worry about
+                    // here -- this is the full-precision reference, so
+                    // `1 - z` is an exact fixed-point subtraction; the
+                    // cancellation question belongs to the DELTA step
+                    // on the GPU, which never forms this difference.
+                    let one = FixedPoint::from_f64(1.0, self.n_limbs);
+                    let mut om = FixedComplex {
+                        re: one.sub(&self.z.re),
+                        im: self.z.im.clone(),
+                    };
+                    // Negate the imaginary part, keeping zero
+                    // canonical (a zero magnitude is non-negative by
+                    // contract -- the same guard MAP_CONJ needs).
+                    om.im.neg = !om.im.neg && !om.im.limbs.iter().all(|l| *l == 0);
+                    self.z = self.c.mul(&self.z.mul(&om));
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
                 if self.ship_variant == MAP_PHOENIX || self.ship_variant == MAP_MANOWAR {
                     // z' = z^2 + c + p*z_prev, and z_prev advances to
                     // the iterate we just left. Manowar is p = 1 (set
@@ -2243,6 +2297,76 @@ mod tests {
             })
             .fold(0.0f32, f32::max);
         assert!(d > 1e-3, "different p produced the same orbit: {d:e}");
+    }
+
+    /// The lambda reference must iterate `c*z*(1-z)` from the
+    /// CRITICAL POINT, in fixed point, matching an f64 oracle.
+    ///
+    /// Two things can go wrong independently and this separates them.
+    /// The map: `1 - z` is a subtraction the other families never do,
+    /// and the imaginary part must be NEGATED rather than subtracted
+    /// (sign-magnitude limbs, so a naive `sub` on a zero would leave a
+    /// non-canonical negative zero). The seed: zero is a fixed point
+    /// of this map for every c, so seeding there gives a constant
+    /// orbit -- which would look like a working reference right up
+    /// until every pixel rendered the same colour.
+    #[test]
+    fn lambda_reference_iterates_the_logistic_map_from_the_critical_point() {
+        let orbit = ReferenceOrbit::compute(
+            "0.6",
+            "0.55",
+            8.0,
+            None,
+            80,
+            None,
+            2,
+            false,
+            MAP_LAMBDA,
+            [0.0, 0.0],
+        )
+        .expect("reference");
+
+        // The seed must be 1/2, not 0.
+        let first = orbit.z_f32(0);
+        assert!(
+            (first[0] - 0.5).abs() < 1e-6 && first[1].abs() < 1e-6,
+            "lambda seeded at {first:?}, not the critical point 1/2"
+        );
+
+        // f64 oracle for the same map and parameter.
+        let (cr, ci) = (0.6f64, 0.55f64);
+        let (mut zr, mut zi) = (0.5f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for k in 1..40u32 {
+            // w = z * (1 - z)
+            let (ar, ai) = (1.0 - zr, -zi);
+            let (pr, pi) = (zr * ar - zi * ai, zr * ai + zi * ar);
+            // z' = c * w
+            let nr = cr * pr - ci * pi;
+            let ni = cr * pi + ci * pr;
+            zr = nr;
+            zi = ni;
+            if k >= orbit.len() {
+                break;
+            }
+            let got = orbit.z_f32(k as usize);
+            let err = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+            worst = worst.max(err);
+        }
+        println!("lambda reference: worst |error| vs f64 = {worst:.3e}");
+        assert!(
+            worst < 1e-5,
+            "the fixed-point lambda reference does not track the map ({worst:.3e})"
+        );
+
+        // And the orbit must actually MOVE -- a constant orbit would
+        // pass a sloppier comparison and is exactly what a zero seed
+        // produces.
+        let last = orbit.z_f32(orbit.len() as usize - 1);
+        assert!(
+            (last[0] - 0.5).abs() > 1e-3 || last[1].abs() > 1e-3,
+            "the lambda reference never left its seed"
+        );
     }
 
     /// The conjugate family's REFERENCE must actually conjugate.

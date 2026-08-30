@@ -66,6 +66,7 @@ independent oracle and pinned by a visual config:
 | Tricorn / multicorn | both | 0/768 vs direct, powers 2/3/5 |
 | Phoenix | both | 0.00% vs an exact orbit at zoom 20 and 28 |
 | Manowar | DEEP ONLY, by measurement | 1.6-2.1% vs an exact orbit at zoom 20-34; 18-27% on the scaled rung |
+| Lambda | both | 0.23% / 0.26% vs an exact orbit at zoom 30 — see the note on why the CAP is part of that number |
 
 Plus 8 new `wgsl_derivative` blocks (tricorn, mcmullen, lambda,
 cactus, exponential, trig, tetration, barnsley).
@@ -76,8 +77,16 @@ Still open, in the order the survey judged tractable:
   assumed: Kaliset needs a fixed-point reciprocal and about 37
   integer bits (|Z| reaches 1.8e11), Ducks needs delta forms for
   `ln` and `atan2`.
-- **Lambda, Feather, McMullen, Magnet** — polynomial or rational;
-  perturbation works, division needs care near poles. Untouched.
+- **Lambda — DONE 2026-08-30.** The first tier whose PARAMETER
+  MULTIPLIES, so its delta step reads the reference's own c and its
+  parameter-plane term picks up `Z(1-Z)` rather than a bare `+ dc`.
+  Both rungs. Details in
+  [escape-time-fractals.md](escape-time-fractals.md).
+- **Feather, McMullen, Magnet** — rational or component-wise;
+  perturbation works, division needs care near poles. All three have a
+  clean delta form (for a quotient, `dq = (dN - q*dD)/(D + dD)` with
+  `q = N/D` the reference quotient — small over full-size, no
+  cancellation). Untouched.
 - **Tetration / exponential / trig / Collatz** — transcendental
   deltas exist but the error analysis is its own study.
 - **Newton / Nova** — convergent, not escaping; deep zoom there wants

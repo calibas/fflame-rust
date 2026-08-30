@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "016d0156",
+  "git_hash": "ddc21b9d",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -353,6 +353,10 @@
     "escape-lambda-de-julia.png": {
       "bytes": 9356,
       "sha256": "af4b90c2657fd9be1bb70d40b70949615e3dab9242db95a72cc7785e0e6df26d"
+    },
+    "escape-lambda-deep.png": {
+      "bytes": 26929,
+      "sha256": "3947478530aa6450afbee8b0df85000ab0e30baebd4fef13033a81dd3f3686b9"
     },
     "escape-lambda-plane.png": {
       "bytes": 5411,

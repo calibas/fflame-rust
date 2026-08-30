@@ -2207,6 +2207,74 @@ this reason, so the machinery exists. Not attempted here: it is a
 different estimator, and "distance estimate" should keep meaning the
 analytic one until something deliberately adds the other.
 
+### The Lambda perturbation tier (2026-08-30)
+
+`z' = c*z*(1-z)` now perturbs on both rungs, taking the logistic
+family from the direct path's ~2^14 ceiling to the same depth the
+Mandelbrot tiers reach.
+
+**It is the first tier whose parameter MULTIPLIES.** Every earlier one
+has c entering additively, so the delta step never needed to know the
+reference's c at all. Expanding `(C+dc)(Z+d)(1-Z-d) - C*Z(1-Z)` and
+collecting gives
+
+    dP = d*(1 - 2Z - d)
+    d' = C*dP + dc*(Z(1-Z) + dP)
+
+so the step carries a factor of C, and the parameter-plane term acts
+on the reference's own z-product `Z(1-Z)` instead of being a bare
+`+ dc`. C rides in the perturb uniform as plain f32, in what used to
+be two words of padding: it is a MULTIPLIER, so only its relative
+error matters, and 2^-24 is what the rung already accepts for the
+reference itself.
+
+**The seed is the other half.** Lambda's parameter plane starts at the
+CRITICAL POINT 1/2, because zero is a fixed point of this map for
+every c — a zero-seeded lambda plane is one flat colour. The reference
+generator needed a matching branch (`MAP_LAMBDA`, seeded 1/2, with the
+`1 - z` subtraction done in fixed point and the imaginary part negated
+rather than subtracted, since the limbs are sign-magnitude and a naive
+`sub` would leave a non-canonical negative zero). The delta still
+starts at zero, because both orbits share that seed.
+
+BLA is declined for now. It is derivable — the map is holomorphic with
+`A = C(1-2Z)` and `B = Z(1-Z)` — but the table builder is written
+around the power tier's `A = p*Z^(p-1)` and has no per-tier hook yet,
+so Lambda iterates per step.
+
+**An f64 oracle is NOT ground truth for this family, and finding that
+out cost most of the work.** The verification pattern that settled
+Phoenix and Manowar — render, then compare escaped-or-not against an
+f64 orbit — reported 19% disagreement here, which looks exactly like a
+broken delta step. It was not. Lambda's critical orbit LINGERS: near
+the boundary pixels take hundreds of iterations to escape, where the
+Mandelbrot and Phoenix views finish in tens, and over that many steps
+an independent f64 orbit amplifies its own rounding past the escape
+decision.
+
+Three measurements separated the instrument from the code:
+
+- the delta recurrence reproduces the exact difference to f64 rounding
+  (~1e-16 against deltas of 1e-7), traced step by step;
+- disagreement is flat in zoom — 18.6% at zoom 16, 19.6% at 20, 18.5%
+  at 24 — which is not what a precision bug looks like;
+- against a **60-digit** ground truth on 120 sampled pixels, the f64
+  direct orbit was wrong on **10.0%** and the perturbed recurrence on
+  **7.5%**. The perturbed path is the more accurate of the two, which
+  is the entire point of carrying an exact reference.
+
+The instrument was then fixed rather than the code: with the same view
+and the same shader, disagreement runs 0.23% at `max_iter` 600 and
+9.40% at 3000. The shipped test uses 600 — long enough that plenty of
+pixels have escaped, short enough that f64 is still an authority — and
+says so in a comment, with the numbers, so the next person does not
+re-run the same investigation.
+
+A degeneracy guard came out of the same episode and is worth keeping
+generally: the first center tried was entirely interior, and an
+all-interior view agrees with ANY oracle. The test now refuses to draw
+a conclusion unless between 10% and 90% of pixels escaped.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep

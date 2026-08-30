@@ -344,8 +344,15 @@ struct PerturbParams {
     // dispatch; per-pixel state rides binding 6 between them.
     iter_start: u32,
     iter_end: u32,
-    _pad_c0: u32,
-    _pad_c1: u32,
+    // The reference orbit's own c, as plain f32. Only the maps whose
+    // parameter MULTIPLIES read it -- Lambda's delta step carries a
+    // factor of c, where z^2 + c's carries none, which is why every
+    // earlier tier could ignore it. It lands in what used to be two
+    // words of padding, so the uniform's size and layout are
+    // unchanged. f32 is enough because it is a MULTIPLIER: only its
+    // relative error matters, and that is the same 2^-24 the scaled
+    // rung already accepts for the reference itself.
+    ref_c: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -754,8 +761,15 @@ struct PerturbParams {
     // dispatch; per-pixel state rides binding 6 between them.
     iter_start: u32,
     iter_end: u32,
-    _pad_c0: u32,
-    _pad_c1: u32,
+    // The reference orbit's own c, as plain f32. Only the maps whose
+    // parameter MULTIPLIES read it -- Lambda's delta step carries a
+    // factor of c, where z^2 + c's carries none, which is why every
+    // earlier tier could ignore it. It lands in what used to be two
+    // words of padding, so the uniform's size and layout are
+    // unchanged. f32 is enough because it is a MULTIPLIER: only its
+    // relative error matters, and that is the same 2^-24 the scaled
+    // rung already accepts for the reference itself.
+    ref_c: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -1512,6 +1526,30 @@ pub enum PerturbTier {
     /// the SEED -- both deltas start at d0, not zero -- and in what
     /// the history rebases against: Z_-1 = Z_0 = c here, zero there.
     Manowar,
+    /// Lambda (logistic): `c*z*(1-z)`.
+    ///
+    /// The first tier whose PARAMETER MULTIPLIES the map. Every
+    /// earlier one has c entering additively, so the delta step never
+    /// needed to know the reference's c at all; here it is a factor,
+    /// and the parameter-plane term picks up the reference's own
+    /// z-product as well:
+    ///
+    ///   dP = d*(1 - 2Z - d)          (the z-part, cancellation-free)
+    ///   d' = C*dP + dc*(Z(1-Z) + dP)
+    ///
+    /// Derived by expanding `(C+dc)(Z+d)(1-Z-d) - C*Z(1-Z)` and
+    /// collecting; every term is a product of available quantities
+    /// with no subtraction of nearly-equal values, which is the whole
+    /// requirement for a delta form.
+    ///
+    /// Seeded at the CRITICAL POINT 1/2 on the parameter plane (zero
+    /// is a fixed point of this map for every c). The delta still
+    /// starts at zero there, because both orbits share that seed.
+    ///
+    /// BLA is available in principle -- the map is holomorphic and
+    /// `A = C(1-2Z)`, `B = Z(1-Z)` -- but is not built yet, so this
+    /// tier iterates per step.
+    Lambda,
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
@@ -1694,6 +1732,44 @@ fn delta_step_scaled_on(p: u32, zr: &str, w: &str) -> String {
     out
 }
 
+/// Lambda's scaled-rung delta step.
+///
+/// With `d = S*w` and `dc = S*d0`, dividing the derivation in
+/// [`PerturbTier::Lambda`] through by S gives
+///
+///   q  = w*(1 - 2Z - S*w)        (= dP/S)
+///   w' = C*q + d0*(Z(1-Z) + S*q)
+///
+/// The `S*w` and `S*q` terms are the second-order ones, dropped under
+/// the deep-linear flag exactly as the power tier drops its `S*w^2`.
+fn delta_step_lambda() -> String {
+    r#"        // Lambda: w' = C*q + d0*(P + S*q), q = w*(1 - 2Z - S*w).
+        var t = vec2<f32>(1.0, 0.0) - 2.0 * z_ref;
+        if ((perturb.flags & 1u) == 0u) {
+            t = t - perturb.s * w;
+        }
+        let q = vec2<f32>(w.x * t.x - w.y * t.y, w.x * t.y + w.y * t.x);
+        let cref = perturb.ref_c;
+        var w_new = vec2<f32>(q.x * cref.x - q.y * cref.y, q.x * cref.y + q.y * cref.x);
+        if (!is_julia_perturb) {
+            // P = Z(1 - Z), the reference's own z-product: what the
+            // pixel's c-offset acts on even where the delta is zero.
+            let om = vec2<f32>(1.0, 0.0) - z_ref;
+            var p_ref = vec2<f32>(
+                z_ref.x * om.x - z_ref.y * om.y,
+                z_ref.x * om.y + z_ref.y * om.x,
+            );
+            if ((perturb.flags & 1u) == 0u) {
+                p_ref = p_ref + perturb.s * q;
+            }
+            w_new = w_new + vec2<f32>(
+                d0_term.x * p_ref.x - d0_term.y * p_ref.y,
+                d0_term.x * p_ref.y + d0_term.y * p_ref.x,
+            );
+        }"#
+    .to_string()
+}
+
 /// The floatexp flavor of the same step.
 /// The default Zhuoran rebase: restart the reference at index 0.
 fn rebase_default() -> String {
@@ -1846,6 +1922,36 @@ fn delta_step_two_term_fe(p_expr: &str) -> String {
 /// in double-float from the reference's own DF entries, so the wrap
 /// does not truncate a pixel's history to f32 -- the reseed-precision
 /// loss this rung exists to fix.
+/// Lambda on the deep rung. Same algebra as [`delta_step_lambda`],
+/// but `w` is the absolute delta here rather than `delta/S`, so the
+/// scale factors drop out entirely:
+///
+///   dP = d*(1 - 2Z - d)
+///   d' = C*dP + dc*(Z(1-Z) + dP)
+///
+/// The reference enters through `cfe2_mul_zdfe`, which applies the DF
+/// mantissa with its OWN exponent -- so a near-nucleus iterate cannot
+/// underflow out of the multiplier, the same care the power tier takes.
+fn delta_step_lambda_fe() -> String {
+    r#"        // Lambda (floatexp): d' = C*dP + dc*(P + dP).
+        let one_fe = cfe2_from_f32(vec2<f32>(1.0, 0.0));
+        let z_fe = cfe2_mul_zdfe(one_fe, z_ref_m, z_ref_lo_m, z_ref_e);
+        let two_z_fe = cfe2_mul_zdfe(one_fe, 2.0 * z_ref_m, 2.0 * z_ref_lo_m, z_ref_e);
+        // t = 1 - 2Z - d. Near Z = 1/2 this cancels, but that is the
+        // map's own vanishing multiplier rather than a lost delta:
+        // the absolute error stays at the DF rounding level and the
+        // product below is correspondingly small.
+        let t_fe = cfe2_add(one_fe, cfe2_mul_c32(cfe2_add(two_z_fe, w), vec2<f32>(-1.0, 0.0)));
+        let dp = cfe2_mul(w, t_fe);
+        var w_new = cfe2_mul_c32(dp, perturb.ref_c);
+        if (!is_julia_perturb) {
+            let om_fe = cfe2_add(one_fe, cfe2_mul_c32(z_fe, vec2<f32>(-1.0, 0.0)));
+            let p_ref = cfe2_mul(z_fe, om_fe);
+            w_new = cfe2_add(w_new, cfe2_mul(d0, cfe2_add(p_ref, dp)));
+        }"#
+    .to_string()
+}
+
 fn rebase_default_fe() -> String {
     "        let rebase_delta = z_full - ref_z(0u);
              if (m >= perturb.orbit_len - 1u
@@ -2105,6 +2211,7 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Tricorn(p) => delta_step_conj(p.clamp(2, 12)),
                 PerturbTier::Phoenix => delta_step_phoenix(),
                 PerturbTier::Manowar => delta_step_manowar(),
+                PerturbTier::Lambda => delta_step_lambda(),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
@@ -2112,6 +2219,7 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Tricorn(p) => delta_step_conj_fe(p.clamp(2, 12)),
                 PerturbTier::Phoenix => delta_step_phoenix_fe(),
                 PerturbTier::Manowar => delta_step_manowar_fe(),
+                PerturbTier::Lambda => delta_step_lambda_fe(),
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
@@ -2871,6 +2979,8 @@ mod tests {
             (PerturbTier::Tricorn(2), true),
             (PerturbTier::Phoenix, false),
             (PerturbTier::Phoenix, true),
+            (PerturbTier::Lambda, false),
+            (PerturbTier::Lambda, true),
         ] {
             let src = assemble_perturbed(&colorings::SMOOTH, floatexp, tier);
             let module = naga::front::wgsl::parse_str(&src)
