@@ -2004,6 +2004,68 @@ mod tests {
             "{interior_moved} of {interior_total} flat interior pixels changed -- \
              the light is being applied where there is no surface"
         );
+
+        // SHADOWS AND HIGHLIGHTS MUST BE SYMMETRIC, and reach full.
+        //
+        // Reported from the app: black shadows at full strength over a
+        // white palette came out mid-grey, while highlights were fine.
+        // The cause was normalizing the two sides by different
+        // achievable spans of a Lambert dot product -- the normal's z
+        // is always positive, so the dot could not fall below
+        // -|l.xy| = -0.707, while the highlight side was normalized
+        // over a span of just 1 - l.z = 0.293. At a 45-degree tilt the
+        // highlight was saturated at 1.000 and the shadow was 0.414,
+        // and 0.414 of black over white IS mid-grey. It was also
+        // non-monotonic: a vertical wall facing the light got no
+        // highlight at all.
+        //
+        // Flipping the light 180 degrees negates the tilt, so a
+        // shadow-only render at A must equal a highlight-only render
+        // at A+180 EXACTLY, given the same colour, strength and blend.
+        // `mix` is used for both so the two sides run identical
+        // arithmetic and the comparison can be bit-exact.
+        let one_sided = |angle: f32, shadow: bool| {
+            let mut c = base.clone();
+            let amt = if shadow { (1.0, 0.0) } else { (0.0, 1.0) };
+            c.shading = crate::config::escape::EscapeShading {
+                enabled: true,
+                light_angle: angle,
+                height: 30.0,
+                shadow_color: [0.0, 0.0, 0.0],
+                shadow_strength: amt.0,
+                shadow_blend: crate::config::escape::ShadingBlend::Mix,
+                highlight_color: [0.0, 0.0, 0.0],
+                highlight_strength: amt.1,
+                highlight_blend: crate::config::escape::ShadingBlend::Mix,
+                ..Default::default()
+            };
+            c
+        };
+        let shadow_at_0 = render(&one_sided(0.0, true), &mut renderer);
+        let highlight_at_180 = render(&one_sided(180.0, false), &mut renderer);
+        assert_eq!(
+            shadow_at_0, highlight_at_180,
+            "shadows and highlights are not mirror images of each other -- one \
+             side is normalized differently from the other, which is what made \
+             black shadows top out at mid-grey"
+        );
+
+        // And the shadow side must actually REACH: somewhere in a
+        // relief this steep, mixing full-strength black must land near
+        // black. The old asymmetry capped it at 0.414 of the way (58%
+        // of the base luminance), so this threshold is what separates
+        // the bug from the fix rather than an arbitrary number.
+        let darkest = shadow_at_0
+            .chunks(4)
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .min()
+            .unwrap_or(0);
+        println!("relief: darkest shadowed pixel {darkest}/765");
+        assert!(
+            darkest < 190,
+            "full-strength black shadows only reached {darkest}/765 -- they \
+             cannot get dark, which is the reported bug"
+        );
     }
 
     /// GPU-time pacing must engage, and must not change the image.

@@ -2094,13 +2094,35 @@ including the supersampled ones.
 
 **Two normalizations that are not cosmetic.**
 
-*Flat must mean untouched.* The lighting term is measured against
-`flat_d`, the response of an unshaded plane, so both the shadow and
-highlight terms start at zero where the surface has no slope. Without
-it the layer tints the entire image — including the interior of the
-set, which has no value field at all. The GPU test asserts exactly
-this, and deleting the normalization moves all 2048 flat interior
-pixels instead of none.
+*Flat must mean untouched.* The response is the signed tilt toward the
+light — the slope along the light direction, divided by
+`sqrt(1 + |grad|²)` to make it `sin(tilt)` — so it is exactly zero on
+flat ground and both terms start there. The GPU test asserts it: the
+interior of the set has no value field at all, and must come through
+the light unchanged.
+
+*And the two sides must be symmetric.* The first version used a
+Lambert dot product with each side normalized by its own achievable
+span, and that shipped a bug the user caught immediately: black
+shadows at full strength over a white palette came out **mid-grey**
+while highlights were fine. The normal's z component is always
+positive, so `dot(n, l)` can never fall below `-|l.xy|` = −0.707,
+while the highlight side was normalized over a span of just
+`1 - l.z` = 0.293. Measured across tilt angles: at 45° the highlight
+was already saturated at 1.000 while the shadow had reached 0.414 —
+and 0.414 of black over white IS mid-grey. Worse, the Lambert term is
+non-monotonic in tilt: a vertical wall facing the light got **no**
+highlight at all, because the dot product peaks at 45° and falls back
+to zero by 90°.
+
+The signed-tilt response has none of that: it runs −1..+1, is
+monotonic, and is symmetric by construction. Measured on the same
+scene, the darkest full-strength black shadow went from 120/255 to
+12/255. The test pins it without a magic threshold — flipping the
+light 180° negates the tilt, so a shadow-only render at angle A must
+be BIT-IDENTICAL to a highlight-only render at A+180 with the same
+colour, strength and `mix` blend. Restoring the Lambert version fails
+that equality.
 
 *Relief is per DISPLAY pixel, not per render pixel.* The difference is
 taken on the supersampled grid, where a given slope spans `factor`

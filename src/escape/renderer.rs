@@ -2316,24 +2316,37 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // field, in value units per pixel.
     let dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
     let dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
-    // Surface normal of the height field. normalize() is also the
-    // saturation: an over-large `height` tips the normal flat against
-    // the surface instead of blowing the lighting out, which is what
-    // makes a single log slider workable across colorings whose value
-    // scales differ by three orders of magnitude.
-    let h = shade.height;
-    // +y is DOWN in pixel space, so dy is negated to put the light
-    // where the azimuth says it is.
-    let n = normalize(vec3<f32>(-dx * h, dy * h, 1.0));
-    let l = normalize(vec3<f32>(shade.light, 1.0));
-    let d = dot(n, l);
-    // A FLAT surface must come out untouched, or shading would tint
-    // the whole image rather than pick out its relief. flat_d is the
-    // response of the unshaded plane, so both terms start at zero
-    // there and grow only where the surface actually tilts.
-    let flat_d = l.z;
-    let hi = clamp((d - flat_d) / max(1.0 - flat_d, 1e-4), 0.0, 1.0);
-    let lo = clamp((flat_d - d) / max(flat_d + 1.0, 1e-4), 0.0, 1.0);
+    // Exaggerated gradient. +y is DOWN in pixel space, so dy is
+    // negated to put the light where the azimuth says it is.
+    let g = vec2<f32>(-dx, dy) * shade.height;
+
+    // THE SIGNED TILT TOWARD THE LIGHT, and not a Lambert dot product.
+    //
+    // `s` is the slope along the light's direction and the divide
+    // turns it into sin(tilt angle) -- so the response runs -1..+1,
+    // is exactly zero on flat ground, is MONOTONIC in the tilt, and
+    // is symmetric: the same slope facing toward or away gives the
+    // same magnitude to the highlight or the shadow.
+    //
+    // The Lambert version this replaces had none of those last two
+    // properties, and both were visible. Because the normal's z
+    // component is always positive, `dot(n, l)` could not fall below
+    // -|l.xy| = -0.707, while the highlight side was normalized over
+    // a span of only 1 - l.z = 0.293: at a 45-degree tilt the
+    // highlight was already saturated at 1.000 while the shadow had
+    // reached 0.414, which is why black-on-white at full strength
+    // came out mid-grey. It was also non-monotonic -- a vertical wall
+    // facing the light got NO highlight, since the dot product peaks
+    // at 45 degrees and falls back.
+    //
+    // The divide doubles as the saturation, so an over-large `height`
+    // walks the response toward +-1 instead of blowing out, which is
+    // what makes one log slider workable across colorings whose value
+    // scales differ by orders of magnitude.
+    let s = dot(g, shade.light);
+    let response = s * inverseSqrt(1.0 + dot(g, g));
+    let hi = clamp(response, 0.0, 1.0);
+    let lo = clamp(-response, 0.0, 1.0);
     var out = rgb;
     out = shade_blend(out, shade.shadow_color, shade.shadow_blend, lo * shade.shadow_strength);
     out = shade_blend(out, shade.highlight_color, shade.highlight_blend, hi * shade.highlight_strength);
