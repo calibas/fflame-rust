@@ -38,7 +38,7 @@ pub mod fields;
 pub mod formulas;
 pub mod renderer;
 
-pub use renderer::{EscapeRenderer, UsableDepth};
+pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};
 
 /// Capability flags a formula can opt into — same pattern as the
 /// variation system's `Feature` enum (a slice on the def, absence ⇒

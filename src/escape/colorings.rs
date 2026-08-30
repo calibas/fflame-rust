@@ -399,10 +399,27 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 
 /// Exterior distance estimation (plan §8): `d = |z|·ln|z| / |dz|`
 /// from the derivative orbit, mapped through −log2 so equal palette
-/// steps mean equal zoom depths of boundary distance. Needs a formula
-/// that supplies a derivative (Mandelbrot, Multibrot, Lambda);
-/// elsewhere |dz| stays at its seed and the coloring degrades to a
-/// |z|·ln|z| wash.
+/// steps mean equal zoom depths of boundary distance.
+///
+/// NEEDS A COMPILED DERIVATIVE, and says so rather than pretending.
+/// Without one `dz` stays at its seed of 1, so `d` collapses to
+/// `|z|·ln|z|` — a smooth function of the escape radius alone, which
+/// renders as a perfectly plausible banded exterior that is not a
+/// distance estimate at all. That is the failure mode this project
+/// keeps finding and keeps refusing: a confident wrong answer is worse
+/// than a visibly missing one. So the coloring returns a flat value
+/// instead, exactly as [`NORMAL_MAP`] returns flat light.
+///
+/// Two cases reach it: the 13 of 25 formulas that define no
+/// derivative, and EVERY perturbed render — the deep rungs do not
+/// iterate a derivative orbit at all, so a Mandelbrot dive past
+/// `PERTURB_MIN_ZOOM` loses it even though the formula has one. The
+/// escape panel says which case you are in.
+///
+/// A finite-difference distance estimate would cover both (the
+/// relief-shading pass already differences the value field for the
+/// same reason), and is the obvious way to lift this limitation
+/// later; it is not what "distance estimate" has meant here so far.
 pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
     name: "distance_estimate",
     display_name: "Distance Estimate",
@@ -417,6 +434,17 @@ pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+    // No derivative compiled => dz is the constant seed, so this
+    // would reduce to |z|.ln|z|: a smooth function of the escape
+    // radius that looks like a distance estimate and is not one.
+    // Flat instead. 0.5 rather than 0.0 deliberately -- pixels that
+    // do not escape are painted by the template, not by this
+    // function, so returning the palette's bottom would make the
+    // exterior blend into the interior and read as "everything is in
+    // the set" rather than "this coloring is unavailable".
+    if (!HAS_DERIVATIVE) {
+        return 0.5;
+    }
     // Escaped only; |z| > 1 at escape so ln|z| > 0.
     let r = max(length(sum.z), 1.0000001);
     let deriv = max(length(sum.dz), 1e-30);

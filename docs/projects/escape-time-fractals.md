@@ -1822,9 +1822,8 @@ shading would be a smooth function of `arg(z)`: convincing relief that
 encodes nothing about the surface. A new `HAS_DERIVATIVE` constant
 tells the coloring which case it is in, and it returns FLAT light
 instead — visibly unshaded beats plausibly wrong. `distance_estimate`
-has the same exposure and still degrades silently; it predates the
-flag and changing it would move baselines, so it is left for a
-deliberate pass.
+had the same exposure and was left silent at the time; it has since
+been guarded too (see below).
 
 **The bug worth remembering.** The first render had a thin black seam
 through the bright quadrant. The template wraps every coloring's value
@@ -2159,6 +2158,54 @@ m-compare.png`: plain, relief at two heights, `normal_map`) shows the
 field-gradient relief reading as the same surface. The analytic look
 remains available as the `normal_map` coloring for anyone who wants it
 exactly. Revisit if a case appears where the difference is visible.
+
+### `distance_estimate` stops pretending (2026-08-30)
+
+The deferred half of the `normal_map` work, finished. `d = |z|·ln|z| /
+|dz|` needs a derivative orbit; without one `dz` is the constant seed
+of 1 and the formula collapses to `|z|·ln|z|` — a smooth function of
+the escape radius alone.
+
+**That failure was invisible because the wrong answer is beautiful.**
+Rendered side by side (`output/origami/de-deep-compare.png`), a
+Mandelbrot dive to zoom 30 gave a fully detailed, entirely convincing
+deep-zoom picture with 516 distinct colours in the exterior — and not
+one pixel of it was a distance estimate. Nothing about the image
+invites suspicion, which is exactly the class of bug this project
+keeps deciding is worse than a broken-looking one.
+
+It now returns a flat 0.5 when `HAS_DERIVATIVE` is false, matching
+`normal_map`'s flat light. 0.5 rather than 0.0 on purpose: pixels that
+do not escape are painted by the template rather than by the coloring,
+so returning the palette's bottom would blend the exterior into the
+interior and read as "everything is in the set" instead of "this
+coloring is unavailable".
+
+**Two cases reach it**, and the second is the one that surprises: the
+13 of 25 formulas that define no derivative, and EVERY perturbed
+render — the deep rungs do not iterate a derivative orbit, so a
+Mandelbrot dive past `PERTURB_MIN_ZOOM` loses its derivative even
+though the formula has one. Both existing visual configs
+(`mandelbrot-de`, `lambda-de-julia`) are shallow views of
+derivative-bearing formulas, so no baseline moved.
+
+**Flat is honest but silent, so the panel now says why.**
+`EscapeRenderer::derivative_gap` answers "formula", "deep path" or
+"none", and the escape panel shows the matching sentence under the
+coloring selector whenever the active coloring declares
+`NeedsDerivative`. It is pinned by assembling the real shader for
+every formula and reading `HAS_DERIVATIVE` back out of the source —
+comparing against a restatement of the rule would pass with both
+sides wrong together. A second test walks a Mandelbrot from zoom 4
+(no gap) to zoom 30 (gap: the deep path) and then adds damping, which
+takes the view back off the perturbed path and restores the
+derivative — so the hint follows the settings rather than the zoom.
+
+A finite-difference distance estimate would cover both cases; the
+relief-shading pass already differences the value field for exactly
+this reason, so the machinery exists. Not attempted here: it is a
+different estimator, and "distance estimate" should keep meaning the
+analytic one until something deliberately adds the other.
 
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,

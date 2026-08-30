@@ -815,6 +815,26 @@ fn show_coloring_section(
                 }
             });
     });
+    // A derivative-based coloring with no derivative to read renders
+    // flat on purpose (a confident wrong image is worse than a visibly
+    // missing one). Flat is honest but silent, so say why — otherwise
+    // the only signal is a blank picture.
+    if coloring.has_feature(crate::escape::ColoringFeature::NeedsDerivative) {
+        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(esc) {
+            let msg = match gap {
+                crate::escape::DerivativeGap::Formula => t!(
+                    "escape_panel.no_derivative_formula",
+                    formula = crate::escape::get_formula(&esc.formula).display_name,
+                    coloring = coloring.display_name
+                ),
+                crate::escape::DerivativeGap::Perturbed => {
+                    t!("escape_panel.no_derivative_perturbed", coloring = coloring.display_name)
+                }
+            };
+            ui.colored_label(egui::Color32::from_rgb(220, 170, 90), msg);
+        }
+    }
+
     // The scale/offset pair is the hardest control here to guess at;
     // offer a starting point rather than leaving the user to probe.
     if coloring.parameters.iter().any(|p| p.name == "scale") {
@@ -1013,6 +1033,74 @@ mod tests {
             config.escape.coloring = c.name.to_string();
             let _ = lay_out(config);
         }
+    }
+
+    /// The "no derivative" hint must match what the SHADER decides.
+    ///
+    /// The panel is claiming to explain a flat render, so the claim
+    /// has to be checked against the thing that actually causes it:
+    /// the `HAS_DERIVATIVE` constant the assembler emits. Comparing
+    /// against a restatement of the rule would pass even if both
+    /// sides were wrong together, so this assembles the real shader
+    /// for every formula and reads the constant back out.
+    #[test]
+    fn the_derivative_hint_matches_what_the_shader_compiles() {
+        use crate::escape::{assembler, colorings, DerivativeGap, EscapeRenderer};
+        for f in crate::escape::FORMULAS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = f.name.to_string();
+            esc.coloring = "distance_estimate".to_string();
+
+            let src = assembler::assemble(f, &colorings::DISTANCE_ESTIMATE, false);
+            let shader_has = src.contains("const HAS_DERIVATIVE: bool = true;");
+            let panel_says = EscapeRenderer::derivative_gap(&esc).is_none();
+            assert_eq!(
+                shader_has, panel_says,
+                "{}: the shader compiles HAS_DERIVATIVE={shader_has} but the panel \
+                 would tell the user {}",
+                f.name,
+                if panel_says { "it has one" } else { "it has none" }
+            );
+        }
+    }
+
+    /// ...and the perturbed rungs outrank the formula.
+    ///
+    /// A Mandelbrot dive is the case that matters: the formula defines
+    /// a derivative, so the hint must appear only once the view is
+    /// deep enough to leave the direct path — and it must name the
+    /// deep path as the reason rather than blaming the formula.
+    #[test]
+    fn the_derivative_hint_follows_the_deep_path() {
+        use crate::escape::{DerivativeGap, EscapeRenderer};
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "distance_estimate".to_string();
+
+        esc.zoom_log2 = 4.0;
+        assert_eq!(
+            EscapeRenderer::derivative_gap(&esc),
+            None,
+            "shallow Mandelbrot renders direct and has its derivative"
+        );
+
+        esc.zoom_log2 = 30.0;
+        assert_eq!(
+            EscapeRenderer::derivative_gap(&esc),
+            Some(DerivativeGap::Perturbed),
+            "a deep dive loses the derivative to the perturbed rungs, and the \
+             hint must say so rather than blaming the formula"
+        );
+
+        // Damping takes the same view OFF the perturbed path, so the
+        // derivative comes back. If the hint were keyed on zoom alone
+        // it would keep warning here.
+        esc.damping_re = 0.5;
+        assert_eq!(
+            EscapeRenderer::derivative_gap(&esc),
+            None,
+            "damping renders direct at any depth, so the derivative is available"
+        );
     }
 
     /// The depth hint must say the right thing for each tier.

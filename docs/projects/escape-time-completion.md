@@ -410,6 +410,16 @@ that shortens the eight-minute cold build, and its cost is dominated
 by a representation change nobody should start casually. Schedule it
 when a deep dive actually hurts, not because it is on the list.
 
+## Derivative-based colorings no longer degrade silently — DONE 2026-08-30
+
+`normal_map` was guarded when it shipped; `distance_estimate` was left
+for a deliberate pass and has now had it. Both return a flat value
+where no derivative is compiled, and the escape panel explains which
+of the two causes applies (the formula defines none, or the view is on
+the deep path, which iterates no derivative orbit whatever the formula
+defines). Details in
+[escape-time-fractals.md](escape-time-fractals.md).
+
 ## Known gap, found 2026-08-29: no recovery from DEVICE LOST
 
 A TDR watchdog kill (observed when origami's first fold-table

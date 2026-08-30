@@ -1926,6 +1926,8 @@ escape_panel:
   supersample: "Antialiasing"
   supersample_off: "Off"
   tooltip_supersample: "Render at N\u00d7 resolution per axis and box-downsample. Smooths pixel noise in dense filigree at N\u00b2 the render cost."
+  no_derivative_formula: "%{coloring} needs a derivative and %{formula} defines none \u2014 it renders flat rather than showing a plausible wrong image. Formulas that do: Mandelbrot, Multibrot, Tricorn, McMullen, Lambda, Spider, Barnsley, Cactus, Exponential, Trig, Lambda-Sine, Tetration."
+  no_derivative_perturbed: "%{coloring} needs a derivative, and the deep-zoom path does not iterate one \u2014 it renders flat past the perturbation threshold. Zoom back out, or use a coloring that reads the orbit instead."
   shading: "Relief Shading"
   shading_enabled: "Enable"
   shading_light: "Light angle"
