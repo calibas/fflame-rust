@@ -2068,6 +2068,143 @@ mod tests {
         );
     }
 
+    /// `distance_estimate` must render FLAT where there is no
+    /// derivative — and the point is that the wrong answer is pretty.
+    ///
+    /// Without a derivative orbit `dz` is the constant seed of 1, so
+    /// `|z|.ln|z| / |dz|` collapses to a smooth function of the escape
+    /// radius alone. That is not a distance estimate, but it renders
+    /// as a fully detailed, entirely convincing exterior: measured on
+    /// a Mandelbrot dive to zoom 30 it produced 516 distinct colours,
+    /// none of them meaning what the coloring's name claims. Nothing
+    /// about the image invites suspicion, which is why the guard has
+    /// to be pinned by a test rather than by looking at renders.
+    ///
+    /// `burning_ship` escapes (so the coloring is actually called) and
+    /// defines no derivative, at a shallow zoom so this stays on the
+    /// direct path and runs in milliseconds.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn distance_estimate_is_flat_without_a_derivative() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 160u32);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let shoot = |formula: &str,
+                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.to_string();
+            esc.coloring = "distance_estimate".to_string();
+            esc.max_iter = 256;
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("de"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("de tonemap"),
+            });
+            renderer.update_background_color(&queue, config.background_color);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                config.use_curve,
+                config.exposure,
+                config.gamma,
+                config.gamma_threshold,
+                config.brightness,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                config.levels_enabled,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+            rgba
+        };
+
+        let colours = |px: &[u8]| -> usize {
+            let mut seen = std::collections::HashSet::new();
+            for p in px.chunks(4) {
+                // Skip the interior: the template paints it, not the
+                // coloring, so it says nothing either way.
+                if p[0] as u32 + p[1] as u32 + p[2] as u32 > 12 {
+                    seen.insert([p[0], p[1], p[2]]);
+                }
+            }
+            seen.len()
+        };
+
+        let no_deriv = shoot("burning_ship", &mut renderer);
+        let n = colours(&no_deriv);
+        println!("distance_estimate on burning_ship: {n} exterior colour(s)");
+        assert_eq!(
+            n, 1,
+            "distance_estimate rendered {n} exterior colours on a formula with no \
+             derivative -- it is estimating from dz = 1, which is a confident \
+             wrong answer, not a distance"
+        );
+
+        // The control: on a formula that DOES define one, the same
+        // coloring must produce a real field. Without this half, the
+        // test above would still pass if the coloring were broken
+        // everywhere.
+        let deriv = shoot("mandelbrot", &mut renderer);
+        let m = colours(&deriv);
+        println!("distance_estimate on mandelbrot: {m} exterior colour(s)");
+        assert!(
+            m > 20,
+            "distance_estimate produced only {m} exterior colours on Mandelbrot, \
+             which HAS a derivative -- the guard is firing where it should not"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

@@ -67,6 +67,16 @@ pub fn render_progress() -> Option<(u32, u32)> {
     Some((RENDER_DONE.load(std::sync::atomic::Ordering::Relaxed), want))
 }
 
+/// Why the derivative-based colorings have nothing to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivativeGap {
+    /// The formula defines no `wgsl_derivative` (13 of 25 do not).
+    Formula,
+    /// The perturbed rungs do not iterate a derivative orbit, whatever
+    /// the formula defines.
+    Perturbed,
+}
+
 /// What depth a config can reach, for the panel to report.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UsableDepth {
@@ -1528,6 +1538,33 @@ impl EscapeRenderer {
         } else {
             UsableDepth::Direct(PERTURB_MIN_ZOOM)
         }
+    }
+
+    /// Why a derivative-based coloring has nothing to work with here,
+    /// or `None` when it does.
+    ///
+    /// `distance_estimate` and `normal_map` read `sum.dz`, and when no
+    /// derivative is compiled that is the constant seed rather than a
+    /// derivative — so both return a flat value instead of a
+    /// confident wrong one. Flat is honest but silent, and the panel
+    /// is where the silence gets explained. Pinned against the
+    /// assembler's own `HAS_DERIVATIVE` decision by test, so the two
+    /// cannot drift.
+    pub fn derivative_gap(escape: &EscapeConfig) -> Option<DerivativeGap> {
+        // The deep rungs do not iterate a derivative orbit at all, so
+        // this outranks the formula: a Mandelbrot dive past
+        // PERTURB_MIN_ZOOM loses its derivative even though the
+        // formula defines one.
+        if Self::wants_perturbation(escape) {
+            return Some(DerivativeGap::Perturbed);
+        }
+        if super::fields::get_field(&escape.formula).is_some() {
+            return Some(DerivativeGap::Formula);
+        }
+        if super::get_formula(&escape.formula).wgsl_derivative.is_empty() {
+            return Some(DerivativeGap::Formula);
+        }
+        None
     }
 
     /// Whether this view renders through the perturbation path:
