@@ -1564,6 +1564,56 @@ fn register_escape(engine: &mut Engine) {
         },
     );
 
+    // ---- Relief shading -------------------------------------------
+    // One function rather than ten properties: the layer is only ever
+    // set up as a whole, and a script that turned on `shading` but
+    // left the light at its default would be a silent no-op nobody
+    // could debug. `shading_off()` is the inverse.
+    engine.register_fn(
+        "shading",
+        |e: &mut EscapeHandle, light_angle: f64, height: f64| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.enabled = true;
+            cfg.escape.shading.light_angle = (light_angle as f32).rem_euclid(360.0);
+            cfg.escape.shading.height = (height as f32).clamp(0.0, 100_000.0);
+        },
+    );
+    engine.register_fn("shading_off", |e: &mut EscapeHandle| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.shading.enabled = false;
+    });
+    engine.register_fn(
+        "shading_shadow",
+        |e: &mut EscapeHandle, r: f64, g: f64, b: f64, strength: f64, blend: &str| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.shadow_color =
+                [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
+            cfg.escape.shading.shadow_strength = (strength as f32).clamp(0.0, 1.0);
+            cfg.escape.shading.shadow_blend =
+                crate::config::escape::shading_blend_from_str(blend);
+        },
+    );
+    engine.register_fn(
+        "shading_highlight",
+        |e: &mut EscapeHandle, r: f64, g: f64, b: f64, strength: f64, blend: &str| {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.highlight_color =
+                [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
+            cfg.escape.shading.highlight_strength = (strength as f32).clamp(0.0, 1.0);
+            cfg.escape.shading.highlight_blend =
+                crate::config::escape::shading_blend_from_str(blend);
+        },
+    );
+    engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.shading.field = crate::config::escape::shading_field_from_str(field);
+    });
+
     engine.register_fn("julia", |e: &mut EscapeHandle, re: f64, im: f64| {
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);

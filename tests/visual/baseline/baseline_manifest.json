@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "8ee1a086",
+  "git_hash": "cf57d429",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -461,6 +461,10 @@
     "escape-origami-butterfly.png": {
       "bytes": 46892,
       "sha256": "9163c274dc035c311e03fe72d68efa96c7fde839073d3eb0a613c1ed200c9115"
+    },
+    "escape-origami-relief.png": {
+      "bytes": 48321,
+      "sha256": "e23431857107af729a9ad980b107f038f89c29f4c05be692d78c5760c5d0fabb"
     },
     "escape-phoenix-classic.png": {
       "bytes": 4187,
