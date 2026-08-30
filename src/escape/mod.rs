@@ -246,6 +246,7 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::MAGNET,
     &formulas::NOVARETTI,
     &formulas::LITTLEWOOD,
+    &formulas::LAMBDA_SINE,
 ];
 
 /// Ordered coloring registry. **Append-only.**

@@ -83,6 +83,18 @@ spiral trap of which the golden one is a default.
 Neither is hypothetical; both are the exact failure modes this
 codebase has already paid for once.
 
+## 2. Cantor sine bouquets — DONE 2026-08-29
+
+Shipped as `lambda_sine`. Verified 0.00% against an f64 orbit at
+λ = 0.5 (an additive parameter reads 14.45%), plus the map's own 2π
+periodicity and mirror symmetry. The plan missed one thing: the
+parameter plane cannot seed at zero, because `sin 0 = 0` makes zero a
+fixed point for every λ — the plane would render one flat colour. It
+seeds at the critical point π/2, as `lambda` does at 1/2. Details in
+[escape-time-fractals.md](escape-time-fractals.md).
+
+### The original plan, for reference
+
 ## 2. Cantor sine bouquets — a multiplicative parameter, not our additive one
 
 `trig` iterates `sin(z) + c`. The bouquet family is **not** that one.

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "7045fd53",
+  "git_hash": "51a437f7",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -357,6 +357,14 @@
     "escape-lambda-plane.png": {
       "bytes": 5411,
       "sha256": "fe242efe64b9907010579cebd22cf69a8a7b6c086554e60aa01a02f9df987c65"
+    },
+    "escape-lambda-sine-bouquet.png": {
+      "bytes": 20486,
+      "sha256": "e0753d3243b66fe63d8c1a356065b01208fab7c53edaa160af5ace9035915ced"
+    },
+    "escape-lambda-sine-plane.png": {
+      "bytes": 23375,
+      "sha256": "f44349f9faf92667e8617e77664a31c46086cbd8439cee49b02ac74046f333ae"
     },
     "escape-littlewood.png": {
       "bytes": 14682,

@@ -1841,6 +1841,35 @@ one value out of a continuum. A person looking at the picture saw it
 immediately. The test now asserts both: the shading matches its
 reference, AND no lit pixel is near-black.
 
+### `lambda_sine` — the Cantor bouquet family (2026-08-29)
+
+`z <- lambda*sin(z)`. NOT `sin(z) + c`, which is the separate `trig`
+formula: the parameter MULTIPLIES, and that is the whole difference
+between a nice fractal and the named one. The literature is specific
+(Pardo-Simón, arXiv:2209.03284, after Devaney–Tangerman): *the Julia
+set of any λ·sin(z) with λ in (0,1) is a Cantor bouquet* — a Cantor
+set of disjoint HAIRS, each an arc to infinity, escaping except at
+the endpoints. Julia mode with a real λ in (0,1) is where they live.
+
+**The parameter plane seeds at π/2, not zero,** and that is
+load-bearing rather than stylistic: `sin 0 = 0`, so zero is a fixed
+point for EVERY λ, and a zero-seeded plane renders one flat colour
+with nothing anywhere to say why. π/2 is where `cos z = 0`, so it is
+the critical point, and its critical value is λ. `LAMBDA` (the
+logistic map) seeds at 1/2 for exactly the same reason.
+
+Escape is `|Im z| > bailout` RAW, shared with the rest of the trig
+family: sin grows like sinh in the imaginary direction, so orbits
+leave through ±i∞ and the bailout wants to be ~50, not 4.
+
+Verified against an f64 orbit at λ = 0.5: **0.00% of pixels differ**,
+and making the parameter additive — the exact mistake the name warns
+about — sends that to 14.45%. The render is also 2π-periodic in Re z
+to 99.5% (pixel rounding) and mirror-symmetric about the real axis to
+100%, both properties of the map rather than of the code. A separate
+CPU test iterates the map from both seeds so the π/2 choice fails
+loudly, with its reason attached, if anyone ever "normalises" it.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep

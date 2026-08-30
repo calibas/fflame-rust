@@ -562,6 +562,52 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 "#,
 };
 
+/// Lambda-sine `z ← λ·sin z` — the Cantor bouquet family.
+///
+/// NOT `sin z + c` (that is [`TRIG`]). The parameter MULTIPLIES, and
+/// the difference is the whole point: the dynamics literature is
+/// specific that *"the Julia set of any λ sin(z) with λ ∈ (0,1) … is
+/// a Cantor bouquet"* (Pardo-Simón, arXiv:2209.03284, following
+/// Devaney–Tangerman). A Cantor bouquet is a Cantor set of disjoint
+/// HAIRS, each an arc to infinity, on which every point escapes
+/// except the endpoint. Julia mode with a real λ in (0,1) is where
+/// they live; try λ ≈ 0.5 and a high iteration cap.
+///
+/// PARAMETER PLANE SEEDS AT THE CRITICAL POINT, π/2, not at zero.
+/// `sin 0 = 0`, so a zero seed is a fixed point and the whole plane
+/// would render one colour — the same reason [`LAMBDA`] seeds the
+/// logistic map at 1/2. `cos z = 0` at π/2, so that is the critical
+/// point, and its critical value is λ.
+///
+/// Escape is `|Im z| > bailout` RAW, as for the rest of the trig
+/// family: sin grows like sinh in the imaginary direction, so orbits
+/// leave through ±i∞ rather than outward in every direction. Set the
+/// bailout around 50; the default 4 works but crops the hairs early.
+pub static LAMBDA_SINE: FormulaDef = FormulaDef {
+    name: "lambda_sine",
+    display_name: "Lambda Sine (λ·sin z)",
+    features: &[],
+    parameters: &[],
+    wgsl: r#"
+fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+    return esc_cmul(c, esc_csin(z));
+}
+"#,
+    wgsl_param_seed: "vec2<f32>(1.5707964, 0.0)",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::AbsIm,
+    wgsl_derivative: r#"
+fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool) -> vec2<f32> {
+    // f = c·sin z, so df/dz = c·cos z. On the parameter plane the
+    // pixel IS c, which contributes df/dc = sin z; the seed is a
+    // constant there, so dz starts at 0 and this term is what gets it
+    // moving.
+    let d = esc_cmul(esc_cmul(c, esc_ccos(z)), dz);
+    return select(d + esc_csin(z), d, is_julia);
+}
+"#,
+};
+
 /// Ducks / Kali-log (Monnier) — `z ← log(Iabs(z) + c)` where
 /// Iabs folds the lower half-plane up (Im ← |Im|), i.e. the ADDITION
 /// OF C SITS INSIDE THE LOG (plan §5.13; Monnier's post 2011-02-27
@@ -989,3 +1035,63 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     escape_metric: EscapeMetric::NormSq,
     wgsl_derivative: "",
 };
+
+#[cfg(test)]
+mod tests {
+    /// `lambda_sine` must seed its parameter plane at the CRITICAL
+    /// POINT, not at zero.
+    ///
+    /// `sin 0 = 0`, so zero is a fixed point of `λ·sin z` for EVERY
+    /// λ: a zero-seeded parameter plane is one flat colour, with no
+    /// error anywhere to say so. This test iterates the map from both
+    /// seeds and shows the difference, so a later tidy-up that
+    /// "normalises" the seed field fails here with the reason
+    /// attached rather than silently flattening the plane.
+    #[test]
+    fn lambda_sine_seeds_at_the_critical_point() {
+        let def = &super::LAMBDA_SINE;
+        assert!(
+            def.wgsl_param_seed.contains("1.5707964"),
+            "the parameter seed must be pi/2 (cos = 0 there, so it is the \
+             critical point); found {:?}",
+            def.wgsl_param_seed
+        );
+
+        // From zero, every lambda stays at zero.
+        for (lr, li) in [(0.3f64, 0.2f64), (0.9, -0.4), (2.5, 1.0), (-1.7, 0.6)] {
+            let (mut zr, mut zi) = (0.0f64, 0.0f64);
+            for _ in 0..50 {
+                // lambda * sin(z), complex.
+                let (sr, si) = (zr.sin() * zi.cosh(), zr.cos() * zi.sinh());
+                let nr = lr * sr - li * si;
+                let ni = lr * si + li * sr;
+                zr = nr;
+                zi = ni;
+            }
+            assert_eq!(
+                (zr, zi),
+                (0.0, 0.0),
+                "zero is a fixed point for lambda = {lr}+{li}i, which is why the \
+                 parameter plane cannot seed there"
+            );
+        }
+
+        // From pi/2 the orbits actually differ from one another.
+        let mut finals = Vec::new();
+        for (lr, li) in [(0.3f64, 0.2f64), (0.9, -0.4)] {
+            let (mut zr, mut zi) = (std::f64::consts::FRAC_PI_2, 0.0f64);
+            for _ in 0..50 {
+                let (sr, si) = (zr.sin() * zi.cosh(), zr.cos() * zi.sinh());
+                let nr = lr * sr - li * si;
+                let ni = lr * si + li * sr;
+                zr = nr;
+                zi = ni;
+            }
+            finals.push((zr, zi));
+        }
+        assert_ne!(
+            finals[0], finals[1],
+            "seeded at the critical point, different lambdas must give different orbits"
+        );
+    }
+}
