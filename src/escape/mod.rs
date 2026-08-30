@@ -55,6 +55,15 @@ pub enum FormulaFeature {
     /// history register into the loop; without the flag the loop
     /// carries no history at all.
     NeedsPrevZ,
+    /// The step needs the ITERATION INDEX, appended to its signature
+    /// as `i: u32`.
+    ///
+    /// For a map whose rule CHANGES from step to step rather than
+    /// being the same function iterated — Origami folds the plane
+    /// along a different line each time. Without it such a formula can
+    /// only repeat one fixed sequence, and the orbit dies as soon as
+    /// the point reaches the region every fold leaves alone.
+    NeedsIndex,
     /// The step MUTATES `c` (Fractint Spider: `z ← z²+c; c ← c/2+z`).
     /// `c` becomes a `var` and `formula_step` receives it as
     /// `ptr<function, vec2<f32>>`; without the flag `c` stays a `let`
@@ -247,6 +256,7 @@ pub static FORMULAS: &[&FormulaDef] = &[
     &formulas::NOVARETTI,
     &formulas::LITTLEWOOD,
     &formulas::LAMBDA_SINE,
+    &formulas::ORIGAMI,
 ];
 
 /// Ordered coloring registry. **Append-only.**

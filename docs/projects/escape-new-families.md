@@ -116,6 +116,29 @@ iteration counts and a distance-estimate or averaging coloring rather
 than raw escape count, because a hair is one pixel wide almost
 everywhere.
 
+## 3. Origami Butterfly — DONE 2026-08-29
+
+Shipped as `origami`. Two things the plan had wrong, both settled by
+prototyping in numpy before writing Rust:
+
+- **The reflections are folds, not mirrors.** Unconditional
+  reflections compose to an affine map, and the render is plain
+  concentric rings — no structure. The source says "mirror
+  symmetries"; the images require conditional reflection.
+- **The creases are invisible in a smooth ramp.** They are derivative
+  discontinuities. Only under a cycling palette — which is how the
+  engine maps values anyway — do they appear. The first greyscale
+  prototype looked like a featureless wash and nearly got this
+  abandoned.
+
+The plan's "seeded line hash" survived, but with an integer hash
+rather than the usual `fract(sin(x)*k)`, which is precision-sensitive
+enough to make the image device-dependent. One fold per iteration
+needed a new `FormulaFeature::NeedsIndex`. Details in
+[escape-time-fractals.md](escape-time-fractals.md).
+
+### The original plan, for reference
+
 ## 3. Origami Butterfly — our Ducks with a different fold
 
 [McCabe's algorithm, as documented by

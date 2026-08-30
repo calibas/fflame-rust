@@ -1870,6 +1870,60 @@ to 99.5% (pixel rounding) and mirror-symmetric about the real axis to
 CPU test iterates the map from both seeds so the π/2 choice fails
 loudly, with its reason attached, if anyone ever "normalises" it.
 
+### `origami` — McCabe's Butterfly Origami, with two corrections (2026-08-29)
+
+Fold the plane along a sequence of lines, average over the image
+points. algorithmic-worlds records the algorithm: *"choose a number of
+random lines cutting the square and order them. For each point of the
+square, compute its images under the sequence of mirror symmetries
+about the sequence of random lines. Then color the result by
+performing an average over all the image points."* Structurally this
+is Ducks — iterate, and let an averaging coloring do the work — which
+is why that page says the results resemble the Duck-like algorithms.
+
+**The reflections must be CONDITIONAL, and that is a correction to the
+wording made on evidence.** An unconditional reflection is an isometry,
+so a composition of them is affine and the average of |z| over the
+sequence is smooth. Prototyped in numpy before any Rust was written,
+that reading renders as plain concentric rings with no structure at
+all; folding — reflecting only the points on one side, which is what
+"origami" means and what the widely repeated paraphrase ("fold a piece
+of paper, project an image onto it, unfold") describes — produces the
+creases and wing lobes. Both prototypes are in
+[escape-new-families.md](escape-new-families.md).
+
+A second thing the prototypes exposed: the creases are DERIVATIVE
+discontinuities, so a smooth greyscale ramp hides them almost
+completely. They only became visible under a cycling palette, which is
+how the engine maps values anyway. A first look at the greyscale
+render nearly sent this to the "does not reproduce the reference"
+pile.
+
+**One fold per iteration**, along line `i mod lines`, so `max_iter` IS
+the length of McCabe's sequence and the accumulator sees every image
+point — which is exactly what "average over all the image points"
+asks for. That needed a new `FormulaFeature::NeedsIndex`, which
+appends the loop counter to the step's signature the way `NeedsPrevZ`
+appends the previous iterate. Folding K lines inside one step instead
+would show the coloring only every Kth point, and the orbit freezes
+the moment it reaches the region every fold leaves alone (measured:
+with 6 random lines, 0% of pixels were still moving after the first
+pass, and the image was identical at 4, 40 and 200 iterations).
+
+**The line hash is INTEGER on purpose.** The usual
+`fract(sin(x) * 43758.5)` idiom multiplies a sine by a large constant,
+which amplifies rounding enough that f32 and f64 disagree — and so can
+two GPUs. That would have made the line arrangement, and therefore the
+whole image, device-dependent, which nothing else in this project
+accepts. Integer ops are exact and immune to fast-math, and the 24
+bits taken from the hash are exactly what an f32 mantissa holds.
+
+Verified against an independent reimplementation of the whole
+algorithm — hash, lines, folds, running mean — at **0.39/255**, and
+the test separately asserts the creases EXIST, because "matches the
+oracle" would pass if both were smooth washes. Making the reflection
+unconditional sends the agreement to 73.32/255.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep

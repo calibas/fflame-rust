@@ -1380,6 +1380,221 @@ mod tests {
         );
     }
 
+    /// Origami must fold the plane the way the algorithm says.
+    ///
+    /// The oracle below is an independent reimplementation of the
+    /// whole thing — integer hash, line construction, fold sequence,
+    /// running mean — not a copy of the shader. It can be exact
+    /// because the hash is INTEGER: the usual
+    /// `fract(sin(x) * 43758.5)` idiom amplifies rounding enough that
+    /// f32 and f64 disagree, which would have made both this test and
+    /// the rendered image device-dependent.
+    ///
+    /// The fold is CONDITIONAL, and that is the load-bearing detail.
+    /// An unconditional reflection is an isometry, so a composition of
+    /// them is affine and the average of |z| over the sequence is
+    /// smooth — prototyped, it renders as plain concentric rings. The
+    /// test asserts the creases exist, because "matches the oracle"
+    /// would still pass if both were smooth washes.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn origami_folds_the_plane_as_specified() {
+        let (device, queue) = repro_device();
+        let (w, h) = (200u32, 200u32);
+        let zoom = -1.0f64;
+        const MAX_ITER: u32 = 32;
+        const LINES: u32 = 24;
+        const SEED: f32 = 7.0;
+        const SPREAD: f32 = 1.0;
+        const SCALE: f32 = 1.2;
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "ramp".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "origami".to_string();
+        esc.coloring = "magnitude_average".to_string();
+        esc.center_re = "0.0".to_string();
+        esc.center_im = "0.0".to_string();
+        esc.zoom_log2 = zoom;
+        esc.max_iter = MAX_ITER;
+        esc.formula_params.insert("seed".to_string(), SEED);
+        esc.formula_params.insert("lines".to_string(), LINES as f32);
+        esc.formula_params.insert("spread".to_string(), SPREAD);
+        esc.coloring_params.insert("scale".to_string(), SCALE);
+        esc.coloring_params.insert("offset".to_string(), 0.0);
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("origami"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 10_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("origami tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        // --- the independent reimplementation ---
+        fn hash(x: u32) -> u32 {
+            let mut h = x;
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x7feb_352d);
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x846c_a68b);
+            h ^= h >> 16;
+            h
+        }
+        fn unit(x: u32) -> f64 {
+            (hash(x) >> 8) as f64 / 16_777_216.0
+        }
+        let s = (SEED as u32).wrapping_mul(2_654_435_761);
+        let lines: Vec<(f64, f64, f64)> = (0..LINES)
+            .map(|k| {
+                let a = unit(k.wrapping_mul(2).wrapping_add(s)) * std::f64::consts::PI;
+                let o = (unit(k.wrapping_mul(2).wrapping_add(1).wrapping_add(s)) * 2.0 - 1.0)
+                    * SPREAD as f64;
+                (a.cos(), a.sin(), o)
+            })
+            .collect();
+
+        let span = 4.0 / zoom.exp2();
+        const BINS: usize = 256;
+        let mut sums = vec![0f64; BINS];
+        let mut sqs = vec![0f64; BINS];
+        let mut counts = vec![0usize; BINS];
+        let mut values = Vec::with_capacity((w * h) as usize);
+        for py in 0..h {
+            for px in 0..w {
+                // The PIXEL is the point being folded: it seeds z0.
+                let mut zx = ((px as f64 + 0.5) / w as f64 - 0.5) * span;
+                let mut zy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span);
+                let mut acc = 0.0f64;
+                for i in 0..MAX_ITER {
+                    let (nx, ny, o) = lines[(i % LINES) as usize];
+                    let d = zx * nx + zy * ny - o;
+                    if d > 0.0 {
+                        zx -= 2.0 * d * nx;
+                        zy -= 2.0 * d * ny;
+                    }
+                    acc += (zx * zx + zy * zy).sqrt();
+                }
+                let val = acc / MAX_ITER as f64;
+                values.push(val);
+                let t = (val * SCALE as f64).rem_euclid(1.0);
+                let b = ((t * (BINS - 1) as f64).round() as usize).min(BINS - 1);
+                let i = ((py * w + px) * 4) as usize;
+                let lum = rgba[i] as f64;
+                counts[b] += 1;
+                sums[b] += lum;
+                sqs[b] += lum * lum;
+            }
+        }
+        let (mut spread, mut total) = (0f64, 0usize);
+        for b in 0..BINS {
+            if counts[b] < 50 {
+                continue;
+            }
+            let n = counts[b] as f64;
+            let sd = (sqs[b] / n - (sums[b] / n).powi(2)).max(0.0).sqrt();
+            spread += sd * n;
+            total += counts[b];
+        }
+        let spread = spread / total as f64;
+        println!("origami: colour spread within a value bin {spread:.2}/255");
+        assert!(
+            spread < 8.0,
+            "the render does not track an independent implementation of the fold \
+             sequence ({spread:.2}/255)"
+        );
+
+        // The creases must exist. Reflecting UNCONDITIONALLY would
+        // make the whole composition affine and this field smooth, so
+        // measure the second difference along a row and require some
+        // sharp turns: a crease is a derivative discontinuity.
+        let mut kinks = 0usize;
+        for py in 0..h as usize {
+            let row = &values[py * w as usize..(py + 1) * w as usize];
+            for x in 1..row.len() - 1 {
+                let second = (row[x + 1] - 2.0 * row[x] + row[x - 1]).abs();
+                if second > 0.01 {
+                    kinks += 1;
+                }
+            }
+        }
+        println!("origami: {kinks} crease samples");
+        assert!(
+            kinks > 500,
+            "the folded field has almost no creases ({kinks}) -- are the \
+             reflections unconditional? that composition is affine, and renders \
+             as smooth rings"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
