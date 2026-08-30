@@ -1952,33 +1952,98 @@ lands in one slice of the palette and reads as flat. The shipped
 config uses 11.6, which is 1/0.086.
 
 The GPU test asserts BOTH directions, because either alone is weak: the
-render must track an f64 average-position oracle (**0.37/255**), and
-must NOT be explained by the mean magnitude (**58.66/255**, a 158x
-separation). Reintroducing the bug — accumulating `length(z)` again —
-flattens the image so completely that the first assertion passes on a
-constant picture; it is the ratio that catches it.
+render must track an f64 average-position oracle, and must NOT be
+explained by the mean magnitude (0.37 vs 58.66/255 on the geometry of
+the day; 0.44 vs 44.23/255 after the wad correction below).
+Reintroducing the bug — accumulating `length(z)` again — flattens the
+image so completely that the first assertion passes on a constant
+picture; it is the ratio that catches it.
 
-**Zooming in does not reveal more detail, and cannot.** The other
-report was that "zooming also doesn't work very well, you don't get
-any more detail past zoom 1". That is a property of folding, not a
-limitation of the port: each fold is a piecewise isometry, so a
-sequence of F folds cuts the plane into at most O(F) affine pieces,
-and nothing anywhere expands — unlike an escape-time map, whose
-derivative grows without bound and manufactures structure at every
-scale. Measured, counting creases as second-difference kinks along
-each row:
+**Zooming was measured dead past zoom ~5, and the section that stood
+here blamed "at most O(F) affine pieces". Both the diagnosis and the
+shipped geometry were wrong — see the fourth-correction section below,
+which replaces this one.** What was real in the measurement: with the
+fold lines FIXED in the plane, later folds miss the shrinking wad
+entirely (0% of pixels moving), the crease count stays O(F) in
+practice, and crease density fell 0.80 at zoom −1 to 0.000 by zoom 5
+even with 256 folds. That is a symptom of the wrong line placement,
+not a property of folding.
 
-| zoom | crease density | value range |
-|-----:|---------------:|------------:|
-| −1   | 0.80           | 5.17        |
-| 2    | 0.0103         | —           |
-| 5    | 0.000          | —           |
-| 9    | 0.000          | 0.009       |
+### `origami`, corrected again: fold the wad, not the sheet (2026-08-29)
 
-Raising the fold count and the line count to 256 did not change it.
-The structure is all at one scale — first fold coarsest, last finest,
-inverted from escape-time, where the first iterations set the coarse
-shape. Origami is a formula to scrub `seed` on, not one to dive into.
+The user compared the render against McCabe's published work
+("Origami Butterfly 8": dense ornamental chains, rosettes, lace,
+folds-on-folds) and it clearly wasn't it — different character, and
+no depth. The prose descriptions of the algorithm were exhausted, so
+the fix came from code archaeology: the only public implementation
+found is **Kyle McDonald's Processing port** (OpenProcessing sketch
+1185; the modern page hides source behind a membership, but the
+2012 Wayback snapshot embeds it in full). It contains the one detail
+every prose description omits:
+
+```java
+folds[i] = { randomPosition(i), randomPosition(i) };
+float[] randomPosition(int level) {
+    return foldPoint(random(w), random(h), level);  // folded through
+}                                                   // the previous folds!
+```
+
+**Each fold line's endpoints are themselves folded through all
+previous folds**, so every new crease is guaranteed to land on the
+current wad — real paper folding: you fold the wad you are holding,
+not the original flat sheet. With that construction every fold stays
+active (measured 8%–92% of pixels reflected on each of 32 folds,
+against 0% for late fixed lines) and the crease count compounds
+toward 2^F. The folds-on-folds look appears immediately; 32 folds is
+McCabe's number, and MORE is smoother, not deeper (96 folds measured
+visibly softer — the wad keeps shrinking under the endpoint domain).
+
+McDonald's colouring is also position-based but not an average: the
+final folded position looks up a SOURCE IMAGE ("project an image onto
+the paper, like tie-dye, then unfold"), normalized to the wad's
+bounding box. A per-pixel shader cannot do the global normalization,
+but the source is periodic so an affine remap is only a
+frequency/phase change: `position_map` projects a two-sine plasma at
+the orbit's final position (`freq_x`, `freq_y`). That coloring
+reproduced the bead-chain-and-rosette ornament of the reference on
+the first render.
+
+**The true zoom limit, replacing the O(F) story.** A fold map is
+CONTINUOUS — creases are derivative kinks, not value jumps — and
+every fold is an isometry, so the final-position field is
+Lipschitz-1: inside a window of size w, landing positions vary by at
+most w. Any fixed smooth colour source therefore washes to a constant
+as the window shrinks, regardless of how good the fold geometry is;
+measured on the corrected geometry, smooth-source contrast still died
+by zoom ~5. The piece count is irrelevant to this; it is the
+smoothness of the colour source that caps the depth.
+
+What survives zooming is the DISCRETE channel: which folds reflected
+the point. That is piecewise-constant with a jump at every crease, so
+its contrast does not decay with window size — only crease density
+does, and with 2^F facets it thins gradually instead of vanishing.
+`position_map.address_mix` blends it in: the coloring accumulator
+builds a binary branch address (0.5 per moved step, halved each
+iteration; `moved = any(z != z_prev)`, reliable because an unmoved
+point returns bit-exact — and it is z against z_prev, not a
+fast-math-hazard self-compare). Measured, following crease
+intersections: address-edge density 0.75 at zoom 0, still 0.01 at
+**zoom 22**, against nothing past zoom 5 for the smooth channel. GPU
+renders confirm crisp structure at zoom 6 and clean facet boundaries
+at zoom 10. The f32 accumulator keeps the last ~24 branch bits — the
+fine ones; the coarse folds are already visible in the smooth part.
+
+`lines` (the cycling line count) is gone from the params — the fold
+count is `max_iter` (capped at 64), which is what it always was in
+the source algorithm. The lines are cached per invocation in a
+`var<private>` array built incrementally (line j folds its endpoints
+through lines 0..j-1, O(F²) once per pixel per dispatch; WGSL
+zero-initializes private variables, so resumed chunks rebuild
+correctly). The GPU oracle tests both reimplement the wad-relative
+construction in f64: the shipped-geometry agreement is 0.51/255, and
+deleting the endpoint folding from the shader alone sends it to
+71.30/255, so the construction is what the test pins, not just the
+fold formula.
 
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,

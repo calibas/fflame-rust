@@ -559,6 +559,92 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 /// The average is UNWEIGHTED. McCabe weights each fold, but a weight
 /// per step needs the iteration index inside the accumulator, and
 /// only the formula side has that today (`FormulaFeature::NeedsIndex`).
+/// Position map — project a colour source onto the folded paper.
+///
+/// McDonald's port of McCabe's origami colours each pixel by LOOKING
+/// UP A SOURCE IMAGE at the orbit's final position ("project an image
+/// onto the paper, like tie-dye, then unfold"). The engine's palette
+/// is one-dimensional, so the source here is a procedural plasma —
+/// two sine waves in x and y — whose frequencies stand in for the
+/// image's detail scale. Folds pack many copies of the plane onto the
+/// wad, so a moderate frequency already shatters into the bead-chain
+/// and rosette ornament of the published images.
+///
+/// `address_mix` blends in the orbit's BRANCH ADDRESS: a binary
+/// fraction accumulating, per iteration, whether the step moved the
+/// point (for origami: which folds reflected it — the facet
+/// identity). This channel is what survives zooming. The smooth part
+/// cannot: an all-isometry orbit makes the final position Lipschitz
+/// in the pixel, so its contrast dies linearly with window size —
+/// measured dead by zoom ~5 — while the address is piecewise-constant
+/// with a jump at every crease, and was still structured at zoom 22.
+/// The f32 accumulator retains the last ~24 branch choices, which are
+/// the fine ones; the coarse folds are visible in the smooth part
+/// anyway.
+///
+/// On always-moving formulas (every escape-time map) the address is
+/// the constant 0.111…₂ and `address_mix` does nothing — this
+/// coloring is for folding/conditional formulas.
+pub static POSITION_MAP: ColoringDef = ColoringDef {
+    name: "position_map",
+    display_name: "Position Map",
+    features: &[
+        ColoringFeature::NeedsOrbitAccum,
+        ColoringFeature::ColorsInterior,
+        ColoringFeature::Bounded,
+    ],
+    parameters: &[
+        EscapeParamDef {
+            name: "freq_x",
+            display_name: "Frequency X",
+            default: 3.0,
+            min: 0.05,
+            max: 64.0,
+            tooltip: "Horizontal frequency of the projected colour source, in \
+                      cycles per unit of the folded plane.",
+        },
+        EscapeParamDef {
+            name: "freq_y",
+            display_name: "Frequency Y",
+            default: 2.0,
+            min: 0.05,
+            max: 64.0,
+            tooltip: "Vertical frequency of the projected colour source.",
+        },
+        EscapeParamDef {
+            name: "address_mix",
+            display_name: "Address mix",
+            default: 0.0,
+            min: 0.0,
+            max: 8.0,
+            tooltip: "How strongly the orbit's branch address (which \
+                      iterations moved the point) shifts the palette. This is \
+                      the channel that keeps detail alive under deep zoom; 0 \
+                      is the pure projected source.",
+        },
+    ],
+    wgsl: r#"
+fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
+    let z = sum.z;
+    let plasma = 0.5
+        + 0.25 * sin(6.2831853 * cparam(0u) * z.x)
+        + 0.25 * sin(6.2831853 * (cparam(1u) * z.y + 0.3));
+    return fract(plasma + state.x * cparam(2u));
+}
+"#,
+    accum_init: "vec2<f32>(0.0, 0.0)",
+    wgsl_accum: r#"
+fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec2<f32>) -> vec2<f32> {
+    // Binary branch address: 0.5 into the low bit when this step moved
+    // the point. An unmoved point returns from the formula bit-exact,
+    // so the comparison is reliable (and it is z against z_prev — two
+    // distinct values — not a fast-math-hazard self-compare).
+    let moved = select(0.0, 0.5, any(z != z_prev));
+    return vec2<f32>(state.x * 0.5 + moved, 0.0);
+}
+"#,
+};
+
 pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
     name: "position_average",
     display_name: "Position Average",
@@ -582,8 +668,8 @@ pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
             tooltip: "Palette distance per unit. A whole turn of the angle \
                       spans the palette once at 1.0, but the average position \
                       often sweeps only a narrow arc across a given view -- \
-                      0.09 of a turn on the shipped Origami -- so raising this \
-                      is how the structure becomes visible.",
+                      a twentieth of a turn is typical on Origami -- so \
+                      raising this is how the structure becomes visible.",
         },
     ],
     wgsl: r#"

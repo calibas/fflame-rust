@@ -114,20 +114,20 @@
   "render_mode": "escape",
   "escape": {
     "formula": "origami",
-    "coloring": "position_average",
+    "coloring": "position_map",
     "bailout": 4.0,
     "center_re": "0.0",
     "center_im": "0.0",
-    "zoom_log2": -0.7,
+    "zoom_log2": -1.0,
     "max_iter": 32,
     "formula_params": {
-      "seed": 11.0,
-      "lines": 32.0,
-      "spread": 1.2
+      "seed": 8.0,
+      "spread": 2.0
     },
     "coloring_params": {
-      "mode": 0.0,
-      "scale": 11.6
+      "freq_x": 5.0,
+      "freq_y": 1.5,
+      "address_mix": 1.5
     }
   }
 }

@@ -137,12 +137,22 @@ prototyping in numpy before writing Rust:
   angle of the mean position carries the creased seams; the mean |z|
   carries concentric rings. Shipped `position_average` for it.
 
-And one thing the plan did not anticipate at all: **zoom buys
-nothing.** Folds are piecewise isometries, so F of them cut the plane
-into O(F) affine pieces and there is no expansion to make finer ones.
-Measured crease density fell 0.80 at zoom −1 to 0.000 by zoom 5, with
-the fold and line counts raised to 256. The family is a `seed` to
-scrub, not a place to dive.
+- **The fold lines belong on the WAD, not the sheet.** The final
+  correction, recovered from Kyle McDonald's Processing port (the
+  2012 Wayback snapshot of OpenProcessing 1185): each line's
+  endpoints are folded through all previous folds before the line is
+  used. Fixed-in-the-plane lines go dead as the wad shrinks (0% of
+  pixels moving); wad-relative lines keep every fold active and the
+  crease count compounds toward 2^F — the folds-on-folds look.
+
+On zoom, the plan's story went through two wrong versions ("O(F)
+pieces") before the right one: fold maps are continuous isometries,
+so the final position is Lipschitz in the pixel and any smooth colour
+source washes out by zoom ~5 no matter the geometry. The discrete
+channel — WHICH folds moved the point — survives at every scale where
+creases exist; `position_map.address_mix` carries it, measured still
+structured at zoom 22. Full story in
+[escape-time-fractals.md](escape-time-fractals.md).
 
 The plan's "seeded line hash" survived, but with an integer hash
 rather than the usual `fract(sin(x)*k)`, which is precision-sensitive
