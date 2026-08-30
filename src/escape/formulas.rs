@@ -608,6 +608,136 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 "#,
 };
 
+/// Origami — McCabe's Butterfly Origami: fold the plane along a
+/// sequence of lines and average over the image points.
+///
+/// [algorithmic-worlds](https://www.algorithmic-worlds.net/expo/work.php?work=20110204-ds7)
+/// records the algorithm: *"Take a square, and choose a number of
+/// random lines cutting the square and order them. For each point of
+/// the square, compute its images under the sequence of mirror
+/// symmetries about the sequence of random lines. Then color the
+/// result by performing an average over all the image points."* The
+/// same page notes the results are "very similar to the Duck-like
+/// algorithms", and indeed the shape here is Ducks': iterate, and let
+/// an averaging coloring do the rest.
+///
+/// THE REFLECTIONS ARE CONDITIONAL — folds, not mirrors — and that is
+/// a correction to the wording, made on evidence rather than taste.
+/// An unconditional reflection is an isometry, so a composition of
+/// them is affine and the average of |z| over the sequence is a
+/// smooth function: prototyped, it renders as plain concentric rings
+/// with no structure at all. Reflecting only the points on one side
+/// (folding the paper, which is what "origami" means, and what the
+/// commonly repeated paraphrase — "fold a piece of paper, project an
+/// image onto it, unfold" — describes) makes the map piecewise
+/// isometric, and the creases appear. The prototypes are in the
+/// project doc.
+///
+/// ONE FOLD PER ITERATION, along line `i mod lines`, so `max_iter` IS
+/// the length of McCabe's sequence and the accumulator sees every
+/// image point — which is what "average over all the image points"
+/// asks for. Folding K lines inside a single step instead would show
+/// the coloring only every Kth point, and the orbit would freeze the
+/// moment it reached the region every fold leaves alone.
+///
+/// THE PIXEL IS THE POINT BEING FOLDED, so it seeds z0 rather than
+/// entering as `c`: McCabe folds "each point of the square", and the
+/// algorithm has no `c` at all. The map ignores it.
+///
+/// The lines come from `seed` through an in-shader hash rather than
+/// from parameters: N lines would be 2N sliders, and the source
+/// describes them as random. Scrub `seed` to explore the family.
+///
+/// Non-escaping, like Ducks: use `magnitude_average` or
+/// `orbit_average`, and expect the creases to show as sharp turns in
+/// the palette's contour bands rather than as edges in a smooth ramp.
+pub static ORIGAMI: FormulaDef = FormulaDef {
+    name: "origami",
+    display_name: "Origami (Butterfly)",
+    features: &[FormulaFeature::NonEscaping, FormulaFeature::NeedsIndex],
+    parameters: &[
+        EscapeParamDef {
+            name: "seed",
+            display_name: "Line seed",
+            default: 7.0,
+            min: 0.0,
+            max: 512.0,
+            tooltip: "Chooses the random line arrangement. Every value is a \
+                      different folding; scrub it to explore the family.",
+        },
+        EscapeParamDef {
+            name: "lines",
+            display_name: "Lines",
+            default: 16.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many distinct lines the sequence cycles through. Once \
+                      the fold count (max iterations) passes this, the sequence \
+                      repeats and the orbit settles.",
+        },
+        EscapeParamDef {
+            name: "spread",
+            display_name: "Line spread",
+            default: 1.0,
+            min: 0.05,
+            max: 4.0,
+            tooltip: "How far the lines sit from the origin. Small values crowd \
+                      the creases together; large ones push most folds off the \
+                      view.",
+        },
+    ],
+    wgsl: r#"
+// An INTEGER hash, deliberately. The usual `fract(sin(x) * 43758.5)`
+// trick multiplies a sine by a large constant, which amplifies
+// rounding: f32 and f64 disagree, and so can two GPUs. That would
+// make the line arrangement — and therefore the whole image —
+// device-dependent, which this project does not accept anywhere else
+// either. Integer ops are exact and immune to fast-math (CLAUDE.md),
+// and 24 bits is precisely what an f32 mantissa holds.
+fn origami_hash(x: u32) -> u32 {
+    var h = x;
+    h = h ^ (h >> 16u);
+    h = h * 0x7feb352du;
+    h = h ^ (h >> 15u);
+    h = h * 0x846ca68bu;
+    h = h ^ (h >> 16u);
+    return h;
+}
+
+fn origami_unit(x: u32) -> f32 {
+    // Top 24 bits -> [0,1), exactly representable.
+    return f32(origami_hash(x) >> 8u) * (1.0 / 16777216.0);
+}
+
+// One line of the arrangement, as (normal.x, normal.y, offset). The
+// whole arrangement lives in two parameters rather than two sliders
+// per line.
+fn origami_line(seed: f32, k: u32) -> vec3<f32> {
+    let s = u32(clamp(seed, 0.0, 4096.0)) * 2654435761u;
+    let a = origami_unit(k * 2u + s) * 3.14159265;
+    let o = (origami_unit(k * 2u + 1u + s) * 2.0 - 1.0) * fparam(2u);
+    return vec3<f32>(cos(a), sin(a), o);
+}
+
+fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
+    let count = max(u32(fparam(1u)), 1u);
+    let line = origami_line(fparam(0u), i % count);
+    let n = line.xy;
+    let d = dot(z, n) - line.z;
+    // The FOLD: only the far side moves. An unconditional reflection
+    // here makes the whole composition affine and the picture smooth.
+    if (d > 0.0) {
+        return z - 2.0 * d * n;
+    }
+    return z;
+}
+"#,
+    wgsl_param_seed: "pixel",
+    wgsl_prev_init: "",
+    escape_metric: EscapeMetric::NormSq,
+    wgsl_derivative: "",
+};
+
 /// Ducks / Kali-log (Monnier) — `z ← log(Iabs(z) + c)` where
 /// Iabs folds the lower half-plane up (Im ← |Im|), i.e. the ADDITION
 /// OF C SITS INSIDE THE LOG (plan §5.13; Monnier's post 2011-02-27

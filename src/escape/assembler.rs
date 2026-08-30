@@ -2248,6 +2248,7 @@ pub fn assemble_with(
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
+    let needs_index = formula.has_feature(FormulaFeature::NeedsIndex);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
     let needs_period = coloring.has_feature(ColoringFeature::NeedsPeriod);
@@ -2436,10 +2437,15 @@ pub fn assemble_with(
                 // undamped pipelines stay byte-identical (a runtime
                 // mix() at alpha = 1 is not bit-exact).
                 let c_arg = if mutates_c { "&c" } else { "c" };
-                let call = if needs_prev {
-                    format!("formula_step(z, {c_arg}, z_prev)")
-                } else {
-                    format!("formula_step(z, {c_arg})")
+                // `i` is the loop counter, in scope here. A formula
+                // whose RULE changes per step (Origami's fold line)
+                // takes it; everything else keeps the two-argument
+                // signature byte-for-byte.
+                let call = match (needs_prev, needs_index) {
+                    (true, true) => format!("formula_step(z, {c_arg}, z_prev, i)"),
+                    (true, false) => format!("formula_step(z, {c_arg}, z_prev)"),
+                    (false, true) => format!("formula_step(z, {c_arg}, i)"),
+                    (false, false) => format!("formula_step(z, {c_arg})"),
                 };
                 if convergent || needs_accum {
                     // The pre-step iterate: the convergence register,
