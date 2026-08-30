@@ -130,6 +130,16 @@ impl MapId {
         }
     }
 
+    /// Magnet I (variant 0) or II (variant 1).
+    pub fn magnet(variant: u32) -> Self {
+        Self {
+            power: 2,
+            ship: false,
+            variant: MAP_MAGNET,
+            params: [variant.min(1) as f32, 0.0],
+        }
+    }
+
     /// Manowar: Phoenix's recurrence with p = 1 and a pixel seed.
     pub fn manowar() -> Self {
         Self { power: 2, ship: false, variant: MAP_MANOWAR, params: [1.0, 0.0] }
@@ -208,6 +218,17 @@ pub const MAP_FEATHER: u32 = 5;
 /// `n` rides `power`; `m` rides `map_params[0]`, since a MapId has
 /// one integer exponent and this family needs two.
 pub const MAP_MCMULLEN: u32 = 6;
+
+/// Magnet — `((z^2 + c - 1)/(2z + c - 2))^2` (variant 0, Magnet I)
+/// and its cubic sibling (variant 1, Magnet II).
+///
+/// The parameter rides `map_params[0]` as the VARIANT, and the map
+/// CONVERGES: these are the renormalization fractals whose orbits
+/// settle at z = 1, so the perturbed loop needs the settle test that
+/// [`crate::escape::assembler::PerturbTier::is_convergent`] turns on.
+/// Without it a converging pixel would run to `max_iter` and the
+/// perturbed image would differ from the direct one.
+pub const MAP_MAGNET: u32 = 7;
 
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
@@ -879,6 +900,79 @@ impl ReferenceOrbit {
                 // z^p, or conj(z)^p for the Tricorn family. See
                 // MAP_CONJ: with `ship` false, `ship_variant` selects
                 // which non-fold map this is.
+                if self.ship_variant == MAP_MAGNET {
+                    // Magnet I:  ((z^2 + c - 1) / (2z + c - 2))^2
+                    // Magnet II: ((z^3 + 3(c-1)z + (c-1)(c-2))
+                    //            /(3z^2 + 3(c-2)z + (c-1)(c-2) + 1))^2
+                    //
+                    // The quotient's denominator VANISHES somewhere in
+                    // the plane; `div` refuses when the result leaves
+                    // fixed point's range, and that refusal is the
+                    // orbit blowing up, recorded as an escape.
+                    let n = self.n_limbs;
+                    let one = FixedPoint::from_f64(1.0, n);
+                    let two = FixedPoint::from_f64(2.0, n);
+                    let z2 = self.z.sqr();
+                    let (num, den) = if self.map_params[0] < 0.5 {
+                        let num = FixedComplex {
+                            re: z2.re.add(&self.c.re).sub(&one),
+                            im: z2.im.add(&self.c.im),
+                        };
+                        let den = FixedComplex {
+                            re: self.z.re.double().add(&self.c.re).sub(&two),
+                            im: self.z.im.double().add(&self.c.im),
+                        };
+                        (num, den)
+                    } else {
+                        let cm1 = FixedComplex {
+                            re: self.c.re.sub(&one),
+                            im: self.c.im.clone(),
+                        };
+                        let cm2 = FixedComplex {
+                            re: self.c.re.sub(&two),
+                            im: self.c.im.clone(),
+                        };
+                        let c12 = cm1.mul(&cm2);
+                        let z3 = z2.mul(&self.z);
+                        let three_cm1_z = {
+                            let t = cm1.mul(&self.z);
+                            FixedComplex {
+                                re: t.re.double().add(&t.re),
+                                im: t.im.double().add(&t.im),
+                            }
+                        };
+                        let num = z3.add(&three_cm1_z).add(&c12);
+                        let three_z2 = FixedComplex {
+                            re: z2.re.double().add(&z2.re),
+                            im: z2.im.double().add(&z2.im),
+                        };
+                        let three_cm2_z = {
+                            let t = cm2.mul(&self.z);
+                            FixedComplex {
+                                re: t.re.double().add(&t.re),
+                                im: t.im.double().add(&t.im),
+                            }
+                        };
+                        let den = FixedComplex {
+                            re: three_z2.re.add(&three_cm2_z.re).add(&c12.re).add(&one),
+                            im: three_z2.im.add(&three_cm2_z.im).add(&c12.im),
+                        };
+                        (num, den)
+                    };
+                    let Some(q) = num.div(&den) else {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    };
+                    self.z = q.sqr();
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
                 if self.ship_variant == MAP_MCMULLEN {
                     // z' = z^n + c/z^m. The division REFUSES when the
                     // quotient will not fit, which for this map is the
@@ -2410,6 +2504,56 @@ mod tests {
             })
             .fold(0.0f32, f32::max);
         assert!(d > 1e-3, "different p produced the same orbit: {d:e}");
+    }
+
+    /// The Magnet reference must iterate the squared quotient, for
+    /// BOTH variants, against an f64 oracle.
+    #[test]
+    fn magnet_reference_iterates_both_variants() {
+        for variant in [0u32, 1] {
+            let (cr, ci) = (2.4f64, 0.35f64);
+            let orbit = ReferenceOrbit::compute(
+                "2.4", "0.35", 8.0, None, 60, None, 2, false, MAP_MAGNET,
+                [variant as f32, 0.0],
+            )
+            .expect("reference");
+            let (mut zr, mut zi) = (0.0f64, 0.0f64);
+            let mut worst = 0.0f64;
+            for k in 1..25u32 {
+                let (nr, ni, dr, di) = if variant == 0 {
+                    (
+                        zr * zr - zi * zi + cr - 1.0,
+                        2.0 * zr * zi + ci,
+                        2.0 * zr + cr - 2.0,
+                        2.0 * zi + ci,
+                    )
+                } else {
+                    let (c1r, c1i) = (cr - 1.0, ci);
+                    let (c2r, c2i) = (cr - 2.0, ci);
+                    let (p12r, p12i) = (c1r * c2r - c1i * c2i, c1r * c2i + c1i * c2r);
+                    let (z2r, z2i) = (zr * zr - zi * zi, 2.0 * zr * zi);
+                    let (z3r, z3i) = (z2r * zr - z2i * zi, z2r * zi + z2i * zr);
+                    (
+                        z3r + 3.0 * (c1r * zr - c1i * zi) + p12r,
+                        z3i + 3.0 * (c1r * zi + c1i * zr) + p12i,
+                        3.0 * z2r + 3.0 * (c2r * zr - c2i * zi) + p12r + 1.0,
+                        3.0 * z2i + 3.0 * (c2r * zi + c2i * zr) + p12i,
+                    )
+                };
+                let d2 = dr * dr + di * di;
+                if d2 < 1e-300 { break; }
+                let (qr, qi) = ((nr * dr + ni * di) / d2, (ni * dr - nr * di) / d2);
+                zr = qr * qr - qi * qi;
+                zi = 2.0 * qr * qi;
+                if k >= orbit.len() { break; }
+                let got = orbit.z_f32(k as usize);
+                let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+                worst = worst.max(e);
+                if zr * zr + zi * zi > 4.0 { break; }
+            }
+            println!("magnet v{variant} reference: len {} worst {worst:.3e}", orbit.len());
+            assert!(worst < 1e-4, "magnet v{variant} reference drifts ({worst:.3e})");
+        }
     }
 
     /// The McMullen reference must iterate `z^n + c/z^m` from z_0 = c,

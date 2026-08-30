@@ -2462,6 +2462,61 @@ is a valid answer; being forced to say so is the point. Reverting the
 McMullen arm now fails that test in milliseconds, on the CPU, instead
 of costing a GPU debugging session.
 
+### Magnet perturbs, and the perturbed path learns to converge (2026-08-30)
+
+Both variants on both rungs, 0.00% against an exact orbit at zoom 30
+in all four combinations — and the last of the four the completion
+plan called tractable.
+
+**The delta form is the quotient one, composed with a square:**
+
+    dq = (dN - q*dD)/(D + dD)      q = N/D, the REFERENCE quotient
+    df = 2*q*dq + dq^2             from f = q^2
+
+What is new is that `c` appears in BOTH the numerator and the
+denominator, so the parameter-plane term is not a bare `+dc`: it
+enters `dN` and `dD` separately and then partially cancels inside
+`dN - q*dD`. That cancellation is the map's own — it is what makes the
+derivative small near the attractor — and it happens between two SMALL
+quantities, so no significance is lost. Magnet II carries the same
+shape with a cubic numerator and quadratic denominator.
+
+**The perturbed templates could not converge, and Magnet is a
+convergent family.** Both rungs hardcoded `converged = false`: fine
+while every perturbing formula escaped, wrong the moment one settles.
+Magnet's orbits go to the fixed point at z = 1, and every escape-count
+and smooth coloring shades convergence SPEED for this family — so
+without the settle test each converging pixel would run to `max_iter`
+and report an iteration count two orders of magnitude too large. That
+is a different picture, not a rounding difference.
+
+Convergence detection is now spliced into both perturbed rungs with
+the same `//__CONVERGE_TEST__` marker the direct template uses, gated
+on `PerturbTier::is_convergent`. `assemble_perturbed` has no
+FormulaDef in scope — on that path the TIER is the map's identity — so
+the feature is restated there, and a test walks every formula asking
+the renderer which tier it would use, checking the two answers agree.
+For non-convergent tiers nothing is spliced and the WGSL is
+byte-identical, which the 219 unchanged visual baselines confirm.
+
+**Testing convergence took two attempts, and the first one lied.** The
+binary lit/dark comparison this suite uses cannot see it: the template
+sets `escaped` on convergence too (so the escape colorings shade
+speed), which makes converged and escaped pixels both LIT. Worse, the
+first views chosen — boundaries found by bisecting on "does the orbit
+terminate" — turned out to contain **zero converging pixels**:
+everything either escaped or landed on a higher-period cycle that a
+period-1 settle test cannot catch. Disabling convergence support left
+that test passing at 0.00%.
+
+So there is a second test. It renders a genuine convergence/escape
+boundary (measured 4069 converging pixels) with the escape-count
+coloring, and bins rendered luminance against the f64 oracle's
+TERMINATION ITERATION — palette-agnostic, asserting only that equal
+counts render equally. It reads 0.58/255 with the settle test compiled
+in and 10.82/255 without, and the threshold is calibrated between
+them rather than guessed.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep

@@ -2818,6 +2818,419 @@ mod tests {
         );
     }
 
+    /// Perturbed Magnet must match an exact orbit at depth, on both
+    /// rungs and BOTH variants.
+    ///
+    /// Two things here are new to the perturbed path. First, `c`
+    /// appears in the numerator AND the denominator, so the
+    /// parameter-plane term is not a bare `+dc` — it enters `dN` and
+    /// `dD` separately and then partially cancels inside
+    /// `dN - q*dD`. Second, the map CONVERGES: these orbits settle at
+    /// z = 1 rather than escaping, so the perturbed loop needs the
+    /// settle test that `PerturbTier::is_convergent` turns on. Without
+    /// it every converging pixel would run to `max_iter` and this
+    /// comparison would fail wholesale — which is exactly what it is
+    /// here to prove does not happen.
+    ///
+    /// The oracle therefore compares TERMINATION (converged or
+    /// escaped), because that is what the template marks: it sets
+    /// `escaped` on convergence too, so escape-count and smooth
+    /// colorings shade convergence speed.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_magnet_matches_an_exact_orbit_at_depth() {
+        for variant in [0u32, 1] {
+            for deep in [false, true] {
+                magnet_exact_orbit_case(variant, deep);
+            }
+        }
+    }
+
+    fn magnet_exact_orbit_case(variant: u32, deep: bool) {
+        let (device, queue) = repro_device();
+        // Each variant is a DIFFERENT map, so each needs its own
+        // boundary: a view chosen on Magnet I's is entirely inside
+        // Magnet II's, which the degeneracy check caught. Both are the
+        // interior side, so the reference runs full length.
+        //
+        // These views separate TERMINATED from RAN-OUT, which is what
+        // a binary lit/dark comparison can see. They contain no
+        // converging pixels at all (everything escapes or lands on a
+        // higher-period cycle the period-1 settle test cannot catch),
+        // so the convergence path is tested separately — see
+        // `perturbed_magnet_detects_convergence`, which exists because
+        // disabling convergence support left THIS test passing.
+        let (cx, cy) = if variant == 0 {
+            (0.64249201397640587f64, 1.32937270291336684f64)
+        } else {
+            (0.46578907048808199f64, 1.31015553960527420f64)
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "magnet".to_string();
+        esc.center_re = format!("{cx:.17}");
+        esc.center_im = format!("{cy:.17}");
+        esc.zoom_log2 = 30.0;
+        esc.max_iter = 400;
+        esc.formula_params.insert("variant".to_string(), variant as f32);
+
+        let (w, h) = (96u32, 72u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "white".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_floatexp = deep;
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("magnet depth"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("magnet depth tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let mut differ = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                let c = (
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                );
+                let (mut zx, mut zy) = (0.0f64, 0.0f64);
+                let mut done = false;
+                for _ in 0..esc.max_iter {
+                    let (pzx, pzy) = (zx, zy);
+                    let (nr, ni, dr, di) = if variant == 0 {
+                        (
+                            zx * zx - zy * zy + c.0 - 1.0,
+                            2.0 * zx * zy + c.1,
+                            2.0 * zx + c.0 - 2.0,
+                            2.0 * zy + c.1,
+                        )
+                    } else {
+                        let (c1r, c1i) = (c.0 - 1.0, c.1);
+                        let (c2r, c2i) = (c.0 - 2.0, c.1);
+                        let (p12r, p12i) = (c1r * c2r - c1i * c2i, c1r * c2i + c1i * c2r);
+                        let (z2r, z2i) = (zx * zx - zy * zy, 2.0 * zx * zy);
+                        let (z3r, z3i) = (z2r * zx - z2i * zy, z2r * zy + z2i * zx);
+                        (
+                            z3r + 3.0 * (c1r * zx - c1i * zy) + p12r,
+                            z3i + 3.0 * (c1r * zy + c1i * zx) + p12i,
+                            3.0 * z2r + 3.0 * (c2r * zx - c2i * zy) + p12r + 1.0,
+                            3.0 * z2i + 3.0 * (c2r * zy + c2i * zx) + p12i,
+                        )
+                    };
+                    let d2 = dr * dr + di * di;
+                    if d2 < 1e-300 {
+                        done = true;
+                        break;
+                    }
+                    let (qr, qi) = ((nr * dr + ni * di) / d2, (ni * dr - nr * di) / d2);
+                    zx = qr * qr - qi * qi;
+                    zy = 2.0 * qr * qi;
+                    // Convergence, exactly as the templates test it.
+                    let (ddx, ddy) = (zx - pzx, zy - pzy);
+                    if ddx * ddx + ddy * ddy < 1e-12 {
+                        done = true;
+                        break;
+                    }
+                    if zx * zx + zy * zy > 4.0 {
+                        done = true;
+                        break;
+                    }
+                }
+                let i = ((py * w + px) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit != done {
+                    differ += 1;
+                }
+            }
+        }
+        let lit_px = rgba
+            .chunks(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+            .count();
+        let total = (w * h) as usize;
+        assert!(
+            lit_px > total / 20 && lit_px < total * 19 / 20,
+            "degenerate view (variant {variant}): {lit_px}/{total} pixels terminated"
+        );
+        let frac = differ as f64 / (w * h) as f64;
+        println!(
+            "magnet v{variant} at zoom {} on the {} rung: {:.2}% differ from the exact orbit",
+            esc.zoom_log2,
+            if deep { "floatexp" } else { "scaled" },
+            100.0 * frac
+        );
+        assert!(
+            frac < 0.01,
+            "perturbed Magnet v{variant} disagrees with an exact orbit on {:.1}% of pixels",
+            100.0 * frac
+        );
+    }
+
+    /// The perturbed path must DETECT CONVERGENCE, not just escape.
+    ///
+    /// Magnet's orbits settle at z = 1 rather than diverging, and both
+    /// perturbed templates used to hardcode `converged = false` — so a
+    /// converging pixel ran to `max_iter` and reported an iteration
+    /// count two orders of magnitude too large. Every escape-count and
+    /// smooth coloring shades convergence SPEED for this family, so
+    /// that is a different picture, not a rounding difference.
+    ///
+    /// The binary lit/dark comparison cannot see this: the template
+    /// sets `escaped` on convergence too, so converged and escaped
+    /// pixels are both lit. This compares the ITERATION COUNT instead,
+    /// on a view chosen for a convergence/escape boundary (measured
+    /// 256 converging against 176 escaping), by binning rendered
+    /// luminance against the f64 oracle's termination iteration —
+    /// palette-agnostic, since it only asserts that equal counts
+    /// render equally.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_magnet_detects_convergence() {
+        let (device, queue) = repro_device();
+        let (cx, cy) = (-0.17175811456405135f64, 0.09206142643187049f64);
+        let (w, h) = (96u32, 72u32);
+        const MAX_ITER: u32 = 400;
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "ramp".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [0.0, 0.0, 0.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "magnet".to_string();
+        esc.coloring = "escape_count".to_string();
+        esc.center_re = format!("{cx:.17}");
+        esc.center_im = format!("{cy:.17}");
+        esc.zoom_log2 = 30.0;
+        esc.max_iter = MAX_ITER;
+        esc.formula_params.insert("variant".to_string(), 0.0);
+        // One palette turn across the whole iteration range, so a
+        // count of 5 and a count of 400 cannot land on the same
+        // colour by wrapping.
+        esc.coloring_params.insert("scale".to_string(), 1.0 / MAX_ITER as f32);
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("magnet converge"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("magnet converge tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        // f64 oracle: the termination iteration, and how it ended.
+        let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        const BINS: usize = 128;
+        let mut sums = vec![0f64; BINS];
+        let mut sqs = vec![0f64; BINS];
+        let mut counts = vec![0usize; BINS];
+        let mut converged_px = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                let c = (
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                );
+                let (mut zx, mut zy) = (0.0f64, 0.0f64);
+                let mut n = MAX_ITER;
+                let mut conv = false;
+                for i in 0..MAX_ITER {
+                    let (pzx, pzy) = (zx, zy);
+                    let (nr, ni) = (zx * zx - zy * zy + c.0 - 1.0, 2.0 * zx * zy + c.1);
+                    let (dr, di) = (2.0 * zx + c.0 - 2.0, 2.0 * zy + c.1);
+                    let d2 = dr * dr + di * di;
+                    if d2 < 1e-300 {
+                        n = i;
+                        break;
+                    }
+                    let (qr, qi) = ((nr * dr + ni * di) / d2, (ni * dr - nr * di) / d2);
+                    zx = qr * qr - qi * qi;
+                    zy = 2.0 * qr * qi;
+                    let (ddx, ddy) = (zx - pzx, zy - pzy);
+                    if ddx * ddx + ddy * ddy < 1e-12 {
+                        n = i;
+                        conv = true;
+                        break;
+                    }
+                    if zx * zx + zy * zy > 4.0 {
+                        n = i;
+                        break;
+                    }
+                }
+                if conv {
+                    converged_px += 1;
+                }
+                let b = ((n as usize) * (BINS - 1) / MAX_ITER as usize).min(BINS - 1);
+                let i = ((py * w + px) * 4) as usize;
+                let lum = rgba[i] as f64;
+                counts[b] += 1;
+                sums[b] += lum;
+                sqs[b] += lum * lum;
+            }
+        }
+        assert!(
+            converged_px > (w * h) as usize / 10,
+            "view has only {converged_px} converging pixels -- it cannot test convergence"
+        );
+        let (mut spread, mut total) = (0f64, 0usize);
+        for b in 0..BINS {
+            if counts[b] < 20 {
+                continue;
+            }
+            let n = counts[b] as f64;
+            spread += (sqs[b] / n - (sums[b] / n).powi(2)).max(0.0).sqrt() * n;
+            total += counts[b];
+        }
+        let spread = spread / total.max(1) as f64;
+        println!(
+            "magnet convergence: {converged_px} converging pixels, colour spread within an \
+             iteration bin {spread:.2}/255"
+        );
+        assert!(
+            // Calibrated, not guessed: this reads 0.58/255 with the
+            // settle test compiled in and 10.82/255 with it disabled,
+            // so 4.0 sits clear of the working value and well below
+            // the broken one.
+            spread < 4.0,
+            "the rendered iteration count does not track the exact orbit's \
+             ({spread:.2}/255) -- converging pixels are probably running to max_iter, \
+             which is what a perturbed path without the settle test does"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

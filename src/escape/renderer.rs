@@ -1058,6 +1058,11 @@ impl EscapeRenderer {
             // Rational with a pole: a BLA bound would have to model the
             // pole term's growth, which the power-tier builder does not.
             assembler::PerturbTier::McMullen(_, _) => return false,
+            // A BLA skip advances the reference index without running
+            // the steps between -- but Magnet's loop can TERMINATE in
+            // those steps, on convergence. Skipping past a settle
+            // would report the wrong iteration count.
+            assembler::PerturbTier::Magnet(_) => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -1687,6 +1692,21 @@ impl EscapeRenderer {
         // p is, below -- an absent key means "the default", and
         // reading it as zero built the reference for c/z^1 while the
         // delta step used c/z^3. Measured: every pixel escaped.
+        // Magnet's VARIANT selects between two different maps, so it
+        // is part of the reference orbit's identity.
+        if escape.formula == "magnet" {
+            let v = escape
+                .formula_params
+                .get("variant")
+                .copied()
+                .unwrap_or_else(|| {
+                    super::get_formula("magnet")
+                        .parameters
+                        .first()
+                        .map_or(0.0, |d| d.default)
+                });
+            return [v, 0.0];
+        }
         if escape.formula == "mcmullen" {
             let m = escape
                 .formula_params
@@ -1761,6 +1781,15 @@ impl EscapeRenderer {
             // measured, 0 of 4000 sampled parameters have a bounded
             // orbit, so that plane has no interior to zoom into. The
             // classic Sierpinski-carpet pictures are Julia sets.
+            "magnet" => {
+                let v = escape.formula_params.get("variant").copied().unwrap_or(0.0);
+                let rv = v.round();
+                if (v - rv).abs() < 1e-6 && (0.0..=1.0).contains(&rv) {
+                    Some(assembler::PerturbTier::Magnet(rv as u32))
+                } else {
+                    None
+                }
+            }
             "mcmullen" if escape.julia => {
                 let n = escape.formula_params.get("n").copied().unwrap_or(2.0);
                 let m = escape.formula_params.get("m").copied().unwrap_or(3.0);
@@ -1884,6 +1913,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::McMullen(n, _) => {
                 (n, false, super::reference::MAP_MCMULLEN)
+            }
+            assembler::PerturbTier::Magnet(_) => {
+                (2, false, super::reference::MAP_MAGNET)
             }
         };
         let height_px = self.height.max(1) as f64;
@@ -2106,6 +2138,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::McMullen(n, _) => {
                 (n, false, super::reference::MAP_MCMULLEN)
+            }
+            assembler::PerturbTier::Magnet(_) => {
+                (2, false, super::reference::MAP_MAGNET)
             }
         };
         let period_hint = if julia_c.is_none() && !ship {
@@ -3437,6 +3472,8 @@ mod tests {
             // Manowar's p = 1 is fixed by the formula, not a parameter.
             ("manowar", &[]),
             ("mcmullen", &["m"]),
+            // The VARIANT selects between two different maps.
+            ("magnet", &["variant"]),
         ];
 
         for (formula, names) in carried {
