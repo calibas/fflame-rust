@@ -69,6 +69,7 @@ independent oracle and pinned by a visual config:
 | Lambda | both | 0.23% / 0.26% vs an exact orbit at zoom 30 — see the note on why the CAP is part of that number |
 | Feather | both | 0.00% / 0.00% vs an exact orbit at zoom 30, on the view that exposed the escape test's delta-blindness |
 | McMullen | both | 0.22% / 0.19% vs an exact orbit at zoom 30 (Julia plane; the parameter plane has no interior) |
+| Magnet I and II | both | 0.00% vs an exact orbit at zoom 30, all four combinations; convergence tracked at 0.58/255 |
 
 Plus 8 new `wgsl_derivative` blocks (tricorn, mcmullen, lambda,
 cactus, exponential, trig, tetration, barnsley).
@@ -133,11 +134,23 @@ Still open, in the order the survey judged tractable:
   sets. Re-seeding the parameter plane at a proper critical point is a
   separate, visible formula change and is NOT done here.
 
-- **Magnet** — the remaining one. Its denominator vanishes too, which
-  `recip_scaled` now handles, but `c` appears in BOTH numerator and
-  denominator and the map is a SQUARED quotient, so the delta form is
-  the quotient one composed with `d(q^2) = 2q*dq + dq^2`. No blocker
-  known; just not written.
+- **Magnet — DONE 2026-08-30.** Both variants, both rungs, 0.00%
+  against an exact orbit at zoom 30. `c` appears in numerator AND
+  denominator, and the map is a squared quotient, so the delta form is
+  the quotient one composed with `d(q^2) = 2q*dq + dq^2`.
+
+  It also needed something none of the others did: the perturbed
+  templates hardcoded `converged = false`, so a CONVERGENT family
+  would have run every settling pixel to `max_iter`. Convergence
+  detection is now spliced into both perturbed rungs, gated on the
+  tier, and inert (byte-identical WGSL) for every non-convergent
+  formula.
+
+**Item 2's tractable four are complete**: Lambda, Feather, McMullen
+and Magnet all perturb. What remains in item 2 is the harder set —
+transcendentals (their own error analysis), Kaliset/Ducks (blocked for
+measured reasons), Newton/Nova (root-basin refinement, a different
+project), and the series-approximation-vs-BLA Phase-0 measurement.
 - **Tetration / exponential / trig / Collatz** — transcendental
   deltas exist but the error analysis is its own study.
 - **Newton / Nova** — convergent, not escaping; deep zoom there wants

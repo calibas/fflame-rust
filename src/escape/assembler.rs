@@ -543,7 +543,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var z = vec2<f32>(0.0, 0.0);
     var escaped = false;
     var n = 0u;
-    let converged = false;
+    // Mutable on the perturbed path too: a Convergent formula
+    // terminates on a settled orbit here exactly as it does on the
+    // direct one. Non-convergent formulas splice nothing below, so
+    // their shaders stay byte-identical and the compiler folds this
+    // straight back to a constant.
+    var converged = false;
     let period = 0u;
     let dz = vec2<f32>(1.0, 0.0);
     // The f32 value of c for the accumulator colorings (trap geometry
@@ -657,6 +662,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         z = z_full;
 
         //__ACCUM_UPDATE__
+        //__CONVERGE_TEST__
 
         // DELTA-AWARE escape test (biomorph is gated off on the
         // perturbed path). |z_full|² in plain f32 quantizes away the
@@ -1391,7 +1397,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var z = vec2<f32>(0.0, 0.0);
     var escaped = false;
     var n = 0u;
-    let converged = false;
+    // Mutable on the perturbed path too: a Convergent formula
+    // terminates on a settled orbit here exactly as it does on the
+    // direct one. Non-convergent formulas splice nothing below, so
+    // their shaders stay byte-identical and the compiler folds this
+    // straight back to a constant.
+    var converged = false;
     let period = 0u;
     let dz = vec2<f32>(1.0, 0.0);
     let c_f32 = params.center;
@@ -1485,6 +1496,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         z = z_full;
 
         //__ACCUM_UPDATE__
+        //__CONVERGE_TEST__
 
         // Delta-aware escape margin -- see the scaled template. The
         // f32 delta underflows to zero exactly when it is too small to
@@ -1642,11 +1654,47 @@ pub enum PerturbTier {
     /// where this works. Seeding the parameter plane at a proper
     /// critical point is a separate, visible formula change.
     McMullen(u32, u32),
+    /// Magnet: `((z^2 + c - 1)/(2z + c - 2))^2` (variant 0) and its
+    /// cubic sibling (variant 1) — the quotient delta form composed
+    /// with a square, and the first CONVERGENT tier.
+    ///
+    ///   dN, dD     the numerator's and denominator's own deltas,
+    ///              each a cancellation-free expansion
+    ///   dq = (dN - q*dD)/(D + dD)      q = N/D, the REFERENCE quotient
+    ///   df = 2*q*dq + dq^2             from f = q^2
+    ///
+    /// `c` appears in BOTH numerator and denominator here, which no
+    /// earlier tier had: the parameter-plane term is not a bare `+dc`
+    /// but enters `dN` and `dD` separately and then partially cancels
+    /// inside `dN - q*dD`. That cancellation is the map's own — it is
+    /// what makes the derivative small near the attractor — and it
+    /// happens between two SMALL quantities, so no significance is
+    /// lost.
+    ///
+    /// CONVERGENT, and that is load-bearing: these orbits settle at
+    /// z = 1 rather than escaping. The perturbed loop needs the settle
+    /// test, or every converging pixel runs to `max_iter` and the
+    /// perturbed image differs from the direct one. See
+    /// [`PerturbTier::is_convergent`].
+    Magnet(u32),
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
     /// arrangement has its own delta algebra.
     Ship(u32),
+}
+
+impl PerturbTier {
+    /// Whether this tier's map CONVERGES, so the perturbed loop needs
+    /// the settle test.
+    ///
+    /// `assemble_perturbed` has no FormulaDef in scope -- on that path
+    /// the TIER is the map's identity -- so the feature has to be
+    /// restated here. A test checks it against the registry's own
+    /// `FormulaFeature::Convergent`, so the two cannot drift.
+    pub fn is_convergent(self) -> bool {
+        matches!(self, PerturbTier::Magnet(_))
+    }
 }
 
 /// The scaled-f32 Burning Ship-family delta step for one variant.
@@ -2021,6 +2069,85 @@ fn delta_step_mcmullen(n: u32, m: u32) -> String {
     out
 }
 
+/// Magnet's scaled-rung delta step.
+fn delta_step_magnet(variant: u32) -> String {
+    let head = if variant == 0 {
+        r#"        // Magnet I: N = z^2+c-1, D = 2z+c-2, f = (N/D)^2.
+        let cref = perturb.ref_c;
+        let zr2 = vec2<f32>(z_ref.x * z_ref.x - z_ref.y * z_ref.y, 2.0 * z_ref.x * z_ref.y);
+        let n_ref = zr2 + cref - vec2<f32>(1.0, 0.0);
+        let d_ref = 2.0 * z_ref + cref - vec2<f32>(2.0, 0.0);
+        // dN/S and dD/S.
+        var ns = 2.0 * vec2<f32>(
+            z_ref.x * w.x - z_ref.y * w.y,
+            z_ref.x * w.y + z_ref.y * w.x,
+        ) + d0_term;
+        ns = ns + perturb.s * vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);
+        let ds = 2.0 * w + d0_term;
+"#
+    } else {
+        r#"        // Magnet II: the cubic numerator and quadratic
+        // denominator, both carrying c.
+        let cref = perturb.ref_c;
+        let cm1 = cref - vec2<f32>(1.0, 0.0);
+        let cm2 = cref - vec2<f32>(2.0, 0.0);
+        let c12 = vec2<f32>(cm1.x * cm2.x - cm1.y * cm2.y, cm1.x * cm2.y + cm1.y * cm2.x);
+        let zr2 = vec2<f32>(z_ref.x * z_ref.x - z_ref.y * z_ref.y, 2.0 * z_ref.x * z_ref.y);
+        let zr3 = vec2<f32>(zr2.x * z_ref.x - zr2.y * z_ref.y, zr2.x * z_ref.y + zr2.y * z_ref.x);
+        let n_ref = zr3 + 3.0 * vec2<f32>(
+            cm1.x * z_ref.x - cm1.y * z_ref.y,
+            cm1.x * z_ref.y + cm1.y * z_ref.x,
+        ) + c12;
+        let d_ref = 3.0 * zr2 + 3.0 * vec2<f32>(
+            cm2.x * z_ref.x - cm2.y * z_ref.y,
+            cm2.x * z_ref.y + cm2.y * z_ref.x,
+        ) + c12 + vec2<f32>(1.0, 0.0);
+        // Shared pieces of dN/S and dD/S.
+        let zw = vec2<f32>(z_ref.x * w.x - z_ref.y * w.y, z_ref.x * w.y + z_ref.y * w.x);
+        let w2 = vec2<f32>(w.x * w.x - w.y * w.y, 2.0 * w.x * w.y);
+        let zpw = z_ref + perturb.s * w;
+        let dcz = vec2<f32>(
+            d0_term.x * zpw.x - d0_term.y * zpw.y,
+            d0_term.x * zpw.y + d0_term.y * zpw.x,
+        );
+        // dc*(2C - 3 + S*dc), the (c-1)(c-2) term's delta.
+        let tail_b = 2.0 * cref - vec2<f32>(3.0, 0.0) + perturb.s * d0_term;
+        let tail = vec2<f32>(
+            d0_term.x * tail_b.x - d0_term.y * tail_b.y,
+            d0_term.x * tail_b.y + d0_term.y * tail_b.x,
+        );
+        let z2w = vec2<f32>(zr2.x * w.x - zr2.y * w.y, zr2.x * w.y + zr2.y * w.x);
+        let zw2 = vec2<f32>(zw.x * w.x - zw.y * w.y, zw.x * w.y + zw.y * w.x);
+        let w3 = vec2<f32>(w2.x * w.x - w2.y * w.y, w2.x * w.y + w2.y * w.x);
+        var ns = 3.0 * z2w + 3.0 * perturb.s * zw2 + perturb.s * perturb.s * w3;
+        ns = ns + 3.0 * vec2<f32>(cm1.x * w.x - cm1.y * w.y, cm1.x * w.y + cm1.y * w.x);
+        ns = ns + 3.0 * dcz + tail;
+        var ds = 3.0 * (2.0 * zw + perturb.s * w2);
+        ds = ds + 3.0 * vec2<f32>(cm2.x * w.x - cm2.y * w.y, cm2.x * w.y + cm2.y * w.x);
+        ds = ds + 3.0 * dcz + tail;
+"#
+    };
+    let tail = r#"        // q = N/D, the REFERENCE quotient, at O(1) in f32.
+        let dr2 = max(dot(d_ref, d_ref), 1e-30);
+        let q = vec2<f32>(
+            (n_ref.x * d_ref.x + n_ref.y * d_ref.y) / dr2,
+            (n_ref.y * d_ref.x - n_ref.x * d_ref.y) / dr2,
+        );
+        // dq/S = (dN/S - q*dD/S) / (D + S*dD/S).
+        let top = ns - vec2<f32>(q.x * ds.x - q.y * ds.y, q.x * ds.y + q.y * ds.x);
+        let div = d_ref + perturb.s * ds;
+        let dv2 = max(dot(div, div), 1e-30);
+        let qs = vec2<f32>(
+            (top.x * div.x + top.y * div.y) / dv2,
+            (top.y * div.x - top.x * div.y) / dv2,
+        );
+        // f = q^2, so df/S = 2*q*(dq/S) + S*(dq/S)^2.
+        var w_new = 2.0 * vec2<f32>(q.x * qs.x - q.y * qs.y, q.x * qs.y + q.y * qs.x);
+        w_new = w_new + perturb.s * vec2<f32>(qs.x * qs.x - qs.y * qs.y, 2.0 * qs.x * qs.y);
+"#;
+    format!("{head}{tail}")
+}
+
 /// The floatexp flavor of the same step.
 /// The default Zhuoran rebase: restart the reference at index 0.
 fn rebase_default() -> String {
@@ -2347,6 +2474,84 @@ fn delta_step_mcmullen_fe(n: u32, m: u32) -> String {
     out
 }
 
+/// Magnet on the deep rung.
+///
+/// Same algebra as [`delta_step_magnet`] with `w` the ABSOLUTE delta,
+/// so the scale factors drop out. The deltas run in floatexp; the
+/// reference's N, D and quotient are O(1) and stay in f32, as does the
+/// divisor — `dD` converts down first, flushing to zero exactly when
+/// it could not have moved an O(1) f32 value.
+fn delta_step_magnet_fe(variant: u32) -> String {
+    let head = if variant == 0 {
+        r#"        // Magnet I (floatexp): N = z^2+c-1, D = 2z+c-2.
+        let cref = perturb.ref_c;
+        let zr32 = z_ref_m * exp2(f32(z_ref_e));
+        let zr2 = vec2<f32>(zr32.x * zr32.x - zr32.y * zr32.y, 2.0 * zr32.x * zr32.y);
+        let n_ref = zr2 + cref - vec2<f32>(1.0, 0.0);
+        let d_ref = 2.0 * zr32 + cref - vec2<f32>(2.0, 0.0);
+        var ns = cfe2_add(cfe2_mul_c32(w, 2.0 * zr32), cfe2_sqr(w));
+        var ds = cfe2_mul_c32(w, vec2<f32>(2.0, 0.0));
+        if (!is_julia_perturb) {
+            ns = cfe2_add(ns, d0);
+            ds = cfe2_add(ds, d0);
+        }
+"#
+    } else {
+        r#"        // Magnet II (floatexp).
+        let cref = perturb.ref_c;
+        let zr32 = z_ref_m * exp2(f32(z_ref_e));
+        let cm1 = cref - vec2<f32>(1.0, 0.0);
+        let cm2 = cref - vec2<f32>(2.0, 0.0);
+        let c12 = vec2<f32>(cm1.x * cm2.x - cm1.y * cm2.y, cm1.x * cm2.y + cm1.y * cm2.x);
+        let zr2 = vec2<f32>(zr32.x * zr32.x - zr32.y * zr32.y, 2.0 * zr32.x * zr32.y);
+        let zr3 = vec2<f32>(zr2.x * zr32.x - zr2.y * zr32.y, zr2.x * zr32.y + zr2.y * zr32.x);
+        let n_ref = zr3 + 3.0 * vec2<f32>(
+            cm1.x * zr32.x - cm1.y * zr32.y,
+            cm1.x * zr32.y + cm1.y * zr32.x,
+        ) + c12;
+        let d_ref = 3.0 * zr2 + 3.0 * vec2<f32>(
+            cm2.x * zr32.x - cm2.y * zr32.y,
+            cm2.x * zr32.y + cm2.y * zr32.x,
+        ) + c12 + vec2<f32>(1.0, 0.0);
+        let zw = cfe2_mul_c32(w, zr32);
+        let w2 = cfe2_sqr(w);
+        let z2w = cfe2_mul_c32(w, zr2);
+        let zw2 = cfe2_mul(zw, w);
+        let w3 = cfe2_mul(w2, w);
+        var ns = cfe2_add(
+            cfe2_add(cfe2_mul_c32(z2w, vec2<f32>(3.0, 0.0)), cfe2_mul_c32(zw2, vec2<f32>(3.0, 0.0))),
+            w3,
+        );
+        ns = cfe2_add(ns, cfe2_mul_c32(w, 3.0 * cm1));
+        var ds = cfe2_mul_c32(cfe2_add(cfe2_mul_c32(zw, vec2<f32>(2.0, 0.0)), w2), vec2<f32>(3.0, 0.0));
+        ds = cfe2_add(ds, cfe2_mul_c32(w, 3.0 * cm2));
+        if (!is_julia_perturb) {
+            // dc*(Z+d) and dc*(2C-3+dc): the c-carrying terms, which
+            // enter the numerator and denominator identically.
+            let zpw = zr32 + cfe2_to_f32(w);
+            let dcz = cfe2_mul_c32(d0, 3.0 * zpw);
+            let tail_b = 2.0 * cref - vec2<f32>(3.0, 0.0) + cfe2_to_f32(d0);
+            let tail = cfe2_mul_c32(d0, tail_b);
+            ns = cfe2_add(cfe2_add(ns, dcz), tail);
+            ds = cfe2_add(cfe2_add(ds, dcz), tail);
+        }
+"#
+    };
+    let tail = r#"        let dr2 = max(dot(d_ref, d_ref), 1e-30);
+        let q = vec2<f32>(
+            (n_ref.x * d_ref.x + n_ref.y * d_ref.y) / dr2,
+            (n_ref.y * d_ref.x - n_ref.x * d_ref.y) / dr2,
+        );
+        let top = cfe2_add(ns, cfe2_mul_c32(ds, vec2<f32>(-q.x, -q.y)));
+        let div = d_ref + cfe2_to_f32(ds);
+        let dv2 = max(dot(div, div), 1e-30);
+        let inv = vec2<f32>(div.x / dv2, -div.y / dv2);
+        let qs = cfe2_mul_c32(top, inv);
+        var w_new = cfe2_add(cfe2_mul_c32(qs, 2.0 * q), cfe2_mul(qs, qs));
+"#;
+    format!("{head}{tail}")
+}
+
 fn rebase_default_fe() -> String {
     "        let rebase_delta = z_full - ref_z(0u);
              if (m >= perturb.orbit_len - 1u
@@ -2591,6 +2796,9 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
+    // On this path the TIER is the map's identity -- there is no
+    // FormulaDef in scope -- so convergence is a property of the tier.
+    let convergent = tier.is_convergent();
     let template = if floatexp {
         PERTURBED_FE_TEMPLATE
     } else {
@@ -2611,6 +2819,7 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::McMullen(n, m) => {
                     delta_step_mcmullen(n.clamp(2, 8), m.clamp(1, 8))
                 }
+                PerturbTier::Magnet(v) => delta_step_magnet(v.min(1)),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
@@ -2623,6 +2832,7 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::McMullen(n, m) => {
                     delta_step_mcmullen_fe(n.clamp(2, 8), m.clamp(1, 8))
                 }
+                PerturbTier::Magnet(v) => delta_step_magnet_fe(v.min(1)),
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
@@ -2670,6 +2880,25 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                     // `var`, not `let`: the perturbed templates' chunk
                     // resume assigns it even when no accumulator runs.
                     out.push("    var accum_state = vec2<f32>(0.0, 0.0);".to_string());
+                }
+            }
+            "//__CONVERGE_TEST__" => {
+                // Same semantics as the direct template: a settled
+                // orbit ends the loop, sets `escaped` so escape-count
+                // and smooth colorings shade convergence SPEED, and
+                // records `converged` for the basin colorings. Without
+                // this a perturbed Convergent formula would run every
+                // converging pixel to max_iter and report a different
+                // image from the direct path -- which is why Magnet
+                // could not perturb until it was here.
+                if convergent {
+                    out.push("        let conv_dz = z - z_before;".to_string());
+                    out.push("        if (dot(conv_dz, conv_dz) < 1e-12) {".to_string());
+                    out.push("            converged = true;".to_string());
+                    out.push("            escaped = true;".to_string());
+                    out.push("            n = i;".to_string());
+                    out.push("            break;".to_string());
+                    out.push("        }".to_string());
                 }
             }
             "//__ACCUM_UPDATE__" => {
@@ -3135,6 +3364,36 @@ mod tests {
         }
     }
 
+    /// `PerturbTier::is_convergent` must agree with the registry.
+    ///
+    /// `assemble_perturbed` has no FormulaDef in scope, so the feature
+    /// is restated on the tier -- and a restatement can drift. This
+    /// walks every formula, asks the renderer which tier it would use,
+    /// and checks the two answers match. A Convergent formula that
+    /// gained a tier without gaining the settle test would render
+    /// every converging pixel at max_iter.
+    #[test]
+    fn tier_convergence_matches_the_registry() {
+        for f in crate::escape::FORMULAS {
+            let declared = f.has_feature(crate::escape::FormulaFeature::Convergent);
+            for julia in [false, true] {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = f.name.to_string();
+                esc.julia = julia;
+                let Some(tier) = crate::escape::EscapeRenderer::perturb_tier(&esc) else {
+                    continue;
+                };
+                assert_eq!(
+                    tier.is_convergent(),
+                    declared,
+                    "{}: the registry says Convergent={declared} but its tier {tier:?}                      says {} -- the perturbed loop would omit (or add) the settle test",
+                    f.name,
+                    tier.is_convergent()
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_combination_parses_as_wgsl() {
         // naga front-end parse + validation, no GPU needed — the same
@@ -3388,6 +3647,10 @@ mod tests {
             (PerturbTier::Feather(3), true),
             (PerturbTier::McMullen(2, 3), false),
             (PerturbTier::McMullen(2, 3), true),
+            (PerturbTier::Magnet(0), false),
+            (PerturbTier::Magnet(0), true),
+            (PerturbTier::Magnet(1), false),
+            (PerturbTier::Magnet(1), true),
         ] {
             let src = assemble_perturbed(&colorings::SMOOTH, floatexp, tier);
             let module = naga::front::wgsl::parse_str(&src)

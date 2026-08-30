@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "2d5b7fa1",
+  "git_hash": "48fb4ff9",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -381,6 +381,10 @@
     "escape-magnet-1.png": {
       "bytes": 4572,
       "sha256": "4b55c42fa15c8014e6bdb4be482aa320841bfe788ac1ecee6089ac695391223c"
+    },
+    "escape-magnet-deep.png": {
+      "bytes": 21932,
+      "sha256": "f5c50b840ef41c83fe74b53edbad7ba61823fec6890b1b31c2c0088b31b4fb17"
     },
     "escape-mandelbrot-biomorph-re.png": {
       "bytes": 4211,
