@@ -424,10 +424,18 @@ struct BlaBuf {
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
 @group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
+// |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
+// The escape margin needs (|Z|² - bailout) to better than f32 ulp --
+// see the margin comment at the escape test.
+@group(0) @binding(11) var<storage, read> ref_r2_buf: array<vec2<f32>>;
 
 // The reference iterate as a plain f32 value (zero below f32's normal
 // range - the pre-exponent behaviour, which is all the rebase test
 // and the z_full reconstruction need).
+fn ref_r2(m: u32) -> vec2<f32> {
+    return ref_r2_buf[m];
+}
+
 fn ref_z(m: u32) -> vec2<f32> {
     let e = ref_orbit_e[m];
     if (e == 0) {
@@ -650,8 +658,22 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         //__ACCUM_UPDATE__
 
-        // Escape test (biomorph is gated off on the perturbed path).
-        if (dot(z_full, z_full) > params.bailout) {
+        // DELTA-AWARE escape test (biomorph is gated off on the
+        // perturbed path). |z_full|² in plain f32 quantizes away the
+        // per-pixel delta once 2·Z·δ drops below one ulp of the
+        // bailout -- past zoom ~22 every pixel then inherits the
+        // reference's rounded fate, which is what broke Feather (its
+        // slow-growth boundary is DECIDED by those sub-ulp
+        // differences; a chaos-amplified boundary never is, which is
+        // why no earlier tier hit this). So the margin is formed in
+        // parts that are each small or exact: r2.x - bailout is exact
+        // near the threshold (both f32, within a factor of two --
+        // Sterbenz), and r2.y + 2·Z·δ + |δ|² are all tiny.
+        let mr = ref_r2(min(m, perturb.orbit_len - 1u));
+        let zi_m = ref_z(min(m, perturb.orbit_len - 1u));
+        let margin = (mr.x - params.bailout)
+            + (mr.y + 2.0 * dot(zi_m, delta) + dot(delta, delta));
+        if (margin > 0.0) {
             escaped = true;
             n = i;
             break;
@@ -842,10 +864,18 @@ struct BlaBuf {
 // See the direct template: the coloring's scalar value for the relief
 // pass, bound to a 1x1 dummy when shading is off.
 @group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
+// |Z|² per reference entry as a DF pair (hi, lo), CPU-computed in f64.
+// The escape margin needs (|Z|² - bailout) to better than f32 ulp --
+// see the margin comment at the escape test.
+@group(0) @binding(11) var<storage, read> ref_r2_buf: array<vec2<f32>>;
 
 // The reference iterate as a plain f32 value (zero below f32's normal
 // range - the pre-exponent behaviour, which is all the rebase test
 // and the z_full reconstruction need).
+fn ref_r2(m: u32) -> vec2<f32> {
+    return ref_r2_buf[m];
+}
+
 fn ref_z(m: u32) -> vec2<f32> {
     let e = ref_orbit_e[m];
     if (e == 0) {
@@ -1456,7 +1486,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         //__ACCUM_UPDATE__
 
-        if (dot(z_full, z_full) > params.bailout) {
+        // Delta-aware escape margin -- see the scaled template. The
+        // f32 delta underflows to zero exactly when it is too small to
+        // move the margin, so the deep rung needs no extended-range
+        // cross term.
+        let mr = ref_r2(min(m, perturb.orbit_len - 1u));
+        let margin = (mr.x - params.bailout)
+            + (mr.y + 2.0 * dot(zi, delta) + dot(delta, delta));
+        if (margin > 0.0) {
             escaped = true;
             n = i;
             break;

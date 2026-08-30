@@ -1121,10 +1121,7 @@ mod tests {
             // c*z*(1-z): perturbs since the Lambda tier shipped, so
             // the panel must stop telling users it stops at 2^14.
             ("lambda", true),
-            // Feather's tier exists but is not selected -- see
-            // perturb_tier. The panel must say 2^14, not promise depth
-            // the engine will not deliver.
-            ("feather", false),
+            ("feather", true),
             ("kaliset", false),
             ("newton", false),
             ("tetration", false),

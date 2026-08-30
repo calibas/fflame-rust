@@ -67,6 +67,7 @@ independent oracle and pinned by a visual config:
 | Phoenix | both | 0.00% vs an exact orbit at zoom 20 and 28 |
 | Manowar | DEEP ONLY, by measurement | 1.6-2.1% vs an exact orbit at zoom 20-34; 18-27% on the scaled rung |
 | Lambda | both | 0.23% / 0.26% vs an exact orbit at zoom 30 — see the note on why the CAP is part of that number |
+| Feather | both | 0.00% / 0.00% vs an exact orbit at zoom 30, on the view that exposed the escape test's delta-blindness |
 
 Plus 8 new `wgsl_derivative` blocks (tricorn, mcmullen, lambda,
 cactus, exponential, trig, tetration, barnsley).
@@ -82,7 +83,14 @@ Still open, in the order the survey judged tractable:
   parameter-plane term picks up `Z(1-Z)` rather than a bare `+ dc`.
   Both rungs. Details in
   [escape-time-fractals.md](escape-time-fractals.md).
-- **Feather — foundation shipped, tier NOT enabled 2026-08-30.** The
+- **Feather — DONE 2026-08-30** (same day, two commits). The gate
+  described below lasted hours: the depth failure turned out to be the
+  f32 escape test quantizing away sub-ulp deltas, fixed engine-wide by
+  the delta-aware margin (`ref_r2`). 0.00% on both rungs at zoom 30 on
+  the exact view that exposed it. The paragraph below records the
+  original finding.
+
+  **The original note — foundation shipped, tier NOT enabled.** The
   blocker for all three rational families turned out not to be "care
   near poles" but something more basic: the fixed-point layer had **no
   division at all** ("the core never divides", per its own header), so

@@ -2441,6 +2441,193 @@ mod tests {
     /// iterations) after the lambda tier taught this suite that an f64
     /// oracle stops being ground truth once orbits linger — see
     /// `lambda_exact_orbit_case`.
+    /// Perturbed Feather must match an exact orbit at depth, on both
+    /// rungs.
+    ///
+    /// The first RATIONAL tier, so this is the first test of the
+    /// quotient delta form `dq = (dN - q*dD)/(D + dD)`. Writing that
+    /// the obvious way instead — `(dN*D - N*dD)/(D*(D+dD))` —
+    /// differences two full-size products and loses the delta to
+    /// cancellation, which would show up here and nowhere else.
+    ///
+    /// It also exercises a NON-HOLOMORPHIC denominator: `1 + x^2 -
+    /// i*y^2` reads the components of z separately, so `dD` is two
+    /// independent component binomials rather than one complex one. A
+    /// port that treated it as holomorphic still renders a plausible
+    /// Feather.
+    ///
+    /// The view is chosen for a SHORT escape horizon (median 8
+    /// iterations) after the lambda tier taught this suite that an f64
+    /// oracle stops being ground truth once orbits linger — see
+    /// `lambda_exact_orbit_case`.
+    ///
+    /// AND it is the view that exposed the f32 escape test's
+    /// delta-blindness: |c|² = 3.975, one step from the bailout, on a
+    /// map whose |z| grows ~×1.2 per step — so escape here is decided
+    /// by sub-ulp differences a plain f32 |z_full|² cannot see. With
+    /// the old test this view read 26% wrong at zoom 25 and went
+    /// fully degenerate by 30; the delta-aware margin is what makes
+    /// zoom 30 pass. This test is the margin's regression.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_feather_matches_an_exact_orbit_at_depth() {
+        for deep in [false, true] {
+            feather_exact_orbit_case(deep);
+        }
+    }
+
+    fn feather_exact_orbit_case(deep: bool) {
+        let (device, queue) = repro_device();
+        // The INTERIOR side of the boundary, so the reference orbit
+        // runs the full iteration count.
+        let (cx, cy) = (-0.77291940505873225f64, -1.83786610577385723f64);
+        const P: u32 = 3;
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "feather".to_string();
+        esc.center_re = format!("{cx:.17}");
+        esc.center_im = format!("{cy:.17}");
+        esc.zoom_log2 = 30.0;
+        esc.max_iter = 600;
+        esc.formula_params.insert("power".to_string(), P as f32);
+
+        let (w, h) = (96u32, 72u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "white".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_floatexp = deep;
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("feather depth"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("feather depth tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let mut differ = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                let c = (
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                );
+                let (mut zx, mut zy) = (0.0f64, 0.0f64);
+                let mut escaped = false;
+                for _ in 0..esc.max_iter {
+                    // num = z^P
+                    let (mut nr, mut ni) = (zx, zy);
+                    for _ in 1..P {
+                        let t = nr * zx - ni * zy;
+                        ni = nr * zy + ni * zx;
+                        nr = t;
+                    }
+                    // den = 1 + x^2 - i*y^2
+                    let (dr, di) = (1.0 + zx * zx, -(zy * zy));
+                    let d2 = dr * dr + di * di;
+                    zx = (nr * dr + ni * di) / d2 + c.0;
+                    zy = (ni * dr - nr * di) / d2 + c.1;
+                    if zx * zx + zy * zy > 4.0 {
+                        escaped = true;
+                        break;
+                    }
+                }
+                let i = ((py * w + px) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit != escaped {
+                    differ += 1;
+                }
+            }
+        }
+        let escaped_px = rgba
+            .chunks(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+            .count();
+        let total = (w * h) as usize;
+        assert!(
+            escaped_px > total / 10 && escaped_px < total * 9 / 10,
+            "degenerate view: {escaped_px}/{total} pixels escaped"
+        );
+        let frac = differ as f64 / (w * h) as f64;
+        println!(
+            "feather at zoom {} on the {} rung: {:.2}% differ from the exact orbit",
+            esc.zoom_log2,
+            if deep { "floatexp" } else { "scaled" },
+            100.0 * frac
+        );
+        assert!(
+            frac < 0.005,
+            "perturbed Feather disagrees with an exact orbit on {:.1}% of pixels -- the quotient delta form or the component-wise denominator is wrong",
+            100.0 * frac
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

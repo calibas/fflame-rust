@@ -2325,17 +2325,13 @@ position, which renders as hard straight diagonals
 `feather`, and the panel's depth hint says 2^14 rather than promising
 depth the engine will not deliver.
 
-**What the cause is not.** An f64 simulation of the same recurrence —
-including the Zhuoran rebase, and including a faithful model of the
-scaled rung with `w = d/S` and every intermediate rounded to f32 —
-reproduces the exact orbit at **0.0% disagreement for zooms 10, 20, 25
-and 30**. The generated WGSL matches that simulation line for line,
-the fixed-point reference is exact at every limb count, and rounding
-the reference to f32 inside the simulation changes nothing. Two
-hypotheses were tested and killed this way (f32 reference
-coefficients; f32 delta arithmetic). The fault is somewhere in the
-shader environment the simulation does not model, and it has not been
-found.
+**The cause was found the next day, and the section below records
+it** — the one line of that "faithful" simulation left in f64 was the
+ESCAPE TEST, and that was the fault. Quantizing just that line to f32
+reproduced the whole failure curve (0.00% / 0.33% / 30.7% / 50.3% at
+zooms 15/20/25/30 against the GPU's 0.00% / 0.49% / 26.35% / dead).
+Everything the paragraph above rules out stays ruled out; the delta
+machinery shipped correct.
 
 **A harness footgun found on the way out**, worth knowing before the
 next tier: `force_perturbed` on a formula whose `perturb_tier` returns
@@ -2344,6 +2340,66 @@ renders the MANDELBROT delta step against that formula's reference.
 The result looks like a broken render of the formula under test rather
 than what it is. That is how gating Feather off turned its passing
 zoom-15 test into "6912/6912 pixels escaped".
+
+### The delta-aware escape margin, and Feather un-gated (2026-08-30)
+
+**The bug.** The perturbed templates reconstructed `z_full = Z_m + δ`
+in f32 and tested `|z_full|² > bailout` in f32. The per-pixel
+information is δ, whose effect on `|z_full|²` is ≈ `2·Z·δ`; one ulp of
+the bailout (4.0) is 2.4e-7. At zoom 25, δ ~ 1e-8 makes that effect
+~4e-8 — **below the ulp** — so the escape test could not distinguish
+neighbouring pixels at all: every pixel inherited the reference's
+rounded fate. Both rungs share that test, which is why the broken
+Feather renders were bit-identical across two unrelated delta
+implementations — the clue misread as "shared upstream data" the
+first day.
+
+**Why only Feather ever noticed.** A chaos-driven boundary
+(Mandelbrot, Lambda, Phoenix) amplifies δ exponentially; by the time
+an orbit crosses the bailout, δ is O(|Z|), far above ulp, and a pixel
+whose δ is still sub-ulp at the crossing genuinely shares the
+reference's fate to ±1 iteration. Feather grows |z| by only ~×1.2 per
+step past the bailout (`z³/(1+x²−iy²)` is near-linear at large |z|),
+and the test view made it maximal: |c|² = 3.9752, one step from the
+bailout, so the local boundary is a smooth threshold arc DECIDED by
+sub-ulp differences. The straight-edged renders were the quantized
+decision regions — and, at this particular view, the *correctly
+rendered* image is also a straight edge, because the true boundary
+there is smooth. The oracle comparison is the arbiter, not the look.
+
+**The fix.** The escape test is now a margin formed in parts that are
+each exact or tiny:
+
+    margin = (|Z|² − bailout) + (r2_lo + 2·Z·δ + |δ|²)
+
+with |Z|² carried per reference entry as a CPU-computed DF pair
+(`ref_r2`, binding 11 on both perturbed layouts). Near the threshold
+`r2_hi − bailout` is EXACT (both f32, within a factor of two —
+Sterbenz), and the remainder terms are all δ-scale. The channel is
+computed at UPLOAD time in f64 from the hi+lo+exponent entries already
+in hand, so there is no reference recompute and **no orbit-store
+format change** — cache-loaded orbits get it for free, at the DF
+shadow's own 2^-48 relative precision, which is the pipeline's native
+reference precision anyway. In-shader compensated arithmetic was
+rejected because Metal runs shaders with fast-math on (CLAUDE.md), and
+error-free transformations do not survive it.
+
+On the deep rung the cross term uses the plain f32 δ, which
+underflows to zero exactly when it is too small to move the margin —
+the correct answer, not an approximation. Residual honest limit: past
+the scaled rung (zoom > 48), a slow-growth threshold boundary whose
+deciding differences sit below 2^-48 relative still cannot be
+resolved; that is the reference's own precision, not the test's.
+
+**Verified four ways.** The zoom-30 Feather view that was 26% wrong
+and then fully degenerate now reads **0.00% on both rungs** against
+the f64 oracle; reverting the margin to the plain f32 test makes that
+test fail; all 21 pre-existing GPU tests pass unchanged (the margin
+is behaviourally invisible on chaos-driven boundaries); and all 217
+visual baselines stayed within range, including the deep-threshold
+configs. Feather's tier is re-enabled, the panel's depth hint says
+deep again, and `escape-feather-deep.fflame` pins the view that found
+the bug.
 
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,

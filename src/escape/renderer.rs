@@ -423,6 +423,40 @@ struct PerturbParamsGpu {
     ref_c: [f32; 2],
 }
 
+/// The |Z|² channel for the delta-aware escape margin, computed on
+/// the CPU in f64 from the DF entries the orbit already carries.
+///
+/// Stored as a DF pair (hi, lo) so the shader can form
+/// `(r2.x - bailout) + (r2.y + 2·Z·δ + |δ|²)` with the first
+/// subtraction EXACT near the threshold (both f32, within a factor of
+/// two of each other — Sterbenz) and the sub-ulp remainder carried in
+/// `r2.y`. A plain f32 |z_full|² test quantizes away the per-pixel
+/// delta once 2·Z·δ drops below one ulp of the bailout, which is what
+/// broke Feather past zoom ~22: its slow-growth escape boundary is
+/// decided by exactly those sub-ulp differences, where a
+/// chaos-amplified boundary (Mandelbrot's) never is.
+///
+/// Computed from hi + lo (the ~2^-48 DF shadow) rather than from the
+/// fixed-point value, so it can be rebuilt at UPLOAD time from data
+/// already in hand — no reference recompute, no orbit-store format
+/// change, and cache-loaded orbits get it for free. 2^-48 relative is
+/// the perturbation pipeline's own reference precision, so nothing
+/// downstream can tell the difference from an exact channel.
+fn r2_channel(hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]) -> Vec<[f32; 2]> {
+    hi.iter()
+        .zip(lo)
+        .zip(e)
+        .map(|((h, l), &ex)| {
+            let s = (ex as f64).exp2();
+            let x = (h[0] as f64 + l[0] as f64) * s;
+            let y = (h[1] as f64 + l[1] as f64) * s;
+            let r2 = x * x + y * y;
+            let r2_hi = r2 as f32;
+            [r2_hi, (r2 - r2_hi as f64) as f32]
+        })
+        .collect()
+}
+
 pub struct EscapeRenderer {
     width: u32,
     height: u32,
@@ -469,6 +503,8 @@ pub struct EscapeRenderer {
     orbit_buffer: Option<Buffer>,
     /// DF residuals, parallel to orbit_buffer (binding 8).
     orbit_lo_buffer: Option<Buffer>,
+    /// |Z|² as a DF pair per entry — see [`r2_channel`].
+    orbit_r2_buffer: Option<Buffer>,
     /// Per-entry reference exponents (binding 9), parallel to the
     /// orbit buffer.
     orbit_e_buffer: Option<Buffer>,
@@ -825,6 +861,17 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // |Z|² DF pair for the delta-aware escape margin.
+                BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -911,6 +958,7 @@ impl EscapeRenderer {
             orbit_generation: 0,
             orbit_buffer: None,
             orbit_lo_buffer: None,
+            orbit_r2_buffer: None,
             orbit_e_buffer: None,
             orbit_capacity: 0,
             orbit_uploaded: 0,
@@ -1679,33 +1727,21 @@ impl EscapeRenderer {
             // c*z*(1-z): the first tier whose parameter MULTIPLIES,
             // so its delta step reads the reference's own c.
             "lambda" => Some(assembler::PerturbTier::Lambda),
-            // Feather is NOT wired up, deliberately. Its tier, its
-            // fixed-point reference and both delta rungs exist and are
-            // verified to zoom 20 (0.00% against an exact orbit at 15,
-            // 0.49% at 20) -- but they degrade past that (26% at 25,
-            // and by 30 the delta stops iterating at all, leaving
-            // escape a linear function of pixel position: straight
-            // diagonal edges, see output/origami/fe-zooms.png).
-            //
-            // The cause is NOT the algebra. An f64 simulation of this
-            // exact recurrence, INCLUDING the rebase and the scaled
-            // rung's w = d/S with every intermediate rounded to f32,
-            // reproduces the exact orbit at 0.0% disagreement at zoom
-            // 10, 20, 25 and 30. The generated WGSL matches that
-            // simulation line for line, and the fixed-point reference
-            // tracks f64 to 5.9e-8 at every limb count. So the fault
-            // is somewhere in the shader environment that the
-            // simulation does not model, and it has not been found.
-            //
-            // Shipping it gated off rather than reverted: the pieces
-            // that ARE verified (FixedPoint::recip, FixedComplex::div,
-            // the MAP_FEATHER reference branch, both delta steps) are
-            // what the other rational families need, and the parse
-            // matrix keeps them compiling. Flip this back on once the
-            // depth behaviour is explained -- not before, because a
-            // deep render that is confidently wrong is the failure
-            // this engine keeps refusing.
-            "feather" => None,
+            // c*z^p over a component-wise denominator. Gated off
+            // 2026-08-30 when its slow-growth escape boundary exposed
+            // the f32 escape test's delta-blindness; re-enabled the
+            // same day once the delta-aware margin (ref_r2 + the
+            // margin test in both rung templates) resolved it -- the
+            // full story is in escape-time-fractals.md.
+            "feather" => {
+                let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=8.0).contains(&rounded) {
+                    Some(assembler::PerturbTier::Feather(rounded as u32))
+                } else {
+                    None
+                }
+            }
             // z^2 + z_prev + c: Phoenix's recurrence with p = 1 and a
             // pixel seed, so it rides the same two-term machinery.
             "manowar" => Some(assembler::PerturbTier::Manowar),
@@ -1892,6 +1928,9 @@ impl EscapeRenderer {
             if let Some(old) = self.orbit_lo_buffer.take() {
                 old.destroy();
             }
+            if let Some(old) = self.orbit_r2_buffer.take() {
+                old.destroy();
+            }
             if let Some(old) = self.orbit_e_buffer.take() {
                 old.destroy();
             }
@@ -1904,6 +1943,12 @@ impl EscapeRenderer {
             }));
             self.orbit_lo_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Reference Orbit Lo"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_r2_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit R2"),
                 size: (capacity as u64) * 8,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -1932,6 +1977,11 @@ impl EscapeRenderer {
                 bytemuck::cast_slice(&p.orbit_lo),
             );
             queue.write_buffer(
+                self.orbit_r2_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&r2_channel(&p.orbit, &p.orbit_lo, &p.orbit_e)),
+            );
+            queue.write_buffer(
                 self.orbit_e_buffer.as_ref().unwrap(),
                 0,
                 bytemuck::cast_slice(&p.orbit_e),
@@ -1948,6 +1998,11 @@ impl EscapeRenderer {
                 self.orbit_lo_buffer.as_ref().unwrap(),
                 (self.orbit_uploaded as u64) * 8,
                 bytemuck::cast_slice(&data_lo),
+            );
+            queue.write_buffer(
+                self.orbit_r2_buffer.as_ref().unwrap(),
+                (self.orbit_uploaded as u64) * 8,
+                bytemuck::cast_slice(&r2_channel(&data, &data_lo, &data_e)),
             );
             queue.write_buffer(
                 self.orbit_e_buffer.as_ref().unwrap(),
@@ -2082,6 +2137,9 @@ impl EscapeRenderer {
             if let Some(old) = self.orbit_lo_buffer.take() {
                 old.destroy();
             }
+            if let Some(old) = self.orbit_r2_buffer.take() {
+                old.destroy();
+            }
             if let Some(old) = self.orbit_e_buffer.take() {
                 old.destroy();
             }
@@ -2096,6 +2154,12 @@ impl EscapeRenderer {
             }));
             self.orbit_lo_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Reference Orbit Lo"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_r2_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit R2"),
                 size: (capacity as u64) * 8,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -2125,6 +2189,11 @@ impl EscapeRenderer {
                 self.orbit_lo_buffer.as_ref().unwrap(),
                 0,
                 bytemuck::cast_slice(&orbit.orbit_lo),
+            );
+            queue.write_buffer(
+                self.orbit_r2_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&r2_channel(&orbit.orbit, &orbit.orbit_lo, &orbit.orbit_e)),
             );
             queue.write_buffer(
                 self.orbit_e_buffer.as_ref().unwrap(),
@@ -2946,6 +3015,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                             binding: 10,
                             resource: BindingResource::TextureView(&self.height_view),
                         },
+                        BindGroupEntry {
+                            binding: 11,
+                            resource: self
+                                .orbit_r2_buffer
+                                .as_ref()
+                                .unwrap()
+                                .as_entire_binding(),
+                        },
                     ],
                 });
                 let ts_qs = if measure_gpu {
@@ -3112,6 +3189,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             b.destroy();
         }
         if let Some(b) = &self.orbit_e_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.orbit_r2_buffer {
             b.destroy();
         }
         if let Some(b) = &self.orbit_lo_buffer {

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "ddc21b9d",
+  "git_hash": "324aa975",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -333,6 +333,10 @@
     "escape-fe-zoom-60-edge.png": {
       "bytes": 15944,
       "sha256": "56b149e4277403e3cc4f0f4c53cbc77086c73073d50faf81f72f8b7c7e4b731e"
+    },
+    "escape-feather-deep.png": {
+      "bytes": 1164,
+      "sha256": "c27051b682f34e0ba6706f72e4dbf817f139c6ea07b9ea76579d1625567b0fa4"
     },
     "escape-feather.png": {
       "bytes": 11665,
