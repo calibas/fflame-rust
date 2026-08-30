@@ -2205,6 +2205,223 @@ mod tests {
         );
     }
 
+    /// Perturbed Lambda must match an exact orbit at depth, on both
+    /// rungs.
+    ///
+    /// `c*z*(1-z)` is the first tier whose PARAMETER MULTIPLIES the
+    /// map, so it exercises two things no earlier tier did: the delta
+    /// step reads the reference's own c as a factor, and the
+    /// parameter-plane term picks up the reference's z-product
+    /// `Z(1-Z)` rather than a bare `+ dc`. Either of those wrong
+    /// gives a render that still looks like a lambda plane.
+    ///
+    /// It also pins the SEED. Zero is a fixed point of this map for
+    /// every c, so a reference seeded there would be constant and
+    /// every pixel would rebase against a frozen orbit — which is
+    /// wrong in a way that produces a smooth, plausible image.
+    ///
+    /// WHY THE ITERATION CAP IS PART OF THE TEST. Lambda's critical
+    /// orbit lingers: near the boundary pixels take hundreds of
+    /// iterations to escape, where the Mandelbrot and Phoenix views
+    /// this suite compares finish in tens. Over that many steps an
+    /// independent f64 orbit is no longer ground truth — chaos
+    /// amplifies its own rounding past the escape decision — so a
+    /// comparison run to a deep cap measures the ORACLE, not the
+    /// render. Chasing that as if it were a bug is exactly what
+    /// happened here; the numbers below are what settled it.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_lambda_matches_an_exact_orbit_at_depth() {
+        for deep in [false, true] {
+            lambda_exact_orbit_case(deep);
+        }
+    }
+
+    fn lambda_exact_orbit_case(deep: bool) {
+        let (device, queue) = repro_device();
+        // Inside the lambda plane's structure, off any axis of
+        // symmetry so a sign error cannot cancel out.
+        // A point ON the lambda set's boundary, found by bisecting a
+        // slanted line between an interior and an exterior parameter
+        // -- slanted so no axis of symmetry can hide a sign error. A
+        // zoom-30 window here straddles the boundary (measured
+        // 622/768 escaping), which the degeneracy check below insists
+        // on: an all-interior view agrees with any oracle at all, and
+        // the first center tried was exactly that.
+        let (cx, cy) = (2.88438199954338481f64, 0.46729682466198574f64);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "lambda".to_string();
+        esc.center_re = format!("{cx:.17}");
+        esc.center_im = format!("{cy:.17}");
+        // Zoom 30 for BOTH rungs, with `force_floatexp` selecting
+        // which one runs. Deep enough that the direct f32 path is long
+        // gone (PERTURB_MIN_ZOOM is 14), and shallow enough that the
+        // f64 oracle is still ground truth: pixel spacing here is
+        // 4/2^30 = 3.7e-9 against ulp(c) = 4.4e-16, seven digits of
+        // headroom. Pushing the deep rung to its own zoom 60 instead
+        // would put pixel spacing BELOW ulp(c), so f64 could not tell
+        // neighbouring pixels apart and the comparison would be
+        // meaningless rather than strict.
+        esc.zoom_log2 = 30.0;
+        // 600 is chosen, not default, and the reason is the point of
+        // the comment above: the f64 oracle stops being ground truth
+        // as the decision horizon grows. Same code, same view, only
+        // this number changed:
+        //
+        //     max_iter  150   degenerate (nothing has escaped yet)
+        //     max_iter  600   0.23% differ
+        //     max_iter 3000   9.40% differ
+        //
+        // That is the oracle degrading, not the render. Against a
+        // 60-digit ground truth on 120 sampled pixels of this view,
+        // the f64 DIRECT orbit was wrong on 10.0% and the perturbed
+        // recurrence on 7.5% -- the perturbed path is the MORE
+        // accurate of the two, which is the whole point of carrying an
+        // exact reference. 600 keeps the horizon short enough that f64
+        // is still an authority while leaving plenty of escaped pixels
+        // to compare.
+        esc.max_iter = 600;
+
+        let (w, h) = (96u32, 72u32);
+        let mut config = crate::config::FractalConfig::default();
+        // Binary image: the comparison reads escaped-or-not only.
+        config.palette = crate::scene::palette::Palette {
+            name: "white".to_string(),
+            stops: vec![
+                crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_floatexp = deep;
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lambda depth"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("lambda depth tonemap"),
+        });
+        renderer.update_background_color(&queue, config.background_color);
+        renderer.update_tonemap(
+            &queue,
+            crate::scene::tonemap::ToneMapMode::Linear,
+            config.highlight_mode,
+            config.use_curve,
+            config.exposure,
+            config.gamma,
+            config.gamma_threshold,
+            config.brightness,
+            config.vibrancy,
+            config.white_level,
+            config.saturation,
+            config.hue_shift,
+            config.alpha_blend_low,
+            config.alpha_blend_high,
+            w,
+            h,
+            renderer.total_iterations(),
+            config.max_iterations,
+            config.zoom,
+            256,
+            4,
+            false,
+            config.levels_enabled,
+            config.levels_low,
+            config.levels_high,
+            config.levels_gamma,
+        );
+        renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+            &device, &queue, false, config.background_color,
+        ))
+        .expect("readback");
+        escape.destroy();
+
+        // f64 oracle over the same view: z' = c*z*(1-z) from z0 = 1/2.
+        let span_y = 4.0 / (esc.zoom_log2 as f64).exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let mut differ = 0usize;
+        for py in 0..h {
+            for px in 0..w {
+                let c = (
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                );
+                let (mut zx, mut zy) = (0.5f64, 0.0f64);
+                let mut escaped = false;
+                for _ in 0..esc.max_iter {
+                    // w = z * (1 - z)
+                    let (ar, ai) = (1.0 - zx, -zy);
+                    let (pr, pi) = (zx * ar - zy * ai, zx * ai + zy * ar);
+                    let nx = c.0 * pr - c.1 * pi;
+                    let ny = c.0 * pi + c.1 * pr;
+                    zx = nx;
+                    zy = ny;
+                    if zx * zx + zy * zy > 4.0 {
+                        escaped = true;
+                        break;
+                    }
+                }
+                let i = ((py * w + px) * 4) as usize;
+                let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                if lit != escaped {
+                    differ += 1;
+                }
+            }
+        }
+        // A view where every pixel escapes (or none do) would agree
+        // with any oracle at all. Require both populations before
+        // reading anything into the agreement.
+        let escaped_px = rgba
+            .chunks(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+            .count();
+        let total = (w * h) as usize;
+        assert!(
+            escaped_px > total / 10 && escaped_px < total * 9 / 10,
+            "degenerate view: {escaped_px}/{total} pixels escaped, so agreement \
+             with the oracle would mean nothing"
+        );
+
+        let frac = differ as f64 / (w * h) as f64;
+        println!(
+            "lambda at zoom {} on the {} rung: {:.2}% differ from the exact orbit",
+            esc.zoom_log2,
+            if deep { "floatexp" } else { "scaled" },
+            100.0 * frac
+        );
+        assert!(
+            frac < 0.005,
+            "perturbed Lambda disagrees with an exact orbit on {:.1}% of pixels -- the reference and the delta step describe different maps",
+            100.0 * frac
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

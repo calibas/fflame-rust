@@ -1118,6 +1118,9 @@ mod tests {
             ("tricorn", true),
             ("phoenix", true),
             ("manowar", true),
+            // c*z*(1-z): perturbs since the Lambda tier shipped, so
+            // the panel must stop telling users it stops at 2^14.
+            ("lambda", true),
             ("kaliset", false),
             ("newton", false),
             ("tetration", false),

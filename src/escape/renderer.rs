@@ -417,8 +417,10 @@ struct PerturbParamsGpu {
     /// Chunk window [iter_start, iter_end) for this dispatch.
     iter_start: u32,
     iter_end: u32,
-    _pad_c0: u32,
-    _pad_c1: u32,
+    /// The reference orbit's own `c`, for the maps whose parameter
+    /// MULTIPLIES (Lambda). Occupies what used to be padding, so the
+    /// layout is unchanged.
+    ref_c: [f32; 2],
 }
 
 pub struct EscapeRenderer {
@@ -994,6 +996,12 @@ impl EscapeRenderer {
             // wrong iterate. A two-term BLA needs 2x2 coefficients;
             // until then Phoenix iterates per-step.
             assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar => return false,
+            // Lambda's BLA is derivable -- the map is holomorphic, so
+            // A = C(1-2Z) and B = Z(1-Z) -- but the table builder is
+            // written for the power tier's A = p*Z^(p-1) and has no
+            // hook for a per-tier coefficient yet. Per-step until it
+            // does; correctness first, skips second.
+            assembler::PerturbTier::Lambda => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -1663,6 +1671,9 @@ impl EscapeRenderer {
                 }
             }
             "phoenix" => Some(assembler::PerturbTier::Phoenix),
+            // c*z*(1-z): the first tier whose parameter MULTIPLIES,
+            // so its delta step reads the reference's own c.
+            "lambda" => Some(assembler::PerturbTier::Lambda),
             // z^2 + z_prev + c: Phoenix's recurrence with p = 1 and a
             // pixel seed, so it rides the same two-term machinery.
             "manowar" => Some(assembler::PerturbTier::Manowar),
@@ -1754,6 +1765,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Manowar => {
                 (2, false, super::reference::MAP_MANOWAR)
+            }
+            assembler::PerturbTier::Lambda => {
+                (2, false, super::reference::MAP_LAMBDA)
             }
         };
         let height_px = self.height.max(1) as f64;
@@ -1948,6 +1962,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Manowar => {
                 (2, false, super::reference::MAP_MANOWAR)
+            }
+            assembler::PerturbTier::Lambda => {
+                (2, false, super::reference::MAP_LAMBDA)
             }
         };
         let period_hint = if julia_c.is_none() && !ship {
@@ -2801,6 +2818,17 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         mapped_at_creation: false,
                     }));
                 }
+                // The reference's own c: the Julia constant on the
+                // dynamical plane, the reference CENTRE on the
+                // parameter plane. Only the multiplying-parameter
+                // tiers read it, and only as a factor, so f32 of the
+                // exact decimal centre is enough.
+                let ref_c = if escape.julia {
+                    [escape.julia_re, escape.julia_im]
+                } else {
+                    let (cx, cy) = escape.center_f64();
+                    [cx as f32, cy as f32]
+                };
                 let pp = PerturbParamsGpu {
                     s: s_f64 as f32,
                     inv_s: if s_f64 > 0.0 { (1.0 / s_f64) as f32 } else { 0.0 },
@@ -2811,8 +2839,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     ref_offset: self.current_ref_offset,
                     iter_start,
                     iter_end,
-                    _pad_c0: 0,
-                    _pad_c1: 0,
+                    ref_c,
                 };
                 queue.write_buffer(&self.perturb_params_buffer, 0, bytemuck::bytes_of(&pp));
 
