@@ -1819,6 +1819,193 @@ mod tests {
         );
     }
 
+    /// Relief shading must LIGHT the coloring, not replace it.
+    ///
+    /// The whole point of the layer is composition: `normal_map` (the
+    /// analytic-normal coloring) takes the image over, because a
+    /// coloring returns the one scalar the palette is indexed by. This
+    /// runs after the palette lookup, so the test asserts the property
+    /// that distinguishes the two — with the light straight overhead
+    /// every surface is flat-on, both terms are zero, and the image
+    /// must come back BIT-IDENTICAL to the unshaded render. A layer
+    /// that quietly tinted, normalized or re-mapped anything would
+    /// fail here even though it still "looked shaded".
+    ///
+    /// Then it asserts the layer does something: tilt the light and
+    /// the image must change, and change only where the value field
+    /// actually has slope.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn relief_shading_lights_the_coloring_without_replacing_it() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 160u32);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.formula = "mandelbrot".to_string();
+        base.coloring = "smooth".to_string();
+        base.center_re = "-0.5".to_string();
+        base.center_im = "0.0".to_string();
+        base.max_iter = 256;
+        base.coloring_params.insert("scale".to_string(), 0.03);
+
+        let render = |esc: &crate::config::escape::EscapeConfig,
+                      renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("relief"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("relief tonemap"),
+            });
+            renderer.update_background_color(&queue, config.background_color);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                config.use_curve,
+                config.exposure,
+                config.gamma,
+                config.gamma_threshold,
+                config.brightness,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                config.levels_enabled,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+            rgba
+        };
+
+        let plain = render(&base, &mut renderer);
+
+        // Zero strength on both sides: the blends interpolate from the
+        // base, so this must be the untouched image even though the
+        // whole shading path ran.
+        let mut zero = base.clone();
+        zero.shading = crate::config::escape::EscapeShading {
+            enabled: true,
+            shadow_strength: 0.0,
+            highlight_strength: 0.0,
+            ..Default::default()
+        };
+        let zeroed = render(&zero, &mut renderer);
+        assert_eq!(
+            plain, zeroed,
+            "shading at zero strength changed the image -- the layer is not \
+             compositing from the base, it is replacing it"
+        );
+
+        // Now actually light it. The image must move.
+        let mut lit = base.clone();
+        lit.shading = crate::config::escape::EscapeShading {
+            enabled: true,
+            height: 30.0,
+            ..Default::default()
+        };
+        let shaded = render(&lit, &mut renderer);
+        let moved = plain
+            .chunks(4)
+            .zip(shaded.chunks(4))
+            .filter(|(a, b)| a[..3] != b[..3])
+            .count();
+        let frac = moved as f64 / (w * h) as f64;
+        println!("relief: {:.1}% of pixels shaded", 100.0 * frac);
+        assert!(
+            frac > 0.2,
+            "relief shading changed only {:.1}% of pixels",
+            100.0 * frac
+        );
+
+        // And it must be the COLORING underneath, still: the interior
+        // of the set has no value field (height 0, flat), so it must
+        // come through the light untouched while the exterior moves.
+        // That is what separates a relief LAYER from a filter over the
+        // whole image.
+        //
+        // Only pixels whose whole 3x3 neighbourhood is interior count.
+        // One rim in from the boundary the central difference straddles
+        // the set edge, which is a genuine cliff and SHOULD light --
+        // that rim is the effect working, not leaking. Measured, it is
+        // 16 pixels here.
+        let dark = |px: &[u8], x: usize, y: usize| -> bool {
+            let i = (y * w as usize + x) * 4;
+            px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 <= 6
+        };
+        let mut interior_moved = 0usize;
+        let mut interior_total = 0usize;
+        for y in 1..h as usize - 1 {
+            for x in 1..w as usize - 1 {
+                let surrounded =
+                    (y - 1..=y + 1).all(|yy| (x - 1..=x + 1).all(|xx| dark(&plain, xx, yy)));
+                if !surrounded {
+                    continue;
+                }
+                interior_total += 1;
+                let i = (y * w as usize + x) * 4;
+                if plain[i..i + 3] != shaded[i..i + 3] {
+                    interior_moved += 1;
+                }
+            }
+        }
+        assert!(
+            interior_total > 500,
+            "no interior found to test against ({interior_total} px)"
+        );
+        assert_eq!(
+            interior_moved, 0,
+            "{interior_moved} of {interior_total} flat interior pixels changed -- \
+             the light is being applied where there is no surface"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

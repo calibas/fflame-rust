@@ -327,6 +327,19 @@ pub enum ConfigPath {
     /// Biomorph classification axis, as its wire string
     /// (`"off"`/`"re"`/`"im"`).
     EscapeBiomorph,
+    // Relief shading — a lit-surface layer over the coloring's output.
+    // Ten paths rather than one struct-valued path because the whole
+    // undo/redo and scripting surface is keyed on leaf parameters.
+    EscapeShadingEnabled,
+    EscapeShadingLightAngle,
+    EscapeShadingHeight,
+    EscapeShadingField,
+    EscapeShadingShadowColor,
+    EscapeShadingShadowStrength,
+    EscapeShadingShadowBlend,
+    EscapeShadingHighlightColor,
+    EscapeShadingHighlightStrength,
+    EscapeShadingHighlightBlend,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -829,6 +842,16 @@ impl Display for ConfigPath {
             ConfigPath::EscapeDampingRe => write!(f, "Damping (re)"),
             ConfigPath::EscapeDampingIm => write!(f, "Damping (im)"),
             ConfigPath::EscapeBiomorph => write!(f, "Biomorph Mode"),
+            ConfigPath::EscapeShadingEnabled => write!(f, "Relief Shading"),
+            ConfigPath::EscapeShadingLightAngle => write!(f, "Relief Light Angle"),
+            ConfigPath::EscapeShadingHeight => write!(f, "Relief Height"),
+            ConfigPath::EscapeShadingField => write!(f, "Relief Source Field"),
+            ConfigPath::EscapeShadingShadowColor => write!(f, "Relief Shadow Colour"),
+            ConfigPath::EscapeShadingShadowStrength => write!(f, "Relief Shadow Strength"),
+            ConfigPath::EscapeShadingShadowBlend => write!(f, "Relief Shadow Blend"),
+            ConfigPath::EscapeShadingHighlightColor => write!(f, "Relief Highlight Colour"),
+            ConfigPath::EscapeShadingHighlightStrength => write!(f, "Relief Highlight Strength"),
+            ConfigPath::EscapeShadingHighlightBlend => write!(f, "Relief Highlight Blend"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
@@ -1054,6 +1077,16 @@ impl ConfigPath {
             ConfigPath::EscapeDampingRe => I18nKey::simple("history.param.escape_damping_re"),
             ConfigPath::EscapeDampingIm => I18nKey::simple("history.param.escape_damping_im"),
             ConfigPath::EscapeBiomorph => I18nKey::simple("history.param.escape_biomorph"),
+            ConfigPath::EscapeShadingEnabled => I18nKey::simple("history.param.escape_shading_enabled"),
+            ConfigPath::EscapeShadingLightAngle => I18nKey::simple("history.param.escape_shading_light_angle"),
+            ConfigPath::EscapeShadingHeight => I18nKey::simple("history.param.escape_shading_height"),
+            ConfigPath::EscapeShadingField => I18nKey::simple("history.param.escape_shading_field"),
+            ConfigPath::EscapeShadingShadowColor => I18nKey::simple("history.param.escape_shading_shadow_color"),
+            ConfigPath::EscapeShadingShadowStrength => I18nKey::simple("history.param.escape_shading_shadow_strength"),
+            ConfigPath::EscapeShadingShadowBlend => I18nKey::simple("history.param.escape_shading_shadow_blend"),
+            ConfigPath::EscapeShadingHighlightColor => I18nKey::simple("history.param.escape_shading_highlight_color"),
+            ConfigPath::EscapeShadingHighlightStrength => I18nKey::simple("history.param.escape_shading_highlight_strength"),
+            ConfigPath::EscapeShadingHighlightBlend => I18nKey::simple("history.param.escape_shading_highlight_blend"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -2353,6 +2386,16 @@ impl ConfigPath {
             | ConfigPath::EscapeDampingRe
             | ConfigPath::EscapeDampingIm
             | ConfigPath::EscapeBiomorph
+            | ConfigPath::EscapeShadingEnabled
+            | ConfigPath::EscapeShadingLightAngle
+            | ConfigPath::EscapeShadingHeight
+            | ConfigPath::EscapeShadingField
+            | ConfigPath::EscapeShadingShadowColor
+            | ConfigPath::EscapeShadingShadowStrength
+            | ConfigPath::EscapeShadingShadowBlend
+            | ConfigPath::EscapeShadingHighlightColor
+            | ConfigPath::EscapeShadingHighlightStrength
+            | ConfigPath::EscapeShadingHighlightBlend
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
@@ -2609,6 +2652,16 @@ impl ConfigPath {
             ConfigPath::EscapeDampingRe => "Escape.DampingRe".to_string(),
             ConfigPath::EscapeDampingIm => "Escape.DampingIm".to_string(),
             ConfigPath::EscapeBiomorph => "Escape.Biomorph".to_string(),
+            ConfigPath::EscapeShadingEnabled => "Escape.Shading.Enabled".to_string(),
+            ConfigPath::EscapeShadingLightAngle => "Escape.Shading.LightAngle".to_string(),
+            ConfigPath::EscapeShadingHeight => "Escape.Shading.Height".to_string(),
+            ConfigPath::EscapeShadingField => "Escape.Shading.Field".to_string(),
+            ConfigPath::EscapeShadingShadowColor => "Escape.Shading.ShadowColor".to_string(),
+            ConfigPath::EscapeShadingShadowStrength => "Escape.Shading.ShadowStrength".to_string(),
+            ConfigPath::EscapeShadingShadowBlend => "Escape.Shading.ShadowBlend".to_string(),
+            ConfigPath::EscapeShadingHighlightColor => "Escape.Shading.HighlightColor".to_string(),
+            ConfigPath::EscapeShadingHighlightStrength => "Escape.Shading.HighlightStrength".to_string(),
+            ConfigPath::EscapeShadingHighlightBlend => "Escape.Shading.HighlightBlend".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
@@ -2793,6 +2846,16 @@ impl ConfigPath {
                 ["DampingRe"] => return Some(ConfigPath::EscapeDampingRe),
                 ["DampingIm"] => return Some(ConfigPath::EscapeDampingIm),
                 ["Biomorph"] => return Some(ConfigPath::EscapeBiomorph),
+                ["Shading", "Enabled"] => return Some(ConfigPath::EscapeShadingEnabled),
+                ["Shading", "LightAngle"] => return Some(ConfigPath::EscapeShadingLightAngle),
+                ["Shading", "Height"] => return Some(ConfigPath::EscapeShadingHeight),
+                ["Shading", "Field"] => return Some(ConfigPath::EscapeShadingField),
+                ["Shading", "ShadowColor"] => return Some(ConfigPath::EscapeShadingShadowColor),
+                ["Shading", "ShadowStrength"] => return Some(ConfigPath::EscapeShadingShadowStrength),
+                ["Shading", "ShadowBlend"] => return Some(ConfigPath::EscapeShadingShadowBlend),
+                ["Shading", "HighlightColor"] => return Some(ConfigPath::EscapeShadingHighlightColor),
+                ["Shading", "HighlightStrength"] => return Some(ConfigPath::EscapeShadingHighlightStrength),
+                ["Shading", "HighlightBlend"] => return Some(ConfigPath::EscapeShadingHighlightBlend),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -3371,6 +3434,30 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::EscapeSupersample => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::EscapeJulia => json.as_bool().map(ConfigValue::Bool),
+        // Relief shading: the continuous controls animate (sweeping the
+        // light around a still is the obvious use), the selectors and
+        // the on/off do not.
+        ConfigPath::EscapeShadingLightAngle
+        | ConfigPath::EscapeShadingHeight
+        | ConfigPath::EscapeShadingShadowStrength
+        | ConfigPath::EscapeShadingHighlightStrength => {
+            json.as_f64().map(|v| ConfigValue::Float(v as f32))
+        }
+        ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
+            let a = json.as_array()?;
+            if a.len() != 3 {
+                return None;
+            }
+            let mut rgb = [0.0f32; 3];
+            for (slot, v) in rgb.iter_mut().zip(a) {
+                *slot = v.as_f64()? as f32;
+            }
+            Some(ConfigValue::ColorRgb(rgb))
+        }
+        ConfigPath::EscapeShadingEnabled
+        | ConfigPath::EscapeShadingField
+        | ConfigPath::EscapeShadingShadowBlend
+        | ConfigPath::EscapeShadingHighlightBlend => None,
         // Selectors and the deep-zoom center strings are structural /
         // exact — not animatable (centers deliberately: see the plan's
         // open questions on center-path animation).

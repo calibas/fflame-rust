@@ -8,6 +8,7 @@
 //! sliders are generated from the registry defs, the way variation
 //! params generate theirs.
 
+use crate::config::escape::{ShadingBlend, ShadingField};
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
@@ -525,6 +526,119 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
             .response
             .on_hover_text(t!("escape_panel.tooltip_supersample"));
     });
+    // ---- Relief shading ----
+    // A LAYER, not a coloring: it runs after the palette lookup, so it
+    // composes with whatever is above it. Collapsed by default because
+    // it is off by default and its ten controls would otherwise crowd
+    // the panel.
+    egui::CollapsingHeader::new(t!("escape_panel.shading"))
+        .default_open(esc.shading.enabled)
+        .show(ui, |ui| {
+            let sh = esc.shading.clone();
+            let mut enabled = sh.enabled;
+            if ui
+                .checkbox(&mut enabled, t!("escape_panel.shading_enabled"))
+                .on_hover_text(t!("escape_panel.tooltip_shading"))
+                .changed()
+            {
+                let _ = config_manager
+                    .update_param(ConfigPath::EscapeShadingEnabled, enabled.into());
+            }
+            ui.add_enabled_ui(sh.enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.shading_light"));
+                    let mut a = sh.light_angle;
+                    if ui
+                        .add(egui::DragValue::new(&mut a).speed(1.0).range(0.0..=360.0).suffix("°"))
+                        .on_hover_text(t!("escape_panel.tooltip_shading_light"))
+                        .changed()
+                    {
+                        let _ = config_manager
+                            .update_param(ConfigPath::EscapeShadingLightAngle, a.into());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.shading_height"));
+                    let mut h = sh.height;
+                    // Logarithmic: the useful value depends on how many
+                    // palette turns the coloring spends across a view,
+                    // which differs by three orders of magnitude
+                    // between (say) a scaled escape count and a bounded
+                    // coloring. A linear slider would be unusable.
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut h, 0.01..=1000.0)
+                                .logarithmic(true)
+                                .clamping(egui::SliderClamping::Never),
+                        )
+                        .on_hover_text(t!("escape_panel.tooltip_shading_height"))
+                        .changed()
+                    {
+                        let _ =
+                            config_manager.update_param(ConfigPath::EscapeShadingHeight, h.into());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.shading_field"));
+                    let cur = sh.field;
+                    egui::ComboBox::from_id_salt("escape_shading_field")
+                        .selected_text(match cur {
+                            ShadingField::Smooth => t!("escape_panel.shading_field_smooth"),
+                            ShadingField::Banded => t!("escape_panel.shading_field_banded"),
+                        })
+                        .show_ui(ui, |ui| {
+                            for f in [ShadingField::Smooth, ShadingField::Banded] {
+                                let label = match f {
+                                    ShadingField::Smooth => {
+                                        t!("escape_panel.shading_field_smooth")
+                                    }
+                                    ShadingField::Banded => {
+                                        t!("escape_panel.shading_field_banded")
+                                    }
+                                };
+                                if ui.selectable_label(f == cur, label).clicked() && f != cur {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::EscapeShadingField,
+                                        ConfigValue::String(
+                                            crate::config::escape::shading_field_to_str(f)
+                                                .to_string(),
+                                        ),
+                                    );
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("escape_panel.tooltip_shading_field"));
+                });
+
+                ui.separator();
+                shading_side(
+                    ui,
+                    config_manager,
+                    t!("escape_panel.shading_shadows").to_string(),
+                    "shadow",
+                    sh.shadow_color,
+                    sh.shadow_strength,
+                    sh.shadow_blend,
+                    ConfigPath::EscapeShadingShadowColor,
+                    ConfigPath::EscapeShadingShadowStrength,
+                    ConfigPath::EscapeShadingShadowBlend,
+                );
+                shading_side(
+                    ui,
+                    config_manager,
+                    t!("escape_panel.shading_highlights").to_string(),
+                    "highlight",
+                    sh.highlight_color,
+                    sh.highlight_strength,
+                    sh.highlight_blend,
+                    ConfigPath::EscapeShadingHighlightColor,
+                    ConfigPath::EscapeShadingHighlightStrength,
+                    ConfigPath::EscapeShadingHighlightBlend,
+                );
+            });
+        });
+
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.bailout"));
         let mut bail = esc.bailout;
@@ -964,5 +1078,64 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// One side of the relief layer — shadows or highlights. They carry
+/// exactly the same three controls, and writing them twice is how the
+/// two drift apart.
+#[allow(clippy::too_many_arguments)]
+fn shading_side(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    title: String,
+    id: &str,
+    color: [f32; 3],
+    strength: f32,
+    blend: ShadingBlend,
+    color_path: ConfigPath,
+    strength_path: ConfigPath,
+    blend_path: ConfigPath,
+) {
+    ui.horizontal(|ui| {
+        ui.label(title);
+        let mut rgb = color;
+        if ui.color_edit_button_rgb(&mut rgb).changed() {
+            let _ = config_manager.update_param(color_path, ConfigValue::ColorRgb(rgb));
+        }
+        let mut s = strength;
+        if ui
+            .add(egui::Slider::new(&mut s, 0.0..=1.0).show_value(true))
+            .on_hover_text(t!("escape_panel.tooltip_shading_strength"))
+            .changed()
+        {
+            let _ = config_manager.update_param(strength_path, s.into());
+        }
+        egui::ComboBox::from_id_salt(format!("escape_shading_blend_{id}"))
+            .width(90.0)
+            .selected_text(blend_label(blend))
+            .show_ui(ui, |ui| {
+                for b in ShadingBlend::all() {
+                    if ui.selectable_label(b == blend, blend_label(b)).clicked() && b != blend {
+                        let _ = config_manager.update_param(
+                            blend_path.clone(),
+                            ConfigValue::String(
+                                crate::config::escape::shading_blend_to_str(b).to_string(),
+                            ),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_shading_blend"));
+    });
+}
+
+fn blend_label(b: ShadingBlend) -> String {
+    match b {
+        ShadingBlend::Multiply => t!("escape_panel.blend_multiply").to_string(),
+        ShadingBlend::Screen => t!("escape_panel.blend_screen").to_string(),
+        ShadingBlend::Overlay => t!("escape_panel.blend_overlay").to_string(),
+        ShadingBlend::Mix => t!("escape_panel.blend_mix").to_string(),
     }
 }

@@ -118,6 +118,12 @@ pub struct EscapeConfig {
     /// plain references with a warning). None = detect/none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_period: Option<u32>,
+
+    /// Relief shading — a LAYER over whatever the coloring produced,
+    /// not a coloring of its own. Off by default and skipped when
+    /// off, so every existing file is byte-stable.
+    #[serde(default, skip_serializing_if = "EscapeShading::is_default")]
+    pub shading: EscapeShading,
 }
 
 fn default_supersample() -> u32 {
@@ -126,6 +132,226 @@ fn default_supersample() -> u32 {
 
 fn is_one_u32(v: &u32) -> bool {
     *v == 1
+}
+
+/// How a shading layer is composited over the colour beneath it.
+///
+/// Named for what they do to the base rather than for a formula, and
+/// chosen to be the four that read differently on a fractal: darken
+/// (`Multiply`), lighten (`Screen`), contrast-preserving (`Overlay`)
+/// and flat tint (`Mix`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadingBlend {
+    /// `base * layer` — the natural shadow: never brightens.
+    #[default]
+    Multiply,
+    /// `1-(1-base)(1-layer)` — the natural highlight: never darkens.
+    Screen,
+    /// Multiply where the base is dark, screen where it is light.
+    /// Keeps the palette's own contrast; the strongest "engraved" look.
+    Overlay,
+    /// Straight linear interpolation toward the layer colour. Flattens,
+    /// but it is the one that shows a coloured light honestly.
+    Mix,
+}
+
+impl ShadingBlend {
+    /// The discriminant the WGSL switch reads.
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            ShadingBlend::Multiply => 0,
+            ShadingBlend::Screen => 1,
+            ShadingBlend::Overlay => 2,
+            ShadingBlend::Mix => 3,
+        }
+    }
+
+    pub fn all() -> [ShadingBlend; 4] {
+        [
+            ShadingBlend::Multiply,
+            ShadingBlend::Screen,
+            ShadingBlend::Overlay,
+            ShadingBlend::Mix,
+        ]
+    }
+}
+
+/// The wire strings ConfigValue carries for [`ShadingBlend`].
+pub fn shading_blend_to_str(m: ShadingBlend) -> &'static str {
+    match m {
+        ShadingBlend::Multiply => "multiply",
+        ShadingBlend::Screen => "screen",
+        ShadingBlend::Overlay => "overlay",
+        ShadingBlend::Mix => "mix",
+    }
+}
+
+pub fn shading_blend_from_str(s: &str) -> ShadingBlend {
+    match s {
+        "screen" => ShadingBlend::Screen,
+        "overlay" => ShadingBlend::Overlay,
+        "mix" => ShadingBlend::Mix,
+        _ => ShadingBlend::Multiply,
+    }
+}
+
+/// Which field the relief is computed FROM.
+///
+/// Two genuinely different pictures, not two qualities of one. The
+/// coloring's value is mapped to the palette through `fract`, so it
+/// has a sawtooth at every band edge; taking the slope of the RAW
+/// value ignores those and reads the underlying surface, while taking
+/// the slope of the WRAPPED value treats each band edge as a cliff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadingField {
+    /// The coloring's value before `fract` — smooth terrain relief.
+    #[default]
+    Smooth,
+    /// The wrapped palette coordinate — every band becomes a step, for
+    /// the engraved / contour-map look.
+    Banded,
+}
+
+impl ShadingField {
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            ShadingField::Smooth => 0,
+            ShadingField::Banded => 1,
+        }
+    }
+}
+
+/// The wire strings ConfigValue carries for [`ShadingField`].
+pub fn shading_field_to_str(m: ShadingField) -> &'static str {
+    match m {
+        ShadingField::Smooth => "smooth",
+        ShadingField::Banded => "banded",
+    }
+}
+
+pub fn shading_field_from_str(s: &str) -> ShadingField {
+    match s {
+        "banded" => ShadingField::Banded,
+        _ => ShadingField::Smooth,
+    }
+}
+
+/// Relief shading: a lit-surface layer composited over the coloring.
+///
+/// Deliberately NOT a `ColoringDef`. A coloring returns one scalar
+/// that the template maps through the palette, so colorings replace
+/// each other by construction and could never decorate one another —
+/// which is why `normal_map` (the analytic-normal coloring) takes over
+/// the image instead of shading it. This runs after the palette
+/// lookup, on the finished RGB, so it composes with every coloring and
+/// every palette including `position_map` on the folding formulas.
+///
+/// The surface comes from the SLOPE of the coloring's own value field,
+/// finite-differenced at render resolution. That is what makes it
+/// universal: it needs no derivative, so it works on the perturbed
+/// rungs and on the 13 of 25 formulas that define none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EscapeShading {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+
+    /// Light azimuth in degrees, counter-clockwise from +x (east).
+    /// 315 (north-west) is the cartographic convention and the
+    /// default, because relief lit from any other quadrant reads as
+    /// inverted to most people.
+    #[serde(default = "default_light_angle")]
+    pub light_angle: f32,
+    /// Vertical exaggeration of the slope before lighting. This is the
+    /// only control whose useful range depends on the coloring: an
+    /// escape count climbs by ~1 per pixel near the boundary, a
+    /// bounded coloring by ~1e-3.
+    #[serde(default = "default_relief_height")]
+    pub height: f32,
+    /// Which field the slope is taken from.
+    #[serde(default, skip_serializing_if = "ShadingField::is_default")]
+    pub field: ShadingField,
+
+    /// Colour applied where the surface faces away from the light.
+    #[serde(default = "default_shadow_color")]
+    pub shadow_color: [f32; 3],
+    #[serde(default = "default_shadow_strength")]
+    pub shadow_strength: f32,
+    #[serde(default, skip_serializing_if = "ShadingBlend::is_multiply")]
+    pub shadow_blend: ShadingBlend,
+
+    /// Colour applied where it faces into the light.
+    #[serde(default = "default_highlight_color")]
+    pub highlight_color: [f32; 3],
+    #[serde(default = "default_highlight_strength")]
+    pub highlight_strength: f32,
+    #[serde(default = "default_highlight_blend")]
+    pub highlight_blend: ShadingBlend,
+}
+
+fn default_light_angle() -> f32 {
+    315.0
+}
+fn default_relief_height() -> f32 {
+    // The slope is measured in palette turns per DISPLAY pixel, which
+    // is already a normalized unit -- every coloring's value is in
+    // turns by construction, since that is what the palette cycles on.
+    // What differs between colorings is how many turns they spend
+    // across a view, so this is a starting point rather than a
+    // universal: 10 puts both `smooth` on the Mandelbrot (0.04
+    // turns/px) and `position_map` on Origami into visible relief.
+    10.0
+}
+fn default_shadow_color() -> [f32; 3] {
+    [0.0, 0.0, 0.0]
+}
+fn default_shadow_strength() -> f32 {
+    0.6
+}
+fn default_highlight_color() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+fn default_highlight_strength() -> f32 {
+    0.5
+}
+fn default_highlight_blend() -> ShadingBlend {
+    ShadingBlend::Screen
+}
+
+impl ShadingBlend {
+    fn is_multiply(v: &ShadingBlend) -> bool {
+        *v == ShadingBlend::Multiply
+    }
+}
+
+impl ShadingField {
+    fn is_default(v: &ShadingField) -> bool {
+        *v == ShadingField::Smooth
+    }
+}
+
+impl Default for EscapeShading {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            light_angle: default_light_angle(),
+            height: default_relief_height(),
+            field: ShadingField::default(),
+            shadow_color: default_shadow_color(),
+            shadow_strength: default_shadow_strength(),
+            shadow_blend: ShadingBlend::Multiply,
+            highlight_color: default_highlight_color(),
+            highlight_strength: default_highlight_strength(),
+            highlight_blend: default_highlight_blend(),
+        }
+    }
+}
+
+impl EscapeShading {
+    pub fn is_default(v: &EscapeShading) -> bool {
+        *v == EscapeShading::default()
+    }
 }
 
 /// Biomorph classification axis (Pickover): which component escape is
@@ -223,6 +449,7 @@ impl Default for EscapeConfig {
             coloring_params: BTreeMap::new(),
             supersample: 1,
             reference_period: None,
+            shading: EscapeShading::default(),
         }
     }
 }
@@ -253,6 +480,76 @@ impl EscapeConfig {
     /// assembler compiles the wrap in only when this is true.
     pub fn is_damped(&self) -> bool {
         self.damping_re != 1.0 || self.damping_im != 0.0
+    }
+}
+
+#[cfg(test)]
+mod shading_tests {
+    use super::*;
+
+    /// An untouched shading block must not appear in the JSON at all.
+    ///
+    /// Every `.fflame` ever saved predates this feature, and the
+    /// project's rule is that new fields are skip-if-default so old
+    /// files stay byte-stable. This is the test that keeps the
+    /// `skip_serializing_if` from being dropped in a later tidy-up —
+    /// which would silently rewrite every config the first time it was
+    /// re-saved.
+    #[test]
+    fn default_shading_serializes_to_nothing() {
+        let esc = EscapeConfig::default();
+        let json = serde_json::to_string(&esc).unwrap();
+        assert!(
+            !json.contains("shading"),
+            "default shading was written to the config: {json}"
+        );
+        // And a config with no shading key must load with the defaults
+        // rather than failing.
+        let back: EscapeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.shading, EscapeShading::default());
+        assert!(!back.shading.enabled);
+    }
+
+    /// Everything the layer can be set to must survive a round-trip.
+    #[test]
+    fn shading_round_trips_through_json() {
+        let mut esc = EscapeConfig::default();
+        esc.shading = EscapeShading {
+            enabled: true,
+            light_angle: 42.5,
+            height: 37.0,
+            field: ShadingField::Banded,
+            shadow_color: [0.1, 0.2, 0.3],
+            shadow_strength: 0.25,
+            shadow_blend: ShadingBlend::Overlay,
+            highlight_color: [0.9, 0.8, 0.7],
+            highlight_strength: 0.75,
+            highlight_blend: ShadingBlend::Mix,
+        };
+        let json = serde_json::to_string(&esc).unwrap();
+        let back: EscapeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.shading, esc.shading);
+    }
+
+    /// The wire strings are the config's public surface (scripting,
+    /// the API blob, saved files), so every enum value must survive
+    /// the string round-trip its ConfigValue arm uses. A new variant
+    /// added without a `from_str` arm would silently read back as the
+    /// default and be very hard to spot.
+    #[test]
+    fn every_blend_and_field_survives_its_wire_string() {
+        for b in ShadingBlend::all() {
+            assert_eq!(shading_blend_from_str(shading_blend_to_str(b)), b);
+        }
+        for f in [ShadingField::Smooth, ShadingField::Banded] {
+            assert_eq!(shading_field_from_str(shading_field_to_str(f)), f);
+        }
+        // The GPU discriminants must be distinct, or two blend modes
+        // would render identically.
+        let mut seen = std::collections::HashSet::new();
+        for b in ShadingBlend::all() {
+            assert!(seen.insert(b.to_gpu()), "duplicate GPU discriminant for {b:?}");
+        }
     }
 }
 

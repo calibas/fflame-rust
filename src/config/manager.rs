@@ -1732,6 +1732,32 @@ impl ConfigManager {
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
             ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
+            ConfigPath::EscapeShadingEnabled => Ok(config.escape.shading.enabled.into()),
+            ConfigPath::EscapeShadingLightAngle => Ok(config.escape.shading.light_angle.into()),
+            ConfigPath::EscapeShadingHeight => Ok(config.escape.shading.height.into()),
+            ConfigPath::EscapeShadingField => Ok(ConfigValue::String(
+                crate::config::escape::shading_field_to_str(config.escape.shading.field).to_string(),
+            )),
+            ConfigPath::EscapeShadingShadowColor => {
+                Ok(ConfigValue::ColorRgb(config.escape.shading.shadow_color))
+            }
+            ConfigPath::EscapeShadingShadowStrength => {
+                Ok(config.escape.shading.shadow_strength.into())
+            }
+            ConfigPath::EscapeShadingShadowBlend => Ok(ConfigValue::String(
+                crate::config::escape::shading_blend_to_str(config.escape.shading.shadow_blend)
+                    .to_string(),
+            )),
+            ConfigPath::EscapeShadingHighlightColor => {
+                Ok(ConfigValue::ColorRgb(config.escape.shading.highlight_color))
+            }
+            ConfigPath::EscapeShadingHighlightStrength => {
+                Ok(config.escape.shading.highlight_strength.into())
+            }
+            ConfigPath::EscapeShadingHighlightBlend => Ok(ConfigValue::String(
+                crate::config::escape::shading_blend_to_str(config.escape.shading.highlight_blend)
+                    .to_string(),
+            )),
             ConfigPath::EscapeReferencePeriod => {
                 Ok(ConfigValue::UInt(config.escape.reference_period.unwrap_or(0)))
             }
@@ -2596,6 +2622,46 @@ impl ConfigManager {
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;
                 self.current.escape.supersample = v.clamp(1, 3);
+            }
+            ConfigPath::EscapeShadingEnabled => {
+                self.current.escape.shading.enabled = value.try_into()?;
+            }
+            ConfigPath::EscapeShadingLightAngle => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.light_angle = v.rem_euclid(360.0);
+            }
+            ConfigPath::EscapeShadingHeight => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.height = v.clamp(0.0, 100_000.0);
+            }
+            ConfigPath::EscapeShadingField => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.field =
+                    crate::config::escape::shading_field_from_str(&v);
+            }
+            ConfigPath::EscapeShadingShadowColor => {
+                self.current.escape.shading.shadow_color = value.try_into()?;
+            }
+            ConfigPath::EscapeShadingShadowStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.shadow_strength = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeShadingShadowBlend => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.shadow_blend =
+                    crate::config::escape::shading_blend_from_str(&v);
+            }
+            ConfigPath::EscapeShadingHighlightColor => {
+                self.current.escape.shading.highlight_color = value.try_into()?;
+            }
+            ConfigPath::EscapeShadingHighlightStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.highlight_strength = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeShadingHighlightBlend => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.highlight_blend =
+                    crate::config::escape::shading_blend_from_str(&v);
             }
             ConfigPath::EscapeReferencePeriod => {
                 let v: u32 = value.try_into()?;

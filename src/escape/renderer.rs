@@ -354,6 +354,10 @@ struct EscapeParamsGpu {
     tile_y0: u32,
     /// Mann α (re, im); the shader reads it only in damped pipelines.
     damping: [f32; 2],
+    /// 1 = the relief pass slopes the WRAPPED palette coordinate
+    /// rather than the coloring's raw value (`ShadingField::Banded`).
+    shade_flags: u32,
+    _pad_shade: [u32; 3],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
@@ -363,6 +367,26 @@ struct EscapeParamsGpu {
 
 /// 64 vec4s = 256 floats — Origami's 64 fold lines exactly.
 const FDATA_VEC4S: usize = 64;
+
+/// Uniform for the relief pass — must match `ShadeParams` in
+/// [`EscapeRenderer::run_resolve`]'s WGSL.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShadeParamsGpu {
+    /// Unit vector toward the light, in pixel space.
+    light: [f32; 2],
+    /// Vertical exaggeration applied to the slope.
+    height: f32,
+    /// 0 = the pass only resolves (box downsample), 1 = shade first.
+    enabled: u32,
+    shadow_color: [f32; 3],
+    shadow_strength: f32,
+    highlight_color: [f32; 3],
+    highlight_strength: f32,
+    shadow_blend: u32,
+    highlight_blend: u32,
+    _pad: [u32; 2],
+}
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
 /// in the WGSL template.
@@ -538,6 +562,16 @@ pub struct EscapeRenderer {
     /// (factor, pipeline, layout) — the factor is spliced into the
     /// WGSL, so a factor change recompiles (rare).
     downsample: Option<(u32, wgpu::ComputePipeline, BindGroupLayout)>,
+    /// The coloring's scalar field at RENDER resolution, written by
+    /// every escape template and finite-differenced by the relief
+    /// pass. A 1×1 dummy while shading is off: the templates store to
+    /// it unconditionally and WGSL discards the out-of-bounds writes,
+    /// which is what keeps one shader variant instead of two.
+    height_texture: Texture,
+    height_view: TextureView,
+    /// Whether `height_texture` is full-size (shading on) or the dummy.
+    height_full: bool,
+    shade_params_buffer: Buffer,
 }
 
 /// GPU-time pacing for the perturbed path (TDR-safety plan item C).
@@ -768,6 +802,17 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // The coloring's scalar field, for the relief pass.
+                BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -810,7 +855,27 @@ impl EscapeRenderer {
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
+                // The coloring's scalar field, for the relief pass.
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
             ],
+        });
+
+        // Dummy until shading turns on: see the field's doc comment.
+        let (height_texture, height_view) = Self::create_height(device, 1, 1);
+        let shade_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape Shade Params"),
+            size: std::mem::size_of::<ShadeParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         Self {
@@ -839,6 +904,10 @@ impl EscapeRenderer {
             orbit_uploaded: 0,
             perturb_params_buffer,
             perturb_bind_group_layout,
+            height_texture,
+            height_view,
+            height_full: false,
+            shade_params_buffer,
             current_ref_offset: [0.0, 0.0],
             iter_state_buffer: None,
             iter_state_px: 0,
@@ -1976,6 +2045,78 @@ impl EscapeRenderer {
         Some((len, done))
     }
 
+    /// The scalar-field target the relief pass differences. R32Float:
+    /// one channel is all the surface needs, and at 4 bytes per render
+    /// pixel it is a quarter of what carrying an analytic normal
+    /// alongside it would cost.
+    fn create_height(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("Escape Height Field"),
+            size: Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::R32Float,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Size the height field to match the render target, or shrink it
+    /// back to the 1×1 dummy when shading is off — an idle escape view
+    /// should not hold 81 MB of scalar field it never reads (the cost
+    /// at 4500², which is 3× supersampling of a 1500² viewport).
+    fn ensure_height(&mut self, device: &Device, want_full: bool) {
+        if want_full == self.height_full
+            && (!want_full
+                || (self.height_texture.width() == self.width
+                    && self.height_texture.height() == self.height))
+        {
+            return;
+        }
+        self.height_texture.destroy();
+        let (t, v) = if want_full {
+            Self::create_height(device, self.width, self.height)
+        } else {
+            Self::create_height(device, 1, 1)
+        };
+        self.height_texture = t;
+        self.height_view = v;
+        self.height_full = want_full;
+    }
+
+    /// The relief pass writes somewhere other than the colour it
+    /// reads, so it needs the display-sized target that supersampling
+    /// already allocates. At 1x with shading on there is no downsample
+    /// to borrow it from, so allocate one; turning shading back off at
+    /// 1x releases it and `output_view` goes back to serving the render
+    /// texture directly.
+    fn ensure_resolve_target(&mut self, device: &Device, shading: bool) {
+        let want = self.supersample > 1 || shading;
+        let sized_right = self
+            .final_texture
+            .as_ref()
+            .is_some_and(|t| t.width() == self.out_width && t.height() == self.out_height);
+        if want && sized_right {
+            return;
+        }
+        if let Some(t) = self.final_texture.take() {
+            t.destroy();
+        }
+        self.final_view = None;
+        if want {
+            let (t, v) = Self::create_output(device, self.out_width, self.out_height);
+            self.final_texture = Some(t);
+            self.final_view = Some(v);
+        }
+    }
+
     fn create_output(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
         let texture = device.create_texture(&TextureDescriptor {
             label: Some("Escape Output"),
@@ -2070,11 +2211,57 @@ impl EscapeRenderer {
     /// factor² samples averaged per output pixel. Linear-space (the
     /// texture is pre-tonemap accumulator format), so the average is
     /// the radiometrically correct one.
-    fn run_downsample(&mut self, device: &Device, encoder: &mut CommandEncoder) {
-        if self.supersample <= 1 {
+    /// Shade and resolve: the relief layer and the supersample box
+    /// downsample, fused into one pass.
+    ///
+    /// Fused deliberately. Shading needs a destination distinct from
+    /// the colour it reads, and a third full-resolution RGBA32Float
+    /// target would cost another 16 bytes per render pixel — 324 MB at
+    /// 4500², on top of the 324 MB the colour already holds. Folding
+    /// the relief into the pass that was going to resolve anyway costs
+    /// nothing extra, and it puts the shading BEFORE the box average,
+    /// which is the correct order: the slope is then measured at
+    /// render resolution and antialiased along with everything else,
+    /// rather than being computed from already-blurred pixels.
+    ///
+    /// With shading off and a factor of 1 there is nothing to do and
+    /// `output_view` serves the render texture directly, exactly as
+    /// before this pass existed.
+    fn run_resolve(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, shading: &crate::config::escape::EscapeShading) {
+        let factor = self.supersample;
+        let shade_on = shading.enabled;
+        if factor <= 1 && !shade_on {
             return;
         }
-        let factor = self.supersample;
+        let Some(final_view) = self.final_view.as_ref() else {
+            return;
+        };
+
+        // The light: azimuth from the config, elevation fixed at 45°.
+        // One angle rather than two because the elevation is the one
+        // nobody adjusts — too low and the relief is all shadow, too
+        // high and it vanishes — while the azimuth decides whether the
+        // surface reads as raised or sunken, which is a real choice.
+        let a = shading.light_angle.to_radians();
+        let params = ShadeParamsGpu {
+            light: [a.cos(), a.sin()],
+            // Per DISPLAY pixel, not per render pixel: the difference
+            // is taken on the supersampled grid, where a given slope
+            // spans `factor` times as many samples and would read
+            // `factor` times shallower. Without this, turning on 3x AA
+            // quietly flattens the relief.
+            height: shading.height * factor as f32,
+            enabled: u32::from(shade_on),
+            shadow_color: shading.shadow_color,
+            shadow_strength: shading.shadow_strength,
+            highlight_color: shading.highlight_color,
+            highlight_strength: shading.highlight_strength,
+            shadow_blend: shading.shadow_blend.to_gpu(),
+            highlight_blend: shading.highlight_blend.to_gpu(),
+            _pad: [0; 2],
+        };
+        queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
+
         let rebuild = match &self.downsample {
             Some((f, _, _)) => *f != factor,
             None => true,
@@ -2082,8 +2269,76 @@ impl EscapeRenderer {
         if rebuild {
             let src = format!(
                 r#"
+struct ShadeParams {{
+    light: vec2<f32>,
+    height: f32,
+    enabled: u32,
+    shadow_color: vec3<f32>,
+    shadow_strength: f32,
+    highlight_color: vec3<f32>,
+    highlight_strength: f32,
+    shadow_blend: u32,
+    highlight_blend: u32,
+}}
+
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
 @group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var height_tex: texture_2d<f32>;
+@group(0) @binding(3) var<uniform> shade: ShadeParams;
+
+fn height_at(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
+    let q = clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+    return textureLoad(height_tex, q, 0).r;
+}}
+
+// 0 multiply, 1 screen, 2 overlay, 3 mix. `amt` is how far to travel
+// from the base toward the blended result, so strength 0 is always
+// exactly the untouched image.
+fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f32> {{
+    var res = layer;
+    if (mode == 0u) {{
+        res = base * layer;
+    }} else if (mode == 1u) {{
+        res = 1.0 - (1.0 - base) * (1.0 - layer);
+    }} else if (mode == 2u) {{
+        res = select(
+            1.0 - 2.0 * (1.0 - base) * (1.0 - layer),
+            2.0 * base * layer,
+            base < vec3<f32>(0.5),
+        );
+    }}
+    return mix(base, res, amt);
+}}
+
+fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
+    let dims = vec2<i32>(textureDimensions(height_tex));
+    // Central differences: the slope of the coloring's own value
+    // field, in value units per pixel.
+    let dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+    let dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    // Surface normal of the height field. normalize() is also the
+    // saturation: an over-large `height` tips the normal flat against
+    // the surface instead of blowing the lighting out, which is what
+    // makes a single log slider workable across colorings whose value
+    // scales differ by three orders of magnitude.
+    let h = shade.height;
+    // +y is DOWN in pixel space, so dy is negated to put the light
+    // where the azimuth says it is.
+    let n = normalize(vec3<f32>(-dx * h, dy * h, 1.0));
+    let l = normalize(vec3<f32>(shade.light, 1.0));
+    let d = dot(n, l);
+    // A FLAT surface must come out untouched, or shading would tint
+    // the whole image rather than pick out its relief. flat_d is the
+    // response of the unshaded plane, so both terms start at zero
+    // there and grow only where the surface actually tilts.
+    let flat_d = l.z;
+    let hi = clamp((d - flat_d) / max(1.0 - flat_d, 1e-4), 0.0, 1.0);
+    let lo = clamp((flat_d - d) / max(flat_d + 1.0, 1e-4), 0.0, 1.0);
+    var out = rgb;
+    out = shade_blend(out, shade.shadow_color, shade.shadow_blend, lo * shade.shadow_strength);
+    out = shade_blend(out, shade.highlight_color, shade.highlight_blend, hi * shade.highlight_strength);
+    return out;
+}}
 
 @compute @workgroup_size(8, 8, 1)
 fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
@@ -2094,11 +2349,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     var sum = vec4<f32>(0.0);
     for (var dy = 0u; dy < {factor}u; dy = dy + 1u) {{
         for (var dx = 0u; dx < {factor}u; dx = dx + 1u) {{
-            sum = sum + textureLoad(
-                src_tex,
-                vec2<i32>(i32(gid.x * {factor}u + dx), i32(gid.y * {factor}u + dy)),
-                0,
-            );
+            let p = vec2<i32>(i32(gid.x * {factor}u + dx), i32(gid.y * {factor}u + dy));
+            var texel = textureLoad(src_tex, p, 0);
+            if (shade.enabled == 1u) {{
+                texel = vec4<f32>(shade_pixel(texel.rgb, p), texel.a);
+            }}
+            sum = sum + texel;
         }}
     }}
     textureStore(
@@ -2110,11 +2366,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 "#
             );
             let module = device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("Escape Downsample Shader"),
+                label: Some("Escape Resolve Shader"),
                 source: ShaderSource::Wgsl(src.into()),
             });
             let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Escape Downsample Layout"),
+                label: Some("Escape Resolve Layout"),
                 entries: &[
                     BindGroupLayoutEntry {
                         binding: 0,
@@ -2136,15 +2392,35 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         },
                         count: None,
                     },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
             let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Escape Downsample Pipeline Layout"),
+                label: Some("Escape Resolve Pipeline Layout"),
                 bind_group_layouts: &[Some(&layout)],
                 immediate_size: 0,
             });
             let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("Escape Downsample Pipeline"),
+                label: Some("Escape Resolve Pipeline"),
                 layout: Some(&pipeline_layout),
                 module: &module,
                 entry_point: Some("downsample_main"),
@@ -2155,7 +2431,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
         let (_, pipeline, layout) = self.downsample.as_ref().unwrap();
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Escape Downsample Bind Group"),
+            label: Some("Escape Resolve Bind Group"),
             layout,
             entries: &[
                 BindGroupEntry {
@@ -2164,14 +2440,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(
-                        self.final_view.as_ref().expect("final texture at ss > 1"),
-                    ),
+                    resource: BindingResource::TextureView(final_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: self.shade_params_buffer.as_entire_binding(),
                 },
             ],
         });
         let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("Escape Downsample Pass"),
+            label: Some("Escape Resolve Pass"),
             timestamp_writes: None,
         });
         pass.set_pipeline(pipeline);
@@ -2297,6 +2579,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
             damping: [escape.damping_re, escape.damping_im],
+            shade_flags: escape.shading.field.to_gpu(),
+            _pad_shade: [0; 3],
             fparams,
             cparams,
             fdata,
@@ -2319,6 +2603,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         escape: &EscapeConfig,
         palette_view: &TextureView,
     ) -> bool {
+        // Relief needs its scalar field and a destination distinct
+        // from the colour it reads; both are allocated on demand, so
+        // an escape view with shading off carries neither.
+        self.ensure_height(device, escape.shading.enabled);
+        self.ensure_resolve_target(device, escape.shading.enabled);
         let mut params = self.params_for(escape);
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -2538,6 +2827,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                                 .unwrap()
                                 .as_entire_binding(),
                         },
+                        BindGroupEntry {
+                            binding: 10,
+                            resource: BindingResource::TextureView(&self.height_view),
+                        },
                     ],
                 });
                 let ts_qs = if measure_gpu {
@@ -2563,7 +2856,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 }
                 // Every chunk refreshes the display image, so
                 // progressive refinement stays visible under AA.
-                self.run_downsample(device, encoder);
+                self.run_resolve(device, queue, encoder, &escape.shading);
                 let iterations_done = iter_end >= escape.max_iter;
                 // Attribution window for the device-lost callback: open
                 // while this render still has chunks to submit.
@@ -2659,6 +2952,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     binding: 3,
                     resource: BindingResource::Sampler(&self.palette_sampler),
                 },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
             ],
         });
 
@@ -2673,7 +2970,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
         drop(pass);
-        self.run_downsample(device, encoder);
+        self.run_resolve(device, queue, encoder, &escape.shading);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let done = self.direct_tile_y >= self.height;
         DIRECT_RENDER_IN_FLIGHT.store(
@@ -2953,12 +3250,14 @@ mod tests {
 
     #[test]
     fn params_struct_matches_wgsl_layout() {
-        // 4 vec2 (32) + 4 u32 (16) + f32 + 3 pad (16) + 2 param arrays
-        // (128) + the derived-data table (1024) = 1216, and the
-        // arrays must start 16-byte aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1216);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 64);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 128);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 192);
+        // 4 vec2 (32) + 4 u32 (16) + f32 + 3 pad (16) + the shading
+        // flags + 3 pad (16) + 2 param arrays (128) + the derived-data
+        // table (1024) = 1232, and the arrays must start 16-byte
+        // aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1232);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 80);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 144);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 208);
     }
 }

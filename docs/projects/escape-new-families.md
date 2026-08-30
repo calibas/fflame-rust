@@ -315,7 +315,33 @@ session (Chéritat's server refused the connection, Shadertoy returned
 implementation rather than writing it from memory — the whole reason
 this project ports formulas by quoting sources.
 
-## 6. Finite-difference slope shading
+## 6. Relief shading — DONE 2026-08-30
+
+Shipped as `EscapeConfig::shading`, and it turned out to be a bigger
+idea than "the fallback for the formulas with no derivative": it is a
+LAYER rather than a coloring, which is the thing the plan had not
+articulated. Full account in
+[escape-time-fractals.md](escape-time-fractals.md); the parts that
+correct this section:
+
+- **It is not a `ColoringDef`, and could not be.** A coloring returns
+  the one scalar the palette is indexed by, so colorings replace each
+  other by construction — which is exactly why `normal_map` takes the
+  image over instead of decorating it. Relief runs AFTER the palette
+  lookup, on the finished RGB.
+- **The slope source is the coloring's own value field**, written to
+  an R32Float target by every escape template and differenced in the
+  resolve pass. So it needs no derivative and works on the perturbed
+  rungs too — 13 of 25 formulas define none, Origami among them.
+- **It did not need a separate pass.** Fused into the supersample
+  resolve, which had to exist anyway, saving a third full-resolution
+  RGBA32Float target (324 MB at 4500²) and putting the shading before
+  the box average, where it is antialiased with everything else.
+
+The plan's guess that it "breaks under jitter" (§7) still stands and
+is still the cost to weigh if temporal AA is ever scheduled.
+
+### The original plan, for reference
 
 The fallback for the 12 formulas with no derivative, and the reason
 §5 says "post-pass": it needs the finished value field, not the

@@ -46,6 +46,14 @@ struct EscapeParams {
     // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
     tile_y0: u32,
     damping: vec2<f32>,    // Mann alpha (re, im); read only when compiled damped
+    shade_flags: u32,      // 1 = relief slopes the WRAPPED value
+    // Three scalars, NOT vec3<u32>: a vec3 aligns to 16 in std140 but
+    // [u32; 3] aligns to 4 in Rust, and the two structs would size
+    // differently (1248 vs 1232 -- caught as a bind-group validation
+    // error the first time this ran).
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
     // CPU-derived formula data (FormulaDef::derived_data), vec4-packed.
@@ -61,6 +69,12 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+// The coloring's scalar value, kept for the relief pass to
+// finite-difference. Bound to a 1x1 dummy when shading is off, where
+// every store but one falls out of bounds and WGSL discards it -- so
+// the cost of always writing is a single dead store per pixel, and
+// there is no second shader variant to keep in step.
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
@@ -208,6 +222,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    // The relief pass slopes THIS, not the rendered colour: the value
+    // before the palette, so a cycling palette's band edges are not
+    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
+    // the rim light exactly on the set boundary.
+    var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -216,6 +235,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
         let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        // SHADING_BANDED picks the wrapped coordinate instead, which
+        // turns every palette band into a step (the engraved look).
+        height = select(raw, t, params.shade_flags == 1u);
         // textureSampleLevel: explicit LOD, legal in non-uniform
         // control flow (unlike textureSample) -- WASM-safe.
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
@@ -223,6 +245,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
 
@@ -285,6 +308,10 @@ struct EscapeParams {
     // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
     tile_y0: u32,
     damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
@@ -387,6 +414,9 @@ struct BlaBuf {
 // iterates plain f32 flushes to zero, which would delete 2*Z*delta
 // from that step and permanently halve delta growth from there on.
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
+// See the direct template: the coloring's scalar value for the relief
+// pass, bound to a 1x1 dummy when shading is off.
+@group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
 
 // The reference iterate as a plain f32 value (zero below f32's normal
 // range - the pre-exponent behaviour, which is all the rebase test
@@ -643,6 +673,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    // The relief pass slopes THIS, not the rendered colour: the value
+    // before the palette, so a cycling palette's band edges are not
+    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
+    // the rim light exactly on the set boundary.
+    var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -651,11 +686,15 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
         let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        // SHADING_BANDED picks the wrapped coordinate instead, which
+        // turns every palette band into a step (the engraved look).
+        height = select(raw, t, params.shade_flags == 1u);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
 
@@ -688,6 +727,10 @@ struct EscapeParams {
     // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
     tile_y0: u32,
     damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
@@ -782,6 +825,9 @@ struct BlaBuf {
 // iterates plain f32 flushes to zero, which would delete 2*Z*delta
 // from that step and permanently halve delta growth from there on.
 @group(0) @binding(9) var<storage, read> ref_orbit_e: array<i32>;
+// See the direct template: the coloring's scalar value for the relief
+// pass, bound to a 1x1 dummy when shading is off.
+@group(0) @binding(10) var height_tex: texture_storage_2d<r32float, write>;
 
 // The reference iterate as a plain f32 value (zero below f32's normal
 // range - the pre-exponent behaviour, which is all the rebase test
@@ -1417,6 +1463,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    // The relief pass slopes THIS, not the rendered colour: the value
+    // before the palette, so a cycling palette's band edges are not
+    // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
+    // the rim light exactly on the set boundary.
+    var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(z, n, escaped, converged, period, dz);
         // `fract` so unbounded colorings cycle as they grow; a
@@ -1425,11 +1476,15 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // darkest. See ColoringFeature::Bounded.
         let raw = coloring_map(summary, accum_state);
         let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        // SHADING_BANDED picks the wrapped coordinate instead, which
+        // turns every palette band into a step (the engraved look).
+        height = select(raw, t, params.shade_flags == 1u);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
 
@@ -2147,6 +2202,10 @@ struct EscapeParams {
     // ROW BAND instead - see EscapeRenderer::direct_rows_per_dispatch.
     tile_y0: u32,
     damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
@@ -2157,6 +2216,12 @@ struct EscapeParams {
 @group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var palette_texture: texture_2d<f32>;
 @group(0) @binding(3) var palette_sampler: sampler;
+// The coloring's scalar value, kept for the relief pass to
+// finite-difference. Bound to a 1x1 dummy when shading is off, where
+// every store but one falls out of bounds and WGSL discards it -- so
+// the cost of always writing is a single dead store per pixel, and
+// there is no second shader variant to keep in step.
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
@@ -2229,10 +2294,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let shade = field_color(sum, grad, terms);
     let t = fract(shade.t);
+    // Relief source, as in the escape templates.
+    let height = select(shade.t, t, params.shade_flags == 1u);
     let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
     let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
 

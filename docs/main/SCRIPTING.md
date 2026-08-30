@@ -226,6 +226,11 @@ Log-calibrated values under which escape output renders black.
 | `escape.coloring(name)` | — | Picks the coloring; likewise clears the coloring parameters. |
 | `escape.formulas()` | array | Every formula name, so a script can iterate the catalog instead of copying a list out of these docs. |
 | `escape.colorings()` | array | Every coloring name. |
+| `escape.shading(light_angle, height)` | — | Turns on **relief shading** and sets it up: light azimuth in degrees (counter-clockwise from east; 315 is the cartographic north-west) and vertical exaggeration of the slope. A layer over whatever coloring is active, so it composes with all of them — including the ones with no derivative. `height` is logarithmic in feel: 10 is the default, and the useful value depends on how many palette turns the coloring spends across the view. |
+| `escape.shading_off()` | — | Turns the layer back off. |
+| `escape.shading_shadow(r, g, b, strength, blend)` | — | The side facing away from the light. `blend` is `"multiply"` (default), `"screen"`, `"overlay"` or `"mix"`. Strength 0 leaves the image exactly untouched. |
+| `escape.shading_highlight(r, g, b, strength, blend)` | — | The side facing into it; same blend names, `"screen"` by default. |
+| `escape.shading_field(name)` | — | Which field the slope is taken from: `"smooth"` (the coloring's value before the palette wraps it — terrain relief) or `"banded"` (the wrapped coordinate, so every band edge is a step — an engraved look). |
 | `escape.center(re, im)` | — | The view centre, as **decimal STRINGS**. See the note below — this is the one place a float would quietly cost you the deep zoom. |
 | `escape.center_re` / `escape.center_im` | string | Read the centre back, still as text. |
 | `escape.zoom` | float | Read/write `zoom_log2`: the **exponent**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. |

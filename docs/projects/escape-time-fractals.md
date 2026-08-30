@@ -2047,6 +2047,97 @@ deleting the endpoint folding from the shader alone sends it to
 71.30/255, so the construction is what the test pins, not just the
 fold formula.
 
+### Relief shading — a layer, not a coloring (2026-08-30)
+
+Asked for as "fake depth shading ... something that applies on top of
+other palettes and/or coloring modes", with colour, strength and blend
+mode for shadows and highlights separately, and with the observation
+that it ought to work with `position_map` because the published
+Origami images clearly have it.
+
+**Why it could not be a `ColoringDef`.** A coloring returns one scalar
+which the template maps through the palette into RGB, so colorings
+replace each other by construction; there is no way for one to
+decorate another. That is not a limitation to work around, it is why
+`normal_map` — the analytic-normal coloring — takes over the image
+instead of shading it. Relief therefore runs AFTER the palette lookup,
+on the finished RGB, which is what makes "on top of any coloring" true
+by construction rather than by effort.
+
+**Where the surface comes from.** Every escape template now writes the
+coloring's scalar value to an R32Float target alongside the colour,
+and the relief pass takes central differences of it. That choice is
+what makes the feature universal: no derivative is involved, so it
+works on the perturbed rungs (where `dz` is a constant seed) and on
+the 13 of 25 formulas that define no derivative at all — Origami
+included, which is the case that prompted it.
+
+The height target is bound as a 1×1 dummy while shading is off and
+the templates store to it unconditionally. WGSL discards
+out-of-bounds `textureStore`, so the cost of always writing is one
+dead store per pixel, and there is ONE shader variant rather than two
+kept in step by a flag. Off, the field costs 16 bytes; on, 4 bytes per
+render pixel (81 MB at 4500²).
+
+**The pass is fused into the supersample resolve.** Shading needs a
+destination distinct from the colour it reads, and a third
+full-resolution RGBA32Float target would have cost another 324 MB at
+4500² on top of the colour's own 324 MB — the kind of allocation that
+produced the TDR device-loss earlier in this branch. Folding it into
+the pass that was going to downsample anyway costs nothing extra, and
+it puts the shading BEFORE the box average, which is the correct
+order: the slope is measured at render resolution and antialiased
+along with everything else, rather than computed from already-blurred
+pixels. With shading off and no supersampling the pass does not run at
+all, and all 215 existing visual baselines stayed byte-identical,
+including the supersampled ones.
+
+**Two normalizations that are not cosmetic.**
+
+*Flat must mean untouched.* The lighting term is measured against
+`flat_d`, the response of an unshaded plane, so both the shadow and
+highlight terms start at zero where the surface has no slope. Without
+it the layer tints the entire image — including the interior of the
+set, which has no value field at all. The GPU test asserts exactly
+this, and deleting the normalization moves all 2048 flat interior
+pixels instead of none.
+
+*Relief is per DISPLAY pixel, not per render pixel.* The difference is
+taken on the supersampled grid, where a given slope spans `factor`
+times as many samples and would read `factor` times shallower — so
+turning on 3× antialiasing would quietly flatten the relief. The
+uploaded height is scaled by the factor to cancel it.
+
+**The `height` control is honestly coloring-dependent.** The slope is
+in palette turns per pixel, which IS a normalized unit — every
+coloring's value is in turns, since that is what the palette cycles
+on — but colorings differ by orders of magnitude in how many turns
+they spend across a view. `smooth` on the Mandelbrot at scale 0.03
+runs about 0.04 turns/px; a bounded coloring runs far less. So the
+slider is logarithmic over 0.01–1000 and the default is 10, which puts
+both of those into visible relief. `normalize()` on the surface normal
+doubles as the saturation, so an over-large value tips the normal flat
+against the surface rather than blowing the lighting out.
+
+**Two source fields, because they are two different pictures.**
+`Smooth` slopes the coloring's raw value; `Banded` slopes the wrapped
+palette coordinate, so every band edge becomes a step — the engraved,
+contour-map look. Worth knowing what `Smooth` does on an escape count:
+the field is a global ramp toward the set, so its relief is a lit
+dome, with a straight shadow terminator across the image. That is
+correct terrain relief of the escape-time surface and it looks like
+what it is; the fractal detail rides on top as a small perturbation.
+
+**The analytic normal was dropped, on measurement.** The plan said to
+prefer `dz` where it exists and fall back to differences. Carrying it
+would mean RGBA32Float instead of R32Float for the height target — 16
+bytes per render pixel against 4, so 324 MB against 81 MB at 4500² —
+and a rendered comparison on the Mandelbrot (`output/origami/
+m-compare.png`: plain, relief at two heights, `normal_map`) shows the
+field-gradient relief reading as the same surface. The analytic look
+remains available as the `normal_map` coloring for anyone who wants it
+exactly. Revisit if a case appears where the difference is visible.
+
 **Depth, per formula.** Not one number: `mandelbrot`, `multibrot`
 (integer powers), the `burning_ship` variants, `tricorn`/multicorn,
 `phoenix` and `manowar` perturb and reach z9316+ (Manowar on the deep
