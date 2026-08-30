@@ -1550,6 +1550,33 @@ pub enum PerturbTier {
     /// `A = C(1-2Z)`, `B = Z(1-Z)` -- but is not built yet, so this
     /// tier iterates per step.
     Lambda,
+    /// Feather: `z^p / (1 + x^2 - i*y^2) + c`, integer p.
+    ///
+    /// The first RATIONAL tier, and the one that introduces the
+    /// quotient delta form the other rationals will reuse:
+    ///
+    ///   dq = (dN - q*dD) / (D + dD)     with q = N/D the REFERENCE
+    ///                                   quotient, N, D its numerator
+    ///                                   and denominator
+    ///
+    /// Both `dN` and `dD` are small and `D + dD` is full size, so
+    /// nothing subtracts nearly-equal values -- which is the entire
+    /// requirement. Writing it the obvious way instead, as
+    /// `(dN*D - N*dD)/(D*(D+dD))`, differences two full-size products
+    /// and loses the delta to cancellation.
+    ///
+    /// `dN` is the ordinary power binomial. `dD` is component-wise,
+    /// because this denominator is NOT holomorphic -- it reads x and y
+    /// separately -- but each component is its own cancellation-free
+    /// binomial: `d(x^2) = 2X*dx + dx^2`. Non-holomorphic also means
+    /// no BLA, for the same reason the Tricorn family has none.
+    ///
+    /// The divisor is the one quantity here that is O(1) rather than
+    /// small, so it is formed in plain f32 on BOTH rungs. On the deep
+    /// rung `dD` converts down first: it flushes to zero exactly when
+    /// it is too small to change an f32 O(1) value, which is the
+    /// correct answer rather than an approximation.
+    Feather(u32),
     /// Burning Ship family: abs-folds via diffabs case analysis, on
     /// both rungs (the floatexp rung runs extended-range scalar
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
@@ -1770,6 +1797,81 @@ fn delta_step_lambda() -> String {
     .to_string()
 }
 
+/// Feather's scaled-rung delta step.
+///
+/// With `d = S*w`, every delta divides through by S: `n_s = dN/S`,
+/// `d_s = dD/S`, and `w' = (n_s - q*d_s)/(D + S*d_s) + d0`.
+fn delta_step_feather(p: u32) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "        // Feather: w' = (dN/S - q*dD/S)/(D + S*dD/S) + d0, for z^{p}/(1+x^2-i y^2)+c.\n"
+    ));
+    // dN/S by the binomial, over the reference Z and the scaled delta.
+    out.push_str("        let fzr1 = z_ref;\n");
+    for k in 2..p {
+        out.push_str(&format!(
+            "        let fzr{k} = vec2<f32>(fzr{}.x * z_ref.x - fzr{}.y * z_ref.y, fzr{}.x * z_ref.y + fzr{}.y * z_ref.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    out.push_str("        let fu1 = w;\n");
+    for k in 2..=p {
+        out.push_str(&format!(
+            "        let fu{k} = perturb.s * vec2<f32>(fu{}.x * w.x - fu{}.y * w.y, fu{}.x * w.y + fu{}.y * w.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    out.push_str("        var n_s = vec2<f32>(0.0, 0.0);\n");
+    for k in 1..=p {
+        let coeff = binomial(p, k);
+        let term = if k == p {
+            format!("{coeff}.0 * fu{k}")
+        } else {
+            let zp = p - k;
+            format!(
+                "{coeff}.0 * vec2<f32>(fzr{zp}.x * fu{k}.x - fzr{zp}.y * fu{k}.y, fzr{zp}.x * fu{k}.y + fzr{zp}.y * fu{k}.x)"
+            )
+        };
+        out.push_str(&format!("        n_s = n_s + {term};\n"));
+    }
+    out.push_str(
+        r#"        // dD/S, component-wise: d(x^2)/S = 2X*wx + S*wx^2,
+        // and the imaginary part carries the formula's minus sign.
+        var d_s = vec2<f32>(2.0 * z_ref.x * w.x, -2.0 * z_ref.y * w.y);
+        if ((perturb.flags & 1u) == 0u) {
+            d_s = d_s + perturb.s * vec2<f32>(w.x * w.x, -(w.y * w.y));
+        }
+        // The reference's own N, D and quotient q = N/D. |D| >= 1 by
+        // construction (Re D = 1 + X^2), so this division is safe.
+        var f_num = z_ref;
+"#,
+    );
+    for _ in 1..p {
+        out.push_str("        f_num = vec2<f32>(f_num.x * z_ref.x - f_num.y * z_ref.y, f_num.x * z_ref.y + f_num.y * z_ref.x);\n");
+    }
+    out.push_str(
+        r#"        let f_den = vec2<f32>(1.0 + z_ref.x * z_ref.x, -(z_ref.y * z_ref.y));
+        let f_dd = dot(f_den, f_den);
+        let q = vec2<f32>(
+            (f_num.x * f_den.x + f_num.y * f_den.y) / f_dd,
+            (f_num.y * f_den.x - f_num.x * f_den.y) / f_dd,
+        );
+        // Divisor D + dD, formed at full size in f32.
+        var div = f_den;
+        if ((perturb.flags & 1u) == 0u) {
+            div = div + perturb.s * d_s;
+        }
+        let dv2 = dot(div, div);
+        let top = n_s - vec2<f32>(q.x * d_s.x - q.y * d_s.y, q.x * d_s.y + q.y * d_s.x);
+        var w_new = vec2<f32>(
+            (top.x * div.x + top.y * div.y) / dv2,
+            (top.y * div.x - top.x * div.y) / dv2,
+        ) + d0_term;
+"#,
+    );
+    out
+}
+
 /// The floatexp flavor of the same step.
 /// The default Zhuoran rebase: restart the reference at index 0.
 fn rebase_default() -> String {
@@ -1950,6 +2052,80 @@ fn delta_step_lambda_fe() -> String {
             w_new = cfe2_add(w_new, cfe2_mul(d0, cfe2_add(p_ref, dp)));
         }"#
     .to_string()
+}
+
+/// Feather on the deep rung. Same quotient form; `w` is the absolute
+/// delta, so the scale factors drop out and the divisor is built by
+/// converting `dD` DOWN to f32 -- which flushes to zero exactly when
+/// it could not have changed an O(1) f32 value anyway.
+fn delta_step_feather_fe(p: u32) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("        // Feather (floatexp), z^{p}/(1+x^2-i y^2)+c.\n"));
+    out.push_str("        let fzr1 = z_ref_m;\n");
+    for k in 2..p {
+        out.push_str(&format!(
+            "        let fzr{k} = vec2<f32>(fzr{}.x * z_ref_m.x - fzr{}.y * z_ref_m.y, fzr{}.x * z_ref_m.y + fzr{}.y * z_ref_m.x);\n",
+            k - 1, k - 1, k - 1, k - 1
+        ));
+    }
+    out.push_str("        let fu1 = w;\n");
+    for k in 2..=p {
+        out.push_str(&format!(
+            "        let fu{k} = cfe2_mul(fu{}, w);\n", k - 1
+        ));
+    }
+    out.push_str("        var n_s = cfe2_zero();\n");
+    for k in 1..=p {
+        let coeff = binomial(p, k);
+        if k == p {
+            out.push_str(&format!(
+                "        n_s = cfe2_add(n_s, cfe2_mul_c32(fu{k}, vec2<f32>({coeff}.0, 0.0)));\n"
+            ));
+        } else {
+            let zp = p - k;
+            out.push_str(&format!(
+                "        n_s = cfe2_add(n_s, cfe2_mul_cfe32(cfe2_mul_c32(fu{k}, vec2<f32>({coeff}.0, 0.0)), fzr{zp}, {zp} * z_ref_e));\n"
+            ));
+        }
+    }
+    out.push_str(
+        r#"        // dD component-wise, in floatexp. The reference
+        // component enters with its own exponent so a tiny iterate
+        // cannot underflow out of the multiplier.
+        let zx = cfe2_mul_cfe32(cfe2_from_f32(vec2<f32>(1.0, 0.0)), vec2<f32>(z_ref_m.x, 0.0), z_ref_e);
+        let zy = cfe2_mul_cfe32(cfe2_from_f32(vec2<f32>(1.0, 0.0)), vec2<f32>(z_ref_m.y, 0.0), z_ref_e);
+        let wx = cfe2_from_f32(vec2<f32>(cfe2_to_f32(w).x, 0.0));
+        let wy = cfe2_from_f32(vec2<f32>(cfe2_to_f32(w).y, 0.0));
+        let dsx = cfe2_add(cfe2_mul_c32(cfe2_mul(zx, wx), vec2<f32>(2.0, 0.0)), cfe2_mul(wx, wx));
+        let dsy = cfe2_add(cfe2_mul_c32(cfe2_mul(zy, wy), vec2<f32>(2.0, 0.0)), cfe2_mul(wy, wy));
+        let d_s32 = vec2<f32>(cfe2_to_f32(dsx).x, -cfe2_to_f32(dsy).x);
+        // The reference's N, D, q at O(1), in f32.
+        let zr32 = z_ref_m * exp2(f32(z_ref_e));
+        var f_num = zr32;
+"#,
+    );
+    for _ in 1..p {
+        out.push_str("        f_num = vec2<f32>(f_num.x * zr32.x - f_num.y * zr32.y, f_num.x * zr32.y + f_num.y * zr32.x);\n");
+    }
+    out.push_str(
+        r#"        let f_den = vec2<f32>(1.0 + zr32.x * zr32.x, -(zr32.y * zr32.y));
+        let f_dd = dot(f_den, f_den);
+        let q = vec2<f32>(
+            (f_num.x * f_den.x + f_num.y * f_den.y) / f_dd,
+            (f_num.y * f_den.x - f_num.x * f_den.y) / f_dd,
+        );
+        let div = f_den + d_s32;
+        let dv2 = dot(div, div);
+        let inv = vec2<f32>(div.x / dv2, -div.y / dv2);
+        let d_s_fe = cfe2_from_f32(d_s32);
+        let top = cfe2_add(n_s, cfe2_mul_c32(d_s_fe, vec2<f32>(-q.x, -q.y)));
+        var w_new = cfe2_mul_c32(top, inv);
+        if (!is_julia_perturb) {
+            w_new = cfe2_add(w_new, d0);
+        }
+"#,
+    );
+    out
 }
 
 fn rebase_default_fe() -> String {
@@ -2212,6 +2388,7 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Phoenix => delta_step_phoenix(),
                 PerturbTier::Manowar => delta_step_manowar(),
                 PerturbTier::Lambda => delta_step_lambda(),
+                PerturbTier::Feather(p) => delta_step_feather(p.clamp(2, 8)),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
@@ -2220,6 +2397,7 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 PerturbTier::Phoenix => delta_step_phoenix_fe(),
                 PerturbTier::Manowar => delta_step_manowar_fe(),
                 PerturbTier::Lambda => delta_step_lambda_fe(),
+                PerturbTier::Feather(p) => delta_step_feather_fe(p.clamp(2, 8)),
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
@@ -2981,6 +3159,8 @@ mod tests {
             (PerturbTier::Phoenix, true),
             (PerturbTier::Lambda, false),
             (PerturbTier::Lambda, true),
+            (PerturbTier::Feather(3), false),
+            (PerturbTier::Feather(3), true),
         ] {
             let src = assemble_perturbed(&colorings::SMOOTH, floatexp, tier);
             let module = naga::front::wgsl::parse_str(&src)

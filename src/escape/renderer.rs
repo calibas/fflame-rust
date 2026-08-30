@@ -1002,6 +1002,11 @@ impl EscapeRenderer {
             // hook for a per-tier coefficient yet. Per-step until it
             // does; correctness first, skips second.
             assembler::PerturbTier::Lambda => return false,
+            // Feather's denominator reads the components of z
+            // separately, so the map is not holomorphic and the
+            // A*delta + B*delta_c model has no derivation -- the same
+            // reason the Tricorn family has no BLA.
+            assembler::PerturbTier::Feather(_) => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -1674,6 +1679,33 @@ impl EscapeRenderer {
             // c*z*(1-z): the first tier whose parameter MULTIPLIES,
             // so its delta step reads the reference's own c.
             "lambda" => Some(assembler::PerturbTier::Lambda),
+            // Feather is NOT wired up, deliberately. Its tier, its
+            // fixed-point reference and both delta rungs exist and are
+            // verified to zoom 20 (0.00% against an exact orbit at 15,
+            // 0.49% at 20) -- but they degrade past that (26% at 25,
+            // and by 30 the delta stops iterating at all, leaving
+            // escape a linear function of pixel position: straight
+            // diagonal edges, see output/origami/fe-zooms.png).
+            //
+            // The cause is NOT the algebra. An f64 simulation of this
+            // exact recurrence, INCLUDING the rebase and the scaled
+            // rung's w = d/S with every intermediate rounded to f32,
+            // reproduces the exact orbit at 0.0% disagreement at zoom
+            // 10, 20, 25 and 30. The generated WGSL matches that
+            // simulation line for line, and the fixed-point reference
+            // tracks f64 to 5.9e-8 at every limb count. So the fault
+            // is somewhere in the shader environment that the
+            // simulation does not model, and it has not been found.
+            //
+            // Shipping it gated off rather than reverted: the pieces
+            // that ARE verified (FixedPoint::recip, FixedComplex::div,
+            // the MAP_FEATHER reference branch, both delta steps) are
+            // what the other rational families need, and the parse
+            // matrix keeps them compiling. Flip this back on once the
+            // depth behaviour is explained -- not before, because a
+            // deep render that is confidently wrong is the failure
+            // this engine keeps refusing.
+            "feather" => None,
             // z^2 + z_prev + c: Phoenix's recurrence with p = 1 and a
             // pixel seed, so it rides the same two-term machinery.
             "manowar" => Some(assembler::PerturbTier::Manowar),
@@ -1768,6 +1800,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Lambda => {
                 (2, false, super::reference::MAP_LAMBDA)
+            }
+            assembler::PerturbTier::Feather(p) => {
+                (p, false, super::reference::MAP_FEATHER)
             }
         };
         let height_px = self.height.max(1) as f64;
@@ -1965,6 +2000,9 @@ impl EscapeRenderer {
             }
             assembler::PerturbTier::Lambda => {
                 (2, false, super::reference::MAP_LAMBDA)
+            }
+            assembler::PerturbTier::Feather(p) => {
+                (p, false, super::reference::MAP_FEATHER)
             }
         };
         let period_hint = if julia_c.is_none() && !ship {
