@@ -530,6 +530,33 @@ pub struct EscapeRenderer {
     /// at the slot, and the shader's write is gated off.
     results_dummy: Option<Buffer>,
     recolor_bind_group_layout: BindGroupLayout,
+    /// Sub-pixel sampling offset, in RENDER pixels, applied to the
+    /// whole view. Zero for an ordinary render.
+    ///
+    /// This is how antialiasing reaches sizes a supersampled grid
+    /// cannot: instead of one enormous render, take several ordinary
+    /// ones displaced within a pixel and average them. No template
+    /// needed changing -- a sub-pixel shift of the sampling grid IS a
+    /// shift of the view, which the direct path already expresses
+    /// through its centre and the perturbed path through
+    /// `ref_offset`.
+    sample_offset: [f32; 2],
+    /// Whether the accumulation target has had its first fold (the
+    /// clear happens on that one rather than as a separate pass).
+    accum_cleared: bool,
+    /// Accumulation targets for that averaging, ping-ponged.
+    ///
+    /// A pair rather than one read-write texture because read-write
+    /// storage access is not supported for `rgba32float` (rejected at
+    /// bind-group-layout creation), and a storage BUFFER would not do
+    /// either: at export sizes it exceeds the 128 MB binding limit a
+    /// 4K frame of `vec4<f32>` needs. Write-only textures have
+    /// neither restriction.
+    accum: Option<(wgpu::Texture, TextureView, wgpu::Texture, TextureView)>,
+    /// Which of the pair currently holds the running mean.
+    accum_front: usize,
+    accum_pipeline: Option<(wgpu::ComputePipeline, BindGroupLayout)>,
+    accum_params: Option<Buffer>,
     /// Which pipeline the last render() call ran ("direct",
     /// "perturbed f32", "perturbed floatexp", "recolor"). The global
     /// diag snapshot carries the same string for the panel, but that
@@ -1162,6 +1189,12 @@ impl EscapeRenderer {
             results_key: None,
             results_dummy: None,
             recolor_bind_group_layout,
+            sample_offset: [0.0, 0.0],
+            accum_cleared: false,
+            accum: None,
+            accum_front: 0,
+            accum_pipeline: None,
+            accum_params: None,
             last_path: "",
             last_orbit_stale: false,
             stale_serves: 0,
@@ -1950,6 +1983,260 @@ impl EscapeRenderer {
             .as_entire_binding()
     }
 
+    /// Antialias by ACCUMULATION rather than by a bigger grid.
+    ///
+    /// A supersampled grid multiplies the render size, and past a
+    /// point that is simply unavailable: 8x over a 4000x3000 export
+    /// is 768 megapixels and 101 GB of per-pixel state, and 32000
+    /// pixels also exceeds the 16384 texture-dimension limit every
+    /// adapter has. No budget tuning reaches it. Averaging several
+    /// ordinary renders, each displaced within a pixel, costs the
+    /// same total iteration work and a FIXED amount of memory.
+    ///
+    /// `samples` is per axis: 4 means a 4x4 jittered grid, 16 renders,
+    /// the same sample count as 4x supersampling. Call
+    /// [`Self::accumulate_sample`] once per offset from
+    /// [`Self::sample_grid`], then read [`Self::accumulated_view`].
+    pub fn begin_accumulation(&mut self, device: &Device, queue: &Queue, samples: u32) {
+        let n = samples.max(1);
+        let (w, h) = (self.out_width.max(1), self.out_height.max(1));
+        let stale = match &self.accum {
+            Some((t, _, _, _)) => t.width() != w || t.height() != h,
+            None => true,
+        };
+        if stale {
+            if let Some((a, _, b, _)) = self.accum.take() {
+                a.destroy();
+                b.destroy();
+            }
+            let (ta, va) = Self::create_output(device, w, h);
+            let (tb, vb) = Self::create_output(device, w, h);
+            self.accum = Some((ta, va, tb, vb));
+        }
+        self.accum_front = 0;
+        if self.accum_params.is_none() {
+            self.accum_params = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Accum Params"),
+                size: 16,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        // Each sample is added pre-scaled by 1/n², so the target holds
+        // the MEAN throughout and can be shown after any number of
+        // samples rather than only the last.
+        let inv = 1.0f32 / (n * n) as f32;
+        let mut raw = [0u8; 16];
+        raw[0..4].copy_from_slice(&inv.to_le_bytes());
+        raw[4..8].copy_from_slice(&1u32.to_le_bytes()); // clear on first add
+        queue.write_buffer(self.accum_params.as_ref().unwrap(), 0, &raw);
+        self.accum_cleared = false;
+    }
+
+    /// The jittered sample offsets for an `n`-per-axis pattern, in
+    /// RENDER pixels.
+    ///
+    /// A regular grid over the pixel, offset by half a step so the
+    /// samples straddle the centre symmetrically — the same positions
+    /// a supersampled grid would take, which is what makes the two
+    /// methods agree rather than merely both look smooth.
+    pub fn sample_grid(n: u32) -> Vec<[f32; 2]> {
+        let n = n.max(1);
+        let mut out = Vec::with_capacity((n * n) as usize);
+        for j in 0..n {
+            for i in 0..n {
+                out.push([
+                    (i as f32 + 0.5) / n as f32 - 0.5,
+                    (j as f32 + 0.5) / n as f32 - 0.5,
+                ]);
+            }
+        }
+        out
+    }
+
+    /// Set the offset for the next render.
+    pub fn set_sample_offset(&mut self, off: [f32; 2]) {
+        self.sample_offset = off;
+    }
+
+    /// Fold the current (settled) image into the accumulation.
+    pub fn accumulate_sample(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+    ) {
+        let Some((_, va, _, vb)) = self.accum.as_ref() else {
+            return;
+        };
+        // Read what we have, write the sum to the other one.
+        let (prev_view, next_view) = if self.accum_front == 0 {
+            (va.clone(), vb.clone())
+        } else {
+            (vb.clone(), va.clone())
+        };
+        if self.accum_pipeline.is_none() {
+            let src = r#"
+struct AccumParams {
+    inv_n: f32,
+    clear: u32,
+}
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var<uniform> p: AccumParams;
+@group(0) @binding(3) var prev_tex: texture_2d<f32>;
+
+@compute @workgroup_size(8, 8, 1)
+fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = vec2<i32>(textureDimensions(dst_tex));
+    let q = vec2<i32>(i32(gid.x), i32(gid.y));
+    if (q.x >= dims.x || q.y >= dims.y) {
+        return;
+    }
+    let s = textureLoad(src_tex, q, 0) * p.inv_n;
+    let prev = select(textureLoad(prev_tex, q, 0), vec4<f32>(0.0), p.clear != 0u);
+    textureStore(dst_tex, q, prev + s);
+}
+"#;
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Accumulate"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Accumulate Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Accumulate Pipeline Layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Accumulate"),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some("accum_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.accum_pipeline = Some((pipeline, layout));
+        }
+        // After the first fold, stop clearing.
+        if !self.accum_cleared {
+            self.accum_cleared = true;
+        } else if let Some(buf) = self.accum_params.as_ref() {
+            let mut raw = [0u8; 8];
+            raw[4..8].copy_from_slice(&0u32.to_le_bytes());
+            queue.write_buffer(buf, 4, &raw[4..8]);
+        }
+        let src = self.output_view().clone();
+        let (pipeline, layout) = self.accum_pipeline.as_ref().unwrap();
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Accumulate Bind Group"),
+            layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&src) },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&next_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: self.accum_params.as_ref().unwrap().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&prev_view),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Accumulate Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(
+            self.out_width.max(1).div_ceil(8),
+            self.out_height.max(1).div_ceil(8),
+            1,
+        );
+        drop(pass);
+        self.accum_front ^= 1;
+    }
+
+    /// The averaged image, once samples have been folded in.
+    pub fn accumulated_view(&self) -> Option<&TextureView> {
+        self.accum.as_ref().map(
+            |(_, va, _, vb)| if self.accum_front == 0 { va } else { vb },
+        )
+    }
+
+    /// The sampling offset in the view's own frame.
+    ///
+    /// Both consumers add it to a quantity that has already been
+    /// y-flipped and rotated (the direct path's `d`, the perturbed
+    /// path's `d0`), so the offset makes the same trip: a shift of
+    /// the sampling grid is a shift of the view only when expressed
+    /// in the view's axes.
+    fn sample_offset_in_view(&self, escape: &EscapeConfig) -> [f32; 2] {
+        let (ox, oy) = (self.sample_offset[0], -self.sample_offset[1]);
+        if ox == 0.0 && oy == 0.0 {
+            return [0.0, 0.0];
+        }
+        let (c, s) = (escape.rotation.cos(), escape.rotation.sin());
+        [ox * c - oy * s, ox * s + oy * c]
+    }
+
+    /// The supersampling factor actually in use, after the budget
+    /// clamp in [`Self::resize`] — which is not always the one asked
+    /// for.
+    pub fn effective_supersample(&self) -> u32 {
+        self.supersample
+    }
+
     /// Whether this config renders on the perturbed path.
     fn perturbed_path(&self, escape: &EscapeConfig) -> bool {
         #[cfg(test)]
@@ -2026,7 +2313,7 @@ impl EscapeRenderer {
             String::new()
         };
         format!(
-            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}",
+            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}|{:?}",
             escape.formula,
             escape.formula_params,
             escape.center_re,
@@ -2048,6 +2335,13 @@ impl EscapeRenderer {
             interior_ok,
             no_bla,
             coloring_fold,
+            // The sub-pixel sampling offset moves WHICH POINTS are
+            // iterated, so it belongs to the iteration's identity.
+            // Left out, accumulation antialiasing silently returned
+            // the same cached image for every sample -- the recolor
+            // cache is keyed on the config, and this lives on the
+            // renderer.
+            self.sample_offset,
         )
     }
 
@@ -3956,7 +4250,19 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // units (the EscapeConfig doc contract); width follows aspect.
         let span_y = 4.0 / escape.zoom_factor();
         let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
-        let (cx, cy) = escape.center_f64();
+        let (mut cx, mut cy) = escape.center_f64();
+        // Sub-pixel sampling offset (see `sample_offset`). The direct
+        // path is shallow by definition -- past zoom 14 the perturbed
+        // path takes over -- so an f64 centre carries a fraction of a
+        // pixel here without trouble.
+        {
+            let off = self.sample_offset_in_view(escape);
+            if off != [0.0, 0.0] {
+                let px = span_y / self.height.max(1) as f64;
+                cx += off[0] as f64 * px;
+                cy += off[1] as f64 * px;
+            }
+        }
 
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
@@ -4262,7 +4568,18 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     flags: if escape.julia { 2 } else { 0 },
                     s_m: s_m as f32,
                     s_e: s_e as i32,
-                    ref_offset: self.current_ref_offset,
+                    ref_offset: {
+                        // The sampling offset rides here for the same
+                        // reason the nucleus relocation does: both
+                        // are a displacement of the view measured in
+                        // pixel spacings, which is what this field
+                        // is. Exact at any depth.
+                        let o = self.sample_offset_in_view(escape);
+                        [
+                            self.current_ref_offset[0] + o[0],
+                            self.current_ref_offset[1] + o[1],
+                        ]
+                    },
                     iter_start,
                     iter_end,
                     ref_c,
@@ -4596,6 +4913,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
         if let Some(t) = &self.final_texture {
             t.destroy();
+        }
+        if let Some((a, _, b, _)) = &self.accum {
+            a.destroy();
+            b.destroy();
         }
         if let Some((a, _, b, _)) = &self.height_blur {
             a.destroy();
