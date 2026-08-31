@@ -136,10 +136,19 @@ pub fn render_escape_content(
                         .clicked()
                         && esc.formula != f.name
                     {
-                        let _ = config_manager.update_param(
-                            ConfigPath::EscapeFormula,
-                            ConfigValue::String(f.name.to_string()),
-                        );
+                        // Same reasoning as mode A: a field's natural
+                        // view and TERM COUNT are its own.
+                        match crate::escape::field_default_preset(f) {
+                            Some(p) => {
+                                let _ = apply_field_preset(config_manager, f, p);
+                            }
+                            None => {
+                                let _ = config_manager.update_param(
+                                    ConfigPath::EscapeFormula,
+                                    ConfigValue::String(f.name.to_string()),
+                                );
+                            }
+                        }
                     }
                 }
             });
@@ -151,17 +160,31 @@ pub fn render_escape_content(
     // stand in it. Kept as a separate row because re-applying one is
     // a normal thing to want after wandering off, not only something
     // that happens on a formula switch.
-    if field.is_none() {
-        let formula_def = crate::escape::get_formula(&esc.formula);
-        if !formula_def.presets.is_empty() {
+    {
+        let presets: &[crate::escape::EscapePreset] = match field {
+            Some(f) => f.presets,
+            None => crate::escape::get_formula(&esc.formula).presets,
+        };
+        if !presets.is_empty() {
             ui.horizontal(|ui| {
                 ui.label(t!("escape_panel.preset"));
                 egui::ComboBox::from_id_salt("escape_preset")
                     .selected_text(t!("escape_panel.preset_pick"))
                     .show_ui(ui, |ui| {
-                        for p in formula_def.presets {
+                        for p in presets {
                             if ui.selectable_label(false, p.name).clicked() {
-                                let _ = apply_preset(config_manager, formula_def, p);
+                                match field {
+                                    Some(f) => {
+                                        let _ = apply_field_preset(config_manager, f, p);
+                                    }
+                                    None => {
+                                        let _ = apply_preset(
+                                            config_manager,
+                                            crate::escape::get_formula(&esc.formula),
+                                            p,
+                                        );
+                                    }
+                                }
                             }
                         }
                     });
@@ -773,55 +796,77 @@ pub fn render_escape_content(
             });
         });
 
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.bailout"));
-        let mut bail = esc.bailout;
-        if ui
-            .add(egui::DragValue::new(&mut bail).speed(0.1).range(0.001..=1.0e12))
-            .on_hover_text(t!("escape_panel.tooltip_bailout"))
-            .changed()
-        {
-            let _ = config_manager.update_param(ConfigPath::EscapeBailout, bail.into());
-        }
-    });
+    // ---- Iteration controls, shown only where the shader reads them ----
+    //
+    // `bailout` and the biomorph axis both live inside the escape
+    // test, which the assembler compiles in only for an ESCAPING
+    // formula; damping is spliced into the step of any mode-A
+    // formula. A field shader has none of the three -- no escape
+    // test, no bailout, and a fixed-count accumulation with no step
+    // to damp -- so all three sat in the panel doing nothing.
+    let controls = match field {
+        Some(_) => crate::escape::FIELD_ITERATION_CONTROLS,
+        None => crate::escape::iteration_controls(
+            crate::escape::get_formula(&esc.formula),
+        ),
+    };
+
+    if controls.bailout {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.bailout"));
+            let mut bail = esc.bailout;
+            if ui
+                .add(egui::DragValue::new(&mut bail).speed(0.1).range(0.001..=1.0e12))
+                .on_hover_text(t!("escape_panel.tooltip_bailout"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeBailout, bail.into());
+            }
+        });
+    }
 
     // Mann-iteration damping (complex α; 1+0i = plain iteration)
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.damping"))
-            .on_hover_text(t!("escape_panel.tooltip_damping"));
-        let mut dre = esc.damping_re;
-        if ui
-            .add(egui::DragValue::new(&mut dre).speed(0.005).prefix("re: "))
-            .changed()
-        {
-            let _ = config_manager.update_param(ConfigPath::EscapeDampingRe, dre.into());
-        }
-        let mut dim = esc.damping_im;
-        if ui
-            .add(egui::DragValue::new(&mut dim).speed(0.005).prefix("im: "))
-            .changed()
-        {
-            let _ = config_manager.update_param(ConfigPath::EscapeDampingIm, dim.into());
-        }
-    });
+    if controls.damping {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.damping"))
+                .on_hover_text(t!("escape_panel.tooltip_damping"));
+            let mut dre = esc.damping_re;
+            if ui
+                .add(egui::DragValue::new(&mut dre).speed(0.005).prefix("re: "))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeDampingRe, dre.into());
+            }
+            let mut dim = esc.damping_im;
+            if ui
+                .add(egui::DragValue::new(&mut dim).speed(0.005).prefix("im: "))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeDampingIm, dim.into());
+            }
+        });
+
+    }
 
     // Biomorph classification axis
-    ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.biomorph"));
-        let current = crate::config::escape::biomorph_to_str(esc.biomorph);
-        egui::ComboBox::from_id_salt("escape_biomorph")
-            .selected_text(current)
-            .show_ui(ui, |ui| {
-                for name in ["off", "re", "im"] {
-                    if ui.selectable_label(current == name, name).clicked() && current != name {
-                        let _ = config_manager.update_param(
-                            ConfigPath::EscapeBiomorph,
-                            ConfigValue::String(name.to_string()),
-                        );
+    if controls.biomorph {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.biomorph"));
+            let current = crate::config::escape::biomorph_to_str(esc.biomorph);
+            egui::ComboBox::from_id_salt("escape_biomorph")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for name in ["off", "re", "im"] {
+                        if ui.selectable_label(current == name, name).clicked() && current != name {
+                            let _ = config_manager.update_param(
+                                ConfigPath::EscapeBiomorph,
+                                ConfigValue::String(name.to_string()),
+                            );
+                        }
                     }
-                }
-            });
-    });
+                });
+        });
+    }
 
     ui.separator();
 
@@ -1116,6 +1161,54 @@ pub fn apply_preset(
         changes.push((ConfigPath::EscapeJuliaIm, im.into()));
     }
     for p in formula.parameters {
+        let v = preset
+            .formula_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map(|(_, v)| *v)
+            .unwrap_or(p.default);
+        changes.push((
+            ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
+            v.into(),
+        ));
+    }
+    for p in coloring.parameters {
+        let v = preset
+            .coloring_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map(|(_, v)| *v)
+            .unwrap_or(p.default);
+        changes.push((
+            ConfigPath::EscapeColoringParam { param: p.name.to_string() },
+            v.into(),
+        ));
+    }
+    config_manager
+        .update_batch(changes, "history.action.escape_preset".to_string())
+        .map(|_| ())
+}
+
+/// [`apply_preset`] for a mode-B field.
+///
+/// Separate because a field's parameters and colorings come from the
+/// field registry, not the formula one — the same shape of work, over
+/// a different pair of definitions.
+pub fn apply_field_preset(
+    config_manager: &mut ConfigManager,
+    field: &'static crate::escape::fields::FieldDef,
+    preset: &crate::escape::EscapePreset,
+) -> Result<(), crate::config::manager::ConfigError> {
+    let coloring = crate::escape::fields::get_field_coloring(preset.coloring, field);
+    let mut changes: Vec<(ConfigPath, ConfigValue)> = vec![
+        (ConfigPath::EscapeFormula, ConfigValue::String(field.name.to_string())),
+        (ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string())),
+        (ConfigPath::EscapeCenterRe, ConfigValue::String(preset.center_re.to_string())),
+        (ConfigPath::EscapeCenterIm, ConfigValue::String(preset.center_im.to_string())),
+        (ConfigPath::EscapeZoomLog2, (preset.zoom_log2 as f32).into()),
+        (ConfigPath::EscapeMaxIter, ConfigValue::UInt(preset.max_iter)),
+    ];
+    for p in field.parameters {
         let v = preset
             .formula_params
             .iter()

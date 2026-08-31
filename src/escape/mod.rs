@@ -193,6 +193,42 @@ pub fn formula_default_preset(formula: &FormulaDef) -> Option<&'static EscapePre
     formula.presets.first()
 }
 
+/// The same, for a mode-B field.
+pub fn field_default_preset(field: &fields::FieldDef) -> Option<&'static EscapePreset> {
+    field.presets.first()
+}
+
+/// Which of the iteration controls the assembled shader will read.
+///
+/// Every one of these is spliced conditionally, so a control the
+/// splice omits does nothing at all — the same silent-inert problem
+/// the coloring gate solves, in a different corner of the panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IterationControls {
+    /// `bailout` is read only by the escape test, which the assembler
+    /// compiles in only for an ESCAPING formula.
+    pub bailout: bool,
+    /// The biomorph axis lives INSIDE that same escape test.
+    pub biomorph: bool,
+    /// Mann damping is spliced into the step of any mode-A formula,
+    /// escaping or not — it changes the iteration, not the test.
+    pub damping: bool,
+}
+
+/// What a mode-A formula's shader actually reads.
+pub fn iteration_controls(formula: &FormulaDef) -> IterationControls {
+    let escapes = !formula.has_feature(FormulaFeature::NonEscaping);
+    IterationControls { bailout: escapes, biomorph: escapes, damping: true }
+}
+
+/// What a mode-B FIELD shader reads: none of them.
+///
+/// A field runs a fixed-count accumulation loop with no escape test,
+/// no bailout and no step to damp — `max_iter` is a TERM COUNT there.
+/// The three controls sat in the panel doing nothing.
+pub const FIELD_ITERATION_CONTROLS: IterationControls =
+    IterationControls { bailout: false, biomorph: false, damping: false };
+
 /// Whether a Julia toggle means anything for this formula.
 ///
 /// False for a map with no `c` (see

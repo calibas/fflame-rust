@@ -58,6 +58,14 @@ SELECTION = {
     "trig": [("Sine", "trig-sin")],
 }
 
+# Mode-B fields, same treatment: a field's natural view and TERM COUNT
+# are as particular as any formula's.
+FIELD_SELECTION = {
+    "weierstrass": [("Hillshade", "weierstrass-hillshade")],
+    "markus_lyapunov": [("A-B Sequence", "markus-lyapunov-ab")],
+    "standard_map_ftle": [("Classic", "standard-map-ftle")],
+}
+
 def rs_f32(v):
     s = f"{float(v):.6}"
     return s if ("." in s or "e" in s or "E" in s) else s + ".0"
@@ -117,8 +125,33 @@ for formula, items in SELECTION.items():
     lines.append("];")
     out.append("\n".join(lines))
 
+for field, items in FIELD_SELECTION.items():
+    const = field.upper()
+    lines = [f"pub static {const}: &[EscapePreset] = &["]
+    for display, stem in items:
+        path = f"tests/visual/configs/escape/{stem}.fflame"
+        d = json.load(io.open(path, encoding="utf-8"))
+        e = d.get("escape", {})
+        assert e.get("formula") == field, (stem, e.get("formula"))
+        lines.append("    EscapePreset {")
+        lines.append(f'        name: "{display}",')
+        lines.append(f'        center_re: "{e.get("center_re", "0")}",')
+        lines.append(f'        center_im: "{e.get("center_im", "0")}",')
+        lines.append(f'        zoom_log2: {rs_f64(e.get("zoom_log2", 0.0))},')
+        lines.append(f'        max_iter: {int(e.get("max_iter", 256))},')
+        lines.append(f'        coloring: "{e.get("coloring", "field_value")}",')
+        lines.append("        julia: None,")
+        lines.append(f'        formula_params: {pairs(e.get("formula_params"))},')
+        lines.append(f'        coloring_params: {pairs(e.get("coloring_params"))},')
+        lines.append("    },")
+    lines.append("];")
+    out.append("\n".join(lines))
+
 io.open("src/escape/presets.rs", "w", encoding="utf-8", newline="\n").write(
     "\n\n".join(out) + "\n"
 )
-print("wrote src/escape/presets.rs with", sum(len(v) for v in SELECTION.values()),
-      "presets across", len(SELECTION), "formulas")
+print("wrote src/escape/presets.rs with",
+      sum(len(v) for v in SELECTION.values())
+      + sum(len(v) for v in FIELD_SELECTION.values()),
+      "presets across", len(SELECTION), "formulas and",
+      len(FIELD_SELECTION), "fields")

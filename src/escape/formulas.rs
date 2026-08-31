@@ -1541,6 +1541,94 @@ mod feature_tag_tests {
         );
     }
 
+    /// The iteration controls must match what the shader reads.
+    ///
+    /// Each is spliced conditionally, so a control the splice omits
+    /// does nothing at all. Rather than trust the predicate, assemble
+    /// the real shader for each formula and check the text: `bailout`
+    /// and the biomorph axis appear only inside the escape test, and
+    /// damping only when it is switched on.
+    #[test]
+    fn iteration_controls_match_the_assembled_shader() {
+        let coloring = crate::escape::get_coloring("smooth");
+        for def in crate::escape::FORMULAS.iter().copied() {
+            let controls = crate::escape::iteration_controls(def);
+            // A coloring the formula can actually take, so the shader
+            // assembles the way it would in the app.
+            let col = if crate::escape::coloring_suits_formula(def, coloring) {
+                coloring
+            } else {
+                crate::escape::COLORINGS
+                    .iter()
+                    .copied()
+                    .find(|c| crate::escape::coloring_suits_formula(def, c))
+                    .expect("every formula has one")
+            };
+            let src = crate::escape::assembler::assemble(def, col, false);
+            assert_eq!(
+                controls.bailout,
+                src.contains("params.bailout"),
+                "formula `{}`: bailout control shown = {}, but the shader {} it",
+                def.name,
+                controls.bailout,
+                if src.contains("params.bailout") { "reads" } else { "ignores" }
+            );
+            assert_eq!(
+                controls.biomorph,
+                src.contains("params.flags >> 1u"),
+                "formula `{}`: biomorph control shown = {}, but the shader {} it",
+                def.name,
+                controls.biomorph,
+                if src.contains("params.flags >> 1u") { "reads" } else { "ignores" }
+            );
+
+            // Damping is a switch, not a formula property: with it on,
+            // every mode-A shader must read it.
+            let damped = crate::escape::assembler::assemble(def, col, true);
+            assert!(
+                controls.damping && damped.contains("params.damping"),
+                "formula `{}`: damping must apply to every mode-A formula",
+                def.name
+            );
+        }
+    }
+
+    /// A FIELD shader reads none of the three.
+    #[test]
+    fn fields_read_no_iteration_controls() {
+        for field in crate::escape::fields::FIELDS {
+            let coloring =
+                crate::escape::fields::get_field_coloring(field.default_coloring, field);
+            let src = crate::escape::assembler::assemble_field(field, coloring);
+            for (name, needle) in [
+                ("bailout", "params.bailout"),
+                ("biomorph", "params.flags >> 1u"),
+                ("damping", "params.damping"),
+            ] {
+                assert!(
+                    !src.contains(needle),
+                    "field `{}` was thought to ignore {name}, but its shader reads it",
+                    field.name
+                );
+            }
+        }
+        let c = crate::escape::FIELD_ITERATION_CONTROLS;
+        assert!(!c.bailout && !c.biomorph && !c.damping);
+    }
+
+    /// Every field must carry a starting point, like every formula.
+    #[test]
+    fn every_field_has_a_preset() {
+        for field in crate::escape::fields::FIELDS {
+            assert!(
+                crate::escape::field_default_preset(field).is_some(),
+                "field `{}` has no preset, so switching to it keeps the previous \
+                 formula's view and term count",
+                field.name
+            );
+        }
+    }
+
     /// The gate must actually bite where the report said it does.
     #[test]
     fn escape_time_colorings_are_refused_for_non_escaping_formulas() {

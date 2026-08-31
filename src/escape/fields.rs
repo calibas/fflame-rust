@@ -45,6 +45,10 @@ pub struct FieldDef {
     /// coloring (the usual state right after switching formulas).
     pub default_coloring: &'static str,
     pub parameters: &'static [EscapeParamDef],
+    /// Named starting points, first = the default applied on a switch
+    /// (see [`super::EscapePreset`]). A field's natural view and term
+    /// count are as particular as any formula's.
+    pub presets: &'static [super::EscapePreset],
     pub wgsl: &'static str,
 }
 
@@ -75,6 +79,7 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
     display_name: "Weierstrass Field",
     has_gradient: true,
     default_coloring: "field_hillshade",
+    presets: super::presets::WEIERSTRASS,
     parameters: &[
         EscapeParamDef {
             name: "a",
@@ -177,6 +182,7 @@ pub static MARKUS_LYAPUNOV: FieldDef = FieldDef {
     display_name: "Markus–Lyapunov",
     has_gradient: false,
     default_coloring: "field_diverging",
+    presets: super::presets::MARKUS_LYAPUNOV,
     parameters: &[
         EscapeParamDef {
             name: "seq_bits",
@@ -251,6 +257,7 @@ pub static STANDARD_MAP_FTLE: FieldDef = FieldDef {
     display_name: "Standard Map FTLE",
     has_gradient: false,
     default_coloring: "field_diverging",
+    presets: super::presets::STANDARD_MAP_FTLE,
     parameters: &[EscapeParamDef {
         name: "k",
         display_name: "Kick Strength",

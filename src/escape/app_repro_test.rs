@@ -4899,7 +4899,130 @@ mod tests {
             config.palette_reverse,
         );
 
+        // Render a config to settle and measure whether it is a
+        // picture: how much is lit, and how many DISTINCT colours
+        // (quantised, so f32 noise does not read as detail).
+        let mut shoot = |esc: &crate::config::escape::EscapeConfig,
+                         renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> (f64, usize) {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("preset"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 200_000, "preset never settled");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("preset tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, px) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            escape.destroy();
+            let mut lit = 0usize;
+            let mut seen = std::collections::HashSet::new();
+            for p in px.chunks(4) {
+                if p[0] as u32 + p[1] as u32 + p[2] as u32 > 24 {
+                    lit += 1;
+                }
+                seen.insert((p[0] >> 3, p[1] >> 3, p[2] >> 3));
+            }
+            (lit as f64 / (w * h) as f64, seen.len())
+        };
+
         let mut checked = 0usize;
+        // Mode B first: a field's presets go through the same "does it
+        // draw anything" bar, and its coloring comes from the field
+        // registry rather than the formula one.
+        for field in crate::escape::fields::FIELDS {
+            for preset in field.presets {
+                let coloring =
+                    crate::escape::fields::get_field_coloring(preset.coloring, field);
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = field.name.to_string();
+                esc.coloring = coloring.name.to_string();
+                esc.center_re = preset.center_re.to_string();
+                esc.center_im = preset.center_im.to_string();
+                esc.zoom_log2 = preset.zoom_log2;
+                esc.max_iter = preset.max_iter;
+                for p in field.parameters {
+                    let v = preset
+                        .formula_params
+                        .iter()
+                        .find(|(k, _)| *k == p.name)
+                        .map(|(_, v)| *v)
+                        .unwrap_or(p.default);
+                    esc.formula_params.insert(p.name.to_string(), v);
+                }
+                for p in coloring.parameters {
+                    let v = preset
+                        .coloring_params
+                        .iter()
+                        .find(|(k, _)| *k == p.name)
+                        .map(|(_, v)| *v)
+                        .unwrap_or(p.default);
+                    esc.coloring_params.insert(p.name.to_string(), v);
+                }
+                let (lit_frac, distinct) = shoot(&esc, &mut renderer);
+                println!(
+                    "{:14} {:20} lit {:5.1}%  {:4} distinct",
+                    field.name, preset.name, 100.0 * lit_frac, distinct
+                );
+                assert!(
+                    lit_frac > 0.02,
+                    "field preset `{}` of `{}` renders essentially nothing ({:.1}% lit)",
+                    preset.name, field.name, 100.0 * lit_frac
+                );
+                assert!(
+                    distinct >= 8,
+                    "field preset `{}` of `{}` renders a flat wash ({distinct} colours)",
+                    preset.name, field.name
+                );
+                checked += 1;
+            }
+        }
         for formula in crate::escape::FORMULAS {
             for preset in formula.presets {
                 // 1. the pairing must be one the engine can draw.
@@ -4944,91 +5067,13 @@ mod tests {
                     esc.coloring_params.insert(p.name.to_string(), v);
                 }
 
-                let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
-                let mut guard = 0u32;
-                loop {
-                    let mut enc =
-                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("preset"),
-                        });
-                    let settled = escape.render(
-                        &device, &queue, &mut enc, &esc, renderer.palette_view(),
-                    );
-                    queue.submit(std::iter::once(enc.finish()));
-                    let _ = device.poll(wgpu::PollType::Wait {
-                        submission_index: None,
-                        timeout: None,
-                    });
-                    if settled {
-                        break;
-                    }
-                    guard += 1;
-                    assert!(
-                        guard < 200_000,
-                        "preset `{}` of `{}` never settled",
-                        preset.name,
-                        formula.name
-                    );
-                }
-                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("preset tonemap"),
-                });
-                renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
-                renderer.update_tonemap(
-                    &queue,
-                    crate::scene::tonemap::ToneMapMode::Linear,
-                    config.highlight_mode,
-                    false,
-                    1.0,
-                    1.0,
-                    config.gamma_threshold,
-                    1.0,
-                    config.vibrancy,
-                    config.white_level,
-                    config.saturation,
-                    config.hue_shift,
-                    config.alpha_blend_low,
-                    config.alpha_blend_high,
-                    w,
-                    h,
-                    renderer.total_iterations(),
-                    config.max_iterations,
-                    config.zoom,
-                    256,
-                    4,
-                    false,
-                    false,
-                    config.levels_low,
-                    config.levels_high,
-                    config.levels_gamma,
-                );
-                renderer.tonemap_pass_with_input(
-                    &device, &queue, &mut enc, escape.output_view(),
-                );
-                queue.submit(std::iter::once(enc.finish()));
-                let (_, _, px) = pollster::block_on(renderer.read_fractal_pixels(
-                    &device, &queue, false, [0.0, 0.0, 0.0],
-                ))
-                .expect("readback");
-                escape.destroy();
-
-                let total = (w * h) as f64;
-                let mut lit = 0usize;
-                let mut seen = std::collections::HashSet::new();
-                for p in px.chunks(4) {
-                    if p[0] as u32 + p[1] as u32 + p[2] as u32 > 24 {
-                        lit += 1;
-                    }
-                    // Quantised, so f32 noise does not read as detail.
-                    seen.insert((p[0] >> 3, p[1] >> 3, p[2] >> 3));
-                }
-                let lit_frac = lit as f64 / total;
+                let (lit_frac, distinct) = shoot(&esc, &mut renderer);
                 println!(
                     "{:14} {:20} lit {:5.1}%  {:4} distinct",
                     formula.name,
                     preset.name,
                     100.0 * lit_frac,
-                    seen.len()
+                    distinct
                 );
                 assert!(
                     lit_frac > 0.02,
@@ -5038,16 +5083,15 @@ mod tests {
                     100.0 * lit_frac
                 );
                 assert!(
-                    seen.len() >= 8,
-                    "preset `{}` of `{}` renders a flat wash ({} distinct colours)",
+                    distinct >= 8,
+                    "preset `{}` of `{}` renders a flat wash ({distinct} distinct colours)",
                     preset.name,
-                    formula.name,
-                    seen.len()
+                    formula.name
                 );
                 checked += 1;
             }
         }
-        assert!(checked >= 40, "only {checked} presets checked");
+        assert!(checked >= 45, "only {checked} presets checked");
     }
 
     /// GPU-time pacing must engage, and must not change the image.
