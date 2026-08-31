@@ -499,6 +499,12 @@ pub struct EscapeRenderer {
     /// at the slot, and the shader's write is gated off.
     results_dummy: Option<Buffer>,
     recolor_bind_group_layout: BindGroupLayout,
+    /// Which pipeline the last render() call ran ("direct",
+    /// "perturbed f32", "perturbed floatexp", "recolor"). The global
+    /// diag snapshot carries the same string for the panel, but that
+    /// is shared across renderers and cargo runs tests in parallel —
+    /// assertions read THIS.
+    pub(crate) last_path: &'static str,
     /// Diagnostics: wall clock started when a change first shows up
     /// (an orbit wait or a chunk restart), stopped when the render
     /// settles. What the Escape panel's latency readout measures.
@@ -1067,6 +1073,7 @@ impl EscapeRenderer {
             results_key: None,
             results_dummy: None,
             recolor_bind_group_layout,
+            last_path: "",
             diag_settle_start: None,
             #[cfg(not(target_arch = "wasm32"))]
             progressive: false,
@@ -2477,6 +2484,13 @@ impl EscapeRenderer {
         self.ensure_orbit_with(device, queue, escape, None).map(|(len, _)| len)
     }
 
+    /// Per-renderer orbit-cache stats (relocations, rebuilds) — the
+    /// parallel-test-safe counterpart of the global diag counters.
+    #[cfg(test)]
+    pub(crate) fn orbit_stats(&self) -> (u64, u64) {
+        (self.orbit_cache.stat_relocations, self.orbit_cache.stat_rebuilds)
+    }
+
     /// Blocking (`budget` None) or time-sliced (`budget` Some) orbit
     /// acquisition + GPU mirror. The sliced form is the WASM path's
     /// per-frame call — no worker thread exists there, so the orbit
@@ -3351,6 +3365,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 self.diag_settle_start = None;
+                self.last_path = "recolor";
                 super::diag::update(|d| {
                     d.path = "recolor";
                     d.restarts += 1;
@@ -3658,6 +3673,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 );
                 RENDER_DONE.store(iter_end, std::sync::atomic::Ordering::Relaxed);
                 let settled = orbit_done && iterations_done;
+                self.last_path = if floatexp { "perturbed floatexp" } else { "perturbed f32" };
                 super::diag::update(|d| {
                     d.path = if floatexp { "perturbed floatexp" } else { "perturbed f32" };
                     d.bla_active = bla_ready;
@@ -3797,6 +3813,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             std::sync::atomic::Ordering::Relaxed,
         );
         self.direct_last = Some(web_time::Instant::now());
+        self.last_path = "direct";
         super::diag::update(|d| {
             d.path = "direct";
             d.inflight_frames += 1;

@@ -3035,10 +3035,33 @@ sized by the render grid; a pixel count past the device's binding
 limit (giant CLI exports) gates the write off via params.flags bit 3
 and renders uncached, exactly as before.
 
-Still open from the same measurement: a pan or zoom-to-cursor event
-recomputes the reference orbit (the center strings are part of its
-identity), ~15-30 ms plus a worker roundtrip per gesture event —
-rebasing could serve nearby centers from the old reference.
+*Reference relocation closes the other half.* A pan or zoom-to-cursor
+event used to recompute the reference orbit — the center strings were
+part of its identity — even though perturbation never needed the
+reference AT the view center (rebasing serves any nearby point).
+`ReferenceOrbit::relocate_to` re-anchors the existing orbit under a
+moved view: the new center is parsed at the orbit's own precision and
+subtracted from the exact fixed-point reference `c`, so a drag of
+hundreds of events accumulates NO error, and the offset rides the
+same `ref_offset` machinery the nucleus path built. Wired into the
+worker's reuse check and the blocking cache; parameter plane only (a
+Julia orbit's reference is its seed, not retained in fixed point) but
+every parameter-plane tier — power, ship, tricorn, phoenix, manowar,
+lambda, feather, mcmullen, magnet — inherits it. Capped at 8192 px of
+offset (the f32 d0 sum's precision budget; the nucleus path documents
+the wall at 2^15): a drag reuses the reference for ~10
+viewport-heights before one recompute re-centers it. Measured: a pan
+at zoom 25 went from ~120 spin-frames of worker roundtrip to 2 frames
+with `orbit=reused`; no GPU re-upload (the orbit generation is
+unchanged) and no BLA rebuild (dc growth handles a widened offset on
+its own). Pinned by `pan_reuses_the_reference_orbit`: the diag must
+show a relocation and no rebuild, the relocated render must agree
+with a FRESH reference at the new view to <3% of pixels (measured
+1.27%, the reference-vs-reference noise band at zoom 30 — a sign
+error in the offset reads 79.5%), and an out-of-range pan must fall
+back to a rebuild. Relocation deliberately does not mark the orbit
+store dirty, so panning a deep view no longer writes a store file
+per gesture event.
 
 ## 9. Testing
 

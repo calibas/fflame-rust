@@ -231,6 +231,13 @@ pub fn load_from(
 
 /// Production save: cost-gated, into the default store directory.
 pub fn maybe_save(orbit: &ReferenceOrbit) {
+    // Nothing new to persist: loaded-from-store orbits that have not
+    // deepened, and — the case that made this flag exist — orbits
+    // RELOCATED under a pan, which would otherwise write the same
+    // deep orbit under a fresh center key on every gesture event.
+    if !orbit.store_grown {
+        return;
+    }
     let limbs = orbit.n_limbs as u64;
     let cost = orbit.len() as u64 * limbs * limbs;
     let precious_nucleus = orbit.periodic.is_some() && orbit.n_limbs >= 4;

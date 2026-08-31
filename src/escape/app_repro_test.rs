@@ -11,6 +11,15 @@
 mod tests {
     use egui_wgpu::wgpu;
 
+    /// Tests that read (or reset) the GLOBAL escape diagnostics
+    /// snapshot hold this while they run: cargo runs tests in
+    /// parallel, and a concurrent render from another test would
+    /// stomp `diag::snapshot()` between a render and its assertion.
+    static DIAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn diag_lock() -> std::sync::MutexGuard<'static, ()> {
+        DIAG_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Interior detection must be INVISIBLE, and must pay.
     ///
     /// The design claim is stronger than "close enough": the direct
@@ -3866,6 +3875,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn interactive_latency_report() {
+        let _diag = diag_lock();
         crate::escape::diag::reset();
         let (device, queue) = repro_device();
         let (w, h) = (960u32, 720u32);
@@ -4001,6 +4011,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn recolor_cache_is_invisible_and_invalidates_correctly() {
+        let _diag = diag_lock();
         let (device, queue) = repro_device();
         let (w, h) = (200u32, 160u32);
         let config = crate::config::FractalConfig::default();
@@ -4091,7 +4102,6 @@ mod tests {
             esc
         };
 
-        let path_of = || crate::escape::diag::snapshot().path;
 
         for (coloring, zoom, expect_hit) in [
             // map-only: hits on both paths
@@ -4109,11 +4119,11 @@ mod tests {
             // The coloring-param tick.
             esc.coloring_params.insert("scale".to_string(), 0.11);
             let ticked = read(&mut escape, &esc, &mut renderer);
-            let hit = path_of() == "recolor";
+            let hit = escape.last_path == "recolor";
             assert_eq!(
                 hit, expect_hit,
                 "{coloring}@{zoom}: expected cache hit={expect_hit}, got path {}",
-                path_of()
+                escape.last_path
             );
             let truth = fresh(&esc, &mut renderer);
             assert_eq!(
@@ -4125,8 +4135,7 @@ mod tests {
             esc.center_re = "-0.743643887037158704".to_string();
             let panned = read(&mut escape, &esc, &mut renderer);
             assert_ne!(
-                path_of(),
-                "recolor",
+                escape.last_path, "recolor",
                 "{coloring}@{zoom}: a view change must not serve cached records"
             );
             let truth = fresh(&esc, &mut renderer);
@@ -4136,6 +4145,201 @@ mod tests {
             );
             escape.destroy();
         }
+    }
+
+    /// A pan must REUSE the reference orbit (relocation), and the
+    /// relocated render must still be correct against an exact f64
+    /// oracle at the NEW view.
+    ///
+    /// Three assertions, in causal order: the diagnostics must show a
+    /// relocation and no rebuild (the mechanism engaged); the lit/
+    /// unlit classification must match exact f64 iteration at the new
+    /// center (the offset was computed right -- a mis-anchored
+    /// reference shifts the whole frame, which this cannot miss); and
+    /// a pan past the relocation cap must fall back to a REBUILD
+    /// (correctness over reuse).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn pan_reuses_the_reference_orbit() {
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (192u32, 160u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.7436438870371587".to_string();
+        esc.center_im = "0.1318259042053119".to_string();
+        esc.zoom_log2 = 30.0;
+        esc.max_iter = 2000;
+        esc.coloring = "smooth".to_string();
+
+        let mut render = |esc: &crate::config::escape::EscapeConfig,
+                          escape: &mut crate::escape::EscapeRenderer| -> Vec<u8> {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("pan frame"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("pan tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+
+        let _at_a = render(&esc, &mut escape);
+        let (relocs0, rebuilds0) = escape.orbit_stats();
+
+        // ~1290 px pan (3e-8 complex units at 2^-28/160 spacing per
+        // pixel): well inside the relocation cap.
+        esc.center_re = "-0.7436438570371587".to_string();
+        let at_b = render(&esc, &mut escape);
+        let (relocs1, rebuilds1) = escape.orbit_stats();
+        assert!(
+            relocs1 > relocs0,
+            "the pan did not relocate (relocations {relocs1}, rebuilds {rebuilds1})"
+        );
+        assert_eq!(
+            rebuilds1, rebuilds0,
+            "the pan rebuilt the reference instead of relocating"
+        );
+
+        // Ground truth for the ANCHORING: a fresh, centered reference
+        // at B. A wrong relocation offset displaces the whole frame
+        // (the pan here is ~1700 px of view travel), so agreement
+        // with the fresh render is the sharp property. The two are
+        // legitimately different references, so chaotic boundary
+        // pixels may flip within f32 delta noise -- the measured
+        // band for reference-vs-reference disagreement at this depth
+        // is ~1.3%, and the Phoenix rung tests accept 1.6-2.1%
+        // against exact orbits.
+        let fresh_b = {
+            let mut escape2 = crate::escape::EscapeRenderer::new(&device, w, h);
+            let px = render(&esc, &mut escape2);
+            escape2.destroy();
+            px
+        };
+        let lit = |buf: &[u8], i: usize| -> bool {
+            buf[i] as u32 + buf[i + 1] as u32 + buf[i + 2] as u32 > 24
+        };
+        let mut vs_fresh = 0usize;
+        for i in (0..at_b.len()).step_by(4) {
+            if lit(&at_b, i) != lit(&fresh_b, i) {
+                vs_fresh += 1;
+            }
+        }
+        let frac_fresh = vs_fresh as f64 / (w as f64 * h as f64);
+
+        // Backstop: exact f64 classification at B. The lit-threshold
+        // heuristic disagrees with the oracle on filament-dense views
+        // regardless of reference (escaped pixels can land on dark
+        // palette bands), so this bound is deliberately loose -- it
+        // exists to catch a wholesale frame shift, not noise.
+        let cx: f64 = esc.center_re.parse().unwrap();
+        let cy: f64 = esc.center_im.parse().unwrap();
+        let span_y = 4.0 / 2f64.powf(esc.zoom_log2);
+        let span_x = span_y * w as f64 / h as f64;
+        let mut vs_exact = 0usize;
+        for py in 0..h as usize {
+            for px in 0..w as usize {
+                let ci = (
+                    ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                    -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                );
+                let (mut zx, mut zy) = (0.0f64, 0.0f64);
+                let mut escaped = false;
+                for _ in 0..esc.max_iter {
+                    let nx = zx * zx - zy * zy + ci.0;
+                    zy = 2.0 * zx * zy + ci.1;
+                    zx = nx;
+                    if zx * zx + zy * zy > 4.0 {
+                        escaped = true;
+                        break;
+                    }
+                }
+                let i = (py * w as usize + px) * 4;
+                if lit(&at_b, i) != escaped {
+                    vs_exact += 1;
+                }
+            }
+        }
+        let frac_exact = vs_exact as f64 / (w as f64 * h as f64);
+        println!(
+            "pan-relocated: {:.2}% vs fresh reference, {:.2}% vs exact f64",
+            100.0 * frac_fresh,
+            100.0 * frac_exact
+        );
+        assert!(
+            frac_fresh < 0.03,
+            "relocated render disagrees with a fresh reference at the new view              ({:.2}% of pixels) -- the re-anchored offset is wrong",
+            100.0 * frac_fresh
+        );
+        assert!(
+            frac_exact < 0.15,
+            "relocated render is grossly wrong against exact iteration              ({:.2}% of pixels) -- the frame is displaced",
+            100.0 * frac_exact
+        );
+
+        // A pan past the cap (0.01 complex units = millions of pixel
+        // spacings) must fall back to a fresh reference.
+        esc.center_re = "-0.7536438570371587".to_string();
+        let _far = render(&esc, &mut escape);
+        let (_, rebuilds2) = escape.orbit_stats();
+        assert!(
+            rebuilds2 > rebuilds1,
+            "an out-of-range pan must rebuild the reference"
+        );
+        escape.destroy();
     }
 
     /// GPU-time pacing must engage, and must not change the image.
