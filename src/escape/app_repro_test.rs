@@ -4773,6 +4773,60 @@ mod tests {
         escape.destroy();
     }
 
+    /// A restart's first chunk must NEVER be sized from a
+    /// survivor-biased measurement.
+    ///
+    /// The general per-iteration cost is measured on whatever chunk
+    /// last carried timestamps -- often a LATE chunk, where most
+    /// pixels have escaped and iterate for nearly free. A restart
+    /// rebirths every pixel. Sizing its first chunk from the cheap
+    /// tail measurement (clamped only by the 1M-iteration ceiling)
+    /// is how a zoom-120, 100k-iteration view earned
+    /// "wgpu DEVICE LOST (Unknown)" in the field. The rule: restarts
+    /// size from the COLD measurement (a first chunk's, all pixels
+    /// alive) or stay seed-bounded.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn restart_chunks_never_trust_survivor_biased_measurements() {
+        let (device, _queue) = repro_device();
+        let mut escape = crate::escape::EscapeRenderer::new(&device, 960, 720);
+        let seed = escape.chunk_seed(true);
+
+        // Survivor-biased measurement only (a late chunk read 0.1 us
+        // per iteration): the ideal from it would be ~100k iterations.
+        // A restart must ignore it and stay seed-bounded.
+        escape.set_pacer_measurements(Some(1e-4), None);
+        let chunk = escape.probe_restart_chunk(true);
+        assert!(
+            chunk <= seed.saturating_mul(2).max(16),
+            "restart chunk {chunk} exceeds the seed bound ({seed} x2) with only a \
+             survivor-biased measurement -- this is the device-loss regression"
+        );
+
+        // With a cold measurement, the restart sizes from IT -- not
+        // from the (much cheaper) general one.
+        escape.set_pacer_measurements(Some(1e-4), Some(0.01));
+        let chunk = escape.probe_restart_chunk(true);
+        assert!(
+            (900..=1100).contains(&chunk),
+            "restart chunk {chunk} should be ~1000 (10 ms target / 0.01 ms per \
+             iteration measured with all pixels alive)"
+        );
+
+        // Mid-render growth is still 2x-bounded even against a rosy
+        // cold number: the second chunk may at most double the first.
+        let second = {
+            // probe_restart_chunk left chunk_iters at `chunk`.
+            escape.set_pacer_measurements(Some(1e-4), Some(0.01));
+            escape.next_chunk_for_test(true)
+        };
+        assert!(
+            second <= chunk.saturating_mul(2),
+            "second chunk {second} grew more than 2x over {chunk}"
+        );
+        escape.destroy();
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

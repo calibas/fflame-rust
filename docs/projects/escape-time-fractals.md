@@ -3118,11 +3118,27 @@ restart**: `reset_chunk_pacing` zeroes `chunk_iters`, and the first
 chunk was then bounded to 2x the cold-start seed. On the floatexp
 rung that seed is ~13x smaller (PERTURB_CHUNK_BUDGET_FE), so a
 gesture — which restarts every frame — never escaped it, and every
-frame covered a fraction of max_iter. The first chunk after a restart
-now goes straight to the measured size; the measurement is honest
-(GPU timestamps against a ~10 ms target) and the TDR budget is
-seconds. Side effect: the paced 13→48 glide went from 3463 ms to
-1809 ms.
+frame covered a fraction of max_iter. Side effect of fixing it: the
+paced 13→48 glide went from 3463 ms to ~1800 ms.
+
+*That fix's first form caused a device loss, and the reason is worth
+keeping.* "Go straight to the measured size on restart" trusted
+`gpu_ms_per_iter`, which is measured on whatever chunk last carried
+timestamps — often a LATE chunk, where most pixels have escaped and
+iterate for nearly free. A restart rebirths every pixel. At zoom 120
+with ~100k iterations the survivor bias is enormous, so the restart's
+first chunk was computed from the cheap tail, clamped only by the 1M
+ceiling, and run with every pixel alive at floatexp cost:
+`wgpu DEVICE LOST (Unknown)`. The measurement was honest about the
+wrong population. The pacer now keeps a SECOND measurement taken only
+on first chunks (`TimestampPacer::from_start` → `gpu_ms_per_iter_cold`)
+— all pixels alive, the regime a restart re-enters — and a restart
+sizes from that or stays seed-bounded as before; mid-render growth
+keeps its 2x bound. `restart_chunks_never_trust_survivor_biased_
+measurements` injects measurements and inspects the chosen chunk
+directly, because a TDR cannot be a test: with the regression
+restored it reads a 100,000-iteration restart chunk against an 868
+seed.
 
 The test (`mid_render_frames_hold_content_instead_of_black`) forces
 64-iteration chunks, settles, pans, and renders exactly ONE chunk
