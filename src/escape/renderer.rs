@@ -33,6 +33,12 @@ use super::reference::OrbitCache;
 /// field-observed at zoom 16, so the switch sits at 14. The scaled
 /// f32 delta pipeline holds to roughly zoom 54 (w-squared overflow);
 /// the floatexp rung takes over beyond [`PERTURB_FLOATEXP_ZOOM`].
+/// Highest supersampling factor offered: 8x is 64 samples per display
+/// pixel. Whether a given view can actually have it is decided by the
+/// render-pixel budget in [`EscapeRenderer::resize`], which reduces
+/// the factor rather than failing.
+pub const MAX_SUPERSAMPLE: u32 = 8;
+
 pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 
 /// Above this zoom the scaled-f32 delta rung approaches its w-squared
@@ -417,10 +423,13 @@ struct ShadeParamsGpu {
     texture_kind: u32,
     texture_strength: f32,
     texture_scale: f32,
+    /// Which combine the downsample uses (`DownsampleMode::to_gpu`).
+    downsample: u32,
     /// std140 rounds the struct up to a multiple of its largest
     /// member alignment (vec3 → 16), so WGSL sees 80 bytes where Rust
-    /// packs 72. Without this the bind group is rejected outright.
-    _pad: [u32; 2],
+    /// would otherwise pack 76. Without this the bind group is
+    /// rejected outright.
+    _pad: u32,
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -3118,14 +3127,26 @@ impl EscapeRenderer {
     /// true when anything changed — the output is stale until the
     /// next `render`.
     pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
-        let mut ss = supersample.clamp(1, 3);
-        // Cap the RENDER pixel count: the perturbed path carries up
-        // to ITER_STATE_BYTES_MAX per pixel of iteration state (plus
-        // the 16 B/px accumulator),
-        // and an unbounded supersample x display product is a device
-        // OOM (observed as a device-loss abort). 32 Mpx ~ 1.5 GB of
-        // state — reduce the factor until it fits rather than crash.
-        const MAX_RENDER_PX: u64 = 32 * 1024 * 1024;
+        let mut ss = supersample.clamp(1, MAX_SUPERSAMPLE);
+        // Cap the RENDER pixel count. An unbounded supersample x
+        // display product is a device OOM (observed as a device-loss
+        // abort), so the factor is reduced until it fits rather than
+        // crashing.
+        //
+        // Expressed as a VRAM BUDGET over the real per-pixel cost,
+        // not as a pixel count: the pipeline has grown buffers since
+        // the count was chosen (the recolor cache's 32 B/px of
+        // records, the softening blur's two r32float targets), and a
+        // fixed pixel ceiling silently meant a larger and larger
+        // allocation. Raising the supersample ceiling to 8x makes
+        // that the difference between a clamp and an out-of-memory.
+        const BYTES_PER_RENDER_PX: u64 = assembler::ITER_STATE_BYTES_MAX  // perturbed state
+            + 32   // terminal iteration records (recolor cache)
+            + 16   // Rgba32Float output
+            + 4    // height field
+            + 8;   // two r32float blur targets, when softening is on
+        const RENDER_BUDGET_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+        const MAX_RENDER_PX: u64 = RENDER_BUDGET_BYTES / BYTES_PER_RENDER_PX;
         // The perturbed path binds its iteration state as ONE storage
         // buffer; the device's binding limit (browsers often grant far
         // less than desktop adapters) caps render pixels harder than
@@ -3144,7 +3165,7 @@ impl EscapeRenderer {
         {
             ss -= 1;
         }
-        if ss != supersample.clamp(1, 3) {
+        if ss != supersample.clamp(1, MAX_SUPERSAMPLE) {
             log::warn!(
                 "Escape supersample clamped to {ss}x at {width}x{height} (render-pixel budget)"
             );
@@ -3443,7 +3464,14 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         Some(vb)
     }
 
-    fn run_resolve(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, shading: &crate::config::escape::EscapeShading) {
+    fn run_resolve(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        shading: &crate::config::escape::EscapeShading,
+        mode: crate::config::escape::DownsampleMode,
+    ) {
         let factor = self.supersample;
         let shade_on = shading.enabled;
         if factor <= 1 && !shade_on {
@@ -3486,7 +3514,8 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // and for the same reason: antialiasing must not change
             // how coarse the grain looks.
             texture_scale: (shading.texture_scale * factor as f32).max(0.25),
-            _pad: [0; 2],
+            downsample: mode.to_gpu(),
+            _pad: 0,
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -3520,6 +3549,7 @@ struct ShadeParams {{
     texture_kind: u32,
     texture_strength: f32,
     texture_scale: f32,
+    downsample: u32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -3691,6 +3721,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return;
     }}
     var sum = vec4<f32>(0.0);
+    var wsum = 0.0;
+    var satsum = 0.0;
     for (var dy = 0u; dy < {factor}u; dy = dy + 1u) {{
         for (var dx = 0u; dx < {factor}u; dx = dx + 1u) {{
             let p = vec2<i32>(i32(gid.x * {factor}u + dx), i32(gid.y * {factor}u + dy));
@@ -3698,14 +3730,58 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if (shade.enabled == 1u) {{
                 texel = vec4<f32>(shade_pixel(texel.rgb, p), texel.a);
             }}
+            // 0 BOX: the plain linear average -- what a sensor does.
+            // 1 PERCEPTUAL: average in gamma space, so two saturated
+            //   colours land between each other instead of at their
+            //   linear sum.
+            // 2 VIVID: weight by the sample's own saturation, so a
+            //   coloured filament is not diluted to grey by neutral
+            //   neighbours. Not energy-preserving, on purpose.
+            if (shade.downsample == 1u) {{
+                texel = vec4<f32>(
+                    pow(max(texel.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)),
+                    texel.a,
+                );
+            }}
+            // VIVID needs the samples' own saturation, because what
+            // dilutes fine colour is mixing HUES, not mixing colour
+            // with grey: nine saturated samples of different hues
+            // average to something far less saturated than any of
+            // them, and a per-sample weight cannot fix that since the
+            // weights come out nearly equal. So remember what the
+            // samples had, and restore it below.
+            let mx = max(texel.r, max(texel.g, texel.b));
+            let mn = min(texel.r, min(texel.g, texel.b));
+            satsum = satsum + select(0.0, (mx - mn) / mx, mx > 1e-6);
             sum = sum + texel;
+            wsum = wsum + 1.0;
         }}
     }}
-    textureStore(
-        dst_tex,
-        vec2<i32>(i32(gid.x), i32(gid.y)),
-        sum / f32({factor}u * {factor}u),
-    );
+    var outc = sum / max(wsum, 1e-6);
+    if (shade.downsample == 1u) {{
+        outc = vec4<f32>(pow(max(outc.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)), outc.a);
+    }} else if (shade.downsample == 2u) {{
+        // Put back the saturation the samples had, keeping the
+        // averaged hue and luminance. Deliberately not
+        // energy-preserving: it is the answer to "antialiasing washes
+        // the colour out of fine detail", which a correct average
+        // does by construction.
+        let want = satsum / max(wsum, 1e-6);
+        let mx = max(outc.r, max(outc.g, outc.b));
+        let mn = min(outc.r, min(outc.g, outc.b));
+        let have = select(0.0, (mx - mn) / mx, mx > 1e-6);
+        if (have > 1e-4 && want > have) {{
+            let luma = dot(outc.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            // Bounded, so a near-neutral pixel cannot be blown into a
+            // fully saturated one by a large ratio.
+            let k = min(want / have, 4.0);
+            outc = vec4<f32>(
+                max(vec3<f32>(luma) + (outc.rgb - vec3<f32>(luma)) * k, vec3<f32>(0.0)),
+                outc.a,
+            );
+        }}
+    }}
+    textureStore(dst_tex, vec2<i32>(i32(gid.x), i32(gid.y)), outc);
 }}
 "#
             );
@@ -3981,7 +4057,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if results_active && self.results_key.as_deref() == Some(ik) {
                 let t0 = web_time::Instant::now();
                 self.run_recolor(device, encoder, escape, palette_view);
-                self.run_resolve(device, queue, encoder, &escape.shading);
+                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 self.diag_settle_start = None;
@@ -4301,7 +4377,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let iterations_done = iter_end >= escape.max_iter;
                 // Every chunk refreshes the display image, so
                 // progressive refinement stays visible under AA.
-                self.run_resolve(device, queue, encoder, &escape.shading);
+                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
                 // Attribution window for the device-lost callback: open
                 // while this render still has chunks to submit.
                 PERTURB_RENDER_IN_FLIGHT.store(
@@ -4449,7 +4525,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
         drop(pass);
-        self.run_resolve(device, queue, encoder, &escape.shading);
+        self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let done = self.direct_tile_y >= self.height;
         DIRECT_RENDER_IN_FLIGHT.store(

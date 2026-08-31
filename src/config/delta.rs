@@ -316,6 +316,7 @@ pub enum ConfigPath {
     EscapeMaxIter,
     /// Supersampling factor (1 = off): N× per axis + box downsample.
     EscapeSupersample,
+    EscapeDownsample,
     /// Reference-orbit period hint (0 = none). Verified before use.
     EscapeReferencePeriod,
     /// Escape radius squared.
@@ -841,6 +842,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
             ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
+            ConfigPath::EscapeDownsample => write!(f, "Escape Downsample"),
             ConfigPath::EscapeReferencePeriod => write!(f, "Escape Reference Period"),
             ConfigPath::EscapeBailout => write!(f, "Escape Bailout"),
             ConfigPath::EscapeDampingRe => write!(f, "Damping (re)"),
@@ -1078,6 +1080,7 @@ impl ConfigPath {
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
             ConfigPath::EscapeSupersample => I18nKey::simple("history.param.escape_supersample"),
+            ConfigPath::EscapeDownsample => I18nKey::simple("history.param.escape_downsample"),
             ConfigPath::EscapeReferencePeriod => {
                 I18nKey::simple("history.param.escape_reference_period")
             }
@@ -2393,6 +2396,7 @@ impl ConfigPath {
             | ConfigPath::EscapeRotation
             | ConfigPath::EscapeMaxIter
             | ConfigPath::EscapeSupersample
+            | ConfigPath::EscapeDownsample
             | ConfigPath::EscapeReferencePeriod
             | ConfigPath::EscapeBailout
             | ConfigPath::EscapeDampingRe
@@ -2663,6 +2667,7 @@ impl ConfigPath {
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
             ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
+            ConfigPath::EscapeDownsample => "Escape.Downsample".to_string(),
             ConfigPath::EscapeReferencePeriod => "Escape.ReferencePeriod".to_string(),
             ConfigPath::EscapeBailout => "Escape.Bailout".to_string(),
             ConfigPath::EscapeDampingRe => "Escape.DampingRe".to_string(),
@@ -2861,6 +2866,7 @@ impl ConfigPath {
                 ["Rotation"] => return Some(ConfigPath::EscapeRotation),
                 ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
                 ["Supersample"] => return Some(ConfigPath::EscapeSupersample),
+                ["Downsample"] => return Some(ConfigPath::EscapeDownsample),
                 ["ReferencePeriod"] => return Some(ConfigPath::EscapeReferencePeriod),
                 ["Bailout"] => return Some(ConfigPath::EscapeBailout),
                 ["DampingRe"] => return Some(ConfigPath::EscapeDampingRe),
@@ -3484,6 +3490,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::EscapeShadingEnabled
         | ConfigPath::EscapeShadingField
         | ConfigPath::EscapeShadingTextureKind
+        | ConfigPath::EscapeDownsample
         | ConfigPath::EscapeShadingShadowBlend
         | ConfigPath::EscapeShadingHighlightBlend => None,
         // Selectors and the deep-zoom center strings are structural /
