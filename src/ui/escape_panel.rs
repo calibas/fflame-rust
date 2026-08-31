@@ -478,6 +478,60 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
 
         });
 
+    egui::CollapsingHeader::new(t!("escape_panel.diag_section"))
+        .default_open(false)
+        .show(ui, |ui| {
+            // A latency attribution readout, not a health check: when
+            // an edit past the perturbation threshold feels slow,
+            // this says which stage the time went to.
+            let d = crate::escape::diag::snapshot();
+            ui.label(t!("escape_panel.diag_path", path = d.path))
+                .on_hover_text(t!("escape_panel.tooltip_diag_path"));
+            ui.label(t!(
+                "escape_panel.diag_settle",
+                ms = format!("{:.0}", d.settle_ms),
+                frames = d.settle_frames
+            ))
+            .on_hover_text(t!("escape_panel.tooltip_diag_settle"));
+            if d.inflight_frames > 0 {
+                ui.label(t!("escape_panel.diag_inflight", frames = d.inflight_frames));
+            }
+            ui.label(t!("escape_panel.diag_restarts", count = d.restarts))
+                .on_hover_text(t!("escape_panel.tooltip_diag_restarts"));
+            ui.label(t!(
+                "escape_panel.diag_render_cpu",
+                ms = format!("{:.2}", d.render_cpu_ms)
+            ))
+            .on_hover_text(t!("escape_panel.tooltip_diag_render_cpu"));
+            if !d.path.is_empty() && d.path != "direct" {
+                ui.separator();
+                ui.label(t!(
+                    "escape_panel.diag_orbit",
+                    len = d.orbit_len,
+                    source = d.orbit_source.label(),
+                    ms = format!("{:.0}", d.orbit_ms)
+                ))
+                .on_hover_text(t!("escape_panel.tooltip_diag_orbit"));
+                ui.label(t!(
+                    "escape_panel.diag_orbit_churn",
+                    rebuilds = d.orbit_rebuilds,
+                    waits = d.orbit_wait_frames
+                ))
+                .on_hover_text(t!("escape_panel.tooltip_diag_orbit_churn"));
+                ui.label(t!("escape_panel.diag_upload", kb = d.upload_bytes / 1024));
+                if d.bla_active {
+                    ui.label(t!(
+                        "escape_panel.diag_bla",
+                        kb = d.bla_bytes / 1024,
+                        ms = format!("{:.1}", d.bla_build_ms)
+                    ));
+                } else {
+                    ui.label(t!("escape_panel.diag_bla_off"));
+                }
+                ui.label(t!("escape_panel.diag_chunk", iters = d.last_chunk_iters));
+            }
+        });
+
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.rotation"));
         let mut deg = esc.rotation.to_degrees();
