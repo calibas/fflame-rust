@@ -276,6 +276,11 @@ pub struct EscapeShading {
     /// Colour applied where the surface faces away from the light.
     #[serde(default = "default_shadow_color")]
     pub shadow_color: [f32; 3],
+    /// 0..4. Past 1 the layer saturates sooner rather than going
+    /// further — which is the point on a DARK image, where a pixel
+    /// sits close to black and the same `amt` moves it far less
+    /// toward black than toward white. That gap is dynamic range, not
+    /// a blend bug, and this is the control that compensates for it.
     #[serde(default = "default_shadow_strength")]
     pub shadow_strength: f32,
     #[serde(default, skip_serializing_if = "ShadingBlend::is_multiply")]

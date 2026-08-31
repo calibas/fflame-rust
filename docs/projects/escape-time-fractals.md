@@ -2100,6 +2100,41 @@ flat ground and both terms start there. The GPU test asserts it: the
 interior of the set has no value field at all, and must come through
 the light unchanged.
 
+*Shadows that could not get dark, and why two fixes were needed.*
+Reported from the app: at relief height 50, black shadows at strength
+1.0 were barely visible while white highlights at strength 0.03 looked
+about as strong. The response was already symmetric (the mirror test
+pins that), so the asymmetry had to be downstream, and it turned out
+to be two separate things.
+
+The first is a real bug. The blends ran on LINEAR light -- the escape
+pass raises the palette to 2.2 on lookup -- and in linear light a dark
+base gives `multiply` almost nothing to take away while `screen` has
+the whole range to add into. Measured on a mid-tone relief config, a
+full-strength black shadow moved 22.45/255 against a white
+highlight's 52.53: 2.3x, from a pair of controls that read as
+identical. Blending in a perceptual space instead brings that to 1.4x,
+and fixes the layer COLOUR as a side effect -- it arrives from the
+picker in sRGB and was being composited against linear light, so any
+shadow tint that was not pure black was landing in the wrong place.
+
+The second is not a bug and cannot be fixed by any choice of blend
+space: DYNAMIC RANGE. A pixel sitting near black is about 0.18
+perceptual units from black and 0.82 from white, so the same `amt`
+moves it far further up than down. On a deliberately dark palette the
+gap is still 9.3x after the perceptual fix. What was missing there is
+headroom, so both strengths now range to 4 rather than 1 -- past 1 the
+layer saturates sooner rather than travelling further, which is
+exactly what a shallow slope on a dark image needs. `amt` is clamped
+before the mix, since an unclamped lerp past 1 would extrapolate
+through the layer colour into negative light.
+
+Measured on that dark palette (unshaded mean 20.1/255): a black shadow
+takes it to 12.3 at strength 1 and 10.6 at strength 4. The test
+asserts that rather than an equal bite, because an equal bite is
+something a dark image cannot deliver and asserting it would have
+meant either a false failure or a meaningless threshold.
+
 *Softer edges are a third control, added on request.* The normal came
 from a ±1-pixel central difference, which is the sharpest derivative
 estimate there is: it responds to every single-pixel wobble in the

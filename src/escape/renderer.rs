@@ -2547,19 +2547,45 @@ fn height_at(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
 // from the base toward the blended result, so strength 0 is always
 // exactly the untouched image.
 fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f32> {{
+    // BLENDED IN A PERCEPTUAL SPACE, NOT IN LINEAR LIGHT, and that is
+    // what makes the two strength sliders mean the same thing.
+    //
+    // The escape pass emits linear light (the palette is raised to
+    // 2.2 on lookup). Multiplying linear light by black is what a
+    // shadow physically does -- but on a dark base there is almost
+    // nothing to take away, while `screen` toward white has the whole
+    // range to add into, and the tonemap's gamma then expands the dark
+    // end further. Measured on the shipped relief config, a
+    // full-strength black shadow moved 22.45/255 where a full-strength
+    // white highlight moved 52.53: the same control reading 2.3x
+    // weaker on one side, and far worse on a darker image (reported
+    // from the app as needing strength 1.0 against 0.03).
+    //
+    // Converting to ~sRGB first makes every mode reach its extreme at
+    // amt = 1 regardless of the base: multiply lands on the layer
+    // colour, screen lands on it too, and the sliders are symmetric.
+    // It also fixes the layer COLOUR, which comes from the picker in
+    // sRGB and was previously composited against linear light.
+    let inv_g = 1.0 / 2.2;
+    let bp = pow(max(base, vec3<f32>(0.0)), vec3<f32>(inv_g, inv_g, inv_g));
     var res = layer;
     if (mode == 0u) {{
-        res = base * layer;
+        res = bp * layer;
     }} else if (mode == 1u) {{
-        res = 1.0 - (1.0 - base) * (1.0 - layer);
+        res = 1.0 - (1.0 - bp) * (1.0 - layer);
     }} else if (mode == 2u) {{
         res = select(
-            1.0 - 2.0 * (1.0 - base) * (1.0 - layer),
-            2.0 * base * layer,
-            base < vec3<f32>(0.5),
+            1.0 - 2.0 * (1.0 - bp) * (1.0 - layer),
+            2.0 * bp * layer,
+            bp < vec3<f32>(0.5),
         );
     }}
-    return mix(base, res, amt);
+    // CLAMPED: the strengths now range past 1 so a shadow can be
+    // driven to saturation on an image with little room below it, and
+    // an unclamped mix would extrapolate past the layer colour into
+    // negative light instead of stopping there.
+    let outp = mix(bp, res, clamp(amt, 0.0, 1.0));
+    return pow(max(outp, vec3<f32>(0.0)), vec3<f32>(2.2, 2.2, 2.2));
 }}
 
 fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{

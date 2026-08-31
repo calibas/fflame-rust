@@ -2645,7 +2645,7 @@ impl ConfigManager {
             }
             ConfigPath::EscapeShadingShadowStrength => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.shading.shadow_strength = v.clamp(0.0, 1.0);
+                self.current.escape.shading.shadow_strength = v.clamp(0.0, 4.0);
             }
             ConfigPath::EscapeShadingShadowBlend => {
                 let v: String = value.try_into()?;
@@ -2657,7 +2657,7 @@ impl ConfigManager {
             }
             ConfigPath::EscapeShadingHighlightStrength => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.shading.highlight_strength = v.clamp(0.0, 1.0);
+                self.current.escape.shading.highlight_strength = v.clamp(0.0, 4.0);
             }
             ConfigPath::EscapeShadingSoftness => {
                 let v: f32 = value.try_into()?;

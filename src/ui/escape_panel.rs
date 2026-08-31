@@ -1209,7 +1209,7 @@ fn shading_side(
         }
         let mut s = strength;
         if ui
-            .add(egui::Slider::new(&mut s, 0.0..=1.0).show_value(true))
+            .add(egui::Slider::new(&mut s, 0.0..=4.0).show_value(true))
             .on_hover_text(t!("escape_panel.tooltip_shading_strength"))
             .changed()
         {

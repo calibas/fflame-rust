@@ -1947,7 +1947,7 @@ escape_panel:
   tooltip_shading_light: "Direction the light comes from, counter-clockwise from east. 315° (north-west) is the cartographic convention; lighting from the opposite side makes raised detail read as sunken."
   tooltip_shading_height: "Vertical exaggeration of the slope. Logarithmic, because the useful value depends on how many palette turns the coloring spends across the view — that differs by orders of magnitude between colorings."
   tooltip_shading_field: "Value: the coloring's number before the palette wraps it — smooth terrain relief. Palette bands: the wrapped coordinate, so every band edge becomes a step — an engraved, contour-map look."
-  tooltip_shading_strength: "How far toward the blended result to travel. 0 leaves the image exactly untouched."
+  tooltip_shading_strength: "How far toward the blended result to travel. 0 leaves the image exactly untouched; past 1 the layer saturates sooner rather than going further. Values above 1 are for DARK images, where a pixel sits close to black and so moves much less toward black than toward white — that gap is the image's dynamic range, not the blend, and this is the control that compensates."
   tooltip_shading_blend: "How the layer composites: Multiply only darkens, Screen only lightens, Overlay keeps the palette's own contrast, Mix tints flatly."
   not_active_hint: "Switch to Escape mode above to edit the escape-time fractal."
   flame_only_hint: "This panel edits the flame and is inactive in Escape mode."
