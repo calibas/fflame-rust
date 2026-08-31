@@ -411,10 +411,16 @@ struct ShadeParamsGpu {
     highlight_strength: f32,
     shadow_blend: u32,
     highlight_blend: u32,
-    /// Normal-estimation radius in RENDER pixels (the config's display
-    /// pixels times the supersample factor). 0 = the ±1 difference.
+    /// Gaussian sigma in RENDER pixels (the config's display pixels
+    /// times the supersample factor). 0 = no softening.
     softness: f32,
-    _pad: u32,
+    texture_kind: u32,
+    texture_strength: f32,
+    texture_scale: f32,
+    /// std140 rounds the struct up to a multiple of its largest
+    /// member alignment (vec3 → 16), so WGSL sees 80 bytes where Rust
+    /// packs 72. Without this the bind group is rejected outright.
+    _pad: [u32; 2],
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -677,6 +683,17 @@ pub struct EscapeRenderer {
     /// (factor, pipeline, layout) — the factor is spliced into the
     /// WGSL, so a factor change recompiles (rare).
     downsample: Option<(u32, wgpu::ComputePipeline, BindGroupLayout)>,
+    /// Separable low-pass of the height field, for relief softness.
+    /// Two ping-pong targets at RENDER resolution plus the pipeline;
+    /// allocated only when a config actually asks for softening.
+    height_blur: Option<(wgpu::Texture, TextureView, wgpu::Texture, TextureView)>,
+    blur_pipeline: Option<(wgpu::ComputePipeline, BindGroupLayout)>,
+    /// ONE PER PASS. `Queue::write_buffer` is ordered against
+    /// submissions, not against passes inside one: with a single
+    /// buffer both writes land before the command buffer runs, the
+    /// second wins, and BOTH passes blur in the same direction —
+    /// which is a 2x blur along one axis and none along the other.
+    blur_params: Option<[Buffer; 2]>,
     /// The coloring's scalar field at RENDER resolution, written by
     /// every escape template and finite-differenced by the relief
     /// pass. A 1×1 dummy while shading is off: the templates store to
@@ -1197,6 +1214,9 @@ impl EscapeRenderer {
             final_texture: None,
             final_view: None,
             downsample: None,
+            height_blur: None,
+            blur_pipeline: None,
+            blur_params: None,
         }
     }
 
@@ -3000,7 +3020,11 @@ impl EscapeRenderer {
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::R32Float,
-            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            // COPY_SRC so a test can read the height field back and
+            // check the softening blur against a CPU one.
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
@@ -3070,7 +3094,11 @@ impl EscapeRenderer {
             format: TextureFormat::Rgba32Float,
             // Storage write from the compute pass; read (textureLoad)
             // by the tonemap pass and the density-effect chain.
-            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            // COPY_SRC so a test can read the height field back and
+            // check the softening blur against a CPU one.
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
@@ -3168,13 +3196,262 @@ impl EscapeRenderer {
     /// With shading off and a factor of 1 there is nothing to do and
     /// `output_view` serves the render texture directly, exactly as
     /// before this pass existed.
+    /// Read a height field back as f32 (test observation point):
+    /// `blurred` selects the softening pass's output over the raw
+    /// field the escape pass wrote.
+    #[cfg(test)]
+    pub(crate) async fn read_height(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        blurred: bool,
+    ) -> Option<Vec<f32>> {
+        let tex = if blurred {
+            &self.height_blur.as_ref()?.2
+        } else {
+            &self.height_texture
+        };
+        let (w, h) = (tex.width(), tex.height());
+        // 256-byte row alignment for the copy.
+        let row = (w * 4).div_ceil(256) * 256;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Height Readback"),
+            size: (row * h) as u64,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Escape Height Readback"),
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(h),
+                },
+            },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = futures::channel::oneshot::channel();
+        staging.slice(..).map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.await.ok()?.ok()?;
+        let out = {
+            let view = staging.slice(..).get_mapped_range();
+            let mut out = Vec::with_capacity((w * h) as usize);
+            for y in 0..h {
+                let base = (y * row) as usize;
+                for x in 0..w {
+                    let i = base + (x * 4) as usize;
+                    out.push(f32::from_le_bytes(view[i..i + 4].try_into().ok()?));
+                }
+            }
+            out
+        };
+        staging.unmap();
+        staging.destroy();
+        Some(out)
+    }
+
+    /// Low-pass the height field so the relief can be SOFTENED.
+    ///
+    /// Two separable Gaussian passes rather than one wide stencil.
+    /// The wide stencil is what the first attempt did, and it does not
+    /// blur at all: sampling a ring of radius r leaves every tap a
+    /// sharp sample and merely displaces the structure, so each edge
+    /// prints ghost copies either side of itself. A real low-pass has
+    /// to average the INTERIOR, which at these radii (softness 8 at
+    /// 3x supersampling is 24 render pixels, a 49x49 window) is only
+    /// affordable separably: two passes of 2r+1 taps instead of one
+    /// of (2r+1)².
+    ///
+    /// Returns the view the shade pass should read: the blurred field
+    /// when softening is on, the raw one when it is not.
+    fn run_height_blur(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        sigma: f32,
+    ) -> Option<TextureView> {
+        if sigma <= 0.0 {
+            return None;
+        }
+        let (w, h) = (self.width.max(1), self.height.max(1));
+        let need_alloc = match &self.height_blur {
+            Some((a, _, _, _)) => a.width() != w || a.height() != h,
+            None => true,
+        };
+        if need_alloc {
+            if let Some((a, _, b, _)) = self.height_blur.take() {
+                a.destroy();
+                b.destroy();
+            }
+            let (ta, va) = Self::create_height(device, w, h);
+            let (tb, vb) = Self::create_height(device, w, h);
+            self.height_blur = Some((ta, va, tb, vb));
+        }
+        if self.blur_params.is_none() {
+            let mk = |i: usize| {
+                device.create_buffer(&BufferDescriptor {
+                    label: Some(if i == 0 {
+                        "Escape Height Blur Params H"
+                    } else {
+                        "Escape Height Blur Params V"
+                    }),
+                    size: 16,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            self.blur_params = Some([mk(0), mk(1)]);
+        }
+        if self.blur_pipeline.is_none() {
+            let src = r#"
+struct BlurParams {
+    // (1,0) horizontal, (0,1) vertical.
+    dir: vec2<i32>,
+    sigma: f32,
+    radius: i32,
+}
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(2) var<uniform> blur: BlurParams;
+
+@compute @workgroup_size(8, 8, 1)
+fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = vec2<i32>(textureDimensions(dst_tex));
+    let p = vec2<i32>(i32(gid.x), i32(gid.y));
+    if (p.x >= dims.x || p.y >= dims.y) {
+        return;
+    }
+    // Clamped at the edges, so the border does not darken the relief.
+    var acc = 0.0;
+    var wsum = 0.0;
+    let inv = 1.0 / (2.0 * blur.sigma * blur.sigma);
+    for (var i = -blur.radius; i <= blur.radius; i = i + 1) {
+        let fi = f32(i);
+        let wt = exp(-fi * fi * inv);
+        let q = clamp(p + blur.dir * i, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+        acc = acc + textureLoad(src_tex, q, 0).r * wt;
+        wsum = wsum + wt;
+    }
+    textureStore(dst_tex, p, vec4<f32>(acc / wsum, 0.0, 0.0, 0.0));
+}
+"#;
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Height Blur"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Height Blur Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::R32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Height Blur Pipeline Layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Height Blur"),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some("blur_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.blur_pipeline = Some((pipeline, layout));
+        }
+        // 3 sigma covers the kernel; capped so a silly radius cannot
+        // turn one frame into a minute.
+        let radius = ((sigma * 3.0).ceil() as i32).clamp(1, 96);
+        let (_, va, _, vb) = self.height_blur.as_ref().unwrap();
+        let (va, vb) = (va.clone(), vb.clone());
+        let (pipeline, layout) = self.blur_pipeline.as_ref().unwrap();
+        let params_bufs = self.blur_params.as_ref().unwrap();
+        for (pass_idx, (src, dst)) in
+            [(&self.height_view, &va), (&va, &vb)].into_iter().enumerate()
+        {
+            let dir: [i32; 2] = if pass_idx == 0 { [1, 0] } else { [0, 1] };
+            let mut raw = [0u8; 16];
+            raw[0..4].copy_from_slice(&dir[0].to_le_bytes());
+            raw[4..8].copy_from_slice(&dir[1].to_le_bytes());
+            raw[8..12].copy_from_slice(&sigma.to_le_bytes());
+            raw[12..16].copy_from_slice(&radius.to_le_bytes());
+            let params_buf = &params_bufs[pass_idx];
+            queue.write_buffer(params_buf, 0, &raw);
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Escape Height Blur Bind Group"),
+                layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(src) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(dst) },
+                    BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+                ],
+            });
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Escape Height Blur Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+        }
+        Some(vb)
+    }
+
     fn run_resolve(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, shading: &crate::config::escape::EscapeShading) {
         let factor = self.supersample;
         let shade_on = shading.enabled;
         if factor <= 1 && !shade_on {
             return;
         }
-        let Some(final_view) = self.final_view.as_ref() else {
+        // Cloned rather than borrowed: the blur below needs `&mut
+        // self`, and a view is a cheap refcounted handle.
+        let Some(final_view) = self.final_view.clone() else {
             return;
         };
 
@@ -3203,9 +3480,24 @@ impl EscapeRenderer {
             // height is scaled: a radius fixed in render pixels would
             // shrink as antialiasing raised the resolution.
             softness: shading.softness * factor as f32,
-            _pad: 0,
+            texture_kind: shading.texture_kind.to_gpu(),
+            texture_strength: shading.texture_strength,
+            // Feature size in DISPLAY pixels, like the softness radius
+            // and for the same reason: antialiasing must not change
+            // how coarse the grain looks.
+            texture_scale: (shading.texture_scale * factor as f32).max(0.25),
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // Softening low-passes the height FIELD; the shade pass then
+        // takes its plain +-1 difference of whatever came back.
+        let softened = if shade_on {
+            self.run_height_blur(device, queue, encoder, params.softness)
+        } else {
+            None
+        };
+        let height_src = softened.unwrap_or_else(|| self.height_view.clone());
 
         let rebuild = match &self.downsample {
             Some((f, _, _)) => *f != factor,
@@ -3225,6 +3517,9 @@ struct ShadeParams {{
     shadow_blend: u32,
     highlight_blend: u32,
     softness: f32,
+    texture_kind: u32,
+    texture_strength: f32,
+    texture_scale: f32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -3282,42 +3577,79 @@ fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f
     return pow(max(outp, vec3<f32>(0.0)), vec3<f32>(2.2, 2.2, 2.2));
 }}
 
+// Hash -> value noise -> the two texture kinds. Integer-based hash so
+// no trig or self-compare is involved (see the fast-math notes in
+// CLAUDE.md); the mix is smoothstep-interpolated value noise, which
+// is cheap and has no directional artefacts of its own.
+fn shade_hash(p: vec2<i32>) -> f32 {{
+    var h = u32(p.x) * 374761393u + u32(p.y) * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    return f32(h ^ (h >> 16u)) * (1.0 / 4294967296.0);
+}}
+
+fn shade_value_noise(q: vec2<f32>) -> f32 {{
+    let i = vec2<i32>(i32(floor(q.x)), i32(floor(q.y)));
+    let f = fract(q);
+    let w = f * f * (3.0 - 2.0 * f);
+    let a = shade_hash(i);
+    let b = shade_hash(i + vec2<i32>(1, 0));
+    let c = shade_hash(i + vec2<i32>(0, 1));
+    let d = shade_hash(i + vec2<i32>(1, 1));
+    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+}}
+
+fn shade_texture(q: vec2<f32>) -> f32 {{
+    // 1 = GRAIN: one octave, isotropic -- film grain / fine tooth.
+    if (shade.texture_kind == 1u) {{
+        return shade_value_noise(q) - 0.5;
+    }}
+    // 2 = PAPER: octaves at falling amplitude, each STRETCHED along a
+    // different axis. The stretch is what makes it read as fibre
+    // rather than as static: paper has long filaments laid in a felt,
+    // not isotropic speckle.
+    var v = 0.0;
+    v = v + (shade_value_noise(q * vec2<f32>(1.0, 0.35)) - 0.5) * 0.6;
+    v = v + (shade_value_noise(q * vec2<f32>(0.4, 2.1) + vec2<f32>(37.0, 11.0)) - 0.5) * 0.3;
+    v = v + (shade_value_noise(q * 3.7 + vec2<f32>(91.0, 53.0)) - 0.5) * 0.15;
+    return v;
+}}
+
 fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     let dims = vec2<i32>(textureDimensions(height_tex));
     // Central differences: the slope of the coloring's own value
     // field, in value units per pixel.
-    var dx: f32;
-    var dy: f32;
-    let sr = i32(round(shade.softness));
-    if (sr <= 0) {{
-        // The sharp estimator: a plain +-1 central difference. Kept
-        // bit-for-bit as the default so every existing config renders
-        // unchanged.
-        dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
-        dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
-    }} else {{
-        // A Sobel stencil widened to radius r. Two things soften here
-        // and they are different: the RADIUS spreads the difference
-        // over 2r pixels, and the 1-2-1 weighting PERPENDICULAR to
-        // each axis averages across the gradient, which is what kills
-        // the single-pixel wobble a plain wide difference would keep.
-        // EIGHT taps regardless of r -- the four corners and the
-        // four edge midpoints of the ring; both axes share them.
-        let pp = height_at(p + vec2<i32>(sr, sr), dims);
-        let pm = height_at(p + vec2<i32>(sr, -sr), dims);
-        let mp = height_at(p + vec2<i32>(-sr, sr), dims);
-        let mm = height_at(p + vec2<i32>(-sr, -sr), dims);
-        let ep = height_at(p + vec2<i32>(sr, 0), dims);
-        let em = height_at(p + vec2<i32>(-sr, 0), dims);
-        let eu = height_at(p + vec2<i32>(0, sr), dims);
-        let ed = height_at(p + vec2<i32>(0, -sr), dims);
-        let inv = 1.0 / (8.0 * f32(sr));
-        dx = ((pm + 2.0 * ep + pp) - (mm + 2.0 * em + mp)) * inv;
-        dy = ((mp + 2.0 * eu + pp) - (mm + 2.0 * ed + pm)) * inv;
-    }}
+    // A plain +-1 central difference, always. SOFTENING IS NOT DONE
+    // HERE: an earlier version widened this stencil to a ring of
+    // radius r, which does not blur anything -- every tap stays a
+    // single sharp sample, and estimating the slope at p from the
+    // height at p+-r simply DISPLACES the structure, printing ghost
+    // copies either side of every edge (reported as "it mirrors into
+    // 3 equally sharp parts"). Softness now low-passes the height
+    // field itself, in `run_height_blur`, and this reads whatever it
+    // produced.
+    let dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+    let dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+
     // Exaggerated gradient. +y is DOWN in pixel space, so dy is
     // negated to put the light where the azimuth says it is.
-    let g = vec2<f32>(-dx, dy) * shade.height;
+    var g = vec2<f32>(-dx, dy) * shade.height;
+
+    // Surface texture: its own micro-relief, added to the TILT rather
+    // than to the height. Added to the height it would be multiplied
+    // by `shade.height` along with everything else, so a strength
+    // that read well at height 50 would be a sandstorm at 1000 --
+    // the two controls would not be separable. As a tilt it is
+    // independent of both the coloring's value scale and the relief
+    // depth, and it is lit by the same light, so it reads as the
+    // surface being grainy rather than as an overlay.
+    if (shade.texture_strength > 0.0 && shade.texture_kind > 0u) {{
+        let sc = max(shade.texture_scale, 0.25);
+        let q = vec2<f32>(f32(p.x), f32(p.y)) / sc;
+        let e = 1.0 / sc;
+        let nx = shade_texture(q + vec2<f32>(e, 0.0)) - shade_texture(q - vec2<f32>(e, 0.0));
+        let ny = shade_texture(q + vec2<f32>(0.0, e)) - shade_texture(q - vec2<f32>(0.0, e));
+        g = g + vec2<f32>(-nx, ny) * (shade.texture_strength * 8.0);
+    }}
 
     // THE SIGNED TILT TOWARD THE LIGHT, and not a Lambert dot product.
     //
@@ -3452,11 +3784,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(final_view),
+                    resource: BindingResource::TextureView(&final_view),
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&self.height_view),
+                    resource: BindingResource::TextureView(&height_src),
                 },
                 BindGroupEntry {
                     binding: 3,
@@ -4188,6 +4520,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
         if let Some(t) = &self.final_texture {
             t.destroy();
+        }
+        if let Some((a, _, b, _)) = &self.height_blur {
+            a.destroy();
+            b.destroy();
         }
         if let Some(ts) = &self.timestamps {
             ts.resolve.destroy();

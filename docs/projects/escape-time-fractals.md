@@ -2135,31 +2135,45 @@ asserts that rather than an equal bite, because an equal bite is
 something a dark image cannot deliver and asserting it would have
 meant either a false failure or a meaningless threshold.
 
-*Softer edges are a third control, added on request.* The normal came
-from a ±1-pixel central difference, which is the sharpest derivative
-estimate there is: it responds to every single-pixel wobble in the
-value field, and on a finely-detailed coloring that reads as crunchy.
-`softness` is the radius, in DISPLAY pixels, of the stencil the normal
-is estimated from — scaled by the supersample factor for the same
-reason `height` is, so antialiasing does not quietly change the look.
+*Softer edges are a third control, and the first attempt at it was
+wrong in a way worth recording.* It widened the difference stencil to
+a ring of radius r. That is not a blur: every tap stays a single
+sharp sample, so estimating the slope at p from the height at p±r
+DISPLACES the structure and prints ghost copies either side of every
+edge — reported from the app as the relief "mirroring into 3 equally
+sharp parts". It shipped because the tests then in place measured
+only that high-frequency content went down (it does, for the wrong
+reason) and that the colour was untouched (it was).
 
-Zero keeps the original ±1 difference BIT-FOR-BIT, which is what lets
-every existing config render unchanged; above zero it switches to a
-Sobel stencil widened to that radius. Two things soften there and they
-are worth separating: the radius spreads the difference over 2r
-pixels, and the 1-2-1 weighting PERPENDICULAR to each axis averages
-across the gradient — that second part is what kills the single-pixel
-wobble a plain wide difference would happily carry. Eight taps
-whatever the radius, since only the ring is read.
+Softness is now a Gaussian sigma in display pixels, applied as a
+separable two-pass low-pass of the HEIGHT FIELD, after which the
+shade pass takes its plain ±1 difference. Separable because the
+radii are large — softness 8 at 3× supersampling is 24 render pixels,
+a 49×49 window — so two passes of 2r+1 taps replace one of (2r+1)².
+It is also continuous now rather than an integer stencil radius,
+which made the old control coarse as well as wrong.
 
-The test pins both halves of what this is for. Softening must soften:
-roughness (mean |second difference| along rows) drops from 77.4 to
-51.6 at radius 4. And it must NOT blur the picture: the stencil
-widens the DERIVATIVE estimate, not the colour, so the palette detail
-underneath survives — the softened render stays at 51.6 against an
-unshaded floor of 43.1, where a softness implemented by blurring the
-finished RGB would have fallen below it. The first assertion alone
-would have accepted exactly the wrong implementation.
+The composite could not settle whether a given implementation ghosts:
+the shading term extracted from it is nonlinear (perceptual blend,
+then gamma), and two composite-level metrics — correlation against a
+shifted copy, and a commutation check — both ranked the ring stencil
+BETTER than the fix. So the test checks the mechanism where it is
+exactly checkable: the blurred height field must equal a Gaussian
+blur of the raw one computed independently on the CPU. That found a
+second bug immediately — both blur passes shared one uniform buffer,
+and `Queue::write_buffer` is ordered against SUBMISSIONS rather than
+against passes inside one, so the second write won and both passes
+blurred vertically. It now reads rms 0.00000, worst 0.0000003 of the
+field's range.
+
+*Surface texture* is a micro-relief lit by the same light: Grain (one
+octave of isotropic value noise) or Paper (octaves stretched along
+different axes, so it reads as fibre laid in a felt rather than as
+speckle). It is added to the surface TILT rather than to the height,
+which is what keeps it independent of both the coloring's value scale
+and the relief depth — added to the height it would be multiplied by
+`height` along with everything else, and a strength that read well at
+height 50 would be a sandstorm at 1000.
 
 *And the two sides must be symmetric.* The first version used a
 Lambert dot product with each side normalized by its own achievable
