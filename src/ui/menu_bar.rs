@@ -352,6 +352,9 @@ pub fn render_menu_bar(
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Scripting, t!("menu.layout_scripting").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Scripting);
                     }
+                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::EscapeTime, t!("menu.layout_escape").as_ref()).clicked() {
+                        workspace.apply_layout(super::workspace::WorkspaceLayout::EscapeTime);
+                    }
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
                     //     workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
                     // }

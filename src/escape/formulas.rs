@@ -689,7 +689,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static ORIGAMI: FormulaDef = FormulaDef {
     name: "origami",
     display_name: "Origami (Butterfly)",
-    features: &[FormulaFeature::NonEscaping, FormulaFeature::NeedsIndex],
+    features: &[FormulaFeature::NonEscaping, FormulaFeature::NeedsIndex, FormulaFeature::DynamicalOnly],
     parameters: &[
         EscapeParamDef {
             name: "seed",
@@ -850,7 +850,7 @@ pub(crate) const ORIGAMI_MAX_FOLDS: usize = 64;
 pub static LATTES: FormulaDef = FormulaDef {
     name: "lattes",
     display_name: "Lattès",
-    features: &[FormulaFeature::NonEscaping],
+    features: &[FormulaFeature::NonEscaping, FormulaFeature::DynamicalOnly],
     parameters: &[
         EscapeParamDef {
             name: "variant",
@@ -1039,7 +1039,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static COLLATZ: FormulaDef = FormulaDef {
     name: "collatz",
     display_name: "Collatz",
-    features: &[],
+    features: &[FormulaFeature::DynamicalOnly],
     parameters: &[],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -1103,7 +1103,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static NEWTON: FormulaDef = FormulaDef {
     name: "newton",
     display_name: "Newton",
-    features: &[FormulaFeature::Convergent],
+    features: &[FormulaFeature::Convergent, FormulaFeature::DynamicalOnly],
     parameters: &[
         EscapeParamDef {
             name: "power",
@@ -1372,6 +1372,155 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     derived_data: None,
     wgsl_derivative: "",
 };
+
+#[cfg(test)]
+mod feature_tag_tests {
+    use super::*;
+
+    /// Strip comments and every function SIGNATURE, so a parameter
+    /// named `c` that the body never reads does not read as a use.
+    fn body_without_signatures(wgsl: &str) -> String {
+        let mut out = String::with_capacity(wgsl.len());
+        for line in wgsl.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            out.push_str(code);
+            out.push('\n');
+        }
+        // Drop `fn name(...)` parameter lists.
+        let mut stripped = String::with_capacity(out.len());
+        let bytes: Vec<char> = out.chars().collect();
+        let mut i = 0;
+        while i < bytes.len() {
+            if out[i..].starts_with("fn ") {
+                // copy up to '(' then skip to the matching ')'
+                while i < bytes.len() && bytes[i] != '(' {
+                    stripped.push(bytes[i]);
+                    i += 1;
+                }
+                let mut depth = 0;
+                while i < bytes.len() {
+                    if bytes[i] == '(' {
+                        depth += 1;
+                    } else if bytes[i] == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            stripped.push(bytes[i]);
+            i += 1;
+        }
+        stripped
+    }
+
+    fn uses_c(wgsl: &str) -> bool {
+        let body = body_without_signatures(wgsl);
+        let chars: Vec<char> = body.chars().collect();
+        for (i, ch) in chars.iter().enumerate() {
+            if *ch != 'c' {
+                continue;
+            }
+            let before_ok = i == 0
+                || !(chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_');
+            let after_ok = i + 1 >= chars.len()
+                || !(chars[i + 1].is_ascii_alphanumeric() || chars[i + 1] == '_');
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `DynamicalOnly` must mean exactly what it says: the step does
+    /// not read `c`.
+    ///
+    /// Both directions matter. A formula that ignores `c` WITHOUT the
+    /// flag offers a Julia toggle that renders an identical image --
+    /// the confusion this tagging exists to remove. A formula that
+    /// reads `c` WITH the flag hides a control that does something,
+    /// which is worse. Scanning the WGSL is what keeps the two from
+    /// drifting apart as formulas are edited.
+    #[test]
+    fn dynamical_only_matches_the_shader() {
+        for def in crate::escape::FORMULAS.iter().copied() {
+            let flagged = def.has_feature(FormulaFeature::DynamicalOnly);
+            let reads_c = uses_c(def.wgsl);
+            assert_eq!(
+                flagged, !reads_c,
+                "formula `{}`: DynamicalOnly = {flagged} but its step {} `c`",
+                def.name,
+                if reads_c { "reads" } else { "ignores" }
+            );
+        }
+    }
+
+    /// A formula with no `c` must seed at the PIXEL.
+    ///
+    /// Otherwise every pixel iterates the same orbit from the same
+    /// constant seed and the parameter plane is one flat colour --
+    /// the formula would have no image at all, not merely a redundant
+    /// Julia toggle.
+    #[test]
+    fn a_formula_without_c_is_seeded_at_the_pixel() {
+        for def in crate::escape::FORMULAS.iter().copied() {
+            if !def.has_feature(FormulaFeature::DynamicalOnly) {
+                continue;
+            }
+            assert_eq!(
+                def.wgsl_param_seed, "pixel",
+                "formula `{}` ignores c, so its parameter plane can only \
+                 differ per pixel through the SEED",
+                def.name
+            );
+        }
+    }
+
+    /// Every formula must have at least one coloring that can draw it.
+    ///
+    /// The gate hides unsuitable colorings; a formula for which it
+    /// hides ALL of them would present an empty dropdown and render
+    /// black whatever the user picked.
+    #[test]
+    fn every_formula_has_a_usable_coloring() {
+        for def in crate::escape::FORMULAS.iter().copied() {
+            let n = crate::escape::COLORINGS.iter().copied()
+                .filter(|c| crate::escape::coloring_suits_formula(def, c))
+                .count();
+            assert!(n > 0, "formula `{}` has no coloring that can draw it", def.name);
+        }
+    }
+
+    /// The gate must actually bite where the report said it does.
+    #[test]
+    fn escape_time_colorings_are_refused_for_non_escaping_formulas() {
+        let origami = crate::escape::get_formula("origami");
+        assert!(origami.has_feature(FormulaFeature::NonEscaping));
+        for dead in ["smooth", "escape_count"] {
+            assert!(
+                !crate::escape::coloring_suits_formula(
+                    origami,
+                    crate::escape::get_coloring(dead)
+                ),
+                "`{dead}` renders black over a non-escaping formula and must be hidden"
+            );
+        }
+        // ...and must not over-reach: the trap family still works.
+        for live in ["orbit_trap", "position_map"] {
+            assert!(
+                crate::escape::coloring_suits_formula(
+                    origami,
+                    crate::escape::get_coloring(live)
+                ),
+                "`{live}` draws a non-escaping formula and must stay offered"
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

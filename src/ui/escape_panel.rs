@@ -14,29 +14,43 @@ use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
 
 /// Render the Escape Fractal panel.
-pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+pub fn render_escape_content(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
+) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
 
-    // ---- Mode switch (same row the View panel shows, plus Escape,
-    // so the user can leave escape mode without hunting for View) ----
-    ui.label(t!("view.render_mode"));
-    ui.horizontal(|ui| {
-        let mode = config.render_mode;
-        for (m, label) in [
-            (RenderMode::TwoD, t!("view.mode_2d")),
-            (RenderMode::ThreeD, t!("view.mode_3d")),
-            (RenderMode::Escape, t!("view.mode_escape")),
-        ] {
-            if ui.selectable_label(mode == m, label.as_ref()).clicked() && mode != m {
-                if let Err(e) = switch_render_mode(config_manager, m) {
-                    log::error!("Failed to switch render mode: {e}");
-                }
-            }
+    // ---- One toggle, not a mode picker ----
+    //
+    // Escape and flame rendering share almost nothing: a 2D/3D choice
+    // is meaningless here, and offering it alongside Escape invited
+    // the reading that Escape is a third KIND of flame. Leaving turns
+    // the flame engine back on in 3D unconditionally -- there is no
+    // previous-mode state to restore, and pretending otherwise would
+    // mean remembering something the user never set.
+    let active = config.render_mode == RenderMode::Escape;
+    let label = if active {
+        t!("escape_panel.toggle_off")
+    } else {
+        t!("escape_panel.toggle_on")
+    };
+    if ui
+        .add(egui::Button::new(label.as_ref()).selected(active))
+        .on_hover_text(t!("escape_panel.toggle_tip"))
+        .clicked()
+    {
+        let target = if active { RenderMode::ThreeD } else { RenderMode::Escape };
+        if let Err(e) = switch_render_mode(config_manager, target) {
+            log::error!("Failed to switch render mode: {e}");
+        } else if !active {
+            // Entering: bring the workspace with it.
+            workspace_request.replace(super::workspace::WorkspaceLayout::EscapeTime);
         }
-    });
+    }
 
-    if config.render_mode != RenderMode::Escape {
+    if !active {
         ui.separator();
         ui.label(t!("escape_panel.not_active_hint"));
         return;
@@ -172,9 +186,19 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
         }
     }
 
-    // ---- Julia toggle ---- (mode A only: fields have no Julia plane)
+    // ---- Julia toggle ----
+    //
+    // Mode A only (fields have no Julia plane), and only where the map
+    // HAS a parameter: for Origami, Newton, Collatz and Lattes the
+    // pixel is the starting point rather than a parameter, so both
+    // planes render the same image and the control is inert. See
+    // FormulaFeature::DynamicalOnly.
+    let julia_meaningful = field.is_none()
+        && crate::escape::formula_julia_is_meaningful(
+            crate::escape::get_formula(&esc.formula),
+        );
     let mut julia = esc.julia;
-    if field.is_none()
+    if julia_meaningful
         && ui
             .checkbox(&mut julia, t!("escape_panel.julia").as_ref())
             .on_hover_text(t!("escape_panel.tooltip_julia"))
@@ -182,7 +206,7 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
     {
         let _ = config_manager.update_param(ConfigPath::EscapeJulia, julia.into());
     }
-    if esc.julia {
+    if esc.julia && julia_meaningful {
         ui.horizontal(|ui| {
             ui.label(t!("escape_panel.julia_seed"));
             let mut re = esc.julia_re;
@@ -889,12 +913,21 @@ fn show_coloring_section(
         return;
     }
     let coloring = crate::escape::get_coloring(&esc.coloring);
+    let formula_def = crate::escape::get_formula(&esc.formula);
+    // Only the colorings that can actually draw THIS formula. An
+    // escape-time coloring over a non-escaping map renders black, not
+    // badly -- see `coloring_suits_formula`. Offering the whole list
+    // and letting the user find the blank ones is most of what makes
+    // this panel hard to approach.
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.coloring"));
         egui::ComboBox::from_id_salt("escape_coloring")
             .selected_text(coloring.display_name)
             .show_ui(ui, |ui| {
                 for c in crate::escape::COLORINGS {
+                    if !crate::escape::coloring_suits_formula(formula_def, c) {
+                        continue;
+                    }
                     if ui
                         .selectable_label(c.name == coloring.name, c.display_name)
                         .clicked()
@@ -908,6 +941,35 @@ fn show_coloring_section(
                 }
             });
     });
+    // The saved coloring may predate the formula it is paired with (an
+    // older config, or a formula switch). Say so and offer the fix,
+    // rather than leaving a black picture to be puzzled over.
+    if !crate::escape::coloring_suits_formula(formula_def, coloring) {
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 170, 90),
+                t!(
+                    "escape_panel.coloring_mismatch",
+                    coloring = coloring.display_name,
+                    formula = formula_def.display_name
+                ),
+            );
+            if let Some(fix) = crate::escape::COLORINGS
+                .iter()
+                .find(|c| crate::escape::coloring_suits_formula(formula_def, c))
+            {
+                if ui
+                    .small_button(t!("escape_panel.coloring_use", name = fix.display_name))
+                    .clicked()
+                {
+                    let _ = config_manager.update_param(
+                        ConfigPath::EscapeColoring,
+                        ConfigValue::String(fix.name.to_string()),
+                    );
+                }
+            }
+        });
+    }
     // A derivative-based coloring with no derivative to read renders
     // flat on purpose (a confident wrong image is worse than a visibly
     // missing one). Flat is honest but silent, so say why — otherwise
@@ -1095,7 +1157,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run(Default::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_escape_content(ui, &mut manager);
+                    render_escape_content(ui, &mut manager, &mut None);
                 });
             });
             labels = out
