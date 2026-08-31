@@ -77,6 +77,17 @@ pub enum FormulaFeature {
     /// escape test — Magnet needs both. The convergence register is
     /// maintained independently of `NeedsPrevZ`.
     Convergent,
+    /// The map has NO parameter `c`: its step ignores the argument and
+    /// it seeds at the pixel, so the parameter plane and the dynamical
+    /// plane are the same picture and the Julia toggle does nothing.
+    ///
+    /// Origami folds the plane along a fixed sequence of lines;
+    /// Newton, Collatz and Lattès iterate a fixed rational map. For
+    /// all four the pixel is the STARTING POINT, not a parameter, and
+    /// offering "Julia mode" beside them only invites the user to
+    /// toggle something inert. `formula_julia_is_meaningful` is the
+    /// gate, and a test keeps the flag honest against the WGSL.
+    DynamicalOnly,
 }
 
 /// Which quantity the escape test compares against `bailout`
@@ -150,6 +161,45 @@ pub struct EscapeParamDef {
     pub min: f32,
     pub max: f32,
     pub tooltip: &'static str,
+}
+
+/// Whether a Julia toggle means anything for this formula.
+///
+/// False for a map with no `c` (see
+/// [`FormulaFeature::DynamicalOnly`]): both planes render the same
+/// image, so the control is inert and the UI hides it.
+pub fn formula_julia_is_meaningful(formula: &FormulaDef) -> bool {
+    !formula.has_feature(FormulaFeature::DynamicalOnly)
+}
+
+/// Whether `coloring` can produce a picture for `formula`.
+///
+/// Two ways a pairing is dead, both of them silent without this:
+///
+/// 1. A NON-ESCAPING map never sets `escaped`, and the templates only
+///    colour a pixel when `escaped || COLORING_COLORS_INTERIOR`. So an
+///    escape-time coloring over an orbit-trap formula renders BLACK —
+///    not a poor image, no image. This is the "Orbit Trapping
+///    fractals can't use escape time coloring" case.
+/// 2. A DERIVATIVE coloring over a formula that supplies no
+///    derivative degrades to a flat constant (the shader returns 0.5
+///    rather than divide by a derivative that is really the number
+///    one).
+///
+/// Both are properties of the assembled shader, not of taste, which
+/// is why this lives beside the registry rather than in the panel.
+pub fn coloring_suits_formula(formula: &FormulaDef, coloring: &ColoringDef) -> bool {
+    if formula.has_feature(FormulaFeature::NonEscaping)
+        && !coloring.has_feature(ColoringFeature::ColorsInterior)
+    {
+        return false;
+    }
+    if coloring.has_feature(ColoringFeature::NeedsDerivative)
+        && formula.wgsl_derivative.is_empty()
+    {
+        return false;
+    }
+    true
 }
 
 /// A formula: the iterated step `z ← f(z, c)`.

@@ -1415,6 +1415,7 @@ impl EguiLayer {
         let mut open_save_online_dialog = false;
         let mut load_api_animation_id: Option<String> = None;
         let mut clear_variation_cache_requested = false;
+        let mut workspace_layout_requested: Option<workspace::WorkspaceLayout> = None;
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
@@ -1774,6 +1775,7 @@ impl EguiLayer {
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
+                        workspace_layout_requested: &mut workspace_layout_requested,
                         variation_update_requested: &mut variation_update_requested,
                         script_cloud,
                         effect_catalog,
@@ -2382,6 +2384,7 @@ impl EguiLayer {
             loaded_api_flame_animations,
             load_api_animation_id,
             clear_variation_cache_requested,
+            workspace_layout_requested,
             variation_update_requested,
             script_cloud_request,
         }

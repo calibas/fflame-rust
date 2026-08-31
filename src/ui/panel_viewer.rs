@@ -369,6 +369,9 @@ pub struct PanelContext<'a> {
     pub open_save_online_dialog: &'a mut bool,
     pub load_api_animation_id: &'a mut Option<String>,
     pub clear_variation_cache_requested: &'a mut bool,
+    /// A panel asking for a different workspace layout (the Escape
+    /// toggle brings its own layout with it).
+    pub workspace_layout_requested: &'a mut Option<super::workspace::WorkspaceLayout>,
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
@@ -859,7 +862,11 @@ impl<'a> PanelViewer<'a> {
                 self.render_scripts_panel(ui);
             }
             PanelType::Escape => {
-                super::escape_panel::render_escape_content(ui, self.context.config_manager);
+                super::escape_panel::render_escape_content(
+                    ui,
+                    self.context.config_manager,
+                    self.context.workspace_layout_requested,
+                );
             }
             PanelType::Subflames => {
                 super::subflames::render_subflames_content(

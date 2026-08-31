@@ -1372,6 +1372,16 @@ impl App {
             signed_in,
         );
 
+        // A panel asked for a different workspace. Applied here rather
+        // than in the panel because the workspace is borrowed by the
+        // UI for the whole frame -- switching mid-draw would rebuild
+        // the dock tree the caller is still walking.
+        if let Some(layout) = ui_response.workspace_layout_requested {
+            if self.workspace.current_layout != layout {
+                self.workspace.apply_layout(layout);
+            }
+        }
+
         // Consume fly-mode responses produced by the UI this frame.
         if let Some((dx, dy)) = ui_response.fly_mouse_drag {
             self.apply_fly_mouse_look(dx, dy);

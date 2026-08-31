@@ -161,20 +161,6 @@ pub fn render_view_content(
                 log::error!("Failed to update render mode: {}", e);
             }
         }
-        let was_escape = matches!(config.render_mode, crate::scene::transforms::RenderMode::Escape);
-        if ui.selectable_label(was_escape, t!("view.mode_escape").as_ref())
-            .on_hover_text(t!("view.tooltip_mode_escape"))
-            .clicked()
-        {
-            // Shared helper also defaults the tonemap to Linear on the
-            // way into escape mode.
-            if let Err(e) = super::escape_panel::switch_render_mode(
-                config_manager,
-                crate::scene::transforms::RenderMode::Escape,
-            ) {
-                log::error!("Failed to update render mode: {}", e);
-            }
-        }
     });
 
     // Show perspective control only in 3D mode
