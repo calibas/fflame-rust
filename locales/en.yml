@@ -1956,7 +1956,7 @@ escape_panel:
   reference_section: "Reference orbit (engine)"
   diag_section: "Diagnostics"
   diag_path: "Path: %{path}"
-  tooltip_diag_path: "Which render pipeline the last frame used. 'direct' iterates every pixel independently; the perturbed paths iterate deltas against a shared reference orbit (engaged past zoom 14)."
+  tooltip_diag_path: "Which render pipeline the last frame used. 'direct' iterates every pixel independently; the perturbed paths iterate deltas against a shared reference orbit (engaged past zoom 14); 'recolor' re-colored cached iteration results without iterating at all (palette, coloring and relief edits)."
   diag_settle: "Last settle: %{ms} ms over %{frames} frame(s)"
   tooltip_diag_settle: "Wall time from a change being noticed to the image being final, and how many chunked frames that took. This is the latency you feel when editing."
   diag_inflight: "Rendering… frame %{frames}"

@@ -76,6 +76,22 @@ struct EscapeParams {
 // there is no second shader variant to keep in step.
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 
+// Terminal per-pixel iteration record (32 B/px), written on a pass
+// that completes the pixel's iteration when params.flags bit 3 is
+// set. The recolor pass re-runs coloring_map + palette lookup from
+// this WITHOUT re-iterating -- the cache that makes palette, coloring
+// and relief edits cheap. Field order mirrors OrbitSummary; the two
+// bools and the period share one word.
+struct IterResult {
+    z: vec2<f32>,
+    dz: vec2<f32>,
+    accum: vec2<f32>,
+    n: u32,
+    // bit 0 escaped, bit 1 converged, bits 2.. detected period.
+    tags: u32,
+}
+@group(0) @binding(5) var<storage, read_write> results: array<IterResult>;
+
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
 }
@@ -244,6 +260,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
+    if ((params.flags & 8u) != 0u) {
+        results[py * params.width + gid.x] = IterResult(
+            z, dz, accum_state, n,
+            select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
+        );
+    }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
@@ -428,6 +450,22 @@ struct BlaBuf {
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
 @group(0) @binding(11) var<storage, read> ref_r2_buf: array<vec2<f32>>;
+
+// Terminal per-pixel iteration record (32 B/px), written on a pass
+// that completes the pixel's iteration when params.flags bit 3 is
+// set. The recolor pass re-runs coloring_map + palette lookup from
+// this WITHOUT re-iterating -- the cache that makes palette, coloring
+// and relief edits cheap. Field order mirrors OrbitSummary; the two
+// bools and the period share one word.
+struct IterResult {
+    z: vec2<f32>,
+    dz: vec2<f32>,
+    accum: vec2<f32>,
+    n: u32,
+    // bit 0 escaped, bit 1 converged, bits 2.. detected period.
+    tags: u32,
+}
+@group(0) @binding(12) var<storage, read_write> results: array<IterResult>;
 
 // The reference iterate as a plain f32 value (zero below f32's normal
 // range - the pre-exponent behaviour, which is all the rebase test
@@ -728,6 +766,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
+    if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
+        results[px_index] = IterResult(
+            z, dz, accum_state, n,
+            select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
+        );
+    }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
@@ -874,6 +918,22 @@ struct BlaBuf {
 // The escape margin needs (|Z|² - bailout) to better than f32 ulp --
 // see the margin comment at the escape test.
 @group(0) @binding(11) var<storage, read> ref_r2_buf: array<vec2<f32>>;
+
+// Terminal per-pixel iteration record (32 B/px), written on a pass
+// that completes the pixel's iteration when params.flags bit 3 is
+// set. The recolor pass re-runs coloring_map + palette lookup from
+// this WITHOUT re-iterating -- the cache that makes palette, coloring
+// and relief edits cheap. Field order mirrors OrbitSummary; the two
+// bools and the period share one word.
+struct IterResult {
+    z: vec2<f32>,
+    dz: vec2<f32>,
+    accum: vec2<f32>,
+    n: u32,
+    // bit 0 escaped, bit 1 converged, bits 2.. detected period.
+    tags: u32,
+}
+@group(0) @binding(12) var<storage, read_write> results: array<IterResult>;
 
 // The reference iterate as a plain f32 value (zero below f32's normal
 // range - the pre-exponent behaviour, which is all the rebase test
@@ -1546,6 +1606,12 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
+    if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
+        results[px_index] = IterResult(
+            z, dz, accum_state, n,
+            select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
+        );
+    }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
@@ -2914,6 +2980,124 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
     }
     out.join("
 ")
+}
+
+/// Recolor pass: re-run the coloring + palette lookup from the
+/// per-pixel [`IterResult`] records a completed iterate pass left
+/// behind, without iterating anything. One dispatch over the full
+/// image; the tail is a transcription of the iterate templates' tail
+/// (kept bit-identical -- the cache-equivalence GPU test pins that a
+/// recolor of stored results matches a full re-render exactly).
+///
+/// Assembled per COLORING (plus the derivative flag), not per
+/// formula: the formula's work is all inside the records.
+const RECOLOR_TEMPLATE: &str = r#"
+// Recolor compute pass: coloring + palette from cached IterResult
+// records. See assemble_recolor.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+struct IterResult {
+    z: vec2<f32>,
+    dz: vec2<f32>,
+    accum: vec2<f32>,
+    n: u32,
+    tags: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var<storage, read> results: array<IterResult>;
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+struct OrbitSummary {
+    z: vec2<f32>,
+    n: u32,
+    escaped: bool,
+    converged: bool,
+    period: u32,
+    dz: vec2<f32>,
+}
+
+//__COLORING__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+    let r = results[gid.y * params.width + gid.x];
+    let escaped = (r.tags & 1u) != 0u;
+    let converged = (r.tags & 2u) != 0u;
+    let period = r.tags >> 2u;
+
+    var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    var height = 0.0;
+    if (escaped || COLORING_COLORS_INTERIOR) {
+        let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
+        let raw = coloring_map(summary, r.accum);
+        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
+        height = select(raw, t, params.shade_flags == 1u);
+        let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+        rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+    }
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}
+"#;
+
+/// Assemble the recolor pass for one coloring.
+///
+/// `has_derivative` must match the iterate pass that produced the
+/// records (the direct path compiles a real derivative orbit when the
+/// formula has one and the coloring wants it; the perturbed rungs
+/// never do) -- a derivative-reading coloring behaves differently
+/// under each, and the renderer folds the flag into both the cache
+/// key and the pipeline key so the two always agree.
+pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String {
+    let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
+    let bounded = coloring.has_feature(ColoringFeature::Bounded);
+    let mut out = Vec::new();
+    for line in RECOLOR_TEMPLATE.lines() {
+        match line.trim() {
+            "//__COLORING__" => {
+                out.push(format!(
+                    "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
+                ));
+                out.push(format!("const HAS_DERIVATIVE: bool = {has_derivative};"));
+                out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
+                out.push(format!("// coloring: {}", coloring.name));
+                out.push(coloring.wgsl.to_string());
+            }
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("\n")
 }
 
 /// Assemble the WGSL for one (formula, coloring) pair.

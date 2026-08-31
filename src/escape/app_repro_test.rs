@@ -3981,6 +3981,163 @@ mod tests {
         escape.destroy();
     }
 
+    /// The recolor cache must be INVISIBLE: a cache-hit frame is
+    /// bit-identical to a from-scratch render of the same config, on
+    /// both paths, for every coloring class -- and it must MISS
+    /// whenever the iteration actually depends on what changed.
+    ///
+    /// Four classes exercised:
+    ///  - map-only coloring (smooth): a param tick HITS and matches a
+    ///    fresh render exactly;
+    ///  - derivative coloring (distance_estimate, direct path): dz
+    ///    flows through the records;
+    ///  - accumulator coloring (stripe_average): a param tick must
+    ///    MISS (the accumulator ran under the old params) and still
+    ///    match a fresh render;
+    ///  - a view change (pan) must MISS everywhere.
+    ///
+    /// Equality is asserted on the tonemapped readback bytes -- the
+    /// same output the visual suite hashes.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn recolor_cache_is_invisible_and_invalidates_correctly() {
+        let (device, queue) = repro_device();
+        let (w, h) = (200u32, 160u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+
+        let read = |escape: &mut crate::escape::EscapeRenderer,
+                    esc: &crate::config::escape::EscapeConfig,
+                    renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("cache frame"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("cache tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+
+        // Fresh-renderer render: the ground truth a cache hit must
+        // reproduce exactly.
+        let mut fresh = |esc: &crate::config::escape::EscapeConfig,
+                         renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let px = read(&mut escape, esc, renderer);
+            escape.destroy();
+            px
+        };
+
+        let mk = |coloring: &str, zoom: f64| {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = "-0.74364388703715870475".to_string();
+            esc.center_im = "0.13182590420531197049".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 600;
+            esc.coloring = coloring.to_string();
+            esc
+        };
+
+        let path_of = || crate::escape::diag::snapshot().path;
+
+        for (coloring, zoom, expect_hit) in [
+            // map-only: hits on both paths
+            ("smooth", 13.0, true),
+            ("smooth", 15.0, true),
+            // derivative (direct path only renders it meaningfully)
+            ("distance_estimate", 13.0, true),
+            // accumulator: the param feeds the loop, must MISS
+            ("stripe_average", 15.0, false),
+        ] {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut esc = mk(coloring, zoom);
+            let _first = read(&mut escape, &esc, &mut renderer);
+
+            // The coloring-param tick.
+            esc.coloring_params.insert("scale".to_string(), 0.11);
+            let ticked = read(&mut escape, &esc, &mut renderer);
+            let hit = path_of() == "recolor";
+            assert_eq!(
+                hit, expect_hit,
+                "{coloring}@{zoom}: expected cache hit={expect_hit}, got path {}",
+                path_of()
+            );
+            let truth = fresh(&esc, &mut renderer);
+            assert_eq!(
+                ticked, truth,
+                "{coloring}@{zoom}: cached recolor differs from a fresh render"
+            );
+
+            // A pan must MISS and re-render correctly.
+            esc.center_re = "-0.743643887037158704".to_string();
+            let panned = read(&mut escape, &esc, &mut renderer);
+            assert_ne!(
+                path_of(),
+                "recolor",
+                "{coloring}@{zoom}: a view change must not serve cached records"
+            );
+            let truth = fresh(&esc, &mut renderer);
+            assert_eq!(
+                panned, truth,
+                "{coloring}@{zoom}: post-pan render differs from a fresh render"
+            );
+            escape.destroy();
+        }
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

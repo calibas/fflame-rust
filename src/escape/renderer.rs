@@ -486,6 +486,19 @@ pub struct EscapeRenderer {
     /// its GPU mirror, and the perturbed pipeline's own layout (two
     /// extra bindings: the orbit buffer and the perturb uniform).
     orbit_cache: OrbitCache,
+    /// Recolor cache: per-pixel terminal iteration records
+    /// (32 B/px), plus the identity of the settled iterate render
+    /// that produced them. When a frame's iterate identity matches,
+    /// the render is one cheap recolor dispatch -- no orbit, no BLA,
+    /// no iteration. `None` key = records absent or stale.
+    results_buffer: Option<Buffer>,
+    results_px: u32,
+    results_key: Option<String>,
+    /// 32-byte stand-in bound when the pixel count exceeds the
+    /// storage-binding limit (giant exports): layouts need SOMETHING
+    /// at the slot, and the shader's write is gated off.
+    results_dummy: Option<Buffer>,
+    recolor_bind_group_layout: BindGroupLayout,
     /// Diagnostics: wall clock started when a change first shows up
     /// (an orbit wait or a chunk restart), stopped when the render
     /// settles. What the Escape panel's latency readout measures.
@@ -879,6 +892,17 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // Terminal iteration records (the recolor cache).
+                BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -932,8 +956,88 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // Terminal iteration records (the recolor cache). The
+                // field template ignores it; a 32-byte dummy is bound
+                // when the pixel count exceeds the binding limit
+                // (giant CLI exports), with the write gated off via
+                // params.flags bit 3.
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
+
+        // Recolor pass: coloring + palette from the cached records.
+        // Same front half as the direct layout, records read-only.
+        let recolor_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Recolor Bind Group Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::R32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
         // Dummy until shading turns on: see the field's doc comment.
         let (height_texture, height_view) = Self::create_height(device, 1, 1);
@@ -958,6 +1062,11 @@ impl EscapeRenderer {
             #[cfg(test)]
             force_floatexp: false,
             orbit_cache: OrbitCache::default(),
+            results_buffer: None,
+            results_px: 0,
+            results_key: None,
+            results_dummy: None,
+            recolor_bind_group_layout,
             diag_settle_start: None,
             #[cfg(not(target_arch = "wasm32"))]
             progressive: false,
@@ -1562,17 +1671,260 @@ impl EscapeRenderer {
     /// the whole time.
     const ORBIT_WAIT_SECONDS: f64 = 0.75;
 
+    /// Whether one records buffer for the current render grid fits
+    /// the device's binding limits. Interactive sizes always do (the
+    /// resize clamp caps pixels against the WIDER iter-state stride);
+    /// giant CLI exports may not, and simply render uncached.
+    fn results_fit(&self, device: &Device) -> bool {
+        let bytes = (self.width as u64) * (self.height as u64) * 32;
+        bytes <= device.limits().max_storage_buffer_binding_size as u64
+            && bytes <= device.limits().max_buffer_size
+    }
+
+    /// (Re)create the records buffer for the current grid; returns
+    /// whether records are ACTIVE (fit the device). When they do not,
+    /// the 32-byte dummy is kept for the layouts and the shader-side
+    /// write is gated off via params.flags bit 3.
+    fn ensure_results(&mut self, device: &Device) -> bool {
+        if !self.results_fit(device) {
+            self.results_key = None;
+            if self.results_dummy.is_none() {
+                self.results_dummy = Some(device.create_buffer(&BufferDescriptor {
+                    label: Some("Escape Results Dummy"),
+                    size: 32,
+                    usage: BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }));
+            }
+            return false;
+        }
+        let px = self.width.max(1) * self.height.max(1);
+        if self.results_px != px || self.results_buffer.is_none() {
+            if let Some(old) = self.results_buffer.take() {
+                old.destroy();
+            }
+            self.results_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Iter Results"),
+                size: (px as u64) * 32,
+                usage: BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }));
+            self.results_px = px;
+            self.results_key = None;
+        }
+        true
+    }
+
+    /// The records binding for iterate bind groups: the real buffer
+    /// when active, the dummy otherwise. `ensure_results` has always
+    /// run first in `render`, so one of the two exists.
+    fn results_binding(&self) -> BindingResource<'_> {
+        self.results_buffer
+            .as_ref()
+            .or(self.results_dummy.as_ref())
+            .expect("ensure_results precedes every bind group")
+            .as_entire_binding()
+    }
+
+    /// Whether this config renders on the perturbed path.
+    fn perturbed_path(&self, escape: &EscapeConfig) -> bool {
+        #[cfg(test)]
+        {
+            Self::wants_perturbation(escape) || self.force_perturbed
+        }
+        #[cfg(not(test))]
+        {
+            Self::wants_perturbation(escape)
+        }
+    }
+
+    /// Whether the iterate pass compiles a real derivative orbit.
+    /// Direct path only: the perturbed rungs never iterate one (their
+    /// colorings see HAS_DERIVATIVE = false). Mirrors assemble_with.
+    fn derivative_active(&self, escape: &EscapeConfig) -> bool {
+        if self.perturbed_path(escape) {
+            return false;
+        }
+        let formula = super::get_formula(&escape.formula);
+        let coloring = super::get_coloring(&escape.coloring);
+        coloring.has_feature(super::ColoringFeature::NeedsDerivative)
+            && !formula.wgsl_derivative.is_empty()
+    }
+
+    /// Identity of everything the ITERATION depends on -- the recolor
+    /// cache key. Deliberately omits the palette (a texture, never
+    /// iterated over) and the relief settings (applied by the resolve
+    /// pass), and folds the coloring in ONLY when it participates in
+    /// iteration: an accumulator or period test runs inside the loop,
+    /// so its identity and params shape the records; a map-only
+    /// coloring touches nothing until the recolor pass re-runs it.
+    ///
+    /// The derivative and interior-detection flags are here because
+    /// assemble_with compiles DIFFERENT iteration loops for them --
+    /// records made without a derivative orbit must not serve a
+    /// coloring that reads one.
+    fn iterate_key_for(&self, escape: &EscapeConfig) -> String {
+        let coloring = super::get_coloring(&escape.coloring);
+        let needs_accum = coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum);
+        let needs_period = coloring.has_feature(super::ColoringFeature::NeedsPeriod);
+        let colors_interior = coloring.has_feature(super::ColoringFeature::ColorsInterior);
+        #[cfg(test)]
+        let interior = !self.disable_interior;
+        #[cfg(not(test))]
+        let interior = true;
+        let interior_ok = interior && !colors_interior && !needs_accum && !needs_period;
+        let perturbed = self.perturbed_path(escape);
+        #[cfg(test)]
+        let floatexp = perturbed
+            && (escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp);
+        #[cfg(not(test))]
+        let floatexp = perturbed && escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+        let floatexp = floatexp
+            || (perturbed
+                && matches!(
+                    Self::perturb_tier(escape),
+                    Some(assembler::PerturbTier::Manowar)
+                ));
+        let path = if !perturbed {
+            "direct"
+        } else if floatexp {
+            "pfe"
+        } else {
+            "p32"
+        };
+        #[cfg(test)]
+        let no_bla = self.disable_bla;
+        #[cfg(not(test))]
+        let no_bla = false;
+        let coloring_fold = if needs_accum || needs_period {
+            format!("{}|{:?}", escape.coloring, escape.coloring_params)
+        } else {
+            String::new()
+        };
+        format!(
+            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}",
+            escape.formula,
+            escape.formula_params,
+            escape.center_re,
+            escape.center_im,
+            escape.zoom_log2,
+            escape.rotation,
+            escape.max_iter,
+            escape.bailout,
+            escape.julia,
+            escape.julia_re,
+            escape.julia_im,
+            escape.damping_re,
+            escape.damping_im,
+            escape.biomorph,
+            escape.reference_period,
+            self.width,
+            self.height,
+            self.derivative_active(escape),
+            interior_ok,
+            no_bla,
+            coloring_fold,
+        )
+    }
+
+    /// One recolor dispatch: coloring + palette from the cached
+    /// records into the output (and height) textures. The caller has
+    /// already written the params buffer for this frame, so changed
+    /// coloring params and relief field flags are in effect.
+    fn run_recolor(
+        &mut self,
+        device: &Device,
+        encoder: &mut CommandEncoder,
+        escape: &EscapeConfig,
+        palette_view: &TextureView,
+    ) {
+        let coloring = super::get_coloring(&escape.coloring);
+        let deriv = self.derivative_active(escape);
+        let key = format!("recolor|{}|{}", coloring.name, deriv);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_recolor(coloring, deriv);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Recolor Pipeline Layout"),
+                bind_group_layouts: &[Some(&self.recolor_bind_group_layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("escape_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Recolor Bind Group"),
+            layout: &self.recolor_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(palette_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self
+                        .results_buffer
+                        .as_ref()
+                        .expect("recolor requires active results")
+                        .as_entire_binding(),
+                },
+            ],
+        });
+        let pipeline = &self.pipelines[&key];
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Recolor Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+    }
+
     fn chunk_key_for(&self, escape: &EscapeConfig, orbit_tag: u64, orbit_done: bool) -> String {
         format!(
-            "{}|{:?}|{}|{}|{}|{}|{}|{}|{:?}|{}x{}|{}|{}",
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
             escape.formula,
             escape.formula_params,
             escape.coloring,
             escape.center_re,
             escape.center_im,
             escape.zoom_log2,
+            escape.rotation,
             escape.max_iter,
+            escape.bailout,
             escape.julia,
+            escape.julia_re,
+            escape.julia_im,
+            escape.damping_re,
+            escape.damping_im,
+            escape.biomorph,
+            escape.reference_period,
             escape.coloring_params,
             self.width,
             self.height,
@@ -2476,6 +2828,8 @@ impl EscapeRenderer {
         self.supersample = ss;
         let (rw, rh) = (width.saturating_mul(ss).max(1), height.saturating_mul(ss).max(1));
         self.output_texture.destroy();
+        // The records describe pixels of the OLD grid.
+        self.results_key = None;
         let (texture, view) = Self::create_output(device, rw, rh);
         self.output_texture = texture;
         self.output_view = view;
@@ -2968,8 +3322,50 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
+        let results_active = self.ensure_results(device);
         let mut params = self.params_for(escape);
+        if results_active {
+            // Bit 3: the iterate templates write their terminal
+            // records (the recolor cache).
+            params.flags |= 8;
+        }
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // The recolor cache: when the settled records were produced
+        // by an iterate pass with THIS identity, nothing about the
+        // iteration changed -- only the coloring map, the palette or
+        // the relief could have -- so the frame is one cheap coloring
+        // dispatch over the records plus the usual resolve. This is
+        // what makes palette and coloring edits real-time on the
+        // perturbed path. Field formulas write no records.
+        let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
+            Some(self.iterate_key_for(escape))
+        } else {
+            None
+        };
+        if let Some(ik) = iterate_key.as_deref() {
+            if results_active && self.results_key.as_deref() == Some(ik) {
+                let t0 = web_time::Instant::now();
+                self.run_recolor(device, encoder, escape, palette_view);
+                self.run_resolve(device, queue, encoder, &escape.shading);
+                DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
+                PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
+                self.diag_settle_start = None;
+                super::diag::update(|d| {
+                    d.path = "recolor";
+                    d.restarts += 1;
+                    d.settle_frames = 1;
+                    d.inflight_frames = 0;
+                    d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                });
+                return true;
+            }
+        }
+        // Anything the iterate passes write from here on describes a
+        // DIFFERENT identity: the stored records are stale.
+        if self.results_key.is_some() && self.results_key != iterate_key {
+            self.results_key = None;
+        }
 
         // Deep zoom: the perturbation path. Falls back to direct on a
         // center-parse failure (matching center_f64's fallback view).
@@ -3216,6 +3612,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                                 .unwrap()
                                 .as_entire_binding(),
                         },
+                        BindGroupEntry {
+                            binding: 12,
+                            resource: self.results_binding(),
+                        },
                     ],
                 });
                 let ts_qs = if measure_gpu {
@@ -3273,6 +3673,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         super::diag::update(|d| {
                             d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
                         });
+                    }
+                    // The final chunk wrote every pixel's terminal
+                    // record under this identity.
+                    if results_active {
+                        self.results_key = iterate_key.clone();
                     }
                 }
                 if iterations_done {
@@ -3366,6 +3771,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     binding: 4,
                     resource: BindingResource::TextureView(&self.height_view),
                 },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.results_binding(),
+                },
             ],
         });
 
@@ -3402,6 +3811,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
                 });
             }
+            // Every band of this render wrote its rows' records
+            // under this identity (None for a field formula).
+            if results_active {
+                self.results_key = iterate_key.clone();
+            }
             // A repeat of the same render starts from the top.
             self.chunk_key = None;
             self.direct_tile_y = 0;
@@ -3435,6 +3849,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             b.destroy();
         }
         if let Some(b) = &self.bla_dummy {
+            b.destroy();
+        }
+        if let Some(b) = &self.results_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.results_dummy {
             b.destroy();
         }
         if let Some(t) = &self.final_texture {
