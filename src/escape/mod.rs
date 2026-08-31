@@ -122,10 +122,10 @@ pub enum ColoringFeature {
     /// well at max_iter 256 turns into hundreds of palette cycles at
     /// 100k — and why the slider's floor kept running out.
     ///
-    /// With `EscapeConfig::auto_scale` on, the packed value is
-    /// divided by the iteration budget relative to
-    /// [`AUTO_SCALE_REFERENCE_ITERS`], holding the LOOK fixed as the
-    /// budget changes. Colorings whose scale means palette distance
+    /// With `EscapeConfig::auto_scale` on, the coloring's value is
+    /// divided by the frame's SMALLEST escape count, so iterations
+    /// are measured from the view's own first escape rather than
+    /// from zero. Colorings whose scale means palette distance
     /// per unit of DISTANCE (trap, normal, sphere) must not carry
     /// this: their scale has nothing to do with the budget.
     IterationScaled,
@@ -166,12 +166,15 @@ pub struct EscapeParamDef {
     pub tooltip: &'static str,
 }
 
-/// Iteration budget at which `auto_scale` is the identity.
+/// Smallest escape count at which `auto_scale` is the identity.
 ///
-/// The default `max_iter`, so turning auto-scale on at the default
-/// view changes nothing, and every scale value a user already knows
-/// keeps meaning what it meant there.
-pub const AUTO_SCALE_REFERENCE_ITERS: f32 = 256.0;
+/// One, because that is what the home view measures: at zoom 0 a
+/// corner pixel escapes on its first iteration. So enabling
+/// auto-scale there changes nothing, and every scale value a user
+/// already knows keeps meaning what it meant — while a view deep
+/// enough that nothing escapes for a thousand iterations divides by
+/// that thousand.
+pub const AUTO_SCALE_REFERENCE_ITERS: f32 = 1.0;
 
 /// A formula: the iterated step `z ← f(z, c)`.
 ///

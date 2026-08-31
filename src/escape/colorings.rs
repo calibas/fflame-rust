@@ -18,8 +18,8 @@ pub static ESCAPE_COUNT: ColoringDef = ColoringDef {
         display_name: "Scale",
         default: 0.05,
         min: 0.000001,
-        max: 1.0,
-        tooltip: "Palette distance per iteration band. Smaller = broader bands. Deep views need very small values; turn on Auto scale to hold the look as the iteration budget grows.",
+        max: 20.0,
+        tooltip: "Palette distance per iteration band. Smaller = broader bands. Deep views need very small values; turn on Track first escape to measure iterations from the view's own first escaping pixel instead of from zero.",
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -42,8 +42,8 @@ pub static SMOOTH: ColoringDef = ColoringDef {
         display_name: "Scale",
         default: 0.05,
         min: 0.000001,
-        max: 1.0,
-        tooltip: "Palette distance per iteration. Smaller = broader gradient. Deep views need very small values; turn on Auto scale to hold the look as the iteration budget grows.",
+        max: 20.0,
+        tooltip: "Palette distance per iteration. Smaller = broader gradient. Deep views need very small values; turn on Track first escape to measure iterations from the view's own first escaping pixel instead of from zero.",
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -370,7 +370,7 @@ pub static PERIOD: ColoringDef = ColoringDef {
             display_name: "Period scale",
             default: 0.1,
             min: 0.000001,
-            max: 1.0,
+            max: 20.0,
             tooltip: "Palette distance per unit of detected cycle length.",
         },
         EscapeParamDef {
@@ -429,7 +429,7 @@ pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
         display_name: "Scale",
         default: 0.05,
         min: 0.000001,
-        max: 1.0,
+        max: 20.0,
         tooltip: "Palette distance per doubling of boundary distance.",
     }],
     wgsl: r#"
