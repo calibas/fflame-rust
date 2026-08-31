@@ -1954,6 +1954,8 @@ escape_panel:
   open_escape_panel: "Open Escape Fractal panel"
   formula: "Formula"
   reference_section: "Reference orbit (engine)"
+  auto_scale_track: "Track iteration budget"
+  auto_scale_track_tip: "Keep the scale proportional as max iterations changes, so a deeper view that needs more iterations does not show proportionally more palette cycles. The button beside this picks a good value once; this keeps it good."
   diag_section: "Diagnostics"
   diag_path: "Path: %{path}"
   tooltip_diag_path: "Which render pipeline the last frame used. 'direct' iterates every pixel independently; the perturbed paths iterate deltas against a shared reference orbit (engaged past zoom 14); 'recolor' re-colored cached iteration results without iterating at all (palette, coloring and relief edits)."

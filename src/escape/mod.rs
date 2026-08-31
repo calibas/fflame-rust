@@ -115,6 +115,20 @@ pub enum ColoringFeature {
     /// is the periodic(k) channel §5.8/§5.17 call for; without the
     /// flag no detection code exists.
     NeedsPeriod,
+    /// The coloring multiplies an ITERATION COUNT by its `scale`
+    /// parameter, so the palette distance a pixel travels grows with
+    /// the iteration budget. Deep views need thousands of times more
+    /// iterations than shallow ones, which is why a scale that reads
+    /// well at max_iter 256 turns into hundreds of palette cycles at
+    /// 100k — and why the slider's floor kept running out.
+    ///
+    /// With `EscapeConfig::auto_scale` on, the packed value is
+    /// divided by the iteration budget relative to
+    /// [`AUTO_SCALE_REFERENCE_ITERS`], holding the LOOK fixed as the
+    /// budget changes. Colorings whose scale means palette distance
+    /// per unit of DISTANCE (trap, normal, sphere) must not carry
+    /// this: their scale has nothing to do with the budget.
+    IterationScaled,
     /// The coloring's value is BOUNDED to 0..1 and means a level, not
     /// a position along a repeating ramp — a lighting term, say.
     ///
@@ -151,6 +165,13 @@ pub struct EscapeParamDef {
     pub max: f32,
     pub tooltip: &'static str,
 }
+
+/// Iteration budget at which `auto_scale` is the identity.
+///
+/// The default `max_iter`, so turning auto-scale on at the default
+/// view changes nothing, and every scale value a user already knows
+/// keeps meaning what it meant there.
+pub const AUTO_SCALE_REFERENCE_ITERS: f32 = 256.0;
 
 /// A formula: the iterated step `z ← f(z, c)`.
 ///

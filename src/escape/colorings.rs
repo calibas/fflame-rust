@@ -12,14 +12,14 @@ use super::{ColoringDef, ColoringFeature, EscapeParamDef};
 pub static ESCAPE_COUNT: ColoringDef = ColoringDef {
     name: "escape_count",
     display_name: "Escape Count",
-    features: &[],
+    features: &[ColoringFeature::IterationScaled],
     parameters: &[EscapeParamDef {
         name: "scale",
         display_name: "Scale",
         default: 0.05,
-        min: 0.001,
+        min: 0.000001,
         max: 1.0,
-        tooltip: "Palette distance per iteration band. Smaller = broader bands.",
+        tooltip: "Palette distance per iteration band. Smaller = broader bands. Deep views need very small values; turn on Auto scale to hold the look as the iteration budget grows.",
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -36,14 +36,14 @@ fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
 pub static SMOOTH: ColoringDef = ColoringDef {
     name: "smooth",
     display_name: "Smooth Iteration",
-    features: &[],
+    features: &[ColoringFeature::IterationScaled],
     parameters: &[EscapeParamDef {
         name: "scale",
         display_name: "Scale",
         default: 0.05,
-        min: 0.001,
+        min: 0.000001,
         max: 1.0,
-        tooltip: "Palette distance per iteration. Smaller = broader gradient.",
+        tooltip: "Palette distance per iteration. Smaller = broader gradient. Deep views need very small values; turn on Auto scale to hold the look as the iteration budget grows.",
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -369,7 +369,7 @@ pub static PERIOD: ColoringDef = ColoringDef {
             name: "scale",
             display_name: "Period scale",
             default: 0.1,
-            min: 0.001,
+            min: 0.000001,
             max: 1.0,
             tooltip: "Palette distance per unit of detected cycle length.",
         },
@@ -428,7 +428,7 @@ pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
         name: "scale",
         display_name: "Scale",
         default: 0.05,
-        min: 0.001,
+        min: 0.000001,
         max: 1.0,
         tooltip: "Palette distance per doubling of boundary distance.",
     }],

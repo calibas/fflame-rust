@@ -782,12 +782,33 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
 /// pixels escape in a few hundred iterations however high the cap is),
 /// while the orbit-trap and average families produce O(1) values and
 /// want a scale near 1.
+/// Slider for one escape parameter, logarithmic when its range spans
+/// enough decades that a linear one is useless.
+///
+/// An iteration-scaled `scale` runs from 1e-6 to 1: linearly, the
+/// entire useful deep-zoom range lives in the leftmost thousandth of
+/// the track. The threshold is high enough (1e5) that every existing
+/// range keeps the linear feel it had.
+fn param_slider<'a>(
+    v: &'a mut f32,
+    p: &'static crate::escape::EscapeParamDef,
+) -> egui::Slider<'a> {
+    let decades = p.min > 0.0 && p.max / p.min >= 1e5;
+    egui::Slider::new(v, p.min..=p.max)
+        .text(p.display_name)
+        .logarithmic(decades)
+}
+
 fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     match coloring {
         "smooth" | "escape_count" | "period" => {
-            // A few cycles over a typical escape range, floored so a
-            // huge cap does not flatten the image to one band.
-            (8.0 / (max_iter as f32).max(1.0)).clamp(0.005, 0.5)
+            // A few cycles over a typical escape range. The floor is
+            // the slider's own minimum, not a round number above it:
+            // it used to stop at 0.005, so at the 100k iterations a
+            // deep view needs, the suggestion came back 60x coarser
+            // than the formula asked for -- which read as "the
+            // minimum scale is much too large".
+            (8.0 / (max_iter as f32).max(1.0)).clamp(0.000001, 0.5)
         }
         "distance_estimate" | "triangle_inequality" | "root_basin" => 1.0,
         // Orbit traps and the averaging family already live at O(1).
@@ -856,7 +877,7 @@ fn show_coloring_section(
         for p in coloring.parameters {
             let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
             let resp = ui
-                .add(egui::Slider::new(&mut v, p.min..=p.max).text(p.display_name))
+                .add(param_slider(&mut v, p))
                 .on_hover_text(p.tooltip);
             if resp.changed() {
                 let _ = config_manager.update_param(
@@ -927,18 +948,32 @@ fn show_coloring_section(
                 ui.label(
                     egui::RichText::new(t!(
                         "escape_panel.auto_scale_hint",
-                        value = format!("{suggested:.4}")
+                        value = format!("{suggested:.6}")
                     ))
                     .small()
                     .weak(),
                 );
             }
         });
+        // The continuous form: the button above picks a good value
+        // ONCE, this keeps whatever value is set proportional as the
+        // iteration budget changes.
+        if coloring.has_feature(crate::escape::ColoringFeature::IterationScaled) {
+            let mut on = esc.auto_scale;
+            if ui
+                .checkbox(&mut on, t!("escape_panel.auto_scale_track").as_ref())
+                .on_hover_text(t!("escape_panel.auto_scale_track_tip"))
+                .changed()
+            {
+                let _ = config_manager
+                    .update_param(ConfigPath::EscapeAutoScale, on.into());
+            }
+        }
     }
     for p in coloring.parameters {
         let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
         let resp = ui
-            .add(egui::Slider::new(&mut v, p.min..=p.max).text(p.display_name))
+            .add(param_slider(&mut v, p))
             .on_hover_text(p.tooltip);
         if resp.changed() {
             let _ = config_manager.update_param(
