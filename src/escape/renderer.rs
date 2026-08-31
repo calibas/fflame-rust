@@ -1983,6 +1983,70 @@ impl EscapeRenderer {
             .as_entire_binding()
     }
 
+    /// Whether this device can hold a render of this size at all.
+    ///
+    /// Checked BEFORE anything is allocated, because the failure mode
+    /// otherwise is silent: wgpu reports a rejected allocation through
+    /// the uncaptured-error handler, which stops nothing, so every
+    /// dispatch runs against an invalid buffer and the export
+    /// "succeeds" with a black image.
+    ///
+    /// This catches the DECLARED limits (a buffer larger than the
+    /// device will bind, a texture wider than it will make), which are
+    /// knowable up front and identical on every run. Running out of
+    /// actual VRAM within those limits is not knowable here -- an
+    /// error scope around the render catches that.
+    pub fn allocation_error(
+        device: &Device,
+        escape: &EscapeConfig,
+        width: u32,
+        height: u32,
+        supersample: u32,
+    ) -> Option<String> {
+        let ss = supersample.max(1) as u64;
+        let (rw, rh) = (width.max(1) as u64 * ss, height.max(1) as u64 * ss);
+        let px = rw * rh;
+        let lim = device.limits();
+
+        let max_dim = lim.max_texture_dimension_2d as u64;
+        if rw > max_dim || rh > max_dim {
+            return Some(format!(
+                "{rw}x{rh} render pixels exceeds this GPU's {max_dim}-pixel texture limit"
+            ));
+        }
+        // The perturbed path's per-pixel state is one storage buffer,
+        // and it is by far the largest thing here.
+        if Self::wants_perturbation(escape) {
+            // The ACTUAL stride for this formula's tier and rung, not
+            // the widest one: only the two-term recurrences on the
+            // deep rung carry the larger state, and assuming it would
+            // refuse renders that fit.
+            let tier = Self::perturb_tier(escape)
+                .unwrap_or(assembler::PerturbTier::Power(2));
+            let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
+                || matches!(tier, assembler::PerturbTier::Manowar);
+            let need = px * assembler::iter_state_bytes(tier, floatexp);
+            let cap = lim.max_storage_buffer_binding_size as u64;
+            if need > cap {
+                return Some(format!(
+                    "a deep-zoom render of {rw}x{rh} needs a {} MB buffer, past this \
+                     GPU's {} MB limit",
+                    need / (1024 * 1024),
+                    cap / (1024 * 1024)
+                ));
+            }
+            if need > lim.max_buffer_size {
+                return Some(format!(
+                    "a deep-zoom render of {rw}x{rh} needs a {} MB buffer, past this \
+                     GPU's {} MB maximum",
+                    need / (1024 * 1024),
+                    lim.max_buffer_size / (1024 * 1024)
+                ));
+            }
+        }
+        None
+    }
+
     /// Antialias by ACCUMULATION rather than by a bigger grid.
     ///
     /// A supersampled grid multiplies the render size, and past a
@@ -3420,45 +3484,36 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// relative to a render; pipelines and params survive. Returns
     /// true when anything changed — the output is stale until the
     /// next `render`.
-    pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
+    /// The supersampling factor this device can actually afford at
+    /// this size — the requested one, reduced until it fits.
+    ///
+    /// Shared with the allocation precheck so the two agree: checking
+    /// the REQUESTED factor there refused renders the renderer would
+    /// have clamped and then made up by accumulation.
+    pub fn affordable_supersample(
+        device: &Device,
+        width: u32,
+        height: u32,
+        supersample: u32,
+    ) -> u32 {
         let mut ss = supersample.clamp(1, MAX_SUPERSAMPLE);
-        // Cap the RENDER pixel count. An unbounded supersample x
-        // display product is a device OOM (observed as a device-loss
-        // abort), so the factor is reduced until it fits rather than
-        // crashing.
-        //
-        // Expressed as a VRAM BUDGET over the real per-pixel cost,
-        // not as a pixel count: the pipeline has grown buffers since
-        // the count was chosen (the recolor cache's 32 B/px of
-        // records, the softening blur's two r32float targets), and a
-        // fixed pixel ceiling silently meant a larger and larger
-        // allocation. Raising the supersample ceiling to 8x makes
-        // that the difference between a clamp and an out-of-memory.
-        const BYTES_PER_RENDER_PX: u64 = assembler::ITER_STATE_BYTES_MAX  // perturbed state
-            + 32   // terminal iteration records (recolor cache)
-            + 16   // Rgba32Float output
-            + 4    // height field
-            + 8;   // two r32float blur targets, when softening is on
-        const RENDER_BUDGET_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+        const BYTES_PER_RENDER_PX: u64 = assembler::ITER_STATE_BYTES_MAX + 32 + 16 + 4 + 8;
+        const RENDER_BUDGET_BYTES: u64 = 3 * 1024 * 1024 * 1024 / 2;
         const MAX_RENDER_PX: u64 = RENDER_BUDGET_BYTES / BYTES_PER_RENDER_PX;
-        // The perturbed path binds its iteration state as ONE storage
-        // buffer; the device's binding limit (browsers often grant far
-        // less than desktop adapters) caps render pixels harder than
-        // the fixed ceiling. Sized for the WIDEST tier: the cap is
-        // computed at resize, which does not know which formula will
-        // be rendered into the surface afterwards.
         let device_px_cap = device.limits().max_storage_buffer_binding_size as u64
             / assembler::ITER_STATE_BYTES_MAX;
-        let px_cap = MAX_RENDER_PX.min(device_px_cap.max(1))
-            .min({
-                let d = device.limits().max_texture_dimension_2d as u64;
-                d * d
-            });
-        while ss > 1
-            && (width as u64 * ss as u64) * (height as u64 * ss as u64) > px_cap
-        {
+        let px_cap = MAX_RENDER_PX.min(device_px_cap.max(1)).min({
+            let d = device.limits().max_texture_dimension_2d as u64;
+            d * d
+        });
+        while ss > 1 && (width as u64 * ss as u64) * (height as u64 * ss as u64) > px_cap {
             ss -= 1;
         }
+        ss
+    }
+
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
+        let ss = Self::affordable_supersample(device, width, height, supersample);
         if ss != supersample.clamp(1, MAX_SUPERSAMPLE) {
             log::warn!(
                 "Escape supersample clamped to {ss}x at {width}x{height} (render-pixel budget)"

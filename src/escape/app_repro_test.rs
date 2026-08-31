@@ -5871,6 +5871,69 @@ mod tests {
         );
     }
 
+    /// A render that cannot get its memory must FAIL, not return a
+    /// black image.
+    ///
+    /// Reported from the app: a 4000x3000 export at 8x antialiasing
+    /// produced an all-black PNG. The crash log named it exactly --
+    /// `wgpu error: Out of Memory`, then `Buffer with 'Escape Iter
+    /// State' label is invalid` on every dispatch afterwards. wgpu
+    /// reports an allocation failure through the uncaptured-error
+    /// handler, which stops nothing: the buffer comes back invalid,
+    /// each dispatch against it quietly does nothing, and the export
+    /// reports SUCCESS over an empty image.
+    ///
+    /// Asking a real device for an impossible allocation is the only
+    /// honest way to test this, so that is what it does: a render
+    /// whose per-pixel state cannot fit any GPU.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn an_allocation_failure_is_reported_not_rendered_black() {
+        let (device, queue) = repro_device();
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        // Deep enough for the perturbed path, which is what carries
+        // the large per-pixel state.
+        config.escape.center_re = "-0.7436438870371587".to_string();
+        config.escape.center_im = "0.1318259042053119".to_string();
+        config.escape.zoom_log2 = 20.0;
+        config.escape.max_iter = 200;
+
+        // A size no device can hold: 40000x30000 is 1.2 gigapixels,
+        // and the perturbed path wants ~72 bytes of state for each.
+        let job = crate::renderer::RenderJob::new(&config, 40_000, 30_000);
+        let result = pollster::block_on(crate::renderer::render(
+            &device,
+            &queue,
+            job,
+            &mut crate::renderer::NoProgress,
+        ));
+
+        match result {
+            Err(crate::renderer::RenderError::OutOfMemory(msg)) => {
+                println!("reported honestly: {msg}");
+            }
+            Err(other) => {
+                // Any explicit failure is acceptable -- the point is
+                // that it does not silently succeed.
+                println!("reported as: {other}");
+            }
+            Ok(out) => {
+                let lit = out
+                    .rgba_data
+                    .chunks(4)
+                    .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                    .count();
+                panic!(
+                    "a render that could not allocate its buffers reported SUCCESS \
+                     with {lit} lit pixels of {} -- an out-of-memory must not be \
+                     served as an image",
+                    out.rgba_data.len() / 4
+                );
+            }
+        }
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

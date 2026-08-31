@@ -3364,6 +3364,32 @@ bit-equality: the direct path carries its centre to the shader as
 f32, so a sub-pixel shift lands a few ten-thousandths of a pixel off,
 and at a chaotic boundary that flips pixels.
 
+*An out-of-memory used to be served as a black image.* A 4000x3000
+export at 8x produced an all-black PNG, and the crash log named it
+exactly: `wgpu error: Out of Memory`, then `Buffer with 'Escape Iter
+State' label is invalid` on every dispatch after. wgpu reports a
+rejected allocation through the uncaptured-error handler, which stops
+NOTHING — the buffer comes back invalid, each dispatch against it
+quietly does nothing, and the export reports success over an empty
+image. Three changes, because the failure had three causes:
+
+- The export ran on the app's own device while the VIEWPORT's escape
+  renderer was still holding its own gigabytes of per-pixel state at
+  8x. The app now frees it before a synchronous export; the frame
+  loop rebuilds it lazily and it has nothing to show meanwhile.
+- The per-renderer budget was 3 GiB, which is too much when a device
+  can carry two of these at once plus the flame renderer and the UI.
+  Halved.
+- The failure is now DETECTED rather than rendered past: an
+  `OutOfMemory` error scope around the whole escape render (the
+  accumulation passes included) turns it into a `RenderError`, and a
+  precheck refuses sizes the device's DECLARED limits cannot hold
+  before allocating anything at all. The precheck shares its
+  supersample calculation with `resize` — checking the REQUESTED
+  factor instead refused renders the renderer would have clamped and
+  then made up by accumulation, which is a bug this doc records
+  because the first version of it did exactly that.
+
 *Downsample modes*, because "antialiasing washes colour out of fine
 detail" is a fair report about a correct behaviour. A saturated
 filament covering one sample in nine IS one ninth of that pixel's
