@@ -3648,6 +3648,210 @@ mod tests {
         );
     }
 
+    /// A shadow at full strength must bite about as hard as a
+    /// highlight at full strength.
+    ///
+    /// Reported from the app: at relief height 50, black shadows at
+    /// strength 1.0 were barely visible while white highlights at
+    /// strength 0.03 looked about as strong — a ~30x asymmetry in a
+    /// pair of controls that read as symmetric.
+    ///
+    /// The RESPONSE is symmetric (a shadow-only render at angle A is
+    /// bit-identical to a highlight-only render at A+180, which
+    /// another test pins). The asymmetry is in the composite: the
+    /// escape shader emits LINEAR light, and in linear space a
+    /// mostly-dark image has almost nothing for `multiply` to take
+    /// away while `screen` has everything to add. This measures the
+    /// mean absolute change each side makes against the unshaded
+    /// render, which is the quantity the eye is reporting.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn shadow_and_highlight_bite_equally_hard() {
+        let (device, queue) = repro_device();
+        let (w, h) = (200u32, 200u32);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.palette = crate::scene::palette::Palette {
+            name: "paper".to_string(),
+            stops: vec![
+                // DARK on purpose. This is where the bug bit hardest:
+                // in linear light a dark base gives `multiply` almost
+                // nothing to remove while `screen` has the whole range
+                // to add into, so the two strength sliders diverge.
+                crate::scene::palette::ColorStop { position: 0.0, color: [0.02, 0.01, 0.05] },
+                crate::scene::palette::ColorStop { position: 0.5, color: [0.16, 0.08, 0.20] },
+                crate::scene::palette::ColorStop { position: 1.0, color: [0.02, 0.01, 0.05] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.brightness = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.formula = "origami".to_string();
+        base.coloring = "position_map".to_string();
+        base.center_re = "0.0".to_string();
+        base.center_im = "0.0".to_string();
+        base.zoom_log2 = -1.0;
+        base.max_iter = 32;
+        base.formula_params.insert("seed".to_string(), 8.0);
+        base.formula_params.insert("spread".to_string(), 2.0);
+        base.coloring_params.insert("freq_x".to_string(), 5.0);
+        base.coloring_params.insert("freq_y".to_string(), 1.5);
+        base.coloring_params.insert("address_mix".to_string(), 1.5);
+
+        let shoot = |shading: crate::config::escape::EscapeShading,
+                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut esc = base.clone();
+            esc.shading = shading;
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("asym"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("asym tonemap"),
+            });
+            renderer.update_background_color(&queue, config.background_color);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                config.use_curve,
+                config.exposure,
+                config.gamma,
+                config.gamma_threshold,
+                config.brightness,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                config.levels_enabled,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+            rgba
+        };
+
+        use crate::config::escape::{EscapeShading, ShadingBlend};
+        let off = shoot(EscapeShading::default(), &mut renderer);
+        let shadow = shoot(
+            EscapeShading {
+                enabled: true,
+                height: 50.0,
+                shadow_color: [0.0, 0.0, 0.0],
+                shadow_strength: 1.0,
+                shadow_blend: ShadingBlend::Multiply,
+                highlight_strength: 0.0,
+                ..Default::default()
+            },
+            &mut renderer,
+        );
+        let highlight = shoot(
+            EscapeShading {
+                enabled: true,
+                height: 50.0,
+                shadow_strength: 0.0,
+                highlight_color: [1.0, 1.0, 1.0],
+                highlight_strength: 1.0,
+                highlight_blend: ShadingBlend::Screen,
+                ..Default::default()
+            },
+            &mut renderer,
+        );
+
+        let bite = |a: &[u8]| -> f64 {
+            let mut acc = 0f64;
+            for (p, q) in a.chunks(4).zip(off.chunks(4)) {
+                for ch in 0..3 {
+                    acc += (p[ch] as f64 - q[ch] as f64).abs();
+                }
+            }
+            acc / (a.len() / 4 * 3) as f64
+        };
+        let hard = shoot(
+            EscapeShading {
+                enabled: true,
+                height: 50.0,
+                shadow_color: [0.0, 0.0, 0.0],
+                shadow_strength: 4.0,
+                shadow_blend: ShadingBlend::Multiply,
+                highlight_strength: 0.0,
+                ..Default::default()
+            },
+            &mut renderer,
+        );
+
+        let mean = |a: &[u8]| -> f64 {
+            let s: f64 = a
+                .chunks(4)
+                .map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0)
+                .sum();
+            s / (a.len() / 4) as f64
+        };
+        let (m_off, m_shadow, m_hard) = (mean(&off), mean(&shadow), mean(&hard));
+        let (bs, bh) = (bite(&shadow), bite(&highlight));
+        println!(
+            "relief: unshaded {m_off:.1}/255, shadow@1 {m_shadow:.1}, shadow@4 {m_hard:.1}; bite shadow {bs:.2} highlight {bh:.2}"
+        );
+
+        // The headroom control has to actually reach: at strength 4 a
+        // black shadow must take a real bite out of the image.
+        assert!(
+            m_hard < m_off * 0.70,
+            "a full black shadow at strength 4 only moved the mean from {m_off:.1} to {m_hard:.1} -- shadows still cannot get dark, which is the report"
+        );
+        // ...and the extra range must be what does it, so the slider
+        // is a real control rather than something saturating at 1.
+        assert!(
+            m_hard < m_shadow * 0.95,
+            "strength 4 ({m_hard:.1}) is no darker than strength 1 ({m_shadow:.1}) -- the extended range is not reaching the blend"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

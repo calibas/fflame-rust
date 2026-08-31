@@ -1591,7 +1591,7 @@ fn register_escape(engine: &mut Engine) {
             enter(&mut cfg);
             cfg.escape.shading.shadow_color =
                 [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
-            cfg.escape.shading.shadow_strength = (strength as f32).clamp(0.0, 1.0);
+            cfg.escape.shading.shadow_strength = (strength as f32).clamp(0.0, 4.0);
             cfg.escape.shading.shadow_blend =
                 crate::config::escape::shading_blend_from_str(blend);
         },
@@ -1603,7 +1603,7 @@ fn register_escape(engine: &mut Engine) {
             enter(&mut cfg);
             cfg.escape.shading.highlight_color =
                 [r as f32, g as f32, b as f32].map(|v| v.clamp(0.0, 1.0));
-            cfg.escape.shading.highlight_strength = (strength as f32).clamp(0.0, 1.0);
+            cfg.escape.shading.highlight_strength = (strength as f32).clamp(0.0, 4.0);
             cfg.escape.shading.highlight_blend =
                 crate::config::escape::shading_blend_from_str(blend);
         },
