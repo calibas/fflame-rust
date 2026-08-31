@@ -327,7 +327,6 @@ pub enum ConfigPath {
     /// Biomorph classification axis, as its wire string
     /// (`"off"`/`"re"`/`"im"`).
     EscapeBiomorph,
-    EscapeAutoScale,
     // Relief shading — a lit-surface layer over the coloring's output.
     // Ten paths rather than one struct-valued path because the whole
     // undo/redo and scripting surface is keyed on leaf parameters.
@@ -844,7 +843,6 @@ impl Display for ConfigPath {
             ConfigPath::EscapeDampingRe => write!(f, "Damping (re)"),
             ConfigPath::EscapeDampingIm => write!(f, "Damping (im)"),
             ConfigPath::EscapeBiomorph => write!(f, "Biomorph Mode"),
-            ConfigPath::EscapeAutoScale => write!(f, "Auto Scale"),
             ConfigPath::EscapeShadingEnabled => write!(f, "Relief Shading"),
             ConfigPath::EscapeShadingLightAngle => write!(f, "Relief Light Angle"),
             ConfigPath::EscapeShadingHeight => write!(f, "Relief Height"),
@@ -1081,7 +1079,6 @@ impl ConfigPath {
             ConfigPath::EscapeDampingRe => I18nKey::simple("history.param.escape_damping_re"),
             ConfigPath::EscapeDampingIm => I18nKey::simple("history.param.escape_damping_im"),
             ConfigPath::EscapeBiomorph => I18nKey::simple("history.param.escape_biomorph"),
-            ConfigPath::EscapeAutoScale => I18nKey::simple("history.param.escape_auto_scale"),
             ConfigPath::EscapeShadingEnabled => I18nKey::simple("history.param.escape_shading_enabled"),
             ConfigPath::EscapeShadingLightAngle => I18nKey::simple("history.param.escape_shading_light_angle"),
             ConfigPath::EscapeShadingHeight => I18nKey::simple("history.param.escape_shading_height"),
@@ -2392,7 +2389,6 @@ impl ConfigPath {
             | ConfigPath::EscapeDampingRe
             | ConfigPath::EscapeDampingIm
             | ConfigPath::EscapeBiomorph
-            | ConfigPath::EscapeAutoScale
             | ConfigPath::EscapeShadingEnabled
             | ConfigPath::EscapeShadingLightAngle
             | ConfigPath::EscapeShadingHeight
@@ -2660,7 +2656,6 @@ impl ConfigPath {
             ConfigPath::EscapeDampingRe => "Escape.DampingRe".to_string(),
             ConfigPath::EscapeDampingIm => "Escape.DampingIm".to_string(),
             ConfigPath::EscapeBiomorph => "Escape.Biomorph".to_string(),
-            ConfigPath::EscapeAutoScale => "Escape.AutoScale".to_string(),
             ConfigPath::EscapeShadingEnabled => "Escape.Shading.Enabled".to_string(),
             ConfigPath::EscapeShadingLightAngle => "Escape.Shading.LightAngle".to_string(),
             ConfigPath::EscapeShadingHeight => "Escape.Shading.Height".to_string(),
@@ -2856,7 +2851,6 @@ impl ConfigPath {
                 ["DampingRe"] => return Some(ConfigPath::EscapeDampingRe),
                 ["DampingIm"] => return Some(ConfigPath::EscapeDampingIm),
                 ["Biomorph"] => return Some(ConfigPath::EscapeBiomorph),
-                ["AutoScale"] => return Some(ConfigPath::EscapeAutoScale),
                 ["Shading", "Enabled"] => return Some(ConfigPath::EscapeShadingEnabled),
                 ["Shading", "LightAngle"] => return Some(ConfigPath::EscapeShadingLightAngle),
                 ["Shading", "Height"] => return Some(ConfigPath::EscapeShadingHeight),
@@ -3445,9 +3439,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
         ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::EscapeSupersample => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
-        ConfigPath::EscapeJulia | ConfigPath::EscapeAutoScale => {
-            json.as_bool().map(ConfigValue::Bool)
-        }
+        ConfigPath::EscapeJulia => json.as_bool().map(ConfigValue::Bool),
         // Relief shading: the continuous controls animate (sweeping the
         // light around a still is the obvious use), the selectors and
         // the on/off do not.

@@ -87,13 +87,7 @@ struct IterResult {
     dz: vec2<f32>,
     accum: vec2<f32>,
     n: u32,
-    // bit 0 escaped, bit 1 converged, bit 2 VALID (this pixel has
-    // finished iterating and the record is final), bits 3.. period.
-    //
-    // Valid matters because records are now written as pixels FINISH,
-    // not only when the whole render does: the normalization reduces
-    // over them mid-render, and the recolor pass must leave a pixel
-    // that has not finished alone rather than painting it.
+    // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
 }
 @group(0) @binding(5) var<storage, read_write> results: array<IterResult>;
@@ -267,11 +261,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     if ((params.flags & 8u) != 0u) {
-        // The direct path runs a pixel to completion inside its own
-        // dispatch, so every record it writes is final.
         results[py * params.width + gid.x] = IterResult(
             z, dz, accum_state, n,
-            select(0u, 1u, escaped) | select(0u, 2u, converged) | 4u | (period << 3u),
+            select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
@@ -470,13 +462,7 @@ struct IterResult {
     dz: vec2<f32>,
     accum: vec2<f32>,
     n: u32,
-    // bit 0 escaped, bit 1 converged, bit 2 VALID (this pixel has
-    // finished iterating and the record is final), bits 3.. period.
-    //
-    // Valid matters because records are now written as pixels FINISH,
-    // not only when the whole render does: the normalization reduces
-    // over them mid-render, and the recolor pass must leave a pixel
-    // that has not finished alone rather than painting it.
+    // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
 }
 @group(0) @binding(12) var<storage, read_write> results: array<IterResult>;
@@ -780,17 +766,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
-    // A pixel is finished the moment it escapes, or when the render
-    // reaches its iteration cap. Writing then (rather than only at
-    // the very end) is what lets the auto-scale normalization measure
-    // a partially-rendered frame -- and an escaped pixel re-enters
-    // this tail on every later chunk with its terminal registers
-    // restored, so it simply rewrites the same record.
-    let finished = escaped || perturb.iter_end >= params.max_iter;
-    if ((params.flags & 8u) != 0u && finished) {
+    if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
         results[px_index] = IterResult(
             z, dz, accum_state, n,
-            select(0u, 1u, escaped) | select(0u, 2u, converged) | 4u | (period << 3u),
+            select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
     // Mid-render, an UNFINISHED pixel keeps the previous frame's
@@ -961,13 +940,7 @@ struct IterResult {
     dz: vec2<f32>,
     accum: vec2<f32>,
     n: u32,
-    // bit 0 escaped, bit 1 converged, bit 2 VALID (this pixel has
-    // finished iterating and the record is final), bits 3.. period.
-    //
-    // Valid matters because records are now written as pixels FINISH,
-    // not only when the whole render does: the normalization reduces
-    // over them mid-render, and the recolor pass must leave a pixel
-    // that has not finished alone rather than painting it.
+    // bit 0 escaped, bit 1 converged, bits 2.. detected period.
     tags: u32,
 }
 @group(0) @binding(12) var<storage, read_write> results: array<IterResult>;
@@ -1643,17 +1616,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     }
 
-    // A pixel is finished the moment it escapes, or when the render
-    // reaches its iteration cap. Writing then (rather than only at
-    // the very end) is what lets the auto-scale normalization measure
-    // a partially-rendered frame -- and an escaped pixel re-enters
-    // this tail on every later chunk with its terminal registers
-    // restored, so it simply rewrites the same record.
-    let finished = escaped || perturb.iter_end >= params.max_iter;
-    if ((params.flags & 8u) != 0u && finished) {
+    if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
         results[px_index] = IterResult(
             z, dz, accum_state, n,
-            select(0u, 1u, escaped) | select(0u, 2u, converged) | 4u | (period << 3u),
+            select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
     // Mid-render, an UNFINISHED pixel keeps the previous frame's
@@ -3036,102 +3002,6 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
 ")
 }
 
-/// Reduction over the finished [`IterResult`] records: the SMALLEST
-/// escape count present in the frame — the iteration at which its
-/// first pixel escapes.
-///
-/// Why the minimum and not an average: it is the only such statistic
-/// that a progressive render cannot move. Chunks advance the whole
-/// image through the iteration range together, so every pixel that
-/// escapes in a later chunk escapes LATER by construction; the
-/// smallest count is therefore settled by the first chunk that
-/// produces any escape, and every subsequent chunk leaves it alone.
-/// A mean, which an earlier version used, climbs steadily as the
-/// slower pixels arrive — and the colours climb with it, which is
-/// exactly what a viewer sees as the image shifting under them.
-///
-/// It also happens to be the better measure of depth: across zooms
-/// 0..28 at one centre it ran 1, 11, 22, 35, 75, 180, 647, 960 —
-/// monotone, where the median over the same views bounced (20, 60,
-/// 64, 109, 355, 1138, 1028, 1057) because it depends on what the
-/// view is over.
-///
-/// A workgroup-local minimum first, then one atomic per workgroup, so
-/// a full-frame reduction costs pixels/64 atomics rather than one per
-/// pixel — cheap enough to run after every chunk, which is what keeps
-/// the normalization live during progressive rendering.
-pub const REDUCE_NORM_WGSL: &str = r#"
-struct EscapeParams {
-    center: vec2<f32>,
-    julia_c: vec2<f32>,
-    span: vec2<f32>,
-    rot_cs: vec2<f32>,
-    width: u32,
-    height: u32,
-    max_iter: u32,
-    flags: u32,
-    bailout: f32,
-    tile_y0: u32,
-    damping: vec2<f32>,
-    shade_flags: u32,
-    _pad_shade0: u32,
-    _pad_shade1: u32,
-    _pad_shade2: u32,
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
-    fdata: array<vec4<f32>, 64>,
-}
-
-struct IterResult {
-    z: vec2<f32>,
-    dz: vec2<f32>,
-    accum: vec2<f32>,
-    n: u32,
-    tags: u32,
-}
-
-struct NormAccum {
-    min_n: atomic<u32>,
-    found: atomic<u32>,
-}
-
-@group(0) @binding(0) var<uniform> params: EscapeParams;
-@group(0) @binding(1) var<storage, read> results: array<IterResult>;
-@group(0) @binding(2) var<storage, read_write> norm: NormAccum;
-
-const NORM_NONE: u32 = 0xFFFFFFFFu;
-
-var<workgroup> wg_min: atomic<u32>;
-
-@compute @workgroup_size(8, 8, 1)
-fn reduce_main(
-    @builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(local_invocation_index) li: u32,
-) {
-    if (li == 0u) {
-        atomicStore(&wg_min, NORM_NONE);
-    }
-    workgroupBarrier();
-    if (gid.x < params.width && gid.y < params.height) {
-        let r = results[gid.y * params.width + gid.x];
-        // Escaped AND finished. An interior pixel ran to the cap and
-        // carries no escape count; an unfinished one carries nothing
-        // yet (a zeroed record reads as neither).
-        if ((r.tags & 1u) != 0u && (r.tags & 4u) != 0u) {
-            atomicMin(&wg_min, r.n);
-        }
-    }
-    workgroupBarrier();
-    if (li == 0u) {
-        let m = atomicLoad(&wg_min);
-        if (m != NORM_NONE) {
-            atomicMin(&norm.min_n, m);
-            atomicStore(&norm.found, 1u);
-        }
-    }
-}
-"#;
-
 /// Recolor pass: re-run the coloring + palette lookup from the
 /// per-pixel [`IterResult`] records a completed iterate pass left
 /// behind, without iterating anything. One dispatch over the full
@@ -3181,13 +3051,6 @@ struct IterResult {
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IterResult>;
 
-// Plain (non-atomic) view of the reduction's output.
-struct NormRead {
-    min_n: u32,
-    found: u32,
-}
-@group(0) @binding(6) var<storage, read> norm: NormRead;
-
 fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
 }
@@ -3209,33 +3072,15 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let r = results[gid.y * params.width + gid.x];
-    // A pixel that has not finished iterating keeps whatever the
-    // texture already holds: mid-render this pass runs over a
-    // partially-filled record buffer, and painting the rest would put
-    // back the black frames the chunked renderer was taught to avoid.
-    if ((r.tags & 4u) == 0u) {
-        return;
-    }
     let escaped = (r.tags & 1u) != 0u;
     let converged = (r.tags & 2u) != 0u;
-    let period = r.tags >> 3u;
+    let period = r.tags >> 2u;
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
     var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
-        var raw = coloring_map(summary, r.accum);
-        // Auto scale (flags bit 4, set only for an ITERATION-SCALED
-        // coloring): measure iterations from the frame's FIRST escape
-        // rather than from zero, so a deep view -- where nothing
-        // escapes for hundreds or thousands of iterations -- does not
-        // spend that whole offset racing through the palette. The
-        // coloring's value is (count * scale), so scaling the RESULT
-        // is exactly scaling the parameter, with no need to reach
-        // into cparams.
-        if ((params.flags & 16u) != 0u && norm.found != 0u) {
-            raw = raw * (AUTO_SCALE_REFERENCE / max(f32(norm.min_n), 1.0));
-        }
+        let raw = coloring_map(summary, r.accum);
         let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
         height = select(raw, t, params.shade_flags == 1u);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
@@ -3266,10 +3111,6 @@ pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String 
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {has_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
-                out.push(format!(
-                    "const AUTO_SCALE_REFERENCE: f32 = {:.1};",
-                    super::AUTO_SCALE_REFERENCE_ITERS
-                ));
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }

@@ -854,7 +854,7 @@ fn show_coloring_section(
             ui.horizontal(|ui| {
                 if ui
                     .button(t!("escape_panel.auto_scale"))
-                    .on_hover_text(t!("escape_panel.auto_scale_tip", value = format!("{suggested:.4}")))
+                    .on_hover_text(t!("escape_panel.auto_scale_tip", value = format!("{suggested:.6}")))
                     .clicked()
                 {
                     let _ = config_manager.update_param(
@@ -866,7 +866,7 @@ fn show_coloring_section(
                     ui.label(
                         egui::RichText::new(t!(
                             "escape_panel.auto_scale_hint",
-                            value = format!("{suggested:.4}")
+                            value = format!("{suggested:.6}")
                         ))
                         .small()
                         .weak(),
@@ -936,7 +936,7 @@ fn show_coloring_section(
         ui.horizontal(|ui| {
             if ui
                 .button(t!("escape_panel.auto_scale"))
-                .on_hover_text(t!("escape_panel.auto_scale_tip", value = format!("{suggested:.4}")))
+                .on_hover_text(t!("escape_panel.auto_scale_tip", value = format!("{suggested:.6}")))
                 .clicked()
             {
                 let _ = config_manager.update_param(
@@ -955,20 +955,6 @@ fn show_coloring_section(
                 );
             }
         });
-        // The continuous form: the button above picks a good value
-        // ONCE, this keeps whatever value is set proportional as the
-        // iteration budget changes.
-        if coloring.has_feature(crate::escape::ColoringFeature::IterationScaled) {
-            let mut on = esc.auto_scale;
-            if ui
-                .checkbox(&mut on, t!("escape_panel.auto_scale_track").as_ref())
-                .on_hover_text(t!("escape_panel.auto_scale_track_tip"))
-                .changed()
-            {
-                let _ = config_manager
-                    .update_param(ConfigPath::EscapeAutoScale, on.into());
-            }
-        }
     }
     for p in coloring.parameters {
         let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);

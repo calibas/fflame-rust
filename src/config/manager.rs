@@ -1779,7 +1779,6 @@ impl ConfigManager {
                 .copied()
                 .unwrap_or(0.0)
                 .into()),
-            ConfigPath::EscapeAutoScale => Ok(config.escape.auto_scale.into()),
             ConfigPath::EscapeColoringParam { param } => Ok(config
                 .escape
                 .coloring_params
@@ -2693,10 +2692,6 @@ impl ConfigManager {
             ConfigPath::EscapeFormulaParam { param } => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.formula_params.insert(param.clone(), v);
-            }
-            ConfigPath::EscapeAutoScale => {
-                let v: bool = value.try_into()?;
-                self.current.escape.auto_scale = v;
             }
             ConfigPath::EscapeColoringParam { param } => {
                 let v: f32 = value.try_into()?;
