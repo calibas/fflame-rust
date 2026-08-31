@@ -36,6 +36,7 @@ pub mod orbit_store;
 pub mod reference;
 pub mod fields;
 pub mod formulas;
+pub mod presets;
 pub mod diag;
 pub mod renderer;
 
@@ -163,6 +164,35 @@ pub struct EscapeParamDef {
     pub tooltip: &'static str,
 }
 
+/// One named starting point for a formula.
+///
+/// A formula's identity is not just its step: Origami wants a
+/// position map at zoom -1 with 32 iterations, Newton wants root
+/// basins at 64, the Mandelbrot wants smooth at 512. None of that
+/// carries over from whatever you were looking at a moment ago, which
+/// is why switching formulas used to leave a stale view over an
+/// unsuitable coloring. A preset carries all of it together.
+#[derive(Clone, Copy, Debug)]
+pub struct EscapePreset {
+    pub name: &'static str,
+    /// Exact decimal centre, as `EscapeConfig` stores it.
+    pub center_re: &'static str,
+    pub center_im: &'static str,
+    pub zoom_log2: f64,
+    pub max_iter: u32,
+    pub coloring: &'static str,
+    /// `Some((re, im))` selects the dynamical plane with that seed.
+    pub julia: Option<(f32, f32)>,
+    pub formula_params: &'static [(&'static str, f32)],
+    pub coloring_params: &'static [(&'static str, f32)],
+}
+
+/// A formula's default starting point: its first preset, if it has
+/// one. This is what a switch to the formula applies.
+pub fn formula_default_preset(formula: &FormulaDef) -> Option<&'static EscapePreset> {
+    formula.presets.first()
+}
+
 /// Whether a Julia toggle means anything for this formula.
 ///
 /// False for a map with no `c` (see
@@ -176,11 +206,20 @@ pub fn formula_julia_is_meaningful(formula: &FormulaDef) -> bool {
 ///
 /// Two ways a pairing is dead, both of them silent without this:
 ///
-/// 1. A NON-ESCAPING map never sets `escaped`, and the templates only
-///    colour a pixel when `escaped || COLORING_COLORS_INTERIOR`. So an
-///    escape-time coloring over an orbit-trap formula renders BLACK —
-///    not a poor image, no image. This is the "Orbit Trapping
-///    fractals can't use escape time coloring" case.
+/// 1. A map that never sets `escaped` leaves the templates'
+///    `escaped || COLORING_COLORS_INTERIOR` false everywhere, so an
+///    escape-time coloring over it renders BLACK — not a poor image,
+///    no image. This is the "Orbit Trapping fractals can't use escape
+///    time coloring" case.
+///
+///    `NonEscaping` alone does NOT mean that: a CONVERGENT formula
+///    has no bailout test but still sets `escaped` when its orbit
+///    settles, which is what lets escape-count and smooth shade
+///    convergence SPEED (Novaretti's shipped look). Only a formula
+///    that is non-escaping and non-convergent truly never escapes.
+///    Getting this wrong hid a coloring that works — caught by the
+///    preset smoke test, which found a shipped config the gate had
+///    just declared impossible.
 /// 2. A DERIVATIVE coloring over a formula that supplies no
 ///    derivative degrades to a flat constant (the shader returns 0.5
 ///    rather than divide by a derivative that is really the number
@@ -189,9 +228,9 @@ pub fn formula_julia_is_meaningful(formula: &FormulaDef) -> bool {
 /// Both are properties of the assembled shader, not of taste, which
 /// is why this lives beside the registry rather than in the panel.
 pub fn coloring_suits_formula(formula: &FormulaDef, coloring: &ColoringDef) -> bool {
-    if formula.has_feature(FormulaFeature::NonEscaping)
-        && !coloring.has_feature(ColoringFeature::ColorsInterior)
-    {
+    let never_escapes = formula.has_feature(FormulaFeature::NonEscaping)
+        && !formula.has_feature(FormulaFeature::Convergent);
+    if never_escapes && !coloring.has_feature(ColoringFeature::ColorsInterior) {
         return false;
     }
     if coloring.has_feature(ColoringFeature::NeedsDerivative)
@@ -249,6 +288,10 @@ pub struct FormulaDef {
     /// derivative available (abs-folds, anti-holomorphic maps);
     /// distance estimation degrades there.
     pub wgsl_derivative: &'static str,
+    /// Named starting points (see [`EscapePreset`]). The FIRST is the
+    /// formula's default, applied when the user switches to it.
+    /// Empty is allowed; the switch then leaves the view alone.
+    pub presets: &'static [EscapePreset],
 }
 
 impl FormulaDef {

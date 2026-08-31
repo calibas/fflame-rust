@@ -4865,6 +4865,191 @@ mod tests {
         big.destroy();
     }
 
+    /// Every preset must render a PICTURE.
+    ///
+    /// Presets exist so a newcomer can land somewhere that works
+    /// instead of assembling a formula, a view, an iteration budget
+    /// and a coloring by trial. A preset that renders black or flat
+    /// fails at exactly that job, silently, and would be found by a
+    /// user rather than by us — which is the whole problem it was
+    /// added to solve.
+    ///
+    /// Two things are checked per preset. The pairing must be legal
+    /// (`coloring_suits_formula`) — cheap, and it catches a preset
+    /// naming a coloring that cannot draw its formula. Then the
+    /// render must be non-degenerate: enough lit pixels to be an
+    /// image, and enough DISTINCT values to be a picture rather than
+    /// a flat wash. Both floors are deliberately low; this is a
+    /// smoke test for "is there anything here", not a judgement of
+    /// composition.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn every_preset_renders_a_picture() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode,
+            config.palette_squeeze_falloff, config.palette_log_strength,
+            config.palette_reverse,
+        );
+
+        let mut checked = 0usize;
+        for formula in crate::escape::FORMULAS {
+            for preset in formula.presets {
+                // 1. the pairing must be one the engine can draw.
+                let coloring = crate::escape::get_coloring(preset.coloring);
+                assert!(
+                    crate::escape::coloring_suits_formula(formula, coloring),
+                    "preset `{}` of `{}` names coloring `{}`, which cannot draw it",
+                    preset.name,
+                    formula.name,
+                    preset.coloring
+                );
+
+                // 2. build exactly what the panel would apply.
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = formula.name.to_string();
+                esc.coloring = preset.coloring.to_string();
+                esc.center_re = preset.center_re.to_string();
+                esc.center_im = preset.center_im.to_string();
+                esc.zoom_log2 = preset.zoom_log2;
+                esc.max_iter = preset.max_iter;
+                esc.julia = preset.julia.is_some();
+                if let Some((re, im)) = preset.julia {
+                    esc.julia_re = re;
+                    esc.julia_im = im;
+                }
+                for p in formula.parameters {
+                    let v = preset
+                        .formula_params
+                        .iter()
+                        .find(|(k, _)| *k == p.name)
+                        .map(|(_, v)| *v)
+                        .unwrap_or(p.default);
+                    esc.formula_params.insert(p.name.to_string(), v);
+                }
+                for p in coloring.parameters {
+                    let v = preset
+                        .coloring_params
+                        .iter()
+                        .find(|(k, _)| *k == p.name)
+                        .map(|(_, v)| *v)
+                        .unwrap_or(p.default);
+                    esc.coloring_params.insert(p.name.to_string(), v);
+                }
+
+                let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+                let mut guard = 0u32;
+                loop {
+                    let mut enc =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("preset"),
+                        });
+                    let settled = escape.render(
+                        &device, &queue, &mut enc, &esc, renderer.palette_view(),
+                    );
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: None,
+                    });
+                    if settled {
+                        break;
+                    }
+                    guard += 1;
+                    assert!(
+                        guard < 200_000,
+                        "preset `{}` of `{}` never settled",
+                        preset.name,
+                        formula.name
+                    );
+                }
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("preset tonemap"),
+                });
+                renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+                renderer.update_tonemap(
+                    &queue,
+                    crate::scene::tonemap::ToneMapMode::Linear,
+                    config.highlight_mode,
+                    false,
+                    1.0,
+                    1.0,
+                    config.gamma_threshold,
+                    1.0,
+                    config.vibrancy,
+                    config.white_level,
+                    config.saturation,
+                    config.hue_shift,
+                    config.alpha_blend_low,
+                    config.alpha_blend_high,
+                    w,
+                    h,
+                    renderer.total_iterations(),
+                    config.max_iterations,
+                    config.zoom,
+                    256,
+                    4,
+                    false,
+                    false,
+                    config.levels_low,
+                    config.levels_high,
+                    config.levels_gamma,
+                );
+                renderer.tonemap_pass_with_input(
+                    &device, &queue, &mut enc, escape.output_view(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let (_, _, px) = pollster::block_on(renderer.read_fractal_pixels(
+                    &device, &queue, false, [0.0, 0.0, 0.0],
+                ))
+                .expect("readback");
+                escape.destroy();
+
+                let total = (w * h) as f64;
+                let mut lit = 0usize;
+                let mut seen = std::collections::HashSet::new();
+                for p in px.chunks(4) {
+                    if p[0] as u32 + p[1] as u32 + p[2] as u32 > 24 {
+                        lit += 1;
+                    }
+                    // Quantised, so f32 noise does not read as detail.
+                    seen.insert((p[0] >> 3, p[1] >> 3, p[2] >> 3));
+                }
+                let lit_frac = lit as f64 / total;
+                println!(
+                    "{:14} {:20} lit {:5.1}%  {:4} distinct",
+                    formula.name,
+                    preset.name,
+                    100.0 * lit_frac,
+                    seen.len()
+                );
+                assert!(
+                    lit_frac > 0.02,
+                    "preset `{}` of `{}` renders essentially nothing ({:.1}% lit)",
+                    preset.name,
+                    formula.name,
+                    100.0 * lit_frac
+                );
+                assert!(
+                    seen.len() >= 8,
+                    "preset `{}` of `{}` renders a flat wash ({} distinct colours)",
+                    preset.name,
+                    formula.name,
+                    seen.len()
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 40, "only {checked} presets checked");
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
