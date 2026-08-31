@@ -1968,6 +1968,8 @@ escape_panel:
   tooltip_diag_orbit: "The shared reference orbit: its length, whether the last request reused it / loaded it from disk / recomputed it, and the CPU time the current orbit's fixed-point compute has taken."
   diag_orbit_churn: "Orbit rebuilds: %{rebuilds}, relocations: %{relocations}, worker waits: %{waits} frame(s)"
   tooltip_diag_orbit_churn: "Rebuilds count every time the reference was thrown away and recomputed since startup; relocations count the times a pan or zoom-to-cursor re-anchored the existing reference instead (the fast path — during a drag, relocations should climb while rebuilds stay put). Worker waits count frames that rendered nothing because the orbit thread had not published yet — each wait is a frame of visible lag."
+  diag_stale: "Gesture frames from last reference: %{frames}"
+  tooltip_diag_stale: "Frames drawn against the previous reference while the orbit worker caught up with a new request — this is what keeps the image live during a wheel zoom or a drag. If a gesture stutters and this stays flat, the reuse conditions are failing."
   diag_upload: "Orbit upload: %{kb} KB"
   diag_bla: "BLA table: %{kb} KB, built in %{ms} ms"
   diag_bla_off: "BLA: inactive (per-step iteration)"

@@ -505,6 +505,20 @@ pub struct EscapeRenderer {
     /// is shared across renderers and cargo runs tests in parallel —
     /// assertions read THIS.
     pub(crate) last_path: &'static str,
+    /// True when the LAST ensure_orbit_progressive call served the
+    /// frame from the worker's previous publication (stale-serve):
+    /// the request was posted but not yet acknowledged, and the
+    /// published orbit's shape + a render-side offset composition
+    /// covered it. render() reads this to skip the slow-orbit hold —
+    /// a stale-servable request is a relocation away, never slow.
+    last_orbit_stale: bool,
+    /// Frames served that way since creation (test observability).
+    pub(crate) stale_serves: u64,
+    /// The config-derived render identity of the last frame; a CHANGE
+    /// here is a user edit, which restarts the settle clock. Orbit
+    /// progression restarts (same identity, longer reference) keep
+    /// the clock, so a deep reference's settle time stays honest.
+    diag_config_key: Option<String>,
     /// Diagnostics: wall clock started when a change first shows up
     /// (an orbit wait or a chunk restart), stopped when the render
     /// settles. What the Escape panel's latency readout measures.
@@ -1074,6 +1088,9 @@ impl EscapeRenderer {
             results_dummy: None,
             recolor_bind_group_layout,
             last_path: "",
+            last_orbit_stale: false,
+            stale_serves: 0,
+            diag_config_key: None,
             diag_settle_start: None,
             #[cfg(not(target_arch = "wasm32"))]
             progressive: false,
@@ -2291,8 +2308,7 @@ impl EscapeRenderer {
             }
         };
         let height_px = self.height.max(1) as f64;
-        let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
-        let epoch = worker.request(OrbitRequest {
+        let req = OrbitRequest {
             center_re: escape.center_re.clone(),
             center_im: escape.center_im.clone(),
             n_limbs: super::fixedpoint::limbs_for_view(
@@ -2313,7 +2329,10 @@ impl EscapeRenderer {
             },
             zoom_log2: escape.zoom_log2,
             height_px,
-        });
+        };
+        let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
+        let epoch = worker.request(req.clone());
+        self.last_orbit_stale = false;
         let (len, done, gen, data, data_lo, data_e) = {
             let p = worker.progress.lock().unwrap();
             if p.epoch == epoch {
@@ -2334,11 +2353,108 @@ impl EscapeRenderer {
                 super::reference::set_live_reference_period(p.detected_period);
             }
             if p.epoch != epoch {
-                super::diag::update(|d| d.orbit_wait_frames += 1);
-                if self.diag_settle_start.is_none() {
-                    self.diag_settle_start = Some(web_time::Instant::now());
+                // The worker has not acknowledged THIS request yet.
+                // During a continuous gesture (wheel zoom smoothing,
+                // a drag) a NEW request is posted every frame, so
+                // waiting for the ack would freeze the image for the
+                // whole gesture. If the last PUBLISHED orbit has the
+                // same shape and the render-side offset composition
+                // reaches the new center, draw this frame against it
+                // — the ack lands a frame later and produces the
+                // authoritative settled render.
+                let stale_off: Option<[f32; 2]> = (|| {
+                    let served = p.served.as_ref()?;
+                    // There must BE a published orbit to draw against.
+                    // (Its content is uploaded below exactly as on the
+                    // acknowledged path -- requiring the mirror to
+                    // already hold it would deadlock a glide that
+                    // starts on the direct path, where the mirror is
+                    // empty and no frame ever gets to fill it.)
+                    if p.orbit.len() < 2 {
+                        return None;
+                    }
+                    // Relocation is parameter-plane only, and the
+                    // shape must match the new request.
+                    if req.julia_c.is_some()
+                        || served.julia_c != req.julia_c
+                        || served.power != req.power
+                        || served.ship != req.ship
+                        || served.ship_variant != req.ship_variant
+                        || served.map_params != req.map_params
+                        || served.reference_period != req.reference_period
+                        || p.n_limbs < req.n_limbs
+                    {
+                        return None;
+                    }
+                    // periodic_serves, evaluated at the NEW zoom.
+                    if p.detected_period.is_some()
+                        && p.closure_octave
+                            > super::reference::closure_limit_for_zoom(escape.zoom_log2)
+                    {
+                        return None;
+                    }
+                    // Composed offset: published offset rescaled to
+                    // this view, plus the EXACT fixed-point delta
+                    // from the published anchor to the new center.
+                    let h = self.height.max(1) as f64;
+                    let base = super::reference::rescale_offset(
+                        p.ref_offset,
+                        p.off_zoom_log2,
+                        p.off_height_px,
+                        escape.zoom_log2,
+                        h,
+                    )?;
+                    let delta = super::reference::center_delta_px(
+                        &served.center_re,
+                        &served.center_im,
+                        &escape.center_re,
+                        &escape.center_im,
+                        p.n_limbs,
+                        escape.zoom_log2,
+                        h,
+                    )?;
+                    let off = [base[0] + delta[0] as f32, base[1] + delta[1] as f32];
+                    if !off[0].is_finite()
+                        || !off[1].is_finite()
+                        || (off[0] as f64).abs() > super::reference::MAX_RELOCATE_PX
+                        || (off[1] as f64).abs() > super::reference::MAX_RELOCATE_PX
+                    {
+                        return None;
+                    }
+                    Some(off)
+                })();
+                if let Some(off) = stale_off {
+                    self.current_ref_offset = off;
+                    self.last_orbit_stale = true;
+                    self.stale_serves += 1;
+                    super::diag::update(|d| d.orbit_stale_serves += 1);
+                    super::reference::set_live_reference_period(p.detected_period);
+                    // The published content, mirrored the same way the
+                    // acknowledged path mirrors it (append under an
+                    // unchanged generation, whole otherwise). `done`
+                    // is forced false: this frame is a preview, and
+                    // the acknowledged render still owes the
+                    // authoritative image.
+                    let start = if self.orbit_generation == p.generation {
+                        self.orbit_uploaded as usize
+                    } else {
+                        0
+                    };
+                    (
+                        p.orbit.len() as u32,
+                        false,
+                        p.generation,
+                        p.orbit[start.min(p.orbit.len())..].to_vec(),
+                        p.orbit_lo[start.min(p.orbit_lo.len())..].to_vec(),
+                        p.orbit_e[start.min(p.orbit_e.len())..].to_vec(),
+                    )
+                } else {
+                    super::diag::update(|d| d.orbit_wait_frames += 1);
+                    if self.diag_settle_start.is_none() {
+                        self.diag_settle_start = Some(web_time::Instant::now());
+                    }
+                    (0u32, false, 0u64, Vec::new(), Vec::new(), Vec::new())
                 }
-                (0u32, false, 0u64, Vec::new(), Vec::new(), Vec::new())
             } else {
                 super::diag::update(|d| {
                     d.orbit_ms = p.compute_ms;
@@ -3381,6 +3497,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if self.results_key.is_some() && self.results_key != iterate_key {
             self.results_key = None;
         }
+        // A changed render identity is a user edit: the settle clock
+        // measures from HERE. (Orbit-progression restarts under an
+        // unchanged identity keep the running clock, so a slow
+        // reference's settle time stays honest.)
+        if iterate_key.is_some() && self.diag_config_key != iterate_key {
+            self.diag_config_key = iterate_key.clone();
+            self.diag_settle_start = Some(web_time::Instant::now());
+        }
 
         // Deep zoom: the perturbation path. Falls back to direct on a
         // center-parse failure (matching center_f64's fallback view).
@@ -3423,7 +3547,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     );
                     let slow = super::reference::predicted_orbit_seconds(want, limbs)
                         > Self::ORBIT_WAIT_SECONDS;
-                    if !done && slow {
+                    // A stale-served frame already has pixels to draw
+                    // and its worker work is a relocation, not a slow
+                    // compute -- never hold it.
+                    if !done && slow && !self.last_orbit_stale {
                         super::reference::set_orbit_progress(len, want);
                         return false;
                     }

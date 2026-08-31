@@ -3971,6 +3971,78 @@ mod tests {
         // iteration counts). force_perturbed runs the perturbation
         // machinery below its zoom gate; mandelbrot's tier is
         // Power(2), so the delta step matches the reference.
+        // The reported gesture: a wheel zoom gliding 13 -> 48, one
+        // render call per smoothing frame, and what the user sees
+        // is how often the image actually updates during it.
+        {
+            println!("--- wheel glide 13 -> 48 ---");
+            let mut esc2 = esc.clone();
+            esc2.center_re = re.to_string();
+            esc2.center_im = im.to_string();
+            esc2.zoom_log2 = 13.0;
+            let mut escape2 = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape2.progressive = true;
+            let mut g = 0;
+            loop {
+                let mut enc = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("glide warm") },
+                );
+                let s = escape2.render(
+                    &device, &queue, &mut enc, &esc2, renderer.palette_view(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(
+                    wgpu::PollType::Wait { submission_index: None, timeout: None },
+                );
+                if s { break; }
+                g += 1;
+                assert!(g < 100_000);
+            }
+            let t0 = web_time::Instant::now();
+            let stale0 = escape2.stale_serves;
+            let mut frames = 0u32;
+            let mut blank = 0u32;
+            let mut z = 13.0f64;
+            while z < 48.0 {
+                // Paced at a real frame cadence. Without this the
+                // loop runs 100 frames in 12 ms -- faster than the
+                // orbit worker gets scheduled at all, which measures
+                // an artifact rather than the gesture.
+                std::thread::sleep(std::time::Duration::from_millis(8));
+                z += 0.35;
+                esc2.zoom_log2 = z;
+                let before = escape2.stale_serves;
+                let mut enc = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("glide") },
+                );
+                let _ = escape2.render(
+                    &device, &queue, &mut enc, &esc2, renderer.palette_view(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(
+                    wgpu::PollType::Wait { submission_index: None, timeout: None },
+                );
+                frames += 1;
+                // A frame that neither served stale nor had the
+                // worker's ack drew nothing.
+                if escape2.stale_serves == before && escape2.last_path.is_empty() {
+                    blank += 1;
+                }
+            }
+            let stale = escape2.stale_serves - stale0;
+            let d = crate::escape::diag::snapshot();
+            let _ = blank;
+            println!(
+                "glide: {frames} frames over {:.0} ms | stale-served {stale} |                  waits {} | rebuilds {} | relocations {} | last path {}",
+                t0.elapsed().as_secs_f32() * 1000.0,
+                d.orbit_wait_frames,
+                d.orbit_rebuilds,
+                d.orbit_relocations,
+                d.path,
+            );
+            escape2.destroy();
+        }
+
         println!("--- zoom 13.5 A/B, identical view ---");
         esc.zoom_log2 = 13.5;
         esc.center_re = re.to_string();
@@ -4339,6 +4411,193 @@ mod tests {
             rebuilds2 > rebuilds1,
             "an out-of-range pan must rebuild the reference"
         );
+        escape.destroy();
+    }
+
+    /// A continuous gesture (wheel-smoothed zoom-to-cursor: zoom AND
+    /// center changing every frame) must keep DRAWING, not freeze
+    /// until the gesture ends.
+    ///
+    /// The failure mode this pins: every gesture frame posts a new
+    /// orbit request, and the worker's acknowledgment is always one
+    /// frame behind, so a renderer that waits for it draws nothing
+    /// for the whole gesture (the report: "settle 192 ms over 1
+    /// frame" on a wheel zoom that a direct slider does in 17 ms).
+    /// The stale-serve path composes the offset render-side against
+    /// the worker's last publication instead.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn continuous_gesture_keeps_drawing() {
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (192u32, 160u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.progressive = true;
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.zoom_log2 = 15.0;
+        esc.max_iter = 800;
+
+        let frame = |esc: &crate::config::escape::EscapeConfig,
+                     escape: &mut crate::escape::EscapeRenderer,
+                     renderer: &crate::renderer::compute_kernel::FlameRenderer|
+         -> bool {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gesture frame"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            settled
+        };
+
+        // Warm up: settle at the starting view so a reference exists.
+        let mut re = -0.743643887f64;
+        let im = 0.131825904f64;
+        esc.center_re = format!("{re:.12}");
+        esc.center_im = format!("{im:.12}");
+        let mut guard = 0;
+        while !frame(&esc, &mut escape, &renderer) {
+            guard += 1;
+            assert!(guard < 100_000, "warmup did not settle");
+        }
+
+        // The gesture: 40 frames, each moving BOTH zoom and center
+        // (zoom-to-cursor), one render call per event like the app's
+        // frame loop.
+        let stale_before = escape.stale_serves;
+        for _ in 0..40 {
+            esc.zoom_log2 += 0.05;
+            re += 1e-6;
+            esc.center_re = format!("{re:.12}");
+            let _ = frame(&esc, &mut escape, &renderer);
+        }
+        let stale_during = escape.stale_serves - stale_before;
+        println!(
+            "gesture: {stale_during}/40 frames drawn from the previous reference"
+        );
+        assert!(
+            stale_during >= 20,
+            "the gesture starved: only {stale_during}/40 frames drew anything \
+             (the rest waited for the worker's acknowledgment)"
+        );
+
+        // The gesture ends; the render must settle normally...
+        let mut guard = 0;
+        while !frame(&esc, &mut escape, &renderer) {
+            guard += 1;
+            assert!(guard < 100_000, "post-gesture render did not settle");
+        }
+
+        // ...and the settled image is the authoritative one: compare
+        // against a fresh renderer at the final view (fresh reference,
+        // no gesture history). Reference-vs-reference noise band only.
+        let read = |escape: &mut crate::escape::EscapeRenderer,
+                    renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gesture tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+        let settled = read(&mut escape, &mut renderer);
+        let fresh = {
+            let mut escape2 = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape2.progressive = true;
+            let mut guard = 0;
+            while !frame(&esc, &mut escape2, &renderer) {
+                guard += 1;
+                assert!(guard < 100_000, "fresh render did not settle");
+            }
+            let px = read(&mut escape2, &mut renderer);
+            escape2.destroy();
+            px
+        };
+        let lit = |buf: &[u8], i: usize| -> bool {
+            buf[i] as u32 + buf[i + 1] as u32 + buf[i + 2] as u32 > 24
+        };
+        let mut differ = 0usize;
+        for i in (0..settled.len()).step_by(4) {
+            if lit(&settled, i) != lit(&fresh, i) {
+                differ += 1;
+            }
+        }
+        let frac = differ as f64 / (w as f64 * h as f64);
+        println!("post-gesture settled vs fresh: {:.2}% differ", 100.0 * frac);
+        assert!(
+            frac < 0.03,
+            "the post-gesture settled image disagrees with a fresh render \
+             ({:.2}% of pixels)",
+            100.0 * frac
+        );
+
+        // EXPORTS MUST NEVER PREVIEW. Video export (animation/export)
+        // and the headless/CLI path both leave `progressive` false,
+        // which routes orbits through the BLOCKING cache -- the
+        // stale-serve path lives in the progressive one and cannot
+        // run. Pinned here because the guarantee is structural and a
+        // future `progressive = true` on an export path would break
+        // it silently: an exported frame drawn against a not-yet-
+        // acknowledged reference is a wrong frame in a finished file.
+        {
+            let mut exporter = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut e = esc.clone();
+            let mut z = e.zoom_log2;
+            for _ in 0..10 {
+                z += 0.05;
+                e.zoom_log2 = z;
+                let settled = frame(&e, &mut exporter, &renderer);
+                assert!(
+                    settled,
+                    "a non-progressive (export) render must settle in one call"
+                );
+            }
+            assert_eq!(
+                exporter.stale_serves, 0,
+                "an export render served a frame from a stale reference"
+            );
+            exporter.destroy();
+        }
         escape.destroy();
     }
 

@@ -78,7 +78,7 @@ fn nucleus_for_view(
 /// zoom-700 uniform-frame bug). 2^13 keeps a comfortable margin: a
 /// pan gesture reuses the reference for ~10 viewport-heights of
 /// travel before one recompute re-centers it.
-const MAX_RELOCATE_PX: f64 = 8192.0;
+pub(crate) const MAX_RELOCATE_PX: f64 = 8192.0;
 
 /// Which map a reference orbit iterates -- everything that changes
 /// the ORBIT, and therefore everything its cache key must cover.
@@ -1763,6 +1763,39 @@ impl ReferenceOrbit {
     }
 }
 
+/// Exact (b − a) in the pixel-spacing units of a view: both centers
+/// parsed at `n_limbs`, subtracted in fixed point, exported via
+/// floatexp — the same arithmetic [`ReferenceOrbit::relocate_to`]
+/// uses, exposed for the render thread's stale-serve composition
+/// (rendering against the worker's LAST published orbit before the
+/// worker has acknowledged the newest request). None when a center
+/// fails to parse.
+pub fn center_delta_px(
+    a_re: &str,
+    a_im: &str,
+    b_re: &str,
+    b_im: &str,
+    n_limbs: usize,
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<[f64; 2]> {
+    let ax = FixedPoint::from_decimal(a_re, n_limbs)?;
+    let ay = FixedPoint::from_decimal(a_im, n_limbs)?;
+    let bx = FixedPoint::from_decimal(b_re, n_limbs)?;
+    let by = FixedPoint::from_decimal(b_im, n_limbs)?;
+    let h = height_px.max(1.0);
+    let to_px = |d: FixedPoint| -> f64 {
+        let fe = d.to_floatexp();
+        let e = fe.e as f64 + (zoom_log2 - 2.0) + h.log2();
+        if fe.m == 0.0 || e < -60.0 {
+            0.0
+        } else {
+            fe.m * 2f64.powf(e.min(40.0))
+        }
+    };
+    Some([to_px(bx.sub(&ax)), to_px(by.sub(&ay))])
+}
+
 /// Rescale a pixel-unit relocation offset from the view it was
 /// measured at to another view. Pixel spacing S = 2^(2−zoom)/height,
 /// so off_px scales by 2^(Δzoom)·(h/off_h). None when the result
@@ -1847,6 +1880,18 @@ pub struct OrbitProgress {
     pub orbit_e: Vec<i32>,
     /// The orbit covers its request's max_iter (or escaped early).
     pub done: bool,
+    /// The request this publication answered — the render thread's
+    /// stale-serve reads the shape and anchor from here to decide
+    /// whether a NEWER, not-yet-acknowledged request can render
+    /// against this same data (its center strings are the anchor the
+    /// published `ref_offset` is measured from). None until the
+    /// first publish, and for an unparseable-center publish.
+    pub served: Option<OrbitRequest>,
+    /// Precision of the published orbit (>= the request's need).
+    pub n_limbs: usize,
+    /// The orbit's closure octave, so `periodic_serves` can be
+    /// evaluated render-side at a DIFFERENT zoom than the request's.
+    pub closure_octave: i64,
     /// Diagnostics: cumulative CPU milliseconds spent computing the
     /// CURRENT orbit (fresh compute plus every extend chunk); zero
     /// for an orbit served without computing.
@@ -1964,6 +2009,7 @@ impl OrbitWorker {
                                         p.orbit_lo.clear();
                                         p.orbit_e.clear();
                                         p.done = true;
+                                        p.served = None;
                                         continue;
                                     }
                                 }
@@ -1998,6 +2044,9 @@ impl OrbitWorker {
                                 || orbit.escaped_at.is_some()
                                 || orbit.len() > req.max_iter;
                             p.source = src;
+                            p.served = Some(req.clone());
+                            p.n_limbs = orbit.n_limbs;
+                            p.closure_octave = orbit.closure_octave;
                             if !reused {
                                 p.compute_ms =
                                     t_compute.elapsed().as_secs_f32() * 1000.0;
@@ -2046,6 +2095,7 @@ impl OrbitWorker {
                                 }
                                 p.detected_period = orbit.periodic;
                                 p.done = done;
+                                p.closure_octave = orbit.closure_octave;
                                 p.compute_ms += extend_ms;
                             }
                         }
@@ -2217,6 +2267,9 @@ fn tx_loopback_send(
             || orbit.escaped_at.is_some()
             || orbit.len() > req.max_iter;
         p.source = src;
+        p.served = Some(req.clone());
+        p.n_limbs = orbit.n_limbs;
+        p.closure_octave = orbit.closure_octave;
         if !reused {
             p.compute_ms = t_compute.elapsed().as_secs_f32() * 1000.0;
         }

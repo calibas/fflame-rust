@@ -519,6 +519,11 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                     waits = d.orbit_wait_frames
                 ))
                 .on_hover_text(t!("escape_panel.tooltip_diag_orbit_churn"));
+                ui.label(t!(
+                    "escape_panel.diag_stale",
+                    frames = d.orbit_stale_serves
+                ))
+                .on_hover_text(t!("escape_panel.tooltip_diag_stale"));
                 ui.label(t!("escape_panel.diag_upload", kb = d.upload_bytes / 1024));
                 if d.bla_active {
                     ui.label(t!(
