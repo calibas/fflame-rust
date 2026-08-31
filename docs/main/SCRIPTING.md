@@ -230,6 +230,7 @@ Log-calibrated values under which escape output renders black.
 | `escape.shading_off()` | — | Turns the layer back off. |
 | `escape.shading_shadow(r, g, b, strength, blend)` | — | The side facing away from the light. `blend` is `"multiply"` (default), `"screen"`, `"overlay"` or `"mix"`. Strength 0 leaves the image exactly untouched. |
 | `escape.shading_highlight(r, g, b, strength, blend)` | — | The side facing into it; same blend names, `"screen"` by default. |
+| `escape.shading_softness(radius)` | — | Radius in pixels of the stencil the surface normal is estimated from. 0 (the default) is a single-pixel difference — the sharpest estimate, and the one that makes finely-detailed colorings look crunchy. Raising it low-passes the **normal**, so edges soften without blurring the colour underneath. |
 | `escape.shading_field(name)` | — | Which field the slope is taken from: `"smooth"` (the coloring's value before the palette wraps it — terrain relief) or `"banded"` (the wrapped coordinate, so every band edge is a step — an engraved look). |
 | `escape.center(re, im)` | — | The view centre, as **decimal STRINGS**. See the note below — this is the one place a float would quietly cost you the deep zoom. |
 | `escape.center_re` / `escape.center_im` | string | Read the centre back, still as text. |

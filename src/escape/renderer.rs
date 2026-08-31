@@ -395,7 +395,10 @@ struct ShadeParamsGpu {
     highlight_strength: f32,
     shadow_blend: u32,
     highlight_blend: u32,
-    _pad: [u32; 2],
+    /// Normal-estimation radius in RENDER pixels (the config's display
+    /// pixels times the supersample factor). 0 = the ±1 difference.
+    softness: f32,
+    _pad: u32,
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -2502,7 +2505,11 @@ impl EscapeRenderer {
             highlight_strength: shading.highlight_strength,
             shadow_blend: shading.shadow_blend.to_gpu(),
             highlight_blend: shading.highlight_blend.to_gpu(),
-            _pad: [0; 2],
+            // Display pixels to render pixels, for the same reason the
+            // height is scaled: a radius fixed in render pixels would
+            // shrink as antialiasing raised the resolution.
+            softness: shading.softness * factor as f32,
+            _pad: 0,
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -2523,6 +2530,7 @@ struct ShadeParams {{
     highlight_strength: f32,
     shadow_blend: u32,
     highlight_blend: u32,
+    softness: f32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -2558,8 +2566,35 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     let dims = vec2<i32>(textureDimensions(height_tex));
     // Central differences: the slope of the coloring's own value
     // field, in value units per pixel.
-    let dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
-    let dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    var dx: f32;
+    var dy: f32;
+    let sr = i32(round(shade.softness));
+    if (sr <= 0) {{
+        // The sharp estimator: a plain +-1 central difference. Kept
+        // bit-for-bit as the default so every existing config renders
+        // unchanged.
+        dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+        dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+    }} else {{
+        // A Sobel stencil widened to radius r. Two things soften here
+        // and they are different: the RADIUS spreads the difference
+        // over 2r pixels, and the 1-2-1 weighting PERPENDICULAR to
+        // each axis averages across the gradient, which is what kills
+        // the single-pixel wobble a plain wide difference would keep.
+        // EIGHT taps regardless of r -- the four corners and the
+        // four edge midpoints of the ring; both axes share them.
+        let pp = height_at(p + vec2<i32>(sr, sr), dims);
+        let pm = height_at(p + vec2<i32>(sr, -sr), dims);
+        let mp = height_at(p + vec2<i32>(-sr, sr), dims);
+        let mm = height_at(p + vec2<i32>(-sr, -sr), dims);
+        let ep = height_at(p + vec2<i32>(sr, 0), dims);
+        let em = height_at(p + vec2<i32>(-sr, 0), dims);
+        let eu = height_at(p + vec2<i32>(0, sr), dims);
+        let ed = height_at(p + vec2<i32>(0, -sr), dims);
+        let inv = 1.0 / (8.0 * f32(sr));
+        dx = ((pm + 2.0 * ep + pp) - (mm + 2.0 * em + mp)) * inv;
+        dy = ((mp + 2.0 * eu + pp) - (mm + 2.0 * ed + pm)) * inv;
+    }}
     // Exaggerated gradient. +y is DOWN in pixel space, so dy is
     // negated to put the light where the azimuth says it is.
     let g = vec2<f32>(-dx, dy) * shade.height;

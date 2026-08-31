@@ -288,6 +288,17 @@ pub struct EscapeShading {
     pub highlight_strength: f32,
     #[serde(default = "default_highlight_blend")]
     pub highlight_blend: ShadingBlend,
+
+    /// Radius, in DISPLAY pixels, of the stencil the surface normal is
+    /// estimated from. 0 keeps the original ±1 central difference.
+    ///
+    /// The default relief reads crunchy on a finely-detailed field
+    /// because a ±1 difference is the sharpest possible derivative
+    /// estimate — it responds to every single-pixel wobble. Widening
+    /// the stencil low-passes the NORMAL rather than the image, so
+    /// edges soften without the colour beneath them blurring.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub softness: f32,
 }
 
 fn default_light_angle() -> f32 {
@@ -344,6 +355,7 @@ impl Default for EscapeShading {
             highlight_color: default_highlight_color(),
             highlight_strength: default_highlight_strength(),
             highlight_blend: default_highlight_blend(),
+            softness: 0.0,
         }
     }
 }
@@ -525,6 +537,7 @@ mod shading_tests {
             highlight_color: [0.9, 0.8, 0.7],
             highlight_strength: 0.75,
             highlight_blend: ShadingBlend::Mix,
+            softness: 3.0,
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();

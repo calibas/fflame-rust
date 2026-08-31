@@ -1932,6 +1932,8 @@ escape_panel:
   shading_enabled: "Enable"
   shading_light: "Light angle"
   shading_height: "Relief height"
+  shading_softness: "Softness"
+  tooltip_shading_softness: "Radius, in pixels, of the stencil the surface normal is estimated from. 0 is a single-pixel difference — the sharpest estimate, and the one that makes finely-detailed fields look crunchy. Raising it low-passes the NORMAL, so edges soften without blurring the colour underneath."
   shading_field: "Slope from"
   shading_field_smooth: "Value (smooth)"
   shading_field_banded: "Palette bands"

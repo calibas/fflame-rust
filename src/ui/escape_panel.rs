@@ -579,6 +579,18 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                     }
                 });
                 ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.shading_softness"));
+                    let mut sf = sh.softness;
+                    if ui
+                        .add(egui::Slider::new(&mut sf, 0.0..=8.0).step_by(1.0))
+                        .on_hover_text(t!("escape_panel.tooltip_shading_softness"))
+                        .changed()
+                    {
+                        let _ = config_manager
+                            .update_param(ConfigPath::EscapeShadingSoftness, sf.into());
+                    }
+                });
+                ui.horizontal(|ui| {
                     ui.label(t!("escape_panel.shading_field"));
                     let cur = sh.field;
                     egui::ComboBox::from_id_salt("escape_shading_field")

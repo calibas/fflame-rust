@@ -340,6 +340,7 @@ pub enum ConfigPath {
     EscapeShadingHighlightColor,
     EscapeShadingHighlightStrength,
     EscapeShadingHighlightBlend,
+    EscapeShadingSoftness,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -852,6 +853,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingHighlightColor => write!(f, "Relief Highlight Colour"),
             ConfigPath::EscapeShadingHighlightStrength => write!(f, "Relief Highlight Strength"),
             ConfigPath::EscapeShadingHighlightBlend => write!(f, "Relief Highlight Blend"),
+            ConfigPath::EscapeShadingSoftness => write!(f, "Relief Softness"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
@@ -1087,6 +1089,7 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightColor => I18nKey::simple("history.param.escape_shading_highlight_color"),
             ConfigPath::EscapeShadingHighlightStrength => I18nKey::simple("history.param.escape_shading_highlight_strength"),
             ConfigPath::EscapeShadingHighlightBlend => I18nKey::simple("history.param.escape_shading_highlight_blend"),
+            ConfigPath::EscapeShadingSoftness => I18nKey::simple("history.param.escape_shading_softness"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -2396,6 +2399,7 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingHighlightColor
             | ConfigPath::EscapeShadingHighlightStrength
             | ConfigPath::EscapeShadingHighlightBlend
+            | ConfigPath::EscapeShadingSoftness
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
@@ -2662,6 +2666,7 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightColor => "Escape.Shading.HighlightColor".to_string(),
             ConfigPath::EscapeShadingHighlightStrength => "Escape.Shading.HighlightStrength".to_string(),
             ConfigPath::EscapeShadingHighlightBlend => "Escape.Shading.HighlightBlend".to_string(),
+            ConfigPath::EscapeShadingSoftness => "Escape.Shading.Softness".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
@@ -2856,6 +2861,7 @@ impl ConfigPath {
                 ["Shading", "HighlightColor"] => return Some(ConfigPath::EscapeShadingHighlightColor),
                 ["Shading", "HighlightStrength"] => return Some(ConfigPath::EscapeShadingHighlightStrength),
                 ["Shading", "HighlightBlend"] => return Some(ConfigPath::EscapeShadingHighlightBlend),
+                ["Shading", "Softness"] => return Some(ConfigPath::EscapeShadingSoftness),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -3440,7 +3446,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::EscapeShadingLightAngle
         | ConfigPath::EscapeShadingHeight
         | ConfigPath::EscapeShadingShadowStrength
-        | ConfigPath::EscapeShadingHighlightStrength => {
+        | ConfigPath::EscapeShadingHighlightStrength
+        | ConfigPath::EscapeShadingSoftness => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
         ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {

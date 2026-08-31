@@ -1754,6 +1754,7 @@ impl ConfigManager {
             ConfigPath::EscapeShadingHighlightStrength => {
                 Ok(config.escape.shading.highlight_strength.into())
             }
+            ConfigPath::EscapeShadingSoftness => Ok(config.escape.shading.softness.into()),
             ConfigPath::EscapeShadingHighlightBlend => Ok(ConfigValue::String(
                 crate::config::escape::shading_blend_to_str(config.escape.shading.highlight_blend)
                     .to_string(),
@@ -2657,6 +2658,10 @@ impl ConfigManager {
             ConfigPath::EscapeShadingHighlightStrength => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.highlight_strength = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeShadingSoftness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.softness = v.clamp(0.0, 8.0);
             }
             ConfigPath::EscapeShadingHighlightBlend => {
                 let v: String = value.try_into()?;
