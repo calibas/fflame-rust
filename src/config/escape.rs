@@ -112,6 +112,17 @@ pub struct EscapeConfig {
     #[serde(default = "default_supersample", skip_serializing_if = "is_one_u32")]
     pub supersample: u32,
 
+    /// How the supersampled grid is combined back into one pixel.
+    ///
+    /// The default is a plain average in LINEAR light, which is what
+    /// a camera does and is right for luminance. It is also why fine
+    /// coloured filaments read as washed out: a saturated line
+    /// covering one sample in nine is averaged with eight neighbours,
+    /// and correct dilution looks like lost colour. The other modes
+    /// trade physical correctness for keeping that colour.
+    #[serde(default, skip_serializing_if = "is_downsample_default")]
+    pub downsample: DownsampleMode,
+
     /// Reference-orbit period hint (fraktaler-3's `reference.period`):
     /// for a location centered on a deep nucleus, the period of that
     /// nucleus. The renderer VERIFIES the center's orbit closes at
@@ -455,6 +466,54 @@ fn default_damping_re() -> f32 {
 fn is_one(v: &f32) -> bool {
     *v == 1.0
 }
+/// How supersampled samples are combined into a display pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DownsampleMode {
+    /// Plain average in linear light. Physically what a sensor does,
+    /// and correct for luminance.
+    #[default]
+    Box,
+    /// Average in a perceptual (gamma 2.2) space. Mixing two
+    /// saturated colours there lands between them rather than at
+    /// their linear sum, so hues stay their own rather than drifting
+    /// toward the brighter neighbour — at the cost of thin bright
+    /// detail reading darker than it physically should.
+    Perceptual,
+    /// Weight each sample by its own saturation, so a coloured
+    /// filament is not diluted to grey by neutral neighbours. Keeps
+    /// fine colour vivid; deliberately not energy-preserving.
+    Vivid,
+}
+
+impl DownsampleMode {
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            DownsampleMode::Box => 0,
+            DownsampleMode::Perceptual => 1,
+            DownsampleMode::Vivid => 2,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DownsampleMode::Box => "box",
+            DownsampleMode::Perceptual => "perceptual",
+            DownsampleMode::Vivid => "vivid",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "perceptual" => DownsampleMode::Perceptual,
+            "vivid" => DownsampleMode::Vivid,
+            _ => DownsampleMode::Box,
+        }
+    }
+}
+
+fn is_downsample_default(v: &DownsampleMode) -> bool {
+    *v == DownsampleMode::Box
+}
+
 /// Which surface texture the relief carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -530,6 +589,7 @@ impl Default for EscapeConfig {
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
             supersample: 1,
+            downsample: DownsampleMode::Box,
             reference_period: None,
             shading: EscapeShading::default(),
         }

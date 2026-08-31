@@ -1732,6 +1732,9 @@ impl ConfigManager {
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
             ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
+            ConfigPath::EscapeDownsample => Ok(ConfigValue::String(
+                config.escape.downsample.as_str().to_string(),
+            )),
             ConfigPath::EscapeShadingEnabled => Ok(config.escape.shading.enabled.into()),
             ConfigPath::EscapeShadingLightAngle => Ok(config.escape.shading.light_angle.into()),
             ConfigPath::EscapeShadingHeight => Ok(config.escape.shading.height.into()),
@@ -2631,7 +2634,13 @@ impl ConfigManager {
             }
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;
-                self.current.escape.supersample = v.clamp(1, 3);
+                self.current.escape.supersample =
+                    v.clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+            }
+            ConfigPath::EscapeDownsample => {
+                let v: String = value.try_into()?;
+                self.current.escape.downsample =
+                    crate::config::escape::DownsampleMode::from_str_or_default(&v);
             }
             ConfigPath::EscapeShadingEnabled => {
                 self.current.escape.shading.enabled = value.try_into()?;

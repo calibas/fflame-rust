@@ -5257,6 +5257,205 @@ mod tests {
         assert!(checked >= 45, "only {checked} presets checked");
     }
 
+    /// The downsample modes must do what their names claim, and 8x
+    /// supersampling must actually resolve.
+    ///
+    /// The report: antialiasing washes colour out of fine detail.
+    /// That is not a bug -- a saturated filament covering one sample
+    /// in nine IS one ninth of the pixel's light, and a linear
+    /// average says so -- but it is a look, and the alternatives are
+    /// worth having. So this pins the property that distinguishes
+    /// them rather than any particular pixel: over a detailed view,
+    /// `Vivid` must retain more SATURATION than `Box`, because it
+    /// weights each sample by its own, while all three must agree
+    /// closely on where the structure IS (they differ in how samples
+    /// combine, not in what was sampled).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn downsample_modes_trade_saturation_for_correctness() {
+        use crate::config::escape::DownsampleMode;
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 128u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode,
+            config.palette_squeeze_falloff, config.palette_log_strength,
+            config.palette_reverse,
+        );
+
+        // A view with fine coloured filaments -- the case the report
+        // is about. Deep enough that detail lands below one display
+        // pixel, which is what supersampling is for.
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.7436438870371587".to_string();
+        base.center_im = "0.1318259042053119".to_string();
+        base.zoom_log2 = 9.0;
+        base.max_iter = 1500;
+        base.coloring = "smooth".to_string();
+        // TIGHT palette bands: many cycles across the frame, so a
+        // display pixel really does straddle several hues. That is
+        // the regime the report is about; a broad-banded view has
+        // little for any combine to preserve.
+        base.coloring_params.insert("scale".to_string(), 0.35);
+
+        let shoot = |esc: &crate::config::escape::EscapeConfig,
+                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.resize(&device, w, h, esc.supersample);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("aa"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 200_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aa tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, px) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            escape.destroy();
+            px
+        };
+        // Mean saturation over pixels bright enough to have a hue.
+        let saturation = |px: &[u8]| -> f64 {
+            let (mut acc, mut n) = (0f64, 0usize);
+            for p in px.chunks(4) {
+                let mx = p[0].max(p[1]).max(p[2]) as f64;
+                let mn = p[0].min(p[1]).min(p[2]) as f64;
+                if mx > 24.0 {
+                    acc += (mx - mn) / mx;
+                    n += 1;
+                }
+            }
+            if n == 0 { 0.0 } else { acc / n as f64 }
+        };
+
+        let mut aa = base.clone();
+        aa.supersample = 3;
+        let mut sats = Vec::new();
+        let mut images = Vec::new();
+        for mode in [DownsampleMode::Box, DownsampleMode::Perceptual, DownsampleMode::Vivid] {
+            let mut esc = aa.clone();
+            esc.downsample = mode;
+            let px = shoot(&esc, &mut renderer);
+            let s = saturation(&px);
+            println!("{mode:?}: mean saturation {s:.4}");
+            sats.push(s);
+            images.push(px);
+        }
+        let (s_box, s_vivid) = (sats[0], sats[2]);
+        assert!(
+            s_vivid > s_box * 1.02,
+            "Vivid ({s_vivid:.4}) did not retain more saturation than Box \
+             ({s_box:.4}) -- the saturation weighting is not reaching the combine"
+        );
+
+        // All three sampled the same image: they must agree on where
+        // the structure is, or one of them is not a combine at all.
+        let lit = |px: &[u8]| -> Vec<bool> {
+            px.chunks(4)
+                .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .collect()
+        };
+        let base_lit = lit(&images[0]);
+        for (i, img) in images.iter().enumerate().skip(1) {
+            let other = lit(img);
+            let differ = base_lit
+                .iter()
+                .zip(other.iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            let frac = differ as f64 / base_lit.len() as f64;
+            assert!(
+                frac < 0.05,
+                "downsample mode {i} disagrees with Box on {:.1}% of pixels about \
+                 where the structure is -- a combine may not move it",
+                100.0 * frac
+            );
+        }
+
+        // And 8x must resolve: at this size the budget allows it, so
+        // the factor must survive resize and produce a finer image
+        // than no antialiasing at all.
+        let mut off = base.clone();
+        off.supersample = 1;
+        let mut deep = base.clone();
+        deep.supersample = 8;
+        let aliasing = |px: &[u8]| -> f64 {
+            // Mean absolute second difference: aliasing shows up as
+            // high-frequency energy that supersampling removes.
+            let mut acc = 0f64;
+            for y in 0..h as usize {
+                for x in 1..w as usize - 1 {
+                    let i = (y * w as usize + x) * 4;
+                    for c in 0..3 {
+                        let a = px[i - 4 + c] as f64;
+                        let b = px[i + c] as f64;
+                        let d = px[i + 4 + c] as f64;
+                        acc += (d - 2.0 * b + a).abs();
+                    }
+                }
+            }
+            acc / (w as f64 * h as f64 * 3.0)
+        };
+        let (a_off, a_8x) = (aliasing(&shoot(&off, &mut renderer)), aliasing(&shoot(&deep, &mut renderer)));
+        println!("aliasing: 1x {a_off:.2}, 8x {a_8x:.2}");
+        assert!(
+            a_8x < a_off * 0.8,
+            "8x supersampling ({a_8x:.2}) is barely smoother than none ({a_off:.2}) \
+             -- the factor was probably clamped away"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

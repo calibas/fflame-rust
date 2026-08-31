@@ -3315,6 +3315,49 @@ COUNT are as particular as any formula's. A GPU smoke test renders
 every preset and requires enough lit pixels to be an image and enough
 distinct values to be a picture rather than a flat wash.
 
+## 8e. Antialiasing: more of it, and how it combines
+
+*The ceiling goes to 8x* (64 samples per display pixel). Whether a
+view can actually have it is decided by the render-pixel budget in
+`resize`, which reduces the factor rather than failing — and that
+budget is now expressed in BYTES over the real per-pixel cost rather
+than as a fixed pixel count. The pipeline had grown buffers since the
+count was chosen (the recolor cache's 32 B/px of records, the
+softening blur's two targets), so a fixed pixel ceiling quietly meant
+a larger and larger allocation; raising the factor to 8x is what
+makes that the difference between a clamp and an out-of-memory.
+Measured at 160x128: aliasing (mean |second difference|) falls from
+96.2 with no antialiasing to 26.1 at 8x.
+
+*Downsample modes*, because "antialiasing washes colour out of fine
+detail" is a fair report about a correct behaviour. A saturated
+filament covering one sample in nine IS one ninth of that pixel's
+light, and a linear average says so. Three combines:
+
+- `Box`, the default and unchanged: a plain average in linear light,
+  what a sensor does.
+- `Perceptual`: average in gamma space, so mixed hues land between
+  each other rather than at their linear sum. THIS IS THE ONE THAT
+  ANSWERS THE REPORT — measured on a tight-banded view it retains
+  10% more mean saturation than Box. It costs the other half of
+  correctness: thin bright detail reads darker than it physically
+  should.
+- `Vivid`: keep the linear average's luminance, then restore the
+  chroma the samples had. Worth knowing that the FIRST design of this
+  — weighting each sample by its own saturation — did almost nothing
+  (+1.2%), because what dilutes fine colour is mixing HUES rather
+  than mixing colour with grey, and nine similarly-saturated samples
+  produce nearly equal weights. Restoring the chroma directly gets
+  +2.2%. Still the smaller effect of the two.
+
+The test pins the property that separates them rather than any
+pixel: Vivid must retain more saturation than Box, and all three must
+agree to within 5% of pixels on WHERE the structure is, since they
+differ in how samples combine and not in what was sampled. It also
+needed a view with tight palette bands to say anything at all — on a
+broad-banded image the three are nearly indistinguishable, which is
+itself worth knowing.
+
 ## 9. Testing
 
 - **Visual corpus**: one config per formula at landmark coordinates;

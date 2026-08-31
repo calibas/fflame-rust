@@ -8,7 +8,7 @@
 //! sliders are generated from the registry defs, the way variation
 //! params generate theirs.
 
-use crate::config::escape::{ShadingBlend, ShadingField, ShadingTexture};
+use crate::config::escape::{DownsampleMode, ShadingBlend, ShadingField, ShadingTexture};
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
@@ -650,19 +650,23 @@ pub fn render_escape_content(
     });
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.supersample"));
-        let current = esc.supersample.clamp(1, 3);
+        let max = crate::escape::renderer::MAX_SUPERSAMPLE;
+        let current = esc.supersample.clamp(1, max);
+        let label_for = |n: u32| match n {
+            1 => t!("escape_panel.supersample_off").to_string(),
+            n => format!("{n}\u{00d7} ({} samples)", n * n),
+        };
         egui::ComboBox::from_id_salt("escape_supersample")
-            .selected_text(match current {
-                1 => t!("escape_panel.supersample_off").to_string(),
-                n => format!("{n}\u{00d7}"),
-            })
+            .selected_text(label_for(current))
             .show_ui(ui, |ui| {
-                for n in 1u32..=3 {
-                    let label = match n {
-                        1 => t!("escape_panel.supersample_off").to_string(),
-                        n => format!("{n}\u{00d7}"),
-                    };
-                    if ui.selectable_label(n == current, label).clicked() && n != current {
+                // Whole factors only, and not every one: 5x and 7x
+                // cost more than 4x and 6x for no visible gain.
+                for n in [1u32, 2, 3, 4, 6, 8] {
+                    if n > max {
+                        continue;
+                    }
+                    if ui.selectable_label(n == current, label_for(n)).clicked() && n != current
+                    {
                         let _ = config_manager
                             .update_param(ConfigPath::EscapeSupersample, ConfigValue::UInt(n));
                     }
@@ -671,6 +675,39 @@ pub fn render_escape_content(
             .response
             .on_hover_text(t!("escape_panel.tooltip_supersample"));
     });
+    // How those samples are combined. Only meaningful when there is
+    // more than one of them.
+    if esc.supersample > 1 {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.downsample"));
+            let cur = esc.downsample;
+            let label_for = |m: DownsampleMode| match m {
+                DownsampleMode::Box => t!("escape_panel.downsample_box"),
+                DownsampleMode::Perceptual => t!("escape_panel.downsample_perceptual"),
+                DownsampleMode::Vivid => t!("escape_panel.downsample_vivid"),
+            };
+            egui::ComboBox::from_id_salt("escape_downsample")
+                .selected_text(label_for(cur))
+                .show_ui(ui, |ui| {
+                    for m in [
+                        DownsampleMode::Box,
+                        DownsampleMode::Perceptual,
+                        DownsampleMode::Vivid,
+                    ] {
+                        if ui.selectable_label(cur == m, label_for(m).as_ref()).clicked()
+                            && cur != m
+                        {
+                            let _ = config_manager.update_param(
+                                ConfigPath::EscapeDownsample,
+                                ConfigValue::String(m.as_str().to_string()),
+                            );
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("escape_panel.tooltip_downsample"));
+        });
+    }
     // ---- Relief shading ----
     // A LAYER, not a coloring: it runs after the palette lookup, so it
     // composes with whatever is above it. Collapsed by default because
