@@ -3000,6 +3000,46 @@ inherit rotation/squeeze/reverse/log-strength free.
 Two-channel emission (position + intensity → rgb·a HDR) so tone
 mapping has something real to do.
 
+## 8b. Interactive latency: diagnostics and the recolor cache
+
+Measured (the `interactive_latency_report` GPU test, 960x720,
+mandelbrot, max_iter 2000): the perturbed compute pass costs ~6x the
+direct pass for the IDENTICAL view (14.2 ms vs 2.3 ms per full
+frame), and before the cache every edit — palette, coloring param,
+relief slider — re-ran the whole iteration. That was the "noticeable
+delay past zoom 14".
+
+*The recolor cache splits iteration from coloring at the template
+level.* Each iterate template (direct, perturbed f32, perturbed
+floatexp — so every formula and all perturbation tiers inherit it)
+writes a 32 B/px terminal record on its finishing pass: z, dz, n,
+escaped/converged/period, and the coloring accumulator. A standalone
+recolor pass — assembled per COLORING, a transcription of the iterate
+templates' tail — re-runs `coloring_map` + palette lookup from the
+records. When a frame's *iterate identity* (formula + params + view +
+max_iter + bailout + damping + the derivative/interior compile flags,
+plus the coloring's identity when it participates in iteration via an
+accumulator or period test) matches the settled records, the frame is
+one recolor dispatch: **coloring edits at zoom 25 went from ~70 ms to
+~0.4 ms**, independent of iteration depth. The Escape panel's
+Diagnostics section shows the live attribution (path = recolor on a
+hit).
+
+Correctness is pinned by `recolor_cache_is_invisible_and_invalidates_
+correctly`: a cache-hit frame is BIT-IDENTICAL to a fresh render for
+a map-only coloring (both paths), a derivative coloring (dz flows
+through the records), and an accumulator coloring — whose param tick
+must MISS, since the accumulator ran under the old params — and a
+view change misses everywhere. Records live in one storage buffer
+sized by the render grid; a pixel count past the device's binding
+limit (giant CLI exports) gates the write off via params.flags bit 3
+and renders uncached, exactly as before.
+
+Still open from the same measurement: a pan or zoom-to-cursor event
+recomputes the reference orbit (the center strings are part of its
+identity), ~15-30 ms plus a worker roundtrip per gesture event —
+rebasing could serve nearby centers from the old reference.
+
 ## 9. Testing
 
 - **Visual corpus**: one config per formula at landmark coordinates;
