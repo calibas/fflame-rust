@@ -772,8 +772,18 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    // Mid-render, an UNFINISHED pixel keeps the previous frame's
+    // content instead of painting itself black: a chunked render's
+    // early frames used to flash black wherever iterations had not
+    // finished (the whole frame, during a pan past the floatexp
+    // threshold, where the TDR-safe chunk is far smaller than
+    // max_iter). Escaped pixels rewrite their final colour every
+    // chunk as before, and the LAST chunk writes everyone -- the
+    // settled image is byte-identical.
+    if (escaped || perturb.iter_end >= params.max_iter) {
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    }
 }
 "#;
 
@@ -1612,8 +1622,18 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    // Mid-render, an UNFINISHED pixel keeps the previous frame's
+    // content instead of painting itself black: a chunked render's
+    // early frames used to flash black wherever iterations had not
+    // finished (the whole frame, during a pan past the floatexp
+    // threshold, where the TDR-safe chunk is far smaller than
+    // max_iter). Escaped pixels rewrite their final colour every
+    // chunk as before, and the LAST chunk writes everyone -- the
+    // settled image is byte-identical.
+    if (escaped || perturb.iter_end >= params.max_iter) {
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    }
 }
 "#;
 
