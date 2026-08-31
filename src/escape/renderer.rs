@@ -486,6 +486,10 @@ pub struct EscapeRenderer {
     /// its GPU mirror, and the perturbed pipeline's own layout (two
     /// extra bindings: the orbit buffer and the perturb uniform).
     orbit_cache: OrbitCache,
+    /// Diagnostics: wall clock started when a change first shows up
+    /// (an orbit wait or a chunk restart), stopped when the render
+    /// settles. What the Escape panel's latency readout measures.
+    diag_settle_start: Option<web_time::Instant>,
     /// Progressive mode (the app sets this): reference orbits come
     /// from the worker thread and frames render with whatever prefix
     /// has landed — `render` reports whether the image is final.
@@ -954,6 +958,7 @@ impl EscapeRenderer {
             #[cfg(test)]
             force_floatexp: false,
             orbit_cache: OrbitCache::default(),
+            diag_settle_start: None,
             #[cfg(not(target_arch = "wasm32"))]
             progressive: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1176,6 +1181,7 @@ impl EscapeRenderer {
         let Some(orbit_data) = orbit_data else {
             return false;
         };
+        let t_bla = web_time::Instant::now();
         let usable = (orbit_len as usize).min(orbit_data.len());
         if usable < 3 {
             return false;
@@ -1288,6 +1294,10 @@ impl EscapeRenderer {
             }));
         }
         queue.write_buffer(self.bla_buffer.as_ref().unwrap(), 0, &bytes);
+        super::diag::update(|d| {
+            d.bla_build_ms = t_bla.elapsed().as_secs_f32() * 1000.0;
+            d.bla_bytes = bytes.len() as u64;
+        });
         self.bla_built = Some(BlaBuilt {
             generation: self.orbit_generation,
             orbit_len: orbit_len_eff,
@@ -1965,8 +1975,16 @@ impl EscapeRenderer {
                 super::reference::set_live_reference_period(p.detected_period);
             }
             if p.epoch != epoch {
+                super::diag::update(|d| d.orbit_wait_frames += 1);
+                if self.diag_settle_start.is_none() {
+                    self.diag_settle_start = Some(web_time::Instant::now());
+                }
                 (0u32, false, 0u64, Vec::new(), Vec::new(), Vec::new())
             } else {
+                super::diag::update(|d| {
+                    d.orbit_ms = p.compute_ms;
+                    d.orbit_source = p.source;
+                });
                 // Append onto what is already uploaded when the GPU
                 // mirror holds this same orbit CONTENT (generation);
                 // a mere epoch change -- a zoom tick reusing the
@@ -2068,6 +2086,10 @@ impl EscapeRenderer {
             );
             self.orbit_uploaded = p.orbit.len() as u32;
             self.orbit_generation = p.generation;
+            super::diag::update(|d| {
+                d.upload_bytes = (p.orbit.len() as u64) * 28;
+                d.orbit_rebuilds += 1;
+            });
         } else if !data.is_empty() {
             queue.write_buffer(
                 self.orbit_buffer.as_ref().unwrap(),
@@ -2090,7 +2112,9 @@ impl EscapeRenderer {
                 bytemuck::cast_slice(&data_e),
             );
             self.orbit_uploaded += data.len() as u32;
+            super::diag::update(|d| d.upload_bytes += (data.len() as u64) * 28);
         }
+        super::diag::update(|d| d.orbit_len = self.orbit_uploaded);
         (self.orbit_uploaded, done)
     }
 
@@ -2164,6 +2188,8 @@ impl EscapeRenderer {
         {
             self.orbit_cache.clear();
         }
+        let gen_before = self.orbit_cache.generation();
+        let t_orbit = web_time::Instant::now();
         let done = match budget {
             None => {
                 self.orbit_cache.get(
@@ -2199,6 +2225,19 @@ impl EscapeRenderer {
         // get()'s mutable borrow, and the slot is guaranteed Some
         // after a successful get.
         let gen = self.orbit_cache.generation();
+        {
+            let ms = t_orbit.elapsed().as_secs_f32() * 1000.0;
+            let rebuilt = gen != gen_before;
+            super::diag::update(|d| {
+                if rebuilt {
+                    d.orbit_source = super::diag::OrbitSource::Computed;
+                    d.orbit_ms = ms;
+                    d.orbit_rebuilds += 1;
+                } else {
+                    d.orbit_source = super::diag::OrbitSource::Reused;
+                }
+            });
+        }
         let orbit = self.orbit_cache.peek()?;
         // The offset's pixel units are rescaled to THIS view (zoom
         // drags and supersampling change the units under a reused
@@ -2926,6 +2965,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // an escape view with shading off carries neither.
         self.ensure_height(device, escape.shading.enabled);
         self.ensure_resolve_target(device, escape.shading.enabled);
+        // Diagnostics: CPU time of this whole call, whatever path or
+        // early return it takes (the drop guard writes on exit).
+        let _diag_cpu = super::diag::CpuTimer::start();
         let mut params = self.params_for(escape);
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -3042,6 +3084,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     self.chunk_key = Some(key);
                     self.chunk_next = 0;
                     self.reset_chunk_pacing();
+                    super::diag::update(|d| {
+                        d.restarts += 1;
+                        d.inflight_frames = 0;
+                    });
+                    if self.diag_settle_start.is_none() {
+                        self.diag_settle_start = Some(web_time::Instant::now());
+                    }
                 }
                 // Consume any landed GPU measurement first: next_chunk
                 // sizes from it.
@@ -3208,6 +3257,24 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     std::sync::atomic::Ordering::Relaxed,
                 );
                 RENDER_DONE.store(iter_end, std::sync::atomic::Ordering::Relaxed);
+                let settled = orbit_done && iterations_done;
+                super::diag::update(|d| {
+                    d.path = if floatexp { "perturbed floatexp" } else { "perturbed f32" };
+                    d.bla_active = bla_ready;
+                    d.last_chunk_iters = iter_end.saturating_sub(iter_start);
+                    d.inflight_frames += 1;
+                    if settled {
+                        d.settle_frames = d.inflight_frames;
+                        d.inflight_frames = 0;
+                    }
+                });
+                if settled {
+                    if let Some(t0) = self.diag_settle_start.take() {
+                        super::diag::update(|d| {
+                            d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                        });
+                    }
+                }
                 if iterations_done {
                     log::debug!(
                         "escape: {} iterations in {} chunks (final chunk {}, baseline {:.1} ms)",
@@ -3238,6 +3305,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             self.chunk_key = Some(key);
             self.direct_tile_y = 0;
             self.direct_last = None;
+            super::diag::update(|d| {
+                d.restarts += 1;
+                d.inflight_frames = 0;
+            });
+            if self.diag_settle_start.is_none() {
+                self.diag_settle_start = Some(web_time::Instant::now());
+            }
         }
         // Shrink-only pacing: while continuing a banded render, the
         // gap since the previous band approximates that band's GPU
@@ -3314,7 +3388,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             std::sync::atomic::Ordering::Relaxed,
         );
         self.direct_last = Some(web_time::Instant::now());
+        super::diag::update(|d| {
+            d.path = "direct";
+            d.inflight_frames += 1;
+            if done {
+                d.settle_frames = d.inflight_frames;
+                d.inflight_frames = 0;
+            }
+        });
         if done {
+            if let Some(t0) = self.diag_settle_start.take() {
+                super::diag::update(|d| {
+                    d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                });
+            }
             // A repeat of the same render starts from the top.
             self.chunk_key = None;
             self.direct_tile_y = 0;

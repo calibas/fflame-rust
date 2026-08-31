@@ -36,6 +36,7 @@ pub mod orbit_store;
 pub mod reference;
 pub mod fields;
 pub mod formulas;
+pub mod diag;
 pub mod renderer;
 
 pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};

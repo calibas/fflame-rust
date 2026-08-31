@@ -3852,6 +3852,135 @@ mod tests {
         );
     }
 
+    /// Interactive-latency attribution across the perturbation
+    /// threshold, in the app's own progressive mode.
+    ///
+    /// The report from the app: edits render in real time up to zoom
+    /// 14, and with a noticeable delay past it. This simulates the
+    /// edits a user actually makes -- a coloring-slider tick, a small
+    /// pan, a zoom notch -- on both sides of the threshold, and prints
+    /// what the diagnostics attribute each settle to (reference orbit
+    /// recomputed or reused, worker wait frames, BLA build, chunked
+    /// frames). The assertions are deliberately weak (the numbers are
+    /// machine-dependent); the value is the printed table.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn interactive_latency_report() {
+        crate::escape::diag::reset();
+        let (device, queue) = repro_device();
+        let (w, h) = (960u32, 720u32);
+
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.progressive = true;
+
+        // Seahorse-valley point, exact enough for any zoom used here.
+        let re = "-0.74364388703715870475";
+        let im = "0.13182590420531197049";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = re.to_string();
+        esc.center_im = im.to_string();
+        esc.max_iter = 2000;
+
+        let mut settle = |esc: &crate::config::escape::EscapeConfig,
+                          escape: &mut crate::escape::EscapeRenderer,
+                          label: &str| {
+            let t0 = web_time::Instant::now();
+            let mut frames = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("latency"),
+                });
+                let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                frames += 1;
+                if settled {
+                    break;
+                }
+                assert!(frames < 200_000, "render did not settle ({label})");
+            }
+            let wall = t0.elapsed().as_secs_f32() * 1000.0;
+            let d = crate::escape::diag::snapshot();
+            println!(
+                "{label}: {wall:.1} ms wall, {frames} frames | path={} orbit={} {} {:.1}ms \
+                 waits={} rebuilds={} | bla={} {:.1}ms | upload={}KB chunk={} cpu={:.2}ms",
+                d.path,
+                d.orbit_len,
+                d.orbit_source.label(),
+                d.orbit_ms,
+                d.orbit_wait_frames,
+                d.orbit_rebuilds,
+                if d.bla_active { "on" } else { "off" },
+                d.bla_build_ms,
+                d.upload_bytes / 1024,
+                d.last_chunk_iters,
+                d.render_cpu_ms,
+            );
+            (wall, frames)
+        };
+
+        for zoom in [13.0f64, 15.0, 25.0] {
+            println!("--- zoom {zoom} ---");
+            esc.zoom_log2 = zoom;
+            esc.center_re = re.to_string();
+            esc.center_im = im.to_string();
+            esc.coloring_params.remove("scale");
+            settle(&esc, &mut escape, "cold settle      ");
+
+            // A coloring-slider tick: view unchanged, orbit reusable.
+            esc.coloring_params.insert("scale".to_string(), 0.06);
+            settle(&esc, &mut escape, "coloring tick    ");
+            esc.coloring_params.insert("scale".to_string(), 0.07);
+            settle(&esc, &mut escape, "coloring tick 2  ");
+
+            // A small pan: the center strings change, the view does
+            // not deepen. This is every mouse-drag event.
+            esc.center_re = format!("{re}1");
+            settle(&esc, &mut escape, "pan (center edit)");
+
+            // A zoom notch at fixed center (wheel without cursor
+            // offset).
+            esc.zoom_log2 = zoom + 0.25;
+            settle(&esc, &mut escape, "zoom notch       ");
+
+            // A zoom notch that ALSO moves the center (zoom-to-cursor,
+            // the app's default wheel behaviour).
+            esc.zoom_log2 = zoom + 0.5;
+            esc.center_im = format!("{im}1");
+            settle(&esc, &mut escape, "zoom-to-cursor   ");
+        }
+
+        // Same view, both pipelines: how much of the threshold cliff
+        // is the perturbed shader itself (vs the deeper view's higher
+        // iteration counts). force_perturbed runs the perturbation
+        // machinery below its zoom gate; mandelbrot's tier is
+        // Power(2), so the delta step matches the reference.
+        println!("--- zoom 13.5 A/B, identical view ---");
+        esc.zoom_log2 = 13.5;
+        esc.center_re = re.to_string();
+        esc.center_im = im.to_string();
+        settle(&esc, &mut escape, "direct settle    ");
+        esc.coloring_params.insert("scale".to_string(), 0.08);
+        settle(&esc, &mut escape, "direct tick      ");
+        escape.force_perturbed = true;
+        esc.coloring_params.insert("scale".to_string(), 0.09);
+        settle(&esc, &mut escape, "perturbed settle ");
+        esc.coloring_params.insert("scale".to_string(), 0.10);
+        settle(&esc, &mut escape, "perturbed tick   ");
+        escape.force_perturbed = false;
+
+        let d = crate::escape::diag::snapshot();
+        assert!(d.settle_ms >= 0.0);
+        assert!(d.restarts > 0, "diagnostics never saw a restart");
+        escape.destroy();
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

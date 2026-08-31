@@ -1739,6 +1739,12 @@ pub struct OrbitProgress {
     pub orbit_e: Vec<i32>,
     /// The orbit covers its request's max_iter (or escaped early).
     pub done: bool,
+    /// Diagnostics: cumulative CPU milliseconds spent computing the
+    /// CURRENT orbit (fresh compute plus every extend chunk); zero
+    /// for an orbit served without computing.
+    pub compute_ms: f32,
+    /// Diagnostics: where the current orbit came from.
+    pub source: super::diag::OrbitSource,
 }
 
 /// Reference orbits on a worker thread with progressive upload (the
@@ -1816,10 +1822,12 @@ impl OrbitWorker {
                                 None
                             }
                         });
+                        let mut src = super::diag::OrbitSource::Reused;
+                        let t_compute = web_time::Instant::now();
                         let (orbit, reused) = match reuse {
                             Some(o) => (o, true),
                             None => {
-                                match worker_compute_orbit(&req) {
+                                match worker_compute_orbit(&req, &mut src) {
                                     Some(o) => (o, false),
                                     None => {
                                         // Unparseable center: publish an
@@ -1865,6 +1873,11 @@ impl OrbitWorker {
                             p.done = orbit.periodic.is_some()
                                 || orbit.escaped_at.is_some()
                                 || orbit.len() > req.max_iter;
+                            p.source = src;
+                            if !reused {
+                                p.compute_ms =
+                                    t_compute.elapsed().as_secs_f32() * 1000.0;
+                            }
                         }
                         current = Some((req, orbit, epoch));
                     }
@@ -1872,9 +1885,16 @@ impl OrbitWorker {
                     // Advance the current job by one chunk.
                     if let Some((req, orbit, epoch)) = current.as_mut() {
                         orbit.set_closure_limit(req.zoom_log2);
+                        let before = orbit.len();
+                        let t_extend = web_time::Instant::now();
                         let target = (orbit.len().saturating_sub(1) + Self::CHUNK)
                             .min(req.max_iter);
                         orbit.extend(target);
+                        let extend_ms = if orbit.len() != before {
+                            t_extend.elapsed().as_secs_f32() * 1000.0
+                        } else {
+                            0.0
+                        };
                         let done = orbit.periodic.is_some()
                             || orbit.escaped_at.is_some()
                             || orbit.len() > req.max_iter;
@@ -1902,6 +1922,7 @@ impl OrbitWorker {
                                 }
                                 p.detected_period = orbit.periodic;
                                 p.done = done;
+                                p.compute_ms += extend_ms;
                             }
                         }
                         if done {
@@ -1945,7 +1966,10 @@ impl OrbitWorker {
 /// iterations — the chunk loop grows it (a periodic nucleus orbit
 /// arrives complete).
 #[cfg(not(target_arch = "wasm32"))]
-fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
+fn worker_compute_orbit(
+    req: &OrbitRequest,
+    source: &mut super::diag::OrbitSource,
+) -> Option<ReferenceOrbit> {
     if let Some(o) = super::orbit_store::load(
         &req.center_re,
         &req.center_im,
@@ -1967,9 +1991,11 @@ fn worker_compute_orbit(req: &OrbitRequest) -> Option<ReferenceOrbit> {
         if o.answers_hint(req.reference_period, req.zoom_log2)
             && o.periodic_serves(req.zoom_log2)
         {
+            *source = super::diag::OrbitSource::Store;
             return Some(o);
         }
     }
+    *source = super::diag::OrbitSource::Computed;
     // Nucleus relocation is derived for the plain power map (Newton on
     // f_c^p(0), ball-method periods, the closure test): the
     // anti-holomorphic family needs its own derivation, so it takes
@@ -2028,9 +2054,11 @@ fn tx_loopback_send(
             None
         }
     });
+    let mut src = super::diag::OrbitSource::Reused;
+    let t_compute = web_time::Instant::now();
     let (orbit, reused) = match reuse {
         Some(o) => (o, true),
-        None => (worker_compute_orbit(&req)?, false),
+        None => (worker_compute_orbit(&req, &mut src)?, false),
     };
     {
         let mut p = shared.lock().unwrap();
@@ -2053,6 +2081,10 @@ fn tx_loopback_send(
         p.done = orbit.periodic.is_some()
             || orbit.escaped_at.is_some()
             || orbit.len() > req.max_iter;
+        p.source = src;
+        if !reused {
+            p.compute_ms = t_compute.elapsed().as_secs_f32() * 1000.0;
+        }
     }
     *current = Some((req, orbit, epoch));
     Some(())
