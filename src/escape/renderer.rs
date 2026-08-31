@@ -2090,24 +2090,34 @@ impl EscapeRenderer {
                 .has_feature(super::ColoringFeature::IterationScaled)
     }
 
-    /// Reduce the finished records to one number: the mean escape
-    /// iteration actually present in the frame.
+    /// Reduce the finished records to one number: the SMALLEST escape
+    /// count in the frame — the iteration its first pixel escapes at.
     ///
-    /// This is what `auto_scale` normalizes by, and it is measured
-    /// rather than predicted for a reason. The obvious candidates are
-    /// both wrong: `max_iter` is a BUDGET, and raising it does not
-    /// change an already-escaped pixel's count (measured -- an 8x
-    /// budget moved a shallow view's colours by 6/255); and zoom has
-    /// no clean law either, since the median escape count depends on
-    /// what the view is over -- measured at one deep centre it ran
-    /// 20, 60, 64, 109, 355, 1138, 1028, 1057 across zooms 4..32,
-    /// climbing 3x in places and falling in others. The frame's own
-    /// counts are the only honest answer.
+    /// This is what `auto_scale` normalizes by, and both halves of
+    /// that choice were arrived at the hard way.
     ///
-    /// A fixed 128x128 subsample, so the cost does not scale with
-    /// resolution, and `n >> 4` per sample so the u32 sum cannot
-    /// overflow (16384 samples x 2^32/16 headroom). Interior pixels
-    /// are excluded: they never escaped and carry no count.
+    /// It is MEASURED rather than predicted because the obvious
+    /// predictors are wrong. `max_iter` is a budget, and raising it
+    /// does not change an already-escaped pixel's count (an 8x budget
+    /// moved a shallow view's colours by 6/255). Zoom has no clean
+    /// law either, because escape counts depend on what the view is
+    /// over.
+    ///
+    /// It is the MINIMUM rather than an average because a progressive
+    /// render cannot move a minimum. Chunks carry the whole image
+    /// through the iteration range together, so anything escaping in
+    /// a later chunk escapes later by construction: the smallest
+    /// count is fixed by the first chunk that produces an escape. A
+    /// mean climbs as the slow pixels arrive, and the colours climb
+    /// with it — which is what "the colours shift during progressive
+    /// rendering" is. The minimum is also the better depth measure:
+    /// across zooms 0..28 at one centre it ran 1, 11, 22, 35, 75,
+    /// 180, 647, 960, monotone, where the median bounced.
+    ///
+    /// Workgroup-local minimum first, one atomic per workgroup, so a
+    /// full-frame reduction is cheap enough to run after every chunk
+    /// — which is what keeps the normalization live while the image
+    /// is still filling in.
     fn run_reduce_norm(
         &mut self,
         device: &Device,
@@ -2130,7 +2140,9 @@ impl EscapeRenderer {
             }));
         }
         let norm = self.norm_buffer.as_ref().unwrap();
-        queue.write_buffer(norm, 0, bytemuck::cast_slice(&[0u32, 0u32]));
+        // min starts at the sentinel the shader compares against;
+        // `found` says whether anything ever beat it.
+        queue.write_buffer(norm, 0, bytemuck::cast_slice(&[u32::MAX, 0u32]));
         let key = "reduce_norm".to_string();
         if !self.pipelines.contains_key(&key) {
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -2168,13 +2180,13 @@ impl EscapeRenderer {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(16, 16, 1);
+        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
     }
 
-    /// The reduction's (mean escape iteration, sample count) from the
-    /// last frame that ran it. Test observation point.
+    /// The reduction's (smallest escape count, found-anything flag)
+    /// from the last frame that ran it. Test observation point.
     #[cfg(test)]
-    pub(crate) async fn read_norm(&self, device: &Device, queue: &Queue) -> Option<(f32, u32)> {
+    pub(crate) async fn read_norm(&self, device: &Device, queue: &Queue) -> Option<(u32, u32)> {
         let src = self.norm_buffer.as_ref()?;
         let staging = device.create_buffer(&BufferDescriptor {
             label: Some("Escape Norm Readback"),
@@ -2193,7 +2205,7 @@ impl EscapeRenderer {
         });
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.await.ok()?.ok()?;
-        let (sum, count) = {
+        let (min_n, found) = {
             let view = staging.slice(..).get_mapped_range();
             (
                 u32::from_le_bytes(view[0..4].try_into().ok()?),
@@ -2202,10 +2214,7 @@ impl EscapeRenderer {
         };
         staging.unmap();
         staging.destroy();
-        if count == 0 {
-            return Some((0.0, 0));
-        }
-        Some((sum as f32 * 16.0 / count as f32, count))
+        Some((min_n, found))
     }
 
     /// One recolor dispatch: coloring + palette from the cached
@@ -4176,13 +4185,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         regime,
                     );
                 }
-                // Auto scale needs the FINISHED records (it measures
-                // them), so the normalized colours are produced by a
-                // recolor pass once the render completes -- the
-                // chunks' own inline colours are unnormalized
-                // previews, and the last word is this.
+                // Auto scale normalizes against the records, so it
+                // runs after EVERY chunk rather than only at the end:
+                // the normalizer is a minimum, which the first chunk
+                // to produce an escape already settles, so every
+                // progressive frame from then on is coloured the same
+                // way the finished one will be. Normalizing only at
+                // the end would leave the chunks showing un-normalized
+                // colour and snap at the last one.
                 let iterations_done = iter_end >= escape.max_iter;
-                if orbit_done && iterations_done && self.auto_norm_applies(escape) {
+                if self.auto_norm_applies(escape) {
                     self.run_reduce_norm(device, queue, encoder);
                     self.run_recolor(device, encoder, escape, palette_view);
                 }
@@ -4336,8 +4348,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
         drop(pass);
-        let direct_done = tile_y0.saturating_add(band) >= self.height;
-        if direct_done && self.auto_norm_applies(escape) {
+        if self.auto_norm_applies(escape) {
             self.run_reduce_norm(device, queue, encoder);
             self.run_recolor(device, encoder, escape, palette_view);
         }

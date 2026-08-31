@@ -103,11 +103,15 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
 
-    /// Divide an iteration-scaled coloring's `scale` by the iteration
-    /// budget (relative to
-    /// [`crate::escape::AUTO_SCALE_REFERENCE_ITERS`]), so raising
-    /// `max_iter` for a deeper view does not multiply the number of
-    /// palette cycles the image shows.
+    /// Measure iterations from the frame's FIRST escape rather than
+    /// from zero: an iteration-scaled coloring's value is divided by
+    /// the smallest escape count present, so a deep view — where
+    /// nothing escapes for hundreds or thousands of iterations —
+    /// does not spend that whole offset racing through the palette.
+    ///
+    /// The minimum is chosen because a progressive render cannot move
+    /// it: later chunks only ever add LARGER counts, so the colours
+    /// do not shift as the image fills in.
     ///
     /// Applies only to colorings carrying
     /// `ColoringFeature::IterationScaled`; a trap or normal-map

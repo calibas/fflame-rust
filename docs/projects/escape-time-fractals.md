@@ -3184,27 +3184,53 @@ then clamped it at 0.005, no longer clamps above the slider's own
 minimum — at the 100k iterations a deep view needs it had been
 returning a value 60x coarser than its own formula asked for.
 
-*The automatic option had to be measured rather than derived.* Two
-plausible laws are both wrong, and the tests that disproved them are
-kept in the file. `max_iter` is a BUDGET: raising it does not change
-an already-escaped pixel's count, and an 8x budget moved a shallow
+*The automatic option had to be measured rather than derived, and
+then measured with the right statistic.* Three candidates, two of
+them wrong, and the tests that disproved them are kept in the file.
+
+`max_iter` is a BUDGET: raising it does not change an
+already-escaped pixel's count, and an 8x budget moved a shallow
 view's colours by 6/255 while normalizing by it moved them 74/255 —
 in the wrong direction. Zoom has no clean law either: at one deep
-centre the median escape count ran 20, 60, 64, 109, 355, 1138, 1028,
+centre the MEDIAN escape count ran 20, 60, 64, 109, 355, 1138, 1028,
 1057 across zooms 4..32, climbing 3x in places and falling in
 others, because it depends entirely on what the view is over — which
-is why the report said "in certain areas". So `auto_scale`
-normalizes by the escape counts MEASURED in the frame: a fixed
-128x128 subsample of the recolor cache's own records is reduced to a
-mean (`n >> 4` per sample so the u32 sum cannot overflow; interior
-pixels excluded, since they never escaped and would drag the mean
-back toward the budget), and the recolor pass divides by it. Because
-the reduction reads FINISHED records and the recolor consumes it in
-the same submission, there is no feedback loop and no frame lag —
-exports are reproducible. The test pins both halves: the reduction's
-mean matches an independent CPU count over the same grid to within
-1%, and auto-scale is bit-identical to setting the scale by hand to
-`base * 256 / mean`.
+is why the report said "in certain areas".
+
+So the normalizer is measured from the frame's own records. The
+first version reduced them to a MEAN, and that was wrong in a way no
+still image shows: a mean climbs steadily as the slower pixels
+escape in later chunks, so the colours climb with it and the image
+shifts under the viewer while it renders. The fix came from the
+report of that shift — normalize by the SMALLEST escape count
+instead. Chunks carry the whole image through the iteration range
+together, so anything escaping in a later chunk escapes LATER by
+construction: the minimum is settled by the first chunk that
+produces an escape and no later chunk can move it. It is also the
+better depth measure, monotone where the median is not (1, 11, 22,
+35, 75, 180, 647, 960 over zooms 0..28).
+
+The semantic is then simply *iterations are measured from the view's
+own first escape rather than from zero*, which is the identity at
+the home view (where a corner pixel escapes on iteration 1) and
+divides by a thousand where nothing escapes for a thousand
+iterations. A workgroup-local minimum then one atomic per workgroup
+makes a full-frame reduction cheap enough to run after EVERY chunk,
+which is what keeps progressive frames coloured the same way the
+finished one will be. Records grew a VALID bit and are now written
+as each pixel finishes rather than only at the end, so the reduction
+can measure a partly-rendered frame and the recolor pass can leave
+unfinished pixels holding their previous content instead of painting
+them black.
+
+Three assertions pin it: the reduction finds the frame's true
+minimum (38, against 38 from an independent CPU pass); auto-scale is
+bit-identical to setting the scale by hand to `base * 1 / min`; and
+across a deliberately chunked 42-frame render the normalizer stays
+at 644 throughout, with 0.0% of the 2299 pixels coloured by frame 9
+changing by the end. Deliberately breaking the reduction into a
+maximum reproduces the original complaint exactly — 672 at frame 7,
+768 at frame 8 — and the stability assertion catches it.
 
 *Device-loss recovery existed but was never reachable.* The full GPU
 rebuild — drop every renderer, `GpuContext::reinit`, recreate,

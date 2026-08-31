@@ -4865,34 +4865,35 @@ mod tests {
         big.destroy();
     }
 
-    /// `auto_scale` normalizes an iteration-scaled coloring by the
-    /// escape counts MEASURED in the frame — and this pins the whole
-    /// chain: that the reduction counts what it claims to, and that
-    /// the recolor pass applies exactly that factor.
+    /// `auto_scale` measures iterations from the frame's FIRST
+    /// escape, and — the property it exists for — that measurement
+    /// must not move while a progressive render fills in.
     ///
-    /// The law had to be measured, not assumed. `max_iter` is a
-    /// BUDGET: raising it does not change an already-escaped pixel's
-    /// count, and an 8x budget moved a shallow view's colours by
-    /// 6/255 — so normalizing by it is normalizing by the wrong
-    /// thing (an earlier version of this test proved exactly that,
-    /// by failing). Zoom has no clean law either: at one deep centre
-    /// the median escape count ran 20, 60, 64, 109, 355, 1138, 1028,
-    /// 1057 across zooms 4..32, rising 3x in places and falling in
-    /// others, because it depends on what the view is over. The
-    /// frame's own counts are the only honest normalizer.
+    /// The law had to be measured, and two earlier versions of this
+    /// test disproved two guesses. `max_iter` is a BUDGET: raising it
+    /// does not change an already-escaped pixel's count, and an 8x
+    /// budget moved a shallow view's colours by 6/255 while
+    /// normalizing by it moved them 74/255 — the wrong way. Zoom has
+    /// no clean law either: at one deep centre the MEDIAN escape
+    /// count ran 20, 60, 64, 109, 355, 1138, 1028, 1057 across zooms
+    /// 4..32, rising 3x in places and falling in others.
     ///
-    /// Two assertions, in causal order:
-    ///  1. the reduction's mean matches an independent CPU count over
-    ///     the same subsample grid (it measures what it says);
-    ///  2. auto-scale ON is INDISTINGUISHABLE from auto-scale off
-    ///     with the scale set by hand to `base * REF / mean` (it
-    ///     applies exactly that factor, and nothing else).
+    /// The minimum is monotone where the median is not (1, 11, 22,
+    /// 35, 75, 180, 647, 960 over zooms 0..28) and, crucially, it is
+    /// the one statistic a chunked render cannot disturb: chunks
+    /// carry the whole image through the iteration range together,
+    /// so a pixel escaping in a later chunk escapes LATER, and the
+    /// smallest count is settled by the first chunk that produces an
+    /// escape. A mean climbs as slow pixels arrive and drags the
+    /// colours with it — reported from the app as the colours
+    /// shifting during progressive rendering.
     ///
-    /// Together those make "auto scale" mean something checkable
-    /// rather than something that merely looks different.
+    /// Three assertions: the reduction finds the true minimum; the
+    /// factor applied is exactly REF/min; and the factor is stable
+    /// across a deliberately chunked render.
     #[test]
     #[ignore = "needs a GPU"]
-    fn auto_scale_normalizes_by_the_measured_escape_counts() {
+    fn auto_scale_tracks_the_first_escape_and_holds_still() {
         let (device, queue) = repro_device();
         let (w, h) = (160u32, 128u32);
         let config = crate::config::FractalConfig::default();
@@ -4901,30 +4902,9 @@ mod tests {
             &config.flame, config.palette_size,
         );
 
-        // Renders to a settled image, returning the pixels and the
-        // reduction's measurement (zero when auto scale is off).
-        let shoot = |esc: &crate::config::escape::EscapeConfig,
-                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
-         -> (Vec<u8>, (f32, u32)) {
-            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
-            let mut guard = 0u32;
-            loop {
-                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("auto scale"),
-                });
-                let settled =
-                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
-                queue.submit(std::iter::once(enc.finish()));
-                let _ =
-                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-                if settled {
-                    break;
-                }
-                guard += 1;
-                assert!(guard < 100_000, "render did not settle");
-            }
-            let measured = pollster::block_on(escape.read_norm(&device, &queue))
-                .unwrap_or((0.0, 0));
+        let tonemap = |escape: &crate::escape::EscapeRenderer,
+                       renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("auto scale tonemap"),
             });
@@ -4963,114 +4943,207 @@ mod tests {
                 &device, &queue, false, [0.0, 0.0, 0.0],
             ))
             .expect("readback");
+            rgba
+        };
+        let shoot = |esc: &crate::config::escape::EscapeConfig,
+                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> (Vec<u8>, (u32, u32)) {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("auto scale"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let measured =
+                pollster::block_on(escape.read_norm(&device, &queue)).unwrap_or((0, 0));
+            let px = tonemap(&escape, renderer);
             escape.destroy();
-            (rgba, measured)
+            (px, measured)
         };
 
-        // The reduction's own subsample grid and escape rule, in f64.
-        let cpu_mean = |esc: &crate::config::escape::EscapeConfig| -> (f64, u32) {
+        // The true minimum escape count over the frame, in f64.
+        let cpu_min = |esc: &crate::config::escape::EscapeConfig| -> Option<u32> {
             let (cx, cy) = (
                 esc.center_re.parse::<f64>().unwrap(),
                 esc.center_im.parse::<f64>().unwrap(),
             );
             let span_y = 4.0 / 2f64.powf(esc.zoom_log2);
             let span_x = span_y * w as f64 / h as f64;
-            let (mut sum, mut count) = (0u64, 0u32);
-            for gy in 0..128u32 {
-                for gx in 0..128u32 {
-                    let px = (gx * w) / 128;
-                    let py = (gy * h) / 128;
+            let mut lo: Option<u32> = None;
+            for py in 0..h {
+                for px in 0..w {
                     let ci = (
                         ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
                         -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
                     );
                     let (mut zx, mut zy) = (0.0f64, 0.0f64);
-                    let mut n = 0u32;
-                    let mut escaped = false;
                     for i in 0..esc.max_iter {
                         let nx = zx * zx - zy * zy + ci.0;
                         zy = 2.0 * zx * zy + ci.1;
                         zx = nx;
                         if zx * zx + zy * zy > esc.bailout as f64 {
-                            escaped = true;
-                            n = i + 1;
+                            let n = i + 1;
+                            if lo.is_none_or(|l| n < l) {
+                                lo = Some(n);
+                            }
                             break;
                         }
                     }
-                    if escaped {
-                        // The shader sums n >> 4 and rescales by 16.
-                        sum += (n >> 4) as u64;
-                        count += 1;
+                }
+            }
+            lo
+        };
+
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.center_re = "-0.7436438870371587".to_string();
+        base.center_im = "0.1318259042053119".to_string();
+        base.zoom_log2 = 13.0;
+        base.max_iter = 3000;
+        base.coloring = "smooth".to_string();
+        base.coloring_params.insert("scale".to_string(), 0.05);
+
+        let mut auto = base.clone();
+        auto.auto_scale = true;
+        let (auto_px, (min_n, found)) = shoot(&auto, &mut renderer);
+        let truth = cpu_min(&auto).expect("some pixel escapes at this view");
+        println!("first escape: GPU {min_n} (found {found}), CPU {truth}");
+
+        // 1. the reduction finds the true minimum.
+        assert_eq!(found, 1, "the reduction saw no escaped pixel");
+        assert_eq!(
+            min_n, truth,
+            "the reduction's minimum ({min_n}) is not the frame's true first \
+             escape ({truth})"
+        );
+
+        // 2. the factor applied is exactly REF/min.
+        let equiv =
+            0.05 * crate::escape::AUTO_SCALE_REFERENCE_ITERS / (min_n.max(1) as f32);
+        let mut manual = base.clone();
+        manual.coloring_params.insert("scale".to_string(), equiv);
+        let (manual_px, _) = shoot(&manual, &mut renderer);
+        let mut differ = 0usize;
+        for (a, b) in auto_px.chunks(4).zip(manual_px.chunks(4)) {
+            if (0..3).any(|c| a[c].abs_diff(b[c]) > 1) {
+                differ += 1;
+            }
+        }
+        let frac = differ as f64 / (w as f64 * h as f64);
+        println!("auto vs hand-set {equiv:.6}: {:.2}% of pixels differ", 100.0 * frac);
+        assert!(
+            frac < 0.01,
+            "auto scale is not equivalent to a hand-set {equiv:.6} ({:.2}% differ)",
+            100.0 * frac
+        );
+
+        // 3. THE POINT: it must hold still while the image fills in.
+        // Tiny chunks force a long progressive render; the normalizer
+        // must not move once found, and the colours must not shift.
+        let mut deep = base.clone();
+        deep.auto_scale = true;
+        deep.zoom_log2 = 24.0;
+        deep.max_iter = 4000;
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.chunk_override = Some(96);
+        let mut seen: Option<u32> = None;
+        let mut frames = 0u32;
+        // Drift baseline: the first frame carrying a MEANINGFUL number
+        // of coloured pixels. The very first frame to colour anything
+        // at this depth has ~100 of them (nothing escapes before
+        // iteration 644, so the earliest chunks paint almost nothing),
+        // which is too small a sample to conclude from -- and a
+        // threshold that small would also let a degenerate all-black
+        // render pass by measuring nothing.
+        let mut baseline: Option<Vec<u8>> = None;
+        let mut baseline_frame = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("progressive"),
+            });
+            let settled =
+                escape.render(&device, &queue, &mut enc, &deep, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            frames += 1;
+            let (m, f) = pollster::block_on(escape.read_norm(&device, &queue)).unwrap_or((0, 0));
+            if f == 1 {
+                match seen {
+                    None => seen = Some(m),
+                    Some(prev) => assert_eq!(
+                        m, prev,
+                        "the normalizer moved mid-render ({prev} -> {m}) at frame \
+                         {frames} -- progressive chunks must not disturb it"
+                    ),
+                }
+                if baseline.is_none() && !settled {
+                    let px = tonemap(&escape, &mut renderer);
+                    let lit = px
+                        .chunks(4)
+                        .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                        .count();
+                    if lit >= 2000 {
+                        baseline = Some(px);
+                        baseline_frame = frames;
                     }
                 }
             }
-            if count == 0 {
-                (0.0, 0)
-            } else {
-                (sum as f64 * 16.0 / count as f64, count)
+            if settled {
+                break;
             }
-        };
+            assert!(frames < 100_000, "progressive render did not settle");
+        }
+        println!("progressive: {frames} chunk frames, first escape {seen:?} throughout");
+        assert!(frames > 3, "chunk_override did not force a progressive render");
 
-        // Two views with genuinely different escape depths.
-        for zoom in [6.0f64, 13.0] {
-            let mut base = crate::config::escape::EscapeConfig::default();
-            base.center_re = "-0.7436438870371587".to_string();
-            base.center_im = "0.1318259042053119".to_string();
-            base.zoom_log2 = zoom;
-            base.max_iter = 3000;
-            base.coloring = "smooth".to_string();
-            base.coloring_params.insert("scale".to_string(), 0.05);
-
-            let mut auto = base.clone();
-            auto.auto_scale = true;
-            let (auto_px, (mean, count)) = shoot(&auto, &mut renderer);
-            let (cpu, cpu_count) = cpu_mean(&auto);
-            println!(
-                "zoom {zoom}: GPU mean n {mean:.1} over {count} samples, \
-                 CPU {cpu:.1} over {cpu_count}"
-            );
-
-            // 1. the reduction measures what it claims.
-            assert!(count > 100, "too few escaped samples to normalize by");
-            assert!(
-                (mean as f64 - cpu).abs() <= cpu * 0.02 + 1.0,
-                "the reduction's mean ({mean:.1}) disagrees with an independent \
-                 count over the same grid ({cpu:.1})"
-            );
-
-            // 2. auto == the equivalent hand-set scale, exactly.
-            let equiv = 0.05 * crate::escape::AUTO_SCALE_REFERENCE_ITERS / mean.max(1.0);
-            let mut manual = base.clone();
-            manual.coloring_params.insert("scale".to_string(), equiv);
-            let (manual_px, _) = shoot(&manual, &mut renderer);
-            let mut differ = 0usize;
-            for (a, b) in auto_px.chunks(4).zip(manual_px.chunks(4)) {
-                if (0..3).any(|c| a[c].abs_diff(b[c]) > 1) {
-                    differ += 1;
+        // The pixels that were already finished in the first coloured
+        // frame must still hold those colours at the end: with a
+        // moving normalizer they would all have drifted.
+        let early = baseline.expect(
+            "no mid-render frame ever carried 2000 coloured pixels -- the \
+             progressive render never showed the user anything to be stable about",
+        );
+        let final_px = tonemap(&escape, &mut renderer);
+        let (mut lit, mut moved) = (0usize, 0usize);
+        for (a, b) in early.chunks(4).zip(final_px.chunks(4)) {
+            if a[0] as u32 + a[1] as u32 + a[2] as u32 > 24 {
+                lit += 1;
+                if (0..3).any(|c| a[c].abs_diff(b[c]) > 8) {
+                    moved += 1;
                 }
             }
-            let frac = differ as f64 / (w as f64 * h as f64);
-            println!(
-                "zoom {zoom}: auto vs hand-set scale {equiv:.6}: {:.2}% of pixels differ",
-                100.0 * frac
-            );
-            assert!(
-                frac < 0.01,
-                "auto scale is not equivalent to setting the scale by hand to \
-                 {equiv:.6} ({:.2}% of pixels differ) -- the factor applied is \
-                 not REF/mean",
-                100.0 * frac
-            );
         }
+        // The 2000-pixel floor above is the guard against a vacuous
+        // pass: a normalizer that collapsed the image to black leaves
+        // nothing to drift, and this check would "succeed" having
+        // measured nothing. It did exactly that against one
+        // deliberately broken reduction before the floor existed.
+        let drift = moved as f64 / lit.max(1) as f64;
+        println!(
+            "of {lit} pixels coloured by frame {baseline_frame} (of {frames}), \
+             {:.1}% changed by the end",
+            100.0 * drift
+        );
+        assert!(
+            drift < 0.10,
+            "{:.1}% of the already-coloured pixels shifted as the render \
+             progressed -- the normalization is not stable",
+            100.0 * drift
+        );
+        escape.destroy();
 
-        // And it must leave a DISTANCE-scaled coloring alone: orbit
-        // trap's scale is palette distance per unit trap distance and
-        // has nothing to do with the iteration count.
-        let mut trap = crate::config::escape::EscapeConfig::default();
-        trap.center_re = "-0.7436438870371587".to_string();
-        trap.center_im = "0.1318259042053119".to_string();
-        trap.zoom_log2 = 13.0;
-        trap.max_iter = 3000;
+        // And a DISTANCE-scaled coloring must be untouched.
+        let mut trap = base.clone();
         trap.coloring = "orbit_trap".to_string();
         let (trap_off, _) = shoot(&trap, &mut renderer);
         let mut trap_on = trap.clone();
