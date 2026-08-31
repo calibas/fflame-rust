@@ -23,6 +23,7 @@ use super::{EscapeMetric, EscapeParamDef, FormulaDef, FormulaFeature};
 pub static MANDELBROT: FormulaDef = FormulaDef {
     name: "mandelbrot",
     display_name: "Mandelbrot",
+    presets: super::presets::MANDELBROT,
     features: &[],
     parameters: &[],
     wgsl: r#"
@@ -47,6 +48,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static MULTIBROT: FormulaDef = FormulaDef {
     name: "multibrot",
     display_name: "Multibrot",
+    presets: super::presets::MULTIBROT,
     features: &[],
     parameters: &[EscapeParamDef {
         name: "power",
@@ -79,6 +81,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static TRICORN: FormulaDef = FormulaDef {
     name: "tricorn",
     display_name: "Tricorn",
+    presets: super::presets::TRICORN,
     features: &[],
     parameters: &[EscapeParamDef {
         name: "power",
@@ -127,6 +130,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static BURNING_SHIP: FormulaDef = FormulaDef {
     name: "burning_ship",
     display_name: "Burning Ship",
+    presets: super::presets::BURNING_SHIP,
     features: &[],
     parameters: &[EscapeParamDef {
         name: "variant",
@@ -193,6 +197,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static MCMULLEN: FormulaDef = FormulaDef {
     name: "mcmullen",
     display_name: "McMullen",
+    presets: super::presets::MCMULLEN,
     features: &[],
     parameters: &[
         EscapeParamDef {
@@ -254,6 +259,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static KALISET: FormulaDef = FormulaDef {
     name: "kaliset",
     display_name: "Kaliset",
+    presets: super::presets::KALISET,
     features: &[FormulaFeature::NonEscaping],
     parameters: &[EscapeParamDef {
         name: "plus_c",
@@ -290,6 +296,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static PHOENIX: FormulaDef = FormulaDef {
     name: "phoenix",
     display_name: "Phoenix",
+    presets: super::presets::PHOENIX,
     features: &[FormulaFeature::NeedsPrevZ],
     parameters: &[
         EscapeParamDef {
@@ -329,6 +336,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
 pub static LAMBDA: FormulaDef = FormulaDef {
     name: "lambda",
     display_name: "Lambda (Logistic)",
+    presets: super::presets::LAMBDA,
     features: &[],
     parameters: &[],
     wgsl: r#"
@@ -355,6 +363,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static SPIDER: FormulaDef = FormulaDef {
     name: "spider",
     display_name: "Spider",
+    presets: super::presets::SPIDER,
     features: &[FormulaFeature::MutatesC],
     parameters: &[],
     wgsl: r#"
@@ -385,6 +394,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static MANOWAR: FormulaDef = FormulaDef {
     name: "manowar",
     display_name: "Manowar",
+    presets: super::presets::MANOWAR,
     features: &[FormulaFeature::NeedsPrevZ],
     parameters: &[],
     wgsl: r#"
@@ -409,6 +419,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
 pub static BARNSLEY: FormulaDef = FormulaDef {
     name: "barnsley",
     display_name: "Barnsley",
+    presets: super::presets::BARNSLEY,
     features: &[],
     parameters: &[EscapeParamDef {
         name: "variant",
@@ -487,6 +498,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static CACTUS: FormulaDef = FormulaDef {
     name: "cactus",
     display_name: "Cactus",
+    presets: super::presets::CACTUS,
     features: &[],
     parameters: &[],
     wgsl: r#"
@@ -517,6 +529,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static EXPONENTIAL: FormulaDef = FormulaDef {
     name: "exponential",
     display_name: "Exponential",
+    presets: super::presets::EXPONENTIAL,
     features: &[],
     parameters: &[],
     wgsl: r#"
@@ -542,6 +555,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static TRIG: FormulaDef = FormulaDef {
     name: "trig",
     display_name: "Sine / Cosine",
+    presets: super::presets::TRIG,
     features: &[],
     parameters: &[EscapeParamDef {
         name: "variant",
@@ -600,6 +614,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static LAMBDA_SINE: FormulaDef = FormulaDef {
     name: "lambda_sine",
     display_name: "Lambda Sine (λ·sin z)",
+    presets: super::presets::LAMBDA_SINE,
     features: &[],
     parameters: &[],
     wgsl: r#"
@@ -689,6 +704,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static ORIGAMI: FormulaDef = FormulaDef {
     name: "origami",
     display_name: "Origami (Butterfly)",
+    presets: super::presets::ORIGAMI,
     features: &[FormulaFeature::NonEscaping, FormulaFeature::NeedsIndex, FormulaFeature::DynamicalOnly],
     parameters: &[
         EscapeParamDef {
@@ -850,6 +866,7 @@ pub(crate) const ORIGAMI_MAX_FOLDS: usize = 64;
 pub static LATTES: FormulaDef = FormulaDef {
     name: "lattes",
     display_name: "Lattès",
+    presets: super::presets::LATTES,
     features: &[FormulaFeature::NonEscaping, FormulaFeature::DynamicalOnly],
     parameters: &[
         EscapeParamDef {
@@ -956,6 +973,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static DUCKS: FormulaDef = FormulaDef {
     name: "ducks",
     display_name: "Ducks (Kali-log)",
+    presets: super::presets::DUCKS,
     features: &[FormulaFeature::NonEscaping],
     parameters: &[EscapeParamDef {
         name: "variant",
@@ -1008,6 +1026,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static TETRATION: FormulaDef = FormulaDef {
     name: "tetration",
     display_name: "Tetration",
+    presets: super::presets::TETRATION,
     features: &[],
     parameters: &[],
     wgsl: r#"
@@ -1039,6 +1058,7 @@ fn formula_derivative(z: vec2<f32>, c: vec2<f32>, dz: vec2<f32>, is_julia: bool)
 pub static COLLATZ: FormulaDef = FormulaDef {
     name: "collatz",
     display_name: "Collatz",
+    presets: super::presets::COLLATZ,
     features: &[FormulaFeature::DynamicalOnly],
     parameters: &[],
     wgsl: r#"
@@ -1066,6 +1086,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static FEATHER: FormulaDef = FormulaDef {
     name: "feather",
     display_name: "Feather",
+    presets: super::presets::FEATHER,
     features: &[],
     parameters: &[EscapeParamDef {
         name: "power",
@@ -1103,6 +1124,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static NEWTON: FormulaDef = FormulaDef {
     name: "newton",
     display_name: "Newton",
+    presets: super::presets::NEWTON,
     features: &[FormulaFeature::Convergent, FormulaFeature::DynamicalOnly],
     parameters: &[
         EscapeParamDef {
@@ -1178,6 +1200,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static NOVA: FormulaDef = FormulaDef {
     name: "nova",
     display_name: "Nova",
+    presets: super::presets::NOVA,
     features: &[FormulaFeature::Convergent],
     parameters: &[
         EscapeParamDef {
@@ -1228,6 +1251,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static MAGNET: FormulaDef = FormulaDef {
     name: "magnet",
     display_name: "Magnet",
+    presets: super::presets::MAGNET,
     features: &[FormulaFeature::Convergent],
     parameters: &[EscapeParamDef {
         name: "variant",
@@ -1275,6 +1299,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static NOVARETTI: FormulaDef = FormulaDef {
     name: "novaretti",
     display_name: "Novaretti",
+    presets: super::presets::NOVARETTI,
     features: &[FormulaFeature::NonEscaping, FormulaFeature::Convergent],
     parameters: &[],
     wgsl: r#"
@@ -1323,6 +1348,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
 pub static LITTLEWOOD: FormulaDef = FormulaDef {
     name: "littlewood",
     display_name: "Littlewood",
+    presets: super::presets::LITTLEWOOD,
     features: &[],
     parameters: &[EscapeParamDef {
         name: "digit_set",
@@ -1493,6 +1519,26 @@ mod feature_tag_tests {
                 .count();
             assert!(n > 0, "formula `{}` has no coloring that can draw it", def.name);
         }
+    }
+
+    /// A CONVERGENT formula still escapes, even with no bailout.
+    ///
+    /// Its convergence test sets `escaped`, so escape-count and
+    /// smooth shade convergence speed there — Novaretti ships that
+    /// way. An earlier gate keyed on `NonEscaping` alone and declared
+    /// a shipped config impossible.
+    #[test]
+    fn convergent_formulas_keep_their_escape_time_colorings() {
+        let novaretti = crate::escape::get_formula("novaretti");
+        assert!(novaretti.has_feature(FormulaFeature::NonEscaping));
+        assert!(novaretti.has_feature(FormulaFeature::Convergent));
+        assert!(
+            crate::escape::coloring_suits_formula(
+                novaretti,
+                crate::escape::get_coloring("escape_count")
+            ),
+            "a convergent formula sets `escaped` on settle, so escape-time              colorings shade its convergence speed"
+        );
     }
 
     /// The gate must actually bite where the report said it does.

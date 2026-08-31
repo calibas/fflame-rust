@@ -108,10 +108,22 @@ pub fn render_escape_content(
                         .clicked()
                         && esc.formula != f.name
                     {
-                        let _ = config_manager.update_param(
-                            ConfigPath::EscapeFormula,
-                            ConfigValue::String(f.name.to_string()),
-                        );
+                        // Land on the formula's own starting point
+                        // rather than inheriting the last one's view.
+                        // A centre and zoom chosen for the Mandelbrot
+                        // mean nothing over Origami, and the coloring
+                        // may not even be able to draw it.
+                        match crate::escape::formula_default_preset(f) {
+                            Some(p) => {
+                                let _ = apply_preset(config_manager, f, p);
+                            }
+                            None => {
+                                let _ = config_manager.update_param(
+                                    ConfigPath::EscapeFormula,
+                                    ConfigValue::String(f.name.to_string()),
+                                );
+                            }
+                        }
                     }
                 }
                 ui.separator();
@@ -132,6 +144,32 @@ pub fn render_escape_content(
                 }
             });
     });
+
+    // ---- Presets ----
+    //
+    // The formula picks the mathematics; the preset picks a place to
+    // stand in it. Kept as a separate row because re-applying one is
+    // a normal thing to want after wandering off, not only something
+    // that happens on a formula switch.
+    if field.is_none() {
+        let formula_def = crate::escape::get_formula(&esc.formula);
+        if !formula_def.presets.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.preset"));
+                egui::ComboBox::from_id_salt("escape_preset")
+                    .selected_text(t!("escape_panel.preset_pick"))
+                    .show_ui(ui, |ui| {
+                        for p in formula_def.presets {
+                            if ui.selectable_label(false, p.name).clicked() {
+                                let _ = apply_preset(config_manager, formula_def, p);
+                            }
+                        }
+                    });
+            })
+            .response
+            .on_hover_text(t!("escape_panel.preset_tip"));
+        }
+    }
 
     // How deep this formula goes, said out loud. 17 of the 23
     // formulas stop resolving around zoom 14 -- the direct path's f32
@@ -1046,6 +1084,66 @@ fn show_coloring_section(
 /// leaving escape and pressing Ctrl+Z restores the flame's look
 /// exactly. A deliberately non-Logarithmic tonemap is left alone.
 /// Per-mode tonemap state is the real fix, noted in the plan.
+/// Apply one preset as a SINGLE undo step.
+///
+/// Everything travels together deliberately: view, iteration budget,
+/// coloring and both parameter sets. Applying them as separate
+/// updates would leave the render passing through states nobody asked
+/// for (a deep view under the wrong coloring, say) and would litter
+/// the history with a dozen entries for one click.
+///
+/// Parameters not named by the preset are RESET to the definition's
+/// defaults rather than left behind — a leftover value from the
+/// previous formula is exactly the kind of invisible state that makes
+/// a preset fail to reproduce its own picture.
+pub fn apply_preset(
+    config_manager: &mut ConfigManager,
+    formula: &'static crate::escape::FormulaDef,
+    preset: &crate::escape::EscapePreset,
+) -> Result<(), crate::config::manager::ConfigError> {
+    let coloring = crate::escape::get_coloring(preset.coloring);
+    let mut changes: Vec<(ConfigPath, ConfigValue)> = vec![
+        (ConfigPath::EscapeFormula, ConfigValue::String(formula.name.to_string())),
+        (ConfigPath::EscapeColoring, ConfigValue::String(preset.coloring.to_string())),
+        (ConfigPath::EscapeCenterRe, ConfigValue::String(preset.center_re.to_string())),
+        (ConfigPath::EscapeCenterIm, ConfigValue::String(preset.center_im.to_string())),
+        (ConfigPath::EscapeZoomLog2, (preset.zoom_log2 as f32).into()),
+        (ConfigPath::EscapeMaxIter, ConfigValue::UInt(preset.max_iter)),
+        (ConfigPath::EscapeJulia, preset.julia.is_some().into()),
+    ];
+    if let Some((re, im)) = preset.julia {
+        changes.push((ConfigPath::EscapeJuliaRe, re.into()));
+        changes.push((ConfigPath::EscapeJuliaIm, im.into()));
+    }
+    for p in formula.parameters {
+        let v = preset
+            .formula_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map(|(_, v)| *v)
+            .unwrap_or(p.default);
+        changes.push((
+            ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
+            v.into(),
+        ));
+    }
+    for p in coloring.parameters {
+        let v = preset
+            .coloring_params
+            .iter()
+            .find(|(k, _)| *k == p.name)
+            .map(|(_, v)| *v)
+            .unwrap_or(p.default);
+        changes.push((
+            ConfigPath::EscapeColoringParam { param: p.name.to_string() },
+            v.into(),
+        ));
+    }
+    config_manager
+        .update_batch(changes, "history.action.escape_preset".to_string())
+        .map(|_| ())
+}
+
 pub fn switch_render_mode(
     config_manager: &mut ConfigManager,
     mode: RenderMode,

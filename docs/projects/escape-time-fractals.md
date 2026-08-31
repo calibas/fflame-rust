@@ -3232,6 +3232,59 @@ creation across the reset window rather than panicking on the first
 failure — a GPU that has just reset is briefly absent, and that path
 cannot fail gracefully, since the old surface is already released.
 
+## 8d. Making the panel approachable
+
+Four changes, all aimed at the same report: the panel is confusing to
+someone new, and much of what it offers does nothing for the fractal
+in front of them.
+
+*Render mode is a toggle, not a third kind of flame.* The View panel
+is back to 2D/3D — all it ever meant, since it edits a flame — and
+the Escape panel has one button: on, or off to 3D flame rendering.
+No previous-mode state is kept; restoring something the user never
+set is not a courtesy.
+
+*The Escape workspace* puts the Escape panel in the left dock where
+Standard puts Transforms, with Colors and History right. It is
+deliberately NOT Standard with one panel swapped: Transforms, the
+Triangle Editor and View all edit a flame and are inert here. Turning
+escape mode on switches to it; the request rides `UiResponse` and is
+applied by App, because the workspace is borrowed by the UI for the
+whole frame.
+
+*Controls that do nothing are hidden*, on two gates that are
+properties of the assembled shader rather than of taste:
+
+- `coloring_suits_formula`. A formula that never sets `escaped`
+  leaves the templates' `escaped || COLORING_COLORS_INTERIOR` false
+  everywhere, so an escape-time coloring over it renders BLACK. Note
+  the subtlety that a first version got wrong: `NonEscaping` alone
+  does not mean that, because a CONVERGENT formula has no bailout yet
+  still sets `escaped` when its orbit settles — which is how
+  Novaretti's shipped look shades convergence speed. The preset smoke
+  test found it by declaring a shipped config impossible.
+- `FormulaFeature::DynamicalOnly`. Origami, Newton, Collatz and
+  Lattès ignore `c` and seed at the pixel, so both planes are the
+  same image and the Julia toggle is inert. (Julia cannot be added to
+  Origami without inventing a c-dependence the fold has no room for —
+  that would be a different fractal, not a mode.)
+
+Both tags are kept honest by tests that scan the WGSL rather than
+trusting the flags, in both directions: a missing `DynamicalOnly`
+offers an inert toggle, a wrong one hides a live control.
+
+*Presets* carry everything a formula needs to look like itself —
+view, iteration budget, coloring, and both parameter sets — as one
+undo step. The first preset of a formula is its default, applied on a
+switch, which is what stops a centre and zoom chosen for the
+Mandelbrot from following you into Origami. They are GENERATED from
+the visual-regression configs (`scripts/gen_escape_presets.py`), so
+each one is a view the suite already renders and hash-compares rather
+than a plausible-looking invention; 46 of them across all 26
+formulas. A GPU smoke test renders every preset and requires enough
+lit pixels to be an image and enough distinct values to be a picture
+rather than a flat wash.
+
 ## 9. Testing
 
 - **Visual corpus**: one config per formula at landmark coordinates;

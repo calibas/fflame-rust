@@ -869,6 +869,7 @@ history:
 
   # Action descriptions (for batch updates and load operations)
   action:
+    escape_preset: "Apply Escape Preset"
     reset_view: "Reset View"
     reset_rendering: "Reset Rendering to Defaults"
     reset_colors: "Reset Colors to Defaults"
@@ -1978,6 +1979,9 @@ escape_panel:
   rendering: "Rendering… {percent}%"
   settled: "Render settled"
   settled_tip: "The image is finished — every iteration in the budget has been drawn. An unsettled frame is still accumulating detail."
+  preset: "Preset"
+  preset_pick: "Choose…"
+  preset_tip: "A known-good starting point for this formula: view, iteration budget, coloring and all parameters together. Switching formulas applies the first one, because a view chosen for another formula rarely means anything here."
   coloring_mismatch: "%{coloring} cannot draw %{formula} — it would render black."
   coloring_use: "Use %{name}"
   toggle_on: "Turn on Escape mode"
