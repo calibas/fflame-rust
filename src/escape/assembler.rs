@@ -238,6 +238,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    // COVERAGE, not colour. A pixel that never escaped has no value
+    // to show, so it is left ABSENT rather than painted black, and
+    // the tonemap's background blend fills it -- which is what makes
+    // the background colour apply to the interior, and what makes a
+    // transparent export leave it transparent. Averaged by the
+    // downsample like everything else, so the boundary antialiases
+    // against the background instead of against black.
+    var coverage = 0.0;
     // The relief pass slopes THIS, not the rendered colour: the value
     // before the palette, so a cycling palette's band edges are not
     // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
@@ -258,6 +266,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // control flow (unlike textureSample) -- WASM-safe.
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        coverage = 1.0;
     }
 
     if ((params.flags & 8u) != 0u) {
@@ -266,7 +275,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             select(0u, 1u, escaped) | select(0u, 2u, converged) | (period << 2u),
         );
     }
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
@@ -746,6 +755,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    // COVERAGE, not colour. A pixel that never escaped has no value
+    // to show, so it is left ABSENT rather than painted black, and
+    // the tonemap's background blend fills it -- which is what makes
+    // the background colour apply to the interior, and what makes a
+    // transparent export leave it transparent. Averaged by the
+    // downsample like everything else, so the boundary antialiases
+    // against the background instead of against black.
+    var coverage = 0.0;
     // The relief pass slopes THIS, not the rendered colour: the value
     // before the palette, so a cycling palette's band edges are not
     // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
@@ -764,6 +781,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         height = select(raw, t, params.shade_flags == 1u);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        coverage = 1.0;
     }
 
     if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
@@ -781,7 +799,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // chunk as before, and the LAST chunk writes everyone -- the
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
-        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
     }
 }
@@ -1596,6 +1614,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    // COVERAGE, not colour. A pixel that never escaped has no value
+    // to show, so it is left ABSENT rather than painted black, and
+    // the tonemap's background blend fills it -- which is what makes
+    // the background colour apply to the interior, and what makes a
+    // transparent export leave it transparent. Averaged by the
+    // downsample like everything else, so the boundary antialiases
+    // against the background instead of against black.
+    var coverage = 0.0;
     // The relief pass slopes THIS, not the rendered colour: the value
     // before the palette, so a cycling palette's band edges are not
     // mistaken for cliffs. Interior pixels keep 0 -- flat, which puts
@@ -1614,6 +1640,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         height = select(raw, t, params.shade_flags == 1u);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        coverage = 1.0;
     }
 
     if ((params.flags & 8u) != 0u && perturb.iter_end >= params.max_iter) {
@@ -1631,7 +1658,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // chunk as before, and the LAST chunk writes everyone -- the
     // settled image is byte-identical.
     if (escaped || perturb.iter_end >= params.max_iter) {
-        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
     }
 }
@@ -3077,6 +3104,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let period = r.tags >> 2u;
 
     var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    // COVERAGE, not colour. A pixel that never escaped has no value
+    // to show, so it is left ABSENT rather than painted black, and
+    // the tonemap's background blend fills it -- which is what makes
+    // the background colour apply to the interior, and what makes a
+    // transparent export leave it transparent. Averaged by the
+    // downsample like everything else, so the boundary antialiases
+    // against the background instead of against black.
+    var coverage = 0.0;
     var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
@@ -3085,8 +3120,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         height = select(raw, t, params.shade_flags == 1u);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        coverage = 1.0;
     }
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
