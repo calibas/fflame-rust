@@ -341,6 +341,9 @@ pub enum ConfigPath {
     EscapeShadingHighlightStrength,
     EscapeShadingHighlightBlend,
     EscapeShadingSoftness,
+    EscapeShadingTextureKind,
+    EscapeShadingTextureStrength,
+    EscapeShadingTextureScale,
     /// Coloring registry name.
     EscapeColoring,
     /// One parameter of the ACTIVE formula, by name — keyed like
@@ -854,6 +857,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => write!(f, "Relief Highlight Strength"),
             ConfigPath::EscapeShadingHighlightBlend => write!(f, "Relief Highlight Blend"),
             ConfigPath::EscapeShadingSoftness => write!(f, "Relief Softness"),
+            ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
+            ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
+            ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
@@ -1090,6 +1096,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => I18nKey::simple("history.param.escape_shading_highlight_strength"),
             ConfigPath::EscapeShadingHighlightBlend => I18nKey::simple("history.param.escape_shading_highlight_blend"),
             ConfigPath::EscapeShadingSoftness => I18nKey::simple("history.param.escape_shading_softness"),
+            ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
+            ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
+            ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
             ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
             ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
                 "history.param.escape_formula_param",
@@ -2400,6 +2409,9 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingHighlightStrength
             | ConfigPath::EscapeShadingHighlightBlend
             | ConfigPath::EscapeShadingSoftness
+            | ConfigPath::EscapeShadingTextureKind
+            | ConfigPath::EscapeShadingTextureStrength
+            | ConfigPath::EscapeShadingTextureScale
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
@@ -2667,6 +2679,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingHighlightStrength => "Escape.Shading.HighlightStrength".to_string(),
             ConfigPath::EscapeShadingHighlightBlend => "Escape.Shading.HighlightBlend".to_string(),
             ConfigPath::EscapeShadingSoftness => "Escape.Shading.Softness".to_string(),
+            ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
+            ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
+            ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
@@ -2862,6 +2877,9 @@ impl ConfigPath {
                 ["Shading", "HighlightStrength"] => return Some(ConfigPath::EscapeShadingHighlightStrength),
                 ["Shading", "HighlightBlend"] => return Some(ConfigPath::EscapeShadingHighlightBlend),
                 ["Shading", "Softness"] => return Some(ConfigPath::EscapeShadingSoftness),
+                ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
+                ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
+                ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
                 ["FormulaParam", param] => {
                     return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
@@ -3447,7 +3465,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingHeight
         | ConfigPath::EscapeShadingShadowStrength
         | ConfigPath::EscapeShadingHighlightStrength
-        | ConfigPath::EscapeShadingSoftness => {
+        | ConfigPath::EscapeShadingSoftness
+        | ConfigPath::EscapeShadingTextureStrength
+        | ConfigPath::EscapeShadingTextureScale => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
         ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
@@ -3463,6 +3483,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
         ConfigPath::EscapeShadingEnabled
         | ConfigPath::EscapeShadingField
+        | ConfigPath::EscapeShadingTextureKind
         | ConfigPath::EscapeShadingShadowBlend
         | ConfigPath::EscapeShadingHighlightBlend => None,
         // Selectors and the deep-zoom center strings are structural /

@@ -3490,7 +3490,18 @@ mod tests {
         }
     }
 
-    /// Relief `softness` must smooth the SHADING and nothing else.
+    /// Relief `softness` must BLUR the relief, and only the relief.
+    ///
+    /// Three properties, and the third is the one that matters most,
+    /// because the first two passed against an implementation that
+    /// was wrong. Softening must reduce high-frequency wobble (that
+    /// is what it is for); it must not blur the IMAGE, since the
+    /// stencil widens the derivative estimate and not the colour; and
+    /// it must not DISPLACE anything. The original implementation
+    /// widened the difference to a ring of radius r, which satisfies
+    /// the first two and fails the third: every tap stays a sharp
+    /// sample, so each edge prints ghost copies at +-r. It reached
+    /// the app before anyone noticed.
     ///
     /// Two properties, and the second is the one that makes this
     /// worth a test rather than an eyeball. A wider normal stencil
@@ -3655,6 +3666,158 @@ mod tests {
             "the softened render ({r_soft:.2}) has less detail than the UNSHADED one \
              ({r_flat:.2}) -- softness is blurring the image, not the normal"
         );
+
+        // The third property -- that softening must not DISPLACE the
+        // structure, which is how the first implementation failed --
+        // is pinned by `height_softening_is_a_real_blur` instead. It
+        // cannot be measured here: the shading term extracted from
+        // the composite is nonlinear (perceptual blend, then gamma),
+        // and both a correlation against a shifted copy and a
+        // commutation check were tried and could not separate a
+        // proper blur from the ring stencil. The mechanism is
+        // testable exactly; the composite is not.
+    }
+
+    /// The relief softening must be a REAL LOW-PASS of the height
+    /// field — the property the first implementation lacked.
+    ///
+    /// That version widened the difference stencil to a ring of
+    /// radius r. Every tap stayed a sharp sample, so it never blurred
+    /// anything: it estimated the slope at p from the height at p±r,
+    /// which displaces the structure and prints ghost copies either
+    /// side of every edge. It shipped because the tests then in place
+    /// measured only that high-frequency content went DOWN (it does,
+    /// for the wrong reason) and that the colour was untouched (it
+    /// was). Reported from the app as the relief "mirroring into 3
+    /// equally sharp parts".
+    ///
+    /// The composite cannot settle this — the shading term is
+    /// nonlinear, and two different composite-level metrics ranked
+    /// the ring stencil BETTER than the fix. So this checks the
+    /// mechanism where it is exactly checkable: the blurred height
+    /// field must equal a Gaussian blur of the raw one, computed
+    /// independently on the CPU. A stencil that samples a ring cannot
+    /// pass that, because it is not a blur of anything.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn height_softening_is_a_real_blur() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+
+        const SIGMA: f32 = 3.0;
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "smooth".to_string();
+        esc.max_iter = 200;
+        esc.shading = crate::config::escape::EscapeShading {
+            enabled: true,
+            height: 30.0,
+            softness: SIGMA,
+            ..Default::default()
+        };
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("blur"),
+            });
+            let settled =
+                escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+
+        let raw = pollster::block_on(escape.read_height(&device, &queue, false))
+            .expect("raw height");
+        let gpu = pollster::block_on(escape.read_height(&device, &queue, true))
+            .expect("blurred height — the softening pass must have run");
+        assert_eq!(raw.len(), (w * h) as usize);
+        assert_eq!(gpu.len(), raw.len());
+
+        // The same Gaussian, separable, clamped at the edges — exactly
+        // what the shader does.
+        let rad = (SIGMA * 3.0).ceil() as i32;
+        let wts: Vec<f32> = (-rad..=rad)
+            .map(|i| (-(i * i) as f32 / (2.0 * SIGMA * SIGMA)).exp())
+            .collect();
+        let mut tmp = vec![0.0f32; raw.len()];
+        let mut cpu = vec![0.0f32; raw.len()];
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let (mut a, mut d) = (0.0f32, 0.0f32);
+                for (k, wt) in wts.iter().enumerate() {
+                    let xx = (x + k as i32 - rad).clamp(0, w as i32 - 1);
+                    a += raw[(y * w as i32 + xx) as usize] * wt;
+                    d += wt;
+                }
+                tmp[(y * w as i32 + x) as usize] = a / d;
+            }
+        }
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let (mut a, mut d) = (0.0f32, 0.0f32);
+                for (k, wt) in wts.iter().enumerate() {
+                    let yy = (y + k as i32 - rad).clamp(0, h as i32 - 1);
+                    a += tmp[(yy * w as i32 + x) as usize] * wt;
+                    d += wt;
+                }
+                cpu[(y * w as i32 + x) as usize] = a / d;
+            }
+        }
+
+        // Scale-relative error: the height field is the coloring's raw
+        // value, whose magnitude is arbitrary.
+        let span = raw.iter().cloned().fold(f32::MIN, f32::max)
+            - raw.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(span > 0.0, "the height field is flat; nothing to blur");
+        let mut worst = 0.0f32;
+        let mut rms = 0.0f64;
+        for (a, b) in gpu.iter().zip(cpu.iter()) {
+            let e = (a - b).abs() / span;
+            worst = worst.max(e);
+            rms += (e * e) as f64;
+        }
+        rms = (rms / gpu.len() as f64).sqrt();
+        println!("height blur vs CPU Gaussian: rms {rms:.5}, worst {worst:.5} of range");
+        assert!(
+            worst < 0.01,
+            "the softening pass is not the Gaussian it claims to be (worst \
+             {worst:.4} of the field's range) -- a stencil that samples a ring \
+             rather than averaging the interior fails here"
+        );
+
+        // And it must actually SMOOTH: the blurred field's own
+        // roughness has to fall well below the raw one's, or a
+        // no-op pass would satisfy the comparison above.
+        let rough = |s: &[f32]| -> f64 {
+            let mut acc = 0f64;
+            for y in 0..h as usize {
+                for x in 1..w as usize - 1 {
+                    let i = y * w as usize + x;
+                    acc += ((s[i + 1] - 2.0 * s[i] + s[i - 1]) as f64).abs();
+                }
+            }
+            acc
+        };
+        let (r_raw, r_blur) = (rough(&raw), rough(&gpu));
+        println!("height roughness: raw {r_raw:.1}, blurred {r_blur:.1}");
+        assert!(
+            r_blur < r_raw * 0.5,
+            "the blurred field is barely smoother than the raw one ({r_blur:.1} \
+             against {r_raw:.1}) -- the pass ran but did nothing"
+        );
+        escape.destroy();
     }
 
     /// A shadow at full strength must bite about as hard as a

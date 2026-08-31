@@ -295,16 +295,32 @@ pub struct EscapeShading {
     #[serde(default = "default_highlight_blend")]
     pub highlight_blend: ShadingBlend,
 
-    /// Radius, in DISPLAY pixels, of the stencil the surface normal is
-    /// estimated from. 0 keeps the original ±1 central difference.
+    /// Gaussian sigma, in DISPLAY pixels, of the low-pass applied to
+    /// the height field before its slope is taken. 0 = no softening.
     ///
-    /// The default relief reads crunchy on a finely-detailed field
-    /// because a ±1 difference is the sharpest possible derivative
-    /// estimate — it responds to every single-pixel wobble. Widening
-    /// the stencil low-passes the NORMAL rather than the image, so
-    /// edges soften without the colour beneath them blurring.
+    /// A ±1 central difference is the sharpest derivative estimate
+    /// there is: it responds to every single-pixel wobble, which on a
+    /// finely-detailed coloring reads as crunchy. Blurring the HEIGHT
+    /// (not the image) softens the relief while leaving the colour
+    /// beneath it untouched.
+    ///
+    /// Continuous, not a pixel count: this is the width of a
+    /// Gaussian, so 0.5 and 0.8 differ. An earlier version rounded it
+    /// to an integer stencil radius, which made the control coarse
+    /// AND — because it sampled only a ring — did not blur at all.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub softness: f32,
+
+    /// Surface texture: a micro-relief lit by the same light, so the
+    /// surface reads as grainy or fibrous rather than glassy.
+    #[serde(default, skip_serializing_if = "is_texture_none")]
+    pub texture_kind: ShadingTexture,
+    /// How pronounced the texture is. 0 = off.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub texture_strength: f32,
+    /// Feature size in DISPLAY pixels — how coarse the grain is.
+    #[serde(default = "default_texture_scale")]
+    pub texture_scale: f32,
 }
 
 fn default_light_angle() -> f32 {
@@ -362,6 +378,9 @@ impl Default for EscapeShading {
             highlight_strength: default_highlight_strength(),
             highlight_blend: default_highlight_blend(),
             softness: 0.0,
+            texture_kind: ShadingTexture::None,
+            texture_strength: 0.0,
+            texture_scale: default_texture_scale(),
         }
     }
 }
@@ -436,6 +455,51 @@ fn default_damping_re() -> f32 {
 fn is_one(v: &f32) -> bool {
     *v == 1.0
 }
+/// Which surface texture the relief carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ShadingTexture {
+    #[default]
+    None,
+    /// One octave of isotropic value noise — film grain, fine tooth.
+    Grain,
+    /// Octaves stretched along different axes, so it reads as fibre
+    /// laid in a felt rather than as isotropic speckle.
+    Paper,
+}
+
+impl ShadingTexture {
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            ShadingTexture::None => 0,
+            ShadingTexture::Grain => 1,
+            ShadingTexture::Paper => 2,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShadingTexture::None => "none",
+            ShadingTexture::Grain => "grain",
+            ShadingTexture::Paper => "paper",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "grain" => ShadingTexture::Grain,
+            "paper" => ShadingTexture::Paper,
+            _ => ShadingTexture::None,
+        }
+    }
+}
+
+fn default_texture_scale() -> f32 {
+    2.0
+}
+
+fn is_texture_none(v: &ShadingTexture) -> bool {
+    *v == ShadingTexture::None
+}
+
 fn is_false(v: &bool) -> bool {
     !*v
 }
@@ -544,6 +608,9 @@ mod shading_tests {
             highlight_strength: 0.75,
             highlight_blend: ShadingBlend::Mix,
             softness: 3.0,
+            texture_kind: ShadingTexture::Paper,
+            texture_strength: 0.6,
+            texture_scale: 3.5,
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();

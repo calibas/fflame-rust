@@ -1755,6 +1755,15 @@ impl ConfigManager {
                 Ok(config.escape.shading.highlight_strength.into())
             }
             ConfigPath::EscapeShadingSoftness => Ok(config.escape.shading.softness.into()),
+            ConfigPath::EscapeShadingTextureKind => Ok(ConfigValue::String(
+                config.escape.shading.texture_kind.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingTextureStrength => {
+                Ok(config.escape.shading.texture_strength.into())
+            }
+            ConfigPath::EscapeShadingTextureScale => {
+                Ok(config.escape.shading.texture_scale.into())
+            }
             ConfigPath::EscapeShadingHighlightBlend => Ok(ConfigValue::String(
                 crate::config::escape::shading_blend_to_str(config.escape.shading.highlight_blend)
                     .to_string(),
@@ -2661,7 +2670,20 @@ impl ConfigManager {
             }
             ConfigPath::EscapeShadingSoftness => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.shading.softness = v.clamp(0.0, 8.0);
+                self.current.escape.shading.softness = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapeShadingTextureKind => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.texture_kind =
+                    crate::config::escape::ShadingTexture::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeShadingTextureStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.texture_strength = v.clamp(0.0, 4.0);
+            }
+            ConfigPath::EscapeShadingTextureScale => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.texture_scale = v.clamp(0.25, 64.0);
             }
             ConfigPath::EscapeShadingHighlightBlend => {
                 let v: String = value.try_into()?;

@@ -8,7 +8,7 @@
 //! sliders are generated from the registry defs, the way variation
 //! params generate theirs.
 
-use crate::config::escape::{ShadingBlend, ShadingField};
+use crate::config::escape::{ShadingBlend, ShadingField, ShadingTexture};
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
@@ -727,7 +727,9 @@ pub fn render_escape_content(
                     ui.label(t!("escape_panel.shading_softness"));
                     let mut sf = sh.softness;
                     if ui
-                        .add(egui::Slider::new(&mut sf, 0.0..=8.0).step_by(1.0))
+                        // Continuous: this is a Gaussian WIDTH, not a
+                        // stencil radius, so fractions mean something.
+                        .add(egui::Slider::new(&mut sf, 0.0..=16.0))
                         .on_hover_text(t!("escape_panel.tooltip_shading_softness"))
                         .changed()
                     {
@@ -735,6 +737,69 @@ pub fn render_escape_content(
                             .update_param(ConfigPath::EscapeShadingSoftness, sf.into());
                     }
                 });
+                // ---- Surface texture ----
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.shading_texture"));
+                    let cur = sh.texture_kind;
+                    egui::ComboBox::from_id_salt("escape_shading_texture")
+                        .selected_text(match cur {
+                            ShadingTexture::None => t!("escape_panel.texture_none"),
+                            ShadingTexture::Grain => t!("escape_panel.texture_grain"),
+                            ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+                        })
+                        .show_ui(ui, |ui| {
+                            for k in [
+                                ShadingTexture::None,
+                                ShadingTexture::Grain,
+                                ShadingTexture::Paper,
+                            ] {
+                                let label = match k {
+                                    ShadingTexture::None => t!("escape_panel.texture_none"),
+                                    ShadingTexture::Grain => t!("escape_panel.texture_grain"),
+                                    ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+                                };
+                                if ui.selectable_label(cur == k, label.as_ref()).clicked()
+                                    && cur != k
+                                {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::EscapeShadingTextureKind,
+                                        ConfigValue::String(k.as_str().to_string()),
+                                    );
+                                }
+                            }
+                        });
+                })
+                .response
+                .on_hover_text(t!("escape_panel.tooltip_shading_texture"));
+                if sh.texture_kind != ShadingTexture::None {
+                    ui.horizontal(|ui| {
+                        ui.label(t!("escape_panel.texture_strength"));
+                        let mut v = sh.texture_strength;
+                        if ui
+                            .add(egui::Slider::new(&mut v, 0.0..=4.0))
+                            .on_hover_text(t!("escape_panel.tooltip_texture_strength"))
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(
+                                ConfigPath::EscapeShadingTextureStrength,
+                                v.into(),
+                            );
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(t!("escape_panel.texture_scale"));
+                        let mut v = sh.texture_scale;
+                        if ui
+                            .add(egui::Slider::new(&mut v, 0.25..=64.0).logarithmic(true))
+                            .on_hover_text(t!("escape_panel.tooltip_texture_scale"))
+                            .changed()
+                        {
+                            let _ = config_manager
+                                .update_param(ConfigPath::EscapeShadingTextureScale, v.into());
+                        }
+                    });
+                }
+
                 ui.horizontal(|ui| {
                     ui.label(t!("escape_panel.shading_field"));
                     let cur = sh.field;
