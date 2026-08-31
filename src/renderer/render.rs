@@ -631,40 +631,84 @@ async fn render_escape(
     let mut escape_renderer = crate::escape::EscapeRenderer::new(device, job.width, job.height);
     // Config-declared supersampling applies on every path (viewport,
     // CLI, thumbnails): a saved file reproduces exactly.
-    escape_renderer.resize(device, job.width, job.height, job.config.escape.supersample);
+    let want_ss = job.config.escape.supersample.max(1);
+    escape_renderer.resize(device, job.width, job.height, want_ss);
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
     escape_renderer.set_chunk_time_target(200.0);
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Escape Render"),
-    });
-    let mut settled = escape_renderer.render(
-        device,
-        queue,
-        &mut encoder,
-        &job.config.escape,
-        renderer.palette_view(),
-    );
-    let mut guard = 0u32;
-    while !settled {
-        queue.submit(std::iter::once(encoder.finish()));
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Escape Render Chunk"),
+
+    // What the supersampled grid could actually give. At export sizes
+    // it is often less than was asked for -- 8x over 4000x3000 is 768
+    // megapixels of per-pixel state AND 32000 pixels a side, past both
+    // the memory budget and the texture-dimension limit every adapter
+    // has -- and the shortfall used to be silent, which reads as
+    // "antialiasing does nothing on export".
+    //
+    // The rest is made up by ACCUMULATION: the same sample positions,
+    // taken as several ordinary renders each displaced within a pixel
+    // and averaged. Same total iteration work, fixed memory, no size
+    // limit. `extra == 1` is the single render this always was.
+    let got_ss = escape_renderer.effective_supersample();
+    let extra = want_ss.div_ceil(got_ss.max(1)).max(1);
+    if extra > 1 {
+        log::info!(
+            "Escape export: {want_ss}x antialiasing = {got_ss}x grid x {extra}x \
+             accumulated ({} renders)",
+            extra * extra
+        );
+    }
+    let offsets = if extra > 1 {
+        crate::escape::EscapeRenderer::sample_grid(extra)
+    } else {
+        vec![[0.0f32, 0.0]]
+    };
+    if extra > 1 {
+        escape_renderer.begin_accumulation(device, queue, extra);
+    }
+    for off in &offsets {
+        escape_renderer.set_sample_offset(*off);
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Escape Render"),
         });
-        settled = escape_renderer.render(
+        let mut settled = escape_renderer.render(
             device,
             queue,
             &mut encoder,
             &job.config.escape,
             renderer.palette_view(),
         );
-        guard += 1;
-        if guard > 4_000_000 {
-            log::error!("escape chunk loop failed to settle; rendering what we have");
-            break;
+        let mut guard = 0u32;
+        while !settled {
+            queue.submit(std::iter::once(encoder.finish()));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Escape Render Chunk"),
+            });
+            settled = escape_renderer.render(
+                device,
+                queue,
+                &mut encoder,
+                &job.config.escape,
+                renderer.palette_view(),
+            );
+            guard += 1;
+            if guard > 4_000_000 {
+                log::error!("escape chunk loop failed to settle; rendering what we have");
+                break;
+            }
         }
+        // Fold this displaced render into the running average. The
+        // encoder still holds the settling chunk's resolve, so the
+        // fold is ordered after it.
+        if extra > 1 {
+            escape_renderer.accumulate_sample(device, queue, &mut encoder);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
     }
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Escape Tail"),
+    });
 
     // Shared tail: density effects → tonemap → color effects → read.
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
@@ -678,7 +722,10 @@ async fn render_escape(
         chain.reset_slots();
     }
 
-    let escape_view = escape_renderer.output_view();
+    let escape_view = match escape_renderer.accumulated_view() {
+        Some(v) if extra > 1 => v,
+        _ => escape_renderer.output_view(),
+    };
     if has_density_effects {
         let chain = effect_chain.as_mut().expect("built above: has_density_effects");
         let density_ran = chain.run_density_effects(

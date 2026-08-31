@@ -3329,6 +3329,41 @@ makes that the difference between a clamp and an out-of-memory.
 Measured at 160x128: aliasing (mean |second difference|) falls from
 96.2 with no antialiasing to 26.1 at 8x.
 
+*At export sizes the grid cannot deliver what is asked for, so
+antialiasing also runs by ACCUMULATION.* 8x over a 4000x3000 export
+is 768 megapixels of per-pixel state — and 32000 pixels a side, past
+the 16384 texture-dimension limit every adapter has, so no budget
+tuning reaches it. The factor was clamped away and nothing said so,
+which reads as "antialiasing does nothing on export".
+
+The same samples can be taken as several ordinary renders, each
+displaced within a pixel, and averaged: identical total iteration
+work, fixed memory, no size limit. No template needed changing,
+because a sub-pixel shift of the sampling grid IS a shift of the
+view — which the direct path already expresses through its centre
+and the perturbed path through `ref_offset` (exact at any depth,
+being a displacement in pixel spacings). The export path uses
+whatever grid factor fits and makes up the rest this way, so 8x at
+4K is a 1x grid times 8x accumulated: 64 renders, ~70 seconds,
+against 0.7 for one. Measured on a detailed view at 4000x3000,
+aliasing falls 3.75x.
+
+Two things the test caught that review would not have. Adding the
+offset silently did NOTHING at first: the recolor cache keys on the
+config, the offset lives on the renderer, so every sample returned
+the same cached image — the offset is now part of the iteration
+identity. And the accumulation target cannot be one read-write
+texture (`rgba32float` read-write storage is rejected outright) nor a
+storage buffer (a 4K frame of `vec4<f32>` exceeds the 128 MB binding
+limit); it is a write-only ping-pong pair. The test pins that one
+accumulated sample at offset zero reproduces a plain render EXACTLY,
+which is what separated "the arithmetic is wrong" from "the positions
+differ", and that the accumulated image lands far closer to the grid
+it replaces (3.08/255) than no antialiasing does (36.93/255). Not
+bit-equality: the direct path carries its centre to the shader as
+f32, so a sub-pixel shift lands a few ten-thousandths of a pixel off,
+and at a chaotic boundary that flips pixels.
+
 *Downsample modes*, because "antialiasing washes colour out of fine
 detail" is a fair report about a correct behaviour. A saturated
 filament covering one sample in nine IS one ninth of that pixel's

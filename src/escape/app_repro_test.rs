@@ -5601,6 +5601,276 @@ mod tests {
         }
     }
 
+    /// Accumulated antialiasing must match the supersampled grid it
+    /// stands in for.
+    ///
+    /// Reported from the app: 8x antialiasing does nothing on a
+    /// 4000x3000 export. It cannot — 8x over that is 768 megapixels
+    /// of per-pixel state and 32000 pixels a side, past both the
+    /// memory budget and the 16384 texture-dimension limit, so the
+    /// factor was clamped away to 1x and nothing said so. The fix
+    /// takes the same sample positions as several ordinary renders
+    /// displaced within a pixel.
+    ///
+    /// Which only helps if it is the SAME antialiasing. So this
+    /// renders one image with a 3x grid and another with 1x plus 3x
+    /// accumulation, and requires them to agree closely: same sample
+    /// positions, same average, so the difference is f32 ordering and
+    /// the per-sample shading pass, not method.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn accumulated_antialiasing_matches_the_grid() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode,
+            config.palette_squeeze_falloff, config.palette_log_strength,
+            config.palette_reverse,
+        );
+
+        // Fine structure, so antialiasing has something to do.
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.7436438870371587".to_string();
+        esc.center_im = "0.1318259042053119".to_string();
+        esc.zoom_log2 = 9.0;
+        esc.max_iter = 1200;
+        esc.coloring = "smooth".to_string();
+        esc.coloring_params.insert("scale".to_string(), 0.2);
+
+        let settle = |escape: &mut crate::escape::EscapeRenderer,
+                      esc: &crate::config::escape::EscapeConfig,
+                      enc: &mut wgpu::CommandEncoder,
+                      palette: &wgpu::TextureView| {
+            let mut guard = 0u32;
+            loop {
+                let settled = escape.render(&device, &queue, enc, esc, palette);
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "did not settle");
+            }
+        };
+        let tonemap_read = |escape: &crate::escape::EscapeRenderer,
+                            view: &wgpu::TextureView,
+                            renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let _ = escape;
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aa tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, view);
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, px) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            px
+        };
+
+        // The palette view is stable for the whole test; cloning it
+        // frees `renderer` for the mutable tonemap calls.
+        let palette = renderer.palette_view().clone();
+
+        // A: the supersampled grid.
+        let grid = {
+            let mut e = crate::escape::EscapeRenderer::new(&device, w, h);
+            e.resize(&device, w, h, 3);
+            assert_eq!(e.effective_supersample(), 3, "the grid must fit at this size");
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("grid"),
+            });
+            settle(&mut e, &esc, &mut enc, &palette);
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let px = tonemap_read(&e, e.output_view(), &mut renderer);
+            e.destroy();
+            px
+        };
+
+        // B: no grid, the same 3x3 positions accumulated.
+        let accumulated = {
+            let mut e = crate::escape::EscapeRenderer::new(&device, w, h);
+            e.resize(&device, w, h, 1);
+            e.begin_accumulation(&device, &queue, 3);
+            for off in crate::escape::EscapeRenderer::sample_grid(3) {
+                e.set_sample_offset(off);
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("accum"),
+                });
+                settle(&mut e, &esc, &mut enc, &palette);
+                e.accumulate_sample(&device, &queue, &mut enc);
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            }
+            let view = e.accumulated_view().expect("accumulation target").clone();
+            let px = tonemap_read(&e, &view, &mut renderer);
+            e.destroy();
+            px
+        };
+
+        // A single accumulated sample at offset zero must equal a
+        // plain render exactly.
+        {
+            let mut e = crate::escape::EscapeRenderer::new(&device, w, h);
+            e.resize(&device, w, h, 1);
+            e.begin_accumulation(&device, &queue, 1);
+            for off in crate::escape::EscapeRenderer::sample_grid(1) {
+                e.set_sample_offset(off);
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("probe"),
+                });
+                settle(&mut e, &esc, &mut enc, &palette);
+                e.accumulate_sample(&device, &queue, &mut enc);
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            }
+            let v = e.accumulated_view().unwrap().clone();
+            let one = tonemap_read(&e, &v, &mut renderer);
+            e.destroy();
+            let mut e2 = crate::escape::EscapeRenderer::new(&device, w, h);
+            e2.resize(&device, w, h, 1);
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("probe plain"),
+            });
+            settle(&mut e2, &esc, &mut enc, &palette);
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let plain1 = tonemap_read(&e2, e2.output_view(), &mut renderer);
+            e2.destroy();
+            let d: i32 = one
+                .chunks(4)
+                .zip(plain1.chunks(4))
+                .map(|(a, b)| (0..3).map(|c| (a[c] as i32 - b[c] as i32).abs()).max().unwrap())
+                .max()
+                .unwrap();
+            println!("one accumulated sample vs a plain render: worst diff {d}");
+            // EXACT, not approximate: one sample at offset zero is the
+            // plain render, so any difference here is the accumulation
+            // arithmetic itself (the 1/n scale, the clear-on-first
+            // rule, the ping-pong) rather than sampling. Separating
+            // the two is what showed the residual below to be
+            // positional.
+            assert_eq!(
+                d, 0,
+                "a single accumulated sample at offset zero must reproduce the                  plain render exactly"
+            );
+        }
+
+        // A render with no antialiasing, as the yardstick below.
+        let plain = {
+            let mut e = crate::escape::EscapeRenderer::new(&device, w, h);
+            e.resize(&device, w, h, 1);
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("plain"),
+            });
+            settle(&mut e, &esc, &mut enc, &palette);
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let px = tonemap_read(&e, e.output_view(), &mut renderer);
+            e.destroy();
+            px
+        };
+
+        let mut worst = 0i32;
+        let mut sum = 0f64;
+        for (a, b) in grid.chunks(4).zip(accumulated.chunks(4)) {
+            for c in 0..3 {
+                let d = (a[c] as i32 - b[c] as i32).abs();
+                worst = worst.max(d);
+                sum += d as f64;
+            }
+        }
+        let mean = sum / (grid.len() / 4 * 3) as f64;
+        println!("grid 3x vs 3x accumulated: mean {mean:.2}/255, worst {worst}");
+        // How far a render with NO antialiasing sits from the grid,
+        // as the yardstick. Accumulation stands in for the grid, so it
+        // has to land far closer to it than doing nothing does.
+        //
+        // Not bit-equality, deliberately: the two take the same
+        // NOMINAL sample positions, but the direct path carries its
+        // centre to the shader as f32, so a sub-pixel shift lands a
+        // few ten-thousandths of a pixel off — and at a chaotic
+        // boundary that is enough to flip a pixel's escape count. The
+        // claim worth testing is that the method reproduces the grid,
+        // not that it reproduces its rounding.
+        let mut plain_sum = 0f64;
+        for (a, b) in grid.chunks(4).zip(plain.chunks(4)) {
+            for c in 0..3 {
+                plain_sum += (a[c] as i32 - b[c] as i32).abs() as f64;
+            }
+        }
+        let plain_mean = plain_sum / (grid.len() / 4 * 3) as f64;
+        println!("for reference, no AA vs grid: mean {plain_mean:.2}/255");
+        assert!(
+            mean < plain_mean * 0.35,
+            "accumulated antialiasing ({mean:.2}/255 from the grid) is not much \
+             closer to it than no antialiasing at all ({plain_mean:.2}/255) -- it \
+             is supposed to be the same sample positions by another route"
+        );
+
+        let aliasing = |px: &[u8]| -> f64 {
+            let mut acc = 0f64;
+            for y in 0..h as usize {
+                for x in 1..w as usize - 1 {
+                    let i = (y * w as usize + x) * 4;
+                    for c in 0..3 {
+                        let a = px[i - 4 + c] as f64;
+                        let b = px[i + c] as f64;
+                        let d = px[i + 4 + c] as f64;
+                        acc += (d - 2.0 * b + a).abs();
+                    }
+                }
+            }
+            acc
+        };
+        let (a_plain, a_acc) = (aliasing(&plain), aliasing(&accumulated));
+        println!("aliasing: none {a_plain:.0}, accumulated {a_acc:.0}");
+        assert!(
+            a_acc < a_plain * 0.85,
+            "the accumulated render ({a_acc:.0}) is no smoother than one with no \
+             antialiasing at all ({a_plain:.0}) -- the offsets are not reaching \
+             the view"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
