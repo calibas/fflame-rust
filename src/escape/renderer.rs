@@ -1619,14 +1619,28 @@ impl EscapeRenderer {
                 } else {
                     Self::GPU_TARGET_MS
                 };
-                let current = self.chunk_iters.max(seed);
                 let ideal = (target / mspi).clamp(16.0, perturb_chunk_ceiling() as f32) as u32;
-                let chunk = ideal
-                    .clamp(
+                // First chunk after a restart (a pan, a zoom notch):
+                // go STRAIGHT to the measured size. The 2x growth
+                // bound exists because cost is non-stationary, but
+                // bounding the first chunk by the cold-start seed
+                // meant a gesture -- which restarts every frame --
+                // never escaped the seed, and on the floatexp rung
+                // (seed ~13x smaller) every gesture frame covered a
+                // fraction of max_iter. The measurement is honest
+                // (GPU timestamps), the target is ~10 ms, and the
+                // TDR budget is seconds, so even a 2x cost drift
+                // since the measurement is far inside safety.
+                let chunk = if self.chunk_iters == 0 {
+                    ideal
+                } else {
+                    let current = self.chunk_iters.max(seed);
+                    ideal.clamp(
                         (current / 2).max(16),
                         current.saturating_mul(2),
                     )
-                    .clamp(16, perturb_chunk_ceiling());
+                }
+                .clamp(16, perturb_chunk_ceiling());
                 self.chunk_iters = chunk;
                 return chunk;
             }

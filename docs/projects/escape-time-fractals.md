@@ -3101,6 +3101,37 @@ render-identity CHANGE rather than on any chunk restart, so the
 reported settle time is the latency of the user's edit rather than
 the whole gesture.
 
+*And the chunked render must not flash black.* Field report, past
+zoom 48: a black screen for the first frames of a zoom, permanently
+black while panning, a single black flash when dragging the zoom
+field, and "a black hole in the middle for a single frame" before
+later chunks filled it — all at max_iter 605.
+
+Two causes, both fixed. **The templates painted every pixel every
+chunk**, so a pixel whose iterations had not finished yet wrote
+black. It now skips the store unless it has escaped or the render has
+reached max_iter, so an unfinished pixel keeps whatever the texture
+held — the previous frame. The settled image is unchanged (the last
+chunk writes everyone), which the test asserts against a fresh
+render. **And the chunk pacer forgot its GPU measurement on every
+restart**: `reset_chunk_pacing` zeroes `chunk_iters`, and the first
+chunk was then bounded to 2x the cold-start seed. On the floatexp
+rung that seed is ~13x smaller (PERTURB_CHUNK_BUDGET_FE), so a
+gesture — which restarts every frame — never escaped it, and every
+frame covered a fraction of max_iter. The first chunk after a restart
+now goes straight to the measured size; the measurement is honest
+(GPU timestamps against a ~10 ms target) and the TDR budget is
+seconds. Side effect: the paced 13→48 glide went from 3463 ms to
+1809 ms.
+
+The test (`mid_render_frames_hold_content_instead_of_black`) forces
+64-iteration chunks, settles, pans, and renders exactly ONE chunk
+frame — what a drag shows. It guards against a vacuous pass (a view
+that is itself nearly all black when settled cannot demonstrate
+holding, and the first draft of this test picked exactly such a view
+and passed while proving nothing), and reverting the shader guard
+reads 100% black against a settled 30.9%.
+
 ## 9. Testing
 
 - **Visual corpus**: one config per formula at landmark coordinates;

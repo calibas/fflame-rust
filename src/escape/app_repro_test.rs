@@ -4601,6 +4601,178 @@ mod tests {
         escape.destroy();
     }
 
+    /// A mid-render chunk frame must HOLD the previous frame's
+    /// content for unfinished pixels, not paint them black.
+    ///
+    /// Past the floatexp threshold the TDR-safe chunk is a fraction
+    /// of a typical max_iter, so a pan restarts a multi-chunk render
+    /// whose first frame used to be mostly black (every pixel whose
+    /// iterations had not finished yet) -- the reported "always black
+    /// while continually panning" at zoom 48+. Unfinished pixels now
+    /// skip the store and keep whatever the texture held.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn mid_render_frames_hold_content_instead_of_black() {
+        let (device, queue) = repro_device();
+        let (w, h) = (192u32, 160u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        // Tiny chunks: a 600-iteration render becomes ~10 chunks, so
+        // the first frame after a restart is genuinely mid-render.
+        escape.chunk_override = Some(64);
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.743643887037158704752191".to_string();
+        esc.center_im = "0.131825904205311970493132".to_string();
+        esc.zoom_log2 = 50.0;
+        esc.max_iter = 6000;
+
+        let one_frame = |esc: &crate::config::escape::EscapeConfig,
+                         escape: &mut crate::escape::EscapeRenderer,
+                         renderer: &crate::renderer::compute_kernel::FlameRenderer|
+         -> bool {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hold frame"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            settled
+        };
+        let read = |escape: &mut crate::escape::EscapeRenderer,
+                    renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hold tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            rgba
+        };
+        let black_frac = |px: &[u8]| -> f64 {
+            let mut black = 0usize;
+            for i in (0..px.len()).step_by(4) {
+                if px[i] < 8 && px[i + 1] < 8 && px[i + 2] < 8 {
+                    black += 1;
+                }
+            }
+            black as f64 / (px.len() / 4) as f64
+        };
+
+        // Settle at A.
+        let mut guard = 0;
+        while !one_frame(&esc, &mut escape, &renderer) {
+            guard += 1;
+            assert!(guard < 100_000, "did not settle at A");
+        }
+        let settled_a = read(&mut escape, &mut renderer);
+        let base_black = black_frac(&settled_a);
+        // Guard against a VACUOUS pass: if the settled image is
+        // itself nearly all black there is no content to hold, and
+        // "the mid frame is not blacker" would prove nothing.
+        assert!(
+            base_black < 0.85,
+            "test view is {:.1}% black when settled -- it cannot show              content-holding; pick a view with structure",
+            100.0 * base_black
+        );
+
+        // Pan (well inside the relocation cap), then render EXACTLY
+        // ONE chunk frame -- what the user sees during a drag.
+        esc.center_re = "-0.743643887037158704752195".to_string();
+        let settled = one_frame(&esc, &mut escape, &renderer);
+        assert!(!settled, "one 64-iteration chunk of 600 must not settle");
+        let mid = read(&mut escape, &mut renderer);
+        let mid_black = black_frac(&mid);
+        println!(
+            "black fraction: settled {:.1}%, first chunk after pan {:.1}%",
+            100.0 * base_black,
+            100.0 * mid_black
+        );
+        // Without content-holding this reads near 100% (64 of 600
+        // iterations finishes almost nothing at this depth); with it,
+        // the frame keeps A's pixels wherever iteration is unfinished.
+        assert!(
+            mid_black < base_black + 0.10,
+            "the mid-render frame is {:.1}% black against a settled {:.1}% -- \
+             unfinished pixels are painting black instead of holding content",
+            100.0 * mid_black,
+            100.0 * base_black
+        );
+
+        // And finishing the render must still produce the correct
+        // image: settle and compare against a fresh renderer at B.
+        let mut guard = 0;
+        while !one_frame(&esc, &mut escape, &renderer) {
+            guard += 1;
+            assert!(guard < 100_000, "did not settle at B");
+        }
+        let settled_b = read(&mut escape, &mut renderer);
+        let fresh_b = {
+            let mut escape2 = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0;
+            while !one_frame(&esc, &mut escape2, &renderer) {
+                guard += 1;
+                assert!(guard < 100_000, "fresh render did not settle");
+            }
+            let px = read(&mut escape2, &mut renderer);
+            escape2.destroy();
+            px
+        };
+        let mut differ = 0usize;
+        for i in (0..settled_b.len()).step_by(4) {
+            let a = settled_b[i] as u32 + settled_b[i + 1] as u32 + settled_b[i + 2] as u32;
+            let b = fresh_b[i] as u32 + fresh_b[i + 1] as u32 + fresh_b[i + 2] as u32;
+            if (a > 24) != (b > 24) {
+                differ += 1;
+            }
+        }
+        let frac = differ as f64 / (w as f64 * h as f64);
+        println!("settled-after-pan vs fresh: {:.2}% differ", 100.0 * frac);
+        assert!(
+            frac < 0.03,
+            "content-holding changed the SETTLED image ({:.2}% of pixels)",
+            100.0 * frac
+        );
+        escape.destroy();
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
