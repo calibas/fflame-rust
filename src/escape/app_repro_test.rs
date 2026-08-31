@@ -4824,7 +4824,45 @@ mod tests {
             second <= chunk.saturating_mul(2),
             "second chunk {second} grew more than 2x over {chunk}"
         );
+
+        // A measurement from the OTHER RUNG must not be used at all.
+        // This is the second device loss: crossing zoom 48 into
+        // floatexp, a cheap scaled-rung cold measurement sized the
+        // floatexp restart, and with max_iter 10k the whole render
+        // became ONE dispatch with every pixel alive.
+        escape.set_pacer_measurements_other_rung(Some(1e-4), Some(1e-4));
+        let chunk = escape.probe_restart_chunk(true);
+        assert!(
+            chunk <= seed.saturating_mul(2).max(16),
+            "restart chunk {chunk} trusted a measurement from the other rung              (seed {seed}) -- cost per iteration differs several-fold across it"
+        );
         escape.destroy();
+
+        // THE CEILING MUST SCALE WITH PIXELS. It is a multiple of the
+        // static budget/pixels seed, not an absolute iteration count:
+        // 1M iterations means something entirely different at 200x160
+        // than at 4K with supersampling, where it is thousands of
+        // times over the budget the seed encodes. Both device losses
+        // ended in a dispatch a pixel-aware ceiling would have
+        // refused.
+        let small = crate::escape::EscapeRenderer::new(&device, 320, 240);
+        let mut big = crate::escape::EscapeRenderer::new(&device, 1920, 1080);
+        big.resize(&device, 1920, 1080, 3);
+        let (c_small, c_big) = (small.chunk_ceiling(true), big.chunk_ceiling(true));
+        println!("chunk ceiling: 320x240 {c_small}, 1920x1080 @3x {c_big}");
+        assert!(
+            c_big < c_small,
+            "the ceiling ignored resolution ({c_small} vs {c_big}): a chunk sized              for a thumbnail would run over a 33-megapixel frame"
+        );
+        // And no measurement, however rosy, may exceed it.
+        big.set_pacer_measurements(Some(1e-9), Some(1e-9));
+        let chunk = big.probe_restart_chunk(true);
+        assert!(
+            chunk <= c_big,
+            "restart chunk {chunk} exceeded the ceiling {c_big}"
+        );
+        small.destroy();
+        big.destroy();
     }
 
     /// GPU-time pacing must engage, and must not change the image.

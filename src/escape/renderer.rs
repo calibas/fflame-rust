@@ -336,11 +336,27 @@ fn perturb_chunk_seed(floatexp: bool, px: u64) -> u32 {
 }
 
 /// The adaptively-grown ceiling, after the session shift.
-fn perturb_chunk_ceiling() -> u32 {
+fn perturb_chunk_ceiling(seed: u32) -> u32 {
     tuning::ensure_loaded();
     let shift = PERTURB_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
-    (CHUNK_ITERS_MAX_BASE >> shift).max(64)
+    let base = (CHUNK_ITERS_MAX_BASE >> shift).max(64);
+    // A MULTIPLE OF THE CALIBRATED SEED, not an absolute count. The
+    // seed is `budget / pixels` -- the whole TDR calibration lives in
+    // it -- so a flat 1M-iteration ceiling means something completely
+    // different at 200x160 than at 4K with 3x supersampling, where it
+    // is thousands of times over budget. Measurement-driven growth
+    // still gets 64x of headroom over the static budget; what it can
+    // no longer do is grow to an absolute number that ignores how
+    // many pixels are paying it. Both device losses in this area
+    // ended in a dispatch this bound would have refused.
+    seed.saturating_mul(CHUNK_SEED_HEADROOM).clamp(64, base)
 }
+
+/// How far past the static per-dispatch budget a MEASURED chunk may
+/// grow. Generous enough that a cheap render still ramps (the seed is
+/// deliberately conservative), bounded enough that a measurement from
+/// the wrong cost regime cannot produce an unbounded dispatch.
+const CHUNK_SEED_HEADROOM: u32 = 64;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4 arrays start at a
@@ -621,6 +637,13 @@ pub struct EscapeRenderer {
     /// alive) -- the only measurement a restart may be sized from.
     /// See `TimestampPacer::from_start`.
     gpu_ms_per_iter_cold: Option<f32>,
+    /// The cost regime both measurements were taken in. A measurement
+    /// is only meaningful for the regime that produced it: the
+    /// floatexp rung costs several times the scaled rung per
+    /// iteration, and cost per iteration scales with the pixel count.
+    /// Carrying an f32-rung measurement across the zoom-48 boundary
+    /// sized a floatexp restart from it and lost the device.
+    gpu_regime: Option<CostRegime>,
     /// Test hook: shrink the chunk to force multi-chunk renders.
     #[cfg(test)]
     pub(crate) chunk_override: Option<u32>,
@@ -692,6 +715,8 @@ struct TimestampPacer {
     phase: TsPhase,
     /// Iterations the in-flight measurement covers.
     iters: u32,
+    /// The regime the measured dispatch ran in.
+    regime: Option<CostRegime>,
     /// The measured dispatch was a render's FIRST chunk (iteration
     /// 0): every pixel alive, which is the cost regime a RESTART
     /// faces. Late-chunk measurements are survivor-biased -- most
@@ -746,10 +771,21 @@ impl TimestampPacer {
             period_ns,
             phase: TsPhase::Idle,
             iters: 0,
+            regime: None,
             from_start: false,
             done: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
+}
+
+/// What a GPU cost measurement is valid for. Anything that changes
+/// the per-iteration cost of a full-frame dispatch belongs here.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CostRegime {
+    floatexp: bool,
+    width: u32,
+    height: u32,
+    tier: assembler::PerturbTier,
 }
 
 /// What the current BLA table was built for (rebuild trigger).
@@ -1131,6 +1167,7 @@ impl EscapeRenderer {
             timestamps: None,
             gpu_ms_per_iter: None,
             gpu_ms_per_iter_cold: None,
+            gpu_regime: None,
             chunk_iters: 0,
             chunk_count: 0,
             chunk_proven: 0,
@@ -1510,10 +1547,19 @@ impl EscapeRenderer {
                 ts.staging.unmap();
                 ts.phase = TsPhase::Idle;
                 let ms = elapsed as f32 * ts.period_ns * 1e-6;
+                let (from_start, regime) = (ts.from_start, ts.regime);
                 if ms > 0.0 && ts.iters > 0 {
                     let mspi = ms / ts.iters as f32;
+                    // A measurement from a different regime is not a
+                    // slightly-stale number, it is a number about
+                    // something else: replace rather than blend.
+                    if self.gpu_regime != regime {
+                        self.gpu_regime = regime;
+                        self.gpu_ms_per_iter = None;
+                        self.gpu_ms_per_iter_cold = None;
+                    }
                     self.gpu_ms_per_iter = Some(mspi);
-                    if ts.from_start {
+                    if from_start {
                         self.gpu_ms_per_iter_cold = Some(mspi);
                     }
                 }
@@ -1540,12 +1586,49 @@ impl EscapeRenderer {
     pub(crate) fn set_pacer_measurements(&mut self, general: Option<f32>, cold: Option<f32>) {
         self.gpu_ms_per_iter = general;
         self.gpu_ms_per_iter_cold = cold;
+        // Attributed to the regime the probes ask about, so a test
+        // that means "a measurement exists" gets one.
+        self.gpu_regime = Some(CostRegime {
+            floatexp: true,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        });
+    }
+
+    /// As [`set_pacer_measurements`], but attributed to the SCALED
+    /// rung — the cross-regime case that lost the device.
+    #[cfg(test)]
+    pub(crate) fn set_pacer_measurements_other_rung(
+        &mut self,
+        general: Option<f32>,
+        cold: Option<f32>,
+    ) {
+        self.gpu_ms_per_iter = general;
+        self.gpu_ms_per_iter_cold = cold;
+        self.gpu_regime = Some(CostRegime {
+            floatexp: false,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        });
+    }
+
+    #[cfg(test)]
+    fn probe_regime(&self, floatexp: bool) -> CostRegime {
+        CostRegime {
+            floatexp,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn probe_restart_chunk(&mut self, floatexp: bool) -> u32 {
         self.reset_chunk_pacing();
-        self.next_chunk(floatexp)
+        let regime = self.probe_regime(floatexp);
+        self.next_chunk(floatexp, regime)
     }
 
     #[cfg(test)]
@@ -1555,7 +1638,15 @@ impl EscapeRenderer {
 
     #[cfg(test)]
     pub(crate) fn next_chunk_for_test(&mut self, floatexp: bool) -> u32 {
-        self.next_chunk(floatexp)
+        let regime = self.probe_regime(floatexp);
+        self.next_chunk(floatexp, regime)
+    }
+
+    /// The measured-growth ceiling for this render size (test view of
+    /// the pixel-aware bound).
+    #[cfg(test)]
+    pub(crate) fn chunk_ceiling(&self, floatexp: bool) -> u32 {
+        perturb_chunk_ceiling(self.chunk_size(floatexp))
     }
 
     /// Whether this dispatch should carry timestamp writes. Creates
@@ -1584,7 +1675,13 @@ impl EscapeRenderer {
 
     /// Resolve the pair this dispatch just wrote, and remember how
     /// many iterations it covered.
-    fn ts_after_dispatch(&mut self, encoder: &mut CommandEncoder, iters: u32, from_start: bool) {
+    fn ts_after_dispatch(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        iters: u32,
+        from_start: bool,
+        regime: CostRegime,
+    ) {
         let Some(ts) = self.timestamps.as_mut() else {
             return;
         };
@@ -1592,6 +1689,7 @@ impl EscapeRenderer {
         encoder.copy_buffer_to_buffer(&ts.resolve, 0, &ts.staging, 0, TimestampPacer::BYTES);
         ts.iters = iters;
         ts.from_start = from_start;
+        ts.regime = Some(regime);
         ts.phase = TsPhase::Encoded;
     }
 
@@ -1636,8 +1734,15 @@ impl EscapeRenderer {
     /// never met with a large chunk; growth is at most 2x per call and
     /// only when the previous call came in under target, which bounds
     /// an overshoot to roughly one target period.
-    fn next_chunk(&mut self, floatexp: bool) -> u32 {
+    fn next_chunk(&mut self, floatexp: bool, regime: CostRegime) -> u32 {
         let seed = self.chunk_size(floatexp);
+        // A measurement from another regime says nothing about this
+        // dispatch's cost. Drop it and fall back to the static seed
+        // until this regime measures itself.
+        if self.gpu_regime != Some(regime) {
+            self.gpu_ms_per_iter = None;
+            self.gpu_ms_per_iter_cold = None;
+        }
         #[cfg(test)]
         if self.chunk_override.is_some() {
             return seed;
@@ -1663,7 +1768,8 @@ impl EscapeRenderer {
                 } else {
                     Self::GPU_TARGET_MS
                 };
-                let ideal = (target / mspi).clamp(16.0, perturb_chunk_ceiling() as f32) as u32;
+                let ceiling = perturb_chunk_ceiling(seed);
+                let ideal = (target / mspi).clamp(16.0, ceiling as f32) as u32;
                 // First chunk after a restart (a pan, a zoom notch):
                 // size it from the COLD measurement -- cost per
                 // iteration measured on a first chunk, where every
@@ -1680,7 +1786,7 @@ impl EscapeRenderer {
                 let chunk = if self.chunk_iters == 0 {
                     match self.gpu_ms_per_iter_cold {
                         Some(cold) if cold > 0.0 => {
-                            (target / cold).clamp(16.0, perturb_chunk_ceiling() as f32) as u32
+                            (target / cold).clamp(16.0, ceiling as f32) as u32
                         }
                         _ => ideal.min(seed.saturating_mul(2).max(16)),
                     }
@@ -1691,7 +1797,7 @@ impl EscapeRenderer {
                         current.saturating_mul(2),
                     )
                 }
-                .clamp(16, perturb_chunk_ceiling());
+                .clamp(16, ceiling);
                 self.chunk_iters = chunk;
                 return chunk;
             }
@@ -1731,7 +1837,7 @@ impl EscapeRenderer {
                 .chunk_proven
                 .max(seed)
                 .saturating_mul(Self::GROWTH_HEADROOM)
-                .min(perturb_chunk_ceiling());
+                .min(perturb_chunk_ceiling(seed));
             if self.chunk_since_growth >= Self::GROWTH_INTERVAL && chunk < cap {
                 chunk = chunk.saturating_mul(2).min(cap);
                 self.chunk_since_growth = 0;
@@ -3699,11 +3805,19 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 // sizes from it.
                 self.ts_poll();
                 let measure_gpu = self.ts_prepare(device, queue);
-                let chunk = self.next_chunk(floatexp);
-                let iter_start = self.chunk_next.min(escape.max_iter);
-                let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
                 let tier = Self::perturb_tier(escape)
                     .unwrap_or(assembler::PerturbTier::Power(2));
+                // Everything that changes what one iteration COSTS.
+                // next_chunk only trusts a measurement taken here.
+                let regime = CostRegime {
+                    floatexp,
+                    width: self.width,
+                    height: self.height,
+                    tier,
+                };
+                let chunk = self.next_chunk(floatexp, regime);
+                let iter_start = self.chunk_next.min(escape.max_iter);
+                let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
                 self.ensure_iter_state(
                     device,
                     assembler::iter_state_bytes(tier, floatexp),
@@ -3848,6 +3962,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         encoder,
                         iter_end.saturating_sub(iter_start),
                         iter_start == 0,
+                        regime,
                     );
                 }
                 // Every chunk refreshes the display image, so
@@ -4135,7 +4250,7 @@ mod tests {
         PERTURB_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
         DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
         let seed0 = perturb_chunk_seed(false, 1920 * 1080);
-        let ceil0 = perturb_chunk_ceiling();
+        let ceil0 = perturb_chunk_ceiling(seed0);
 
         note_device_lost();
         assert_eq!(
@@ -4153,8 +4268,11 @@ mod tests {
         );
         // Both the seed and the ceiling must actually shrink -- the
         // ceiling is what a runaway growth loop would otherwise reach.
-        assert_eq!(perturb_chunk_seed(false, 1920 * 1080), seed0 / 2);
-        assert_eq!(perturb_chunk_ceiling(), ceil0 / 2);
+        let seed1 = perturb_chunk_seed(false, 1920 * 1080);
+        assert_eq!(seed1, seed0 / 2);
+        // The ceiling is now a multiple of the seed, so the breaker
+        // still halves it -- through the seed rather than beside it.
+        assert_eq!(perturb_chunk_ceiling(seed1), ceil0 / 2);
 
         for _ in 0..10 {
             PERTURB_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);

@@ -3140,6 +3140,26 @@ directly, because a TDR cannot be a test: with the regression
 restored it reads a 100,000-iteration restart chunk against an 868
 seed.
 
+*That was not the whole of it — the same view lost the device again
+at 10k iterations, and the second look found two deeper holes.* A
+measurement was kept across a change of COST REGIME: crossing zoom 48
+into floatexp, a cheap scaled-rung cold measurement sized the
+floatexp restart, and at max_iter 10k the resulting chunk covered the
+whole render in ONE dispatch with every pixel alive. Measurements are
+now tagged with the regime that produced them (rung, render width and
+height, tier) and discarded outright on a mismatch — a measurement
+from another regime is not a stale number, it is a number about
+something else. And the growth CEILING was an absolute iteration
+count (1M), blind to how many pixels pay it: identical at 320x240 and
+at 1920x1080 with 3x supersampling, where it stands ~500x over the
+budget the seed encodes. It is now a multiple of that seed
+(`CHUNK_SEED_HEADROOM = 64`), which measures 499,968 against 2,048
+for those two sizes. Both device losses in this area ended in a
+dispatch the pixel-aware ceiling alone would have refused; the
+circuit breaker still halves it, now through the seed. The test
+covers all three failures — survivor bias, cross-rung reuse, and the
+resolution-blind ceiling.
+
 The test (`mid_render_frames_hold_content_instead_of_black`) forces
 64-iteration chunks, settles, pans, and renders exactly ONE chunk
 frame — what a drag shows. It guards against a vacuous pass (a view
