@@ -515,6 +515,7 @@ pub fn render_escape_content(ui: &mut egui::Ui, config_manager: &mut ConfigManag
                 ui.label(t!(
                     "escape_panel.diag_orbit_churn",
                     rebuilds = d.orbit_rebuilds,
+                    relocations = d.orbit_relocations,
                     waits = d.orbit_wait_frames
                 ))
                 .on_hover_text(t!("escape_panel.tooltip_diag_orbit_churn"));

@@ -66,6 +66,11 @@ pub struct EscapeDiag {
     /// started. Climbing during a pan/zoom gesture means each step
     /// threw the reference away.
     pub orbit_rebuilds: u64,
+    /// Times a moved view was served by re-anchoring the existing
+    /// reference (relocate_to) instead of recomputing it — the pan
+    /// fast path. During a drag this should climb while
+    /// `orbit_rebuilds` stays put.
+    pub orbit_relocations: u64,
 
     // ---- BLA table ------------------------------------------------
     pub bla_active: bool,

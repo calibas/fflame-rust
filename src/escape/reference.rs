@@ -69,6 +69,17 @@ fn nucleus_for_view(
     Some((hit.re, hit.im, hit.period, off))
 }
 
+/// Pan-reuse ceiling on a relocation offset, in pixel-spacing units.
+///
+/// The shader forms d0 = pixel_offset + ref_offset in f32 PIXEL
+/// units, so a large offset quantizes pixel positions: at 2^13 px the
+/// sum's ulp is ~2^-10 px (invisible); the nucleus path documents the
+/// hard wall at 2^15 (error ~2^-8) and total collapse at ~2^23 (the
+/// zoom-700 uniform-frame bug). 2^13 keeps a comfortable margin: a
+/// pan gesture reuses the reference for ~10 viewport-heights of
+/// travel before one recompute re-centers it.
+const MAX_RELOCATE_PX: f64 = 8192.0;
+
 /// Which map a reference orbit iterates -- everything that changes
 /// the ORBIT, and therefore everything its cache key must cover.
 ///
@@ -424,6 +435,13 @@ pub struct ReferenceOrbit {
     /// Pixels needing more iterations rebase (wrap to index 0), so a
     /// short orbit is fine — it just stops growing.
     pub escaped_at: Option<u32>,
+    /// Whether this orbit holds content the disk store has not seen:
+    /// set by a fresh compute and by every extend that grows the
+    /// orbit, false on a store load, and — the reason it exists —
+    /// UNTOUCHED by [`Self::relocate_to`]. Without it, panning a deep
+    /// view would save the same orbit under a new center key on
+    /// every gesture event.
+    pub(crate) store_grown: bool,
     /// Live fixed-point state (c and current Z) for append-on-deepen.
     c: FixedComplex,
     z: FixedComplex,
@@ -740,6 +758,7 @@ impl ReferenceOrbit {
                 re: FixedPoint::from_f64(map_params[0] as f64, n),
                 im: FixedPoint::from_f64(map_params[1] as f64, n),
             },
+            store_grown: true,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
             orbit_e: vec![0],
@@ -843,6 +862,14 @@ impl ReferenceOrbit {
         if self.escaped_at.is_some() {
             return;
         }
+        let len_before = self.orbit.len();
+        self.extend_inner(max_iter);
+        if self.orbit.len() != len_before {
+            self.store_grown = true;
+        }
+    }
+
+    fn extend_inner(&mut self, max_iter: u32) {
         if let Some(p) = self.periodic {
             // A nucleus orbit is complete at its period.
             let _ = p;
@@ -1163,12 +1190,91 @@ impl ReferenceOrbit {
     ) -> bool {
         self.center_re == center_re
             && self.center_im == center_im
-            && self.n_limbs >= n_limbs
+            && self.serves_shape(n_limbs, julia_c, power, ship, ship_variant, map_params)
+    }
+
+    /// [`serves`](Self::serves) minus the center compare: the same
+    /// MAP at sufficient precision. An orbit passing this can serve a
+    /// request at a DIFFERENT center through
+    /// [`relocate_to`](Self::relocate_to).
+    pub fn serves_shape(
+        &self,
+        n_limbs: usize,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+    ) -> bool {
+        self.n_limbs >= n_limbs
             && self.julia_c == julia_c
             && self.power == power.max(2)
             && self.ship == ship
             && self.ship_variant == if ship { ship_variant.min(5) } else { ship_variant }
             && self.map_params == map_params
+    }
+
+    /// Re-anchor this orbit under a MOVED view: same reference point,
+    /// new view center. This is what makes a pan or a zoom-to-cursor
+    /// wheel notch free — perturbation never needed the reference AT
+    /// the view center (rebasing serves any nearby point), only the
+    /// exact offset between them.
+    ///
+    /// The offset is recomputed from scratch each call — the new
+    /// center parsed at the orbit's own precision against the exact
+    /// fixed-point reference `c` — so a drag of hundreds of events
+    /// accumulates NO error. Parameter plane only: a Julia orbit's
+    /// reference is its SEED, which is not retained in fixed point,
+    /// so composing offsets would drift.
+    ///
+    /// True = the orbit now serves the new center (its identity
+    /// strings and offset provenance are updated; `store_grown` is
+    /// deliberately untouched). False = out of range (offset past
+    /// [`MAX_RELOCATE_PX`]) or not eligible — compute fresh.
+    pub fn relocate_to(
+        &mut self,
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        height_px: f64,
+    ) -> bool {
+        if self.julia_c.is_some() {
+            return false;
+        }
+        let n = self.n_limbs;
+        let (Some(vx), Some(vy)) = (
+            FixedPoint::from_decimal(center_re, n),
+            FixedPoint::from_decimal(center_im, n),
+        ) else {
+            return false;
+        };
+        // ref_offset = (C_view − C_reference) / S, exact in fixed
+        // point, exported via floatexp — the nucleus path's formula.
+        // S = 2^(2 − zoom) / height ⇒ 1/S = height · 2^(zoom − 2).
+        let h = height_px.max(1.0);
+        let to_px = |d: FixedPoint| -> f64 {
+            let fe = d.to_floatexp();
+            let e = fe.e as f64 + (zoom_log2 - 2.0) + h.log2();
+            if fe.m == 0.0 || e < -60.0 {
+                0.0
+            } else {
+                fe.m * 2f64.powf(e.min(40.0))
+            }
+        };
+        let off = [to_px(vx.sub(&self.c.re)), to_px(vy.sub(&self.c.im))];
+        if !off[0].is_finite()
+            || !off[1].is_finite()
+            || off[0].abs() > MAX_RELOCATE_PX
+            || off[1].abs() > MAX_RELOCATE_PX
+        {
+            return false;
+        }
+        self.center_re = center_re.to_string();
+        self.center_im = center_im.to_string();
+        self.ref_offset = [off[0] as f32, off[1] as f32];
+        self.off_zoom_log2 = zoom_log2;
+        self.off_height_px = h;
+        true
     }
 
     /// The relocation offset in the PIXEL UNITS of a given view.
@@ -1452,6 +1558,7 @@ impl ReferenceOrbit {
                     ship,
                     ship_variant,
                     periodic,
+                    store_grown: false,
                     ref_offset,
                     off_zoom_log2: off_zoom,
                     off_height_px: off_height,
@@ -1577,6 +1684,7 @@ impl ReferenceOrbit {
             ship,
             ship_variant,
             periodic,
+            store_grown: false,
             ref_offset,
             off_zoom_log2: off_zoom,
             off_height_px: off_height,
@@ -1795,17 +1903,18 @@ impl OrbitWorker {
                     }
 
                     if let Some((epoch, req)) = next {
-                        // Same orbit, deeper? Keep the live state and
-                        // append. Otherwise start fresh.
-                        let reuse = current.take().and_then(|(old_req, orbit, _)| {
+                        // Same MAP, deeper or merely MOVED? Keep the
+                        // live state. A pan or zoom-to-cursor changes
+                        // only the center; the reference point still
+                        // serves — relocate_to re-anchors the offset
+                        // exactly instead of recomputing the orbit.
+                        let reuse = current.take().and_then(|(old_req, mut orbit, _)| {
                             // n_limbs: >= not == -- an orbit at higher
                             // precision serves a shallower request (the
                             // blocking cache's `serves` agrees), and
                             // equality rebuilt a full-depth orbit at
                             // every limb crossing of a zoom-out.
-                            let same = old_req.center_re == req.center_re
-                                && old_req.center_im == req.center_im
-                                && old_req.n_limbs >= req.n_limbs
+                            let shape = orbit.n_limbs >= req.n_limbs
                                 && old_req.julia_c == req.julia_c
                                 && old_req.power == req.power
                                 && old_req.ship == req.ship
@@ -1813,10 +1922,25 @@ impl OrbitWorker {
                                 && old_req.reference_period == req.reference_period
                                 && old_req.map_params == req.map_params
                                 && orbit.periodic_serves(req.zoom_log2);
-                            if same
-                                && orbit
-                                    .relocation_serves(req.zoom_log2, req.height_px.max(1.0))
-                            {
+                            if !shape {
+                                return None;
+                            }
+                            let h = req.height_px.max(1.0);
+                            let same_center = old_req.center_re == req.center_re
+                                && old_req.center_im == req.center_im;
+                            if same_center {
+                                if orbit.relocation_serves(req.zoom_log2, h) {
+                                    return Some(orbit);
+                                }
+                                return None;
+                            }
+                            if orbit.relocate_to(
+                                &req.center_re,
+                                &req.center_im,
+                                req.zoom_log2,
+                                h,
+                            ) {
+                                super::diag::update(|d| d.orbit_relocations += 1);
                                 Some(orbit)
                             } else {
                                 None
@@ -2037,18 +2161,29 @@ fn tx_loopback_send(
     (epoch, req): (u64, OrbitRequest),
     current: &mut Option<(OrbitRequest, ReferenceOrbit, u64)>,
 ) -> Option<()> {
-    let reuse = current.take().and_then(|(old_req, orbit, _)| {
-        let same = old_req.center_re == req.center_re
-            && old_req.center_im == req.center_im
-            && old_req.n_limbs >= req.n_limbs
+    let reuse = current.take().and_then(|(old_req, mut orbit, _)| {
+        let shape = orbit.n_limbs >= req.n_limbs
             && old_req.julia_c == req.julia_c
             && old_req.power == req.power
-                                && old_req.ship == req.ship
-                                && old_req.ship_variant == req.ship_variant
-                                && old_req.reference_period == req.reference_period
-                                && old_req.map_params == req.map_params
-                                && orbit.periodic_serves(req.zoom_log2);
-        if same && orbit.relocation_serves(req.zoom_log2, req.height_px.max(1.0)) {
+            && old_req.ship == req.ship
+            && old_req.ship_variant == req.ship_variant
+            && old_req.reference_period == req.reference_period
+            && old_req.map_params == req.map_params
+            && orbit.periodic_serves(req.zoom_log2);
+        if !shape {
+            return None;
+        }
+        let h = req.height_px.max(1.0);
+        let same_center =
+            old_req.center_re == req.center_re && old_req.center_im == req.center_im;
+        if same_center {
+            if orbit.relocation_serves(req.zoom_log2, h) {
+                return Some(orbit);
+            }
+            return None;
+        }
+        if orbit.relocate_to(&req.center_re, &req.center_im, req.zoom_log2, h) {
+            super::diag::update(|d| d.orbit_relocations += 1);
             Some(orbit)
         } else {
             None
@@ -2275,6 +2410,11 @@ pub struct OrbitCache {
     /// Verified-before-use period hint for parameter-plane power
     /// tiers (see [`ReferenceOrbit::try_periodic_from_hint`]).
     reference_period: Option<u32>,
+    /// Per-cache counters mirroring the global diag ones — the diag
+    /// snapshot is process-global and tests run in parallel, so
+    /// assertions read these instead.
+    pub(crate) stat_relocations: u64,
+    pub(crate) stat_rebuilds: u64,
 }
 
 impl OrbitCache {
@@ -2312,11 +2452,27 @@ impl OrbitCache {
             o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant, map_params)
                 && o.periodic_serves(zoom_log2)
         });
+        // Moved view, same map: re-anchor instead of recomputing (the
+        // worker's reuse policy, for the blocking/WASM path). The
+        // hint-conformance the slot already has (set_reference_period
+        // clears it on any hint change) carries over unchanged.
+        let hit = hit
+            || self.slot.as_mut().is_some_and(|o| {
+                o.serves_shape(n, julia_c, power, ship, ship_variant, map_params)
+                    && o.periodic_serves(zoom_log2)
+                    && o.relocate_to(center_re, center_im, zoom_log2, self.height_px.max(1.0))
+                    && {
+                        self.stat_relocations += 1;
+                        super::diag::update(|d| d.orbit_relocations += 1);
+                        true
+                    }
+            });
         if hit {
             let orbit = self.slot.as_mut().unwrap();
             orbit.set_closure_limit(zoom_log2);
             orbit.extend(max_iter);
         } else {
+            self.stat_rebuilds += 1;
             // Disk store first (desktop): an exact-identity hit skips
             // the fixed-point recompute entirely and still deepens.
             #[cfg(not(target_arch = "wasm32"))]
@@ -2397,7 +2553,22 @@ impl OrbitCache {
             o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant, map_params)
                 && o.periodic_serves(zoom_log2)
         });
+        // Moved view, same map: re-anchor (see get()).
+        let hit = hit
+            || self.slot.as_mut().is_some_and(|o| {
+                o.serves_shape(n, julia_c, power, ship, ship_variant, map_params)
+                    && o.periodic_serves(zoom_log2)
+                    && o.relocate_to(center_re, center_im, zoom_log2, self.height_px.max(1.0))
+                    && {
+                        self.stat_relocations += 1;
+                        super::diag::update(|d| d.orbit_relocations += 1);
+                        true
+                    }
+            });
         let budget = budget.max(64);
+        if !hit {
+            self.stat_rebuilds += 1;
+        }
         if hit {
             let orbit = self.slot.as_mut().unwrap();
             orbit.set_closure_limit(zoom_log2);
@@ -2469,6 +2640,42 @@ mod tests {
             );
         }
         assert_eq!(orbit.escaped_at, None);
+    }
+
+    /// relocate_to must re-anchor exactly: a view moved by a known
+    /// number of pixel-spacings yields exactly that offset, computed
+    /// against the fixed-point reference (not by composing floats).
+    #[test]
+    fn relocate_re_anchors_exactly_and_refuses_out_of_range() {
+        let mut orbit = ReferenceOrbit::compute(
+            "-0.75", "0.1", 20.0, None, 50, None, 2, false, 0, [0.0, 0.0],
+        )
+        .unwrap();
+        // S = 2^(2-20)/1024 = 2^-28; ten pixel-spacings exactly:
+        // 10 * 2^-28 = 0.000000037252902984619140625.
+        let moved = "-0.749999962747097015380859375";
+        assert!(orbit.relocate_to(moved, "0.1", 20.0, 1024.0));
+        assert!(
+            (orbit.ref_offset[0] - 10.0).abs() < 1e-4 && orbit.ref_offset[1].abs() < 1e-6,
+            "offset {:?}, wanted [10, 0]",
+            orbit.ref_offset
+        );
+        assert_eq!(orbit.center_re, moved, "identity must follow the view");
+        assert_eq!(orbit.off_zoom_log2, 20.0);
+
+        // Out of range (0.25 complex units = 2^26 px at this view):
+        // refuse, and leave the current anchoring untouched.
+        assert!(!orbit.relocate_to("-0.5", "0.1", 20.0, 1024.0));
+        assert_eq!(orbit.center_re, moved);
+        assert!((orbit.ref_offset[0] - 10.0).abs() < 1e-4);
+
+        // Julia orbits never relocate: the reference is the SEED,
+        // which is not retained in fixed point.
+        let mut julia = ReferenceOrbit::compute(
+            "0.1", "0.2", 20.0, None, 50, Some((-0.4, 0.6)), 2, false, 0, [0.0, 0.0],
+        )
+        .unwrap();
+        assert!(!julia.relocate_to(moved, "0.1", 20.0, 1024.0));
     }
 
     #[test]
