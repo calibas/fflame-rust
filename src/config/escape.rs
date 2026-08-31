@@ -103,6 +103,19 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
 
+    /// Divide an iteration-scaled coloring's `scale` by the iteration
+    /// budget (relative to
+    /// [`crate::escape::AUTO_SCALE_REFERENCE_ITERS`]), so raising
+    /// `max_iter` for a deeper view does not multiply the number of
+    /// palette cycles the image shows.
+    ///
+    /// Applies only to colorings carrying
+    /// `ColoringFeature::IterationScaled`; a trap or normal-map
+    /// coloring's scale is palette distance per unit DISTANCE and has
+    /// nothing to do with the budget.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_scale: bool,
+
     /// Supersampling factor: the image renders at N× resolution per
     /// axis and box-downsamples (N² samples per display pixel).
     /// 1 = off. Part of the CONFIG (not a device preference) so a
@@ -464,6 +477,7 @@ impl Default for EscapeConfig {
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
+            auto_scale: false,
             supersample: 1,
             reference_period: None,
             shading: EscapeShading::default(),

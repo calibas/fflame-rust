@@ -969,6 +969,18 @@ impl App {
                         WindowEvent::RedrawRequested => {
                             // Handle deferred GPU reinitialization (from previous frame's error)
                             // Desktop only — WASM WebGPU doesn't have device loss from sleep/wake
+                            // A lost DEVICE reaches us through wgpu's
+                            // device-lost callback, not as a surface
+                            // error, so it has to be picked up here --
+                            // otherwise the app runs on against a dead
+                            // device with every call failing. The
+                            // rebuild below is the one surface loss
+                            // already used.
+                            #[cfg(not(target_arch = "wasm32"))]
+                            if crate::gpu::device::take_device_lost() {
+                                log::warn!("Device lost: scheduling a full GPU rebuild");
+                                app.needs_surface_recreate = true;
+                            }
                             #[cfg(not(target_arch = "wasm32"))]
                             if app.needs_surface_recreate {
                                 log::info!("Attempting full GPU reinitialization...");

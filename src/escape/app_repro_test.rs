@@ -4865,6 +4865,223 @@ mod tests {
         big.destroy();
     }
 
+    /// `auto_scale` normalizes an iteration-scaled coloring by the
+    /// escape counts MEASURED in the frame — and this pins the whole
+    /// chain: that the reduction counts what it claims to, and that
+    /// the recolor pass applies exactly that factor.
+    ///
+    /// The law had to be measured, not assumed. `max_iter` is a
+    /// BUDGET: raising it does not change an already-escaped pixel's
+    /// count, and an 8x budget moved a shallow view's colours by
+    /// 6/255 — so normalizing by it is normalizing by the wrong
+    /// thing (an earlier version of this test proved exactly that,
+    /// by failing). Zoom has no clean law either: at one deep centre
+    /// the median escape count ran 20, 60, 64, 109, 355, 1138, 1028,
+    /// 1057 across zooms 4..32, rising 3x in places and falling in
+    /// others, because it depends on what the view is over. The
+    /// frame's own counts are the only honest normalizer.
+    ///
+    /// Two assertions, in causal order:
+    ///  1. the reduction's mean matches an independent CPU count over
+    ///     the same subsample grid (it measures what it says);
+    ///  2. auto-scale ON is INDISTINGUISHABLE from auto-scale off
+    ///     with the scale set by hand to `base * REF / mean` (it
+    ///     applies exactly that factor, and nothing else).
+    ///
+    /// Together those make "auto scale" mean something checkable
+    /// rather than something that merely looks different.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn auto_scale_normalizes_by_the_measured_escape_counts() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 128u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+
+        // Renders to a settled image, returning the pixels and the
+        // reduction's measurement (zero when auto scale is off).
+        let shoot = |esc: &crate::config::escape::EscapeConfig,
+                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> (Vec<u8>, (f32, u32)) {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("auto scale"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let measured = pollster::block_on(escape.read_norm(&device, &queue))
+                .unwrap_or((0.0, 0));
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("auto scale tonemap"),
+            });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0],
+            ))
+            .expect("readback");
+            escape.destroy();
+            (rgba, measured)
+        };
+
+        // The reduction's own subsample grid and escape rule, in f64.
+        let cpu_mean = |esc: &crate::config::escape::EscapeConfig| -> (f64, u32) {
+            let (cx, cy) = (
+                esc.center_re.parse::<f64>().unwrap(),
+                esc.center_im.parse::<f64>().unwrap(),
+            );
+            let span_y = 4.0 / 2f64.powf(esc.zoom_log2);
+            let span_x = span_y * w as f64 / h as f64;
+            let (mut sum, mut count) = (0u64, 0u32);
+            for gy in 0..128u32 {
+                for gx in 0..128u32 {
+                    let px = (gx * w) / 128;
+                    let py = (gy * h) / 128;
+                    let ci = (
+                        ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + cx,
+                        -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + cy,
+                    );
+                    let (mut zx, mut zy) = (0.0f64, 0.0f64);
+                    let mut n = 0u32;
+                    let mut escaped = false;
+                    for i in 0..esc.max_iter {
+                        let nx = zx * zx - zy * zy + ci.0;
+                        zy = 2.0 * zx * zy + ci.1;
+                        zx = nx;
+                        if zx * zx + zy * zy > esc.bailout as f64 {
+                            escaped = true;
+                            n = i + 1;
+                            break;
+                        }
+                    }
+                    if escaped {
+                        // The shader sums n >> 4 and rescales by 16.
+                        sum += (n >> 4) as u64;
+                        count += 1;
+                    }
+                }
+            }
+            if count == 0 {
+                (0.0, 0)
+            } else {
+                (sum as f64 * 16.0 / count as f64, count)
+            }
+        };
+
+        // Two views with genuinely different escape depths.
+        for zoom in [6.0f64, 13.0] {
+            let mut base = crate::config::escape::EscapeConfig::default();
+            base.center_re = "-0.7436438870371587".to_string();
+            base.center_im = "0.1318259042053119".to_string();
+            base.zoom_log2 = zoom;
+            base.max_iter = 3000;
+            base.coloring = "smooth".to_string();
+            base.coloring_params.insert("scale".to_string(), 0.05);
+
+            let mut auto = base.clone();
+            auto.auto_scale = true;
+            let (auto_px, (mean, count)) = shoot(&auto, &mut renderer);
+            let (cpu, cpu_count) = cpu_mean(&auto);
+            println!(
+                "zoom {zoom}: GPU mean n {mean:.1} over {count} samples, \
+                 CPU {cpu:.1} over {cpu_count}"
+            );
+
+            // 1. the reduction measures what it claims.
+            assert!(count > 100, "too few escaped samples to normalize by");
+            assert!(
+                (mean as f64 - cpu).abs() <= cpu * 0.02 + 1.0,
+                "the reduction's mean ({mean:.1}) disagrees with an independent \
+                 count over the same grid ({cpu:.1})"
+            );
+
+            // 2. auto == the equivalent hand-set scale, exactly.
+            let equiv = 0.05 * crate::escape::AUTO_SCALE_REFERENCE_ITERS / mean.max(1.0);
+            let mut manual = base.clone();
+            manual.coloring_params.insert("scale".to_string(), equiv);
+            let (manual_px, _) = shoot(&manual, &mut renderer);
+            let mut differ = 0usize;
+            for (a, b) in auto_px.chunks(4).zip(manual_px.chunks(4)) {
+                if (0..3).any(|c| a[c].abs_diff(b[c]) > 1) {
+                    differ += 1;
+                }
+            }
+            let frac = differ as f64 / (w as f64 * h as f64);
+            println!(
+                "zoom {zoom}: auto vs hand-set scale {equiv:.6}: {:.2}% of pixels differ",
+                100.0 * frac
+            );
+            assert!(
+                frac < 0.01,
+                "auto scale is not equivalent to setting the scale by hand to \
+                 {equiv:.6} ({:.2}% of pixels differ) -- the factor applied is \
+                 not REF/mean",
+                100.0 * frac
+            );
+        }
+
+        // And it must leave a DISTANCE-scaled coloring alone: orbit
+        // trap's scale is palette distance per unit trap distance and
+        // has nothing to do with the iteration count.
+        let mut trap = crate::config::escape::EscapeConfig::default();
+        trap.center_re = "-0.7436438870371587".to_string();
+        trap.center_im = "0.1318259042053119".to_string();
+        trap.zoom_log2 = 13.0;
+        trap.max_iter = 3000;
+        trap.coloring = "orbit_trap".to_string();
+        let (trap_off, _) = shoot(&trap, &mut renderer);
+        let mut trap_on = trap.clone();
+        trap_on.auto_scale = true;
+        let (trap_auto, _) = shoot(&trap_on, &mut renderer);
+        assert_eq!(
+            trap_off, trap_auto,
+            "auto scale must not touch a coloring whose scale is not per-iteration"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue

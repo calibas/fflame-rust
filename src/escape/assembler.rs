@@ -3002,6 +3002,74 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
 ")
 }
 
+/// Reduction over the finished [`IterResult`] records: the mean
+/// escape iteration actually present in the frame, which
+/// `auto_scale` normalizes the coloring by.
+///
+/// A fixed 128x128 subsample (16x16 workgroups of 8x8), so the cost
+/// is independent of resolution, and `n >> 4` per sample so the u32
+/// sum cannot overflow. Interior pixels are excluded -- they never
+/// escaped, so they carry no iteration count to average, and
+/// including them would drag the mean toward the BUDGET, which is
+/// the quantity this exists to stop depending on.
+pub const REDUCE_NORM_WGSL: &str = r#"
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+struct IterResult {
+    z: vec2<f32>,
+    dz: vec2<f32>,
+    accum: vec2<f32>,
+    n: u32,
+    tags: u32,
+}
+
+struct NormAccum {
+    sum: atomic<u32>,
+    count: atomic<u32>,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var<storage, read> results: array<IterResult>;
+@group(0) @binding(2) var<storage, read_write> norm: NormAccum;
+
+@compute @workgroup_size(8, 8, 1)
+fn reduce_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= 128u || gid.y >= 128u) {
+        return;
+    }
+    let px = (gid.x * params.width) / 128u;
+    let py = (gid.y * params.height) / 128u;
+    if (px >= params.width || py >= params.height) {
+        return;
+    }
+    let r = results[py * params.width + px];
+    if ((r.tags & 1u) == 0u) {
+        return;
+    }
+    atomicAdd(&norm.sum, r.n >> 4u);
+    atomicAdd(&norm.count, 1u);
+}
+"#;
+
 /// Recolor pass: re-run the coloring + palette lookup from the
 /// per-pixel [`IterResult`] records a completed iterate pass left
 /// behind, without iterating anything. One dispatch over the full
@@ -3051,6 +3119,13 @@ struct IterResult {
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IterResult>;
 
+// Plain (non-atomic) view of the reduction's output.
+struct NormRead {
+    sum: u32,
+    count: u32,
+}
+@group(0) @binding(6) var<storage, read> norm: NormRead;
+
 fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
 }
@@ -3080,7 +3155,17 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var height = 0.0;
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
-        let raw = coloring_map(summary, r.accum);
+        var raw = coloring_map(summary, r.accum);
+        // Auto scale (flags bit 4, set only for an ITERATION-SCALED
+        // coloring): divide by the mean escape count measured over
+        // this frame's own records, so the image keeps a fixed number
+        // of palette cycles however deep the view goes. The coloring's
+        // value is (count * scale), so scaling the RESULT is exactly
+        // scaling the parameter -- no reaching into cparams needed.
+        if ((params.flags & 16u) != 0u && norm.count > 0u) {
+            let mean = (f32(norm.sum) * 16.0) / f32(norm.count);
+            raw = raw * (AUTO_SCALE_REFERENCE / max(mean, 1.0));
+        }
         let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
         height = select(raw, t, params.shade_flags == 1u);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
@@ -3111,6 +3196,10 @@ pub fn assemble_recolor(coloring: &ColoringDef, has_derivative: bool) -> String 
                 ));
                 out.push(format!("const HAS_DERIVATIVE: bool = {has_derivative};"));
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
+                out.push(format!(
+                    "const AUTO_SCALE_REFERENCE: f32 = {:.1};",
+                    super::AUTO_SCALE_REFERENCE_ITERS
+                ));
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }

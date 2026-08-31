@@ -46,6 +46,51 @@ impl Drop for GpuContext {
     }
 }
 
+/// Set by the device-lost callback, consumed by the frame loop.
+///
+/// The callback is a plain `fn` with no access to the application, so
+/// this static is the only place the two can meet. Release/Acquire so
+/// the frame loop sees everything the callback did before it.
+static DEVICE_LOST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Take the pending device-loss signal, if any (clearing it).
+///
+/// True means the GPU context is dead, every subsequent call on it
+/// will fail, and the caller must rebuild.
+pub fn take_device_lost() -> bool {
+    DEVICE_LOST.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+
+/// Raise the signal by hand (tests, and the device-lost callback's
+/// own path is the only other writer).
+#[cfg(test)]
+pub(crate) fn signal_device_lost_for_test() {
+    DEVICE_LOST.store(true, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(test)]
+mod device_lost_tests {
+    /// The signal must be consumed EXACTLY once.
+    ///
+    /// The frame loop turns it into a full GPU rebuild, which drops
+    /// and recreates every renderer. A signal that stayed raised
+    /// would rebuild on every subsequent frame -- the app would run,
+    /// but it would throw away its reference orbit, pipelines and
+    /// accumulated render once per frame forever, which looks like a
+    /// hang rather than a recovery.
+    #[test]
+    fn device_lost_signal_is_taken_once() {
+        // Not raised: nothing to do.
+        assert!(!super::take_device_lost());
+        super::signal_device_lost_for_test();
+        assert!(super::take_device_lost(), "the raised signal must be seen");
+        assert!(
+            !super::take_device_lost(),
+            "the signal must not survive being taken -- a rebuild per frame is              not a recovery"
+        );
+    }
+}
+
 impl GpuContext {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
@@ -262,12 +307,21 @@ impl GpuContext {
         // process down as 0xc0000409 (Windows fail-fast) with no line
         // of ours in the message. Observed in the field: a TDR (a
         // >2 s dispatch) or a VRAM overcommit surfaces as "Parent
-        // device is lost" and an aborted process. This callback
-        // cannot RECOVER the device (that needs a full GPU-context
-        // rebuild), but it names the reason in the log -- the
-        // difference between a report that says "crashed" and one
-        // that says why.
+        // device is lost" and an aborted process. The callback
+        // itself cannot rebuild anything (it is a plain fn with no
+        // access to the application), so it names the reason in the
+        // log and raises a flag the frame loop consumes -- see
+        // `take_device_lost`.
         device.set_device_lost_callback(|reason, message| {
+            // Ask the frame loop to rebuild the GPU context. That
+            // rebuild path already exists and is exercised by SURFACE
+            // loss (sleep/wake, display change); a DEVICE loss never
+            // reached it, because it arrives through this callback
+            // rather than as an error from get_current_texture -- so
+            // a TDR left the app running against a dead device with
+            // every call failing, which is the "never recovered" in
+            // the field report.
+            DEVICE_LOST.store(true, std::sync::atomic::Ordering::Release);
             log::error!(
                 "wgpu DEVICE LOST ({reason:?}): {message} -- the GPU context is gone \
                  and subsequent GPU calls will fail. A TDR here means a dispatch \
@@ -417,10 +471,29 @@ impl GpuContext {
         // If new() fails after this, we panic — there's no way to restore a valid surface.
         unsafe { ManuallyDrop::drop(&mut self.surface); }
 
-        let new_ctx = ManuallyDrop::new(
-            pollster::block_on(Self::new(window))
-                .expect("GPU reinitialization failed — cannot recover from device loss")
-        );
+        // A GPU that has just reset is briefly unavailable, and this
+        // is the one place that cannot fail gracefully: the old
+        // surface is already released (the OS allows one swap chain
+        // per window), so there is no valid state to return to.
+        // Retry across the reset window -- without this, a TDR that
+        // the driver recovers from in half a second still took the
+        // app down.
+        let mut created = None;
+        for attempt in 0..8u32 {
+            match pollster::block_on(Self::new(window.clone())) {
+                Ok(ctx) => {
+                    created = Some(ctx);
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("GPU reinitialization attempt {} failed: {e:?}", attempt + 1);
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+        }
+        let new_ctx = ManuallyDrop::new(created.expect(
+            "GPU reinitialization failed after retries — cannot recover from device loss",
+        ));
 
         // SAFETY: We're moving all fields out of new_ctx and preventing its Drop
         // from running (via ManuallyDrop). The old surface was already dropped above.

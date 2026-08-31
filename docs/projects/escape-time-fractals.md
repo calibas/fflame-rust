@@ -3168,6 +3168,58 @@ holding, and the first draft of this test picked exactly such a view
 and passed while proving nothing), and reverting the shader guard
 reads 100% black against a settled 30.9%.
 
+## 8c. Coloring scale at depth, and device-loss recovery
+
+*The scale floor was reachable in practice long before the slider
+allowed it.* An iteration-scaled coloring (`smooth`, `escape_count`,
+`period`, `distance_estimate`) multiplies an escape count by `scale`,
+and a deep view's counts are orders of magnitude larger than a
+shallow one's — so the useful values live far below the old 0.001
+minimum. Three coordinated changes: the floor drops to 1e-6; a
+slider whose range spans 1e5 or more decades becomes LOGARITHMIC
+(otherwise the entire deep-zoom range sits in the leftmost thousandth
+of the track, while every existing range keeps its linear feel); and
+the one-shot suggestion button, which computed `8 / max_iter` and
+then clamped it at 0.005, no longer clamps above the slider's own
+minimum — at the 100k iterations a deep view needs it had been
+returning a value 60x coarser than its own formula asked for.
+
+*The automatic option had to be measured rather than derived.* Two
+plausible laws are both wrong, and the tests that disproved them are
+kept in the file. `max_iter` is a BUDGET: raising it does not change
+an already-escaped pixel's count, and an 8x budget moved a shallow
+view's colours by 6/255 while normalizing by it moved them 74/255 —
+in the wrong direction. Zoom has no clean law either: at one deep
+centre the median escape count ran 20, 60, 64, 109, 355, 1138, 1028,
+1057 across zooms 4..32, climbing 3x in places and falling in
+others, because it depends entirely on what the view is over — which
+is why the report said "in certain areas". So `auto_scale`
+normalizes by the escape counts MEASURED in the frame: a fixed
+128x128 subsample of the recolor cache's own records is reduced to a
+mean (`n >> 4` per sample so the u32 sum cannot overflow; interior
+pixels excluded, since they never escaped and would drag the mean
+back toward the budget), and the recolor pass divides by it. Because
+the reduction reads FINISHED records and the recolor consumes it in
+the same submission, there is no feedback loop and no frame lag —
+exports are reproducible. The test pins both halves: the reduction's
+mean matches an independent CPU count over the same grid to within
+1%, and auto-scale is bit-identical to setting the scale by hand to
+`base * 256 / mean`.
+
+*Device-loss recovery existed but was never reachable.* The full GPU
+rebuild — drop every renderer, `GpuContext::reinit`, recreate,
+`request_full_resync` — was wired only to SURFACE errors from
+`get_current_texture` (sleep/wake, display change). A lost DEVICE
+arrives through wgpu's device-lost callback instead, so a TDR left
+the app running against a dead device with every call failing, which
+is the "never recovered" in the field report. The callback now
+raises a flag the frame loop consumes (it is a plain `fn` with no
+access to the app, so a static is the only place the two meet), and
+the existing rebuild does the rest. `reinit` also retries device
+creation across the reset window rather than panicking on the first
+failure — a GPU that has just reset is briefly absent, and that path
+cannot fail gracefully, since the old surface is already released.
+
 ## 9. Testing
 
 - **Visual corpus**: one config per formula at landmark coordinates;
