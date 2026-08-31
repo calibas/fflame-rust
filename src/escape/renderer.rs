@@ -617,6 +617,10 @@ pub struct EscapeRenderer {
     /// on devices without the feature -- the wall-clock path then
     /// carries the pacing unchanged.
     gpu_ms_per_iter: Option<f32>,
+    /// Cost per iteration measured on a FIRST chunk only (all pixels
+    /// alive) -- the only measurement a restart may be sized from.
+    /// See `TimestampPacer::from_start`.
+    gpu_ms_per_iter_cold: Option<f32>,
     /// Test hook: shrink the chunk to force multi-chunk renders.
     #[cfg(test)]
     pub(crate) chunk_override: Option<u32>,
@@ -688,6 +692,14 @@ struct TimestampPacer {
     phase: TsPhase,
     /// Iterations the in-flight measurement covers.
     iters: u32,
+    /// The measured dispatch was a render's FIRST chunk (iteration
+    /// 0): every pixel alive, which is the cost regime a RESTART
+    /// faces. Late-chunk measurements are survivor-biased -- most
+    /// pixels have escaped and iterate for free -- and sizing a
+    /// restart from one is how a 100k-iteration view earned a device
+    /// loss (all pixels reborn into a chunk computed from the cheap
+    /// tail).
+    from_start: bool,
     /// Map completion, set from the callback: 0 pending, 1 mapped,
     /// 2 failed.
     done: std::sync::Arc<std::sync::atomic::AtomicU32>,
@@ -734,6 +746,7 @@ impl TimestampPacer {
             period_ns,
             phase: TsPhase::Idle,
             iters: 0,
+            from_start: false,
             done: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
@@ -1117,6 +1130,7 @@ impl EscapeRenderer {
             chunk_key: None,
             timestamps: None,
             gpu_ms_per_iter: None,
+            gpu_ms_per_iter_cold: None,
             chunk_iters: 0,
             chunk_count: 0,
             chunk_proven: 0,
@@ -1497,7 +1511,11 @@ impl EscapeRenderer {
                 ts.phase = TsPhase::Idle;
                 let ms = elapsed as f32 * ts.period_ns * 1e-6;
                 if ms > 0.0 && ts.iters > 0 {
-                    self.gpu_ms_per_iter = Some(ms / ts.iters as f32);
+                    let mspi = ms / ts.iters as f32;
+                    self.gpu_ms_per_iter = Some(mspi);
+                    if ts.from_start {
+                        self.gpu_ms_per_iter_cold = Some(mspi);
+                    }
                 }
             }
             _ => {
@@ -1513,6 +1531,31 @@ impl EscapeRenderer {
     #[cfg(test)]
     pub(crate) fn gpu_ms_per_iter(&self) -> Option<f32> {
         self.gpu_ms_per_iter
+    }
+
+    /// Test hooks for the pacer's sizing logic: inject measurements,
+    /// then observe what a restart's first chunk would be. The TDR
+    /// class of bug this guards cannot be tested by triggering it.
+    #[cfg(test)]
+    pub(crate) fn set_pacer_measurements(&mut self, general: Option<f32>, cold: Option<f32>) {
+        self.gpu_ms_per_iter = general;
+        self.gpu_ms_per_iter_cold = cold;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn probe_restart_chunk(&mut self, floatexp: bool) -> u32 {
+        self.reset_chunk_pacing();
+        self.next_chunk(floatexp)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn chunk_seed(&self, floatexp: bool) -> u32 {
+        self.chunk_size(floatexp)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_chunk_for_test(&mut self, floatexp: bool) -> u32 {
+        self.next_chunk(floatexp)
     }
 
     /// Whether this dispatch should carry timestamp writes. Creates
@@ -1541,13 +1584,14 @@ impl EscapeRenderer {
 
     /// Resolve the pair this dispatch just wrote, and remember how
     /// many iterations it covered.
-    fn ts_after_dispatch(&mut self, encoder: &mut CommandEncoder, iters: u32) {
+    fn ts_after_dispatch(&mut self, encoder: &mut CommandEncoder, iters: u32, from_start: bool) {
         let Some(ts) = self.timestamps.as_mut() else {
             return;
         };
         encoder.resolve_query_set(&ts.query_set, 0..2, &ts.resolve, 0);
         encoder.copy_buffer_to_buffer(&ts.resolve, 0, &ts.staging, 0, TimestampPacer::BYTES);
         ts.iters = iters;
+        ts.from_start = from_start;
         ts.phase = TsPhase::Encoded;
     }
 
@@ -1621,18 +1665,25 @@ impl EscapeRenderer {
                 };
                 let ideal = (target / mspi).clamp(16.0, perturb_chunk_ceiling() as f32) as u32;
                 // First chunk after a restart (a pan, a zoom notch):
-                // go STRAIGHT to the measured size. The 2x growth
-                // bound exists because cost is non-stationary, but
-                // bounding the first chunk by the cold-start seed
-                // meant a gesture -- which restarts every frame --
-                // never escaped the seed, and on the floatexp rung
-                // (seed ~13x smaller) every gesture frame covered a
-                // fraction of max_iter. The measurement is honest
-                // (GPU timestamps), the target is ~10 ms, and the
-                // TDR budget is seconds, so even a 2x cost drift
-                // since the measurement is far inside safety.
+                // size it from the COLD measurement -- cost per
+                // iteration measured on a first chunk, where every
+                // pixel is alive, which is exactly the regime a
+                // restart re-enters. The general measurement is
+                // often survivor-biased (a late chunk of a long
+                // render iterates mostly-escaped pixels for nearly
+                // free) and sizing a restart from it is how a
+                // 100k-iteration view earned a DEVICE LOST: all
+                // pixels reborn into a chunk computed from the cheap
+                // tail, clamped only by the 1M ceiling. With no cold
+                // measurement yet, stay seed-bounded exactly as the
+                // pre-measurement path does.
                 let chunk = if self.chunk_iters == 0 {
-                    ideal
+                    match self.gpu_ms_per_iter_cold {
+                        Some(cold) if cold > 0.0 => {
+                            (target / cold).clamp(16.0, perturb_chunk_ceiling() as f32) as u32
+                        }
+                        _ => ideal.min(seed.saturating_mul(2).max(16)),
+                    }
                 } else {
                     let current = self.chunk_iters.max(seed);
                     ideal.clamp(
@@ -3793,7 +3844,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
                 drop(pass);
                 if measure_gpu {
-                    self.ts_after_dispatch(encoder, iter_end.saturating_sub(iter_start));
+                    self.ts_after_dispatch(
+                        encoder,
+                        iter_end.saturating_sub(iter_start),
+                        iter_start == 0,
+                    );
                 }
                 // Every chunk refreshes the display image, so
                 // progressive refinement stays visible under AA.
