@@ -103,22 +103,6 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
 
-    /// Measure iterations from the frame's FIRST escape rather than
-    /// from zero: an iteration-scaled coloring's value is divided by
-    /// the smallest escape count present, so a deep view — where
-    /// nothing escapes for hundreds or thousands of iterations —
-    /// does not spend that whole offset racing through the palette.
-    ///
-    /// The minimum is chosen because a progressive render cannot move
-    /// it: later chunks only ever add LARGER counts, so the colours
-    /// do not shift as the image fills in.
-    ///
-    /// Applies only to colorings carrying
-    /// `ColoringFeature::IterationScaled`; a trap or normal-map
-    /// coloring's scale is palette distance per unit DISTANCE and has
-    /// nothing to do with the budget.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub auto_scale: bool,
 
     /// Supersampling factor: the image renders at N× resolution per
     /// axis and box-downsamples (N² samples per display pixel).
@@ -481,7 +465,6 @@ impl Default for EscapeConfig {
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
-            auto_scale: false,
             supersample: 1,
             reference_period: None,
             shading: EscapeShading::default(),

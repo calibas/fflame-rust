@@ -506,6 +506,26 @@ python tests/visual/run_tests.py --update-baseline
 python tests/visual/wasm/test_wasm.py --update-baseline
 ```
 
+**Running the suite while the app is open.** Windows locks a running
+executable, so `cargo build --release` fails with `Access is denied`
+whenever the app is up — and a suite run then silently tests the
+STALE binary. Build into a side tree and point the runner at it:
+
+```bash
+CARGO_TARGET_DIR=target-verify cargo build --release
+python tests/visual/run_tests.py --binary target-verify/release/FractalArtEditor.exe
+```
+
+`target-verify` is gitignored. The first build there is a full one;
+after that it is incremental like any other tree.
+
+One symptom worth recognising: contending with a running app for the
+GPU shows up as a THROUGHPUT failure (`below 4 Miter/s floor`) rather
+than a pixel mismatch. Observed 4 Miter/s against a busy GPU versus
+52 Miter/s on the same commit with the GPU free — so treat a lone
+throughput failure as a measurement to repeat, not a regression to
+chase.
+
 ### Architecture
 
 **Test Infrastructure:**

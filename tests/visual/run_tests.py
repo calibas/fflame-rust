@@ -620,6 +620,13 @@ def main():
         help="Use debug build instead of release"
     )
     parser.add_argument(
+        "--binary",
+        type=Path,
+        help="Path to the FractalArtEditor executable (default: "
+             "target/<profile>/FractalArtEditor). Useful when the default "
+             "build is locked by a running instance of the app.",
+    )
+    parser.add_argument(
         "--skip-warmup",
         action="store_true",
         help="Skip GPU warmup (may result in slower first test)"
@@ -630,7 +637,7 @@ def main():
         print("\nNote: Running without PIL/Pillow - using file hash comparison")
         print("For pixel-perfect comparison, install: pip install Pillow numpy\n")
 
-    runner = VisualTestRunner(use_release=not args.debug)
+    runner = VisualTestRunner(binary_path=args.binary, use_release=not args.debug)
 
     if args.update_baseline:
         print("Running tests and updating baselines...\n")

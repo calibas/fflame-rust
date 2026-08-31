@@ -515,10 +515,6 @@ pub struct EscapeRenderer {
     /// at the slot, and the shader's write is gated off.
     results_dummy: Option<Buffer>,
     recolor_bind_group_layout: BindGroupLayout,
-    /// (sum of n>>4, count) over a subsample of the finished records
-    /// — what `auto_scale` normalizes by. See `run_reduce_norm`.
-    norm_buffer: Option<Buffer>,
-    reduce_bind_group_layout: BindGroupLayout,
     /// Which pipeline the last render() call ran ("direct",
     /// "perturbed f32", "perturbed floatexp", "recolor"). The global
     /// diag snapshot carries the same string for the panel, but that
@@ -1109,56 +1105,6 @@ impl EscapeRenderer {
                         },
                         count: None,
                     },
-                    // The reduction's (sum, count).
-                    BindGroupLayoutEntry {
-                        binding: 6,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        // Reduction over the records: params + results in, the
-        // (sum, count) accumulator out.
-        let reduce_bind_group_layout =
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Escape Reduce Bind Group Layout"),
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
                 ],
             });
 
@@ -1190,8 +1136,6 @@ impl EscapeRenderer {
             results_key: None,
             results_dummy: None,
             recolor_bind_group_layout,
-            norm_buffer: None,
-            reduce_bind_group_layout,
             last_path: "",
             last_orbit_stale: false,
             stale_serves: 0,
@@ -2078,145 +2022,6 @@ impl EscapeRenderer {
         )
     }
 
-    /// Whether this config wants the measured iteration normalization.
-    ///
-    /// Requires the records (the reduction reads them) and a coloring
-    /// whose scale multiplies an iteration count.
-    fn auto_norm_applies(&self, escape: &EscapeConfig) -> bool {
-        escape.auto_scale
-            && self.results_buffer.is_some()
-            && super::fields::get_field(&escape.formula).is_none()
-            && super::get_coloring(&escape.coloring)
-                .has_feature(super::ColoringFeature::IterationScaled)
-    }
-
-    /// Reduce the finished records to one number: the SMALLEST escape
-    /// count in the frame — the iteration its first pixel escapes at.
-    ///
-    /// This is what `auto_scale` normalizes by, and both halves of
-    /// that choice were arrived at the hard way.
-    ///
-    /// It is MEASURED rather than predicted because the obvious
-    /// predictors are wrong. `max_iter` is a budget, and raising it
-    /// does not change an already-escaped pixel's count (an 8x budget
-    /// moved a shallow view's colours by 6/255). Zoom has no clean
-    /// law either, because escape counts depend on what the view is
-    /// over.
-    ///
-    /// It is the MINIMUM rather than an average because a progressive
-    /// render cannot move a minimum. Chunks carry the whole image
-    /// through the iteration range together, so anything escaping in
-    /// a later chunk escapes later by construction: the smallest
-    /// count is fixed by the first chunk that produces an escape. A
-    /// mean climbs as the slow pixels arrive, and the colours climb
-    /// with it — which is what "the colours shift during progressive
-    /// rendering" is. The minimum is also the better depth measure:
-    /// across zooms 0..28 at one centre it ran 1, 11, 22, 35, 75,
-    /// 180, 647, 960, monotone, where the median bounced.
-    ///
-    /// Workgroup-local minimum first, one atomic per workgroup, so a
-    /// full-frame reduction is cheap enough to run after every chunk
-    /// — which is what keeps the normalization live while the image
-    /// is still filling in.
-    fn run_reduce_norm(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        encoder: &mut CommandEncoder,
-    ) {
-        let Some(results) = self.results_buffer.as_ref() else {
-            return;
-        };
-        if self.norm_buffer.is_none() {
-            self.norm_buffer = Some(device.create_buffer(&BufferDescriptor {
-                label: Some("Escape Norm Accum"),
-                size: 8,
-                // COPY_SRC so a test can read the measurement back and
-                // check it against an independent count.
-                usage: BufferUsages::STORAGE
-                    | BufferUsages::COPY_DST
-                    | BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }));
-        }
-        let norm = self.norm_buffer.as_ref().unwrap();
-        // min starts at the sentinel the shader compares against;
-        // `found` says whether anything ever beat it.
-        queue.write_buffer(norm, 0, bytemuck::cast_slice(&[u32::MAX, 0u32]));
-        let key = "reduce_norm".to_string();
-        if !self.pipelines.contains_key(&key) {
-            let module = device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("Escape Reduce Norm"),
-                source: ShaderSource::Wgsl(assembler::REDUCE_NORM_WGSL.into()),
-            });
-            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Escape Reduce Norm Layout"),
-                bind_group_layouts: &[Some(&self.reduce_bind_group_layout)],
-                immediate_size: 0,
-            });
-            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("Escape Reduce Norm"),
-                layout: Some(&layout),
-                module: &module,
-                entry_point: Some("reduce_main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-            self.pipelines.insert(key.clone(), pipeline);
-        }
-        let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Escape Reduce Norm Bind Group"),
-            layout: &self.reduce_bind_group_layout,
-            entries: &[
-                BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
-                BindGroupEntry { binding: 1, resource: results.as_entire_binding() },
-                BindGroupEntry { binding: 2, resource: norm.as_entire_binding() },
-            ],
-        });
-        let pipeline = &self.pipelines[&key];
-        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("Escape Reduce Norm Pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
-    }
-
-    /// The reduction's (smallest escape count, found-anything flag)
-    /// from the last frame that ran it. Test observation point.
-    #[cfg(test)]
-    pub(crate) async fn read_norm(&self, device: &Device, queue: &Queue) -> Option<(u32, u32)> {
-        let src = self.norm_buffer.as_ref()?;
-        let staging = device.create_buffer(&BufferDescriptor {
-            label: Some("Escape Norm Readback"),
-            size: 8,
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Escape Norm Readback"),
-        });
-        enc.copy_buffer_to_buffer(src, 0, &staging, 0, 8);
-        queue.submit(std::iter::once(enc.finish()));
-        let (tx, rx) = futures::channel::oneshot::channel();
-        staging.slice(..).map_async(wgpu::MapMode::Read, move |res| {
-            let _ = tx.send(res);
-        });
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        rx.await.ok()?.ok()?;
-        let (min_n, found) = {
-            let view = staging.slice(..).get_mapped_range();
-            (
-                u32::from_le_bytes(view[0..4].try_into().ok()?),
-                u32::from_le_bytes(view[4..8].try_into().ok()?),
-            )
-        };
-        staging.unmap();
-        staging.destroy();
-        Some((min_n, found))
-    }
-
     /// One recolor dispatch: coloring + palette from the cached
     /// records into the output (and height) textures. The caller has
     /// already written the params buffer for this frame, so changed
@@ -2252,18 +2057,6 @@ impl EscapeRenderer {
             });
             self.pipelines.insert(key.clone(), pipeline);
         }
-        if self.norm_buffer.is_none() {
-            self.norm_buffer = Some(device.create_buffer(&BufferDescriptor {
-                label: Some("Escape Norm Accum"),
-                size: 8,
-                // COPY_SRC so a test can read the measurement back and
-                // check it against an independent count.
-                usage: BufferUsages::STORAGE
-                    | BufferUsages::COPY_DST
-                    | BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }));
-        }
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Recolor Bind Group"),
             layout: &self.recolor_bind_group_layout,
@@ -2294,14 +2087,6 @@ impl EscapeRenderer {
                         .results_buffer
                         .as_ref()
                         .expect("recolor requires active results")
-                        .as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: self
-                        .norm_buffer
-                        .as_ref()
-                        .expect("recolor requires the norm buffer")
                         .as_entire_binding(),
                 },
             ],
@@ -3802,8 +3587,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     crate::config::escape::BiomorphMode::Re => 1,
                     crate::config::escape::BiomorphMode::Im => 2,
                 };
-                let auto = if self.auto_norm_applies(escape) { 16u32 } else { 0 };
-                (if escape.julia { 1 } else { 0 }) | (bio << 1) | auto
+                (if escape.julia { 1 } else { 0 }) | (bio << 1)
             },
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
@@ -3864,9 +3648,6 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some(ik) = iterate_key.as_deref() {
             if results_active && self.results_key.as_deref() == Some(ik) {
                 let t0 = web_time::Instant::now();
-                if self.auto_norm_applies(escape) {
-                    self.run_reduce_norm(device, queue, encoder);
-                }
                 self.run_recolor(device, encoder, escape, palette_view);
                 self.run_resolve(device, queue, encoder, &escape.shading);
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -4185,19 +3966,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         regime,
                     );
                 }
-                // Auto scale normalizes against the records, so it
-                // runs after EVERY chunk rather than only at the end:
-                // the normalizer is a minimum, which the first chunk
-                // to produce an escape already settles, so every
-                // progressive frame from then on is coloured the same
-                // way the finished one will be. Normalizing only at
-                // the end would leave the chunks showing un-normalized
-                // colour and snap at the last one.
                 let iterations_done = iter_end >= escape.max_iter;
-                if self.auto_norm_applies(escape) {
-                    self.run_reduce_norm(device, queue, encoder);
-                    self.run_recolor(device, encoder, escape, palette_view);
-                }
                 // Every chunk refreshes the display image, so
                 // progressive refinement stays visible under AA.
                 self.run_resolve(device, queue, encoder, &escape.shading);
@@ -4348,10 +4117,6 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
         drop(pass);
-        if self.auto_norm_applies(escape) {
-            self.run_reduce_norm(device, queue, encoder);
-            self.run_recolor(device, encoder, escape, palette_view);
-        }
         self.run_resolve(device, queue, encoder, &escape.shading);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let done = self.direct_tile_y >= self.height;
@@ -4419,9 +4184,6 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             b.destroy();
         }
         if let Some(b) = &self.results_dummy {
-            b.destroy();
-        }
-        if let Some(b) = &self.norm_buffer {
             b.destroy();
         }
         if let Some(t) = &self.final_texture {
