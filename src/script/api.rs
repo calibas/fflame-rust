@@ -1608,6 +1608,11 @@ fn register_escape(engine: &mut Engine) {
                 crate::config::escape::shading_blend_from_str(blend);
         },
     );
+    engine.register_fn("shading_softness", |e: &mut EscapeHandle, r: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.escape.shading.softness = (r as f32).clamp(0.0, 8.0);
+    });
     engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| {
         let mut cfg = e.cfg.borrow_mut();
         enter(&mut cfg);

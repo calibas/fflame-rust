@@ -2100,6 +2100,32 @@ flat ground and both terms start there. The GPU test asserts it: the
 interior of the set has no value field at all, and must come through
 the light unchanged.
 
+*Softer edges are a third control, added on request.* The normal came
+from a ±1-pixel central difference, which is the sharpest derivative
+estimate there is: it responds to every single-pixel wobble in the
+value field, and on a finely-detailed coloring that reads as crunchy.
+`softness` is the radius, in DISPLAY pixels, of the stencil the normal
+is estimated from — scaled by the supersample factor for the same
+reason `height` is, so antialiasing does not quietly change the look.
+
+Zero keeps the original ±1 difference BIT-FOR-BIT, which is what lets
+every existing config render unchanged; above zero it switches to a
+Sobel stencil widened to that radius. Two things soften there and they
+are worth separating: the radius spreads the difference over 2r
+pixels, and the 1-2-1 weighting PERPENDICULAR to each axis averages
+across the gradient — that second part is what kills the single-pixel
+wobble a plain wide difference would happily carry. Eight taps
+whatever the radius, since only the ring is read.
+
+The test pins both halves of what this is for. Softening must soften:
+roughness (mean |second difference| along rows) drops from 77.4 to
+51.6 at radius 4. And it must NOT blur the picture: the stencil
+widens the DERIVATIVE estimate, not the colour, so the palette detail
+underneath survives — the softened render stays at 51.6 against an
+unshaded floor of 43.1, where a softness implemented by blurring the
+finished RGB would have fallen below it. The first assertion alone
+would have accepted exactly the wrong implementation.
+
 *And the two sides must be symmetric.* The first version used a
 Lambert dot product with each side normalized by its own achievable
 span, and that shipped a bug the user caught immediately: black

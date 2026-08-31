@@ -3481,6 +3481,173 @@ mod tests {
         }
     }
 
+    /// Relief `softness` must smooth the SHADING and nothing else.
+    ///
+    /// Two properties, and the second is the one that makes this
+    /// worth a test rather than an eyeball. A wider normal stencil
+    /// obviously reduces high-frequency wobble in the relief — that
+    /// is what it is for. What it must NOT do is blur the image: the
+    /// stencil widens the derivative estimate, not the colour, so the
+    /// palette detail underneath has to survive intact. A softness
+    /// implemented by blurring the finished RGB would pass the first
+    /// check and fail the second.
+    ///
+    /// Roughness is measured as the mean absolute second difference
+    /// along each row — a plain high-frequency detector, and the same
+    /// quantity for both images, so no calibration is needed beyond
+    /// comparing them to each other.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn relief_softness_smooths_the_shading_without_blurring_the_image() {
+        let (device, queue) = repro_device();
+        let (w, h) = (200u32, 200u32);
+
+        let mut config = crate::config::FractalConfig::default();
+        config.background_color = [0.0, 0.0, 0.0];
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation, config.palette_squeeze,
+            config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse,
+        );
+
+        // Origami under position_map: a deliberately fine-grained
+        // field, which is where the sharp stencil looks crunchy.
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.formula = "origami".to_string();
+        base.coloring = "position_map".to_string();
+        base.center_re = "0.0".to_string();
+        base.center_im = "0.0".to_string();
+        base.zoom_log2 = -1.0;
+        base.max_iter = 32;
+        base.formula_params.insert("seed".to_string(), 8.0);
+        base.formula_params.insert("spread".to_string(), 2.0);
+        base.coloring_params.insert("freq_x".to_string(), 5.0);
+        base.coloring_params.insert("freq_y".to_string(), 1.5);
+        base.coloring_params.insert("address_mix".to_string(), 1.5);
+
+        let shoot = |softness: f32,
+                     shaded: bool,
+                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut esc = base.clone();
+            esc.shading = crate::config::escape::EscapeShading {
+                enabled: shaded,
+                height: 30.0,
+                softness,
+                ..Default::default()
+            };
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("softness"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("softness tonemap"),
+            });
+            renderer.update_background_color(&queue, config.background_color);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                config.use_curve,
+                config.exposure,
+                config.gamma,
+                config.gamma_threshold,
+                config.brightness,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                config.levels_enabled,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, config.background_color,
+            ))
+            .expect("readback");
+            escape.destroy();
+            rgba
+        };
+
+        // Mean |second difference| along rows: high-frequency content.
+        let roughness = |px: &[u8]| -> f64 {
+            let mut acc = 0f64;
+            let mut n = 0usize;
+            for y in 0..h as usize {
+                for x in 1..w as usize - 1 {
+                    let i = |xx: usize| (y * w as usize + xx) * 4;
+                    for ch in 0..3 {
+                        let a = px[i(x - 1) + ch] as f64;
+                        let b = px[i(x) + ch] as f64;
+                        let c = px[i(x + 1) + ch] as f64;
+                        acc += (c - 2.0 * b + a).abs();
+                        n += 1;
+                    }
+                }
+            }
+            acc / n as f64
+        };
+
+        let sharp = shoot(0.0, true, &mut renderer);
+        let soft = shoot(4.0, true, &mut renderer);
+        let unshaded = shoot(0.0, false, &mut renderer);
+
+        let (r_sharp, r_soft, r_flat) =
+            (roughness(&sharp), roughness(&soft), roughness(&unshaded));
+        println!(
+            "relief roughness: sharp {r_sharp:.2}, soft {r_soft:.2}, unshaded {r_flat:.2}"
+        );
+
+        // 1. Softening must actually soften.
+        assert!(
+            r_soft < r_sharp * 0.85,
+            "softness 4 barely changed the relief ({r_soft:.2} against {r_sharp:.2}) -- \
+             the wider stencil is not reaching the normal"
+        );
+
+        // 2. And it must not have blurred the picture. The shading is
+        // a LAYER over the coloring, so the palette detail underneath
+        // is untouched by the stencil width -- a softness that blurred
+        // the finished RGB would push this below the unshaded floor.
+        assert!(
+            r_soft > r_flat * 0.75,
+            "the softened render ({r_soft:.2}) has less detail than the UNSHADED one \
+             ({r_flat:.2}) -- softness is blurring the image, not the normal"
+        );
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
