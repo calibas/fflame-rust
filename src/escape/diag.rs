@@ -71,6 +71,12 @@ pub struct EscapeDiag {
     /// fast path. During a drag this should climb while
     /// `orbit_rebuilds` stays put.
     pub orbit_relocations: u64,
+    /// Frames drawn against the worker's PREVIOUS publication while
+    /// the newest request was still unacknowledged (render-side
+    /// offset composition). This is what keeps the image live during
+    /// a continuous gesture; zero here while a wheel zoom stutters
+    /// means the stale-serve conditions are not being met.
+    pub orbit_stale_serves: u64,
 
     // ---- BLA table ------------------------------------------------
     pub bla_active: bool,

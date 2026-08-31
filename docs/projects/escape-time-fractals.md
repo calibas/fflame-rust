@@ -3063,6 +3063,44 @@ back to a rebuild. Relocation deliberately does not mark the orbit
 store dirty, so panning a deep view no longer writes a store file
 per gesture event.
 
+*Continuous gestures need one more thing: the render must not wait
+for the worker's acknowledgment.* Field report — a wheel zoom from 13
+to 48 showed "settle 117-192 ms over 1 frame" per step, while dragging
+the zoom FIELD to the same depth settled in 17 ms. One frame of chunk
+work against 192 ms of wall clock is the signature of waiting, not
+rendering: wheel smoothing changes the view every frame, so every
+frame posts a new orbit request and reads an acknowledgment that is
+always one epoch behind, and the image freezes for the whole gesture.
+
+The stale-serve path renders the frame against the worker's LAST
+publication instead. The published orbit carries its own request
+(`OrbitProgress::served`), so the render thread can check the shape
+itself and compose the offset: the published `ref_offset` rescaled to
+this view, plus the EXACT fixed-point delta from the published anchor
+to the new center (`center_delta_px` — the same arithmetic
+`relocate_to` uses, so a glide accumulates no error). Same cap, same
+parameter-plane-only restriction. The frame reports NOT settled, so
+the acknowledged render still produces the authoritative image a
+frame later. Measured on a paced 13→48 glide: 78 of 100 frames drew,
+against 0 before.
+
+Two structural guarantees, both tested. **Exports never preview**:
+video export and the headless/CLI path leave `progressive` false,
+which routes orbits through the blocking cache — the stale-serve path
+lives in the progressive one and cannot run
+(`continuous_gesture_keeps_drawing` asserts a non-progressive
+renderer settles every call and never stale-serves, because a future
+`progressive = true` on an export path would otherwise put a preview
+frame in a finished file). **Animation playback is unaffected in
+correctness**: it advances only on `!escape_dirty`, and a stale-served
+frame is not settled, so no preview can be mistaken for a real
+animation frame — playback merely stops freezing between them.
+
+One diagnostics fix rode along: the settle clock now restarts on a
+render-identity CHANGE rather than on any chunk restart, so the
+reported settle time is the latency of the user's edit rather than
+the whole gesture.
+
 ## 9. Testing
 
 - **Visual corpus**: one config per formula at landmark coordinates;
