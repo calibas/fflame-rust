@@ -599,3 +599,45 @@ pub static TRIG: &[EscapePreset] = &[
         coloring_params: &[("scale", 0.05)],
     },
 ];
+
+pub static WEIERSTRASS: &[EscapePreset] = &[
+    EscapePreset {
+        name: "Hillshade",
+        center_re: "0.0",
+        center_im: "0.0",
+        zoom_log2: 0.0,
+        max_iter: 24,
+        coloring: "field_hillshade",
+        julia: None,
+        formula_params: &[("a", 0.55), ("b", 2.0), ("generator", 0.0), ("phase", 0.0)],
+        coloring_params: &[("azimuth", 315.0), ("elevation", 45.0), ("relief", 2.0), ("scale", 0.6)],
+    },
+];
+
+pub static MARKUS_LYAPUNOV: &[EscapePreset] = &[
+    EscapePreset {
+        name: "A-B Sequence",
+        center_re: "3.2",
+        center_im: "3.2",
+        zoom_log2: 1.3,
+        max_iter: 600,
+        coloring: "field_diverging",
+        julia: None,
+        formula_params: &[("seq_bits", 2.0), ("seq_len", 2.0), ("warmup", 50.0)],
+        coloring_params: &[("scale", 6.0)],
+    },
+];
+
+pub static STANDARD_MAP_FTLE: &[EscapePreset] = &[
+    EscapePreset {
+        name: "Classic",
+        center_re: "3.14159265",
+        center_im: "0.0",
+        zoom_log2: -0.65,
+        max_iter: 400,
+        coloring: "field_diverging",
+        julia: None,
+        formula_params: &[("k", 1.0)],
+        coloring_params: &[("scale", 12.0)],
+    },
+];

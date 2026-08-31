@@ -3273,6 +3273,21 @@ Both tags are kept honest by tests that scan the WGSL rather than
 trusting the flags, in both directions: a missing `DynamicalOnly`
 offers an inert toggle, a wrong one hides a live control.
 
+*The iteration controls are gated the same way*, because the same
+question applies to them: `bailout` and the biomorph axis both live
+INSIDE the escape test, which the assembler compiles in only for an
+escaping formula, and Mann damping is spliced into the step of any
+mode-A formula. A mode-B FIELD reads none of the three — it runs a
+fixed-count accumulation with no escape test, no bailout and no step
+to damp, so all three sat in its panel doing nothing. Rather than
+trust a predicate, the test ASSEMBLES each formula's real shader and
+asserts the control is offered exactly when the WGSL reads it. (One
+thing that looked like a bug and is not: damping and biomorph also
+take a config OFF the perturbed path, but they disable perturbation
+rather than being silently ignored, so a damped deep zoom renders the
+direct path's honest mush rather than wrong math — `usable_depth`
+already tells the user which case they are in.)
+
 *Presets* carry everything a formula needs to look like itself —
 view, iteration budget, coloring, and both parameter sets — as one
 undo step. The first preset of a formula is its default, applied on a
@@ -3281,9 +3296,10 @@ Mandelbrot from following you into Origami. They are GENERATED from
 the visual-regression configs (`scripts/gen_escape_presets.py`), so
 each one is a view the suite already renders and hash-compares rather
 than a plausible-looking invention; 46 of them across all 26
-formulas. A GPU smoke test renders every preset and requires enough
-lit pixels to be an image and enough distinct values to be a picture
-rather than a flat wash.
+formulas, plus the three mode-B fields, whose natural view and TERM
+COUNT are as particular as any formula's. A GPU smoke test renders
+every preset and requires enough lit pixels to be an image and enough
+distinct values to be a picture rather than a flat wash.
 
 ## 9. Testing
 
