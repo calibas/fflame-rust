@@ -340,6 +340,20 @@ impl App {
             return;
         }
 
+        // The viewport's own escape renderer is about to compete with
+        // the export for VRAM on the SAME device, and at a high
+        // antialiasing factor it holds gigabytes of per-pixel state.
+        // That combination is what turned a 4000x3000 8x export into
+        // an out-of-memory and an all-black PNG. Free it: the frame
+        // loop rebuilds it lazily, and it has nothing to show during a
+        // synchronous export anyway.
+        if escape_mode {
+            if let Some(esc) = self.escape_renderer.take() {
+                esc.destroy();
+            }
+            self.escape_dirty = true;
+        }
+
         // Regular GPU export — runs SYNCHRONOUSLY on the app's own device.
         // The direct path allocates full-resolution buffers (gigabytes at 8K+);
         // doing that on a second background device alongside the live app device

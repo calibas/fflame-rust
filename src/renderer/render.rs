@@ -122,6 +122,15 @@ pub enum RenderError {
     /// rewritten -- and reports this rather than rendering a flame the
     /// file never described.
     EngineMissing(&'static str),
+    /// A GPU allocation failed part-way through.
+    ///
+    /// Worth its own variant because the alternative is what it used
+    /// to do: wgpu reports the failure through the uncaptured-error
+    /// handler, the render carries on against an invalid buffer, and
+    /// every dispatch quietly does nothing -- so the export SUCCEEDS
+    /// and writes an all-black PNG. A render that could not allocate
+    /// what it needed has to say so.
+    OutOfMemory(String),
 }
 
 impl std::fmt::Display for RenderError {
@@ -133,6 +142,10 @@ impl std::fmt::Display for RenderError {
             RenderError::EngineMissing(what) => {
                 write!(f, "this build has no {what} engine")
             }
+            RenderError::OutOfMemory(what) => write!(
+                f,
+                "the GPU ran out of memory ({what}); try a smaller size or less antialiasing"
+            ),
         }
     }
 }
@@ -168,6 +181,32 @@ pub async fn render(
     job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
+    // Refuse a size this device cannot hold BEFORE allocating any of
+    // it -- including the flame renderer's own textures, which are
+    // built below whichever engine ends up rendering. The limits are
+    // knowable up front; the alternative is a rejected allocation
+    // that stops nothing and a black image.
+    #[cfg(feature = "engine-escape")]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
+        if let Some(why) = crate::escape::EscapeRenderer::allocation_error(
+            device,
+            &job.config.escape,
+            job.width,
+            job.height,
+            // The factor the renderer will actually use: checking the
+            // REQUESTED one refused renders it would have clamped and
+            // then made up by accumulation.
+            crate::escape::EscapeRenderer::affordable_supersample(
+                device,
+                job.width,
+                job.height,
+                job.config.escape.supersample,
+            ),
+        ) {
+            return Err(RenderError::OutOfMemory(why));
+        }
+    }
+
     // Create renderer with config's palette size
     let surface_format = TextureFormat::Rgba8Unorm;
     let mut renderer = FlameRenderer::with_palette_size(
@@ -628,6 +667,14 @@ async fn render_escape(
     // chunked dispatches, each its own submission — the driver never
     // sees an unbounded pass (the TDR class of crash). The final
     // chunk's encoder carries the tail passes below.
+    // Catch an allocation failure instead of rendering past it. wgpu
+    // reports OOM through the uncaptured-error handler, which stops
+    // nothing: the buffer comes back invalid, every dispatch against
+    // it silently does nothing, and the export "succeeds" with an
+    // all-black image. Observed at 4000x3000 with 8x antialiasing,
+    // where the export shares a device with the viewport's own escape
+    // renderer.
+    let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let mut escape_renderer = crate::escape::EscapeRenderer::new(device, job.width, job.height);
     // Config-declared supersampling applies on every path (viewport,
     // CLI, thumbnails): a saved file reproduces exactly.
@@ -763,6 +810,18 @@ async fn render_escape(
     } else {
         false
     };
+
+    // Before reading anything back: did we get the memory we asked
+    // for? Checked here rather than at each allocation because the
+    // scope covers the whole render, the per-sample accumulation
+    // passes included.
+    if let Some(err) = oom_scope.pop().await {
+        escape_renderer.destroy();
+        if let Some(chain) = &effect_chain {
+            chain.destroy();
+        }
+        return Err(RenderError::OutOfMemory(err.to_string()));
+    }
 
     let pixels = if color_effects_ran {
         effect_chain
