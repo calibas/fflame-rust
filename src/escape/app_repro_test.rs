@@ -5456,6 +5456,151 @@ mod tests {
         );
     }
 
+    /// A pixel that never escaped must show the BACKGROUND COLOUR,
+    /// not black.
+    ///
+    /// The interior used to be written as opaque black, which looks
+    /// identical to the default background and so went unnoticed
+    /// until someone set a background and found it ignored. The fix
+    /// is to write coverage rather than colour: a pixel with no value
+    /// is absent, and the tonemap's existing background blend fills
+    /// it.
+    ///
+    /// Checked at several colours, because a single one cannot tell
+    /// "the background is applied" from "the interior happens to be
+    /// that colour" — and black specifically must keep rendering
+    /// exactly as it did, which is what leaves every existing config
+    /// untouched.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_interior_takes_the_background_colour() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_palette(
+            &device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode,
+            config.palette_squeeze_falloff, config.palette_log_strength,
+            config.palette_reverse,
+        );
+
+        // The home view: a big, unmistakable interior.
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "smooth".to_string();
+        esc.max_iter = 256;
+
+        let shoot = |bg: [f32; 3],
+                     renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
+         -> Vec<u8> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("bg"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ =
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("bg tonemap"),
+            });
+            renderer.update_background_color(&queue, bg);
+            renderer.update_tonemap(
+                &queue,
+                crate::scene::tonemap::ToneMapMode::Linear,
+                config.highlight_mode,
+                false,
+                1.0,
+                1.0,
+                config.gamma_threshold,
+                1.0,
+                config.vibrancy,
+                config.white_level,
+                config.saturation,
+                config.hue_shift,
+                config.alpha_blend_low,
+                config.alpha_blend_high,
+                w,
+                h,
+                renderer.total_iterations(),
+                config.max_iterations,
+                config.zoom,
+                256,
+                4,
+                false,
+                false,
+                config.levels_low,
+                config.levels_high,
+                config.levels_gamma,
+            );
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, px) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, bg,
+            ))
+            .expect("readback");
+            escape.destroy();
+            px
+        };
+
+        // The set's centre is interior at the home view whatever the
+        // colouring does, so this pixel never escapes.
+        let centre = ((h as usize / 2) * w as usize + w as usize / 2) * 4;
+        for (bg, want) in [
+            ([0.0f32, 0.0, 0.0], [0u8, 0, 0]),
+            ([1.0, 0.0, 0.0], [255, 0, 0]),
+            ([0.2, 0.4, 0.8], [51, 102, 204]),
+            ([1.0, 1.0, 1.0], [255, 255, 255]),
+        ] {
+            let px = shoot(bg, &mut renderer);
+            let got = [px[centre], px[centre + 1], px[centre + 2]];
+            println!("background {bg:?} -> interior {got:?} (want {want:?})");
+            for c in 0..3 {
+                let d = got[c] as i32 - want[c] as i32;
+                assert!(
+                    d.abs() <= 2,
+                    "interior pixel is {got:?} with the background set to {bg:?}: \
+                     expected {want:?}. A pixel that never escaped must take the \
+                     background, not black."
+                );
+            }
+        }
+
+        // And the colouring itself must be untouched: a pixel that
+        // DID escape keeps its palette colour whatever the background
+        // is, or the blend is leaking into the fractal.
+        let corner = (2 * w as usize + 2) * 4;
+        let a = shoot([0.0, 0.0, 0.0], &mut renderer);
+        let b = shoot([1.0, 1.0, 1.0], &mut renderer);
+        let (ca, cb) = (
+            [a[corner], a[corner + 1], a[corner + 2]],
+            [b[corner], b[corner + 1], b[corner + 2]],
+        );
+        println!("escaped pixel: on black {ca:?}, on white {cb:?}");
+        for c in 0..3 {
+            assert!(
+                (ca[c] as i32 - cb[c] as i32).abs() <= 2,
+                "an escaped pixel changed with the background ({ca:?} vs {cb:?}) \
+                 -- the background must fill only what the fractal left empty"
+            );
+        }
+    }
+
     /// GPU-time pacing must engage, and must not change the image.
     ///
     /// The wall-clock proxy it replaces is honest only once the queue
