@@ -6037,6 +6037,107 @@ mod tests {
 
     /// The fixed-chunk mode must not change the image.
     ///
+    /// Batching several chunk dispatches into one redraw must not
+    /// change a pixel: the same iteration windows run in the same
+    /// order, only their grouping into frames differs. This drives
+    /// the real perturbed path twice — batching disabled via its
+    /// escape hatch, then free — and requires bit-identical images,
+    /// plus proof that the free run actually batched (real timestamp
+    /// measurements land on this device and make the batch engage).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn batched_chunks_render_the_same_image() {
+        let (device, queue) = repro_device();
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        esc_cfg.center_re = "-0.75".to_string();
+        esc_cfg.center_im = "0.1".to_string();
+        esc_cfg.zoom_log2 = 20.0;
+        // Modest depth, tiny chunks: escapes spread across the WHOLE
+        // window sequence, so a mis-stitched batch window shifts
+        // visible escape counts. (At a huge max_iter every pixel
+        // resolves in the first unbatched frames and the survivors
+        // are interior-coloured — a window bug would be invisible.)
+        esc_cfg.max_iter = 4_000;
+
+        let (w, h) = (192u32, 128u32);
+        let mut render = |cap: Option<&str>| -> (Vec<u8>, u32) {
+            match cap {
+                Some(v) => std::env::set_var("ESCAPE_CHUNK_BATCH", v),
+                None => std::env::remove_var("ESCAPE_CHUNK_BATCH"),
+            }
+            let config = crate::config::FractalConfig::default();
+            let mut renderer =
+                crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+                    &device,
+                    &queue,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    w,
+                    h,
+                    &config.flame,
+                    config.palette_size,
+                );
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            // Tiny pinned chunks: many windows, so batching has room
+            // to matter (and the run without it takes many frames).
+            escape.chunk_override = Some(16);
+            let mut max_batch = 0u32;
+            let mut guard = 0u32;
+            loop {
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("batch frame"),
+                    });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &esc_cfg,
+                    renderer.palette_view(),
+                );
+                queue.submit(std::iter::once(encoder.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                max_batch = max_batch.max(crate::escape::diag::snapshot().chunk_batch);
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "batch loop failed to settle (cap={cap:?})");
+            }
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("batch tonemap"),
+            });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut encoder, escape.output_view());
+            queue.submit(std::iter::once(encoder.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device,
+                &queue,
+                false,
+                config.background_color,
+            ))
+            .expect("readback");
+            (rgba, max_batch)
+        };
+
+        let (single, single_max) = render(Some("1"));
+        let (batched, batched_max) = render(None);
+        assert_eq!(single_max, 1, "the escape hatch must hold batching at one");
+        assert!(
+            batched_max > 1,
+            "the free run never batched (max {batched_max}) — either timestamps are \
+             unavailable on this device or the batch gate is broken"
+        );
+        let diff = single
+            .iter()
+            .zip(batched.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            diff, 0,
+            "batched and single-chunk renders differ in {diff} bytes — chunk grouping \
+             must be invisible"
+        );
+    }
+
     /// `set_fixed_chunk` exists for callers that submit chunk after
     /// chunk without letting the queue drain (the browser export --
     /// there is no blocking device poll on the web), where the
@@ -6340,7 +6441,7 @@ mod tests {
             if frame_ms > 40.0 || frame % 120 == 0 {
                 println!(
                     "f{frame:5} t={:7.2}s frame={frame_ms:7.1}ms cpu={:6.1}ms src={:?} \
-                     orbit_ms={:.0} wait={} bla={:6.1}ms inflight={} chunk_iters={} settle={:.0}ms",
+                     orbit_ms={:.0} wait={} bla={:6.1}ms inflight={} chunk_iters={} batch={} settle={:.0}ms",
                     t0.elapsed().as_secs_f64(),
                     d.render_cpu_ms,
                     d.orbit_source,
@@ -6349,6 +6450,7 @@ mod tests {
                     d.bla_build_ms,
                     d.inflight_frames,
                     d.last_chunk_iters,
+                    d.chunk_batch,
                     d.settle_ms,
                 );
             }

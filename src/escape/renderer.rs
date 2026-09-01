@@ -609,6 +609,11 @@ pub struct EscapeRenderer {
     orbit_capacity: u32,
     orbit_uploaded: u32,
     perturb_params_buffer: Buffer,
+    /// Params buffers for chunks 2..N of a BATCHED redraw. Each pass
+    /// needs its own because `Queue::write_buffer` applies at the
+    /// submission boundary, not between passes — several passes
+    /// reading one buffer would all see the last write.
+    perturb_params_pool: Vec<Buffer>,
     perturb_bind_group_layout: BindGroupLayout,
     /// Relocation of the current reference (pixel units); fed into
     /// the perturb uniform each render.
@@ -668,6 +673,10 @@ pub struct EscapeRenderer {
     /// time target. The render must be IDENTICAL at every setting -
     /// that is the property the chunk-invariance test checks.
     chunk_target_env: Option<f32>,
+    /// Diagnostic escape hatch (ESCAPE_CHUNK_BATCH): cap the chunk
+    /// dispatches per redraw (1 disables batching). The render must be
+    /// IDENTICAL at every setting — the batching test checks that.
+    chunk_batch_env: Option<u32>,
     /// GPU-time pacing, when the device supports timestamp queries.
     timestamps: Option<TimestampPacer>,
     /// Milliseconds per iteration measured on the GPU by the most
@@ -1212,6 +1221,7 @@ impl EscapeRenderer {
             orbit_capacity: 0,
             orbit_uploaded: 0,
             perturb_params_buffer,
+            perturb_params_pool: Vec::new(),
             perturb_bind_group_layout,
             height_texture,
             height_view,
@@ -1240,6 +1250,10 @@ impl EscapeRenderer {
                 .ok()
                 .and_then(|v| v.parse::<f32>().ok())
                 .filter(|v| *v > 0.0),
+            chunk_batch_env: std::env::var("ESCAPE_CHUNK_BATCH")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|v| *v > 0),
             #[cfg(test)]
             chunk_override: None,
             chunk_fixed: false,
@@ -1785,6 +1799,71 @@ impl EscapeRenderer {
     /// pacing. Well inside a 60 Hz frame, and an order of magnitude
     /// inside the ~2 s window a driver reset watches.
     const GPU_TARGET_MS: f32 = 10.0;
+
+    /// Chunk DISPATCHES per redraw at a measured cost: enough of them
+    /// to fill `target_ms` of GPU time, each individually still
+    /// ceiling-capped.
+    ///
+    /// The ceiling bounds one dispatch — that is the driver-watchdog
+    /// guard, and it stays untouched. But the in-app path runs chunks
+    /// once per redraw, so when the ceiling caps a chunk below the
+    /// frame's GPU budget the remainder of every frame was simply
+    /// discarded: measured on a cached 10.1M-iteration revisit, ~530
+    /// vsync frames (~9 s) with the GPU ~80% idle in each. Batching
+    /// fills the same budget the single-chunk design already declares
+    /// safe per redraw.
+    fn batch_for(chunk: u32, mspi: f32, target_ms: f32, cap: u32) -> u32 {
+        if chunk == 0 || !(mspi > 0.0) {
+            return 1;
+        }
+        let est = chunk as f32 * mspi;
+        if !(est > 0.0) {
+            return 1;
+        }
+        ((target_ms / est) as u32).clamp(1, cap.max(1))
+    }
+
+    /// Upper bound on dispatches per redraw, however cheap a chunk
+    /// measures — belt and braces against a mismeasured cost.
+    const MAX_CHUNK_BATCH: u32 = 16;
+
+    /// How many chunks THIS redraw may dispatch. One, unless this
+    /// exact cost regime has a real GPU-time measurement; one on a
+    /// restart frame (iteration 0 re-enters the all-pixels-alive
+    /// regime whose history includes a device loss — the batch
+    /// multiplier must not compound that bet).
+    fn chunk_batch(&self, chunk: u32, iter_start: u32, regime: CostRegime) -> u32 {
+        let cap = self
+            .chunk_batch_env
+            .unwrap_or(Self::MAX_CHUNK_BATCH)
+            .clamp(1, Self::MAX_CHUNK_BATCH);
+        if cap == 1 || iter_start == 0 || self.gpu_regime != Some(regime) {
+            return 1;
+        }
+        let Some(mspi) = self.gpu_ms_per_iter else {
+            return 1;
+        };
+        let target = if let Some(forced) = self.chunk_target_env {
+            forced
+        } else if self.chunk_target_ms > 0.0 {
+            self.chunk_target_ms
+        } else {
+            Self::GPU_TARGET_MS
+        };
+        Self::batch_for(chunk, mspi, target, cap)
+    }
+
+    /// Grow the params pool to serve `batch` dispatches this redraw.
+    fn ensure_params_pool(&mut self, device: &Device, batch: u32) {
+        while (self.perturb_params_pool.len() as u32) < batch.saturating_sub(1) {
+            self.perturb_params_pool.push(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Perturb Params (batch)"),
+                size: std::mem::size_of::<PerturbParamsGpu>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+    }
 
     /// Reset the size feedback (new render state, or a finished one).
     fn reset_chunk_pacing(&mut self) {
@@ -2814,6 +2893,139 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     /// Ensure the perturbed pipeline for this coloring exists.
+    /// One perturbed chunk dispatch, recorded into the frame's
+    /// encoder. `pass_i` selects the params buffer: chunks after the
+    /// first use pooled buffers because `Queue::write_buffer` applies
+    /// at the submission boundary, not between passes — several
+    /// passes reading one buffer would all see the last write (the
+    /// same trap the relief blur once fell into). Only the first
+    /// dispatch of a redraw carries the timestamp pair.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_perturbed_chunk(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        palette_view: &TextureView,
+        key: &str,
+        pass_i: u32,
+        pp: &PerturbParamsGpu,
+        measure: bool,
+        regime: CostRegime,
+        bla_ready: bool,
+    ) {
+        let params_buf = if pass_i == 0 {
+            &self.perturb_params_buffer
+        } else {
+            &self.perturb_params_pool[pass_i as usize - 1]
+        };
+        queue.write_buffer(params_buf, 0, bytemuck::bytes_of(pp));
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Perturbed Bind Group"),
+            layout: &self.perturb_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(palette_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: self.orbit_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: params_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: self
+                        .iter_state_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: if bla_ready {
+                        self.bla_buffer.as_ref().unwrap().as_entire_binding()
+                    } else {
+                        self.bla_dummy.as_ref().unwrap().as_entire_binding()
+                    },
+                },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: self
+                        .orbit_lo_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 9,
+                    resource: self
+                        .orbit_e_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 10,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 11,
+                    resource: self
+                        .orbit_r2_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 12,
+                    resource: self.results_binding(),
+                },
+            ],
+        });
+        let ts_qs = if measure {
+            self.timestamps.as_ref().map(|t| &t.query_set)
+        } else {
+            None
+        };
+        let pipeline = &self.pipelines[key];
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Perturbed Pass"),
+            timestamp_writes: ts_qs.map(|qs| wgpu::ComputePassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: Some(1),
+            }),
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+        drop(pass);
+        if measure {
+            self.ts_after_dispatch(
+                encoder,
+                pp.iter_end.saturating_sub(pp.iter_start),
+                pp.iter_start == 0,
+                regime,
+            );
+        }
+    }
+
     fn ensure_perturbed_pipeline(
         &mut self,
         device: &Device,
@@ -4612,8 +4824,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     tier,
                 };
                 let chunk = self.next_chunk(floatexp, regime);
-                let iter_start = self.chunk_next.min(escape.max_iter);
-                let iter_end = iter_start.saturating_add(chunk).min(escape.max_iter);
+                let first_start = self.chunk_next.min(escape.max_iter);
+                let batch = self.chunk_batch(chunk, first_start, regime);
+                self.ensure_params_pool(device, batch);
                 self.ensure_iter_state(
                     device,
                     assembler::iter_state_bytes(tier, floatexp),
@@ -4642,7 +4855,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     let (cx, cy) = escape.center_f64();
                     [cx as f32, cy as f32]
                 };
-                let pp = PerturbParamsGpu {
+                let mut pp = PerturbParamsGpu {
                     s: s_f64 as f32,
                     inv_s: if s_f64 > 0.0 { (1.0 / s_f64) as f32 } else { 0.0 },
                     orbit_len: orbit_len.max(2),
@@ -4661,116 +4874,36 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                             self.current_ref_offset[1] + o[1],
                         ]
                     },
-                    iter_start,
-                    iter_end,
+                    iter_start: first_start,
+                    iter_end: first_start,
                     ref_c,
                 };
-                queue.write_buffer(&self.perturb_params_buffer, 0, bytemuck::bytes_of(&pp));
-
                 let key = self.ensure_perturbed_pipeline(device, escape, floatexp);
-                let bind_group = device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("Escape Perturbed Bind Group"),
-                    layout: &self.perturb_bind_group_layout,
-                    entries: &[
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: self.params_buffer.as_entire_binding(),
-                        },
-                        BindGroupEntry {
-                            binding: 1,
-                            resource: BindingResource::TextureView(&self.output_view),
-                        },
-                        BindGroupEntry {
-                            binding: 2,
-                            resource: BindingResource::TextureView(palette_view),
-                        },
-                        BindGroupEntry {
-                            binding: 3,
-                            resource: BindingResource::Sampler(&self.palette_sampler),
-                        },
-                        BindGroupEntry {
-                            binding: 4,
-                            resource: self.orbit_buffer.as_ref().unwrap().as_entire_binding(),
-                        },
-                        BindGroupEntry {
-                            binding: 5,
-                            resource: self.perturb_params_buffer.as_entire_binding(),
-                        },
-                        BindGroupEntry {
-                            binding: 6,
-                            resource: self
-                                .iter_state_buffer
-                                .as_ref()
-                                .unwrap()
-                                .as_entire_binding(),
-                        },
-                        BindGroupEntry {
-                            binding: 7,
-                            resource: if bla_ready {
-                                self.bla_buffer.as_ref().unwrap().as_entire_binding()
-                            } else {
-                                self.bla_dummy.as_ref().unwrap().as_entire_binding()
-                            },
-                        },
-                        BindGroupEntry {
-                            binding: 8,
-                            resource: self
-                                .orbit_lo_buffer
-                                .as_ref()
-                                .unwrap()
-                                .as_entire_binding(),
-                        },
-                        BindGroupEntry {
-                            binding: 9,
-                            resource: self
-                                .orbit_e_buffer
-                                .as_ref()
-                                .unwrap()
-                                .as_entire_binding(),
-                        },
-                        BindGroupEntry {
-                            binding: 10,
-                            resource: BindingResource::TextureView(&self.height_view),
-                        },
-                        BindGroupEntry {
-                            binding: 11,
-                            resource: self
-                                .orbit_r2_buffer
-                                .as_ref()
-                                .unwrap()
-                                .as_entire_binding(),
-                        },
-                        BindGroupEntry {
-                            binding: 12,
-                            resource: self.results_binding(),
-                        },
-                    ],
-                });
-                let ts_qs = if measure_gpu {
-                    self.timestamps.as_ref().map(|t| &t.query_set)
-                } else {
-                    None
-                };
-                let pipeline = &self.pipelines[&key];
-                let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-                    label: Some("Escape Perturbed Pass"),
-                    timestamp_writes: ts_qs.map(|qs| wgpu::ComputePassTimestampWrites {
-                        query_set: qs,
-                        beginning_of_pass_write_index: Some(0),
-                        end_of_pass_write_index: Some(1),
-                    }),
-                });
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
-                drop(pass);
-                if measure_gpu {
-                    self.ts_after_dispatch(
+                let mut start = first_start;
+                let mut iter_end = first_start;
+                let mut dispatched = 0u32;
+                for pass_i in 0..batch {
+                    let end = start.saturating_add(chunk).min(escape.max_iter);
+                    if pass_i > 0 && end == start {
+                        break;
+                    }
+                    pp.iter_start = start;
+                    pp.iter_end = end;
+                    self.dispatch_perturbed_chunk(
+                        device,
+                        queue,
                         encoder,
-                        iter_end.saturating_sub(iter_start),
-                        iter_start == 0,
+                        palette_view,
+                        &key,
+                        pass_i,
+                        &pp,
+                        measure_gpu && pass_i == 0,
                         regime,
+                        bla_ready,
                     );
+                    dispatched += 1;
+                    iter_end = end;
+                    start = end;
                 }
                 let iterations_done = iter_end >= escape.max_iter;
                 // Every chunk refreshes the display image, so
@@ -4795,7 +4928,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 super::diag::update(|d| {
                     d.path = if floatexp { "perturbed floatexp" } else { "perturbed f32" };
                     d.bla_active = bla_ready;
-                    d.last_chunk_iters = iter_end.saturating_sub(iter_start);
+                    d.last_chunk_iters = chunk;
+                    d.chunk_batch = dispatched;
                     d.inflight_frames += 1;
                     if settled {
                         d.settle_frames = d.inflight_frames;
@@ -4965,6 +5099,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         self.output_texture.destroy();
         self.params_buffer.destroy();
         self.perturb_params_buffer.destroy();
+        for b in &self.perturb_params_pool {
+            b.destroy();
+        }
         if let Some(b) = &self.orbit_buffer {
             b.destroy();
         }
@@ -5324,5 +5461,32 @@ mod tests {
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 80);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 144);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 208);
+    }
+}
+
+#[cfg(test)]
+mod chunk_batch_tests {
+    use super::EscapeRenderer;
+
+    /// The batch math must fill the target and nothing more, hold at
+    /// one without a usable measurement, and respect its cap however
+    /// cheap a chunk claims to be.
+    #[test]
+    fn batch_fills_the_target_and_respects_the_cap() {
+        // 2 ms chunks against a 10 ms target: five fit.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 16), 5);
+        // A chunk already at or past the target: one.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.010, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.050, 10.0, 16), 1);
+        // Absurdly cheap measurement: the cap holds.
+        assert_eq!(EscapeRenderer::batch_for(16, 1e-9, 10.0, 16), 16);
+        assert_eq!(EscapeRenderer::batch_for(16, 1e-9, 10.0, 4), 4);
+        // No measurement, zero, negative, NaN: one, never a panic.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.0, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(0, 0.002, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(1000, -1.0, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(1000, f32::NAN, 10.0, 16), 1);
+        // A zero cap is treated as one, not zero dispatches.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 0), 1);
     }
 }

@@ -512,13 +512,38 @@ changing a single computed value:
   the orbit worker's progress lock.
 
 Net: the revisit stall is ~0.8 s, ~6x less, all bit-identical (74/74
-escape visual baselines unchanged). Still open, in descending value:
-a persistent spin-barrier pool for the reference build itself (rayon
-fork overhead caps the current join+stripe at ~2x of the ideal ~6x;
-the doc above measured the shape), dropping the span-2 BLA level
-(halves table size/build/upload but CHANGES which skips fire —
-baseline churn, needs sign-off), and the bit-changing multiply
-options above.
+escape visual baselines unchanged).
+
+**Follow-up same day — the settle was vsync-bound, and that was the
+part users actually felt.** Driving the app's exact frame path
+against the real cached orbit (the `timeline_of_a_cached_revisit`
+repro) showed the remaining wait was not CPU at all: the in-app loop
+ran ONE ceiling-capped chunk per redraw, so a 10.1M-iteration settle
+was ~530 vsync frames (~9 s) with the GPU ~80% idle in each. Chunks
+now BATCH: several dispatches per redraw, filling the same 10 ms
+GPU target one chunk was already allowed, each dispatch still
+individually ceiling-capped (the driver-watchdog bound is per
+dispatch and is untouched). Measured on that orbit: 531 frames ->
+101, so the visible settle drops from ~9 s to under 2 s. Batching
+engages only past a real timestamp measurement in the exact cost
+regime, never on a restart frame, capped at 16, and each batched
+pass gets its OWN params buffer — `Queue::write_buffer` applies at
+the submission boundary, so passes sharing one buffer would all read
+the last window (measured: the image self-heals through the
+per-pixel resume, but the batch silently collapses into one
+watchdog-length dispatch — the exact hazard the ceiling exists to
+prevent). ESCAPE_CHUNK_BATCH=1 is the escape hatch; a repro test
+pins batched == unbatched bit-identical.
+
+Still open, in descending value: a persistent spin-barrier pool for
+the reference build itself (rayon fork overhead caps the current
+join+stripe at ~2x of the ideal ~6x; the doc above measured the
+shape), interior detection for the perturbed templates (the direct
+path's exact-repeat check was never ported, so interior pixels march
+all of max_iter — now the next GPU-side lever once frames are
+GPU-bound again), dropping the span-2 BLA level (halves table
+size/build/upload but CHANGES which skips fire — baseline churn,
+needs sign-off), and the bit-changing multiply options above.
 
 Perspective on priority: the orbit store already turns the second
 visit to a location into seconds, and FFORBIT6 made those files ~100x
