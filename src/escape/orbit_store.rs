@@ -35,7 +35,13 @@ pub const MAGIC: &[u8; 8] = b"FFORBIT7";
 const SAVE_COST_THRESHOLD: u64 = 2_000_000;
 
 /// Eviction caps: newest-first by modification time.
-const MAX_FILES: usize = 24;
+///
+/// 50, not the 24 this started at. That number predates FFORBIT6's
+/// compression, when a deep orbit on disk was ~200 MB and two dozen
+/// was already more than the byte cap would ever allow; the same
+/// orbit is ~2.8 MB now, so the file cap was evicting locations the
+/// byte cap had ample room for.
+const MAX_FILES: usize = 50;
 
 /// Byte cap, runtime-settable because the right value depends on what
 /// the user is doing: one 10.1M-iteration reference is ~202 MB, so the
@@ -88,8 +94,32 @@ pub fn clear() {
 /// The default store directory, or None when app storage is
 /// unavailable (headless CI without a profile, etc. — the store just
 /// disables itself).
+///
+/// Under `cargo test` this is a throwaway directory, NOT the user's
+/// real cache. Tests reach the production load path through
+/// `OrbitCache`, and once that path could serve a nearby center by
+/// relocation it could also reach whatever the developer happened to
+/// have cached: two tests began failing with a ten-million-iteration
+/// orbit from a real deep zoom substituted for the tiny one they
+/// built. Test outcomes must not depend on the contents of a
+/// developer's home directory.
+#[cfg(not(test))]
 fn default_dir() -> Option<PathBuf> {
     let dir = crate::storage::backend::get_app_data_dir().ok()?.join("orbit_cache");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// The throwaway store directory used under `cargo test`, for tests
+/// that drive the production save path and need to see its output.
+#[cfg(test)]
+pub fn test_store_dir() -> Option<PathBuf> {
+    default_dir()
+}
+
+#[cfg(test)]
+fn default_dir() -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("fflame-orbit-store-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -193,6 +223,10 @@ pub fn save_to(dir: &Path, orbit: &ReferenceOrbit) -> bool {
 /// Load from an explicit directory (tests). Validates identity,
 /// magic/version, and — for relocated orbits — the (zoom, height)
 /// the pixel-unit offset was measured at.
+///
+/// Tries the exact center first, then any stored orbit of the same map
+/// that can be RELOCATED to this center (see [`load_nearby`]).
+#[allow(clippy::too_many_arguments)]
 pub fn load_from(
     dir: &Path,
     center_re: &str,
@@ -209,8 +243,44 @@ pub fn load_from(
     let name = key_for(
         center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, map_params,
     );
-    let path = dir.join(name);
-    let bytes = std::fs::read(&path).ok()?;
+    let exact = load_exact(
+        &dir.join(name),
+        center_re,
+        center_im,
+        n_limbs,
+        julia_c,
+        power,
+        ship,
+        ship_variant,
+        map_params,
+        zoom_log2,
+        height_px,
+    );
+    if exact.is_some() {
+        return exact;
+    }
+    load_nearby(
+        dir, center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, map_params,
+        zoom_log2, height_px,
+    )
+}
+
+/// One file, by exact identity.
+#[allow(clippy::too_many_arguments)]
+fn load_exact(
+    path: &Path,
+    center_re: &str,
+    center_im: &str,
+    n_limbs: usize,
+    julia_c: Option<(f32, f32)>,
+    power: u32,
+    ship: bool,
+    ship_variant: u32,
+    map_params: [f32; 2],
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<ReferenceOrbit> {
+    let bytes = std::fs::read(path).ok()?;
     let orbit = ReferenceOrbit::from_bytes(&bytes)?;
     // Defense in depth: the deserialized identity must serve the
     // request (hash collisions, hand-edited files).
@@ -229,12 +299,141 @@ pub fn load_from(
     Some(orbit)
 }
 
+/// How many relocation candidates are worth decoding before giving up
+/// and rebuilding. The ranking is an estimate (`ref_offset` is stored
+/// as f32), so the closest candidate can in principle be refused by
+/// `relocate_to` while a slightly further one is accepted; three
+/// covers that without turning a miss into seconds of decoding.
+const RELOCATE_CANDIDATES: usize = 3;
+
+/// Serve a center the store has no exact file for, by relocating a
+/// nearby one.
+///
+/// The engine can re-anchor a reference orbit to any center within
+/// [`MAX_RELOCATE_PX`](super::reference::MAX_RELOCATE_PX) — that is
+/// what makes panning at depth free. The store could not, because it
+/// keys on the exact center string: a pan of one pixel produced a key
+/// miss and an eight-minute rebuild of an orbit already sitting on
+/// disk. This closes that gap.
+///
+/// Candidates are ranked from FILE HEADERS, a few kilobytes each,
+/// because decoding a ten-million-point body costs the better part of
+/// a second and most files in the directory are other locations.
+/// Only the best few are decoded, and `relocate_to` — working from the
+/// exact fixed-point reference — makes the final decision.
+#[allow(clippy::too_many_arguments)]
+fn load_nearby(
+    dir: &Path,
+    center_re: &str,
+    center_im: &str,
+    n_limbs: usize,
+    julia_c: Option<(f32, f32)>,
+    power: u32,
+    ship: bool,
+    ship_variant: u32,
+    map_params: [f32; 2],
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<ReferenceOrbit> {
+    // A Julia orbit's reference is its seed, which relocation cannot
+    // move (see relocate_to) — no point reading the directory.
+    if julia_c.is_some() {
+        return None;
+    }
+    let h = height_px.max(1.0);
+    let mut ranked: Vec<(f64, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|x| x != "orbit") {
+            continue;
+        }
+        let Some(head) = read_header(&path) else {
+            continue;
+        };
+        // EQUAL precision, not merely sufficient. `serves_shape`
+        // accepts a deeper orbit because an in-memory one is already
+        // paid for; from disk it is not, and decoding a
+        // ten-million-point 197-limb body to serve a shallow view
+        // costs far more than rebuilding that view from scratch. The
+        // exact-key path has always required this (n_limbs is part of
+        // the key), so matching it adds the nearby case and changes
+        // nothing else.
+        if head.n_limbs != n_limbs
+            || !head.serves_shape(n_limbs, julia_c, power, ship, ship_variant, map_params)
+        {
+            continue;
+        }
+        let Some(off) = head.offset_estimate_px(center_re, center_im, zoom_log2, h) else {
+            continue;
+        };
+        let far = super::reference::MAX_RELOCATE_PX;
+        if !off[0].is_finite() || !off[1].is_finite() || off[0].abs() > far || off[1].abs() > far {
+            continue;
+        }
+        ranked.push((off[0].hypot(off[1]), path));
+    }
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    for (_, path) in ranked.iter().take(RELOCATE_CANDIDATES) {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let Some(mut orbit) = ReferenceOrbit::from_bytes(&bytes) else {
+            continue;
+        };
+        if orbit.n_limbs != n_limbs
+            || !orbit.serves_shape(n_limbs, julia_c, power, ship, ship_variant, map_params)
+        {
+            continue;
+        }
+        if orbit.relocate_to(center_re, center_im, zoom_log2, h) {
+            super::diag::update(|d| d.orbit_relocations += 1);
+            return Some(orbit);
+        }
+    }
+    None
+}
+
+/// A file's identity prefix, without decoding its body.
+fn read_header(path: &Path) -> Option<super::reference::StoredHeader> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; super::reference::MAX_HEADER_BYTES];
+    // Short files are fine: read_header validates as it goes, and a
+    // truncated read simply fails to parse.
+    let mut filled = 0;
+    while filled < buf.len() {
+        match f.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => return None,
+        }
+    }
+    buf.truncate(filled);
+    super::reference::header_from_bytes(&buf)
+}
+
 /// Production save: cost-gated, into the default store directory.
-pub fn maybe_save(orbit: &ReferenceOrbit) {
+///
+/// Takes `&mut` to CLEAR `store_grown` once the orbit is on disk. The
+/// flag means "has grown since it was last persisted", and the clear
+/// is what makes that true: a relocated orbit keeps its identity
+/// strings updated to each new view center, so an orbit that stayed
+/// flagged would be written out again, in full, under a fresh center
+/// key on every pan and every wheel notch. Observed before the clear
+/// existed: 24 files, 2.8 MB each, all holding the SAME 10.1M-iteration
+/// orbit at centers a handful of pixels apart — a cache made entirely
+/// of one location, having evicted every other.
+pub fn maybe_save(orbit: &mut ReferenceOrbit) {
+    if let Some(dir) = default_dir() {
+        maybe_save_to(&dir, orbit);
+    }
+}
+
+/// [`maybe_save`] into an explicit directory.
+pub fn maybe_save_to(dir: &Path, orbit: &mut ReferenceOrbit) {
     // Nothing new to persist: loaded-from-store orbits that have not
-    // deepened, and — the case that made this flag exist — orbits
-    // RELOCATED under a pan, which would otherwise write the same
-    // deep orbit under a fresh center key on every gesture event.
+    // deepened, and orbits relocated since their last save.
     if !orbit.store_grown {
         return;
     }
@@ -244,8 +443,8 @@ pub fn maybe_save(orbit: &ReferenceOrbit) {
     if cost < SAVE_COST_THRESHOLD && !precious_nucleus {
         return;
     }
-    if let Some(dir) = default_dir() {
-        save_to(&dir, orbit);
+    if save_to(dir, orbit) {
+        orbit.store_grown = false;
     }
 }
 
@@ -539,6 +738,208 @@ mod tests {
         let c = key_for("-0.2", "0.35", 8, None, 2, false, 2, [-0.5, 0.0]);
         assert_ne!(a, b, "different p must not collide");
         assert_eq!(a, c, "the same identity must be stable");
+    }
+
+    /// A center string at deep-zoom precision, nudged in its `digit`th
+    /// decimal place — the shape a pan produces at depth.
+    fn nudged_center(digit: usize) -> String {
+        format!("-0.5{}1", "0".repeat(digit))
+    }
+
+    /// An orbit expensive enough to pass the save cost gate.
+    fn costly_orbit(center_re: &str) -> ReferenceOrbit {
+        let o = ReferenceOrbit::compute(
+            center_re, "0.1", 2000.0, None, 3000, None, 2, false, 0, [0.0, 0.0],
+        )
+        .unwrap();
+        let cost = o.len() as u64 * (o.n_limbs as u64).pow(2);
+        assert!(cost >= SAVE_COST_THRESHOLD, "test orbit too cheap to be saved: {cost}");
+        o
+    }
+
+    fn count_orbits(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "orbit"))
+            .count()
+    }
+
+    /// THE 24-FILE BUG: panning must not rewrite the same orbit under
+    /// every center it passes through.
+    ///
+    /// Reported from the app: a single deep dive left 24 files of
+    /// 2.8 MB each, all holding the SAME 10.1M-iteration orbit at
+    /// centers a handful of pixels apart, having evicted every other
+    /// location. Relocation correctly avoided RECOMPUTING the orbit —
+    /// 24 rebuilds could not fit in the 40 seconds they spanned — but
+    /// each new view center produced a new cache key, and the orbit
+    /// still counted as "grown", so it was serialized and written out
+    /// again every time.
+    #[test]
+    fn a_relocated_orbit_is_not_resaved_under_every_center() {
+        let dir = test_dir("relocation_resave");
+        let mut orbit = costly_orbit("-0.5");
+        maybe_save_to(&dir, &mut orbit);
+        assert_eq!(count_orbits(&dir), 1, "the first save must land");
+
+        // Pan across a run of nearby centers, as a drag does.
+        let mut relocations = 0;
+        for d in 0..12 {
+            let c = nudged_center(600 + d);
+            if orbit.relocate_to(&c, "0.1", 2000.0, 512.0) {
+                relocations += 1;
+                assert_eq!(orbit.center_re, c, "relocation updates the identity");
+            }
+            maybe_save_to(&dir, &mut orbit);
+        }
+        assert!(relocations >= 8, "test needs real relocations, got {relocations}");
+        assert_eq!(
+            count_orbits(&dir),
+            1,
+            "{relocations} relocations of ONE orbit wrote {} files — a pan is \
+             rewriting the cache under every center it passes through",
+            count_orbits(&dir)
+        );
+    }
+
+    /// Deepening after a save must still be persisted: the flag means
+    /// "grown since last written", not "never write again".
+    #[test]
+    fn deepening_after_a_save_is_still_written() {
+        let dir = test_dir("resave_after_growth");
+        let mut orbit = costly_orbit("-0.5");
+        maybe_save_to(&dir, &mut orbit);
+        let before = orbit.len();
+        orbit.extend(before + 2000);
+        assert!(orbit.len() > before, "test needs the orbit to actually grow");
+        maybe_save_to(&dir, &mut orbit);
+        let reloaded = load_from(
+            &dir, "-0.5", "0.1", orbit.n_limbs, None, 2, false, 0, [0.0, 0.0], 2000.0, 512.0,
+        )
+        .expect("hit");
+        assert_eq!(
+            reloaded.len(),
+            orbit.len(),
+            "the deepened orbit was not persisted — the next session rebuilds it"
+        );
+    }
+
+    /// A center the store has no file for is served by relocating a
+    /// nearby one, instead of rebuilding from scratch.
+    ///
+    /// Without this the store could not serve what the engine could:
+    /// one pixel of pan produced a key miss and a full rebuild of an
+    /// orbit already sitting on disk.
+    #[test]
+    fn a_nearby_center_is_served_by_relocation() {
+        let dir = test_dir("nearby_relocation");
+        let mut orbit = costly_orbit("-0.5");
+        let len = orbit.len();
+        let limbs = orbit.n_limbs;
+        maybe_save_to(&dir, &mut orbit);
+
+        let near = nudged_center(600);
+        let hit = load_from(
+            &dir, &near, "0.1", limbs, None, 2, false, 0, [0.0, 0.0], 2000.0, 512.0,
+        )
+        .expect("a center a fraction of a pixel away must be served by relocation");
+        assert_eq!(hit.len(), len, "it must be the stored orbit, not a rebuild");
+        assert_eq!(hit.center_re, near, "and it must now serve the requested center");
+        assert!(
+            !hit.store_grown,
+            "a relocated load has nothing new to persist"
+        );
+    }
+
+    /// With a directory full of other locations, the scan must still
+    /// find the one orbit that can be relocated here.
+    ///
+    /// Candidates are ranked and filtered from HEADERS, a few
+    /// kilobytes each, because decoding a deep body costs the better
+    /// part of a second — a miss among fifty stored locations must not
+    /// become a multi-second stall.
+    #[test]
+    fn the_relocatable_candidate_is_found_among_many() {
+        let dir = test_dir("nearby_ranking");
+        // Decoys: same map, same precision, unrelated centers.
+        for d in [80usize, 90, 100, 110, 120] {
+            let mut decoy = costly_orbit(&nudged_center(d));
+            maybe_save_to(&dir, &mut decoy);
+        }
+        let mut target = costly_orbit("-0.5");
+        let len = target.len();
+        let limbs = target.n_limbs;
+        maybe_save_to(&dir, &mut target);
+        assert_eq!(count_orbits(&dir), 6, "decoys and target must all be stored");
+
+        let near = nudged_center(600);
+        let hit = load_from(
+            &dir, &near, "0.1", limbs, None, 2, false, 0, [0.0, 0.0], 2000.0, 512.0,
+        )
+        .expect("the one relocatable orbit must be found among the decoys");
+        assert_eq!(hit.len(), len);
+        assert_eq!(hit.center_re, near);
+    }
+
+    /// ...but only within relocation range. A center far away must
+    /// MISS, not silently render against a reference that cannot
+    /// serve it.
+    #[test]
+    fn a_far_center_is_not_served_by_relocation() {
+        let dir = test_dir("far_no_relocation");
+        let mut orbit = costly_orbit("-0.5");
+        let limbs = orbit.n_limbs;
+        maybe_save_to(&dir, &mut orbit);
+        // At zoom 2^-2000 a pixel is ~1e-601 wide, so a nudge in the
+        // 100th decimal place is astronomically out of range.
+        let far = nudged_center(100);
+        assert!(
+            load_from(
+                &dir, &far, "0.1", limbs, None, 2, false, 0, [0.0, 0.0], 2000.0, 512.0
+            )
+            .is_none(),
+            "a center far outside relocation range must miss"
+        );
+    }
+
+    /// A different map must never be relocated into, however close its
+    /// center: the nearby scan widens what the store will serve, and
+    /// identity is the thing it must not widen.
+    #[test]
+    fn relocation_never_crosses_map_identity() {
+        let dir = test_dir("nearby_identity");
+        let mut orbit = costly_orbit("-0.5");
+        let limbs = orbit.n_limbs;
+        maybe_save_to(&dir, &mut orbit);
+        let near = nudged_center(600);
+        for (power, ship, variant) in [(3u32, false, 0u32), (2, true, 0), (2, false, super::super::reference::MAP_CONJ)] {
+            assert!(
+                load_from(
+                    &dir, &near, "0.1", limbs, None, power, ship, variant, [0.0, 0.0], 2000.0,
+                    512.0
+                )
+                .is_none(),
+                "a power-{power} ship-{ship} variant-{variant} request was served a \
+                 power-2 Mandelbrot orbit"
+            );
+        }
+    }
+
+    /// The header probe must be able to parse any header the writer
+    /// can produce from its first [`MAX_HEADER_BYTES`] bytes alone —
+    /// that bound is what lets the store rank candidates without
+    /// decoding ten-million-point bodies.
+    #[test]
+    fn a_header_probe_reads_enough() {
+        let orbit = costly_orbit("-0.5");
+        let bytes = orbit.to_bytes();
+        let probe = &bytes[..super::super::reference::MAX_HEADER_BYTES.min(bytes.len())];
+        let head = super::super::reference::header_from_bytes(probe)
+            .expect("the header must parse from the probe prefix alone");
+        assert_eq!(head.center_re, orbit.center_re);
+        assert_eq!(head.n_limbs, orbit.n_limbs);
+        assert_eq!(head.orbit_len, orbit.len() as usize);
     }
 
     #[test]
