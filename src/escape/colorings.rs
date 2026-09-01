@@ -295,19 +295,66 @@ pub static ROOT_BASIN: ColoringDef = ColoringDef {
             max: 0.2,
             tooltip: "Palette offset per iteration of convergence time, shading within each basin.",
         },
+        EscapeParamDef {
+            name: "key",
+            display_name: "Basin key",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "0: Angle buckets - the true basin index, but only when the roots are evenly spaced on a circle (z^p - 1). 1: General - folds in log|z| so roots that share an angle still separate; use it for every other function.",
+        },
+        EscapeParamDef {
+            name: "key_scale",
+            display_name: "Key scale",
+            default: 0.25,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "How strongly the General key weighs log|z| against the angle. Tune until neighbouring basins stop sharing a colour.",
+        },
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
-    // Angle of the final iterate, bucketed into `roots` equal arcs.
-    // A converged orbit sits on a root of z^p - 1, so the bucket IS
-    // the basin index. Origin guard: never hand atan2 a zero pair
-    // (Metal fast-math hazard).
+    // Origin guard throughout: never hand atan2 a zero pair (Metal
+    // fast-math hazard, CLAUDE.md).
     var t = 0.0;
     if (dot(sum.z, sum.z) > 1e-30) {
         let tau = 6.28318530718;
         let ang = fract(atan2(sum.z.y, sum.z.x) / tau + 1.0);
-        let roots = clamp(cparam(0u), 2.0, 12.0);
-        t = floor(ang * roots + 0.5) / roots;
+        if (cparam(2u) < 0.5) {
+            // Angle of the final iterate, bucketed into `roots` equal
+            // arcs. A converged orbit sits on a root of z^p - 1, so
+            // the bucket IS the basin index.
+            let roots = clamp(cparam(0u), 2.0, 12.0);
+            t = floor(ang * roots + 0.5) / roots;
+        } else {
+            // General key. Roots that are NOT evenly spaced on a
+            // circle share angle buckets -- z^3 - 2z + 2 has one real
+            // and two conjugate roots, and sin z - 1's roots all sit
+            // ON the real axis at angle 0 or pi -- so fold in log|z|,
+            // which separates them by magnitude. This is a
+            // DISCRIMINATOR, not a basin index: distinct roots get
+            // distinct colours, but the numbering means nothing, and
+            // two roots can still collide (turn Key scale until they
+            // do not). Smooth in z, so a basin stays flat rather than
+            // dissolving into noise the way a hash would.
+            //
+            // Only for a converged orbit. A point that never reached a
+            // root has no root to key on -- its final iterate is just
+            // wherever the cap left it -- and keying on that painted
+            // the transcendental families' large non-convergent
+            // regions as a smooth rainbow that looked like structure
+            // and was not. Those points are the INTERESTING ones for
+            // z^3 - 2z + 2 (its critical orbit falls into an
+            // attracting 2-cycle, so a whole region converges to no
+            // root at all), so they get one flat colour of their own.
+            if (sum.converged) {
+                let lr = 0.5 * log(max(dot(sum.z, sum.z), 1e-30));
+                t = fract(ang + lr * cparam(3u));
+            } else {
+                t = 0.0;
+                return t;
+            }
+        }
     }
     return t + f32(sum.n) * cparam(1u);
 }

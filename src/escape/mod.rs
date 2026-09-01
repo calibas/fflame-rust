@@ -185,6 +185,15 @@ pub struct EscapePreset {
     pub julia: Option<(f32, f32)>,
     pub formula_params: &'static [(&'static str, f32)],
     pub coloring_params: &'static [(&'static str, f32)],
+    /// Escape radius, when the preset needs one other than the
+    /// config default. `None` leaves the current value alone.
+    ///
+    /// Root-finders are why this exists: Newton's iterates wander far
+    /// outside the unit disc before settling, and a function whose
+    /// ROOTS lie past the default bailout (z^8 + 15z^4 - 16 has four
+    /// at |z| = 2) would have every one of them classified as an
+    /// escape — the basins vanish and the view renders flat.
+    pub bailout: Option<f32>,
 }
 
 /// A formula's default starting point: its first preset, if it has

@@ -1114,13 +1114,25 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     wgsl_derivative: "",
 };
 
-/// Newton / root-finder plane over `zᵖ − 1` (plan §5.7): the scheme
-/// axis with complex relaxation R — the generalized-relaxation
-/// "a-plane" galleries. Schemes shipped: Newton, Halley, Chebyshev
-/// (closed forms over f = zᵖ−1, f′ = p·zᵖ⁻¹, f″ = p(p−1)zᵖ⁻²);
-/// Schröder/Householder-3/König are noted follow-ups. `c` is unused —
-/// the Newton fractal is the dynamical plane, so the parameter plane
-/// seeds the pixel too.
+/// Newton / root-finder plane (plan §5.7): a FUNCTION axis and a
+/// scheme axis, with complex relaxation R — the generalized-relaxation
+/// "a-plane" galleries.
+///
+/// Functions shipped are Wikipedia's Newton-fractal gallery: `zᵖ − 1`
+/// (the roots of unity), `z³ − 2z + 2` (Newton's classic FAILURE
+/// case — the critical point falls into an attracting 2-cycle, so a
+/// whole basin never reaches a root), `z⁸ + 15z⁴ − 16`, and the
+/// transcendentals `sin z − 1`, `cosh z − 1`, `zᵖ·sin z − 1`, whose
+/// infinitely many roots tile the plane instead of ringing an origin.
+/// Schemes: Newton, Halley, Chebyshev, closed forms over (f, f′, f″);
+/// Schröder/Householder-3/König are noted follow-ups (they want f‴).
+///
+/// `c` is unused — the Newton fractal is the dynamical plane, so the
+/// parameter plane seeds the pixel too.
+///
+/// NOTE for the non-unity functions: `root_basin`'s default angle
+/// buckets assume roots evenly spaced on a circle, which only `zᵖ − 1`
+/// gives. Set its Basin Key to "General" for the others.
 pub static NEWTON: FormulaDef = FormulaDef {
     name: "newton",
     display_name: "Newton",
@@ -1159,17 +1171,98 @@ pub static NEWTON: FormulaDef = FormulaDef {
             max: 3.0,
             tooltip: "Imaginary part of the relaxation.",
         },
+        EscapeParamDef {
+            name: "func",
+            display_name: "Function",
+            default: 0.0,
+            min: 0.0,
+            max: 5.0,
+            tooltip: "Which f(z) to find the roots of. 0: z^p - 1 (roots of unity), 1: z^3 - 2z + 2 (Newton's classic failure case), 2: z^8 + 15z^4 - 16, 3: sin z - 1, 4: cosh z - 1, 5: z^p sin z - 1. Only 0 has roots evenly spaced on a circle - for the others set the coloring's Basin Key to General.",
+        },
     ],
     wgsl: r#"
-fn newton_delta(z: vec2<f32>) -> vec2<f32> {
+// cosh/sinh through the guarded trig helpers: cosh z = cos(iz) and
+// sinh z = -i.sin(iz), so the origin/overflow guards already tested
+// there are reused rather than duplicated.
+fn nf_cosh(z: vec2<f32>) -> vec2<f32> {
+    return esc_ccos(vec2<f32>(-z.y, z.x));
+}
+
+fn nf_sinh(z: vec2<f32>) -> vec2<f32> {
+    let s = esc_csin(vec2<f32>(-z.y, z.x));
+    return vec2<f32>(s.y, -s.x);
+}
+
+// (f, f', f'') for the selected function, as the three columns of a
+// mat3x2 -- three complex values without declaring a struct. Every
+// scheme needs the first two; Halley and Chebyshev need the third.
+fn newton_jet(z: vec2<f32>) -> mat3x2<f32> {
+    let one = vec2<f32>(1.0, 0.0);
+    let func = u32(clamp(fparam(4u), 0.0, 5.0));
+    if (func == 1u) {
+        // z^3 - 2z + 2
+        let z2 = esc_cmul(z, z);
+        return mat3x2<f32>(
+            esc_cmul(z2, z) - 2.0 * z + vec2<f32>(2.0, 0.0),
+            3.0 * z2 - vec2<f32>(2.0, 0.0),
+            6.0 * z,
+        );
+    }
+    if (func == 2u) {
+        // z^8 + 15 z^4 - 16
+        let z2 = esc_cmul(z, z);
+        let z3 = esc_cmul(z2, z);
+        let z4 = esc_cmul(z2, z2);
+        let z6 = esc_cmul(z4, z2);
+        let z7 = esc_cmul(z6, z);
+        let z8 = esc_cmul(z4, z4);
+        return mat3x2<f32>(
+            z8 + 15.0 * z4 - vec2<f32>(16.0, 0.0),
+            8.0 * z7 + 60.0 * z3,
+            56.0 * z6 + 180.0 * z2,
+        );
+    }
+    if (func == 3u) {
+        // sin z - 1
+        return mat3x2<f32>(esc_csin(z) - one, esc_ccos(z), -esc_csin(z));
+    }
+    if (func == 4u) {
+        // cosh z - 1
+        return mat3x2<f32>(nf_cosh(z) - one, nf_sinh(z), nf_cosh(z));
+    }
+    if (func == 5u) {
+        // z^p sin z - 1
+        let p = fparam(0u);
+        let sn = esc_csin(z);
+        let cs = esc_ccos(z);
+        let zp = esc_cpow(z, p);
+        let zp1 = esc_cpow(z, p - 1.0);
+        let zp2 = esc_cpow(z, p - 2.0);
+        return mat3x2<f32>(
+            esc_cmul(zp, sn) - one,
+            p * esc_cmul(zp1, sn) + esc_cmul(zp, cs),
+            p * (p - 1.0) * esc_cmul(zp2, sn) + 2.0 * p * esc_cmul(zp1, cs)
+                - esc_cmul(zp, sn),
+        );
+    }
+    // 0: z^p - 1
     let p = fparam(0u);
-    let f = esc_cpow(z, p) - vec2<f32>(1.0, 0.0);
-    let fp = p * esc_cpow(z, p - 1.0);
+    return mat3x2<f32>(
+        esc_cpow(z, p) - one,
+        p * esc_cpow(z, p - 1.0),
+        p * (p - 1.0) * esc_cpow(z, p - 2.0),
+    );
+}
+
+fn newton_delta(z: vec2<f32>) -> vec2<f32> {
+    let jet = newton_jet(z);
+    let f = jet[0];
+    let fp = jet[1];
     let scheme = u32(clamp(fparam(1u), 0.0, 2.0));
     if (scheme == 0u) {
         return esc_cdiv(f, fp);
     }
-    let fpp = p * (p - 1.0) * esc_cpow(z, p - 2.0);
+    let fpp = jet[2];
     if (scheme == 1u) {
         // Halley: 2 f f' / (2 f'^2 - f f'')
         let num = 2.0 * esc_cmul(f, fp);
@@ -1511,6 +1604,175 @@ mod feature_tag_tests {
     /// The gate hides unsuitable colorings; a formula for which it
     /// hides ALL of them would present an empty dropdown and render
     /// black whatever the user picked.
+    #[test]
+    fn newton_function_derivatives_are_consistent() {
+        // The Newton schemes are built from (f, f', f''), so a typo in
+        // a derivative does not crash or look obviously wrong — it
+        // quietly renders a DIFFERENT fractal. This mirrors each
+        // shipped f(z) in f64 and holds its derivatives to central
+        // finite differences of the function itself, which is the one
+        // check that cannot be passed by transcribing the same typo
+        // twice: `f` is short enough to read against the reference,
+        // and `f'`/`f''` are then derived from it numerically.
+        type C = (f64, f64);
+        fn mul(a: C, b: C) -> C {
+            (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+        }
+        fn add(a: C, b: C) -> C {
+            (a.0 + b.0, a.1 + b.1)
+        }
+        fn sub(a: C, b: C) -> C {
+            (a.0 - b.0, a.1 - b.1)
+        }
+        fn scale(a: C, k: f64) -> C {
+            (a.0 * k, a.1 * k)
+        }
+        fn div(a: C, b: C) -> C {
+            let d = b.0 * b.0 + b.1 * b.1;
+            ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
+        }
+        fn powf(z: C, p: f64) -> C {
+            let r2 = z.0 * z.0 + z.1 * z.1;
+            if r2 < 1e-300 {
+                return (0.0, 0.0);
+            }
+            let th = z.1.atan2(z.0) * p;
+            let r = r2.powf(0.5 * p);
+            (r * th.cos(), r * th.sin())
+        }
+        fn csin(z: C) -> C {
+            (z.0.sin() * z.1.cosh(), z.0.cos() * z.1.sinh())
+        }
+        fn ccos(z: C) -> C {
+            (z.0.cos() * z.1.cosh(), -z.0.sin() * z.1.sinh())
+        }
+        fn ccosh(z: C) -> C {
+            (z.0.cosh() * z.1.cos(), z.0.sinh() * z.1.sin())
+        }
+        fn csinh(z: C) -> C {
+            (z.0.sinh() * z.1.cos(), z.0.cosh() * z.1.sin())
+        }
+        const ONE: C = (1.0, 0.0);
+
+        // Mirrors of the WGSL `newton_jet` branches, same order.
+        fn jet(func: u32, p: f64, z: C) -> (C, C, C) {
+            match func {
+                1 => {
+                    let z2 = mul(z, z);
+                    (
+                        add(sub(mul(z2, z), scale(z, 2.0)), (2.0, 0.0)),
+                        sub(scale(z2, 3.0), (2.0, 0.0)),
+                        scale(z, 6.0),
+                    )
+                }
+                2 => {
+                    let z2 = mul(z, z);
+                    let z3 = mul(z2, z);
+                    let z4 = mul(z2, z2);
+                    let z6 = mul(z4, z2);
+                    let z7 = mul(z6, z);
+                    let z8 = mul(z4, z4);
+                    (
+                        sub(add(z8, scale(z4, 15.0)), (16.0, 0.0)),
+                        add(scale(z7, 8.0), scale(z3, 60.0)),
+                        add(scale(z6, 56.0), scale(z2, 180.0)),
+                    )
+                }
+                3 => (sub(csin(z), ONE), ccos(z), scale(csin(z), -1.0)),
+                4 => (sub(ccosh(z), ONE), csinh(z), ccosh(z)),
+                5 => {
+                    let sn = csin(z);
+                    let cs = ccos(z);
+                    let zp = powf(z, p);
+                    let zp1 = powf(z, p - 1.0);
+                    let zp2 = powf(z, p - 2.0);
+                    (
+                        sub(mul(zp, sn), ONE),
+                        add(scale(mul(zp1, sn), p), mul(zp, cs)),
+                        sub(
+                            add(
+                                scale(mul(zp2, sn), p * (p - 1.0)),
+                                scale(mul(zp1, cs), 2.0 * p),
+                            ),
+                            mul(zp, sn),
+                        ),
+                    )
+                }
+                _ => (
+                    sub(powf(z, p), ONE),
+                    scale(powf(z, p - 1.0), p),
+                    scale(powf(z, p - 2.0), p * (p - 1.0)),
+                ),
+            }
+        }
+
+        let probes = [
+            (0.7, 0.4),
+            (-1.1, 0.8),
+            (0.3, -1.4),
+            (1.9, 0.2),
+            (-0.5, -0.6),
+        ];
+        let h = 1e-5;
+        for func in 0..=5u32 {
+            let p = 3.0;
+            for z in probes {
+                let (_, d1, d2) = jet(func, p, z);
+                // Central differences along the real axis; f is
+                // holomorphic, so this IS the complex derivative.
+                let fp = |zz: C| jet(func, p, zz).0;
+                let f1 = |zz: C| jet(func, p, zz).1;
+                let zr = |k: f64| (z.0 + k, z.1);
+                let fd1 = scale(sub(fp(zr(h)), fp(zr(-h))), 0.5 / h);
+                let fd2 = scale(sub(f1(zr(h)), f1(zr(-h))), 0.5 / h);
+                let rel = |a: C, b: C| {
+                    let n = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                    let m = (b.0 * b.0 + b.1 * b.1).sqrt().max(1e-6);
+                    n / m
+                };
+                assert!(
+                    rel(d1, fd1) < 1e-4,
+                    "func {func} at {z:?}: f' = {d1:?} but finite differences say {fd1:?}"
+                );
+                assert!(
+                    rel(d2, fd2) < 1e-3,
+                    "func {func} at {z:?}: f'' = {d2:?} but finite differences say {fd2:?}"
+                );
+            }
+        }
+
+        // ...and Newton actually finds a ROOT of each: iterate the
+        // plain scheme and require |f| to collapse. A wrong f' can
+        // still be self-consistent under differentiation (it would be
+        // the derivative of a different f), so this pins f too.
+        for func in 0..=5u32 {
+            let mut found = 0;
+            for z0 in probes {
+                let mut z = z0;
+                for _ in 0..400 {
+                    let (f, d1, _) = jet(func, 3.0, z);
+                    if d1.0 * d1.0 + d1.1 * d1.1 < 1e-30 {
+                        break;
+                    }
+                    z = sub(z, div(f, d1));
+                    if !z.0.is_finite() || !z.1.is_finite() {
+                        break;
+                    }
+                }
+                let (f, _, _) = jet(func, 3.0, z);
+                if (f.0 * f.0 + f.1 * f.1).sqrt() < 1e-6 {
+                    found += 1;
+                }
+            }
+            assert!(
+                found >= 2,
+                "func {func}: Newton reached a root from only {found} of {} seeds — \
+                 f and f' do not describe the same function",
+                probes.len()
+            );
+        }
+    }
+
     #[test]
     fn every_formula_has_a_usable_coloring() {
         for def in crate::escape::FORMULAS.iter().copied() {
