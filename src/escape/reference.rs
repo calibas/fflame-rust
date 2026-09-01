@@ -3511,6 +3511,681 @@ mod tests {
         let _ = &mut o;
     }
 
+    /// CPU mirror of the FE perturbed shader (f32 + CFe2, op for op)
+    /// on a power-4 view at depth 426 whose reference orbit dips to
+    /// |Z| ~ 2^-51 at iteration 1382, judged against exact
+    /// fixed-point orbits for every pixel.
+    ///
+    /// This is the laboratory that found the dip-underflow bug: with
+    /// UN-normalized reference powers the mantissa's cube leaves f32
+    /// range at the dip and the Z^(p-1)·w term flushes, splitting the
+    /// image along the straight half-plane boundary of "rebased
+    /// before the dip" (~17% of pixels ±30 iterations wrong; the
+    /// user-visible seam). The test asserts BOTH directions: the
+    /// shipped normalized step stays at the DF noise floor, and the
+    /// un-normalized step still reproduces the bug — so the test
+    /// provably bites. The component flags (exact rebase / gate /
+    /// step) are the bisection surface, kept for the next hunt.
+    #[test]
+    #[ignore = "heavy (~1 min CPU): run when touching the FE delta step"]
+    fn fe_step_survives_reference_dips() {
+        use rayon::prelude::*;
+
+        // ---------- CFe2 mirror ----------
+        const CFE_ZERO_E: i32 = -1_000_000_000;
+        #[derive(Clone, Copy)]
+        struct Cfe2 {
+            hi: [f32; 2],
+            lo: [f32; 2],
+            e: i32,
+        }
+        fn frexp(a: f32) -> (f32, i32) {
+            if a == 0.0 || !a.is_finite() {
+                return (a, 0);
+            }
+            let bits = a.to_bits();
+            let exp_bits = ((bits >> 23) & 0xFF) as i32;
+            if exp_bits == 0 {
+                let (m, e) = frexp(a * 2f32.powi(64));
+                return (m, e - 64);
+            }
+            (
+                f32::from_bits((bits & 0x807F_FFFF) | (126 << 23)),
+                exp_bits - 126,
+            )
+        }
+        fn two_sum(a: f32, b: f32) -> [f32; 2] {
+            let s = a + b;
+            let bb = s - a;
+            let err = (a - (s - bb)) + (b - bb);
+            [s, err]
+        }
+        fn quick_sum(a: f32, b: f32) -> [f32; 2] {
+            let s = a + b;
+            [s, b - (s - a)]
+        }
+        fn split(a: f32) -> [f32; 2] {
+            let hi = f32::from_bits(a.to_bits() & 0xFFFF_F000);
+            [hi, a - hi]
+        }
+        fn two_prod(a: f32, b: f32) -> [f32; 2] {
+            let p = a * b;
+            let aa = split(a);
+            let bb = split(b);
+            let err = ((aa[0] * bb[0] - p) + aa[0] * bb[1] + aa[1] * bb[0]) + aa[1] * bb[1];
+            [p, err]
+        }
+        fn df_add(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+            let t = two_sum(a[0], b[0]);
+            quick_sum(t[0], t[1] + a[1] + b[1])
+        }
+        fn df_mul(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+            let t = two_prod(a[0], b[0]);
+            quick_sum(t[0], t[1] + (a[0] * b[1] + a[1] * b[0]))
+        }
+        fn df_muls(a: [f32; 2], b: f32) -> [f32; 2] {
+            let t = two_prod(a[0], b);
+            quick_sum(t[0], t[1] + a[1] * b)
+        }
+        fn df_neg(a: [f32; 2]) -> [f32; 2] {
+            [-a[0], -a[1]]
+        }
+        fn cfe2_zero() -> Cfe2 {
+            Cfe2 { hi: [0.0; 2], lo: [0.0; 2], e: CFE_ZERO_E }
+        }
+        fn cfe2_norm(v: Cfe2) -> Cfe2 {
+            let a = v.hi[0].abs().max(v.hi[1].abs());
+            if a == 0.0 {
+                let b = v.lo[0].abs().max(v.lo[1].abs());
+                if b == 0.0 {
+                    return cfe2_zero();
+                }
+                let f = frexp(b);
+                let sc = 2f32.powi(-f.1);
+                return Cfe2 {
+                    hi: [v.lo[0] * sc, v.lo[1] * sc],
+                    lo: [0.0; 2],
+                    e: v.e + f.1,
+                };
+            }
+            let f = frexp(a);
+            let sc = 2f32.powi(-f.1);
+            Cfe2 {
+                hi: [v.hi[0] * sc, v.hi[1] * sc],
+                lo: [v.lo[0] * sc, v.lo[1] * sc],
+                e: v.e + f.1,
+            }
+        }
+        fn cfe2_to_f32(v: Cfe2) -> [f32; 2] {
+            if v.e < -126 || v.e == CFE_ZERO_E {
+                return [0.0; 2];
+            }
+            if v.e > 127 {
+                return [v.hi[0] * 3.0e38, v.hi[1] * 3.0e38];
+            }
+            let sc = 2f32.powi(v.e);
+            [v.hi[0] * sc, v.hi[1] * sc]
+        }
+        fn cfe2_mul(a: Cfe2, b: Cfe2) -> Cfe2 {
+            if a.e == CFE_ZERO_E || b.e == CFE_ZERO_E {
+                return cfe2_zero();
+            }
+            let ax = [a.hi[0], a.lo[0]];
+            let ay = [a.hi[1], a.lo[1]];
+            let bx = [b.hi[0], b.lo[0]];
+            let by = [b.hi[1], b.lo[1]];
+            let re = df_add(df_mul(ax, bx), df_neg(df_mul(ay, by)));
+            let im = df_add(df_mul(ax, by), df_mul(ay, bx));
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e + b.e })
+        }
+        fn cfe2_mul_c32(a: Cfe2, b: [f32; 2]) -> Cfe2 {
+            if a.e == CFE_ZERO_E {
+                return a;
+            }
+            let ax = [a.hi[0], a.lo[0]];
+            let ay = [a.hi[1], a.lo[1]];
+            let re = df_add(df_muls(ax, b[0]), df_neg(df_muls(ay, b[1])));
+            let im = df_add(df_muls(ax, b[1]), df_muls(ay, b[0]));
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e })
+        }
+        fn cfe2_mul_zdf(a: Cfe2, zh: [f32; 2], zl: [f32; 2]) -> Cfe2 {
+            if a.e == CFE_ZERO_E {
+                return a;
+            }
+            let ax = [a.hi[0], a.lo[0]];
+            let ay = [a.hi[1], a.lo[1]];
+            let bx = [zh[0], zl[0]];
+            let by = [zh[1], zl[1]];
+            let re = df_add(df_mul(ax, bx), df_neg(df_mul(ay, by)));
+            let im = df_add(df_mul(ax, by), df_mul(ay, bx));
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e })
+        }
+        fn cfe2_mul_zdfe(a: Cfe2, zh: [f32; 2], zl: [f32; 2], ze: i32) -> Cfe2 {
+            let mut r = cfe2_mul_zdf(a, zh, zl);
+            if r.e != CFE_ZERO_E {
+                r.e += ze;
+            }
+            r
+        }
+        fn cfe2_add(a: Cfe2, b: Cfe2) -> Cfe2 {
+            if a.e == CFE_ZERO_E {
+                return b;
+            }
+            if b.e == CFE_ZERO_E {
+                return a;
+            }
+            let d = a.e - b.e;
+            if d > 49 {
+                return a;
+            }
+            if d < -49 {
+                return b;
+            }
+            if d >= 0 {
+                let sc = 2f32.powi(-d);
+                let re = df_add([a.hi[0], a.lo[0]], [b.hi[0] * sc, b.lo[0] * sc]);
+                let im = df_add([a.hi[1], a.lo[1]], [b.hi[1] * sc, b.lo[1] * sc]);
+                return cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e });
+            }
+            let sc = 2f32.powi(d);
+            let re = df_add([a.hi[0] * sc, a.lo[0] * sc], [b.hi[0], b.lo[0]]);
+            let im = df_add([a.hi[1] * sc, a.lo[1] * sc], [b.hi[1], b.lo[1]]);
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: b.e })
+        }
+
+        // ---------- reference orbit + channels ----------
+        let re_s = "-0.96417873977697013026011288714743352326571975407038683546248307556701454144367857998579799044153007991031446482736663768012668752446996327705342813138475";
+        let im_s = "0.20113415795567669775171048165243266489819985719087999752585437953404063460519395316530711399750169766068721928290032028758102407532349929726277906601037";
+        let zoom = 426.5725f64;
+        let rot = 0.545846f32;
+        let (w_px, h_px) = (300u32, 200u32);
+        let max_iter = 2660u32;
+        let orbit = ReferenceOrbit::compute(
+            re_s, im_s, zoom, None, max_iter, None, 4, false, 0, [0.0, 0.0],
+        )
+        .unwrap();
+        let len = orbit.orbit.len() as u32;
+        let hi = &orbit.orbit;
+        let lo = &orbit.orbit_lo;
+        let ee = &orbit.orbit_e;
+        let r2: Vec<[f32; 2]> = hi
+            .iter()
+            .zip(lo)
+            .zip(ee)
+            .map(|((h, l), &ex)| {
+                let s = (ex as f64).exp2();
+                let x = (h[0] as f64 + l[0] as f64) * s;
+                let y = (h[1] as f64 + l[1] as f64) * s;
+                let v = x * x + y * y;
+                [v as f32, (v - (v as f32) as f64) as f32]
+            })
+            .collect();
+        let ref_z = |m: u32| -> [f32; 2] {
+            let m = m as usize;
+            let e = ee[m];
+            if e == 0 {
+                hi[m]
+            } else if e < -126 {
+                [0.0; 2]
+            } else {
+                let sc = 2f32.powi(e);
+                [hi[m][0] * sc, hi[m][1] * sc]
+            }
+        };
+        let ref_z_lo = |m: u32| -> [f32; 2] {
+            let m = m as usize;
+            let e = ee[m];
+            if e == 0 {
+                lo[m]
+            } else if e < -126 {
+                [0.0; 2]
+            } else {
+                let sc = 2f32.powi(e);
+                [lo[m][0] * sc, lo[m][1] * sc]
+            }
+        };
+        // Exact f64 view of an orbit entry (for the exact-rebase
+        // variant): (hi+lo)·2^e.
+        let ref_f64 = |m: u32| -> (f64, f64) {
+            let m = m as usize;
+            let s = (ee[m] as f64).exp2();
+            (
+                (hi[m][0] as f64 + lo[m][0] as f64) * s,
+                (hi[m][1] as f64 + lo[m][1] as f64) * s,
+            )
+        };
+        let cfe2_from_f64 = |re: f64, im: f64| -> Cfe2 {
+            let a = re.abs().max(im.abs());
+            if a == 0.0 {
+                return cfe2_zero();
+            }
+            let e = (a.log2().floor() as i32) + 1;
+            let sc = 2f64.powi(-e);
+            let rh = (re * sc) as f32;
+            let ih = (im * sc) as f32;
+            let rl = (re * sc - rh as f64) as f32;
+            let il = (im * sc - ih as f64) as f32;
+            cfe2_norm(Cfe2 { hi: [rh, ih], lo: [rl, il], e })
+        };
+
+        // fe_rebase_delta, faithful (Z_0 = 0 on the parameter plane,
+        // but mirror the general form).
+        let fe_rebase = |w: Cfe2, at: u32| -> Cfe2 {
+            let zi = ref_z(at);
+            let z0 = ref_z(0);
+            let zi_lo = ref_z_lo(at);
+            let z0_lo = ref_z_lo(0);
+            let mut dxr = [0.0f32; 2];
+            let mut dyr = [0.0f32; 2];
+            if w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127 {
+                let sc = 2f32.powi(w.e);
+                dxr = [w.hi[0] * sc, w.lo[0] * sc];
+                dyr = [w.hi[1] * sc, w.lo[1] * sc];
+            }
+            let rx = df_add(df_add([zi[0], zi_lo[0]], df_neg([z0[0], z0_lo[0]])), dxr);
+            let ry = df_add(df_add([zi[1], zi_lo[1]], df_neg([z0[1], z0_lo[1]])), dyr);
+            cfe2_norm(Cfe2 { hi: [rx[0], ry[0]], lo: [rx[1], ry[1]], e: 0 })
+        };
+        // Exact-rebase variant: Z_at + w in f64 (w itself exact to its
+        // own DF bits), renormalized to the best CFe2 can hold.
+        let fe_rebase_exact = |w: Cfe2, at: u32| -> Cfe2 {
+            let (zx, zy) = ref_f64(at);
+            let (wx, wy) = if w.e == CFE_ZERO_E {
+                (0.0, 0.0)
+            } else {
+                let sc = 2f64.powi(w.e);
+                (
+                    (w.hi[0] as f64 + w.lo[0] as f64) * sc,
+                    (w.hi[1] as f64 + w.lo[1] as f64) * sc,
+                )
+            };
+            cfe2_from_f64(zx + wx, zy + wy)
+        };
+
+        // ---------- per-pixel FE loop ----------
+        let sx = 2.0 - zoom - (h_px as f64).log2();
+        let s_e = sx.floor() as i32;
+        let s_m = 2f64.powf(sx - s_e as f64) as f32;
+        let bailout = 4.0f32;
+        let r2p = r2.clone();
+        let run = move |px: u32,
+                        py: u32,
+                        exact_rebase: bool,
+                        exact_gate: bool,
+                        exact_step: bool,
+                        norm_powers: bool|
+              -> u32 {
+            let cx = px as f32 + 0.5 - w_px as f32 * 0.5;
+            let cy = -(py as f32 + 0.5 - h_px as f32 * 0.5);
+            let d0px = [
+                cx * rot.cos() - cy * rot.sin(),
+                cx * rot.sin() + cy * rot.cos(),
+            ];
+            let d0xs = df_muls(two_sum(d0px[0], 0.0), s_m);
+            let d0ys = df_muls(two_sum(d0px[1], 0.0), s_m);
+            let d0 = cfe2_norm(Cfe2 {
+                hi: [d0xs[0], d0ys[0]],
+                lo: [d0xs[1], d0ys[1]],
+                e: s_e,
+            });
+            let mut w = cfe2_zero();
+            let mut m = 0u32;
+            let mut i = 0u32;
+            while i < max_iter {
+                if exact_step {
+                    // The identical step in f64, roundtripping w
+                    // through the CFe2 representation each iteration —
+                    // isolates step-internal precision from the rest.
+                    let (wxx, wyy) = if w.e == CFE_ZERO_E {
+                        (0.0f64, 0.0f64)
+                    } else {
+                        let sc = 2f64.powi(w.e);
+                        (
+                            (w.hi[0] as f64 + w.lo[0] as f64) * sc,
+                            (w.hi[1] as f64 + w.lo[1] as f64) * sc,
+                        )
+                    };
+                    let (zx, zy) = ref_f64(m);
+                    let mul =
+                        |ax: f64, ay: f64, bx: f64, by: f64| (ax * bx - ay * by, ax * by + ay * bx);
+                    let (z2x, z2y) = mul(zx, zy, zx, zy);
+                    let (z3x, z3y) = mul(z2x, z2y, zx, zy);
+                    let (w2x, w2y) = mul(wxx, wyy, wxx, wyy);
+                    let (w3x, w3y) = mul(w2x, w2y, wxx, wyy);
+                    let (w4x, w4y) = mul(w2x, w2y, w2x, w2y);
+                    let (t1x, t1y) = mul(z3x, z3y, wxx, wyy);
+                    let (t2x, t2y) = mul(z2x, z2y, w2x, w2y);
+                    let (t3x, t3y) = mul(zx, zy, w3x, w3y);
+                    // d0 exactly as the faithful path built it.
+                    let (d0xf, d0yf) = {
+                        let sc = 2f64.powi(d0.e);
+                        (
+                            (d0.hi[0] as f64 + d0.lo[0] as f64) * sc,
+                            (d0.hi[1] as f64 + d0.lo[1] as f64) * sc,
+                        )
+                    };
+                    let nx = 4.0 * t1x + 6.0 * t2x + 4.0 * t3x + w4x + d0xf;
+                    let ny = 4.0 * t1y + 6.0 * t2y + 4.0 * t3y + w4y + d0yf;
+                    w = cfe2_from_f64(nx, ny);
+                    m += 1;
+                    i += 1;
+                    let delta = cfe2_to_f32(w);
+                    let mi = m.min(len - 1);
+                    let zi = ref_z(mi);
+                    let z_full = [zi[0] + delta[0], zi[1] + delta[1]];
+                    let mr = r2[mi as usize];
+                    let margin = (mr[0] - bailout)
+                        + (mr[1]
+                            + 2.0 * (zi[0] * delta[0] + zi[1] * delta[1])
+                            + (delta[0] * delta[0] + delta[1] * delta[1]));
+                    if margin > 0.0 {
+                        return i;
+                    }
+                    let z0 = ref_z(0);
+                    let rd = [z_full[0] - z0[0], z_full[1] - z0[1]];
+                    if m >= len - 1
+                        || (rd[0] * rd[0] + rd[1] * rd[1])
+                            < (delta[0] * delta[0] + delta[1] * delta[1])
+                    {
+                        w = fe_rebase(w, m.min(len - 1));
+                        m = 0;
+                    }
+                    continue;
+                }
+                // Binomial step p=4, DF reference powers (current
+                // shader), optionally NORMALIZED before powering so a
+                // dip entry's mantissa (stored raw when it fits f32)
+                // cannot underflow out of its own cube.
+                let zm0 = hi[m as usize];
+                let zlo0 = lo[m as usize];
+                let ze0 = ee[m as usize];
+                let (zm, zlo, ze) = if norm_powers {
+                    let a = zm0[0].abs().max(zm0[1].abs());
+                    if a == 0.0 {
+                        (zm0, zlo0, ze0)
+                    } else {
+                        let f = frexp(a);
+                        let sc = 2f32.powi(-f.1);
+                        (
+                            [zm0[0] * sc, zm0[1] * sc],
+                            [zlo0[0] * sc, zlo0[1] * sc],
+                            ze0 + f.1,
+                        )
+                    }
+                } else {
+                    (zm0, zlo0, ze0)
+                };
+                let zdr1 = [zm[0], zlo[0]];
+                let zdi1 = [zm[1], zlo[1]];
+                let zdr2 = df_add(df_mul(zdr1, zdr1), df_neg(df_mul(zdi1, zdi1)));
+                let zdi2 = df_add(df_mul(zdr1, zdi1), df_mul(zdi1, zdr1));
+                let zdr3 = df_add(df_mul(zdr2, zdr1), df_neg(df_mul(zdi2, zdi1)));
+                let zdi3 = df_add(df_mul(zdr2, zdi1), df_mul(zdi2, zdr1));
+                let u1 = w;
+                let u2 = cfe2_mul(u1, w);
+                let u3 = cfe2_mul(u2, w);
+                let u4 = cfe2_mul(u3, w);
+                let mut w_new = d0;
+                let t1r = df_muls(zdr3, 4.0);
+                let t1i = df_muls(zdi3, 4.0);
+                w_new = cfe2_add(
+                    w_new,
+                    cfe2_mul_zdfe(u1, [t1r[0], t1i[0]], [t1r[1], t1i[1]], 3 * ze),
+                );
+                let t2r = df_muls(zdr2, 6.0);
+                let t2i = df_muls(zdi2, 6.0);
+                w_new = cfe2_add(
+                    w_new,
+                    cfe2_mul_zdfe(u2, [t2r[0], t2i[0]], [t2r[1], t2i[1]], 2 * ze),
+                );
+                let t3r = df_muls(zdr1, 4.0);
+                let t3i = df_muls(zdi1, 4.0);
+                w_new = cfe2_add(
+                    w_new,
+                    cfe2_mul_zdfe(u3, [t3r[0], t3i[0]], [t3r[1], t3i[1]], ze),
+                );
+                w_new = cfe2_add(w_new, cfe2_mul_c32(u4, [1.0, 0.0]));
+                w = w_new;
+                m += 1;
+                i += 1;
+
+                let delta = cfe2_to_f32(w);
+                let mi = m.min(len - 1);
+                let zi = ref_z(mi);
+                let z_full = [zi[0] + delta[0], zi[1] + delta[1]];
+                let mr = r2[mi as usize];
+                let margin = (mr[0] - bailout)
+                    + (mr[1]
+                        + 2.0 * (zi[0] * delta[0] + zi[1] * delta[1])
+                        + (delta[0] * delta[0] + delta[1] * delta[1]));
+                if margin > 0.0 {
+                    return i;
+                }
+                let z0 = ref_z(0);
+                let rd = [z_full[0] - z0[0], z_full[1] - z0[1]];
+                let fires = if exact_gate {
+                    // The gate on exact f64 values: no 2^-126 flush,
+                    // a delta far below f32 range can still trigger
+                    // the rebase the dynamics ask for.
+                    let (wxx, wyy) = if w.e == CFE_ZERO_E {
+                        (0.0f64, 0.0f64)
+                    } else {
+                        let sc = 2f64.powi(w.e);
+                        (
+                            (w.hi[0] as f64 + w.lo[0] as f64) * sc,
+                            (w.hi[1] as f64 + w.lo[1] as f64) * sc,
+                        )
+                    };
+                    let (zx1, zy1) = ref_f64(mi);
+                    let zfx = zx1 + wxx;
+                    let zfy = zy1 + wyy;
+                    zfx * zfx + zfy * zfy < wxx * wxx + wyy * wyy
+                } else {
+                    (rd[0] * rd[0] + rd[1] * rd[1])
+                        < (delta[0] * delta[0] + delta[1] * delta[1])
+                };
+                if m >= len - 1 || fires {
+                    w = if exact_rebase {
+                        fe_rebase_exact(w, m.min(len - 1))
+                    } else {
+                        fe_rebase(w, m.min(len - 1))
+                    };
+                    m = 0;
+                }
+            }
+            max_iter
+        };
+
+        // All-f64 variant: the same ALGORITHM (delta + rebase gate +
+        // margin against the 48-bit reference) with every number in
+        // f64 — at this depth nothing underflows f64, so this is the
+        // algorithm at effectively exact precision.
+        let run_f64 = move |px: u32, py: u32| -> u32 {
+            let cx = px as f64 + 0.5 - w_px as f64 * 0.5;
+            let cy = -(py as f64 + 0.5 - h_px as f64 * 0.5);
+            let rot64 = 0.545846f64;
+            let s = 2f64.powf(2.0 - zoom) / h_px as f64;
+            let d0x = (cx * rot64.cos() - cy * rot64.sin()) * s;
+            let d0y = (cx * rot64.sin() + cy * rot64.cos()) * s;
+            let (mut wx, mut wy) = (0.0f64, 0.0f64);
+            let mut m = 0u32;
+            let mut i = 0u32;
+            while i < max_iter {
+                let (zx, zy) = ref_f64(m);
+                // w' = 4Z^3 w + 6Z^2 w^2 + 4Z w^3 + w^4 + d0, exact
+                // complex arithmetic in f64.
+                let mul = |ax: f64, ay: f64, bx: f64, by: f64| (ax * bx - ay * by, ax * by + ay * bx);
+                let (z2x, z2y) = mul(zx, zy, zx, zy);
+                let (z3x, z3y) = mul(z2x, z2y, zx, zy);
+                let (w2x, w2y) = mul(wx, wy, wx, wy);
+                let (w3x, w3y) = mul(w2x, w2y, wx, wy);
+                let (w4x, w4y) = mul(w2x, w2y, w2x, w2y);
+                let (t1x, t1y) = mul(z3x, z3y, wx, wy);
+                let (t2x, t2y) = mul(z2x, z2y, w2x, w2y);
+                let (t3x, t3y) = mul(zx, zy, w3x, w3y);
+                wx = 4.0 * t1x + 6.0 * t2x + 4.0 * t3x + w4x + d0x;
+                wy = 4.0 * t1y + 6.0 * t2y + 4.0 * t3y + w4y + d0y;
+                m += 1;
+                i += 1;
+                let mi = m.min(len - 1);
+                let (zx1, zy1) = ref_f64(mi);
+                let zfx = zx1 + wx;
+                let zfy = zy1 + wy;
+                if zfx * zfx + zfy * zfy > bailout as f64 {
+                    return i;
+                }
+                if m >= len - 1 || zfx * zfx + zfy * zfy < wx * wx + wy * wy {
+                    wx = zfx;
+                    wy = zfy;
+                    m = 0;
+                }
+            }
+            max_iter
+        };
+
+        // ---------- truth ----------
+        let n_limbs = 9usize;
+        let fcx = FixedPoint::from_decimal(re_s, n_limbs).unwrap();
+        let fcy = FixedPoint::from_decimal(im_s, n_limbs).unwrap();
+        let s = 2f64.powf(2.0 - zoom) / h_px as f64;
+        let rot64 = 0.545846f64;
+        let truth: Vec<u32> = (0..(w_px * h_px) as usize)
+            .into_par_iter()
+            .map(|idx| {
+                let gx = (idx as u32 % w_px) as f64 + 0.5 - w_px as f64 / 2.0;
+                let gy = -((idx as u32 / w_px) as f64 + 0.5 - h_px as f64 / 2.0);
+                let dx = (gx * rot64.cos() - gy * rot64.sin()) * s;
+                let dy = (gx * rot64.sin() + gy * rot64.cos()) * s;
+                let c = FixedComplex {
+                    re: fcx.add(&FixedPoint::from_f64(dx, n_limbs)),
+                    im: fcy.add(&FixedPoint::from_f64(dy, n_limbs)),
+                };
+                let mut z = FixedComplex::zero(n_limbs);
+                for i in 0..max_iter {
+                    z = z.sqr();
+                    z = z.sqr();
+                    z = z.add(&c);
+                    let x = z.re.to_f64();
+                    let y = z.im.to_f64();
+                    if x * x + y * y > 4.0 {
+                        return i + 1;
+                    }
+                }
+                max_iter
+            })
+            .collect();
+
+        // ---------- run both variants, compare ----------
+        let wrong_of = |norm_powers: bool| -> usize {
+            (0..(w_px * h_px) as usize)
+                .into_par_iter()
+                .map(|idx| {
+                    run(idx as u32 % w_px, idx as u32 / w_px, false, false, false, norm_powers)
+                })
+                .collect::<Vec<u32>>()
+                .iter()
+                .zip(&truth)
+                .filter(|(a, b)| (**a as i64 - **b as i64).abs() > 20)
+                .count()
+        };
+        let floor: usize = {
+            (0..(w_px * h_px) as usize)
+                .into_par_iter()
+                .map(|idx| run_f64(idx as u32 % w_px, idx as u32 / w_px))
+                .collect::<Vec<u32>>()
+                .iter()
+                .zip(&truth)
+                .filter(|(a, b)| (**a as i64 - **b as i64).abs() > 20)
+                .count()
+        };
+        let broken = wrong_of(false);
+        let shipped = wrong_of(true);
+        let px = (w_px * h_px) as usize;
+        println!(
+            "un-normalized {broken} ({:.1}%), shipped {shipped} ({:.1}%), f64 floor {floor} of {px}",
+            broken as f64 * 100.0 / px as f64,
+            shipped as f64 * 100.0 / px as f64,
+        );
+        assert!(
+            broken > px / 20,
+            "the un-normalized step no longer reproduces the dip bug ({broken} wrong) — \
+             this test has lost its teeth; rebuild the scenario"
+        );
+        assert!(
+            shipped < px / 50,
+            "the shipped step is {shipped} pixels wrong (> 2%) against exact orbits — \
+             the dip-underflow class is back"
+        );
+    }
+
+    /// TEMP: exact fixed-point ground truth for the seam view — every
+    /// pixel iterated directly, no perturbation, no reference.
+    #[test]
+    #[ignore = "diagnostic: writes output/seam_truth.png"]
+    fn seam_ground_truth() {
+        use rayon::prelude::*;
+        let re_s = "-0.96417873977697013026011288714743352326571975407038683546248307556701454144367857998579799044153007991031446482736663768012668752446996327705342813138475";
+        let im_s = "0.20113415795567669775171048165243266489819985719087999752585437953404063460519395316530711399750169766068721928290032028758102407532349929726277906601037";
+        let zoom = 426.5725f64;
+        let rot = 0.545846f64;
+        let (w, h) = (300usize, 200usize);
+        let max_iter = 2660u32;
+        let n = 9usize;
+        let cx = FixedPoint::from_decimal(re_s, n).unwrap();
+        let cy = FixedPoint::from_decimal(im_s, n).unwrap();
+        // Pixel spacing S = 2^(2-zoom)/h: ~2^-432, comfortably an
+        // f64, so each rotated offset embeds into fixed point exactly
+        // (an f64 mantissa is 53 bits; the 9-limb grid has 568).
+        let s = 2f64.powf(2.0 - zoom) / h as f64;
+        let counts: Vec<u32> = (0..w * h)
+            .into_par_iter()
+            .map(|idx| {
+                let px = (idx % w) as f64 + 0.5 - w as f64 / 2.0;
+                let py = h as f64 / 2.0 - ((idx / w) as f64 + 0.5);
+                let dx = (px * rot.cos() - py * rot.sin()) * s;
+                let dy = (px * rot.sin() + py * rot.cos()) * s;
+                let c = FixedComplex {
+                    re: cx.add(&FixedPoint::from_f64(dx, n)),
+                    im: cy.add(&FixedPoint::from_f64(dy, n)),
+                };
+                let mut z = FixedComplex::zero(n);
+                for i in 0..max_iter {
+                    z = z.sqr();
+                    z = z.sqr();
+                    z = z.add(&c);
+                    let x = z.re.to_f64();
+                    let y = z.im.to_f64();
+                    if x * x + y * y > 4.0 {
+                        return i;
+                    }
+                }
+                max_iter
+            })
+            .collect();
+        let mut img = vec![0u8; w * h * 3];
+        for (i, &nn) in counts.iter().enumerate() {
+            let p = if nn >= max_iter {
+                [0u8, 0, 0]
+            } else {
+                // Band the counts so structure is comparable to the
+                // smooth coloring's bands.
+                let t = ((nn as f32) * 0.03).fract();
+                let v = (60.0 + 195.0 * t) as u8;
+                [v, v, 255 - v / 2]
+            };
+            img[i * 3..i * 3 + 3].copy_from_slice(&p);
+        }
+        image::save_buffer(
+            "output/seam_truth.png",
+            &img,
+            w as u32,
+            h as u32,
+            image::ColorType::Rgb8,
+        )
+        .unwrap();
+        println!("wrote output/seam_truth.png");
+    }
+
     #[test]
     fn cache_hits_extends_and_replaces() {
         // Julia c = 0 (z -> z^2 from |z0| < 1: bounded, never escapes,

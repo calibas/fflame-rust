@@ -1290,6 +1290,12 @@ impl EscapeRenderer {
         progressive: bool,
         orbit_done: bool,
     ) -> bool {
+        // Diagnostic escape hatch, sibling to ESCAPE_CHUNK_MS /
+        // ESCAPE_CHUNK_BATCH: render without iteration skipping to
+        // bisect "is this artifact BLA's".
+        if std::env::var("ESCAPE_BLA").is_ok_and(|v| v == "0") {
+            return false;
+        }
         #[cfg(test)]
         if self.disable_bla {
             return false;
@@ -2068,7 +2074,9 @@ impl EscapeRenderer {
             self.results_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Iter Results"),
                 size: (px as u64) * 32,
-                usage: BufferUsages::STORAGE,
+                // COPY_SRC: read back by ground-truth comparison
+                // tests; free otherwise.
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }));
             self.results_px = px;
@@ -2080,6 +2088,50 @@ impl EscapeRenderer {
     /// The records binding for iterate bind groups: the real buffer
     /// when active, the dummy otherwise. `ensure_results` has always
     /// run first in `render`, so one of the two exists.
+    /// Test-only: read back the terminal records' iteration counts
+    /// (n, tags) per pixel, for ground-truth comparisons.
+    #[cfg(test)]
+    pub(crate) fn read_results_counts(
+        &self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Option<Vec<(u32, u32)>> {
+        let src = self.results_buffer.as_ref()?;
+        let px = (self.width as u64) * (self.height as u64);
+        let size = px * 32;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("results staging"),
+            size,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("results readback"),
+        });
+        enc.copy_buffer_to_buffer(src, 0, &staging, 0, size);
+        queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().ok()?.ok()?;
+        let data = slice.get_mapped_range();
+        let out = data
+            .chunks_exact(32)
+            .map(|rec| {
+                (
+                    u32::from_le_bytes(rec[24..28].try_into().unwrap()),
+                    u32::from_le_bytes(rec[28..32].try_into().unwrap()),
+                )
+            })
+            .collect();
+        drop(data);
+        staging.unmap();
+        Some(out)
+    }
+
     fn results_binding(&self) -> BindingResource<'_> {
         self.results_buffer
             .as_ref()

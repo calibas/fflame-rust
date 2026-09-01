@@ -549,6 +549,41 @@ Perspective on priority: the orbit store already turns the second
 visit to a location into seconds, and FFORBIT6 made those files ~100x
 smaller. §7 was about the FIRST visit; this follow-up was the second.
 
+**2026-09-01 — the multibrot dip seam.** A depth-426 power-4 view
+rendered a straight seam: two populations of pixels with entirely
+different content split along a half-plane. Root cause, found with a
+CPU mirror of the FE shader (op-for-op f32/CFe2, judged per pixel
+against exact fixed-point orbits — the mirror ships as
+`fe_step_survives_reference_dips`): the p >= 3 binomial step raised
+the reference MANTISSA to powers assuming it O(1), but entries within
+f32's range are stored raw with e = 0 — at a reference dip (|Z| ~
+2^-51 mid-orbit) the mantissa's cube left f32 range and the
+Z^(p-1)·w term silently flushed. Pixels whose reference index reached
+the dip without a rebase took the poisoned step (~17% of pixels, ±30
+iterations wrong); pixels that rebased first never executed it —
+hence the straight rebase-gate boundary. The fix normalizes the
+mantissa before powering (exponent folded into the term multiply) and
+reads the powers in DF rather than hi-only; measured wrongness
+against exact orbits fell 16.9% -> 1.2% (the DF noise floor). p = 2
+never powers the mantissa, which is why deep Mandelbrot zooms never
+showed it. Guards: the CPU mirror asserts both that the shipped step
+stays at the floor AND that the un-normalized step still reproduces
+the bug; `deep_multibrot_matches_exact_orbits` (GPU) asserts the
+end-to-end render against exact orbits; the view is also a visual
+baseline (`escape/multibrot-dip-seam`). Diagnostic hatches added
+along the way: ESCAPE_BLA=0 renders without iteration skipping.
+
+Noted while diagnosing, not yet done: the SCALED rung's p >= 3 step
+(`delta_step_scaled_on`) powers the plain f32 reference the same way
+— the same underflow class is reachable at dips within its zoom
+range; audit it. And the same view answered "why no orbit-cache
+file": its reference ESCAPES at iteration 2,098, so the orbit costs
+~milliseconds to rebuild and the store's cost gate skips it by
+design — but an escaping reference also caps every pixel at ~2,099
+useful reference steps; a nucleus search wider than the view radius
+(the relocation cap allows ~50 view-heights) would find the
+non-escaping references such views want.
+
 ## Suggested order, and why
 
 1. **Accuracy audit (1)** — it is foundational: optimizing or
