@@ -100,6 +100,9 @@ pub struct EscapeDiag {
     /// The render in progress, if any (frames so far).
     pub inflight_frames: u32,
     pub last_chunk_iters: u32,
+    /// Chunk dispatches in the last redraw (>1 = batching active:
+    /// the frame budget fit several ceiling-capped chunks).
+    pub chunk_batch: u32,
     /// CPU time spent inside the last `render()` call itself —
     /// encoder/bind-group work, orbit mirroring, BLA building; the
     /// GPU dispatch is not included (it is asynchronous).
