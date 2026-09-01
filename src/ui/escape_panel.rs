@@ -1397,13 +1397,13 @@ pub(crate) fn magnification_label(log10: f64) -> String {
         let e = log10.floor();
         // 10^frac stays in [1, 10) — no overflow at any depth.
         let m = 10f64.powf(log10 - e);
-        format!("×{m:.2}e{}", e as i64)
+        format!("({m:.2}e{})", e as i64)
     } else {
         let v = 10f64.powf(log10);
         if v >= 100.0 {
-            format!("×{v:.0}")
+            format!("({v:.0})")
         } else {
-            format!("×{v:.3}")
+            format!("({v:.3})")
         }
     }
 }
