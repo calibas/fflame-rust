@@ -341,6 +341,12 @@ fn load_nearby(
         return None;
     }
     let h = height_px.max(1.0);
+    // Parse the REQUEST's center once: it is the same for every
+    // candidate, and a deep center is thousands of digits.
+    let to = (
+        super::fixedpoint::FixedPoint::from_decimal(center_re, n_limbs)?,
+        super::fixedpoint::FixedPoint::from_decimal(center_im, n_limbs)?,
+    );
     let mut ranked: Vec<(f64, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
@@ -363,7 +369,7 @@ fn load_nearby(
         {
             continue;
         }
-        let Some(off) = head.offset_estimate_px(center_re, center_im, zoom_log2, h) else {
+        let Some(off) = head.offset_estimate_px(&to, zoom_log2, h) else {
             continue;
         };
         let far = super::reference::MAX_RELOCATE_PX;

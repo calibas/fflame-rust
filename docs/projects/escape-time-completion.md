@@ -489,9 +489,40 @@ and truncated Karatsuba both alter which carries fall at the
 truncation edge, which churns every deep-zoom baseline and the orbit
 store's cold==warm identity. Needs explicit sign-off if ever wanted.
 
+**Follow-up 2026-09-01 — the SECOND visit got the same treatment.**
+Profiling a realistic revisit (a stored 10.1M-iteration, 197-limb
+orbit; generator + profiler live as ignored tests in `reference.rs`)
+found the cached path spending ~4.9 s of single-threaded CPU before
+the GPU could start, and 4.0 s of it was the BLA build — ON THE
+RENDER THREAD, a UI freeze on every revisit of a deep location. All
+of it was independent-per-element work, so it parallelized without
+changing a single computed value:
+
+- BLA build 3,970 → ~560 ms (level 0 and every merge level are pure
+  per-entry maps; also dropped a per-level `clone()` that was
+  copying the whole table a second time). Differential test pins the
+  parallel build bit-identical to the serial recurrence.
+- `from_bytes` 778 → ~135 ms: every DD-shadow correction is a full
+  restart state, so the replay parallelizes by segment (the profiled
+  orbit carries 188k corrections, median segment 54); plus a
+  parallel min-rescan. The store's byte-exact roundtrip tests are
+  the differential harness.
+- BLA GPU packing ~125 → ~70 ms (fixed 32-byte slots, parallel
+  chunks), `with_exp` conversion parallelized too — it runs holding
+  the orbit worker's progress lock.
+
+Net: the revisit stall is ~0.8 s, ~6x less, all bit-identical (74/74
+escape visual baselines unchanged). Still open, in descending value:
+a persistent spin-barrier pool for the reference build itself (rayon
+fork overhead caps the current join+stripe at ~2x of the ideal ~6x;
+the doc above measured the shape), dropping the span-2 BLA level
+(halves table size/build/upload but CHANGES which skips fire —
+baseline churn, needs sign-off), and the bit-changing multiply
+options above.
+
 Perspective on priority: the orbit store already turns the second
 visit to a location into seconds, and FFORBIT6 made those files ~100x
-smaller. This item was about the FIRST visit only.
+smaller. §7 was about the FIRST visit; this follow-up was the second.
 
 ## Suggested order, and why
 

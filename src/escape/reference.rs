@@ -1571,44 +1571,80 @@ impl ReferenceOrbit {
             let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
             [cx, cxl, cy, cyl]
         };
-        let mut orbit = Vec::with_capacity(orbit_len);
-        let mut orbit_lo = Vec::with_capacity(orbit_len);
-        let mut shadow = [f64::NAN; 4];
-        let mut next_corr = 0usize;
-        for i in 0..orbit_len {
-            if next_corr < corrections.len() && corrections[next_corr].idx as usize == i {
-                let cc = &corrections[next_corr];
-                if cc.e != orbit_e[i] {
-                    return None;
-                }
-                orbit.push(cc.hi);
-                orbit_lo.push(cc.lo);
-                shadow = cc.dd;
-                next_corr += 1;
-            } else {
-                if i == 0 {
-                    return None; // entry 0 must be a correction
-                }
-                let (sx, sy) = shadow_step(
-                    (shadow[0], shadow[1]),
-                    (shadow[2], shadow[3]),
-                    &c_dd,
-                    power,
-                    ship,
-                    ship_variant,
-                );
-                shadow = [sx.0, sx.1, sy.0, sy.1];
-                let (hi, lo, ee) = shadow_split(sx, sy);
-                if ee != orbit_e[i] {
-                    return None;
-                }
-                orbit.push(hi);
-                orbit_lo.push(lo);
-            }
-        }
-        if next_corr != corrections.len() {
+        // Every correction record is a full restart state (its `dd`
+        // reseeds the shadow), so the stretch from one correction to
+        // the next depends on nothing outside itself — the replay
+        // parallelizes by SEGMENT, each thread running the identical
+        // shadow_step chain the serial loop ran. A real 10.1M deep
+        // orbit carries ~188k corrections (median segment 54), and
+        // its measured decode dropped from ~780 ms to ~130 ms.
+        //
+        // The serial loop consumed corrections strictly in index
+        // order and rejected any file where one failed to line up;
+        // monotonicity + bounds up front reproduce exactly that
+        // accept/reject behaviour.
+        if corrections.windows(2).any(|w| w[1].idx <= w[0].idx)
+            || corrections.last().is_some_and(|c| (c.idx as usize) >= orbit_len)
+        {
             return None;
         }
+        let mut orbit = vec![[0f32; 2]; orbit_len];
+        let mut orbit_lo = vec![[0f32; 2]; orbit_len];
+        let mut segments: Vec<(&Correction, &mut [[f32; 2]], &mut [[f32; 2]], usize)> =
+            Vec::with_capacity(corrections.len());
+        {
+            let mut hi_rest: &mut [[f32; 2]] = &mut orbit;
+            let mut lo_rest: &mut [[f32; 2]] = &mut orbit_lo;
+            let mut start = 0usize;
+            for (k, cc) in corrections.iter().enumerate() {
+                let end = corrections
+                    .get(k + 1)
+                    .map_or(orbit_len, |n| n.idx as usize);
+                let take = end - cc.idx as usize;
+                let (hi_seg, hr) = hi_rest.split_at_mut(take);
+                let (lo_seg, lr) = lo_rest.split_at_mut(take);
+                hi_rest = hr;
+                lo_rest = lr;
+                segments.push((cc, hi_seg, lo_seg, start));
+                start = end;
+            }
+        }
+        let replay_segment =
+            |(cc, hi_seg, lo_seg, start): &mut (&Correction, &mut [[f32; 2]], &mut [[f32; 2]], usize)|
+             -> Option<[f64; 4]> {
+                let start = *start;
+                if cc.e != orbit_e[start] {
+                    return None;
+                }
+                hi_seg[0] = cc.hi;
+                lo_seg[0] = cc.lo;
+                let mut shadow = cc.dd;
+                for j in 1..hi_seg.len() {
+                    let (sx, sy) = shadow_step(
+                        (shadow[0], shadow[1]),
+                        (shadow[2], shadow[3]),
+                        &c_dd,
+                        power,
+                        ship,
+                        ship_variant,
+                    );
+                    shadow = [sx.0, sx.1, sy.0, sy.1];
+                    let (hi, lo, ee) = shadow_split(sx, sy);
+                    if ee != orbit_e[start + j] {
+                        return None;
+                    }
+                    hi_seg[j] = hi;
+                    lo_seg[j] = lo;
+                }
+                Some(shadow)
+            };
+        let finals: Option<Vec<[f64; 4]>> = {
+            use rayon::prelude::*;
+            segments.par_iter_mut().map(replay_segment).collect()
+        };
+        // The live shadow is the state after the LAST iterate — the
+        // final segment's replay ends exactly there.
+        let shadow = *finals?.last()?;
         Some(Self {
             center_re,
             center_im,
@@ -1652,14 +1688,38 @@ impl ReferenceOrbit {
     /// fixed-point state as the orbit extends.
     #[cfg(not(target_arch = "wasm32"))]
     fn with_rescanned_min(mut self) -> Self {
-        for i in 1..self.orbit.len() {
-            let z = self.z_f32(i);
-            let m = (z[0] as f64) * (z[0] as f64) + (z[1] as f64) * (z[1] as f64);
-            let oct = if m == 0.0 { -149 } else { (m.log2() / 2.0) as i64 };
-            if oct < self.min_octave {
-                self.min_octave = oct;
-                self.min_at = i as u32;
-            }
+        // Parallel min-reduce. The serial scan kept the FIRST index
+        // reaching each new minimum (strict <), so ties between
+        // chunks break toward the LOWER index — same winner exactly.
+        use rayon::prelude::*;
+        let best = (1..self.orbit.len())
+            .into_par_iter()
+            .fold(
+                || (i64::MAX, u32::MAX),
+                |acc, i| {
+                    let z = entry_value(self.orbit[i], self.orbit_e.get(i).copied().unwrap_or(0));
+                    let m = (z[0] as f64) * (z[0] as f64) + (z[1] as f64) * (z[1] as f64);
+                    let oct = if m == 0.0 { -149 } else { (m.log2() / 2.0) as i64 };
+                    if oct < acc.0 || (oct == acc.0 && (i as u32) < acc.1) {
+                        (oct, i as u32)
+                    } else {
+                        acc
+                    }
+                },
+            )
+            .reduce(
+                || (i64::MAX, u32::MAX),
+                |a, b| {
+                    if b.0 < a.0 || (b.0 == a.0 && b.1 < a.1) {
+                        b
+                    } else {
+                        a
+                    }
+                },
+            );
+        if best.0 < self.min_octave {
+            self.min_octave = best.0;
+            self.min_at = best.1;
         }
         self
     }
@@ -1912,7 +1972,8 @@ impl StoredHeader {
     }
 
     /// Estimated relocation offset, in pixels of the requested view,
-    /// if this stored orbit were relocated to `center`.
+    /// if this stored orbit were relocated to the (already parsed)
+    /// center `to`.
     ///
     /// The stored file records its center and the offset from its
     /// REFERENCE to that center, so the reference is reachable without
@@ -1923,22 +1984,23 @@ impl StoredHeader {
     /// [`ReferenceOrbit::relocate_to`] works from the exact
     /// fixed-point reference — which is why this ranks candidates and
     /// `relocate_to` still makes the decision.
+    ///
+    /// `to` arrives parsed because the CALLER's center is the same
+    /// for every candidate in a directory scan, while a deep center
+    /// string is thousands of digits — re-parsing it per file was
+    /// most of the scan.
     pub(crate) fn offset_estimate_px(
         &self,
-        center_re: &str,
-        center_im: &str,
+        to: &(FixedPoint, FixedPoint),
         zoom_log2: f64,
         height_px: f64,
     ) -> Option<[f64; 2]> {
-        let step = center_offset_px(
-            &self.center_re,
-            &self.center_im,
-            center_re,
-            center_im,
-            self.n_limbs,
-            zoom_log2,
-            height_px,
-        )?;
+        let fr = FixedPoint::from_decimal(&self.center_re, self.n_limbs)?;
+        let fi = FixedPoint::from_decimal(&self.center_im, self.n_limbs)?;
+        let step = [
+            fixed_to_px(&to.0.sub(&fr), zoom_log2, height_px),
+            fixed_to_px(&to.1.sub(&fi), zoom_log2, height_px),
+        ];
         let carried = rescale_offset(
             self.ref_offset,
             self.off_zoom_log2,
@@ -1964,32 +2026,6 @@ fn fixed_to_px(d: &FixedPoint, zoom_log2: f64, height_px: f64) -> f64 {
     } else {
         fe.m * 2f64.powf(e.min(40.0))
     }
-}
-
-/// The step from one center to another, in pixels of the given view.
-/// None if either center is unparseable at `n_limbs`.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn center_offset_px(
-    from_re: &str,
-    from_im: &str,
-    to_re: &str,
-    to_im: &str,
-    n_limbs: usize,
-    zoom_log2: f64,
-    height_px: f64,
-) -> Option<[f64; 2]> {
-    let (fr, fi) = (
-        FixedPoint::from_decimal(from_re, n_limbs)?,
-        FixedPoint::from_decimal(from_im, n_limbs)?,
-    );
-    let (tr, ti) = (
-        FixedPoint::from_decimal(to_re, n_limbs)?,
-        FixedPoint::from_decimal(to_im, n_limbs)?,
-    );
-    Some([
-        fixed_to_px(&tr.sub(&fr), zoom_log2, height_px),
-        fixed_to_px(&ti.sub(&fi), zoom_log2, height_px),
-    ])
 }
 
 pub fn rescale_offset(
@@ -3321,6 +3357,158 @@ mod tests {
              rewriting the store",
             count()
         );
+    }
+
+    /// MANUAL: time every single-threaded cost between "cached orbit
+    /// file exists" and "GPU can start" on the profile orbit.
+    #[test]
+    #[ignore = "manual: needs output/orbit_profile/ from the generator"]
+    fn profile_cached_orbit_costs() {
+        let dir = std::path::PathBuf::from("output").join("orbit_profile");
+        let path = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "orbit"))
+            .expect("run generate_deep_profile_orbit first");
+
+        let t = std::time::Instant::now();
+        let bytes = std::fs::read(&path).unwrap();
+        println!("fs::read      {:7.1} ms  ({} bytes)", t.elapsed().as_secs_f64() * 1e3, bytes.len());
+
+        let t = std::time::Instant::now();
+        let orbit = ReferenceOrbit::from_bytes(&bytes).unwrap();
+        println!(
+            "from_bytes    {:7.1} ms  (len {}, {} corrections)",
+            t.elapsed().as_secs_f64() * 1e3,
+            orbit.len(),
+            orbit.corrections.len()
+        );
+
+        // Segment-length statistics decide whether a parallel replay
+        // has the granularity to win.
+        let mut segs: Vec<usize> = orbit
+            .corrections
+            .windows(2)
+            .map(|w| (w[1].idx - w[0].idx) as usize)
+            .collect();
+        segs.push(orbit.orbit.len() - orbit.corrections.last().unwrap().idx as usize);
+        segs.sort_unstable();
+        println!(
+            "segments: {} (median {}, p99 {}, max {})",
+            segs.len(),
+            segs[segs.len() / 2],
+            segs[segs.len() * 99 / 100],
+            segs.last().unwrap()
+        );
+
+        // The renderer's with_exp conversion (hi+lo -> f64, scaled).
+        let t = std::time::Instant::now();
+        let data: Vec<[f64; 2]> = orbit
+            .orbit
+            .iter()
+            .enumerate()
+            .map(|(i, z)| {
+                let l = orbit.orbit_lo[i];
+                let scale = match orbit.orbit_e[i] {
+                    0 => 1.0,
+                    k => (k as f64).exp2(),
+                };
+                [
+                    (z[0] as f64 + l[0] as f64) * scale,
+                    (z[1] as f64 + l[1] as f64) * scale,
+                ]
+            })
+            .collect();
+        println!("with_exp      {:7.1} ms", t.elapsed().as_secs_f64() * 1e3);
+
+        // BLA build at a realistic deep-view |dc|.
+        let dc_log2 = -9314.0f64;
+        let e = dc_log2.floor();
+        let dc = super::super::bla::MagFe { m: 2f64.powf(dc_log2 - e), e: e as i64 };
+        let t = std::time::Instant::now();
+        let table = super::super::bla::BlaTable::build_with_dc(&data, 2, dc, dc_log2);
+        let entries: usize = table.levels.iter().map(|l| l.len()).sum();
+        println!(
+            "bla build     {:7.1} ms  ({} levels, {} entries)",
+            t.elapsed().as_secs_f64() * 1e3,
+            table.levels.len(),
+            entries
+        );
+
+        // The renderer's GPU packing, same parallel shape as
+        // ensure_bla's (kept only for the timing readout).
+        let t = std::time::Instant::now();
+        let n_levels = table.levels.len().min(30);
+        let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
+        let mut gpu = vec![0u8; 144 + total * 32];
+        let clamp_e = |e: i64| -> i32 { e.clamp(-1_000_000_000, 1_000_000_000) as i32 };
+        let mut base = 144usize;
+        for lev in &table.levels[..n_levels] {
+            use rayon::prelude::*;
+            gpu[base..base + lev.len() * 32]
+                .par_chunks_exact_mut(32)
+                .zip(lev.par_iter())
+                .for_each(|(dst, ent)| {
+                    dst[0..4].copy_from_slice(&(ent.a.re as f32).to_le_bytes());
+                    dst[4..8].copy_from_slice(&(ent.a.im as f32).to_le_bytes());
+                    dst[8..12].copy_from_slice(&(ent.b.re as f32).to_le_bytes());
+                    dst[12..16].copy_from_slice(&(ent.b.im as f32).to_le_bytes());
+                    dst[16..20].copy_from_slice(&clamp_e(ent.a.e).to_le_bytes());
+                    dst[20..24].copy_from_slice(&clamp_e(ent.b.e).to_le_bytes());
+                    let (rm, re) = if ent.r.m > 0.0 {
+                        (ent.r.m as f32, clamp_e(ent.r.e))
+                    } else {
+                        (0.0f32, 0)
+                    };
+                    dst[24..28].copy_from_slice(&rm.to_le_bytes());
+                    dst[28..32].copy_from_slice(&re.to_le_bytes());
+                });
+            base += lev.len() * 32;
+        }
+        println!("gpu packing   {:7.1} ms  ({} bytes)", t.elapsed().as_secs_f64() * 1e3, gpu.len());
+
+        let t = std::time::Instant::now();
+        let out = orbit.to_bytes();
+        println!("to_bytes      {:7.1} ms  ({} bytes)", t.elapsed().as_secs_f64() * 1e3, out.len());
+    }
+
+    /// MANUAL: generate a realistic deep orbit for decode/render
+    /// profiling — chaotic real-axis c (in the set, aperiodic, so it
+    /// neither escapes nor closes, and the DD shadow needs dense
+    /// corrections like a real deep zoom), 197 limbs, 10.1M
+    /// iterations, matching the profiled user orbit.
+    #[test]
+    #[ignore = "manual: ~5 minutes, writes output/orbit_profile/"]
+    fn generate_deep_profile_orbit() {
+        let dir = std::path::PathBuf::from("output").join("orbit_profile");
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = std::time::Instant::now();
+        let mut o = ReferenceOrbit::compute(
+            "-1.9998877665544332211",
+            "0",
+            9316.0,
+            Some(197),
+            10_100_100,
+            None,
+            2,
+            false,
+            0,
+            [0.0, 0.0],
+        )
+        .unwrap();
+        println!(
+            "built: len={} limbs={} periodic={:?} escaped={:?} in {:.1}s ({:.1} us/iter)",
+            o.len(),
+            o.n_limbs,
+            o.periodic,
+            o.escaped_at,
+            t.elapsed().as_secs_f64(),
+            t.elapsed().as_secs_f64() * 1e6 / o.len() as f64
+        );
+        assert!(super::super::orbit_store::save_to(&dir, &o), "save must land");
+        println!("corrections: {}", o.corrections.len());
+        let _ = &mut o;
     }
 
     #[test]

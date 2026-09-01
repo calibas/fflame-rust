@@ -243,6 +243,23 @@ pub struct BlaTable {
 /// eps · the linear term. 2^-24 targets f32 delta precision.
 pub const BLA_EPS: f64 = 5.960_464_477_539_063e-8;
 
+/// Ordered parallel map over an index range — sequential on wasm
+/// (no threads) and below a size floor (fork cost), identical output
+/// either way.
+#[cfg(not(target_arch = "wasm32"))]
+fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
+    if n < (1 << 13) {
+        return (0..n).map(f).collect();
+    }
+    use rayon::prelude::*;
+    (0..n).into_par_iter().map(f).collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn par_map<T>(n: usize, f: impl Fn(usize) -> T) -> Vec<T> {
+    (0..n).map(f).collect()
+}
+
 impl BlaTable {
     /// Build from a reference orbit (Zₙ as f64 pairs, orbit[0] = Z₀).
     ///
@@ -279,31 +296,45 @@ impl BlaTable {
         let steps = orbit.len().saturating_sub(1);
         // Level 0 of the recurrence: single steps (used only to merge
         // — the shader's plain iteration handles unskipped steps).
-        let mut prev: Vec<BlaEntry> = (0..steps)
-            .map(|n| {
-                let z = Cfe64::from_f64(orbit[n][0], orbit[n][1]);
-                // p·Z^(p−1)
-                let mut a = Cfe64::from_f64(p as f64, 0.0);
-                for _ in 0..(p - 1) {
-                    a = a.mul(z);
-                }
-                let (zm, ze) = z.mag();
-                let r = MagFe { m: zm, e: ze }
-                    .norm()
-                    .mul(MagFe::from_f64(BLA_EPS * 2.0 / (p as f64 - 1.0)));
-                BlaEntry { a, b: Cfe64::from_f64(1.0, 0.0), r }
-            })
-            .collect();
+        //
+        // Every entry here, and every merge below, is an independent
+        // pure function of its inputs, so the whole build maps in
+        // parallel WITHOUT changing a single computed value — the same
+        // f64 chains run, just on more cores. Measured serial on a
+        // 10.1M-iteration orbit this build was a 4.0 s render-thread
+        // stall on every revisit of a cached deep location.
+        let level0: Vec<BlaEntry> = par_map(steps, |n| {
+            let z = Cfe64::from_f64(orbit[n][0], orbit[n][1]);
+            // p·Z^(p−1)
+            let mut a = Cfe64::from_f64(p as f64, 0.0);
+            for _ in 0..(p - 1) {
+                a = a.mul(z);
+            }
+            let (zm, ze) = z.mag();
+            let r = MagFe { m: zm, e: ze }
+                .norm()
+                .mul(MagFe::from_f64(BLA_EPS * 2.0 / (p as f64 - 1.0)));
+            BlaEntry { a, b: Cfe64::from_f64(1.0, 0.0), r }
+        });
         let mut levels = Vec::new();
-        while prev.len() >= 2 {
-            let merged: Vec<BlaEntry> = prev
-                .chunks_exact(2)
-                .map(|pair| Self::merge(&pair[0], &pair[1], dc))
-                .collect();
-            levels.push(merged.clone());
-            prev = merged;
+        if level0.len() >= 2 {
+            levels.push(Self::merge_level(&level0, dc));
+            loop {
+                let merged = match levels.last() {
+                    Some(prev) if prev.len() >= 2 => Self::merge_level(prev, dc),
+                    _ => break,
+                };
+                levels.push(merged);
+            }
         }
         Self { levels, dc_max: dc_max_hint }
+    }
+
+    /// One level of pair merges: entry i of the result covers entries
+    /// 2i, 2i+1 of `prev` (`chunks_exact(2)` semantics — a trailing
+    /// odd entry is dropped, exactly as before).
+    fn merge_level(prev: &[BlaEntry], dc: MagFe) -> Vec<BlaEntry> {
+        par_map(prev.len() / 2, |i| Self::merge(&prev[2 * i], &prev[2 * i + 1], dc))
     }
 
     /// y ∘ x: apply x's span first, then y's.
@@ -442,6 +473,85 @@ mod tests {
                 "level {l}: radius grew ({} 2^{} > {} 2^{})",
                 hi.m, hi.e, lo.m, lo.e
             );
+        }
+    }
+
+    /// The parallel build must be BIT-IDENTICAL to the plain serial
+    /// recurrence it replaced: parallelism is an ordered map over
+    /// independent entries, so the same f64 chains must produce the
+    /// same bits — held to here against a from-scratch serial
+    /// reimplementation, across power, |dc|, odd lengths and a
+    /// deep-dip orbit, and pushed past the par_map size floor so the
+    /// rayon path is the one being tested.
+    #[test]
+    fn parallel_build_matches_serial_exactly() {
+        fn serial_build(orbit: &[[f64; 2]], power: u32, dc: MagFe) -> Vec<Vec<BlaEntry>> {
+            let p = power.max(2);
+            let steps = orbit.len().saturating_sub(1);
+            let mut prev: Vec<BlaEntry> = (0..steps)
+                .map(|n| {
+                    let z = Cfe64::from_f64(orbit[n][0], orbit[n][1]);
+                    let mut a = Cfe64::from_f64(p as f64, 0.0);
+                    for _ in 0..(p - 1) {
+                        a = a.mul(z);
+                    }
+                    let (zm, ze) = z.mag();
+                    let r = MagFe { m: zm, e: ze }
+                        .norm()
+                        .mul(MagFe::from_f64(BLA_EPS * 2.0 / (p as f64 - 1.0)));
+                    BlaEntry { a, b: Cfe64::from_f64(1.0, 0.0), r }
+                })
+                .collect();
+            let mut levels = Vec::new();
+            while prev.len() >= 2 {
+                let merged: Vec<BlaEntry> = prev
+                    .chunks_exact(2)
+                    .map(|pair| BlaTable::merge(&pair[0], &pair[1], dc))
+                    .collect();
+                levels.push(merged.clone());
+                prev = merged;
+            }
+            levels
+        }
+        fn same(a: &BlaEntry, b: &BlaEntry) -> bool {
+            let f = |v: f64, w: f64| v.to_bits() == w.to_bits();
+            f(a.a.re, b.a.re)
+                && f(a.a.im, b.a.im)
+                && a.a.e == b.a.e
+                && f(a.b.re, b.b.re)
+                && f(a.b.im, b.b.im)
+                && a.b.e == b.b.e
+                && f(a.r.m, b.r.m)
+                && a.r.e == b.r.e
+        }
+        // A dip: magnitudes crossing dozens of octaves, like a
+        // near-nucleus pass.
+        let mut orbit = f64_orbit(-0.7436, 0.1318, 2, 20000);
+        for (i, z) in orbit.iter_mut().enumerate() {
+            if i % 977 == 0 {
+                let s = (-(300.0 + (i % 7) as f64)).exp2();
+                z[0] *= s;
+                z[1] *= s;
+            }
+        }
+        for power in [2u32, 3, 5] {
+            for dc in [MagFe::zero(), MagFe::from_f64(1e-14), MagFe { m: 0.7, e: -9314 }] {
+                for len in [3usize, 64, 65, 20000] {
+                    let table = BlaTable::build_with_dc(&orbit[..len], power, dc, 0.0);
+                    let want = serial_build(&orbit[..len], power, dc);
+                    assert_eq!(table.levels.len(), want.len(), "level count");
+                    for (l, (got, exp)) in table.levels.iter().zip(want.iter()).enumerate() {
+                        assert_eq!(got.len(), exp.len(), "level {l} length");
+                        for (k, (g, e)) in got.iter().zip(exp.iter()).enumerate() {
+                            assert!(
+                                same(g, e),
+                                "power {power} len {len} level {l} entry {k}: parallel and \
+                                 serial builds diverged"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
