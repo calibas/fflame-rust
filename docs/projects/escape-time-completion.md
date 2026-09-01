@@ -428,36 +428,70 @@ What the queue already MEASURED, so nobody re-derives it:
   FULL product would cost at that size. It is worth revisiting only
   well above this limb count.
 
-So the honest remaining lever is **SIMD**, and it aims squarely at
-the 91%: 32-bit limbs through AVX2 `vpmuludq`, or 52-bit limbs
-through AVX-512 IFMA, against the current scalar 64x64->128 chain
-(measured at ~1.15 ns per limb MAC, i.e. 3-4 cycles -- about what
-well-scheduled scalar `mulx`/`adc` achieves, so there is no scalar
-win hiding here). A 2-4x cut would take the f3 cold build from eight
-minutes to two or three.
+**DONE 2026-08-31.** The follow-up prototyping settled every open
+question above with measurements, and two levers shipped in
+`fixedpoint.rs`. What was measured first (i5-10400F, 6C/12T):
 
-Two caveats to design around before starting:
+- **native scalar really is saturated.** A u32 half-limb column
+  rewrite ran at **0.5x** (LLVM will not auto-vectorize it, and it
+  quadruples the multiply count), a Comba column scan at **0.91x**.
+  The doc's ~1.15 ns/MAC stands.
+- the x86-SIMD lever proposed above is dead on the development
+  machine: Comet Lake has no AVX-512/IFMA, and AVX2 `vpmuludq` is the
+  0.5x result above. Left unimplemented; revisit only as a
+  capability-gated path on hardware that can measure it.
+- **wasm was the real SIMD target.** On wasm every u128 product is a
+  software `__multi3` libcall -- the same row scan measured ~6x
+  slower than native under node. The u32-column form with no u128
+  anywhere wins there even scalar (**1.28x** at 197 limbs), and
+  vectorized with simd128 `u64x2_extmul_*` wins **1.7-1.9x** from 50
+  to 1000 limbs.
+- **multithreading needed no spin-barrier pool.** rayon (already a
+  dependency) at the right granularity: `join` the complex square's
+  two independent muls, and stripe each mul's rows across threads
+  (interleaved -- row i costs O(i), contiguous chunks unbalance) into
+  PRIVATE accumulators merged exactly at the end. Complex-square
+  shape, joined + 8 stripes: **1.95x** at 197 limbs, **2.69x** at
+  400, **3.45x** at 1000; ~1.0x at 100 limbs where the fork cost eats
+  the work.
 
-- the representation is the interface. `fixedpoint.rs`'s u64 limbs
-  are load-bearing for the orbit store's format, the DF shadow's
-  bit-exactness and every determinism guarantee in this project. A
-  SIMD-friendly relimbing is a change to all of them, and the
-  cold==warm identity test is the thing that must not break.
-- **it must stay portable**: x86 SIMD needs a scalar fallback for
-  ARM and wasm, and the two paths must agree BIT-EXACTLY or saved
-  orbits stop being portable between machines -- the same
-  requirement the NTT plan's Phase 1 identified, for the same
-  reason.
+What shipped: `mul_trunc` is now a dispatcher over three
+BIT-IDENTICAL implementations of the same truncated product set --
+serial row scan (native, shallow), rayon-striped row scan (native,
+>= 192 limbs on a >= 4-thread pool), u32 columns with a simd128 core
+(wasm32; scalar-column fallback if simd128 is off). `FixedComplex::
+sqr`/`mul` join their independent muls past the same threshold.
+End-to-end through the real reference builder (DF shadow and orbit
+store included): 197 limbs **46.2 -> 25.5 us/iter (1.81x)**, 400
+limbs **173.2 -> 69.3 (2.50x)**.
 
-Multithreading one multiply is plausible but fiddly: 44.6 us split
-four ways needs a persistent spin-barrier pool, because dispatching
-through a work queue ten million times would cost more than it
-saves. Worth measuring only after SIMD, and probably only above
-~1,000 limbs.
+Both caveats above held by construction rather than by care: integer
+arithmetic is exact, so any correct summation of the same product
+multiset gives the same limbs. No relimbing, no representation
+change; differential tests (`mul_impl_tests` in `fixedpoint.rs`)
+hold every implementation to the serial scan on adversarial inputs,
+and a dispatcher test crosses the parallel threshold. The 74 escape
+visual baselines are unchanged. The simd128 core was verified
+bit-exact against the row scan under node (the harness asserts
+equality on every call).
+
+Build-flag footnote: wasm builds now pass `-C
+target-feature=+simd128` -- set in `.cargo/config.toml` AND in both
+`build-wasm` scripts, because `RUSTFLAGS` in the environment
+REPLACES the config list (cargo's flag sources are mutually
+exclusive; the scripts' env var had silently been dropping the
+getrandom cfg too, now also repeated there). Cost-free for
+compatibility: every WebGPU-capable browser shipped simd128 first.
+
+Deliberately NOT taken, because they change bits: the three-squaring
+reformulation (re^2, im^2, (re+im)^2 ~= 1.65 mult-equivalents vs 2)
+and truncated Karatsuba both alter which carries fall at the
+truncation edge, which churns every deep-zoom baseline and the orbit
+store's cold==warm identity. Needs explicit sign-off if ever wanted.
 
 Perspective on priority: the orbit store already turns the second
 visit to a location into seconds, and FFORBIT6 made those files ~100x
-smaller. This item is about the FIRST visit only.
+smaller. This item was about the FIRST visit only.
 
 ## Suggested order, and why
 

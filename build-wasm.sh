@@ -5,7 +5,11 @@ echo "Building for WASM..."
 
 # Build the WASM module
 echo "Building WASM module..."
-export RUSTFLAGS=--cfg=web_sys_unstable_apis
+# NOTE: setting RUSTFLAGS in the environment REPLACES the rustflags
+# list in .cargo/config.toml (cargo's flag sources are mutually
+# exclusive), so the getrandom cfg and simd128 from there must be
+# repeated here.
+export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128'
 cargo build --lib --target wasm32-unknown-unknown --profile dist
 
 if [ $? -ne 0 ]; then

@@ -8,5 +8,14 @@
 # Target-scoped, so native builds are untouched. Cargo discovers config
 # by walking parent directories, so this also applies to the standalone
 # crates under wasm/ even though they are separate workspaces.
+# simd128: the escape engine's reference-orbit bignum multiply has a
+# vectorized column form on wasm (src/escape/fixedpoint.rs, measured
+# 1.9x over the scalar row scan). Every WebGPU-capable browser shipped
+# simd128 years before WebGPU, and the app requires WebGPU, so this
+# costs no compatibility. NOTE: the build-wasm scripts set RUSTFLAGS in
+# the environment, which REPLACES this whole list (cargo's flag sources
+# are mutually exclusive, env wins) -- so both flags here are repeated
+# there. This entry still covers the wasm-pack gallery crates and any
+# bare `cargo build --target wasm32-unknown-unknown`.
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-Ctarget-feature=+simd128']
