@@ -160,7 +160,34 @@ fn div_small(a: &mut [u64], d: u64) -> u64 {
 /// limb absorbs the carries of the dropped region; the dropped
 /// products contribute strictly less than `n` ulps of that limb, which
 /// the guard limb is sized to absorb.
+///
+/// This is a DISPATCHER over three bit-identical implementations of
+/// that product set — integer arithmetic is exact, so any correct
+/// summation of the same products gives the same limbs, which the
+/// differential tests in `mul_impl_tests` hold each one to:
+///
+/// - native, deep (≥ [`PAR_THRESHOLD_LIMBS`]): the row scan striped
+///   across rayon threads ([`mul_trunc_striped`]);
+/// - native otherwise: the serial row scan below — measured saturated
+///   at ~1.12 ns/MAC on Comet Lake; column and Comba rewrites both
+///   LOST to it, so there is no single-thread win hiding here;
+/// - wasm32: u32 half-limb columns ([`columns`]), because wasm has no
+///   hardware u128 — every product in the row scan is a software
+///   `__multi3` call there — and the column form vectorizes with
+///   simd128.
 fn mul_trunc(a: &[u64], b: &[u64], c: &mut [u64]) {
+    #[cfg(target_arch = "wasm32")]
+    if a.len() >= 2 {
+        return columns::mul_trunc_columns(a, b, c);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if parallelism_pays(a.len()) {
+        return mul_trunc_striped(a, b, c, STRIPES);
+    }
+    mul_trunc_serial(a, b, c);
+}
+
+fn mul_trunc_serial(a: &[u64], b: &[u64], c: &mut [u64]) {
     let n = a.len();
     debug_assert_eq!(b.len(), n);
     debug_assert_eq!(c.len(), n);
@@ -194,6 +221,242 @@ fn mul_trunc(a: &[u64], b: &[u64], c: &mut [u64]) {
     // (product >> (64·n − INT_BITS)) = (product >> 64·(n−1)) >> (64 − INT_BITS).
     shr_small(&mut acc[1..], 64 - INT_BITS);
     c.copy_from_slice(&acc[1..n + 1]);
+}
+
+/// Where parallel multiplication starts to pay, in limbs.
+///
+/// Measured on an i5-10400F (6C/12T, the development machine),
+/// complex-square shape (two muls joined, each striped 8-way):
+/// 197 limbs 1.95x, 400 limbs 2.69x, 1000 limbs 3.45x — but ~1.0x at
+/// 100 limbs, where rayon's fork cost eats the ~12 us of work, and a
+/// bare join without striping LOSES below ~250 limbs. 192 keeps every
+/// measured point above water. Below it an orbit is fast anyway: the
+/// threshold is ~12,000 bits, zooms past 1e3600.
+#[cfg(not(target_arch = "wasm32"))]
+const PAR_THRESHOLD_LIMBS: usize = 192;
+
+/// Stripes per multiply. 8 measured best at every depth ≥ 197 limbs
+/// (with 2 muls in flight that is 16 tasks — the slack past the pool's
+/// 12 threads is what lets work stealing balance them; 6 stripes = 12
+/// tasks measured WORSE than 8 at 400 limbs). The merge is
+/// O(stripes·n) u64 adds — noise.
+#[cfg(not(target_arch = "wasm32"))]
+const STRIPES: usize = 8;
+
+/// Deep enough AND parallel hardware to run it on. On a pool under 4
+/// threads the fork overhead has nothing to hide behind (2 stripes
+/// measured 0.82x at 197 limbs), so small machines stay serial.
+#[cfg(not(target_arch = "wasm32"))]
+fn parallelism_pays(n: usize) -> bool {
+    n >= PAR_THRESHOLD_LIMBS && rayon::current_num_threads() >= 4
+}
+
+/// The row scan of [`mul_trunc_serial`], striped across threads.
+///
+/// Rows are independent up to the shared accumulator, so each stripe
+/// sums its rows into a PRIVATE accumulator and the accumulators are
+/// added (with carries) at the end. Same product multiset, exact
+/// integer sums — bit-identical to the serial scan by construction,
+/// which `striped_matches_reference_exactly` holds it to.
+///
+/// Rows are INTERLEAVED (stripe s takes rows s, s+stripes, …): row i
+/// costs O(i) products — the truncation window shortens early rows —
+/// so contiguous chunks would give the last stripe most of the work.
+/// Striding balances exactly.
+#[cfg(not(target_arch = "wasm32"))]
+fn mul_trunc_striped(a: &[u64], b: &[u64], c: &mut [u64], stripes: usize) {
+    let n = a.len();
+    debug_assert_eq!(b.len(), n);
+    debug_assert_eq!(c.len(), n);
+    let stripes = stripes.max(1);
+    let accs: Vec<Vec<u64>> = {
+        use rayon::prelude::*;
+        (0..stripes)
+            .into_par_iter()
+            .map(|s| {
+                let mut acc = vec![0u64; n + 2];
+                for i in (s..n).step_by(stripes) {
+                    let lo_j = (n as isize - 2 - i as isize).max(0) as usize;
+                    let mut carry = 0u64;
+                    for j in lo_j..n {
+                        let k = i + j - (n - 2);
+                        let p = (a[i] as u128) * (b[j] as u128)
+                            + (acc[k] as u128)
+                            + (carry as u128);
+                        acc[k] = p as u64;
+                        carry = (p >> 64) as u64;
+                    }
+                    let mut k = i + 2;
+                    while carry != 0 && k < acc.len() {
+                        let (s, o) = acc[k].overflowing_add(carry);
+                        acc[k] = s;
+                        carry = o as u64;
+                        k += 1;
+                    }
+                }
+                acc
+            })
+            .collect()
+    };
+    // Merge: a partial sum over a subset of rows is <= the full sum,
+    // so each fits the same headroom the serial scan asserts.
+    let mut acc = vec![0u64; n + 2];
+    for part in &accs {
+        let mut carry = 0u64;
+        for (dst, &src) in acc.iter_mut().zip(part.iter()) {
+            let (s1, o1) = dst.overflowing_add(src);
+            let (s2, o2) = s1.overflowing_add(carry);
+            *dst = s2;
+            carry = (o1 as u64) + (o2 as u64);
+        }
+        debug_assert_eq!(carry, 0, "merged product overflowed INT_BITS headroom");
+    }
+    shr_small(&mut acc[1..], 64 - INT_BITS);
+    c.copy_from_slice(&acc[1..n + 1]);
+}
+
+/// The same truncated product by u32 half-limb COLUMNS — the wasm32
+/// implementation.
+///
+/// The row scan's inner loop is a serial carry chain (each step waits
+/// on the previous limb's carry), and on wasm every u128 product is a
+/// software `__multi3` libcall — measured ~6x slower than native for
+/// the same limbs. Splitting into u32 half-limbs and accumulating each
+/// column's product halves into plain u64 sums removes both: no u128
+/// anywhere, no carries until one pass at the end — and the inner loop
+/// vectorizes with simd128 (`u64x2_extmul_*` is exactly a 32x32→64
+/// widening multiply). Measured under node on this machine's wasm:
+/// scalar columns 1.28x over the row scan at 197 limbs, simd128 1.87x
+/// (1.86–1.94x from 50 to 400 limbs).
+///
+/// Compiled on every target so the differential test runs natively;
+/// only wasm32 dispatches into it.
+#[allow(dead_code)]
+mod columns {
+    use super::{shr_small, INT_BITS};
+
+    fn split32(a: &[u64], out: &mut [u32]) {
+        for (i, &v) in a.iter().enumerate() {
+            out[2 * i] = v as u32;
+            out[2 * i + 1] = (v >> 32) as u32;
+        }
+    }
+
+    /// Accumulate every product the row scan includes: the FULL
+    /// product `a[i]·b[j]` exactly when `i + j >= n-2` (window + one
+    /// guard limb), so inclusion is decided by the parent u64 pair,
+    /// not the u32 column.
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    fn columns_core(a32: &[u32], b32: &[u32], n: usize, sum_lo: &mut [u64], sum_hi: &mut [u64]) {
+        let m = 2 * n;
+        let base = 2 * (n - 2);
+        for p in 0..m {
+            let i = p >> 1;
+            let jmin = n.saturating_sub(2 + i).min(n);
+            let qmin = 2 * jmin;
+            let av = a32[p] as u64;
+            if av == 0 {
+                continue;
+            }
+            let mut idx = p + qmin - base;
+            for q in qmin..m {
+                let prod = av * (b32[q] as u64);
+                sum_lo[idx] += prod & 0xFFFF_FFFF;
+                sum_hi[idx] += prod >> 32;
+                idx += 1;
+            }
+        }
+    }
+
+    /// The same column accumulation, 4 products per round via simd128
+    /// widening multiplies. Identical index math and inclusion rule as
+    /// the scalar core — only the inner product loop differs — and
+    /// every lane computes the exact same u64 sums, so the bits match
+    /// (verified against the row scan inside the node harness that
+    /// tuned this; the shared `combine` tail and inclusion math are
+    /// covered natively by the differential test).
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    fn columns_core(a32: &[u32], b32: &[u32], n: usize, sum_lo: &mut [u64], sum_hi: &mut [u64]) {
+        use core::arch::wasm32::*;
+        let m = 2 * n;
+        let base = 2 * (n - 2);
+        let mask = u64x2_splat(0xFFFF_FFFF);
+        for p in 0..m {
+            let i = p >> 1;
+            let jmin = n.saturating_sub(2 + i).min(n);
+            let qmin = 2 * jmin;
+            let av = a32[p];
+            if av == 0 {
+                continue;
+            }
+            let av_v = u32x4_splat(av);
+            let mut idx = p + qmin - base;
+            let mut q = qmin;
+            // extmul low/high give 2 widened u64 products each; the
+            // sum arrays carry 4 limbs of slack so idx+3 stays in
+            // bounds on the last round. wasm v128 loads/stores are
+            // alignment-tolerant by spec.
+            while q + 4 <= m {
+                let bv = unsafe { v128_load(b32.as_ptr().add(q) as *const v128) };
+                let lo2 = u64x2_extmul_low_u32x4(av_v, bv);
+                let hi2 = u64x2_extmul_high_u32x4(av_v, bv);
+                unsafe {
+                    let sl = sum_lo.as_mut_ptr().add(idx) as *mut v128;
+                    let sh = sum_hi.as_mut_ptr().add(idx) as *mut v128;
+                    v128_store(sl, u64x2_add(v128_load(sl), v128_and(lo2, mask)));
+                    v128_store(sh, u64x2_add(v128_load(sh), u64x2_shr(lo2, 32)));
+                    let sl2 = sum_lo.as_mut_ptr().add(idx + 2) as *mut v128;
+                    let sh2 = sum_hi.as_mut_ptr().add(idx + 2) as *mut v128;
+                    v128_store(sl2, u64x2_add(v128_load(sl2), v128_and(hi2, mask)));
+                    v128_store(sh2, u64x2_add(v128_load(sh2), u64x2_shr(hi2, 32)));
+                }
+                idx += 4;
+                q += 4;
+            }
+            while q < m {
+                let prod = (av as u64) * (b32[q] as u64);
+                sum_lo[idx] += prod & 0xFFFF_FFFF;
+                sum_hi[idx] += prod >> 32;
+                idx += 1;
+                q += 1;
+            }
+        }
+    }
+
+    pub(super) fn mul_trunc_columns(a: &[u64], b: &[u64], c: &mut [u64]) {
+        let n = a.len();
+        debug_assert!(n >= 2, "the column window math needs n >= 2");
+        debug_assert_eq!(b.len(), n);
+        debug_assert_eq!(c.len(), n);
+        let m = 2 * n;
+        let mut a32 = vec![0u32; m];
+        let mut b32 = vec![0u32; m];
+        split32(a, &mut a32);
+        split32(b, &mut b32);
+        let ncols = 2 * n + 3;
+        // +4: slack for the simd core's 4-wide stores (see above).
+        let mut sum_lo = vec![0u64; ncols + 4];
+        let mut sum_hi = vec![0u64; ncols + 4];
+        columns_core(&a32, &b32, n, &mut sum_lo, &mut sum_hi);
+
+        let mut acc = vec![0u64; n + 2];
+        let mut carry: u64 = 0;
+        // One column PAST the products: the top column's high halves
+        // land there, and dropping them loses the top limb's high
+        // word (caught by the differential test on its first run).
+        for c32 in 0..=ncols {
+            let lo = if c32 < ncols { sum_lo[c32] } else { 0 };
+            let hi = if c32 > 0 { sum_hi[c32 - 1] } else { 0 };
+            let t = lo + hi + carry;
+            carry = t >> 32;
+            let k = c32 >> 1;
+            if k < acc.len() {
+                acc[k] |= (t & 0xFFFF_FFFF) << (32 * (c32 & 1));
+            }
+        }
+        shr_small(&mut acc[1..], 64 - INT_BITS);
+        c.copy_from_slice(&acc[1..n + 1]);
+    }
 }
 
 // ============================================================
@@ -817,7 +1080,21 @@ impl FixedComplex {
     }
 
     /// z² via two multiplies.
+    ///
+    /// The two muls are independent, so past the parallel threshold
+    /// they run as a rayon join — each striped internally, which is
+    /// the measured-best shape (see [`PAR_THRESHOLD_LIMBS`]). Below it
+    /// the join alone would LOSE (fork cost > the whole mul), so the
+    /// sequential form stays.
     pub fn sqr(&self) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        if parallelism_pays(self.re.n_limbs()) {
+            let (re, im) = rayon::join(
+                || self.re.add(&self.im).mul(&self.re.sub(&self.im)),
+                || self.re.mul(&self.im).double(),
+            );
+            return Self { re, im };
+        }
         let re = self.re.add(&self.im).mul(&self.re.sub(&self.im));
         let im = self.re.mul(&self.im).double();
         Self { re, im }
@@ -825,8 +1102,18 @@ impl FixedComplex {
 
     /// General complex multiply (four big muls — used by the
     /// Multibrot reference's power chain; squaring stays on the
-    /// two-mul fast path).
+    /// two-mul fast path). The real and imaginary halves are
+    /// independent two-mul chains, joined past the threshold like
+    /// [`Self::sqr`].
     pub fn mul(&self, other: &Self) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        if parallelism_pays(self.re.n_limbs()) {
+            let (re, im) = rayon::join(
+                || self.re.mul(&other.re).sub(&self.im.mul(&other.im)),
+                || self.re.mul(&other.im).add(&self.im.mul(&other.re)),
+            );
+            return Self { re, im };
+        }
         let re = self.re.mul(&other.re).sub(&self.im.mul(&other.im));
         let im = self.re.mul(&other.im).add(&self.im.mul(&other.re));
         Self { re, im }
@@ -986,6 +1273,178 @@ mod recip_tests {
             assert!(m > 0.5 - 1e-12 && m <= 1.0 + 1e-12, "recip_scaled({v}) mantissa {m}");
         }
         assert!(FixedPoint::zero(8).recip_scaled().is_none(), "1/0 must refuse");
+    }
+}
+
+#[cfg(test)]
+mod mul_impl_tests {
+    use super::*;
+
+    fn rand_limbs(n: usize, seed: &mut u64) -> Vec<u64> {
+        (0..n)
+            .map(|_| {
+                *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *seed ^ (*seed >> 31)
+            })
+            .collect()
+    }
+
+    /// Random plus adversarial inputs — all-ones (worst carries),
+    /// sparse, zero, and single-bit patterns.
+    fn cases(n: usize, seed: &mut u64) -> Vec<(Vec<u64>, Vec<u64>)> {
+        let mut cases: Vec<(Vec<u64>, Vec<u64>)> = Vec::new();
+        for _ in 0..20 {
+            cases.push((rand_limbs(n, seed), rand_limbs(n, seed)));
+        }
+        cases.push((vec![u64::MAX; n], vec![u64::MAX; n]));
+        cases.push((vec![0; n], rand_limbs(n, seed)));
+        let mut one_high = vec![0u64; n];
+        one_high[n - 1] = 1 << 55;
+        cases.push((one_high.clone(), vec![u64::MAX; n]));
+        let mut alt = vec![0u64; n];
+        for (i, v) in alt.iter_mut().enumerate() {
+            if i % 2 == 0 {
+                *v = u64::MAX;
+            }
+        }
+        cases.push((alt, one_high));
+        cases
+    }
+
+    /// Every implementation behind [`mul_trunc`] must be BIT-IDENTICAL
+    /// to the serial row scan — the wasm column form here in its scalar
+    /// shape (the simd128 core shares the index math, inclusion rule
+    /// and combine tail, differing only in the inner product loop, and
+    /// was verified against the row scan under node).
+    #[test]
+    fn columns_match_reference_exactly() {
+        let mut seed = 0x00C0FFEE_u64;
+        for n in [2usize, 3, 4, 8, 33, 100, 197] {
+            for (a, b) in &cases(n, &mut seed) {
+                let mut want = vec![0u64; n];
+                let mut got = vec![0u64; n];
+                mul_trunc_serial(a, b, &mut want);
+                columns::mul_trunc_columns(a, b, &mut got);
+                assert_eq!(want, got, "columns mismatch at n={n}");
+            }
+        }
+    }
+
+    /// Striping must not change a bit either — any partition of the
+    /// rows sums the same product multiset in exact integer
+    /// arithmetic, and this holds the code to that claim.
+    #[test]
+    fn striped_matches_reference_exactly() {
+        let mut seed = 0xFEED_u64;
+        for n in [2usize, 3, 8, 100, 197] {
+            for stripes in [1usize, 2, 3, 6, 8, 13] {
+                for (a, b) in cases(n, &mut seed).iter().take(8) {
+                    let mut want = vec![0u64; n];
+                    let mut got = vec![0u64; n];
+                    mul_trunc_serial(a, b, &mut want);
+                    mul_trunc_striped(a, b, &mut got, stripes);
+                    assert_eq!(want, got, "striped mismatch n={n} stripes={stripes}");
+                }
+            }
+        }
+    }
+
+    /// The dispatcher itself, above and below the parallel threshold,
+    /// against the serial scan — whatever path it picks on this
+    /// machine must produce the same limbs.
+    #[test]
+    fn dispatcher_is_bit_identical_across_the_threshold() {
+        let mut seed = 0xD15C_u64;
+        for n in [100usize, PAR_THRESHOLD_LIMBS - 1, PAR_THRESHOLD_LIMBS, 260] {
+            for (a, b) in cases(n, &mut seed).iter().take(6) {
+                let mut want = vec![0u64; n];
+                let mut got = vec![0u64; n];
+                mul_trunc_serial(a, b, &mut want);
+                mul_trunc(a, b, &mut got);
+                assert_eq!(want, got, "dispatcher mismatch at n={n}");
+            }
+        }
+    }
+
+    /// Manual END-TO-END benchmark: the real reference-orbit builder
+    /// (fixed-point square + DF shadow + orbit store), pinned to a
+    /// limb count. What the mul-level speedup survives as, after the
+    /// serial ~9% around the multiplies.
+    #[test]
+    #[ignore = "manual benchmark -- run with --nocapture"]
+    fn bench_reference_build() {
+        use crate::escape::reference::ReferenceOrbit;
+        for n in [197usize, 400] {
+            let iters = 2000u32;
+            let t0 = std::time::Instant::now();
+            let orbit = ReferenceOrbit::compute(
+                "-0.7436438870371587",
+                "0.1318259042053119",
+                60.0,
+                Some(n),
+                iters,
+                None,
+                2,
+                false,
+                0,
+                [0.0, 0.0],
+            )
+            .unwrap();
+            let dt = t0.elapsed().as_secs_f64();
+            let done = orbit.len();
+            println!(
+                "n={n:4}  {done} iterations in {:.2} s = {:.1} us/iter",
+                dt,
+                dt * 1e6 / done as f64
+            );
+        }
+    }
+
+    /// Manual tuning benchmark for [`PAR_THRESHOLD_LIMBS`] and
+    /// [`STRIPES`] — the complex-square shape, since that is the orbit
+    /// loop's unit of work. Numbers in the constants' docs came from
+    /// here.
+    #[test]
+    #[ignore = "manual benchmark -- run with --nocapture"]
+    fn bench_square_parallel() {
+        let mut seed = 0xACE_u64;
+        for n in [100usize, 197, 400, 1000] {
+            let re = rand_limbs(n, &mut seed);
+            let im = rand_limbs(n, &mut seed);
+            let (sum, dif) = (re.clone(), im.clone()); // stand-ins, same cost
+            let mut o1 = vec![0u64; n];
+            let mut o2 = vec![0u64; n];
+            let iters = (1_000_000 / (n * n / 2)).max(8);
+
+            let t0 = std::time::Instant::now();
+            for _ in 0..iters {
+                mul_trunc_serial(&sum, &dif, &mut o1);
+                mul_trunc_serial(&re, &im, &mut o2);
+            }
+            let seq = t0.elapsed().as_secs_f64() / iters as f64;
+
+            let mut line = format!("n={n:5}  sequential {:8.2} us", seq * 1e6);
+            for stripes in [3usize, 4, 6, 8] {
+                let t0 = std::time::Instant::now();
+                for _ in 0..iters {
+                    rayon::join(
+                        || {
+                            let mut o = vec![0u64; n];
+                            mul_trunc_striped(&sum, &dif, &mut o, stripes);
+                            o
+                        },
+                        || {
+                            let mut o = vec![0u64; n];
+                            mul_trunc_striped(&re, &im, &mut o, stripes);
+                            o
+                        },
+                    );
+                }
+                let t = t0.elapsed().as_secs_f64() / iters as f64;
+                line += &format!(" | j+s{stripes} {:.2}x", seq / t);
+            }
+            println!("{line}");
+        }
     }
 }
 

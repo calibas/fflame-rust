@@ -611,7 +611,7 @@ def main():
     )
     parser.add_argument(
         "--category",
-        choices=["2d", "3d", "tonemap", "variations"],
+        choices=["2d", "3d", "tonemap", "variations", "escape", "solid"],
         help="Run only tests in this category"
     )
     parser.add_argument(
