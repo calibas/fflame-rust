@@ -1252,16 +1252,10 @@ impl ReferenceOrbit {
         // point, exported via floatexp — the nucleus path's formula.
         // S = 2^(2 − zoom) / height ⇒ 1/S = height · 2^(zoom − 2).
         let h = height_px.max(1.0);
-        let to_px = |d: FixedPoint| -> f64 {
-            let fe = d.to_floatexp();
-            let e = fe.e as f64 + (zoom_log2 - 2.0) + h.log2();
-            if fe.m == 0.0 || e < -60.0 {
-                0.0
-            } else {
-                fe.m * 2f64.powf(e.min(40.0))
-            }
-        };
-        let off = [to_px(vx.sub(&self.c.re)), to_px(vy.sub(&self.c.im))];
+        let off = [
+            fixed_to_px(&vx.sub(&self.c.re), zoom_log2, h),
+            fixed_to_px(&vy.sub(&self.c.im), zoom_log2, h),
+        ];
         if !off[0].is_finite()
             || !off[1].is_finite()
             || off[0].abs() > MAX_RELOCATE_PX
@@ -1436,87 +1430,26 @@ impl ReferenceOrbit {
     /// truncation, magic, or shape mismatch (a miss, not an error).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        struct R<'a>(&'a [u8]);
-        impl<'a> R<'a> {
-            fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-                if self.0.len() < n {
-                    return None;
-                }
-                let (a, b) = self.0.split_at(n);
-                self.0 = b;
-                Some(a)
-            }
-            fn u8(&mut self) -> Option<u8> {
-                Some(self.take(1)?[0])
-            }
-            fn u32(&mut self) -> Option<u32> {
-                Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
-            }
-            fn f32(&mut self) -> Option<f32> {
-                Some(f32::from_le_bytes(self.take(4)?.try_into().ok()?))
-            }
-            fn f64(&mut self) -> Option<f64> {
-                Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?))
-            }
-            fn string(&mut self) -> Option<String> {
-                let n = self.u32()? as usize;
-                if n > 4096 {
-                    return None;
-                }
-                String::from_utf8(self.take(n)?.to_vec()).ok()
-            }
-            fn fixed(&mut self, expect_limbs: usize) -> Option<super::super::escape::fixedpoint::FixedPoint> {
-                let neg = self.u8()? != 0;
-                let n = self.u32()? as usize;
-                if n != expect_limbs || n > 1024 {
-                    return None;
-                }
-                let mut limbs = Vec::with_capacity(n);
-                for _ in 0..n {
-                    limbs.push(u64::from_le_bytes(self.take(8)?.try_into().ok()?));
-                }
-                Some(super::super::escape::fixedpoint::FixedPoint { neg, limbs })
-            }
-        }
         let mut r = R(bytes);
-        if r.take(8)? != super::orbit_store::MAGIC {
-            return None;
-        }
-        let orbit_len = r.u32()? as usize;
-        if orbit_len == 0 || orbit_len > 64_000_000 {
-            return None;
-        }
-        let hint_period = match r.u32()? {
-            0 => None,
-            p => Some(p),
-        };
-        let hint_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
-        let center_re = r.string()?;
-        let center_im = r.string()?;
-        let julia_c = match r.u8()? {
-            0 => None,
-            _ => Some((r.f32()?, r.f32()?)),
-        };
-        let power = r.u32()?;
-        let ship = r.u8()? != 0;
-        let ship_variant = r.u32()?;
-        let map_params = [r.f32()?, r.f32()?];
-        let periodic = match r.u8()? {
-            0 => None,
-            _ => Some(r.u32()?),
-        };
-        let closure_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
-        let ref_offset = [r.f32()?, r.f32()?];
-        let off_zoom = r.f64()?;
-        let off_height = r.f64()?;
-        let n_limbs = r.u32()? as usize;
-        if n_limbs == 0 || n_limbs > 1024 {
-            return None;
-        }
-        let escaped_at = match r.u8()? {
-            0 => None,
-            _ => Some(r.u32()?),
-        };
+        let StoredHeader {
+            orbit_len,
+            hint_period,
+            hint_octave,
+            center_re,
+            center_im,
+            julia_c,
+            power,
+            ship,
+            ship_variant,
+            map_params,
+            periodic,
+            closure_octave,
+            ref_offset,
+            off_zoom_log2: off_zoom,
+            off_height_px: off_height,
+            n_limbs,
+            escaped_at,
+        } = read_header(&mut r)?;
         let mode = r.u8()?;
         if mode == 0 {
             // RAW mode: FFORBIT5-style arrays (the dip-dense case).
@@ -1801,6 +1734,264 @@ pub fn center_delta_px(
 /// so off_px scales by 2^(Δzoom)·(h/off_h). None when the result
 /// leaves f32's useful range — render with a recomputed reference,
 /// never with a garbage offset.
+/// Byte reader for the store format. Module level because the header
+/// parse below is shared: the store reads identity WITHOUT decoding a
+/// ten-million-point body, and one parser for both is the only way the
+/// two cannot drift apart.
+#[cfg(not(target_arch = "wasm32"))]
+struct R<'a>(&'a [u8]);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<'a> R<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        if self.0.len() < n {
+            return None;
+        }
+        let (a, b) = self.0.split_at(n);
+        self.0 = b;
+        Some(a)
+    }
+    fn u8(&mut self) -> Option<u8> {
+        Some(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> Option<u32> {
+        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+    }
+    fn f32(&mut self) -> Option<f32> {
+        Some(f32::from_le_bytes(self.take(4)?.try_into().ok()?))
+    }
+    fn f64(&mut self) -> Option<f64> {
+        Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn string(&mut self) -> Option<String> {
+        let n = self.u32()? as usize;
+        if n > MAX_CENTER_CHARS {
+            return None;
+        }
+        String::from_utf8(self.take(n)?.to_vec()).ok()
+    }
+    fn fixed(&mut self, expect_limbs: usize) -> Option<FixedPoint> {
+        let neg = self.u8()? != 0;
+        let n = self.u32()? as usize;
+        if n != expect_limbs || n > 1024 {
+            return None;
+        }
+        let mut limbs = Vec::with_capacity(n);
+        for _ in 0..n {
+            limbs.push(u64::from_le_bytes(self.take(8)?.try_into().ok()?));
+        }
+        Some(FixedPoint { neg, limbs })
+    }
+}
+
+/// Longest center string the format accepts.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_CENTER_CHARS: usize = 4096;
+
+/// Everything a stored orbit records BEFORE its arrays: identity,
+/// period hints, and the relocation provenance.
+///
+/// Split out so the store can read a file's identity for the price of
+/// a few kilobytes — decoding the body of a ten-million-point orbit
+/// costs the better part of a second, which is far too much to spend
+/// on a candidate that turns out to be the wrong location.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct StoredHeader {
+    pub orbit_len: usize,
+    pub hint_period: Option<u32>,
+    pub hint_octave: i64,
+    pub center_re: String,
+    pub center_im: String,
+    pub julia_c: Option<(f32, f32)>,
+    pub power: u32,
+    pub ship: bool,
+    pub ship_variant: u32,
+    pub map_params: [f32; 2],
+    pub periodic: Option<u32>,
+    pub closure_octave: i64,
+    pub ref_offset: [f32; 2],
+    pub off_zoom_log2: f64,
+    pub off_height_px: f64,
+    pub n_limbs: usize,
+    pub escaped_at: Option<u32>,
+}
+
+/// Largest a [`StoredHeader`] can serialize to: the fixed fields plus
+/// two maximum-length center strings. Reading this many bytes off the
+/// front of a file is enough to parse any header the writer can
+/// produce, which `a_header_probe_reads_enough` pins down.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_HEADER_BYTES: usize = 128 + 2 * (4 + MAX_CENTER_CHARS);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_header(r: &mut R) -> Option<StoredHeader> {
+    if r.take(8)? != super::orbit_store::MAGIC {
+        return None;
+    }
+    let orbit_len = r.u32()? as usize;
+    if orbit_len == 0 || orbit_len > 64_000_000 {
+        return None;
+    }
+    let hint_period = match r.u32()? {
+        0 => None,
+        p => Some(p),
+    };
+    let hint_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
+    let center_re = r.string()?;
+    let center_im = r.string()?;
+    let julia_c = match r.u8()? {
+        0 => None,
+        _ => Some((r.f32()?, r.f32()?)),
+    };
+    let power = r.u32()?;
+    let ship = r.u8()? != 0;
+    let ship_variant = r.u32()?;
+    let map_params = [r.f32()?, r.f32()?];
+    let periodic = match r.u8()? {
+        0 => None,
+        _ => Some(r.u32()?),
+    };
+    let closure_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
+    let ref_offset = [r.f32()?, r.f32()?];
+    let off_zoom_log2 = r.f64()?;
+    let off_height_px = r.f64()?;
+    let n_limbs = r.u32()? as usize;
+    if n_limbs == 0 || n_limbs > 1024 {
+        return None;
+    }
+    let escaped_at = match r.u8()? {
+        0 => None,
+        _ => Some(r.u32()?),
+    };
+    Some(StoredHeader {
+        orbit_len,
+        hint_period,
+        hint_octave,
+        center_re,
+        center_im,
+        julia_c,
+        power,
+        ship,
+        ship_variant,
+        map_params,
+        periodic,
+        closure_octave,
+        ref_offset,
+        off_zoom_log2,
+        off_height_px,
+        n_limbs,
+        escaped_at,
+    })
+}
+
+/// Parse just the identity prefix of a stored orbit.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn header_from_bytes(bytes: &[u8]) -> Option<StoredHeader> {
+    read_header(&mut R(bytes))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StoredHeader {
+    /// The same shape test as [`ReferenceOrbit::serves_shape`], on
+    /// header data alone.
+    pub(crate) fn serves_shape(
+        &self,
+        n_limbs: usize,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+    ) -> bool {
+        self.n_limbs >= n_limbs
+            && self.julia_c == julia_c
+            && self.power == power.max(2)
+            && self.ship == ship
+            && self.ship_variant == if ship { ship_variant.min(5) } else { ship_variant }
+            && self.map_params == map_params
+    }
+
+    /// Estimated relocation offset, in pixels of the requested view,
+    /// if this stored orbit were relocated to `center`.
+    ///
+    /// The stored file records its center and the offset from its
+    /// REFERENCE to that center, so the reference is reachable without
+    /// the body: offset(reference → new center) = offset(reference →
+    /// stored center), rescaled to the new view, plus the step from
+    /// the stored center to the new one. Only an estimate because
+    /// `ref_offset` is stored as f32 while
+    /// [`ReferenceOrbit::relocate_to`] works from the exact
+    /// fixed-point reference — which is why this ranks candidates and
+    /// `relocate_to` still makes the decision.
+    pub(crate) fn offset_estimate_px(
+        &self,
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        height_px: f64,
+    ) -> Option<[f64; 2]> {
+        let step = center_offset_px(
+            &self.center_re,
+            &self.center_im,
+            center_re,
+            center_im,
+            self.n_limbs,
+            zoom_log2,
+            height_px,
+        )?;
+        let carried = rescale_offset(
+            self.ref_offset,
+            self.off_zoom_log2,
+            self.off_height_px,
+            zoom_log2,
+            height_px,
+        )?;
+        Some([carried[0] as f64 + step[0], carried[1] as f64 + step[1]])
+    }
+}
+
+/// A fixed-point magnitude in pixels of a view: pixel spacing is
+/// S = 2^(2−zoom)/height, so dividing by it is multiplying by
+/// height·2^(zoom−2).
+///
+/// Shared by [`ReferenceOrbit::relocate_to`] and the store's candidate
+/// ranking so the two measure relocation distance the same way.
+fn fixed_to_px(d: &FixedPoint, zoom_log2: f64, height_px: f64) -> f64 {
+    let fe = d.to_floatexp();
+    let e = fe.e as f64 + (zoom_log2 - 2.0) + height_px.max(1.0).log2();
+    if fe.m == 0.0 || e < -60.0 {
+        0.0
+    } else {
+        fe.m * 2f64.powf(e.min(40.0))
+    }
+}
+
+/// The step from one center to another, in pixels of the given view.
+/// None if either center is unparseable at `n_limbs`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn center_offset_px(
+    from_re: &str,
+    from_im: &str,
+    to_re: &str,
+    to_im: &str,
+    n_limbs: usize,
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<[f64; 2]> {
+    let (fr, fi) = (
+        FixedPoint::from_decimal(from_re, n_limbs)?,
+        FixedPoint::from_decimal(from_im, n_limbs)?,
+    );
+    let (tr, ti) = (
+        FixedPoint::from_decimal(to_re, n_limbs)?,
+        FixedPoint::from_decimal(to_im, n_limbs)?,
+    );
+    Some([
+        fixed_to_px(&tr.sub(&fr), zoom_log2, height_px),
+        fixed_to_px(&ti.sub(&fi), zoom_log2, height_px),
+    ])
+}
+
 pub fn rescale_offset(
     off: [f32; 2],
     off_zoom: f64,
@@ -2573,7 +2764,7 @@ impl OrbitCache {
         // Persist anything worth keeping (cost-gated; rewrites only
         // when deeper than what the store already holds).
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(o) = self.slot.as_ref() {
+        if let Some(o) = self.slot.as_mut() {
             super::orbit_store::maybe_save(o);
         }
         self.slot.as_ref()
@@ -3074,6 +3265,62 @@ mod tests {
         for (i, (x, y)) in a.orbit.iter().zip(b.orbit.iter()).enumerate() {
             assert_eq!(x, y, "diverged at iteration {i}");
         }
+    }
+
+    /// END TO END: a deep dive followed by a pan must leave ONE
+    /// cached orbit, not one per view center.
+    ///
+    /// The store-level test pins the same rule, but this one drives
+    /// the path the app actually uses — `OrbitCache::get`, which
+    /// relocates its in-memory orbit and then persists it — because
+    /// that is where the reported behaviour came from: a single dive
+    /// left 24 files of 2.8 MB, all the same 10.1M-iteration orbit at
+    /// centers a few pixels apart, having evicted every other
+    /// location the user had cached.
+    #[test]
+    fn a_pan_at_depth_leaves_one_cached_orbit() {
+        let dir = super::super::orbit_store::test_store_dir().expect("test store dir");
+        // This test owns the shared per-process test store.
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let _ = std::fs::remove_file(e.path());
+        }
+        let count = || {
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "orbit"))
+                .count()
+        };
+
+        let mut cache = OrbitCache::default();
+        cache.height_px = 512.0;
+        // Deep enough that the orbit is worth storing at all.
+        let got = cache
+            .get("-0.5", "0.1", 2000.0, 3000, None, 2, false, 0, [0.0, 0.0])
+            .expect("orbit");
+        let len = got.len();
+        assert_eq!(count(), 1, "the dive itself must store exactly one orbit");
+
+        // Now pan: a run of centers a fraction of a pixel apart, as a
+        // drag produces at this depth.
+        for d in 0..12 {
+            let c = format!("-0.5{}1", "0".repeat(600 + d));
+            let o = cache
+                .get(&c, "0.1", 2000.0, 3000, None, 2, false, 0, [0.0, 0.0])
+                .expect("orbit");
+            assert_eq!(
+                o.len(),
+                len,
+                "the pan rebuilt the orbit instead of relocating it"
+            );
+        }
+        assert_eq!(
+            count(),
+            1,
+            "a 12-step pan left {} cached orbits — every view center is \
+             rewriting the store",
+            count()
+        );
     }
 
     #[test]
