@@ -1389,22 +1389,30 @@ impl EscapeRenderer {
         // (2^-183 and below) that f32 flushes to zero, which is what
         // made those steps un-skippable.
         let cap = orbit_len_eff as usize;
+        // Parallel on native: this runs holding the worker's progress
+        // lock, so at 10M entries a serial conversion also stalled
+        // the orbit worker's next publish.
         let with_exp = |hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]| -> Vec<[f64; 2]> {
-            hi.iter()
-                .take(cap)
-                .enumerate()
-                .map(|(i, z)| {
-                    let l = lo.get(i).copied().unwrap_or([0.0, 0.0]);
-                    let scale = match e.get(i).copied().unwrap_or(0) {
-                        0 => 1.0,
-                        k => (k as f64).exp2(),
-                    };
-                    [
-                        (z[0] as f64 + l[0] as f64) * scale,
-                        (z[1] as f64 + l[1] as f64) * scale,
-                    ]
-                })
-                .collect()
+            let n = hi.len().min(cap);
+            let one = |i: usize| -> [f64; 2] {
+                let z = hi[i];
+                let l = lo.get(i).copied().unwrap_or([0.0, 0.0]);
+                let scale = match e.get(i).copied().unwrap_or(0) {
+                    0 => 1.0,
+                    k => (k as f64).exp2(),
+                };
+                [
+                    (z[0] as f64 + l[0] as f64) * scale,
+                    (z[1] as f64 + l[1] as f64) * scale,
+                ]
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                (0..n).into_par_iter().map(one).collect()
+            }
+            #[cfg(target_arch = "wasm32")]
+            (0..n).map(one).collect()
         };
         #[cfg(not(target_arch = "wasm32"))]
         let orbit_data: Option<Vec<[f64; 2]>> = if progressive {
@@ -1490,36 +1498,54 @@ impl EscapeRenderer {
             self.bla_built = None;
             return false;
         }
-        let mut bytes = Vec::with_capacity(144 + total * 32);
+        let mut bytes = vec![0u8; 144 + total * 32];
         let mut offsets = [0u32; 32];
         let mut acc = 0u32;
         for (l, lev) in table.levels[..n_levels].iter().enumerate() {
             offsets[l] = acc;
             acc += lev.len() as u32;
         }
-        for o in offsets {
-            bytes.extend_from_slice(&o.to_le_bytes());
+        for (l, o) in offsets.iter().enumerate() {
+            bytes[l * 4..l * 4 + 4].copy_from_slice(&o.to_le_bytes());
         }
-        bytes.extend_from_slice(&(n_levels as u32).to_le_bytes());
-        bytes.extend_from_slice(&((prefix - 1) as u32).to_le_bytes());
-        bytes.extend_from_slice(&[0u8; 8]);
+        bytes[128..132].copy_from_slice(&(n_levels as u32).to_le_bytes());
+        bytes[132..136].copy_from_slice(&((prefix - 1) as u32).to_le_bytes());
+        // [136..144] stays zero (padding).
         let clamp_e = |e: i64| -> i32 { e.clamp(-1_000_000_000, 1_000_000_000) as i32 };
+        let pack_one = |ent: &super::bla::BlaEntry, dst: &mut [u8]| {
+            dst[0..4].copy_from_slice(&(ent.a.re as f32).to_le_bytes());
+            dst[4..8].copy_from_slice(&(ent.a.im as f32).to_le_bytes());
+            dst[8..12].copy_from_slice(&(ent.b.re as f32).to_le_bytes());
+            dst[12..16].copy_from_slice(&(ent.b.im as f32).to_le_bytes());
+            dst[16..20].copy_from_slice(&clamp_e(ent.a.e).to_le_bytes());
+            dst[20..24].copy_from_slice(&clamp_e(ent.b.e).to_le_bytes());
+            let (rm, re) = if ent.r.m > 0.0 {
+                (ent.r.m as f32, clamp_e(ent.r.e))
+            } else {
+                (0.0f32, 0)
+            };
+            dst[24..28].copy_from_slice(&rm.to_le_bytes());
+            dst[28..32].copy_from_slice(&re.to_le_bytes());
+        };
+        // Entries pack into fixed 32-byte slots — independent, so the
+        // ~320 MB table for a 10M orbit packs across threads instead
+        // of stalling the render thread (identical bytes either way).
+        let mut base = 144usize;
         for lev in &table.levels[..n_levels] {
-            for ent in lev {
-                bytes.extend_from_slice(&(ent.a.re as f32).to_le_bytes());
-                bytes.extend_from_slice(&(ent.a.im as f32).to_le_bytes());
-                bytes.extend_from_slice(&(ent.b.re as f32).to_le_bytes());
-                bytes.extend_from_slice(&(ent.b.im as f32).to_le_bytes());
-                bytes.extend_from_slice(&clamp_e(ent.a.e).to_le_bytes());
-                bytes.extend_from_slice(&clamp_e(ent.b.e).to_le_bytes());
-                let (rm, re) = if ent.r.m > 0.0 {
-                    (ent.r.m as f32, clamp_e(ent.r.e))
-                } else {
-                    (0.0f32, 0)
-                };
-                bytes.extend_from_slice(&rm.to_le_bytes());
-                bytes.extend_from_slice(&re.to_le_bytes());
+            let region = &mut bytes[base..base + lev.len() * 32];
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                region
+                    .par_chunks_exact_mut(32)
+                    .zip(lev.par_iter())
+                    .for_each(|(dst, ent)| pack_one(ent, dst));
             }
+            #[cfg(target_arch = "wasm32")]
+            for (dst, ent) in region.chunks_exact_mut(32).zip(lev.iter()) {
+                pack_one(ent, dst);
+            }
+            base += lev.len() * 32;
         }
         let size = bytes.len() as u64;
         let recreate = match &self.bla_buffer {
