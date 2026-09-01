@@ -162,6 +162,17 @@ pub struct EscapeParamDef {
     pub min: f32,
     pub max: f32,
     pub tooltip: &'static str,
+    /// Labels for a DISCRETE parameter, in index order; empty for a
+    /// continuous one.
+    ///
+    /// The stored value is unchanged — still the same `f32` index the
+    /// shader reads, still `min..max` — so this is presentation only.
+    /// What it fixes is that a set of named alternatives (Burning Ship
+    /// vs Celtic vs Buffalo; point vs cross vs circle) was being
+    /// offered as a continuum, where the user could land on 2.4 and
+    /// get variant 2 with no way to tell which choices existed short
+    /// of reading the tooltip.
+    pub choices: &'static [&'static str],
 }
 
 /// One named starting point for a formula.
@@ -504,6 +515,63 @@ mod tests {
         let esc = crate::config::escape::EscapeConfig::default();
         assert!(FORMULAS.iter().any(|f| f.name == esc.formula));
         assert!(COLORINGS.iter().any(|c| c.name == esc.coloring));
+    }
+
+    /// A discrete parameter's labels must cover its range EXACTLY.
+    ///
+    /// The labels are UI-side but the range is what the shader clamps
+    /// against, so the two can drift apart silently: add a sixth
+    /// Burning Ship variant to the WGSL and bump `max`, forget the
+    /// label, and the dropdown quietly cannot reach it. Requiring
+    /// `max == choices.len() - 1` makes that a build failure instead.
+    #[test]
+    fn discrete_params_are_labelled_across_their_whole_range() {
+        let mut checked = 0;
+        let mut params: Vec<(&str, &EscapeParamDef)> = Vec::new();
+        for f in FORMULAS {
+            params.extend(f.parameters.iter().map(|p| (f.name, p)));
+        }
+        for c in COLORINGS {
+            params.extend(c.parameters.iter().map(|p| (c.name, p)));
+        }
+        for f in fields::FIELDS {
+            params.extend(f.parameters.iter().map(|p| (f.name, p)));
+        }
+        for c in fields::FIELD_COLORINGS {
+            params.extend(c.parameters.iter().map(|p| (c.name, p)));
+        }
+        for (owner, p) in params {
+            if p.choices.is_empty() {
+                continue;
+            }
+            checked += 1;
+            assert_eq!(
+                p.min, 0.0,
+                "{owner}.{}: a choice list indexes from 0, so min must be 0",
+                p.name
+            );
+            assert_eq!(
+                p.max,
+                (p.choices.len() - 1) as f32,
+                "{owner}.{}: {} labels but the range runs to {} — the dropdown and the \
+                 shader's clamp disagree",
+                p.name,
+                p.choices.len(),
+                p.max
+            );
+            assert!(
+                p.default >= 0.0 && p.default <= p.max && p.default.fract() == 0.0,
+                "{owner}.{}: default {} is not one of the choices",
+                p.name,
+                p.default
+            );
+            assert!(
+                p.choices.iter().all(|c| !c.trim().is_empty()),
+                "{owner}.{}: a blank choice label",
+                p.name
+            );
+        }
+        assert!(checked >= 15, "expected the known discrete params, found {checked}");
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub static MULTIBROT: FormulaDef = FormulaDef {
         min: 2.0,
         max: 12.0,
         tooltip: "Exponent p in z^p + c. 2 is the Mandelbrot set; higher powers grow more lobes.",
+        choices: &[],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -90,6 +91,7 @@ pub static TRICORN: FormulaDef = FormulaDef {
         min: 2.0,
         max: 12.0,
         tooltip: "Exponent p in conj(z)^p + c. 2 is the Tricorn; higher powers are the multicorns.",
+        choices: &[],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -139,6 +141,7 @@ pub static BURNING_SHIP: FormulaDef = FormulaDef {
         min: 0.0,
         max: 5.0,
         tooltip: "0 Burning Ship, 1 Perpendicular Mandelbrot, 2 Perpendicular Ship, 3 Celtic, 4 Buffalo, 5 Perpendicular Celtic.",
+        choices: &["Burning Ship", "Perpendicular Mandelbrot", "Perpendicular Ship", "Celtic", "Buffalo", "Perpendicular Celtic"],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -207,6 +210,7 @@ pub static MCMULLEN: FormulaDef = FormulaDef {
             min: 2.0,
             max: 8.0,
             tooltip: "Power of the polynomial term z^n.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "m",
@@ -215,6 +219,7 @@ pub static MCMULLEN: FormulaDef = FormulaDef {
             min: 1.0,
             max: 8.0,
             tooltip: "Power of the pole term c / z^m. n=2, m=3 is the classic Sierpinski-carpet family.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -268,6 +273,7 @@ pub static KALISET: FormulaDef = FormulaDef {
         min: 0.0,
         max: 1.0,
         tooltip: "0: z <- |z|/<z,z> - c (classic). 1: the + c branch.",
+        choices: &["Subtract c (classic)", "Add c"],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -306,6 +312,7 @@ pub static PHOENIX: FormulaDef = FormulaDef {
             min: -2.0,
             max: 2.0,
             tooltip: "Real part of the previous-iterate coefficient. The classic Phoenix Julia uses c = 0.5667, p = -0.5.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "p_im",
@@ -314,6 +321,7 @@ pub static PHOENIX: FormulaDef = FormulaDef {
             min: -2.0,
             max: 2.0,
             tooltip: "Imaginary part of the previous-iterate coefficient.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -428,6 +436,7 @@ pub static BARNSLEY: FormulaDef = FormulaDef {
         min: 0.0,
         max: 2.0,
         tooltip: "0: M1 (fold on Re z), 1: M2 (fold on a bilinear test), 2: M3 (quadratic with conditional c term).",
+        choices: &["M1 (fold on Re z)", "M2 (bilinear test)", "M3 (quadratic)"],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -564,6 +573,7 @@ pub static TRIG: FormulaDef = FormulaDef {
         min: 0.0,
         max: 1.0,
         tooltip: "0: sin z + c, 1: cos z + c.",
+        choices: &["sin z + c", "cos z + c"],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -715,6 +725,7 @@ pub static ORIGAMI: FormulaDef = FormulaDef {
             max: 512.0,
             tooltip: "Chooses the random fold arrangement. Every value is a \
                       different folding; scrub it to explore the family.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "spread",
@@ -725,6 +736,7 @@ pub static ORIGAMI: FormulaDef = FormulaDef {
             tooltip: "Half-size of the square the fold endpoints are drawn \
                       from, before being folded onto the wad. 2.0 matches the \
                       default view.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -879,6 +891,7 @@ pub static LATTES: FormulaDef = FormulaDef {
                       2: (z^3+a)/(a z^3+1). All three are ergodic on the sphere, so \
                       keep the iteration count LOW (around 5) -- the structure is in \
                       the transient and long orbits average it away.",
+            choices: &["(z^2-a)^2 / 4z(z-1)(z-a)", "(z + 1/z)/2i", "(z^3+a)/(a z^3+1)"],
         },
         EscapeParamDef {
             name: "a_re",
@@ -889,6 +902,7 @@ pub static LATTES: FormulaDef = FormulaDef {
             tooltip: "The map's modulus. Variant 2 is a Lattès map at the cube root of \
                       unity exp(2*pi*i/3) = -0.5 + 0.866i, which is the default; variant \
                       0 is one for any a outside {0, 1}.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "a_im",
@@ -897,6 +911,7 @@ pub static LATTES: FormulaDef = FormulaDef {
             min: -4.0,
             max: 4.0,
             tooltip: "Imaginary part of the modulus.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -983,6 +998,7 @@ pub static DUCKS: FormulaDef = FormulaDef {
         max: 4.0,
         tooltip: "0 classic log(f+c); 1 log(sin(f+c)); 2 log(f+c - sec(f+c)); \
                   3 log(sin(f)+c); 4 log((f+c)^2). Softology's variation set.",
+        choices: &["log(f+c)", "log(sin(f+c))", "log(f+c - sec(f+c))", "log(sin(f)+c)", "log((f+c)^2)"],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -1095,6 +1111,7 @@ pub static FEATHER: FormulaDef = FormulaDef {
         min: 2.0,
         max: 8.0,
         tooltip: "Exponent p in the numerator z^p. The classic feather uses 3.",
+        choices: &[],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -1146,6 +1163,7 @@ pub static NEWTON: FormulaDef = FormulaDef {
             min: 2.0,
             max: 12.0,
             tooltip: "Roots of z^p - 1: p basins of attraction.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "scheme",
@@ -1154,6 +1172,7 @@ pub static NEWTON: FormulaDef = FormulaDef {
             min: 0.0,
             max: 2.0,
             tooltip: "0: Newton, 1: Halley, 2: Chebyshev.",
+            choices: &["Newton", "Halley", "Chebyshev"],
         },
         EscapeParamDef {
             name: "relax_re",
@@ -1162,6 +1181,7 @@ pub static NEWTON: FormulaDef = FormulaDef {
             min: -3.0,
             max: 3.0,
             tooltip: "Complex relaxation R multiplying the step. 1+0i is the plain scheme; the interesting galleries live away from it.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "relax_im",
@@ -1170,6 +1190,7 @@ pub static NEWTON: FormulaDef = FormulaDef {
             min: -3.0,
             max: 3.0,
             tooltip: "Imaginary part of the relaxation.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "func",
@@ -1178,6 +1199,7 @@ pub static NEWTON: FormulaDef = FormulaDef {
             min: 0.0,
             max: 5.0,
             tooltip: "Which f(z) to find the roots of. 0: z^p - 1 (roots of unity), 1: z^3 - 2z + 2 (Newton's classic failure case), 2: z^8 + 15z^4 - 16, 3: sin z - 1, 4: cosh z - 1, 5: z^p sin z - 1. Only 0 has roots evenly spaced on a circle - for the others set the coloring's Basin Key to General.",
+            choices: &["z^p - 1", "z^3 - 2z + 2", "z^8 + 15z^4 - 16", "sin z - 1", "cosh z - 1", "z^p sin z - 1"],
         },
     ],
     wgsl: r#"
@@ -1303,6 +1325,7 @@ pub static NOVA: FormulaDef = FormulaDef {
             min: 2.0,
             max: 12.0,
             tooltip: "Power of the underlying z^p - 1.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "relax_re",
@@ -1311,6 +1334,7 @@ pub static NOVA: FormulaDef = FormulaDef {
             min: -3.0,
             max: 3.0,
             tooltip: "Complex relaxation R multiplying the Newton step.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "relax_im",
@@ -1319,6 +1343,7 @@ pub static NOVA: FormulaDef = FormulaDef {
             min: -3.0,
             max: 3.0,
             tooltip: "Imaginary part of the relaxation.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -1353,6 +1378,7 @@ pub static MAGNET: FormulaDef = FormulaDef {
         min: 0.0,
         max: 1.0,
         tooltip: "0: Magnet I, 1: Magnet II.",
+        choices: &["Magnet I", "Magnet II"],
     }],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -1450,6 +1476,7 @@ pub static LITTLEWOOD: FormulaDef = FormulaDef {
         min: 0.0,
         max: 2.0,
         tooltip: "0: {+1,-1} (Littlewood), 1: {0,+1,-1}, 2: {+1,-1,+i,-i}.",
+        choices: &["{+1,-1} (Littlewood)", "{0,+1,-1}", "{+1,-1,+i,-i}"],
     }],
     wgsl: r#"
 fn littlewood_pick(w: vec2<f32>, ds: u32) -> vec2<f32> {

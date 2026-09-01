@@ -236,10 +236,7 @@ pub fn render_escape_content(
     };
     for p in formula_params {
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
-        let resp = ui
-            .add(egui::Slider::new(&mut v, p.min..=p.max).text(p.display_name))
-            .on_hover_text(p.tooltip);
-        if resp.changed() {
+        if param_control(ui, &mut v, p, "formula") {
             let _ = config_manager.update_param(
                 ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
                 v.into(),
@@ -1020,6 +1017,58 @@ fn param_slider<'a>(
         .logarithmic(decades)
 }
 
+/// One escape parameter's control: a DROPDOWN when the definition
+/// names discrete choices, the slider otherwise. Returns whether the
+/// value changed.
+///
+/// The stored value is identical either way — the choice index, in the
+/// same f32 the shader reads — so this changes presentation only. A
+/// slider over "0: Burning Ship, 1: Perpendicular Mandelbrot, ... 5:
+/// Perpendicular Celtic" let you land on 2.4, which is variant 2 with
+/// no indication that it was not something in its own right, and hid
+/// the roster behind the tooltip.
+///
+/// `salt` separates the formula and coloring sections: both can define
+/// a parameter called `variant`, and two combo boxes sharing an egui
+/// id would share their popup state.
+fn param_control(
+    ui: &mut egui::Ui,
+    v: &mut f32,
+    p: &'static crate::escape::EscapeParamDef,
+    salt: &str,
+) -> bool {
+    if p.choices.is_empty() {
+        return ui.add(param_slider(v, p)).on_hover_text(p.tooltip).changed();
+    }
+    // Round rather than truncate, and clamp: a config written before
+    // the choice list existed (or hand-edited) can hold anything, and
+    // it must land on a real entry rather than panicking the index.
+    let last = p.choices.len() - 1;
+    let mut idx = if v.is_finite() {
+        (v.round().max(0.0) as usize).min(last)
+    } else {
+        0
+    };
+    let before = idx;
+    ui.horizontal(|ui| {
+        ui.label(p.display_name);
+        egui::ComboBox::from_id_salt((salt, p.name))
+            .selected_text(p.choices[idx])
+            .show_ui(ui, |ui| {
+                for (i, c) in p.choices.iter().enumerate() {
+                    ui.selectable_value(&mut idx, i, *c);
+                }
+            })
+            .response
+            .on_hover_text(p.tooltip);
+    });
+    if idx != before {
+        *v = idx as f32;
+        return true;
+    }
+    false
+}
+
 fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     match coloring {
         "smooth" | "escape_count" | "period" => {
@@ -1097,10 +1146,7 @@ fn show_coloring_section(
         }
         for p in coloring.parameters {
             let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-            let resp = ui
-                .add(param_slider(&mut v, p))
-                .on_hover_text(p.tooltip);
-            if resp.changed() {
+            if param_control(ui, &mut v, p, "coloring") {
                 let _ = config_manager.update_param(
                     ConfigPath::EscapeColoringParam { param: p.name.to_string() },
                     v.into(),
@@ -1217,10 +1263,7 @@ fn show_coloring_section(
     }
     for p in coloring.parameters {
         let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-        let resp = ui
-            .add(param_slider(&mut v, p))
-            .on_hover_text(p.tooltip);
-        if resp.changed() {
+        if param_control(ui, &mut v, p, "coloring") {
             let _ = config_manager.update_param(
                 ConfigPath::EscapeColoringParam { param: p.name.to_string() },
                 v.into(),

@@ -89,6 +89,7 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
             max: 0.95,
             tooltip: "Per-octave amplitude factor a. Roughness rises toward 1 \
                       (the sum stays convergent below 1).",
+            choices: &[],
         },
         EscapeParamDef {
             name: "b",
@@ -98,6 +99,7 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
             max: 8.0,
             tooltip: "Per-octave frequency factor b (the lacunary sequence bⁿ). \
                       Classic Weierstrass needs ab ≥ 1 for nowhere-differentiability.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "generator",
@@ -106,6 +108,7 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
             min: 0.0,
             max: 2.0,
             tooltip: "0 = cosine, 1 = sine, 2 = triangle wave (Takagi/blancmange).",
+            choices: &["Cosine", "Sine", "Triangle (Takagi)"],
         },
         EscapeParamDef {
             name: "phase",
@@ -114,6 +117,7 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
             min: 0.0,
             max: 6.28318,
             tooltip: "Phase offset added inside every octave's generator.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -193,6 +197,7 @@ pub static MARKUS_LYAPUNOV: FieldDef = FieldDef {
             tooltip: "The A/B forcing sequence as a bit pattern (bit n of the \
                       integer: 0 = A, 1 = B), read LSB-first over the sequence \
                       length. 2 with length 2 = the classic \"AB\".",
+            choices: &[],
         },
         EscapeParamDef {
             name: "seq_len",
@@ -201,6 +206,7 @@ pub static MARKUS_LYAPUNOV: FieldDef = FieldDef {
             min: 1.0,
             max: 10.0,
             tooltip: "How many bits of the pattern form the repeating sequence.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "warmup",
@@ -210,6 +216,7 @@ pub static MARKUS_LYAPUNOV: FieldDef = FieldDef {
             max: 500.0,
             tooltip: "Transient iterations discarded before the exponent \
                       accumulates (lets the orbit settle onto its attractor).",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -266,6 +273,7 @@ pub static STANDARD_MAP_FTLE: FieldDef = FieldDef {
         max: 10.0,
         tooltip: "Chirikov K. Islands dominate below ~0.97; the chaotic sea \
                   takes over above it.",
+        choices: &[],
     }],
     wgsl: r#"
 fn field_init(p: vec2<f32>) -> FieldState {
@@ -323,6 +331,7 @@ pub static FIELD_VALUE: FieldColoringDef = FieldColoringDef {
             min: 0.01,
             max: 20.0,
             tooltip: "Palette cycles per unit of field value.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "offset",
@@ -331,6 +340,7 @@ pub static FIELD_VALUE: FieldColoringDef = FieldColoringDef {
             min: 0.0,
             max: 1.0,
             tooltip: "Palette phase offset.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -354,6 +364,7 @@ pub static FIELD_DIVERGING: FieldColoringDef = FieldColoringDef {
         max: 100.0,
         tooltip: "Sensitivity: how fast the field value saturates toward the \
                   palette's ends.",
+        choices: &[],
     }],
     wgsl: r#"
 fn field_color(sum: f32, grad: vec2<f32>, n_terms: u32) -> FieldShade {
@@ -380,6 +391,7 @@ pub static FIELD_HILLSHADE: FieldColoringDef = FieldColoringDef {
             max: 360.0,
             tooltip: "Light direction, degrees clockwise from north (the \
                       cartography convention; 315 = upper-left).",
+            choices: &[],
         },
         EscapeParamDef {
             name: "elevation",
@@ -388,6 +400,7 @@ pub static FIELD_HILLSHADE: FieldColoringDef = FieldColoringDef {
             min: 5.0,
             max: 90.0,
             tooltip: "Light height above the horizon, degrees.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "relief",
@@ -396,6 +409,7 @@ pub static FIELD_HILLSHADE: FieldColoringDef = FieldColoringDef {
             min: 0.01,
             max: 20.0,
             tooltip: "Vertical exaggeration of the surface before lighting.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "scale",
@@ -404,6 +418,7 @@ pub static FIELD_HILLSHADE: FieldColoringDef = FieldColoringDef {
             min: 0.01,
             max: 20.0,
             tooltip: "Palette cycles per unit of field value.",
+            choices: &[],
         },
     ],
     wgsl: r#"
