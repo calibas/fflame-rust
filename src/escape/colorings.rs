@@ -20,6 +20,7 @@ pub static ESCAPE_COUNT: ColoringDef = ColoringDef {
         min: 0.000001,
         max: 1.0,
         tooltip: "Palette distance per iteration band. Smaller = broader bands. Deep views need very small values -- the slider reaches 1e-6.",
+        choices: &[],
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -44,6 +45,7 @@ pub static SMOOTH: ColoringDef = ColoringDef {
         min: 0.000001,
         max: 1.0,
         tooltip: "Palette distance per iteration. Smaller = broader gradient. Deep views need very small values -- the slider reaches 1e-6.",
+        choices: &[],
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -82,6 +84,7 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
             max: 3.0,
             tooltip: "0: point at origin, 1: coordinate axes (cross), 2: unit circle, \
                       3: logarithmic spiral (golden by default).",
+            choices: &["Point at origin", "Cross (axes)", "Unit circle", "Logarithmic spiral"],
         },
         EscapeParamDef {
             name: "scale",
@@ -90,6 +93,7 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
             min: 0.01,
             max: 20.0,
             tooltip: "Palette distance per unit of trap distance.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "growth",
@@ -101,6 +105,7 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
                       QUARTER turn. The default is the golden ratio, which makes \
                       it the golden spiral; 2 gives a doubling-per-quarter-turn \
                       spiral, and values near 1 wind tightly.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -166,6 +171,7 @@ pub static ORBIT_AVERAGE: ColoringDef = ColoringDef {
         min: 0.01,
         max: 20.0,
         tooltip: "Palette distance per unit of averaged trap value.",
+        choices: &[],
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -197,6 +203,7 @@ pub static STRIPE_AVERAGE: ColoringDef = ColoringDef {
             min: 0.5,
             max: 32.0,
             tooltip: "Angular frequency of the stripes (sin(density * arg z)).",
+            choices: &[],
         },
         EscapeParamDef {
             name: "scale",
@@ -205,6 +212,7 @@ pub static STRIPE_AVERAGE: ColoringDef = ColoringDef {
             min: 0.01,
             max: 20.0,
             tooltip: "Palette distance per unit of averaged stripe value.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -246,6 +254,7 @@ pub static MAGNITUDE_AVERAGE: ColoringDef = ColoringDef {
             min: 0.01,
             max: 100.0,
             tooltip: "Palette distance per unit of averaged |z| (above the offset).",
+            choices: &[],
         },
         EscapeParamDef {
             name: "offset",
@@ -254,6 +263,7 @@ pub static MAGNITUDE_AVERAGE: ColoringDef = ColoringDef {
             min: -10.0,
             max: 10.0,
             tooltip: "Baseline subtracted from the mean before scaling. A Ducks                       julia field can span only ~0.2 around a large mean -- offset                       to the field's floor, then scale up, to stretch that range                       across the palette (the reference images normalize contrast                       this way).",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -286,6 +296,7 @@ pub static ROOT_BASIN: ColoringDef = ColoringDef {
             min: 2.0,
             max: 12.0,
             tooltip: "Number of basins to bucket the final angle into - match the formula's power.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "speed",
@@ -294,6 +305,7 @@ pub static ROOT_BASIN: ColoringDef = ColoringDef {
             min: 0.0,
             max: 0.2,
             tooltip: "Palette offset per iteration of convergence time, shading within each basin.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "key",
@@ -302,6 +314,7 @@ pub static ROOT_BASIN: ColoringDef = ColoringDef {
             min: 0.0,
             max: 1.0,
             tooltip: "0: Angle buckets - the true basin index, but only when the roots are evenly spaced on a circle (z^p - 1). 1: General - folds in log|z| so roots that share an angle still separate; use it for every other function.",
+            choices: &["Angle buckets", "General"],
         },
         EscapeParamDef {
             name: "key_scale",
@@ -310,6 +323,7 @@ pub static ROOT_BASIN: ColoringDef = ColoringDef {
             min: -2.0,
             max: 2.0,
             tooltip: "How strongly the General key weighs log|z| against the angle. Tune until neighbouring basins stop sharing a colour.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -378,6 +392,7 @@ pub static TRIANGLE_INEQUALITY: ColoringDef = ColoringDef {
         min: 0.01,
         max: 20.0,
         tooltip: "Palette distance per unit of averaged TIA value.",
+        choices: &[],
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -419,6 +434,7 @@ pub static PERIOD: ColoringDef = ColoringDef {
             min: 0.000001,
             max: 1.0,
             tooltip: "Palette distance per unit of detected cycle length.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "escape_scale",
@@ -427,6 +443,7 @@ pub static PERIOD: ColoringDef = ColoringDef {
             min: 0.0,
             max: 1.0,
             tooltip: "Palette distance per iteration for pixels that escape instead of cycling.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -478,6 +495,7 @@ pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
         min: 0.000001,
         max: 1.0,
         tooltip: "Palette distance per doubling of boundary distance.",
+        choices: &[],
     }],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec2<f32>) -> f32 {
@@ -548,6 +566,7 @@ pub static NORMAL_MAP: ColoringDef = ColoringDef {
             max: 1.0,
             tooltip: "Direction the light comes from, in TURNS (0.125 = 45°), \
                       measured counter-clockwise from the +x axis.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "height",
@@ -558,6 +577,7 @@ pub static NORMAL_MAP: ColoringDef = ColoringDef {
             tooltip: "How high the light sits above the plane. Low values rake \
                       across the surface and exaggerate relief; high values \
                       flatten it toward even illumination.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "scale",
@@ -566,6 +586,7 @@ pub static NORMAL_MAP: ColoringDef = ColoringDef {
             min: 0.01,
             max: 20.0,
             tooltip: "Palette distance per unit of reflection (reflection runs 0..1).",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -677,6 +698,7 @@ pub static POSITION_MAP: ColoringDef = ColoringDef {
             max: 64.0,
             tooltip: "Horizontal frequency of the projected colour source, in \
                       cycles per unit of the folded plane.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "freq_y",
@@ -685,6 +707,7 @@ pub static POSITION_MAP: ColoringDef = ColoringDef {
             min: 0.05,
             max: 64.0,
             tooltip: "Vertical frequency of the projected colour source.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "address_mix",
@@ -696,6 +719,7 @@ pub static POSITION_MAP: ColoringDef = ColoringDef {
                       iterations moved the point) shifts the palette. This is \
                       the channel that keeps detail alive under deep zoom; 0 \
                       is the pure projected source.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -770,6 +794,7 @@ pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
             tooltip: "The sphere point distances are measured to, as a complex number. \
                       The origin and 1 are the usual choices; a point ON the attractor \
                       picks out where the orbit spends its time.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "target_im",
@@ -778,6 +803,7 @@ pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
             min: -8.0,
             max: 8.0,
             tooltip: "Imaginary part of the target point.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "at_infinity",
@@ -788,6 +814,7 @@ pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
             tooltip: "Measure to the sphere's north pole instead: d = 2/sqrt(1+|z|^2). \
                       Infinity is an ordinary point in the chordal metric, so this is a \
                       legitimate target rather than a special case.",
+            choices: &["Origin", "Infinity (north pole)"],
         },
         EscapeParamDef {
             name: "stride",
@@ -797,6 +824,7 @@ pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
             max: 64.0,
             tooltip: "Average over every nth orbit point only, which shows the dynamics \
                       of f^n rather than f. 1 is the plain orbit.",
+            choices: &[],
         },
         EscapeParamDef {
             name: "scale",
@@ -807,6 +835,7 @@ pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
             tooltip: "Palette distance per unit of mean chordal distance. The metric is \
                       bounded by 2, so the whole useful range lands inside one palette \
                       turn at 1.0.",
+            choices: &[],
         },
     ],
     wgsl: r#"
@@ -860,6 +889,7 @@ pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
             max: 1.0,
             tooltip: "0: angle of the average position (carries the fold seams), \
                       1: its distance from the origin.",
+            choices: &["Angle", "Distance"],
         },
         EscapeParamDef {
             name: "scale",
@@ -872,6 +902,7 @@ pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
                       often sweeps only a narrow arc across a given view -- \
                       a twentieth of a turn is typical on Origami -- so \
                       raising this is how the structure becomes visible.",
+            choices: &[],
         },
     ],
     wgsl: r#"
