@@ -27,6 +27,7 @@ pub static MANDELBROT: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
     EscapePreset {
         name: "Seahorse Valley",
@@ -38,6 +39,7 @@ pub static MANDELBROT: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.01)],
+        bailout: None,
     },
     EscapePreset {
         name: "Distance Estimate",
@@ -49,6 +51,7 @@ pub static MANDELBROT: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
     EscapePreset {
         name: "Orbit Trap",
@@ -60,6 +63,7 @@ pub static MANDELBROT: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.8), ("shape", 0.0)],
+        bailout: None,
     },
     EscapePreset {
         name: "Stripe Average",
@@ -71,6 +75,7 @@ pub static MANDELBROT: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("density", 6.0), ("scale", 1.0)],
+        bailout: None,
     },
     EscapePreset {
         name: "Normal Map Relief",
@@ -82,6 +87,7 @@ pub static MANDELBROT: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("angle", 0.125), ("height", 1.5), ("scale", 1.0)],
+        bailout: None,
     },
     EscapePreset {
         name: "Julia Dragon",
@@ -93,6 +99,7 @@ pub static MANDELBROT: &[EscapePreset] = &[
         julia: Some((-0.8, 0.156)),
         formula_params: &[],
         coloring_params: &[("scale", 0.02)],
+        bailout: None,
     },
 ];
 
@@ -107,6 +114,7 @@ pub static MULTIBROT: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("power", 4.0)],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -121,6 +129,7 @@ pub static BURNING_SHIP: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
     EscapePreset {
         name: "Celtic",
@@ -132,6 +141,7 @@ pub static BURNING_SHIP: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("variant", 3.0)],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -146,6 +156,7 @@ pub static TRICORN: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -160,6 +171,7 @@ pub static PHOENIX: &[EscapePreset] = &[
         julia: Some((0.5667, 0.0)),
         formula_params: &[("p_re", -0.5)],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -174,6 +186,7 @@ pub static MANOWAR: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -188,6 +201,7 @@ pub static LAMBDA: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
     EscapePreset {
         name: "Julia, Distance",
@@ -199,6 +213,7 @@ pub static LAMBDA: &[EscapePreset] = &[
         julia: Some((3.0, 0.05)),
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -213,6 +228,7 @@ pub static LAMBDA_SINE: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
     EscapePreset {
         name: "Bouquet",
@@ -224,6 +240,7 @@ pub static LAMBDA_SINE: &[EscapePreset] = &[
         julia: Some((0.5, 0.0)),
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -238,6 +255,7 @@ pub static FEATHER: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -252,6 +270,7 @@ pub static MCMULLEN: &[EscapePreset] = &[
         julia: Some((0.04, 0.0)),
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -266,6 +285,7 @@ pub static MAGNET: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -280,6 +300,7 @@ pub static NEWTON: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("roots", 3.0), ("speed", 0.01)],
+        bailout: None,
     },
     EscapePreset {
         name: "Relaxed",
@@ -291,6 +312,73 @@ pub static NEWTON: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("power", 3.0), ("relax_im", 0.6), ("relax_re", 1.35), ("scheme", 0.0)],
         coloring_params: &[("roots", 3.0), ("speed", 0.01)],
+        bailout: None,
+    },
+    // The function axis. All four carry a large bailout and the
+    // General basin key: their roots are not the evenly spaced roots
+    // of unity the angle buckets assume, and Newton's iterates wander
+    // well past |z| = 2 before settling (z^8 + 15z^4 - 16 has roots
+    // AT |z| = 2, which the default bailout would classify as escapes).
+    EscapePreset {
+        name: "Cubic Trap",
+        center_re: "0",
+        center_im: "0",
+        zoom_log2: 0.0,
+        max_iter: 200,
+        coloring: "root_basin",
+        julia: None,
+        // z^3 - 2z + 2: Newton's classic failure case. The critical
+        // point falls into an attracting 2-cycle, so the region around
+        // it converges to NO root -- it renders as the flat
+        // non-converged colour, which is the whole point of the view.
+        formula_params: &[("func", 1.0), ("scheme", 0.0), ("relax_re", 1.0), ("relax_im", 0.0)],
+        coloring_params: &[("roots", 3.0), ("speed", 0.004), ("key", 1.0), ("key_scale", 0.25)],
+        bailout: Some(1.0e6),
+    },
+    EscapePreset {
+        name: "Octic Star",
+        center_re: "0",
+        center_im: "0",
+        zoom_log2: -1.0,
+        max_iter: 200,
+        coloring: "root_basin",
+        julia: None,
+        // z^8 + 15z^4 - 16: four roots at |z| = 1 (z^4 = 1) and four
+        // at |z| = 2 (z^4 = -16), so the basins form an eight-fold
+        // star in two rings.
+        formula_params: &[("func", 2.0), ("scheme", 0.0), ("relax_re", 1.0), ("relax_im", 0.0)],
+        coloring_params: &[("roots", 8.0), ("speed", 0.004), ("key", 1.0), ("key_scale", 0.25)],
+        bailout: Some(1.0e6),
+    },
+    EscapePreset {
+        name: "Sine Roots",
+        center_re: "1.5707963",
+        center_im: "0",
+        zoom_log2: -1.0,
+        max_iter: 200,
+        coloring: "root_basin",
+        julia: None,
+        // sin z - 1: roots at pi/2 + 2pi k, all ON the real axis, so
+        // the basins repeat horizontally forever instead of ringing an
+        // origin. Centred on the first root.
+        formula_params: &[("func", 3.0), ("scheme", 0.0), ("relax_re", 1.0), ("relax_im", 0.0)],
+        coloring_params: &[("roots", 3.0), ("speed", 0.004), ("key", 1.0), ("key_scale", 0.25)],
+        bailout: Some(1.0e6),
+    },
+    EscapePreset {
+        name: "Halley Cubic",
+        center_re: "0",
+        center_im: "0",
+        zoom_log2: 0.0,
+        max_iter: 200,
+        coloring: "root_basin",
+        julia: None,
+        // The scheme axis on the same trap: Halley's larger basin of
+        // attraction shrinks the non-convergent region that Newton
+        // leaves behind.
+        formula_params: &[("func", 1.0), ("scheme", 1.0), ("relax_re", 1.0), ("relax_im", 0.0)],
+        coloring_params: &[("roots", 3.0), ("speed", 0.004), ("key", 1.0), ("key_scale", 0.25)],
+        bailout: Some(1.0e6),
     },
 ];
 
@@ -305,6 +393,7 @@ pub static NOVA: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
     EscapePreset {
         name: "Sphere Average",
@@ -316,6 +405,7 @@ pub static NOVA: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("power", 4.0)],
         coloring_params: &[("at_infinity", 0.0), ("scale", 3.0), ("stride", 1.0), ("target_im", 0.0), ("target_re", 1.0)],
+        bailout: None,
     },
 ];
 
@@ -330,6 +420,7 @@ pub static NOVARETTI: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.02)],
+        bailout: None,
     },
     EscapePreset {
         name: "Period",
@@ -341,6 +432,7 @@ pub static NOVARETTI: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("escape_scale", 0.01), ("scale", 0.13)],
+        bailout: None,
     },
     EscapePreset {
         name: "Julia Trap",
@@ -352,6 +444,7 @@ pub static NOVARETTI: &[EscapePreset] = &[
         julia: Some((0.3, 0.2)),
         formula_params: &[],
         coloring_params: &[("scale", 2.5), ("shape", 0.0)],
+        bailout: None,
     },
 ];
 
@@ -366,6 +459,7 @@ pub static COLLATZ: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.1)],
+        bailout: None,
     },
 ];
 
@@ -380,6 +474,7 @@ pub static DUCKS: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 2.0)],
+        bailout: None,
     },
     EscapePreset {
         name: "Julia",
@@ -391,6 +486,7 @@ pub static DUCKS: &[EscapePreset] = &[
         julia: Some((0.1, -0.62)),
         formula_params: &[],
         coloring_params: &[("offset", 1.648), ("scale", 11.64)],
+        bailout: None,
     },
     EscapePreset {
         name: "Secant",
@@ -402,6 +498,7 @@ pub static DUCKS: &[EscapePreset] = &[
         julia: Some((0.1, -0.62)),
         formula_params: &[("variant", 2.0)],
         coloring_params: &[("offset", 1.857), ("scale", 5.17)],
+        bailout: None,
     },
 ];
 
@@ -416,6 +513,7 @@ pub static KALISET: &[EscapePreset] = &[
         julia: Some((0.6, 0.4)),
         formula_params: &[],
         coloring_params: &[("scale", 0.5)],
+        bailout: None,
     },
 ];
 
@@ -430,6 +528,7 @@ pub static ORIGAMI: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("seed", 8.0), ("spread", 2.0)],
         coloring_params: &[("address_mix", 1.5), ("freq_x", 5.0), ("freq_y", 1.5)],
+        bailout: None,
     },
     EscapePreset {
         name: "Relief",
@@ -441,6 +540,7 @@ pub static ORIGAMI: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("seed", 8.0), ("spread", 2.0)],
         coloring_params: &[("address_mix", 1.5), ("freq_x", 5.0), ("freq_y", 1.5)],
+        bailout: None,
     },
     EscapePreset {
         name: "Soft Relief",
@@ -452,6 +552,7 @@ pub static ORIGAMI: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("seed", 8.0), ("spread", 2.0)],
         coloring_params: &[("address_mix", 1.5), ("freq_x", 5.0), ("freq_y", 1.5)],
+        bailout: None,
     },
 ];
 
@@ -466,6 +567,7 @@ pub static LATTES: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("a_im", 0.866025), ("a_re", -0.5), ("variant", 0.0)],
         coloring_params: &[("at_infinity", 0.0), ("scale", 2.0), ("stride", 1.0), ("target_im", -0.2), ("target_re", 0.35)],
+        bailout: None,
     },
     EscapePreset {
         name: "Variant 2",
@@ -477,6 +579,7 @@ pub static LATTES: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("a_im", 0.866025), ("a_re", -0.5), ("variant", 2.0)],
         coloring_params: &[("at_infinity", 0.0), ("scale", 2.0), ("stride", 1.0), ("target_im", -0.2), ("target_re", 0.35)],
+        bailout: None,
     },
 ];
 
@@ -491,6 +594,7 @@ pub static BARNSLEY: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("variant", 2.0)],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
     EscapePreset {
         name: "M1 Julia",
@@ -502,6 +606,7 @@ pub static BARNSLEY: &[EscapePreset] = &[
         julia: Some((0.6, 1.1)),
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -516,6 +621,7 @@ pub static CACTUS: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -530,6 +636,7 @@ pub static EXPONENTIAL: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -544,6 +651,7 @@ pub static LITTLEWOOD: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -558,6 +666,7 @@ pub static SPIDER: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.03)],
+        bailout: None,
     },
 ];
 
@@ -572,6 +681,7 @@ pub static TETRATION: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
     EscapePreset {
         name: "Period",
@@ -583,6 +693,7 @@ pub static TETRATION: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("escape_scale", 0.005), ("scale", 0.13)],
+        bailout: None,
     },
 ];
 
@@ -597,6 +708,7 @@ pub static TRIG: &[EscapePreset] = &[
         julia: None,
         formula_params: &[],
         coloring_params: &[("scale", 0.05)],
+        bailout: None,
     },
 ];
 
@@ -611,6 +723,7 @@ pub static WEIERSTRASS: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("a", 0.55), ("b", 2.0), ("generator", 0.0), ("phase", 0.0)],
         coloring_params: &[("azimuth", 315.0), ("elevation", 45.0), ("relief", 2.0), ("scale", 0.6)],
+        bailout: None,
     },
 ];
 
@@ -625,6 +738,7 @@ pub static MARKUS_LYAPUNOV: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("seq_bits", 2.0), ("seq_len", 2.0), ("warmup", 50.0)],
         coloring_params: &[("scale", 6.0)],
+        bailout: None,
     },
 ];
 
@@ -639,5 +753,6 @@ pub static STANDARD_MAP_FTLE: &[EscapePreset] = &[
         julia: None,
         formula_params: &[("k", 1.0)],
         coloring_params: &[("scale", 12.0)],
+        bailout: None,
     },
 ];

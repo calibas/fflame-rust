@@ -2705,6 +2705,43 @@ parameter plane over the convergent core) and relaxation `R`. The
 **scheme axis** (§3) generalizes this entry: Newton, Halley,
 Schröder, Householder-3, secant, Chebyshev, König over `zᵖ − 1` (or a
 small polynomial picker), with complex relaxation — the a-plane
+
+**The function picker shipped 2026-09-01** (Newton only; Nova still
+takes the roots of unity alone). Six f(z), Wikipedia's Newton-fractal
+gallery: `z^p - 1`, `z^3 - 2z + 2` (Newton's classic FAILURE case --
+the critical point falls into an attracting 2-cycle, so a whole region
+converges to no root), `z^8 + 15z^4 - 16`, `sin z - 1`, `cosh z - 1`,
+`z^p sin z - 1`. Appended as a `func` parameter, so every stored config
+keeps its slots and its picture. Derivatives are held to central finite
+differences of f in `newton_function_derivatives_are_consistent` -- the
+check a hand-transcribed f' needs, and it caught a seeded coefficient
+error when sabotaged.
+
+Two things the picker forced into the open:
+
+- **`root_basin`'s angle buckets are a basin index only for
+  `z^p - 1`.** Roots elsewhere are not evenly spaced on a circle
+  (`z^3 - 2z + 2` has one real and two conjugate; `sin z - 1`'s all sit
+  ON the real axis), so a "General" key folds in log|z|. It is a
+  discriminator, not an index, and it applies only to CONVERGED orbits
+  -- keying on a non-converged final iterate painted the
+  transcendentals' large wandering regions as a smooth rainbow that
+  looked like structure and was not.
+- **The escape bailout is wrong for a root-finder.** Newton's iterates
+  wander far outside the unit disc before settling, and a function
+  whose ROOTS lie past the bailout (`z^8 + 15z^4 - 16` has four at
+  |z| = 2) has every one of them classified as an escape -- the basins
+  vanish and the view renders flat. `EscapePreset` gained an optional
+  `bailout` so the shipped presets carry 1e6. The principled fix is to
+  make Newton `NonEscaping` the way Novaretti is (a root-finder has no
+  escape criterion at all); that changes existing `z^p - 1` renders, so
+  it wants sign-off rather than a silent flip.
+
+Still open here: Schroder/Householder-3/Koenig (they want the third derivative), the
+function picker for Nova, and Nova's critical-point seed -- its z0 is
+hardcoded to 1, which is exact for `z^p - 1` at relaxation a = 1 and
+wrong elsewhere (the critical point solves `z^p = a(p-1)/(p-a)`).
+
 galleries. "Root-finder Alloy" (Geisler) = alternating schemes, a
 phase-5 hybrid-loop citizen. Perturbation: **hard** (convergent
 rebase criterion — Imagina has prior art); last in line.

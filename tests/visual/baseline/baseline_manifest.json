@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "20eb64a7",
+  "git_hash": "d1200ad3",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -282,9 +282,25 @@
       "bytes": 9063,
       "sha256": "9185a58f498fbcb85f0be3a30ef438ebcd77c4917de6668e1832e4140c0a0f50"
     },
+    "escape-newton-cubic-trap.png": {
+      "bytes": 9753,
+      "sha256": "92773594a61d4b3515f87295c13c8524020a9fedc8b9a5f738e533c5816d3c34"
+    },
+    "escape-newton-halley-cubic.png": {
+      "bytes": 5613,
+      "sha256": "1813c03c0c1422d3980aeb5f85cbf54118419b451bc20896ce58778e82865b21"
+    },
+    "escape-newton-octic-star.png": {
+      "bytes": 22283,
+      "sha256": "fd725c56b1f254b56141dd9f28d023963bda154440c61fa5ea6adaa57866b6a1"
+    },
     "escape-newton-relaxed.png": {
       "bytes": 17071,
       "sha256": "43a051c4cf5363644e9c22a2045352fe0e9c2a5ee667f32167b92456151fd99a"
+    },
+    "escape-newton-sine-roots.png": {
+      "bytes": 9882,
+      "sha256": "7cb68cf8799f82c6c3308ba87c77b3b42f057f5d6b1d8bf2b19d5381de9272fc"
     },
     "escape-normal-map-relief.png": {
       "bytes": 14011,
