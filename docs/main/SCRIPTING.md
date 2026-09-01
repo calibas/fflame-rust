@@ -234,7 +234,7 @@ Log-calibrated values under which escape output renders black.
 | `escape.shading_field(name)` | — | Which field the slope is taken from: `"smooth"` (the coloring's value before the palette wraps it — terrain relief) or `"banded"` (the wrapped coordinate, so every band edge is a step — an engraved look). |
 | `escape.center(re, im)` | — | The view centre, as **decimal STRINGS**. See the note below — this is the one place a float would quietly cost you the deep zoom. |
 | `escape.center_re` / `escape.center_im` | string | Read the centre back, still as text. |
-| `escape.zoom` | float | Read/write `zoom_log2`: the **exponent**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. |
+| `escape.zoom` | float | Read/write `zoom_log2`: the **exponent in BASE 2**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. Note the panel displays base 10 (log10) — the engine, the `.fflame` field and this API are all base 2, which is what the deep-zoom maths needs; multiply by 3.3219 to go from a displayed log10 to this. |
 | `escape.max_iter` | int | Read/write the iteration cap. Deep views need far more than shallow ones; too low reads as a flat wash. |
 | `escape.bailout` | float | Read/write the escape radius squared (4.0 is the usual). |
 | `escape.supersample` | int | Read/write 1–3. |
