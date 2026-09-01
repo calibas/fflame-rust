@@ -6037,6 +6037,137 @@ mod tests {
 
     /// The fixed-chunk mode must not change the image.
     ///
+    /// End-to-end numeric ground truth on the dip-seam view: GPU
+    /// per-pixel iteration counts (terminal records) against exact
+    /// fixed-point CPU orbits, same pixel mapping. The reference
+    /// orbit here dips to |Z| ~ 2^-51 mid-orbit — the configuration
+    /// that exposed the un-normalized reference-power underflow (a
+    /// straight seam, 17% of pixels wrong; see
+    /// fe_step_survives_reference_dips for the CPU-side anatomy).
+    /// Writes output/seam_diff.png: green = agree, red = wrong.
+    #[test]
+    #[ignore = "needs a GPU + ~1 min of exact CPU orbits"]
+    fn deep_multibrot_matches_exact_orbits() {
+        use rayon::prelude::*;
+        let re_s = "-0.96417873977697013026011288714743352326571975407038683546248307556701454144367857998579799044153007991031446482736663768012668752446996327705342813138475";
+        let im_s = "0.20113415795567669775171048165243266489819985719087999752585437953404063460519395316530711399750169766068721928290032028758102407532349929726277906601037";
+        let zoom = 426.5725f64;
+        let rot = 0.545846f64;
+        let (w, h) = (300u32, 200u32);
+        let max_iter = 2660u32;
+
+        // --- GPU render to settled, then read the records.
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+            &config.flame,
+            config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        esc_cfg.formula = "multibrot".to_string();
+        esc_cfg.formula_params.insert("power".to_string(), 4.0f32);
+        esc_cfg.center_re = re_s.to_string();
+        esc_cfg.center_im = im_s.to_string();
+        esc_cfg.zoom_log2 = zoom;
+        esc_cfg.rotation = rot as f32;
+        esc_cfg.max_iter = max_iter;
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("seam frame"),
+            });
+            let settled =
+                escape.render(&device, &queue, &mut enc, &esc_cfg, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 200_000, "failed to settle");
+        }
+        let gpu: Vec<(u32, u32)> = escape
+            .read_results_counts(&device, &queue)
+            .expect("records inactive — results_fit failed?");
+
+        // --- exact CPU truth, same mapping as the shader.
+        let n_limbs = 9usize;
+        let cx = crate::escape::fixedpoint::FixedPoint::from_decimal(re_s, n_limbs).unwrap();
+        let cy = crate::escape::fixedpoint::FixedPoint::from_decimal(im_s, n_limbs).unwrap();
+        let s = 2f64.powf(2.0 - zoom) / h as f64;
+        let truth: Vec<u32> = (0..(w * h) as usize)
+            .into_par_iter()
+            .map(|idx| {
+                let gx = (idx as u32 % w) as f64 + 0.5 - w as f64 / 2.0;
+                let gy = -((idx as u32 / w) as f64 + 0.5 - h as f64 / 2.0);
+                let dx = (gx * rot.cos() - gy * rot.sin()) * s;
+                let dy = (gx * rot.sin() + gy * rot.cos()) * s;
+                let c = crate::escape::fixedpoint::FixedComplex {
+                    re: cx.add(&crate::escape::fixedpoint::FixedPoint::from_f64(dx, n_limbs)),
+                    im: cy.add(&crate::escape::fixedpoint::FixedPoint::from_f64(dy, n_limbs)),
+                };
+                let mut z = crate::escape::fixedpoint::FixedComplex::zero(n_limbs);
+                for i in 0..max_iter {
+                    z = z.sqr();
+                    z = z.sqr();
+                    z = z.add(&c);
+                    let x = z.re.to_f64();
+                    let y = z.im.to_f64();
+                    if x * x + y * y > 4.0 {
+                        return i + 1;
+                    }
+                }
+                max_iter
+            })
+            .collect();
+
+        // --- diff map + stats.
+        let mut img = vec![0u8; (w * h) as usize * 3];
+        let mut wrong = 0usize;
+        let mut offsets: Vec<i64> = Vec::new();
+        for i in 0..(w * h) as usize {
+            let (gn, tags) = gpu[i];
+            let escaped = tags & 1 != 0;
+            let tn = truth[i];
+            let g = if escaped { gn as i64 } else { max_iter as i64 };
+            let t = tn as i64;
+            let d = (g - t).abs();
+            offsets.push(g - t);
+            let p: [u8; 3] = if d <= 2 {
+                [0, 160, 0]
+            } else if d <= 20 {
+                [200, 200, 0]
+            } else {
+                wrong += 1;
+                [220, 0, 0]
+            };
+            img[i * 3..i * 3 + 3].copy_from_slice(&p);
+        }
+        offsets.sort_unstable();
+        println!(
+            "pixels: {}  wrong(>20): {} ({:.1}%)  offset median {} p10 {} p90 {}",
+            w * h,
+            wrong,
+            wrong as f64 * 100.0 / (w * h) as f64,
+            offsets[offsets.len() / 2],
+            offsets[offsets.len() / 10],
+            offsets[offsets.len() * 9 / 10]
+        );
+        image::save_buffer("output/seam_diff.png", &img, w, h, image::ColorType::Rgb8).unwrap();
+        println!("wrote output/seam_diff.png");
+        assert!(
+            wrong < (w * h) as usize / 50,
+            "{wrong} pixels disagree with exact orbits by >20 iterations (>2%) — \
+             the perturbed multibrot has regressed at reference dips"
+        );
+    }
+
     /// Batching several chunk dispatches into one redraw must not
     /// change a pixel: the same iteration windows run in the same
     /// order, only their grouping into frames differs. This drives

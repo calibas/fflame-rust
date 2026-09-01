@@ -2866,15 +2866,49 @@ fn delta_step_floatexp_on(p: u32, zm: &str, zlo: &str, w: &str) -> String {
     }
     let mut out = String::new();
     out.push_str(&format!("        // Binomial delta step for z^{p} + c (floatexp).\n"));
-    // zr{k} is the k-th power of the reference MANTISSA; the matching
+    // zdr{k}/zdi{k} are the k-th power of the reference mantissa in
+    // DOUBLE FLOAT (re and im each a hi/lo pair); the matching
     // exponent k*z_ref_e is applied at the term multiply below. The
-    // mantissa stays in [1,4), so no power of it underflows even when
-    // the iterate itself is far below f32's range.
-    out.push_str(&format!("        let zr1 = {zm};\n"));
+    // hi mantissa stays in [1,4), so no power of it underflows even
+    // when the iterate itself is far below f32's range.
+    //
+    // DF, not bare f32, and that is load-bearing: the p = 2 step
+    // reads the reference through cfe2_mul_zdfe for exactly this
+    // reason, but this generator used to raise ONLY the hi mantissa
+    // — every Z^(p-k) coefficient carried 24 bits against the
+    // delta's 49, and at a depth-426 power-4 view the accumulated
+    // coefficient error split the image along a straight rebase
+    // seam, ground-truthed against exact fixed-point orbits.
+    // NORMALIZE before powering — ground-truthed at a depth-426
+    // power-4 view: an orbit entry within f32's range is stored RAW
+    // with e = 0, so at a deep dip the mantissa is itself ~2^-51 and
+    // its cube is past f32's subnormal floor — the Z^(p-1)·w term
+    // silently flushed at exactly the dip iteration. Every pixel
+    // whose m reached the dip without a rebase took that poisoned
+    // step: the image split along the straight half-plane boundary
+    // of "rebased before the dip", ±30 iterations wrong on one side.
+    // p = 2 never powers the mantissa, which is why Mandelbrot zooms
+    // at 20x this depth never showed it.
+    out.push_str(&format!(
+        "        var zpw_e = z_ref_e;\n\
+         \x20       var zpw_sc = 1.0;\n\
+         \x20       let zpw_a = max(abs({zm}.x), abs({zm}.y));\n\
+         \x20       if (zpw_a != 0.0) {{\n\
+         \x20           let zpw_f = frexp(zpw_a);\n\
+         \x20           zpw_sc = exp2(f32(-zpw_f.exp));\n\
+         \x20           zpw_e = z_ref_e + zpw_f.exp;\n\
+         \x20       }}\n"
+    ));
+    out.push_str(&format!("        let zdr1 = vec2<f32>({zm}.x * zpw_sc, {zlo}.x * zpw_sc);\n"));
+    out.push_str(&format!("        let zdi1 = vec2<f32>({zm}.y * zpw_sc, {zlo}.y * zpw_sc);\n"));
     for k in 2..p {
         out.push_str(&format!(
-            "        let zr{k} = vec2<f32>(zr{}.x * {zm}.x - zr{}.y * {zm}.y, zr{}.x * {zm}.y + zr{}.y * {zm}.x);\n",
-            k - 1, k - 1, k - 1, k - 1
+            "        let zdr{k} = df_add(df_mul(zdr{}, zdr1), df_neg(df_mul(zdi{}, zdi1)));\n",
+            k - 1, k - 1
+        ));
+        out.push_str(&format!(
+            "        let zdi{k} = df_add(df_mul(zdr{}, zdi1), df_mul(zdi{}, zdr1));\n",
+            k - 1, k - 1
         ));
     }
     out.push_str(&format!("        let u1 = {w};\n"));
@@ -2891,8 +2925,17 @@ fn delta_step_floatexp_on(p: u32, zm: &str, zlo: &str, w: &str) -> String {
             ));
         } else {
             let zp = p - k;
+            // Scale the DF power by the binomial coefficient with a
+            // compensated scalar multiply — a bare hi*coeff would
+            // round the very bits the DF exists to keep.
             out.push_str(&format!(
-                "        w_new = cfe2_add(w_new, cfe2_mul_cfe32(u{k}, {coeff}.0 * zr{zp}, {zp} * z_ref_e));\n"
+                "        let t{k}r = df_muls(zdr{zp}, {coeff}.0);\n"
+            ));
+            out.push_str(&format!(
+                "        let t{k}i = df_muls(zdi{zp}, {coeff}.0);\n"
+            ));
+            out.push_str(&format!(
+                "        w_new = cfe2_add(w_new, cfe2_mul_zdfe(u{k}, vec2<f32>(t{k}r.x, t{k}i.x), vec2<f32>(t{k}r.y, t{k}i.y), {zp} * zpw_e));\n"
             ));
         }
     }
@@ -3759,7 +3802,11 @@ mod tests {
                             "p=2 deep fast path must use the conjugates"
                         );
                     } else {
-                        assert!(src.contains("let zr1 = zcm;"));
+                        // The DF power chain must be built from the
+                        // CONJUGATED mantissa (normalized before
+                        // powering — the dip-underflow guard).
+                        assert!(src.contains("max(abs(zcm.x), abs(zcm.y))"));
+                        assert!(src.contains("let zdr1 = vec2<f32>(zcm.x * zpw_sc, zclo.x * zpw_sc);"));
                     }
                 } else {
                     assert!(src.contains("let zc = vec2<f32>(z_ref.x, -z_ref.y);"));

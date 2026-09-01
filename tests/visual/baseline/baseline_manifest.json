@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "4f1bdd8d",
+  "git_hash": "20eb64a7",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -273,6 +273,10 @@
     "escape-multibrot-4.png": {
       "bytes": 3536,
       "sha256": "64590dd657725e31b972f142a39fc3136cd8cad53c07ed8471451c8fd2f9f610"
+    },
+    "escape-multibrot-dip-seam.png": {
+      "bytes": 46083,
+      "sha256": "3f58d551b0752f49b568f66916e15c46879cab93e86bb02393944f791fd3b5a4"
     },
     "escape-newton-3.png": {
       "bytes": 9063,
