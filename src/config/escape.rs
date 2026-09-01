@@ -613,6 +613,26 @@ impl EscapeConfig {
         )
     }
 
+    /// The zoom exponent in BASE 10 — the display unit.
+    ///
+    /// Every other deep-zoom tool reports magnification as a power of
+    /// ten (fraktaler-3, Kalles Fraktaler, Ultra Fractal), so that is
+    /// what the UI shows. The stored/engine value stays base 2 on
+    /// purpose: see [`Self::zoom_log2`] — there it is a BIT COUNT
+    /// (`limbs_for_zoom` adds it straight to a bit total), it is added
+    /// directly into floatexp base-2 exponents, and the renderer
+    /// splits it into the shader's exact `s_m · 2^s_e` pixel spacing.
+    /// A base-10 store would put an irrational factor in front of all
+    /// three.
+    pub fn zoom_log10(&self) -> f64 {
+        self.zoom_log2 * std::f64::consts::LOG10_2
+    }
+
+    /// Inverse of [`Self::zoom_log10`], for UI edits.
+    pub fn log10_to_log2(log10: f64) -> f64 {
+        log10 * std::f64::consts::LOG2_10
+    }
+
     /// Magnification as a plain factor (2^zoom_log2).
     pub fn zoom_factor(&self) -> f64 {
         self.zoom_log2.exp2()

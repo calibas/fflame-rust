@@ -212,7 +212,7 @@ pub fn render_escape_content(
             let past = esc.zoom_log2 > limit;
             let text = egui::RichText::new(t!(
                 "escape_panel.depth_direct",
-                zoom = format!("{limit:.0}")
+                zoom = format!("{:.1}", limit * std::f64::consts::LOG10_2)
             ))
             .small();
             ui.label(if past { text.color(egui::Color32::from_rgb(220, 160, 60)) } else { text.weak() })
@@ -308,15 +308,24 @@ pub fn render_escape_content(
     }
 
     ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.zoom_log2"));
-        let mut z = esc.zoom_log2 as f32;
-        if ui
-            .add(egui::DragValue::new(&mut z).speed(0.02))
-            .on_hover_text(t!("escape_panel.tooltip_zoom_log2"))
-            .changed()
-        {
-            let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, z.into());
+        ui.label(t!("escape_panel.zoom_log10"));
+        // Shown in base 10 — the unit every other deep-zoom tool
+        // reports — while the engine keeps base 2 (see
+        // EscapeConfig::zoom_log10 for why the STORED value must).
+        let mut z10 = esc.zoom_log10();
+        // Same drag feel as before: 0.02 octaves per step, in decades.
+        let resp = ui
+            .add(
+                egui::DragValue::new(&mut z10)
+                    .speed(0.02 * std::f64::consts::LOG10_2)
+                    .max_decimals(4),
+            )
+            .on_hover_text(t!("escape_panel.tooltip_zoom_log10"));
+        if resp.changed() {
+            let z2 = crate::config::escape::EscapeConfig::log10_to_log2(z10);
+            let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (z2 as f32).into());
         }
+        ui.label(egui::RichText::new(magnification_label(esc.zoom_log10())).weak());
     });
 
     // Newton navigation: locate the minibrot governing the current
@@ -411,7 +420,10 @@ pub fn render_escape_content(
                                     "escape_panel.period_found",
                                     period = p,
                                     octave = -oct,
-                                    zoom = (-oct - 16).max(0)
+                                    zoom = format!(
+                                        "{:.1}",
+                                        (-oct - 16).max(0) as f64 * std::f64::consts::LOG10_2
+                                    )
                                 )
                                 .to_string(),
                             );
@@ -1372,6 +1384,30 @@ pub fn switch_render_mode(
     }
 }
 
+/// Magnification as a readable factor, formatted FROM THE LOG.
+///
+/// Never from `zoom_factor()`: 2^zoom overflows f64 past zoom_log2
+/// 1024 and a deep dive runs past 9000, so the plain factor would
+/// read "inf" exactly where the number matters most.
+pub(crate) fn magnification_label(log10: f64) -> String {
+    if !log10.is_finite() {
+        return String::new();
+    }
+    if log10.abs() >= 5.0 {
+        let e = log10.floor();
+        // 10^frac stays in [1, 10) — no overflow at any depth.
+        let m = 10f64.powf(log10 - e);
+        format!("×{m:.2}e{}", e as i64)
+    } else {
+        let v = 10f64.powf(log10);
+        if v >= 100.0 {
+            format!("×{v:.0}")
+        } else {
+            format!("×{v:.3}")
+        }
+    }
+}
+
 /// Zoom the escape view by a plain factor (keyboard +/- keys): adds
 /// log2(factor) to the exponent, clamped to the same travel range the
 /// wheel uses.
@@ -1677,5 +1713,60 @@ fn blend_label(b: ShadingBlend) -> String {
         ShadingBlend::Screen => t!("escape_panel.blend_screen").to_string(),
         ShadingBlend::Overlay => t!("escape_panel.blend_overlay").to_string(),
         ShadingBlend::Mix => t!("escape_panel.blend_mix").to_string(),
+    }
+}
+
+#[cfg(test)]
+mod zoom_display_tests {
+    use super::magnification_label;
+    use crate::config::escape::EscapeConfig;
+
+    /// The base-10 display must survive depths where the plain
+    /// magnification does not.
+    ///
+    /// `zoom_factor()` is 2^zoom_log2, which is +inf past 1024 — and
+    /// real dives run past 9000. Formatting from the LOG is what
+    /// keeps the readout meaningful exactly where the user needs it.
+    #[test]
+    fn magnification_reads_at_any_depth() {
+        let mut cfg = EscapeConfig::default();
+        for (z2, want) in [
+            (426.5725f64, "×2.58e128"),
+            (9316.7, "×4.04e2804"),
+            (100_000.0, "×9.99e30102"),
+        ] {
+            cfg.zoom_log2 = z2;
+            assert!(
+                cfg.zoom_factor().is_infinite() || z2 < 1024.0,
+                "test premise: the plain factor overflows up here"
+            );
+            assert_eq!(magnification_label(cfg.zoom_log10()), want, "at zoom_log2 {z2}");
+        }
+        // Shallow and zoomed-OUT views stay readable too.
+        cfg.zoom_log2 = 0.0;
+        assert_eq!(magnification_label(cfg.zoom_log10()), "×1.000");
+        cfg.zoom_log2 = -8.0;
+        assert_eq!(magnification_label(cfg.zoom_log10()), "×0.004");
+        // Never a panic or "NaN" in the panel.
+        assert_eq!(magnification_label(f64::NAN), "");
+        assert_eq!(magnification_label(f64::INFINITY), "");
+    }
+
+    /// The display conversion must round-trip: an edit that does not
+    /// move the drag value must not move the zoom. The UI writes
+    /// through an f32 config path, so f32 is the bar.
+    #[test]
+    fn log10_round_trips_through_the_display() {
+        let mut cfg = EscapeConfig::default();
+        for z2 in [0.0f64, -8.0, 21.5, 426.5725, 9316.7, 100_000.0] {
+            cfg.zoom_log2 = z2;
+            let back = EscapeConfig::log10_to_log2(cfg.zoom_log10());
+            assert!(
+                (back - z2).abs() <= z2.abs() * 1e-12 + 1e-12,
+                "zoom {z2} came back as {back}"
+            );
+            // ...and through the f32 path the panel actually writes.
+            assert_eq!(back as f32, z2 as f32, "f32 config path moved zoom {z2}");
+        }
     }
 }
