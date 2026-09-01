@@ -6253,6 +6253,135 @@ mod tests {
         (device, queue)
     }
 
+    /// MANUAL: the wall-clock timeline of revisiting a CACHED deep
+    /// location, driven exactly the way the app drives a frame —
+    /// worker, store load, BLA build, uploads, chunked GPU render.
+    /// Answers "where does the time actually go in-app".
+    #[test]
+    #[ignore = "manual: needs a GPU and output/orbit_profile from the generator"]
+    fn timeline_of_a_cached_revisit() {
+        // Stage an orbit as the ONLY store entry: ORBIT_SRC names a
+        // .orbit file (e.g. one from the real app cache), default the
+        // generated profile orbit.
+        let src = match std::env::var("ORBIT_SRC") {
+            Ok(p) => std::path::PathBuf::from(p),
+            Err(_) => std::fs::read_dir(std::path::PathBuf::from("output").join("orbit_profile"))
+                .unwrap()
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|x| x == "orbit"))
+                .expect("run generate_deep_profile_orbit first"),
+        };
+        let store = crate::escape::orbit_store::test_store_dir().expect("store dir");
+        for e in std::fs::read_dir(&store).unwrap().flatten() {
+            let _ = std::fs::remove_file(e.path());
+        }
+        std::fs::copy(&src, store.join(src.file_name().unwrap())).unwrap();
+        // The stored header carries the exact view this orbit was
+        // saved from — center, zoom — so the revisit is faithful.
+        let head_bytes = std::fs::read(&src).unwrap();
+        let head = crate::escape::reference::header_from_bytes(
+            &head_bytes[..crate::escape::reference::MAX_HEADER_BYTES.min(head_bytes.len())],
+        )
+        .expect("orbit header");
+        println!(
+            "staged: len={} limbs={} zoom={:.1} center digits={}",
+            head.orbit_len,
+            head.n_limbs,
+            head.off_zoom_log2,
+            head.center_re.len()
+        );
+
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            400,
+            300,
+            &config.flame,
+            config.palette_size,
+        );
+
+        let (w, h) = (1878u32, 1056u32);
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        let mut esc_cfg = crate::config::escape::EscapeConfig::default();
+        // Same VALUE as the stored orbit's center, padded so
+        // limbs_for_view lands on the file's 197 limbs — the string
+        // differs, so this exercises the nearby-relocation load, like
+        // a real pan-then-save-then-revisit.
+        esc_cfg.center_re = head.center_re.clone();
+        esc_cfg.center_im = head.center_im.clone();
+        esc_cfg.zoom_log2 = head.off_zoom_log2;
+        esc_cfg.max_iter = (head.orbit_len as u32).saturating_sub(1);
+        assert_eq!(
+            crate::escape::fixedpoint::limbs_for_view(
+                &esc_cfg.center_re,
+                &esc_cfg.center_im,
+                esc_cfg.zoom_log2
+            ),
+            head.n_limbs,
+            "request must match the stored orbit's precision"
+        );
+
+        let t0 = std::time::Instant::now();
+        let mut settled_at: Option<(u32, f32, f32)> = None;
+        for frame in 0..100_000u32 {
+            let tf = std::time::Instant::now();
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("timeline frame"),
+            });
+            escape.render(&device, &queue, &mut encoder, &esc_cfg, renderer.palette_view());
+            queue.submit(std::iter::once(encoder.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let frame_ms = tf.elapsed().as_secs_f64() * 1e3;
+            let d = crate::escape::diag::snapshot();
+            if frame_ms > 40.0 || frame % 120 == 0 {
+                println!(
+                    "f{frame:5} t={:7.2}s frame={frame_ms:7.1}ms cpu={:6.1}ms src={:?} \
+                     orbit_ms={:.0} wait={} bla={:6.1}ms inflight={} chunk_iters={} settle={:.0}ms",
+                    t0.elapsed().as_secs_f64(),
+                    d.render_cpu_ms,
+                    d.orbit_source,
+                    d.orbit_ms,
+                    d.orbit_wait_frames,
+                    d.bla_build_ms,
+                    d.inflight_frames,
+                    d.last_chunk_iters,
+                    d.settle_ms,
+                );
+            }
+            if d.settle_ms > 0.0 && settled_at.is_none() {
+                settled_at = Some((frame, t0.elapsed().as_secs_f32(), d.settle_ms));
+                println!(
+                    "SETTLED at frame {frame}: wall {:.2}s from start, settle_ms {:.0} \
+                     over {} frames",
+                    t0.elapsed().as_secs_f64(),
+                    d.settle_ms,
+                    d.settle_frames
+                );
+                break;
+            }
+            if t0.elapsed().as_secs_f64() > 600.0 {
+                println!(
+                    "CAP at 600s: inflight={} frames, last_chunk_iters={}, settle pending",
+                    d.inflight_frames, d.last_chunk_iters
+                );
+                break;
+            }
+        }
+        let d = crate::escape::diag::snapshot();
+        println!(
+            "final: relocations={} rebuilds={} bla_bytes={}MB upload={}MB settled={:?}",
+            d.orbit_relocations,
+            d.orbit_rebuilds,
+            d.bla_bytes / (1024 * 1024),
+            d.upload_bytes / (1024 * 1024),
+            settled_at
+        );
+    }
+
     #[test]
     #[ignore = "needs a GPU"]
     fn app_style_escape_frame_produces_pixels() {
