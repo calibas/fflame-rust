@@ -3099,6 +3099,61 @@ test pins nine depths spanning the rung switch against exact
 big-float orbits, and `escape-ducks-singularity` renders the reported
 view.
 
+### A browser freeze on loading a deep config (2026-09-02)
+
+Reported from WASM: loading an escape config with high iteration count
+and zoom freezes, while zooming in manually to the same place does
+not. The error is
+
+    Uncaught RuntimeError: index out of bounds
+
+from inside a requestAnimationFrame callback, with no Rust panic
+message.
+
+**That message is the diagnosis, and it says what it is NOT.** The
+panic hook IS installed (`lib.rs`), so a Rust panic would have printed
+a located message; a slice panic would read "index out of bounds: the
+len is N but the index is M". A bare `RuntimeError` with neither is a
+WebAssembly trap — a linear-memory access out of range — and safe Rust
+cannot produce one. In the whole escape engine there is exactly one
+place that can: the simd128 column multiply in `fixedpoint.rs`, which
+stores through raw pointers.
+
+Ruled out by measurement rather than reasoning, in this order:
+
+- **The partial-orbit path.** WASM has no worker thread, so it slices
+  the reference under a per-frame budget and renders against a partial
+  orbit — a path with NO desktop coverage, which made it the first
+  suspect. A test knob (`force_budgeted`) now takes it on the desktop;
+  it settles cleanly at zoom 30/120/400/900 with up to 1M iterations.
+- **32-bit `usize` overflow**, the classic desktop-works/wasm-fails
+  divergence: every buffer size in the path is computed in `u64`.
+- **`BigFloat::mul`**, which has its own bounds-checked schoolbook
+  loop and never reaches the vector core.
+- **The orbit store**, which is `std::fs` and desktop-only.
+
+**What was wrong with the vector core.** Its index arithmetic is
+correct — writes reach `2n+2` against an allocation of `2n+7`, and
+reads are guarded by the loop condition. But every PRECONDITION that
+makes that true (`a.len() == b.len() == n`, the allocation size, and
+`n >= 2` so `2*(n-2)` does not underflow a `usize`) rested on
+`debug_assert`s, which are compiled out of the shipped wasm. A
+violation there is not a panic anyone can locate; it is a trap from
+whatever callback happened to be running.
+
+So the preconditions are now CHECKED, once per multiply — O(1)
+against an O(n^2) body — and the scalar core, every index of which the
+compiler bounds-checks, takes over if any fails. A violation now
+surfaces as a located Rust panic instead of an unattributable trap.
+The arithmetic itself is pinned by
+`the_vector_column_core_stays_inside_its_allocation`, which reproduces
+the index math for n = 2..64 on every platform, including the desktop
+where the code it describes is not compiled.
+
+**Honest status:** the trap has not been reproduced, so this is
+hardening plus attribution, not a confirmed fix. If it recurs, the
+message will now name a file and line.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

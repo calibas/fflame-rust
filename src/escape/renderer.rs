@@ -513,6 +513,17 @@ pub struct EscapeRenderer {
     /// Test-only: with `force_perturbed`, use the floatexp rung.
     #[cfg(test)]
     pub(crate) force_floatexp: bool,
+    /// Test-only: take the BROWSER's orbit path on the desktop — no
+    /// worker thread, the reference sliced per frame under a budget,
+    /// and the frame rendered against a PARTIAL orbit until it
+    /// completes.
+    ///
+    /// That path had no desktop coverage at all, which is how an
+    /// index-out-of-bounds panic reached a released WASM build: it
+    /// only fires while the orbit is SHORT, and on the desktop the
+    /// orbit is always complete before the first perturbed dispatch.
+    #[cfg(test)]
+    pub(crate) force_budgeted: bool,
     /// Deep-zoom state: CPU reference-orbit cache (append-on-deepen),
     /// its GPU mirror, and the perturbed pipeline's own layout (two
     /// extra bindings: the orbit buffer and the perturb uniform).
@@ -1226,6 +1237,8 @@ impl EscapeRenderer {
             force_perturbed: false,
             #[cfg(test)]
             force_floatexp: false,
+            #[cfg(test)]
+            force_budgeted: false,
             orbit_cache: OrbitCache::default(),
             results_buffer: None,
             results_px: 0,
@@ -5255,7 +5268,23 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.ensure_orbit(device, queue, escape).map(|l| (l, true))
+                    #[cfg(test)]
+                    let budgeted = self.force_budgeted;
+                    #[cfg(not(test))]
+                    let budgeted = false;
+                    if budgeted {
+                        // Byte-for-byte the wasm32 arm above.
+                        let limbs =
+                            super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1) as u32;
+                        let budget = (1_000_000 / limbs).clamp(256, 50_000);
+                        match self.ensure_orbit_with(device, queue, escape, Some(budget)) {
+                            Some((len, done)) if len >= 2 => Some((len, done)),
+                            Some(_) => return false,
+                            None => None,
+                        }
+                    } else {
+                        self.ensure_orbit(device, queue, escape).map(|l| (l, true))
+                    }
                 }
             };
             if let Some((orbit_len, orbit_done)) = orbit_state {

@@ -346,8 +346,17 @@ mod columns {
     /// product `a[i]·b[j]` exactly when `i + j >= n-2` (window + one
     /// guard limb), so inclusion is decided by the parent u64 pair,
     /// not the u32 column.
-    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
-    fn columns_core(a32: &[u32], b32: &[u32], n: usize, sum_lo: &mut [u64], sum_hi: &mut [u64]) {
+    /// The scalar column accumulation. Compiled everywhere: natively
+    /// it IS `columns_core`, and under wasm+simd128 it is the
+    /// bounds-checked fallback the vector core drops to when its
+    /// preconditions do not hold.
+    fn columns_core_scalar(
+        a32: &[u32],
+        b32: &[u32],
+        n: usize,
+        sum_lo: &mut [u64],
+        sum_hi: &mut [u64],
+    ) {
         let m = 2 * n;
         let base = 2 * (n - 2);
         for p in 0..m {
@@ -368,6 +377,13 @@ mod columns {
         }
     }
 
+    /// Natively there is no vector core: the scalar body IS the
+    /// column accumulation.
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    fn columns_core(a32: &[u32], b32: &[u32], n: usize, sum_lo: &mut [u64], sum_hi: &mut [u64]) {
+        columns_core_scalar(a32, b32, n, sum_lo, sum_hi)
+    }
+
     /// The same column accumulation, 4 products per round via simd128
     /// widening multiplies. Identical index math and inclusion rule as
     /// the scalar core — only the inner product loop differs — and
@@ -379,6 +395,30 @@ mod columns {
     fn columns_core(a32: &[u32], b32: &[u32], n: usize, sum_lo: &mut [u64], sum_hi: &mut [u64]) {
         use core::arch::wasm32::*;
         let m = 2 * n;
+        // THE UNSAFE BLOCK BELOW ASSUMES ALL OF THIS, and every
+        // assumption used to rest on a `debug_assert` in the caller —
+        // which is compiled out of the shipped wasm. A raw
+        // `v128_store` past the end of `sum_lo` is not a Rust panic
+        // with a location: it is a linear-memory access out of range,
+        // which the browser reports as a bare
+        // `RuntimeError: index out of bounds` from inside whatever
+        // requestAnimationFrame callback happened to be running. That
+        // is unattributable, and it is the only place in the escape
+        // engine that can produce it, so the preconditions are now
+        // CHECKED once per multiply (O(1) against an O(n^2) body) and
+        // the scalar core — every index of which is bounds-checked by
+        // the compiler — takes over if any of them does not hold.
+        //
+        // Writes reach `p + m - 1 - base` at most, which is 2n+2 for
+        // the largest p; reads reach `b32[q+3]` with `q + 4 <= m`.
+        if n < 2
+            || a32.len() < m
+            || b32.len() < m
+            || sum_lo.len() < 2 * n + 3
+            || sum_hi.len() < 2 * n + 3
+        {
+            return columns_core_scalar(a32, b32, n, sum_lo, sum_hi);
+        }
         let base = 2 * (n - 2);
         let mask = u64x2_splat(0xFFFF_FFFF);
         for p in 0..m {
@@ -1678,6 +1718,59 @@ mod tests {
     }
 
     #[test]
+    /// The vector column core writes through RAW POINTERS, and what
+    /// keeps those in range is arithmetic, not a bounds check. This
+    /// pins that arithmetic on every platform — including the desktop,
+    /// where the code it describes is not even compiled.
+    ///
+    /// Reproduces the index math exactly: `idx` starts at
+    /// `p + qmin - base`, advances with `q`, and each round stores
+    /// four u64 lanes at `idx..idx+3`. The allocation is
+    /// `2n + 3 + 4`. If a future change to the window rule (`jmin`)
+    /// or the slack moves either side, this fails here rather than as
+    /// a bare `RuntimeError: index out of bounds` in a browser, with
+    /// no location and no attribution.
+    #[test]
+    fn the_vector_column_core_stays_inside_its_allocation() {
+        for n in 2..=64usize {
+            let m = 2 * n;
+            let base = 2 * (n - 2);
+            let alloc = 2 * n + 3 + 4;
+            let mut worst_write = 0usize;
+            let mut worst_read = 0usize;
+            for p in 0..m {
+                let i = p >> 1;
+                let jmin = n.saturating_sub(2 + i).min(n);
+                let qmin = 2 * jmin;
+                // No underflow forming the start index.
+                assert!(p + qmin >= base, "n={n} p={p}: idx would underflow");
+                let mut idx = p + qmin - base;
+                let mut q = qmin;
+                while q + 4 <= m {
+                    worst_write = worst_write.max(idx + 3);
+                    worst_read = worst_read.max(q + 3);
+                    idx += 4;
+                    q += 4;
+                }
+                // The scalar tail indexes one lane at a time.
+                while q < m {
+                    worst_write = worst_write.max(idx);
+                    worst_read = worst_read.max(q);
+                    idx += 1;
+                    q += 1;
+                }
+            }
+            assert!(
+                worst_write < alloc,
+                "n={n}: writes reach {worst_write}, allocation is {alloc}"
+            );
+            assert!(
+                worst_read < m,
+                "n={n}: reads reach b32[{worst_read}], length is {m}"
+            );
+        }
+    }
+
     fn limbs_for_zoom_scales() {
         assert!(limbs_for_zoom(0.0) >= 2);
         assert!(limbs_for_zoom(100.0) >= 3);

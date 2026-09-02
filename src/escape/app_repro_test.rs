@@ -3933,6 +3933,63 @@ mod tests {
         }
     }
 
+    /// The BROWSER's orbit path, on the desktop.
+    ///
+    /// WASM has no worker thread, so it slices the reference under a
+    /// per-frame budget and renders against a PARTIAL orbit until it
+    /// completes. That path had no desktop coverage at all — the
+    /// desktop always has the whole orbit before the first perturbed
+    /// dispatch — so nothing here was exercised until a browser
+    /// reported a freeze on loading a deep config.
+    ///
+    /// Cold renderer each time IS "load a config": no cached orbit,
+    /// full depth and iteration count from the first frame.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_browsers_budgeted_orbit_path_settles_at_depth() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64,
+            &config.flame, config.palette_size);
+        for (name, zoom, iters) in [
+            ("deep", 30.0f64, 400_000u32),
+            ("deeper", 120.0, 400_000),
+            ("extreme zoom", 400.0, 200_000),
+            ("extreme both", 900.0, 1_000_000),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".to_string();
+            esc.coloring = "smooth".to_string();
+            esc.center_re = "-1.7492046334590016288000000000000000000".to_string();
+            esc.center_im = "0.0".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.force_budgeted = true;
+            let mut frames = 0u32;
+            loop {
+                let mut e = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("budgeted") });
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(e.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                frames += 1;
+                if done { break; }
+                assert!(frames < 400_000, "{name}: never settled");
+            }
+            // A partial orbit must never leave the frame blank: the
+            // rebasing path is what makes a sliced reference usable.
+            let recs = escape.read_results_full(&device, &queue).unwrap();
+            let lit = recs.iter().filter(|r| r.n > 0).count();
+            println!("{name:14} zoom {zoom:6.1} iters {iters:7}: {frames:3} frames,                       {lit}/{} pixels iterated, path={}", recs.len(), escape.last_path);
+            assert!(lit > recs.len() / 2, "{name}: most pixels never iterated");
+            escape.destroy();
+        }
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.
@@ -8567,6 +8624,7 @@ mod tests {
         renderer.destroy();
     }
 }
+
 
 
 
