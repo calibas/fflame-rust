@@ -3107,6 +3107,28 @@ fn rf_cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 fn rf_tinv(z_lo: vec2<f32>, z_hi: vec2<f32>, t_hi: vec2<f32>) -> vec2<f32> {
     // The fold takes |Im|, so the low half follows the hi half's sign.
     let t_lo = vec2<f32>(z_lo.x, select(-z_lo.y, z_lo.y, z_hi.y >= 0.0));
+    // Where the hi half dominates, the first-order expansion
+    // 1/(T_hi+T_lo) ~ (1/T_hi)(1 - T_lo/T_hi) is accurate and cheap.
+    //
+    // Where it does NOT, it is invalid -- its correction term is the
+    // size of the term it corrects. That happens when the reference
+    // passes near the LOG SINGULARITY: `fold(Z) + c` cancels two O(1)
+    // f32 numbers, so `t_hi` is left holding a value at or below its
+    // own rounding, and the true T lives in the low word. Measured on
+    // the reported view: at iteration 65 the orbit reaches
+    // Z = (-0.1500, 0.6750) against c = (0.15, -0.675), and |T| falls
+    // to 2.08e-8 -- a third of an ulp of the operands. `rf_cinv` then
+    // returns its 1e20 floor sentinel, |u| passes 1e19, and `dot(u,u)`
+    // OVERFLOWS f32 inside rf_clog1p: the pixel goes infinite and
+    // takes the whole magnitude-average accumulator with it (898 of
+    // 1728 pixels on the reported config).
+    //
+    // When the halves are comparable their f32 SUM is the accurate
+    // object -- they share an exponent, so nothing is lost adding
+    // them, and t_hi is exact there by Sterbenz.
+    if (dot(t_lo, t_lo) * 16.0 >= dot(t_hi, t_hi)) {
+        return rf_cinv(t_hi + t_lo);
+    }
     let inv = rf_cinv(t_hi);
     return inv - rf_cmul(inv, rf_cmul(t_lo, inv));
 }
@@ -3130,6 +3152,18 @@ fn rf_clog1p(u: vec2<f32>) -> vec2<f32> {
         acc = rf_cmul(acc, u) + vec2<f32>(-0.5, 0.0);
         acc = rf_cmul(acc, u) + vec2<f32>(1.0, 0.0);
         return rf_cmul(acc, u);
+    }
+    // |u| past ~1.8e19 makes dot(u, u) overflow f32, and the sum below
+    // then reads +inf where the true log(1+u) is about 45 -- a value
+    // f32 holds comfortably. Factor the magnitude out instead:
+    // log|1+u| -> log|u| = log(m) + log|u/m|, each term in range.
+    let um = max(abs(u.x), abs(u.y));
+    if (!(um < 1.0e18)) {
+        let us = u / um;
+        // |u| is enormous here, so the arguments are never a zero
+        // pair and plain atan2 is safe (see the guard below for
+        // the case that is).
+        return vec2<f32>(log(um) + 0.5 * log(dot(us, us)), atan2(u.y, u.x));
     }
     // |1 + u| = 0 is the pixel at the log singularity: clamp rather
     // than take the log of zero. The atan2 zero pair (Metal) sits at

@@ -1,0 +1,156 @@
+{
+  "brightness": 1.0,
+  "escape": {
+    "bailout": 4.0,
+    "center_im": "0.02803879307866999008142687940949730302",
+    "center_re": "1.28453316189159720109327118553936378896",
+    "coloring": "magnitude_average",
+    "coloring_params": {
+      "offset": 1.648,
+      "scale": 11.64
+    },
+    "contrast": {
+      "clip": 0.0,
+      "strength": 1.0,
+      "turns": 1.0
+    },
+    "downsample": "perceptual",
+    "formula": "ducks",
+    "formula_params": {
+      "variant": 0.0
+    },
+    "julia": true,
+    "julia_im": -0.675,
+    "julia_re": 0.15,
+    "max_iter": 80,
+    "rotation": -1.5707964,
+    "supersample": 1,
+    "zoom_log2": 41.474274
+  },
+  "flame": {
+    "name": "Escape ducks-singularity",
+    "transforms": [
+      {
+        "a": 1.0,
+        "b": 0.0,
+        "c": 0.0,
+        "color": 1.0,
+        "color_speed": 0.0,
+        "d": 1.0,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "opacity": 1.0,
+        "variation_params": {},
+        "variations": {
+          "bubble": 0.2,
+          "pre_blur": 10.0
+        },
+        "weight": 0.5
+      },
+      {
+        "a": 0.707107,
+        "b": 0.707107,
+        "c": -0.707107,
+        "color": 0.0,
+        "color_speed": 0.0,
+        "d": 0.707107,
+        "e": 0.0,
+        "f": -0.3,
+        "g": 0.0,
+        "opacity": 1.0,
+        "variation_params": {
+          "julian.dist": -1.0,
+          "julian.power": 2.0
+        },
+        "variations": {
+          "flatten": 1.0,
+          "julian": 1.0
+        },
+        "weight": 6.0
+      },
+      {
+        "a": 0.707107,
+        "b": 0.707107,
+        "c": -0.707107,
+        "color": 0.49803922,
+        "color_speed": 0.0,
+        "d": 0.707107,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "opacity": 1.0,
+        "variation_params": {
+          "julian.dist": -1.0,
+          "julian.power": 15.0
+        },
+        "variations": {
+          "flatten": 1.0,
+          "julian": 0.2
+        },
+        "weight": 1.0
+      },
+      {
+        "a": 0.707107,
+        "b": 0.707107,
+        "c": -0.707107,
+        "color": 0.7490196,
+        "color_speed": 0.0,
+        "d": 0.707107,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "opacity": 1.0,
+        "variation_params": {
+          "julian.dist": -1.0,
+          "julian.power": 8.0
+        },
+        "variations": {
+          "flatten": 1.0,
+          "julian": 0.3
+        },
+        "weight": 1.0
+      }
+    ]
+  },
+  "levels_gamma": 0.6,
+  "levels_high": 5.0,
+  "palette": {
+    "indexed_colors": "7ABAA8,81ACA2,899E9B,908F95,97808E,9F7288,A66581,AD587B,B34D75,BA4370,C03C6A,C63665,CC3260,D1305C,D63058,DA3354,DE3751,E13E4E,E4464B,E75049,E95C48,EA6947,EB7746,EB8546,EB9447,EAA247,E9B149,E7BE4B,E5CB4D,E2D750,DFE153,DBE957,D6EF5B,D2F45F,CDF664,C7F769,C1F56E,BBF174,B4EA79,AEE280,A7D986,A0CD8C,99C193,91B399,8AA5A0,8296A6,7B88AD,7479B3,6D6BBA,665EC0,5F53C6,5848CC,523FD1,4C38D6,4633DB,4130E0,3C30E4,3731E8,3335EC,2F3AEF,2C42F2,294BF4,2756F6,2562F7,2470F8,247EF8,248CF8,249BF7,25A9F6,27B8F4,29C5F2,2BD1F0,2FDCED,32E5E9,36ECE6,3BF2E1,40F5DD,45F7D8,4BF6D3,51F3CD,57EEC8,5EE7C2,65DEBB,6CD3B5,73C7AF,7ABAA8,81ACA2,899E9B,908F95,97808E,9F7288,A66581,AD587B,B34D75,BA4370,C03C6A,C63665,CC3260,D1305C,D63058,DA3354,DE3751,E13E4E,E4464B,E75049,E95C48,EA6947,EB7746,EB8546,EB9447,EAA247,E9B149,E7BE4B,E5CB4D,E2D750,DFE153,DBE957,D6EF5B,D2F45F,CDF664,C7F769,C1F56E,BBF174,B4EA79,AEE280,A7D986,A0CD8C,99C193,91B399,8AA5A0,8296A6,7B88AD,7479B3,6D6BBA,665EC0,5F53C6,5848CC,523FD1,4C38D6,4633DB,4130E0,3C30E4,3731E8,3335EC,2F3AEF,2C42F2,294BF4,2756F6,2562F7,2470F8,247EF8,248CF8,249BF7,25A9F6,27B8F4,29C5F2,2BD1F0,2FDCED,32E5E9,36ECE6,3BF2E1,40F5DD,45F7D8,4BF6D3,51F3CD,57EEC8,5EE7C2,65DEBB,6CD3B5,73C7AF,7ABAA8,81ACA2,899E9B,908F95,97808E,9F7288,A66581,AD587B,B34D75,BA4370,C03C6A,C63665,CC3260,D1305C,D63058,DA3354,DE3751,E13E4E,E4464B,E75049,E95C48,EA6947,EB7746,EB8546,EB9447,EAA247,E9B149,E7BE4B,E5CB4D,E2D750,DFE153,DBE957,D6EF5B,D2F45F,CDF664,C7F769,C1F56E,BBF174,B4EA79,AEE280,A7D986,A0CD8C,99C193,91B399,8AA5A0,8296A6,7B88AD,7479B3,6D6BBA,665EC0,5F53C6,5848CC,523FD1,4C38D6,4633DB,4130E0,3C30E4,3731E8,3335EC,2F3AEF,2C42F2,294BF4,2756F6,2562F7,2470F8,247EF8,248CF8,249BF7,25A9F6,27B8F4,29C5F2,2BD1F0,2FDCED,32E5E9,36ECE6,3BF2E1,40F5DD,45F7D8,4BF6D3,51F3CD,57EEC8,5EE7C2,65DEBB,6CD3B5,73C7AF,7ABAA8",
+    "locked": true,
+    "name": "Procedural \u00b7 Random"
+  },
+  "palette_log_strength": 1.3,
+  "render_mode": "escape",
+  "rotation": -0.7853982,
+  "saturation": 1.8,
+  "speed_factor": 1.0,
+  "tonemap_curve": {
+    "points": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 0.15625,
+        "y": 0.15625
+      },
+      {
+        "x": 0.5,
+        "y": 0.5
+      },
+      {
+        "x": 0.84375,
+        "y": 0.84375
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ]
+  },
+  "tonemap_mode": "linear",
+  "version": 3,
+  "zoom": 1.795,
+  "deterministic_rng": true
+}

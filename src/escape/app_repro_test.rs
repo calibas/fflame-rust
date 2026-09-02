@@ -3298,7 +3298,7 @@ mod tests {
     /// oracle for the non-escaping families' orbit accumulators. The
     /// map's own reference step is verified against f64 separately
     /// (reference.rs), so this isolates the GPU delta algebra.
-    fn exact_mean_magnitude(
+    pub(super) fn exact_mean_magnitude(
         esc: &crate::config::escape::EscapeConfig,
         w: u32,
         h: u32,
@@ -3844,6 +3844,93 @@ mod tests {
         println!("frames differ in {diff_ab} bytes; B-after-A vs B-alone worst channel delta {worst}");
         assert!(worst <= 1,
             "a frame accumulated after another must equal that frame alone (worst {worst}/255)");
+    }
+
+    /// A Ducks reference that passes near the LOG SINGULARITY.
+    ///
+    /// Reported as: past about 1e12 the fractal changes completely,
+    /// zooming back out does not undo it, and the two saved views
+    /// render wrongly when loaded directly. Blamed on orbit caching;
+    /// it was arithmetic, and it was not depth-dependent at all --
+    /// measured, this centre was broken from zoom 19 upward, which is
+    /// as soon as it perturbs.
+    ///
+    /// At iteration 65 the reference reaches Z = (-0.1500, 0.6750)
+    /// against c = (0.15, -0.675), so `fold(Z) + c` cancels to
+    /// |T| = 2.08e-8 -- a third of an ulp of the O(1) operands. Two
+    /// things then failed together:
+    ///
+    /// - `rf_tinv` expanded 1/(T_hi + T_lo) to first order in
+    ///   T_lo/T_hi, which is only valid while T_hi dominates. Here
+    ///   T_hi holds nothing but rounding and the true T is in the low
+    ///   word, so the correction was the size of the term.
+    /// - `rf_cinv` then returned its 1e20 floor sentinel, |u| passed
+    ///   1e19, and `dot(u, u)` OVERFLOWED f32 inside `rf_clog1p` --
+    ///   +inf where log(1+u) is about 45.
+    ///
+    /// 898 of 1728 pixels went infinite, taking the magnitude-average
+    /// accumulator with them. Both rungs shared `rf_tinv`, so both
+    /// were affected.
+    ///
+    /// Pinned against exact big-float orbits at nine depths spanning
+    /// the rung switch, because the failure was invisible to every
+    /// existing Ducks test: those centres never pass close enough to
+    /// the singularity for the expansion to break.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn ducks_survives_a_reference_that_grazes_the_log_singularity() {
+        let (device, queue) = repro_device();
+        let (w, h) = (48u32, 36u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64,
+            &config.flame, config.palette_size);
+        for zoom in [19.267183f64, 30.0, 41.474274, 47.0, 50.0, 56.0] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "ducks".to_string();
+            esc.coloring = "magnitude_average".to_string();
+            esc.center_re = "1.28453316189159720109327118553936378896".to_string();
+            esc.center_im = "0.02803879307866999008142687940949730302".to_string();
+            esc.julia = true;
+            esc.julia_re = 0.15;
+            esc.julia_im = -0.675;
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 80;
+            esc.bailout = 4.0;
+            esc.formula_params.insert("variant".to_string(), 0.0);
+
+            let truth = exact_mean_magnitude(
+                &esc, w, h, crate::escape::reference::MAP_DUCKS, [0.0, 0.0]);
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut g = 0;
+            loop {
+                let mut e = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("sing") });
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(e.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if done { break; }
+                g += 1;
+                assert!(g < 100_000);
+            }
+            let recs = escape.read_results_full(&device, &queue).unwrap();
+            let path = escape.last_path;
+            escape.destroy();
+            let got: Vec<f64> = recs.iter()
+                .map(|r| r.accum[0] as f64 / (r.accum[1] as f64).max(1.0)).collect();
+            let n = got.len();
+            let nonfinite = got.iter().filter(|v| !v.is_finite()).count();
+            assert_eq!(nonfinite, 0,
+                "zoom {zoom}: {nonfinite}/{n} pixels non-finite (the singularity overflow)");
+            let mean_err: f64 = got.iter().zip(&truth)
+                .map(|(a, b)| (a - b).abs()).sum::<f64>() / n as f64;
+            let bad = got.iter().zip(&truth)
+                .filter(|(a, b)| (*a - *b).abs() > 1e-3).count();
+            println!("zoom {zoom:9.4}: mean|err| {mean_err:.3e}, {bad}/{n} past 1e-3, path={path}");
+            assert!(mean_err < 1e-5,
+                "zoom {zoom} ({path}): mean error {mean_err:.3e} against exact orbits");
+            assert_eq!(bad, 0, "zoom {zoom} ({path}): {bad}/{n} pixels past 1e-3");
+        }
     }
 
     /// The reported seam: Ducks just past the perturbation threshold.
@@ -8480,6 +8567,7 @@ mod tests {
         renderer.destroy();
     }
 }
+
 
 
 
