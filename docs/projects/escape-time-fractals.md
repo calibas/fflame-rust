@@ -1,7 +1,55 @@
 # Escape-Time, Field & Orbit-Trap Fractals
 
-**Status:** Planning — agreed architecture, no code yet. Scheduled for
-a post-0.5 branch. This is the working plan.
+**Status:** SHIPPED and live on the `escape-time` branch — 25
+formulas, 14 colorings, 2 field formulas, deep zoom by perturbation
+with big-float references, relief shading, auto contrast, and the
+whole shared tail (palette, tone mapping, effects, export, animation,
+scripting, online sync). This began as a plan and is now the design
+record: the dated sections below are the history of how each piece was
+built and what was measured, and they are the reason a change here can
+be judged against what was already tried.
+
+The remaining work is listed in **What is left** immediately below.
+The per-item completion tracker, the new-families research and the
+seed document for the third fractal family are finished and archived
+under [docs/archive/escape-time/](../archive/escape-time/).
+
+## What is left
+
+Everything else in this document is built. These are not:
+
+- **Perturbation tiers for the transcendental formulas** —
+  `tetration`, `exponential`, `trig`, `collatz`. The deltas exist
+  (`exp(Z+d) = exp(Z)·exp(d)`); each needs its own error analysis.
+  Ducks' trig variants 1-3 (Secant among them) sit here too: they
+  want big-float `sin`/`cos`/`exp` on the reference side, which is
+  comparable groundwork to the `ln`/`atan2` already done.
+- **Chebyshev over the two non-unity Newton functions** DECLINES the
+  tier, by measurement rather than omission: its `r` is
+  asymptotically constant, so the quotient rule loses the delta, and
+  the symbolic cancellation that fixes it exists only for `z^p - 1`.
+  Recorded so it is not re-attempted blind.
+- **Series approximation** — absent, and still unmeasured against
+  BLA. Worth a Phase-0 measurement before any building.
+- **Kaliset's zoom-24 floor** — it perturbs correctly above zoom 24
+  and declines below it, because the inversion amplifies the delta
+  faster than the rung holds. The panel's depth hint does not yet
+  express that nuance (it reads "unlimited" from zoom 14).
+- **Row banding of the perturbed path** — would let a frame exceed a
+  device's buffer limit by sizing the per-pixel state to a band, as
+  the direct path already does via `tile_y0`. Only needed where a
+  device's real `max_buffer_size` is under the frame's state (398 MB
+  at 4K); accumulation covers the antialiasing case. Not built.
+- **Temporal antialiasing / spectral rendering** — motion blur and
+  wavelength-correlated fringing on a zoom. Planned, never scheduled;
+  it is an export-loop feature, not a shader one, and wants its own
+  plan. Full costing in the archived new-families research (§7).
+- **GPU reference-orbit computation (the NTT direction)** —
+  measurement-gated go/no-go, never run. See
+  [escape-ntt-reference.md](../experimental/escape-ntt-reference.md).
+- **`timeline_of_a_cached_revisit`** fails (148 vs 197 limbs) and has
+  since before 2026-09-02; verified pre-existing against a stashed
+  tree. Unrelated to the tiers.
 
 A family of per-pixel fragment rendering modes (Mandelbrot, Burning
 Ship, tetration, Kali, Lyapunov, Weierstrass fields, escape-time IFS,
@@ -1761,7 +1809,7 @@ Two measurement notes worth keeping, since both cost time here:
 the first trap here that is not a point, a cross or a circle. It
 composes with all 23 formulas, which is why it was worth doing before
 adding a 24th (see
-[escape-new-families.md](escape-new-families.md)).
+[escape-new-families.md](../archive/escape-time/escape-new-families.md)).
 
 The form is Nylander's:
 
@@ -1889,7 +1937,7 @@ all; folding — reflecting only the points on one side, which is what
 "origami" means and what the widely repeated paraphrase ("fold a piece
 of paper, project an image onto it, unfold") describes — produces the
 creases and wing lobes. Both prototypes are in
-[escape-new-families.md](escape-new-families.md).
+[escape-new-families.md](../archive/escape-time/escape-new-families.md).
 
 A second thing the prototypes exposed: the creases are DERIVATIVE
 discontinuities, so a smooth greyscale ramp hides them almost
@@ -2601,7 +2649,7 @@ about zoom 14 -- which is why `PERTURB_MIN_ZOOM` sits there. Extending that set 
 completion plan.
 
 **What remains before this branch is done** is scoped in
-[escape-time-completion.md](escape-time-completion.md): per-formula
+[escape-time-completion.md](../archive/escape-time/escape-time-completion.md): per-formula
 accuracy against references (only 3 of 23 formulas can perturb --
 the other 20 stop at the direct path's ~2^14 ceiling), extending the
 Mandelbrot deep-zoom machinery to more formulas (only 3 define a
@@ -2612,7 +2660,7 @@ escape zero times today).
 
 Two plans split out of this queue on 2026-08-28 (both "later",
 sequenced after the orbit-store compression lands):
-[escape-tdr-safety.md](../archive/escape-tdr-safety.md) — the perturbed-path
+[escape-tdr-safety.md](../archive/escape-time/escape-tdr-safety.md) — the perturbed-path
 TDR breaker, trust-bounded chunk growth, GPU timestamp pacing,
 interior detection, escape-consistent animation playback, and
 retiring Overwrite/live-preview in escape mode; and

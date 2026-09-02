@@ -14,7 +14,7 @@ all, and 20 of 23 formulas cannot zoom past the f32 direct path.
 ## 1. Accuracy against a reference — DONE 2026-08-28
 
 Ran, results and the open item recorded in
-[escape-time-fractals.md](escape-time-fractals.md) ("Formula accuracy
+[escape-time-fractals.md](../../projects/escape-time-fractals.md) ("Formula accuracy
 audit"), reproducible via `scripts/audit_escape_formulas.py`.
 21 of 23 formulas verified against independent numpy oracles; one
 real bug found and fixed (novaretti's pole sentinel overflowed f32 on
@@ -90,12 +90,12 @@ Still open, in the order the survey judged tractable:
   for its O(1) divisor. Kaliset is accurate only past about zoom 24
   and carries a floor of its own rather than shipping a render worse
   than direct at the threshold. Full account, with the numbers, in
-  [escape-time-fractals.md](escape-time-fractals.md).
+  [escape-time-fractals.md](../../projects/escape-time-fractals.md).
 - **Lambda — DONE 2026-08-30.** The first tier whose PARAMETER
   MULTIPLIES, so its delta step reads the reference's own c and its
   parameter-plane term picks up `Z(1-Z)` rather than a bare `+ dc`.
   Both rungs. Details in
-  [escape-time-fractals.md](escape-time-fractals.md).
+  [escape-time-fractals.md](../../projects/escape-time-fractals.md).
 - **Feather — DONE 2026-08-30** (same day, two commits). The gate
   described below lasted hours: the depth failure turned out to be the
   f32 escape test quantizing away sub-ulp deltas, fixed engine-wide by
@@ -364,7 +364,19 @@ three sizes before committing to the maintenance cost, because a
 feature-gated engine is a permanent tax on every future change that
 crosses the seam.
 
-## 5. Online API support
+## 5. Online API support — DONE
+
+**Shipped after this was written.** `ApiRenderMode` gained an
+`escape` value (`api/types.rs`), `api/sync.rs` maps `RenderMode::Escape`
+both ways, the fractal browser labels and filters on it, and the
+client-side refusal is gone. The server side answered too, and its
+answer is recorded on the enum: escape fractals are stored AS FLAMES
+— same endpoints, ids and access control — so `transform_count` is 0
+and `variation_names` empty for them legitimately, and `has_3d=false`
+returns them alongside 2D flames. A serde round-trip test pins the
+wire string.
+
+### The survey, for reference
 
 **What the survey found.** `ApiRenderMode` has two values, `2d` and
 `3d`. `RenderMode::Escape` currently maps to `TwoD` (lossy), a
@@ -393,7 +405,7 @@ name (validated against the registry, with the alternatives listed on
 a typo), the catalog reachable via `formulas()`/`colorings()`/
 `params()`, the view (`center`, `zoom`, `max_iter`, `bailout`,
 `supersample`, `rotation`), the Julia plane, and both parameter maps.
-Documented in [SCRIPTING.md](../main/SCRIPTING.md), which the existing
+Documented in [SCRIPTING.md](../../main/SCRIPTING.md), which the existing
 staleness test enforces, and covered by six tests.
 
 Two decisions that are load-bearing rather than stylistic:
@@ -633,9 +645,22 @@ where no derivative is compiled, and the escape panel explains which
 of the two causes applies (the formula defines none, or the view is on
 the deep path, which iterates no derivative orbit whatever the formula
 defines). Details in
-[escape-time-fractals.md](escape-time-fractals.md).
+[escape-time-fractals.md](../../projects/escape-time-fractals.md).
 
-## Known gap, found 2026-08-29: no recovery from DEVICE LOST
+## Known gap, found 2026-08-29: no recovery from DEVICE LOST — CLOSED
+
+**Built since.** `GpuContext::reinit()` re-creates device, surface and
+renderers; `gpu::device::take_device_lost()` raises the signal and the
+frame loop in `app/mod.rs` drops GPU-dependent resources and rebuilds
+rather than running on against a dead device; a `crash.log` in the app
+data directory records the event, because the GUI build attaches no
+console and stderr goes nowhere. The circuit breakers that keep it
+from recurring — `DIRECT_BUDGET_SHIFT`, `PERTURB_BUDGET_SHIFT`, and
+their persisted tuning file — shipped alongside (see
+[escape-tdr-safety.md](escape-tdr-safety.md), also archived here).
+
+### The gap as originally written
+
 
 A TDR watchdog kill (observed when origami's first fold-table
 implementation ran per-thread under 3x supersampling) leaves the app

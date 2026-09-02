@@ -8,7 +8,7 @@ only artefacts are these documents and two NumPy prototypes under
 This is the plan of record for the third fractal family — the
 neighbour-coupled simulations (reaction–diffusion, cellular automata,
 aggregation and growth models) proposed in
-[field-type-fractals.md](field-type-fractals.md). It is split across
+[field-type-fractals.md](../archive/escape-time/field-type-fractals.md). It is split across
 four documents so each can be read for one purpose:
 
 | document | answers |
