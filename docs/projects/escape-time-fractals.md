@@ -3247,6 +3247,61 @@ wall-clock estimate would be confidently wrong, while the counts are
 exact and carry the scale — which is the part that matters at ten
 million iterations.
 
+### The slice fix unleashed the GPU chunk: a browser TDR (2026-09-02)
+
+Reported right after the progress-overlay commit: console spam
+("Escape supersample clamped to 6x at 397x708"), an intermittent
+`memory access out of bounds` after loading several files, and -- the
+one that was a regression -- a `DXGI_ERROR_DEVICE_HUNG` mid-render.
+
+**The spam** was a warning placed above `resize`'s no-change early
+return; the viewport calls `resize` every frame with the config's
+factor, and a factor the budget clamps is clamped identically every
+frame. Moved below the early return: once, when the clamp takes
+effect.
+
+**The TDR was caused by the slice fix, by removing an accidental
+throttle.** Without timestamp queries (WebGPU exposes none by
+default) the chunk sizer grows the dispatch from CALL SPACING -- the
+time between `render()` calls -- on the premise that a call waits for
+the GPU. In a browser nothing does: WebGPU cannot block on
+completion, so the spacing is the frame period plus CPU work, and the
+chunk doubles every third on-time call regardless of GPU cost, up to
+64x the seed. At 397x708 with 6x supersampling that ceiling is ~51k
+iterations over 10 MP in one dispatch -- a guaranteed multi-second
+submission. It had never fired because the CPU orbit slice took
+240 ms, so every call was "late" and the chunk sat pinned at 16.
+Cutting the slice to 30 ms removed the throttle, and the chunk
+climbed to the TDR within a few seconds.
+
+Fixed by giving the browser what the desktop has: a MEASURED cost.
+The no-timestamp path now times each recorded batch from
+`on_submitted_work_done` -- an upper bound on GPU time, which is the
+conservative direction -- and drains it through the same attribution
+the timestamp pacer uses (`apply_gpu_measurement`), so `next_chunk`
+sizes from `target / ms_per_iter` with its existing bounded growth.
+Until the first sample lands the browser chunk stays at the
+calibrated seed; the blind call-spacing growth is desktop-only now,
+where a call really does wait. `a_completion_time_sample_reaches_the_chunk_sizer`
+injects a sample as the callback would and checks it lands.
+
+**Two things that made the loss unrecoverable in the browser, also
+fixed.** The circuit breaker halved the budget in-session but
+`tuning::save()` was a no-op on wasm, so every reload started at the
+full budget and lost the device again; the storage backend already
+had a localStorage `read_file`/`write_file`, and the tuning file now
+lives there. And a lost device is not rebuilt in the browser at all
+(no window to recreate a surface on) -- every call after it fails
+quietly, which is the "freeze" -- so the viewport now says so:
+"Reload the page; the render budget has been lowered for next time."
+
+**The `memory access out of bounds` is still open.** Chrome's
+wording fixes the class (linear memory), and the 16 MiB stack cleared
+some cases, but this one recurs after several loads at the same
+function (`$func868`) and does not reproduce natively. The
+`dist-debug` build exists for exactly this; its trace names the
+function and its overflow checks fire at the source.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

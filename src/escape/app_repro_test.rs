@@ -4038,6 +4038,49 @@ mod tests {
         assert_eq!(EscapeRenderer::orbit_slice_budget(2), 50_000);
     }
 
+    /// A completion-time GPU sample must size the next chunk.
+    ///
+    /// The browser has no timestamp queries, so the chunk sizer used
+    /// to grow from CALL SPACING -- blind to the GPU, because WebGPU
+    /// cannot block on completion -- doubling every third call to 64x
+    /// the seed. That was a DXGI_ERROR_DEVICE_HUNG in the field. The
+    /// no-timestamp path now times `on_submitted_work_done` and drains
+    /// the sample through the same attribution the timestamp pacer
+    /// uses. This injects such a sample as the callback would and
+    /// checks it lands in the sizer's measured cost with the regime
+    /// attached -- the drain and attribution are shared with the
+    /// timestamp path, so this covers the part that is new.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_completion_time_sample_reaches_the_chunk_sizer() {
+        let (device, queue) = repro_device();
+        let (w, h) = (64u32, 48u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64,
+            &config.flame, config.palette_size);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "smooth".to_string();
+        esc.center_re = "-0.7436438870371587".to_string();
+        esc.center_im = "0.1318259042053119".to_string();
+        esc.zoom_log2 = 20.0;
+        esc.max_iter = 400;
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_perturbed = true;
+        // 12 ms for 300 iterations = 0.04 ms/iter, flagged as a cold
+        // (from-start) measurement.
+        escape.inject_gpu_done_sample(12.0, 300, true);
+        let mut enc = device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("drain") });
+        let _ = escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+        queue.submit(std::iter::once(enc.finish()));
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let got = escape.gpu_ms_per_iter().expect("the sample must land in the sizer");
+        assert!((got - 0.04).abs() < 1e-6, "ms/iter {got} != 0.04");
+        escape.destroy();
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.

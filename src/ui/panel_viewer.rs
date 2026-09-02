@@ -1287,6 +1287,34 @@ impl<'a> PanelViewer<'a> {
             // Deep-zoom reference builds take minutes and the frame
             // cannot start until one exists, so say so rather than
             // leaving the last image up with no explanation.
+            // A lost GPU device in the browser is not recoverable in
+            // place (no window to rebuild a surface on), and every
+            // call after it fails quietly, so the canvas would simply
+            // stop -- reported as a freeze with a DXGI_ERROR_DEVICE_HUNG
+            // in the console. Say what happened and what to do.
+            #[cfg(target_arch = "wasm32")]
+            if crate::gpu::device::device_was_lost() {
+                let rect = response.rect;
+                let painter = ui.painter_at(rect);
+                let galley = painter.layout_no_wrap(
+                    t!("escape_panel.gpu_lost_reload").to_string(),
+                    egui::FontId::proportional(15.0),
+                    egui::Color32::from_rgb(255, 210, 200),
+                );
+                let pad = egui::vec2(12.0, 7.0);
+                let box_size = galley.size() + pad * 2.0;
+                let origin = egui::pos2(
+                    rect.center().x - box_size.x * 0.5,
+                    rect.center().y - box_size.y * 0.5,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_size(origin, box_size),
+                    6.0,
+                    egui::Color32::from_black_alpha(220),
+                );
+                painter.galley(origin + pad, galley, egui::Color32::WHITE);
+            }
+
             // NOT desktop-only. The browser needs this more, not
             // less: it has no worker thread, so a long reference is
             // built in slices on the frame loop and the canvas simply
