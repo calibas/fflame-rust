@@ -2652,6 +2652,118 @@ remains is mode C itself and the deferred tails:
   decision) or a separate worker bundle; browser builds keep the
   synchronous reference path meanwhile.
 
+### The big-float families perturb: Newton, Nova, Ducks, Kaliset (2026-09-02)
+
+The four remaining families the completion plan called blocked. Each
+needed the same thing first, and it is the reason they were blocked:
+**a reference orbit that fixed point cannot hold**. Newton's step
+divides by f', so a reference passing near a critical point makes an
+excursion no fixed binary point survives (measured: |Z| reaches 3e9
+from a 1e-5 miss, and 958 on an ordinary boundary view); Kaliset
+inverts; Ducks takes a log. So these iterate a `BigComplex` -- the
+limb-array-plus-exponent type that already existed for Newton
+nucleus-finding -- and `bigfloat.rs` gained the transcendentals to do
+it: `sqrt`, `ln` and a principal-value `atan2`, each Newton- or
+series-based over the existing multiply, with `ln 2` and `pi` cached
+per width. `map_is_big` names the family set; those orbits are never
+written to the disk store (the file format has no slot for their live
+state, and they are short).
+
+**What each tier's delta form is**, beyond the shapes already in this
+document:
+
+- **Newton / Nova** — the quotient rule over Taylor differences: every
+  `dF`, `dF'`, `dF''` is the cancellation-free binomial, and each
+  scheme is a quotient of polynomials in those, so Feather's
+  `dq = (dN - q dD)/(D + dD)` composes with the product rule. Newton
+  is c-free, so the renderer requests its reference **Julia-style**
+  whatever the toggle says (`PerturbTier::is_dynamical`): the delta
+  starts at d0 and no dc term ever enters.
+- **Kaliset** — the Ship tier's `diffabs` for the fold, over a REAL
+  denominator: `dq = ((da, db) - q*dr2)/(r2 + dr2)`.
+- **Ducks** — `log1p` of the fold's ratio, since a bare
+  `log(T + dt) - log(T)` cancels to nothing.
+
+Four things went wrong, and all four are worth recording because
+three of them looked like the others.
+
+**1. Chebyshev's `r` cannot be differenced by the quotient rule.**
+`r = F F''/(2F'^2)` is asymptotically CONSTANT, so `dA - r dB`
+cancels its own leading terms and leaves ~|Z|^-(3p-2) of the
+operands -- at that 958 excursion, far below f32. Newton and Halley
+never trigger it (their references peak at 10.5 and 2.7); Chebyshev
+put 3.3% of pixels in the wrong basin. The fix is symbolic rather than
+numeric: for `z^p - 1`, `r = k(1 - z^-p)` with `k = (p-1)/2p`, so
+`dr = k dM/(Z^p (Z+d)^p)` -- McMullen's pole form, cancellation-free.
+That closed form exists only for `z^p - 1`, so **Chebyshev over the
+other two functions declines the tier** (`rootfinder_has_delta`)
+rather than shipping a plausible wrong picture.
+
+**2. Ducks' branch cut is not invisible.** `Log(T) + Log1p(u)` is the
+principal value only MODULO 2*pi*i, and the fold does NOT undo the
+difference (`|y|` and `|y - 2pi|` differ everywhere except at the cut
+itself) -- while `|z|` is exactly what the Ducks colorings average. So
+a missed turn is an O(1) error on a real fraction of pixels. Both
+rungs now re-anchor the delta by a whole number of turns; a MULTIPLE,
+because variant 4's reference is `Log(t^2)`, whose delta is
+`2 Log1p(u)` and can start two turns out.
+
+**3. The reference's f32 hi is not good enough for Ducks.**
+`T = fold(Z) + C` is O(1) and built from the stored hi, so it is
+wrong by ~2^-24 -- and that is not a relative error on the delta but
+an INCONSISTENCY between the reference the delta is propagated
+against and the one the coloring adds back. Measured at zoom 30:
+8.0e-5 mean (worst 4.5e-3) against exact orbits, which is 1.6% of that
+view's entire contrast. Feeding the low half back through one Neumann
+term (`rf_tinv`) gives 1.1e-6.
+
+**4. Kaliset is accurate only from about zoom 24.** Its inversion
+gives the delta a 1/|Z|^2 amplification the other tiers have no
+analogue for. Scored against exact orbits on an inverting view:
+37% out at zoom 10 and 20% at 14 -- where the DIRECT path is 0.2% --
+then 2.4e-2 at 18, 3.6e-4 at 24, 5.7e-6 at 30. So it carries a floor
+of its own (`tier_min_zoom`) and renders direct below it, which is
+what it did before this tier existed. Shipping without the floor would
+have made the picture worse exactly at the threshold. A compensated
+(exact-product) difference in its numerator was tried and measured to
+change nothing, so it is not in the code.
+
+**Testing this needed a better oracle than f64, and that cost the most
+time.** At these boundary centres an f64 orbit has already lost the
+trajectory by step 27-41, and Chebyshev's orbits run to 83 -- so an
+f64 "truth" disagrees with the exact answer on ~3% of pixels by
+itself, which reads exactly like a broken delta step. Worse, a
+float32 CPU mirror of the delta algebra AGREED with that f64 oracle,
+because both drifted together; it exonerated code that was in fact
+wrong. The convergent oracles now read their outcome off a big-float
+orbit per pixel, and the non-escaping ones off `exact_mean_magnitude`.
+Two further traps in the same family: comparing the perturbed render
+against the DIRECT one assumes direct is the truth, which on a chaotic
+orbit average it is not (`perturbation_beats_direct...` scores both
+against exact orbits instead); and Ducks variant 4 at 80 iterations is
+chaos-dominated -- a 1e-3-PIXEL nudge moves the exact mean by 6.6e-3
+on 97% of pixels -- so its test runs at 40, where the field is fully
+determined and still carries 8.7e-3 of contrast.
+
+**Two robustness fixes fell out.** The root-finder reference now takes
+the shader's own `esc_cdiv` pole guard instead of ending the orbit at
+a critical point: `z^p - 1` has `f'(0) = 0` and Newton's shipped
+preset is centred at exactly z = 0, so an orbit that stopped there
+handed the perturbed path a one-entry reference and rendered nothing
+like the direct image (603 of 768 blocks). And `rf_cinv` gained an
+upper guard, because Z^p at |Z| ~ 1e3 overflows f32 for the higher
+powers and the unguarded form would divide inf by inf.
+
+**Verified.** Against exact orbits at zoom 30, both rungs: Newton
+schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
+mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
+on both sign branches; Ducks 1.1e-6 (variant 0) and its variant-4
+view. Against the DIRECT path at shallow zoom, block-mean compared:
+Newton every scheme and the relaxation, Nova, and Ducks both variants
+and both planes, all on both rungs. Kaliset is deliberately absent
+from that comparison -- forcing it below its floor would test it
+outside the regime the engine ever uses it in.
+
 ---
 
 ## 5. Mode A catalog — iterate & classify

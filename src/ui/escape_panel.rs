@@ -1652,9 +1652,14 @@ mod tests {
             // the panel must stop telling users it stops at 2^14.
             ("lambda", true),
             ("feather", true),
-            ("kaliset", false),
-            ("newton", false),
+            // The big-float families: Kaliset, Ducks (plain log),
+            // Newton (polynomial functions) and Nova all perturb now.
+            ("kaliset", true),
+            ("ducks", true),
+            ("newton", true),
+            ("nova", true),
             ("tetration", false),
+            ("lattes", false),
         ] {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = formula.to_string();

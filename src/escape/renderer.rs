@@ -1337,6 +1337,12 @@ impl EscapeRenderer {
             // those steps, on convergence. Skipping past a settle
             // would report the wrong iteration count.
             assembler::PerturbTier::Magnet(_) => return false,
+            // Convergent, like Magnet: a skip could cross the settle.
+            assembler::PerturbTier::Newton { .. } | assembler::PerturbTier::Nova(_) => {
+                return false
+            }
+            // Abs-folds (and a log): not holomorphic, no linear model.
+            assembler::PerturbTier::Kaliset | assembler::PerturbTier::Ducks(_) => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings keep the per-step path.
@@ -2096,6 +2102,19 @@ impl EscapeRenderer {
         device: &Device,
         queue: &Queue,
     ) -> Option<Vec<(u32, u32)>> {
+        self.read_results_full(device, queue)
+            .map(|v| v.into_iter().map(|r| (r.n, r.tags)).collect())
+    }
+
+    /// Test-only: every field of every terminal record (the recolor
+    /// cache), for ground-truth comparisons that need the final z or
+    /// the orbit accumulator rather than just the count.
+    #[cfg(test)]
+    pub(crate) fn read_results_full(
+        &self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Option<Vec<IterRecord>> {
         let src = self.results_buffer.as_ref()?;
         let px = (self.width as u64) * (self.height as u64);
         let size = px * 32;
@@ -2118,13 +2137,15 @@ impl EscapeRenderer {
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         rx.recv().ok()?.ok()?;
         let data = slice.get_mapped_range();
+        let f = |rec: &[u8], at: usize| f32::from_le_bytes(rec[at..at + 4].try_into().unwrap());
         let out = data
             .chunks_exact(32)
-            .map(|rec| {
-                (
-                    u32::from_le_bytes(rec[24..28].try_into().unwrap()),
-                    u32::from_le_bytes(rec[28..32].try_into().unwrap()),
-                )
+            .map(|rec| IterRecord {
+                z: [f(rec, 0), f(rec, 4)],
+                dz: [f(rec, 8), f(rec, 12)],
+                accum: [f(rec, 16), f(rec, 20)],
+                n: u32::from_le_bytes(rec[24..28].try_into().unwrap()),
+                tags: u32::from_le_bytes(rec[28..32].try_into().unwrap()),
             })
             .collect();
         drop(data);
@@ -2745,11 +2766,35 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// path's f32 ceiling. Everything else stays direct (and deep
     /// zooms of unsupported combinations render the direct path's
     /// f32 mush honestly rather than wrong perturbation math).
-    fn wants_perturbation(escape: &EscapeConfig) -> bool {
-        escape.zoom_log2 > PERTURB_MIN_ZOOM
-            && Self::perturb_tier(escape).is_some()
-            && !escape.is_damped()
-            && escape.biomorph == crate::config::escape::BiomorphMode::Off
+    pub(crate) fn wants_perturbation(escape: &EscapeConfig) -> bool {
+        match Self::perturb_tier(escape) {
+            Some(tier) => {
+                escape.zoom_log2 > Self::tier_min_zoom(tier)
+                    && !escape.is_damped()
+                    && escape.biomorph == crate::config::escape::BiomorphMode::Off
+            }
+            None => false,
+        }
+    }
+
+    /// The depth a tier's delta form is ACCURATE from, which is not
+    /// the same question as the depth the direct path runs out at.
+    ///
+    /// Only Kaliset needs a floor of its own. Its map is an inversion,
+    /// so the delta picks up a 1/|Z|^2 amplification that the other
+    /// tiers have no analogue for, and it needs a genuinely small
+    /// delta before that settles. Measured against exact orbits on an
+    /// inverting view: 37% out at zoom 10 and 20% at 14 (the direct
+    /// path is 0.2% there), 2.4e-2 at 18, then 3.6e-4 at 24 and
+    /// 5.7e-6 at 30. Below the floor it renders direct -- which is
+    /// what it did before this tier existed, so the floor costs
+    /// nothing and shipping without one would have made the picture
+    /// WORSE exactly at the threshold.
+    fn tier_min_zoom(tier: assembler::PerturbTier) -> f64 {
+        match tier {
+            assembler::PerturbTier::Kaliset => 24.0,
+            _ => PERTURB_MIN_ZOOM,
+        }
     }
 
     /// Rows the direct path may cover in one dispatch.
@@ -2789,6 +2834,31 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // formula rather than by a parameter.
         if escape.formula == "manowar" {
             return [1.0, 0.0];
+        }
+        // Newton and Nova carry their complex RELAXATION here: it
+        // multiplies the step, so it is part of the reference orbit.
+        // Resolved through the registry defaults, as Phoenix's p is.
+        if escape.formula == "newton" || escape.formula == "nova" {
+            let defs = super::get_formula(&escape.formula).parameters;
+            let get = |name: &str| {
+                escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                    defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.default)
+                })
+            };
+            return [get("relax_re"), get("relax_im")];
+        }
+        // Kaliset's sign branch and Ducks' variant select different
+        // maps, so they are part of the identity too. Carried RAW,
+        // exactly as `pack_params` hands them to the shader: the
+        // reference's own step then thresholds them the same way the
+        // WGSL does, so the two cannot describe different maps.
+        if escape.formula == "kaliset" || escape.formula == "ducks" {
+            let name = if escape.formula == "kaliset" { "plus_c" } else { "variant" };
+            let defs = super::get_formula(&escape.formula).parameters;
+            let v = escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.default)
+            });
+            return [v, 0.0];
         }
         // McMullen carries its POLE POWER here: a MapId has one
         // integer exponent (n) and this family needs two. Resolved
@@ -2936,6 +3006,55 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let v = variant.round();
                 if (variant - v).abs() < 1e-6 && (0.0..=5.0).contains(&v) {
                     Some(assembler::PerturbTier::Ship(v as u32))
+                } else {
+                    None
+                }
+            }
+            // The root-finder plane: an integer power (the binomial),
+            // one of the three closed-form schemes, and a POLYNOMIAL
+            // function -- the transcendental ones (sin, cosh, z^p sin)
+            // have no big-float sin yet and stay direct.
+            "newton" => {
+                let get = |k: &str, d: f32| escape.formula_params.get(k).copied().unwrap_or(d);
+                let (p, scheme, func) = (get("power", 3.0), get("scheme", 0.0), get("func", 0.0));
+                let (rp, rs, rf) = (p.round(), scheme.round(), func.round());
+                let integral = |v: f32, r: f32| (v - r).abs() < 1e-6;
+                if integral(p, rp)
+                    && (2.0..=12.0).contains(&rp)
+                    && integral(scheme, rs)
+                    && (0.0..=2.0).contains(&rs)
+                    && integral(func, rf)
+                    && (0.0..=2.0).contains(&rf)
+                    && assembler::rootfinder_has_delta(rs as u32, rf as u32)
+                {
+                    Some(assembler::PerturbTier::Newton {
+                        p: rp as u32,
+                        scheme: rs as u32,
+                        func: rf as u32,
+                    })
+                } else {
+                    None
+                }
+            }
+            "nova" => {
+                let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=12.0).contains(&rounded) {
+                    Some(assembler::PerturbTier::Nova(rounded as u32))
+                } else {
+                    None
+                }
+            }
+            // Both sign branches; the branch rides the reference's
+            // identity (map_params) and the step reads it at runtime.
+            "kaliset" => Some(assembler::PerturbTier::Kaliset),
+            // The plain log and the log of the square; the sin/sec
+            // variants have no big-float sin yet and stay direct.
+            "ducks" => {
+                let v = escape.formula_params.get("variant").copied().unwrap_or(0.0);
+                let rv = v.round();
+                if (v - rv).abs() < 1e-6 && (rv == 0.0 || rv == 4.0) {
+                    Some(assembler::PerturbTier::Ducks(rv as u32))
                 } else {
                     None
                 }
@@ -3123,13 +3242,19 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         escape: &EscapeConfig,
     ) -> (u32, bool) {
         use super::reference::{OrbitRequest, OrbitWorker};
-        let julia_c = if escape.julia {
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        // A c-free map (Newton) is requested Julia-style whatever the
+        // toggle says: the reference seeds at the centre and the
+        // pixels' deltas at d0, with no dc term -- see
+        // PerturbTier::is_dynamical.
+        let julia_c = if tier.is_dynamical() {
+            Some((0.0, 0.0))
+        } else if escape.julia {
             Some((escape.julia_re, escape.julia_im))
         } else {
             None
         };
-        let tier = Self::perturb_tier(escape)
-            .unwrap_or(assembler::PerturbTier::Power(2));
         let (power, ship, ship_variant) = match tier {
             assembler::PerturbTier::Power(p) => (p, false, 0),
             assembler::PerturbTier::Ship(v) => (2, true, v),
@@ -3154,6 +3279,12 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             assembler::PerturbTier::Magnet(_) => {
                 (2, false, super::reference::MAP_MAGNET)
             }
+            assembler::PerturbTier::Newton { p, scheme, func } => {
+                (p, false, super::reference::newton_variant(scheme, func))
+            }
+            assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
+            assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
+            assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
         };
         let height_px = self.height.max(1) as f64;
         let req = OrbitRequest {
@@ -3468,13 +3599,19 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         escape: &EscapeConfig,
         budget: Option<u32>,
     ) -> Option<(u32, bool)> {
-        let julia_c = if escape.julia {
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        // A c-free map (Newton) is requested Julia-style whatever the
+        // toggle says: the reference seeds at the centre and the
+        // pixels' deltas at d0, with no dc term -- see
+        // PerturbTier::is_dynamical.
+        let julia_c = if tier.is_dynamical() {
+            Some((0.0, 0.0))
+        } else if escape.julia {
             Some((escape.julia_re, escape.julia_im))
         } else {
             None
         };
-        let tier = Self::perturb_tier(escape)
-            .unwrap_or(assembler::PerturbTier::Power(2));
         let (power, ship, ship_variant) = match tier {
             assembler::PerturbTier::Power(p) => (p, false, 0),
             assembler::PerturbTier::Ship(v) => (2, true, v),
@@ -3499,6 +3636,12 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             assembler::PerturbTier::Magnet(_) => {
                 (2, false, super::reference::MAP_MAGNET)
             }
+            assembler::PerturbTier::Newton { p, scheme, func } => {
+                (p, false, super::reference::newton_variant(scheme, func))
+            }
+            assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
+            assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
+            assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
         };
         let period_hint = if julia_c.is_none() && !ship {
             escape.reference_period.filter(|&p| p > 0)
@@ -4911,7 +5054,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     s: s_f64 as f32,
                     inv_s: if s_f64 > 0.0 { (1.0 / s_f64) as f32 } else { 0.0 },
                     orbit_len: orbit_len.max(2),
-                    flags: if escape.julia { 2 } else { 0 },
+                    // Bit 1: Julia-style deltas (d0 seed, no dc term)
+                    // -- the Julia plane, and the c-free maps.
+                    flags: if escape.julia || tier.is_dynamical() { 2 } else { 0 },
                     s_m: s_m as f32,
                     s_e: s_e as i32,
                     ref_offset: {
@@ -5377,6 +5522,15 @@ mod tests {
             ("mcmullen", &["m"]),
             // The VARIANT selects between two different maps.
             ("magnet", &["variant"]),
+            // The root finders carry their complex RELAXATION: it
+            // multiplies the step, so a reference built without it
+            // iterates a different map.
+            ("newton", &["relax_re", "relax_im"]),
+            ("nova", &["relax_re", "relax_im"]),
+            // The sign branch and the log variant each select a
+            // different map, exactly as Magnet's variant does.
+            ("kaliset", &["plus_c"]),
+            ("ducks", &["variant"]),
         ];
 
         for (formula, names) in carried {
@@ -5542,3 +5696,17 @@ mod chunk_batch_tests {
         assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 0), 1);
     }
 }
+
+/// One terminal record (the shader's `IterResult`), read back for the
+/// ground-truth tests: final z, derivative, orbit accumulator, the
+/// iteration count and the tag bits (1 escaped, 2 converged).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IterRecord {
+    pub z: [f32; 2],
+    pub dz: [f32; 2],
+    pub accum: [f32; 2],
+    pub n: u32,
+    pub tags: u32,
+}
+

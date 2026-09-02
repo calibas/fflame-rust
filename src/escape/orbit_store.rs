@@ -184,6 +184,12 @@ fn saved_meta(path: &Path) -> Option<(u32, u32)> {
 /// Save into an explicit directory (tests). See [`maybe_save`] for
 /// the production entry point with the cost gate.
 pub fn save_to(dir: &Path, orbit: &ReferenceOrbit) -> bool {
+    // The big-float families carry live state the file format has no
+    // slot for (a BigComplex, not fixed point), and their orbits are
+    // short: never stored, so never loaded.
+    if super::reference::map_is_big(orbit.ship, orbit.ship_variant) {
+        return false;
+    }
     let name = key_for(
         &orbit.center_re,
         &orbit.center_im,
@@ -441,6 +447,9 @@ pub fn maybe_save_to(dir: &Path, orbit: &mut ReferenceOrbit) {
     // Nothing new to persist: loaded-from-store orbits that have not
     // deepened, and orbits relocated since their last save.
     if !orbit.store_grown {
+        return;
+    }
+    if super::reference::map_is_big(orbit.ship, orbit.ship_variant) {
         return;
     }
     let limbs = orbit.n_limbs as u64;
