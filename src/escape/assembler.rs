@@ -711,26 +711,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__ACCUM_UPDATE__
         //__CONVERGE_TEST__
 
-        // DELTA-AWARE escape test (biomorph is gated off on the
-        // perturbed path). |z_full|² in plain f32 quantizes away the
-        // per-pixel delta once 2·Z·δ drops below one ulp of the
-        // bailout -- past zoom ~22 every pixel then inherits the
-        // reference's rounded fate, which is what broke Feather (its
-        // slow-growth boundary is DECIDED by those sub-ulp
-        // differences; a chaos-amplified boundary never is, which is
-        // why no earlier tier hit this). So the margin is formed in
-        // parts that are each small or exact: r2.x - bailout is exact
-        // near the threshold (both f32, within a factor of two --
-        // Sterbenz), and r2.y + 2·Z·δ + |δ|² are all tiny.
-        let mr = ref_r2(min(m, perturb.orbit_len - 1u));
-        let zi_m = ref_z(min(m, perturb.orbit_len - 1u));
-        let margin = (mr.x - params.bailout)
-            + (mr.y + 2.0 * dot(zi_m, delta) + dot(delta, delta));
-        if (margin > 0.0) {
-            escaped = true;
-            n = i;
-            break;
-        }
+        //__ESCAPE_MARGIN__
 
         // Zhuoran rebase: restart the reference index when the new
         // delta AGAINST THE ORBIT'S START would be smaller than the
@@ -1586,18 +1567,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         //__ACCUM_UPDATE__
         //__CONVERGE_TEST__
 
-        // Delta-aware escape margin -- see the scaled template. The
-        // f32 delta underflows to zero exactly when it is too small to
-        // move the margin, so the deep rung needs no extended-range
-        // cross term.
-        let mr = ref_r2(min(m, perturb.orbit_len - 1u));
-        let margin = (mr.x - params.bailout)
-            + (mr.y + 2.0 * dot(zi, delta) + dot(delta, delta));
-        if (margin > 0.0) {
-            escaped = true;
-            n = i;
-            break;
-        }
+        //__ESCAPE_MARGIN__
 
         //__REBASE__
     }
@@ -1795,6 +1765,70 @@ pub enum PerturbTier {
     /// diffabs). The u32 is the variant enum (0..=5) — each fold
     /// arrangement has its own delta algebra.
     Ship(u32),
+    /// Newton root-finder plane: `z - R * step(z)`, `step` the
+    /// Newton, Halley or Chebyshev quotient over `z^p - 1`,
+    /// `z^3 - 2z + 2` or `z^8 + 15z^4 - 16` (the formula's `scheme`
+    /// and `func` axes), R the complex relaxation. Julia-style
+    /// throughout: the map has no c and the pixel is the SEED, so the
+    /// delta starts at d0 and no dc term ever enters (the renderer
+    /// requests the reference with `julia_c = Some(0)` for exactly
+    /// that -- see [`PerturbTier::is_dynamical`]).
+    ///
+    /// The delta form is the quotient rule over Taylor differences:
+    /// every `dF`, `dF'`, `dF''` is the exact binomial expansion of
+    /// `F(Z+d) - F(Z)` (cancellation-free, as the power tier's), and
+    /// each scheme's step is a quotient of polynomials in those --
+    /// Newton `f/f'`, Halley `2ff'/(2f'^2 - ff'')`, Chebyshev
+    /// `(f/f')(1 + ff''/(2f'^2))` -- so its delta is Feather's
+    /// quotient form `dq = (dN - q*dD)/(D + dD)` composed with the
+    /// product rule `d(ab) = da*b + a*db + da*db`. Nothing subtracts
+    /// nearly-equal O(1) values. The divisor `D + dD` is the pixel's
+    /// own f'(z): near a pole it is small and the quotient huge,
+    /// which is the map, not a precision loss.
+    ///
+    /// CONVERGENT: the settle test terminates every basin pixel.
+    Newton { p: u32, scheme: u32, func: u32 },
+    /// Nova: the Newton step over `z^p - 1` plus c, seeded at the
+    /// critical point z_0 = 1 on the parameter plane. The Newton
+    /// tier's scheme-0 delta with the `+ dc` term back.
+    Nova(u32),
+    /// Kaliset: `|z|/<z,z> -+ c` (component abs), seeded at the pixel
+    /// on the parameter plane -- so its delta starts at d0 AND the dc
+    /// term enters every step, which no earlier tier combined.
+    ///
+    ///   dr2 = 2(X dx + Y dy) + |d|^2               the |z|^2 delta
+    ///   da  = diffabs(X, dx),  db = diffabs(Y, dy)  the Ship fold
+    ///   dq  = ((da, db) - q*dr2) / (r2 + dr2)       q = (|X|,|Y|)/r2
+    ///
+    /// -- the quotient rule with a REAL denominator. NON-ESCAPING:
+    /// the perturbed loop drops its escape test and runs to
+    /// max_iter for the orbit accumulators.
+    Kaliset,
+    /// Ducks: `log(fold(z) + c)`, fold = (x, |y|); the u32 is the
+    /// formula's variant (0 = plain, 4 = log of the square).
+    ///
+    ///   dt = (dx, diffabs(Y, dy)) + dc                 the fold
+    ///   u  = dt / T                                     T = fold(Z) + C
+    ///   d' = log1p(u) = (log1p(2u.x + |u|^2)/2, atan2(u.y, 1 + u.x))
+    ///
+    /// `log1p` keeps the delta's relative precision where a bare
+    /// `log(T + dt) - log(T)` would cancel to nothing.
+    ///
+    /// THE BRANCH CUT IS NOT INVISIBLE, and assuming it was is what
+    /// made this tier's first cut wrong: the identity holds only
+    /// MODULO 2*pi*i. `Log(T)` and `Log(1+u)` are each principal, so
+    /// their sum leaves (-pi, pi] exactly when the pixel's argument
+    /// crosses the cut the reference did not -- and then
+    /// `z = Z + delta` is a full turn away in the imaginary part.
+    /// The fold does NOT undo it (`|y|` and `|y - 2pi|` differ
+    /// everywhere except at the cut itself), and `|z|` is precisely
+    /// what the Ducks colorings average, so it is an O(1) error on a
+    /// real fraction of pixels. Both rungs re-anchor the delta by a
+    /// whole number of turns so the SUM is the principal value --
+    /// a MULTIPLE, not a single step: variant 4's reference is
+    /// `Log(t^2)`, whose delta is `2 Log1p(u)` and so can start two
+    /// turns out. NON-ESCAPING.
+    Ducks(u32),
 }
 
 impl PerturbTier {
@@ -1806,7 +1840,26 @@ impl PerturbTier {
     /// restated here. A test checks it against the registry's own
     /// `FormulaFeature::Convergent`, so the two cannot drift.
     pub fn is_convergent(self) -> bool {
-        matches!(self, PerturbTier::Magnet(_))
+        matches!(
+            self,
+            PerturbTier::Magnet(_) | PerturbTier::Newton { .. } | PerturbTier::Nova(_)
+        )
+    }
+
+    /// Whether this tier's map never escapes, so the perturbed loop
+    /// compiles its escape test out and runs to `max_iter` -- the
+    /// direct template's `FormulaFeature::NonEscaping`, restated on
+    /// the tier for the same reason `is_convergent` is, and pinned to
+    /// the registry by the same kind of test.
+    pub fn is_non_escaping(self) -> bool {
+        matches!(self, PerturbTier::Kaliset | PerturbTier::Ducks(_))
+    }
+
+    /// Whether the map has no parameter c at all (the pixel is the
+    /// seed): the renderer then requests the reference Julia-style,
+    /// so the delta starts at d0 and no dc term enters.
+    pub fn is_dynamical(self) -> bool {
+        matches!(self, PerturbTier::Newton { .. })
     }
 }
 
@@ -2318,8 +2371,12 @@ fn state_tail(tier: PerturbTier) -> (String, String, String) {
 /// at d0 even though it is a parameter-plane map.
 fn w_init(tier: PerturbTier, floatexp: bool) -> String {
     match (tier, floatexp) {
-        (PerturbTier::Manowar, false) => "    var w = d0;".to_string(),
-        (PerturbTier::Manowar, true) => "    w = d0;".to_string(),
+        // Kaliset seeds z_0 = c on the parameter plane (and the pixel
+        // on the Julia plane): its delta starts at d0 either way.
+        (PerturbTier::Manowar, false) | (PerturbTier::Kaliset, false) => {
+            "    var w = d0;".to_string()
+        }
+        (PerturbTier::Manowar, true) | (PerturbTier::Kaliset, true) => "    w = d0;".to_string(),
         (_, false) => "    var w = select(vec2<f32>(0.0, 0.0), d0, is_julia_perturb);".to_string(),
         (_, true) => "    if (is_julia_perturb) {
         w = d0;
@@ -2942,6 +2999,706 @@ fn delta_step_floatexp_on(p: u32, zm: &str, zlo: &str, w: &str) -> String {
     out
 }
 
+// ============================================================
+// Root-finder (Newton / Nova), Kaliset and Ducks tiers
+// ============================================================
+
+/// Module-scope helpers the newer tiers' steps call: plain complex
+/// algebra on O(1) reference quantities (the small deltas ride the
+/// rung's own arithmetic), a pole-guarded division mirroring
+/// `esc_cdiv`, Kahan's `log1p`, and an SFe reader for the deep rung.
+/// Empty for every earlier tier, so their WGSL is byte-identical.
+fn tier_helpers(tier: PerturbTier, floatexp: bool) -> String {
+    if !matches!(
+        tier,
+        PerturbTier::Newton { .. }
+            | PerturbTier::Nova(_)
+            | PerturbTier::Kaliset
+            | PerturbTier::Ducks(_)
+    ) {
+        return String::new();
+    }
+    let mut out = String::from(
+        "// Tier helpers (root-finder / Kaliset / Ducks): see tier_helpers.
+fn rf_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+// 1/b, pole-guarded exactly as esc_cdiv: a vanishing divisor returns
+// a huge value (the escape test fires next) rather than inf/NaN.
+// The upper guard is the same statement at the other end: a root
+// finder's reference legitimately visits |Z| ~ 1e3 (measured), and
+// Z^p there overflows f32 for the higher powers -- 1/b is then zero
+// to every bit that matters, where the unguarded form would divide
+// inf by inf. Written as a NEGATED comparison so a NaN takes the
+// same branch (Metal runs fast-math; see CLAUDE.md).
+fn rf_cinv(b: vec2<f32>) -> vec2<f32> {
+    let d = dot(b, b);
+    if (d < 1e-30) {
+        return vec2<f32>(1e20, 0.0);
+    }
+    if (!(d < 1e30)) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    return vec2<f32>(b.x, -b.y) / d;
+}
+
+fn rf_cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    return rf_cmul(a, rf_cinv(b));
+}
+
+// 1/T for a T built from the REFERENCE iterate at index m, carrying
+// the reference's low half.
+//
+// Ducks needs this and the escaping tiers do not. `T = fold(Z) + C` is
+// an O(1) quantity formed from the stored f32 hi, so it is wrong by
+// ~2^-24 -- and unlike a relative error on the delta, that ulp is an
+// inconsistency between the reference the delta is propagated against
+// and the one the coloring adds back. The map carries it forward:
+// measured on the zoom-30 Julia view, the reference's truncated hi
+// alone put the orbit-average field 8.0e-5 out (worst 4.5e-3) against
+// exact orbits, which is 1.6% of that view's entire contrast. Feeding
+// the low half back through one Neumann term,
+//
+//   1/(T_hi + T_lo) = (1/T_hi)(1 - T_lo/T_hi + ...)
+//
+// leaves 8.0e-5 -> 1.1e-6 (worst 2.3e-5). One term is enough because
+// T_lo/T_hi ~ 2^-24, so the next term is below f32 rounding of the
+// correction itself. Verified against exact orbits before shipping.
+fn rf_tinv(z_lo: vec2<f32>, z_hi: vec2<f32>, t_hi: vec2<f32>) -> vec2<f32> {
+    // The fold takes |Im|, so the low half follows the hi half's sign.
+    let t_lo = vec2<f32>(z_lo.x, select(-z_lo.y, z_lo.y, z_hi.y >= 0.0));
+    let inv = rf_cinv(t_hi);
+    return inv - rf_cmul(inv, rf_cmul(t_lo, inv));
+}
+
+// Complex log(1 + u) with the delta's RELATIVE precision. The GPU's
+// log and atan2 are accurate in absolute terms, which near 1 and 0
+// (where a small delta lands them) leaves nothing of a small result
+// -- measured: a bare log(T + d) - log(T) form put a Ducks field
+// off by 0.3%, the field's own contrast. Inside |u| < 1/8 the series
+// to u^8 is exact to f32 rounding (truncation |u|^9/9 < 2e-8
+// relative); outside it the direct form is fine, because the result
+// is then O(1) and an absolute error is a relative one.
+fn rf_clog1p(u: vec2<f32>) -> vec2<f32> {
+    if (dot(u, u) < 0.015625) {
+        var acc = vec2<f32>(-0.125, 0.0);
+        acc = rf_cmul(acc, u) + vec2<f32>(0.14285715, 0.0);
+        acc = rf_cmul(acc, u) + vec2<f32>(-0.16666667, 0.0);
+        acc = rf_cmul(acc, u) + vec2<f32>(0.2, 0.0);
+        acc = rf_cmul(acc, u) + vec2<f32>(-0.25, 0.0);
+        acc = rf_cmul(acc, u) + vec2<f32>(0.33333334, 0.0);
+        acc = rf_cmul(acc, u) + vec2<f32>(-0.5, 0.0);
+        acc = rf_cmul(acc, u) + vec2<f32>(1.0, 0.0);
+        return rf_cmul(acc, u);
+    }
+    // |1 + u| = 0 is the pixel at the log singularity: clamp rather
+    // than take the log of zero. The atan2 zero pair (Metal) sits at
+    // the same point and is selected away.
+    let v = max(2.0 * u.x + dot(u, u), -0.99999994);
+    let ax = 1.0 + u.x;
+    let ang = select(atan2(u.y, ax), 0.0, ax == 0.0 && u.y == 0.0);
+    return vec2<f32>(0.5 * log(1.0 + v), ang);
+}
+",
+    );
+    if floatexp {
+        out.push_str(
+            "
+fn sfe_to_f32(v: SFe) -> f32 {
+    if (v.e < -126 || v.e == CFE_ZERO_E) {
+        return 0.0;
+    }
+    if (v.e > 127) {
+        return v.m * 3.0e38;
+    }
+    return v.m * exp2(f32(v.e));
+}
+",
+        );
+    }
+    out
+}
+
+/// The scaled rung's delta-aware escape test, verbatim from where it
+/// lived in the template before the non-escaping tiers needed it
+/// behind a marker. Every escaping tier's WGSL is unchanged by the
+/// move.
+fn escape_margin_scaled() -> String {
+    r#"        // DELTA-AWARE escape test (biomorph is gated off on the
+        // perturbed path). |z_full|² in plain f32 quantizes away the
+        // per-pixel delta once 2·Z·δ drops below one ulp of the
+        // bailout -- past zoom ~22 every pixel then inherits the
+        // reference's rounded fate, which is what broke Feather (its
+        // slow-growth boundary is DECIDED by those sub-ulp
+        // differences; a chaos-amplified boundary never is, which is
+        // why no earlier tier hit this). So the margin is formed in
+        // parts that are each small or exact: r2.x - bailout is exact
+        // near the threshold (both f32, within a factor of two --
+        // Sterbenz), and r2.y + 2·Z·δ + |δ|² are all tiny.
+        let mr = ref_r2(min(m, perturb.orbit_len - 1u));
+        let zi_m = ref_z(min(m, perturb.orbit_len - 1u));
+        let margin = (mr.x - params.bailout)
+            + (mr.y + 2.0 * dot(zi_m, delta) + dot(delta, delta));
+        if (margin > 0.0) {
+            escaped = true;
+            n = i;
+            break;
+        }"#
+        .to_string()
+}
+
+/// The deep rung's escape margin, likewise verbatim.
+fn escape_margin_fe() -> String {
+    r#"        // Delta-aware escape margin -- see the scaled template. The
+        // f32 delta underflows to zero exactly when it is too small to
+        // move the margin, so the deep rung needs no extended-range
+        // cross term.
+        let mr = ref_r2(min(m, perturb.orbit_len - 1u));
+        let margin = (mr.x - params.bailout)
+            + (mr.y + 2.0 * dot(zi, delta) + dot(delta, delta));
+        if (margin > 0.0) {
+            escaped = true;
+            n = i;
+            break;
+        }"#
+        .to_string()
+}
+
+/// The reference's power ladder `rfz0..rfz{k}` in f32.
+fn rf_power_ladder(k: u32) -> String {
+    let mut out =
+        String::from("        let rfz0 = vec2<f32>(1.0, 0.0);\n        let rfz1 = z_ref;\n");
+    for j in 2..=k {
+        out.push_str(&format!("        let rfz{j} = rf_cmul(rfz{}, z_ref);\n", j - 1));
+    }
+    out
+}
+
+/// `Δ(z^k)/S` as a named value on the scaled rung: the power tier's
+/// binomial (`binom_scaled`) for k >= 2, the delta itself for k = 1,
+/// zero for k = 0.
+fn rf_dpow_scaled(k: u32, name: &str) -> String {
+    match k {
+        0 => format!("        let {name} = vec2<f32>(0.0, 0.0);\n"),
+        1 => format!("        let {name} = w;\n"),
+        _ => {
+            let pre = format!("{name}_");
+            format!("{}        let {name} = {pre}d;\n", binom_scaled(k, "z_ref", "w", &pre))
+        }
+    }
+}
+
+/// `Δ(z^k)` as a named CFe2 on the deep rung: the power tier's
+/// floatexp binomial over the NORMALIZED DF reference mantissa (the
+/// same construction as `delta_step_floatexp_on`, whose comments
+/// explain why the mantissa is normalized and why it is DF), without
+/// the `+ d0` and assigned to a name.
+fn rf_dpow_fe(k: u32, name: &str) -> String {
+    match k {
+        0 => return format!("        let {name} = cfe2_zero();\n"),
+        1 => return format!("        let {name} = w;\n"),
+        _ => {}
+    }
+    let pre = format!("{name}_");
+    let mut out = String::new();
+    out.push_str(&format!(
+        "        var {pre}e = z_ref_e;\n\
+         \x20       var {pre}sc = 1.0;\n\
+         \x20       let {pre}a = max(abs(z_ref_m.x), abs(z_ref_m.y));\n\
+         \x20       if ({pre}a != 0.0) {{\n\
+         \x20           let {pre}f = frexp({pre}a);\n\
+         \x20           {pre}sc = exp2(f32(-{pre}f.exp));\n\
+         \x20           {pre}e = z_ref_e + {pre}f.exp;\n\
+         \x20       }}\n"
+    ));
+    out.push_str(&format!(
+        "        let {pre}zr1 = vec2<f32>(z_ref_m.x * {pre}sc, z_ref_lo_m.x * {pre}sc);\n"
+    ));
+    out.push_str(&format!(
+        "        let {pre}zi1 = vec2<f32>(z_ref_m.y * {pre}sc, z_ref_lo_m.y * {pre}sc);\n"
+    ));
+    for j in 2..k {
+        out.push_str(&format!(
+            "        let {pre}zr{j} = df_add(df_mul({pre}zr{}, {pre}zr1), df_neg(df_mul({pre}zi{}, {pre}zi1)));\n",
+            j - 1,
+            j - 1
+        ));
+        out.push_str(&format!(
+            "        let {pre}zi{j} = df_add(df_mul({pre}zr{}, {pre}zi1), df_mul({pre}zi{}, {pre}zr1));\n",
+            j - 1,
+            j - 1
+        ));
+    }
+    out.push_str(&format!("        let {pre}u1 = w;\n"));
+    for j in 2..=k {
+        out.push_str(&format!("        let {pre}u{j} = cfe2_mul({pre}u{}, w);\n", j - 1));
+    }
+    out.push_str(&format!("        var {name} = cfe2_zero();\n"));
+    for j in 1..=k {
+        let coeff = binomial(k, j);
+        if j == k {
+            out.push_str(&format!(
+                "        {name} = cfe2_add({name}, cfe2_mul_c32({pre}u{j}, vec2<f32>({coeff}.0, 0.0)));\n"
+            ));
+        } else {
+            let zp = k - j;
+            out.push_str(&format!("        let {pre}t{j}r = df_muls({pre}zr{zp}, {coeff}.0);\n"));
+            out.push_str(&format!("        let {pre}t{j}i = df_muls({pre}zi{zp}, {coeff}.0);\n"));
+            out.push_str(&format!(
+                "        {name} = cfe2_add({name}, cfe2_mul_zdfe({pre}u{j}, vec2<f32>({pre}t{j}r.x, {pre}t{j}i.x), vec2<f32>({pre}t{j}r.y, {pre}t{j}i.y), {zp} * {pre}e));\n"
+            ));
+        }
+    }
+    out
+}
+
+/// The reference jet `rf_f, rf_fp, rf_fpp` (f32) and its scaled
+/// deltas `rf_df, rf_dfp, rf_dfpp` for the Newton family's function
+/// `func` (0: z^p - 1, 1: z^3 - 2z + 2, 2: z^8 + 15z^4 - 16).
+fn rf_jet_scaled(p: u32, func: u32) -> String {
+    let mut out = String::new();
+    match func {
+        1 => {
+            out.push_str(&rf_power_ladder(3));
+            out.push_str("        let rf_f = rfz3 - 2.0 * z_ref + vec2<f32>(2.0, 0.0);\n");
+            out.push_str("        let rf_fp = 3.0 * rfz2 - vec2<f32>(2.0, 0.0);\n");
+            out.push_str("        let rf_fpp = 6.0 * z_ref;\n");
+            out.push_str(&rf_dpow_scaled(3, "rf_d3"));
+            out.push_str(&rf_dpow_scaled(2, "rf_d2"));
+            out.push_str("        let rf_df = rf_d3 - 2.0 * w;\n");
+            out.push_str("        let rf_dfp = 3.0 * rf_d2;\n");
+            out.push_str("        let rf_dfpp = 6.0 * w;\n");
+        }
+        2 => {
+            out.push_str(&rf_power_ladder(8));
+            out.push_str("        let rf_f = rfz8 + 15.0 * rfz4 - vec2<f32>(16.0, 0.0);\n");
+            out.push_str("        let rf_fp = 8.0 * rfz7 + 60.0 * rfz3;\n");
+            out.push_str("        let rf_fpp = 56.0 * rfz6 + 180.0 * rfz2;\n");
+            for k in [8u32, 7, 6, 4, 3, 2] {
+                out.push_str(&rf_dpow_scaled(k, &format!("rf_d{k}")));
+            }
+            out.push_str("        let rf_df = rf_d8 + 15.0 * rf_d4;\n");
+            out.push_str("        let rf_dfp = 8.0 * rf_d7 + 60.0 * rf_d3;\n");
+            out.push_str("        let rf_dfpp = 56.0 * rf_d6 + 180.0 * rf_d2;\n");
+        }
+        _ => {
+            out.push_str(&rf_power_ladder(p));
+            out.push_str(&format!("        let rf_f = rfz{p} - vec2<f32>(1.0, 0.0);\n"));
+            out.push_str(&format!("        let rf_fp = {p}.0 * rfz{};\n", p - 1));
+            out.push_str(&format!(
+                "        let rf_fpp = {}.0 * rfz{};\n",
+                p * (p - 1),
+                p - 2
+            ));
+            out.push_str(&rf_dpow_scaled(p, "rf_da"));
+            out.push_str(&rf_dpow_scaled(p - 1, "rf_db"));
+            out.push_str(&rf_dpow_scaled(p - 2, "rf_dc"));
+            out.push_str("        let rf_df = rf_da;\n");
+            out.push_str(&format!("        let rf_dfp = {p}.0 * rf_db;\n"));
+            out.push_str(&format!("        let rf_dfpp = {}.0 * rf_dc;\n", p * (p - 1)));
+        }
+    }
+    out
+}
+
+/// The deep-rung jet: the same reference values in f32, the deltas
+/// as CFe2.
+fn rf_jet_fe(p: u32, func: u32) -> String {
+    let mut out = String::new();
+    match func {
+        1 => {
+            out.push_str(&rf_power_ladder(3));
+            out.push_str("        let rf_f = rfz3 - 2.0 * z_ref + vec2<f32>(2.0, 0.0);\n");
+            out.push_str("        let rf_fp = 3.0 * rfz2 - vec2<f32>(2.0, 0.0);\n");
+            out.push_str("        let rf_fpp = 6.0 * z_ref;\n");
+            out.push_str(&rf_dpow_fe(3, "rf_d3"));
+            out.push_str(&rf_dpow_fe(2, "rf_d2"));
+            out.push_str(
+                "        let rf_df = cfe2_add(rf_d3, cfe2_mul_c32(w, vec2<f32>(-2.0, 0.0)));\n",
+            );
+            out.push_str("        let rf_dfp = cfe2_mul_c32(rf_d2, vec2<f32>(3.0, 0.0));\n");
+            out.push_str("        let rf_dfpp = cfe2_mul_c32(w, vec2<f32>(6.0, 0.0));\n");
+        }
+        2 => {
+            out.push_str(&rf_power_ladder(8));
+            out.push_str("        let rf_f = rfz8 + 15.0 * rfz4 - vec2<f32>(16.0, 0.0);\n");
+            out.push_str("        let rf_fp = 8.0 * rfz7 + 60.0 * rfz3;\n");
+            out.push_str("        let rf_fpp = 56.0 * rfz6 + 180.0 * rfz2;\n");
+            for k in [8u32, 7, 6, 4, 3, 2] {
+                out.push_str(&rf_dpow_fe(k, &format!("rf_d{k}")));
+            }
+            out.push_str(
+                "        let rf_df = cfe2_add(rf_d8, cfe2_mul_c32(rf_d4, vec2<f32>(15.0, 0.0)));\n",
+            );
+            out.push_str(
+                "        let rf_dfp = cfe2_add(cfe2_mul_c32(rf_d7, vec2<f32>(8.0, 0.0)), cfe2_mul_c32(rf_d3, vec2<f32>(60.0, 0.0)));\n",
+            );
+            out.push_str(
+                "        let rf_dfpp = cfe2_add(cfe2_mul_c32(rf_d6, vec2<f32>(56.0, 0.0)), cfe2_mul_c32(rf_d2, vec2<f32>(180.0, 0.0)));\n",
+            );
+        }
+        _ => {
+            out.push_str(&rf_power_ladder(p));
+            out.push_str(&format!("        let rf_f = rfz{p} - vec2<f32>(1.0, 0.0);\n"));
+            out.push_str(&format!("        let rf_fp = {p}.0 * rfz{};\n", p - 1));
+            out.push_str(&format!(
+                "        let rf_fpp = {}.0 * rfz{};\n",
+                p * (p - 1),
+                p - 2
+            ));
+            out.push_str(&rf_dpow_fe(p, "rf_da"));
+            out.push_str(&rf_dpow_fe(p - 1, "rf_db"));
+            out.push_str(&rf_dpow_fe(p - 2, "rf_dc"));
+            out.push_str("        let rf_df = rf_da;\n");
+            out.push_str(&format!(
+                "        let rf_dfp = cfe2_mul_c32(rf_db, vec2<f32>({p}.0, 0.0));\n"
+            ));
+            out.push_str(&format!(
+                "        let rf_dfpp = cfe2_mul_c32(rf_dc, vec2<f32>({}.0, 0.0));\n",
+                p * (p - 1)
+            ));
+        }
+    }
+    out
+}
+
+/// The scheme's step delta `rf_qs` (scaled rung) from the jet: the
+/// quotient rule `dq = (dN - q dD)/(D + dD)` over the product rule,
+/// every second-order product carrying its S.
+fn rf_scheme_scaled(scheme: u32, p: u32) -> String {
+    match scheme {
+        0 => "        // Newton: q = f/f'.
+        let rf_q = rf_cdiv(rf_f, rf_fp);
+        let rf_den = rf_fp + perturb.s * rf_dfp;
+        let rf_qs = rf_cdiv(rf_df - rf_cmul(rf_q, rf_dfp), rf_den);
+"
+        .to_string(),
+        1 => "        // Halley: N = 2 f f', D = 2 f'^2 - f f''.
+        let rf_nref = 2.0 * rf_cmul(rf_f, rf_fp);
+        let rf_dref = 2.0 * rf_cmul(rf_fp, rf_fp) - rf_cmul(rf_f, rf_fpp);
+        let rf_dn = 2.0 * (rf_cmul(rf_df, rf_fp) + rf_cmul(rf_f, rf_dfp) + perturb.s * rf_cmul(rf_df, rf_dfp));
+        let rf_dd = 4.0 * rf_cmul(rf_fp, rf_dfp) + 2.0 * perturb.s * rf_cmul(rf_dfp, rf_dfp)
+            - (rf_cmul(rf_df, rf_fpp) + rf_cmul(rf_f, rf_dfpp) + perturb.s * rf_cmul(rf_df, rf_dfpp));
+        let rf_q = rf_cdiv(rf_nref, rf_dref);
+        let rf_den = rf_dref + perturb.s * rf_dd;
+        let rf_qs = rf_cdiv(rf_dn - rf_cmul(rf_q, rf_dd), rf_den);
+"
+        .to_string(),
+        // Chebyshev, over z^p - 1 only (see `cheb_closed_form`).
+        _ => format!(
+            "        // Chebyshev: q0 (1 + r). r is CLOSED-FORM here --
+        // r = k(1 - z^-p), k = (p-1)/2p -- because the quotient rule
+        // cannot compute its delta: r is asymptotically CONSTANT, so
+        // dA - r*dB cancels its own leading terms and leaves
+        // ~|Z|^-(3p-2) of the operands, which at the reference's
+        // measured |Z| ~ 958 excursion is far below f32. Symbolic
+        // cancellation instead, giving McMullen's pole form:
+        //   dr = k * dM / (Z^p (Z+d)^p),  dM = d(z^p) = dF
+        // -- numerator cancellation-free, both divisors full-size.
+        let rf_q0 = rf_cdiv(rf_f, rf_fp);
+        let rf_den0 = rf_fp + perturb.s * rf_dfp;
+        let rf_q0s = rf_cdiv(rf_df - rf_cmul(rf_q0, rf_dfp), rf_den0);
+        let rf_zp = rfz{p};
+        let rf_zpd = rf_zp + perturb.s * rf_df;
+        let rf_r = {k} * (vec2<f32>(1.0, 0.0) - rf_cinv(rf_zp));
+        let rf_rs = {k} * rf_cmul(rf_cmul(rf_df, rf_cinv(rf_zp)), rf_cinv(rf_zpd));
+        let rf_one_r = vec2<f32>(1.0, 0.0) + rf_r;
+        let rf_qs = rf_cmul(rf_q0s, rf_one_r) + rf_cmul(rf_q0, rf_rs) + perturb.s * rf_cmul(rf_q0s, rf_rs);
+",
+            p = p,
+            k = cheb_k(p),
+        ),
+    }
+}
+
+/// Chebyshev's closed-form constant `k = (p-1)/(2p)` for `z^p - 1`.
+fn cheb_k(p: u32) -> String {
+    format!("{:.9}", (p as f64 - 1.0) / (2.0 * p as f64))
+}
+
+/// Whether this (scheme, func) pair has a delta form we can compute.
+///
+/// Chebyshev's `r` needs the symbolic cancellation above, which
+/// exists for `z^p - 1` and not for the other two functions -- their
+/// `r` is asymptotically constant in the same way, so the quotient
+/// rule loses it, and there is no closed form to substitute. Rather
+/// than ship a scheme that renders a plausible WRONG picture during a
+/// reference excursion (measured: 3.3% of pixels land in the wrong
+/// basin), those pairs decline the tier and render direct.
+pub fn rootfinder_has_delta(scheme: u32, func: u32) -> bool {
+    scheme != 2 || func == 0
+}
+
+/// The deep-rung scheme delta: the same algebra with the small
+/// quantities in CFe2 and each O(1) divisor applied as its f32
+/// reciprocal (the Magnet deep rung's shape).
+fn rf_scheme_fe(scheme: u32, p: u32) -> String {
+    match scheme {
+        0 => "        // Newton (deep rung): q = f/f'.
+        let rf_q = rf_cdiv(rf_f, rf_fp);
+        let rf_den = rf_fp + cfe2_to_f32(rf_dfp);
+        let rf_qs = cfe2_mul_c32(cfe2_add(rf_df, cfe2_mul_c32(rf_dfp, -rf_q)), rf_cinv(rf_den));
+"
+        .to_string(),
+        1 => "        // Halley (deep rung): N = 2 f f', D = 2 f'^2 - f f''.
+        let rf_nref = 2.0 * rf_cmul(rf_f, rf_fp);
+        let rf_dref = 2.0 * rf_cmul(rf_fp, rf_fp) - rf_cmul(rf_f, rf_fpp);
+        let rf_dn = cfe2_add(
+            cfe2_add(cfe2_mul_c32(rf_df, 2.0 * rf_fp), cfe2_mul_c32(rf_dfp, 2.0 * rf_f)),
+            cfe2_mul_c32(cfe2_mul(rf_df, rf_dfp), vec2<f32>(2.0, 0.0)),
+        );
+        let rf_ddp = cfe2_add(
+            cfe2_mul_c32(rf_dfp, 4.0 * rf_fp),
+            cfe2_mul_c32(cfe2_mul(rf_dfp, rf_dfp), vec2<f32>(2.0, 0.0)),
+        );
+        let rf_ddn = cfe2_add(
+            cfe2_add(cfe2_mul_c32(rf_df, rf_fpp), cfe2_mul_c32(rf_dfpp, rf_f)),
+            cfe2_mul(rf_df, rf_dfpp),
+        );
+        let rf_dd = cfe2_add(rf_ddp, cfe2_mul_c32(rf_ddn, vec2<f32>(-1.0, 0.0)));
+        let rf_q = rf_cdiv(rf_nref, rf_dref);
+        let rf_den = rf_dref + cfe2_to_f32(rf_dd);
+        let rf_qs = cfe2_mul_c32(cfe2_add(rf_dn, cfe2_mul_c32(rf_dd, -rf_q)), rf_cinv(rf_den));
+"
+        .to_string(),
+        // Chebyshev, over z^p - 1 only -- the same closed form the
+        // scaled rung uses, and for the same reason.
+        _ => format!(
+            "        // Chebyshev (deep rung): q0 (1 + r), r closed-form.
+        let rf_q0 = rf_cdiv(rf_f, rf_fp);
+        let rf_den0 = rf_fp + cfe2_to_f32(rf_dfp);
+        let rf_q0s = cfe2_mul_c32(cfe2_add(rf_df, cfe2_mul_c32(rf_dfp, -rf_q0)), rf_cinv(rf_den0));
+        let rf_zp = rfz{p};
+        let rf_zpd = rf_zp + cfe2_to_f32(rf_df);
+        let rf_r = {k} * (vec2<f32>(1.0, 0.0) - rf_cinv(rf_zp));
+        let rf_rs = cfe2_mul_c32(
+            cfe2_mul_c32(rf_df, rf_cinv(rf_zp)),
+            {k} * rf_cinv(rf_zpd),
+        );
+        let rf_one_r = vec2<f32>(1.0, 0.0) + rf_r;
+        let rf_qs = cfe2_add(
+            cfe2_add(cfe2_mul_c32(rf_q0s, rf_one_r), cfe2_mul_c32(rf_rs, rf_q0)),
+            cfe2_mul(rf_q0s, rf_rs),
+        );
+",
+            p = p,
+            k = cheb_k(p),
+        ),
+    }
+}
+
+/// The relaxation's uniform slot: Newton packs (power, scheme,
+/// relax_re, relax_im, func), Nova (power, relax_re, relax_im).
+fn rf_relax_expr(nova: bool) -> &'static str {
+    if nova {
+        "vec2<f32>(params.fparams[0][1], params.fparams[0][2])"
+    } else {
+        "vec2<f32>(params.fparams[0][2], params.fparams[0][3])"
+    }
+}
+
+/// Newton (`nova` false) or Nova (true) on the scaled rung:
+/// `w' = w - R * dstep/S` (+ d0 for Nova's parameter plane).
+fn delta_step_rootfinder(p: u32, scheme: u32, func: u32, nova: bool) -> String {
+    let mut out = String::from(
+        "        // Root-finder delta, scaled rung: the reference jet (f, f',\n\
+         \x20       // f'') in f32; each delta a Taylor difference divided by S.\n\
+         \x20       // See PerturbTier::Newton.\n",
+    );
+    out.push_str(&rf_jet_scaled(p, func));
+    out.push_str(&rf_scheme_scaled(scheme, p));
+    out.push_str(&format!("        let rf_relax = {};\n", rf_relax_expr(nova)));
+    out.push_str("        var w_new = w - rf_cmul(rf_relax, rf_qs);\n");
+    if nova {
+        out.push_str("        w_new = w_new + d0_term;\n");
+    }
+    out
+}
+
+/// The same on the deep rung.
+fn delta_step_rootfinder_fe(p: u32, scheme: u32, func: u32, nova: bool) -> String {
+    let mut out = String::from(
+        "        // Root-finder delta, deep rung: reference jet in f32, deltas\n\
+         \x20       // in double-float floatexp. See PerturbTier::Newton.\n",
+    );
+    out.push_str(&rf_jet_fe(p, func));
+    out.push_str(&rf_scheme_fe(scheme, p));
+    out.push_str(&format!("        let rf_relax = {};\n", rf_relax_expr(nova)));
+    out.push_str("        var w_new = cfe2_add(w, cfe2_mul_c32(rf_qs, -rf_relax));\n");
+    if nova {
+        out.push_str(
+            "        if (!is_julia_perturb) {\n            w_new = cfe2_add(w_new, d0);\n        }\n",
+        );
+    }
+    out
+}
+
+/// Kaliset, scaled rung: the fold's diffabs (positively homogeneous,
+/// so `diffabs(X, S w)/S = diffabs(X/S, w)` exactly as the Ship tier
+/// uses it), the |z|^2 delta, and the real-denominator quotient rule.
+fn delta_step_kaliset() -> String {
+    "        // Kaliset delta, scaled rung. See PerturbTier::Kaliset.
+        let ks_x = z_ref.x;
+        let ks_y = z_ref.y;
+        let ks_r2 = ks_x * ks_x + ks_y * ks_y;
+        let ks_dr2 = 2.0 * (ks_x * w.x + ks_y * w.y) + perturb.s * dot(w, w);
+        let ks_da = diffabs(ks_x * perturb.inv_s, w.x);
+        let ks_db = diffabs(ks_y * perturb.inv_s, w.y);
+        // The reference's own folded, inverted value, with the
+        // formula's 0/0 guard.
+        var ks_q = vec2<f32>(0.0, 0.0);
+        if (ks_r2 > 1e-30) {
+            ks_q = vec2<f32>(abs(ks_x), abs(ks_y)) / ks_r2;
+        }
+        let ks_den = ks_r2 + perturb.s * ks_dr2;
+        var ks_qs = vec2<f32>(0.0, 0.0);
+        if (ks_den > 1e-30) {
+            ks_qs = (vec2<f32>(ks_da, ks_db) - ks_q * ks_dr2) / ks_den;
+        } else {
+            // The pixel sits at the formula's 0/0 guard: its fold is
+            // zero, so the delta is minus the reference's value.
+            ks_qs = -ks_q * perturb.inv_s;
+        }
+        let ks_sign = select(-1.0, 1.0, params.fparams[0][0] > 0.5);
+        var w_new = ks_qs + ks_sign * d0_term;
+"
+    .to_string()
+}
+
+/// Kaliset, deep rung: the Ship deep rung's extended-range scalar
+/// algebra (`sfe_*`), the quotient's real divisor in f32.
+fn delta_step_kaliset_fe() -> String {
+    "        // Kaliset delta, deep rung. See PerturbTier::Kaliset.
+        let ks_x = z_ref.x;
+        let ks_y = z_ref.y;
+        let ks_r2 = ks_x * ks_x + ks_y * ks_y;
+        let ks_dx = sfe_norm(SFe(w.hi.x, w.e));
+        let ks_dy = sfe_norm(SFe(w.hi.y, w.e));
+        let ks_dr2 = sfe_add(
+            sfe_add(sfe_scale(ks_dx, 2.0 * ks_x), sfe_scale(ks_dy, 2.0 * ks_y)),
+            sfe_add(sfe_mul(ks_dx, ks_dx), sfe_mul(ks_dy, ks_dy)),
+        );
+        let ks_da = sfe_diffabs(ks_x, ks_dx);
+        let ks_db = sfe_diffabs(ks_y, ks_dy);
+        var ks_q = vec2<f32>(0.0, 0.0);
+        if (ks_r2 > 1e-30) {
+            ks_q = vec2<f32>(abs(ks_x), abs(ks_y)) / ks_r2;
+        }
+        let ks_den = ks_r2 + sfe_to_f32(ks_dr2);
+        var ks_qsx = SFe(0.0, CFE_ZERO_E);
+        var ks_qsy = SFe(0.0, CFE_ZERO_E);
+        if (ks_den > 1e-30) {
+            let ks_inv = 1.0 / ks_den;
+            ks_qsx = sfe_scale(sfe_add(ks_da, sfe_scale(ks_dr2, -ks_q.x)), ks_inv);
+            ks_qsy = sfe_scale(sfe_add(ks_db, sfe_scale(ks_dr2, -ks_q.y)), ks_inv);
+        } else {
+            ks_qsx = sfe_from_f32(-ks_q.x);
+            ks_qsy = sfe_from_f32(-ks_q.y);
+        }
+        let ks_c = cfe_from_sfe(ks_qsx, ks_qsy);
+        var w_new = CFe2(ks_c.m, vec2<f32>(0.0, 0.0), ks_c.e);
+        if (!is_julia_perturb) {
+            let ks_sign = select(-1.0, 1.0, params.fparams[0][0] > 0.5);
+            w_new = cfe2_add(w_new, cfe2_mul_c32(d0, vec2<f32>(ks_sign, 0.0)));
+        }
+"
+    .to_string()
+}
+
+/// Ducks, scaled rung. `u = S w / T` is formed in f32: the scaled
+/// rung's zoom range keeps it inside f32 (|u| >= 2^-55), and
+/// `rf_clog1p` returns the delta with f32 relative precision for any
+/// |u|, tiny or O(1). Variant 4 logs the square: twice the delta.
+fn delta_step_ducks(variant: u32) -> String {
+    let scale = if variant == 4 { "2.0" } else { "1.0" };
+    format!(
+        "        // Ducks delta, scaled rung. See PerturbTier::Ducks.
+        let dk_t = vec2<f32>(z_ref.x, abs(z_ref.y)) + perturb.ref_c;
+        let dk_dt = vec2<f32>(w.x, diffabs(z_ref.y * perturb.inv_s, w.y)) + d0_term;
+        let dk_u = perturb.s * rf_cmul(dk_dt, rf_tinv(ref_z_lo(m), z_ref, dk_t));
+        var w_new = rf_clog1p(dk_u) * ({scale} * perturb.inv_s);
+        // Re-anchor onto the principal branch (see PerturbTier::Ducks).
+        // `perturb.s * w_new.y` is the absolute delta: it underflows to
+        // zero exactly when it is too small to move the sum out of
+        // range, which is the right answer rather than an approximation.
+        let dk_zn = ref_z(min(m + 1u, perturb.orbit_len - 1u));
+        let dk_tot = dk_zn.y + perturb.s * w_new.y;
+        let dk_turn = round(dk_tot * 0.15915494);
+        if (dk_turn != 0.0) {{
+            w_new.y = w_new.y - dk_turn * 6.2831853 * perturb.inv_s;
+        }}
+"
+    )
+}
+
+/// Ducks, deep rung. The fold's y delta keeps w's double-float
+/// halves where the fold does not flip and is an O(1) f32 where it
+/// does; `u = dt / T` then goes through the complex series to u^8 in
+/// double float while |u| < ~0.18 (relative truncation below 2e-8,
+/// and no GPU log/atan2 near its accuracy floor) and through the f32
+/// form otherwise, where the result is O(1).
+fn delta_step_ducks_fe(variant: u32) -> String {
+    let scale = if variant == 4 {
+        "        w_new = cfe2_mul_c32(w_new, vec2<f32>(2.0, 0.0));\n"
+    } else {
+        ""
+    };
+    format!(
+        "        // Ducks delta, deep rung. See PerturbTier::Ducks.
+        let dk_t = vec2<f32>(z_ref.x, abs(z_ref.y)) + perturb.ref_c;
+        let dk_wy = cfe2_to_f32(w).y;
+        var dk_dt = CFe2(vec2<f32>(w.hi.x, 0.0), vec2<f32>(w.lo.x, 0.0), w.e);
+        let dk_ysum = z_ref.y + dk_wy;
+        if (z_ref.y >= 0.0) {{
+            if (dk_ysum >= 0.0) {{
+                dk_dt = w;
+            }} else {{
+                dk_dt = cfe2_add(dk_dt, cfe2_from_f32(vec2<f32>(0.0, -(2.0 * z_ref.y + dk_wy))));
+            }}
+        }} else {{
+            if (dk_ysum > 0.0) {{
+                dk_dt = cfe2_add(dk_dt, cfe2_from_f32(vec2<f32>(0.0, 2.0 * z_ref.y + dk_wy)));
+            }} else {{
+                dk_dt = cfe2_add(dk_dt, CFe2(vec2<f32>(0.0, -w.hi.y), vec2<f32>(0.0, -w.lo.y), w.e));
+            }}
+        }}
+        if (!is_julia_perturb) {{
+            dk_dt = cfe2_add(dk_dt, d0);
+        }}
+        dk_dt = cfe2_norm(dk_dt);
+        let dk_u = cfe2_mul_c32(dk_dt, rf_tinv(ref_z_lo(m), z_ref, dk_t));
+        var w_new = cfe2_zero();
+        if (dk_u.e != CFE_ZERO_E && dk_u.e < -4) {{
+            // |u| < 0.09 here (the mantissa is normalized into
+            // [0.5, 1)), so log1p(u) = u - u^2/2 + ... - u^8/8 by
+            // Horner truncates below 3e-10 relative -- and stays in
+            // double float, where the GPU's own log and atan2 would
+            // have dropped the delta to f32.
+            var dk_acc = cfe2_from_f32(vec2<f32>(-0.125, 0.0));
+            dk_acc = cfe2_add(cfe2_mul(dk_acc, dk_u), cfe2_from_f32(vec2<f32>(0.14285715, 0.0)));
+            dk_acc = cfe2_add(cfe2_mul(dk_acc, dk_u), cfe2_from_f32(vec2<f32>(-0.16666667, 0.0)));
+            dk_acc = cfe2_add(cfe2_mul(dk_acc, dk_u), cfe2_from_f32(vec2<f32>(0.2, 0.0)));
+            dk_acc = cfe2_add(cfe2_mul(dk_acc, dk_u), cfe2_from_f32(vec2<f32>(-0.25, 0.0)));
+            dk_acc = cfe2_add(cfe2_mul(dk_acc, dk_u), cfe2_from_f32(vec2<f32>(0.33333334, 0.0)));
+            dk_acc = cfe2_add(cfe2_mul(dk_acc, dk_u), cfe2_from_f32(vec2<f32>(-0.5, 0.0)));
+            dk_acc = cfe2_add(cfe2_mul(dk_acc, dk_u), cfe2_from_f32(vec2<f32>(1.0, 0.0)));
+            w_new = cfe2_mul(dk_acc, dk_u);
+        }} else if (dk_u.e != CFE_ZERO_E) {{
+            w_new = cfe2_from_f32(rf_clog1p(cfe2_to_f32(dk_u)));
+        }}
+{scale}        // Re-anchor onto the principal branch, after the
+        // variant's doubling (see PerturbTier::Ducks).
+        let dk_zn = ref_z(min(m + 1u, perturb.orbit_len - 1u));
+        let dk_tot = dk_zn.y + cfe2_to_f32(w_new).y;
+        let dk_turn = round(dk_tot * 0.15915494);
+        if (dk_turn != 0.0) {{
+            w_new = cfe2_add(w_new, cfe2_from_f32(vec2<f32>(0.0, -dk_turn * 6.2831853)));
+        }}
+"
+    )
+}
+
 /// Assemble the perturbed (deep-zoom) WGSL for one coloring at a
 /// given integer power (`z^p + c` — the "clean" binomial tier; p = 2
 /// is Mandelbrot and emits the original hand-written step). The
@@ -2976,6 +3733,12 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                     delta_step_mcmullen(n.clamp(2, 8), m.clamp(1, 8))
                 }
                 PerturbTier::Magnet(v) => delta_step_magnet(v.min(1)),
+                PerturbTier::Newton { p, scheme, func } => {
+                    delta_step_rootfinder(p.clamp(2, 12), scheme.min(2), func.min(2), false)
+                }
+                PerturbTier::Nova(p) => delta_step_rootfinder(p.clamp(2, 12), 0, 0, true),
+                PerturbTier::Kaliset => delta_step_kaliset(),
+                PerturbTier::Ducks(v) => delta_step_ducks(v),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
@@ -2989,7 +3752,22 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                     delta_step_mcmullen_fe(n.clamp(2, 8), m.clamp(1, 8))
                 }
                 PerturbTier::Magnet(v) => delta_step_magnet_fe(v.min(1)),
+                PerturbTier::Newton { p, scheme, func } => {
+                    delta_step_rootfinder_fe(p.clamp(2, 12), scheme.min(2), func.min(2), false)
+                }
+                PerturbTier::Nova(p) => delta_step_rootfinder_fe(p.clamp(2, 12), 0, 0, true),
+                PerturbTier::Kaliset => delta_step_kaliset_fe(),
+                PerturbTier::Ducks(v) => delta_step_ducks_fe(v),
             }),
+            "//__ESCAPE_MARGIN__" => {
+                // The delta-aware escape test. A NON-ESCAPING tier
+                // (Kaliset, Ducks) compiles it out exactly as the direct
+                // template does for the feature, and runs every pixel to
+                // max_iter for its orbit accumulators.
+                if !tier.is_non_escaping() {
+                    out.push(if floatexp { escape_margin_fe() } else { escape_margin_scaled() });
+                }
+            }
             "//__REBASE__" => out.push(match (tier, floatexp) {
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
                 (PerturbTier::Phoenix, true) => rebase_phoenix_fe(),
@@ -3018,6 +3796,10 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 // a derivative that is really the number 1.
                 out.push("const HAS_DERIVATIVE: bool = false;".to_string());
                 out.push(format!("const COLORING_IS_BOUNDED: bool = {bounded};"));
+                let helpers = tier_helpers(tier, floatexp);
+                if !helpers.is_empty() {
+                    out.push(helpers);
+                }
                 out.push(format!("// coloring: {}", coloring.name));
                 out.push(coloring.wgsl.to_string());
             }
@@ -3673,6 +4455,81 @@ mod tests {
                     f.name,
                     tier.is_convergent()
                 );
+            }
+        }
+    }
+
+    /// `PerturbTier::is_non_escaping` must agree with the registry --
+    /// the twin of `tier_convergence_matches_the_registry`, for the
+    /// escape test the non-escaping tiers compile out.
+    #[test]
+    fn tier_non_escaping_matches_the_registry() {
+        for f in crate::escape::FORMULAS {
+            let declared = f.has_feature(crate::escape::FormulaFeature::NonEscaping);
+            for julia in [false, true] {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = f.name.to_string();
+                esc.julia = julia;
+                let Some(tier) = crate::escape::EscapeRenderer::perturb_tier(&esc) else {
+                    continue;
+                };
+                assert_eq!(
+                    tier.is_non_escaping(),
+                    declared,
+                    "{}: the registry says NonEscaping={declared} but its tier {tier:?} says {}",
+                    f.name,
+                    tier.is_non_escaping()
+                );
+            }
+        }
+    }
+
+    /// The root-finder, Kaliset and Ducks tiers parse and validate on
+    /// both rungs with the colorings they are used with -- the compile
+    /// half of their probe, over every scheme and function.
+    #[test]
+    fn root_finder_kaliset_and_ducks_tiers_validate() {
+        let tiers = [
+            PerturbTier::Newton { p: 3, scheme: 0, func: 0 },
+            PerturbTier::Newton { p: 2, scheme: 1, func: 0 },
+            PerturbTier::Newton { p: 12, scheme: 2, func: 0 },
+            PerturbTier::Newton { p: 3, scheme: 0, func: 1 },
+            PerturbTier::Newton { p: 3, scheme: 1, func: 2 },
+            PerturbTier::Newton { p: 3, scheme: 2, func: 2 },
+            PerturbTier::Nova(3),
+            PerturbTier::Nova(2),
+            PerturbTier::Kaliset,
+            PerturbTier::Ducks(0),
+            PerturbTier::Ducks(4),
+        ];
+        for tier in tiers {
+            for coloring in [
+                &crate::escape::colorings::SMOOTH,
+                &crate::escape::colorings::MAGNITUDE_AVERAGE,
+                &crate::escape::colorings::ROOT_BASIN,
+            ] {
+                for floatexp in [false, true] {
+                    let src = assemble_perturbed(coloring, floatexp, tier);
+                    assert!(!src.contains("//__"), "{tier:?} left a marker");
+                    let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| {
+                        panic!(
+                            "{tier:?} x {} (floatexp {floatexp}) failed to parse: {}",
+                            coloring.name,
+                            e.emit_to_string(&src)
+                        )
+                    });
+                    naga::valid::Validator::new(
+                        naga::valid::ValidationFlags::all(),
+                        naga::valid::Capabilities::all(),
+                    )
+                    .validate(&module)
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "{tier:?} x {} (floatexp {floatexp}) failed validation: {e:?}",
+                            coloring.name
+                        )
+                    });
+                }
             }
         }
     }

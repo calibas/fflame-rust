@@ -13,6 +13,7 @@
 //! (center strings, limb count); a max_iter increase extends the hit
 //! in place.
 
+use super::bigfloat::{BigComplex, BigFloat};
 use super::fixedpoint::{limbs_for_zoom, FixedComplex, FixedPoint};
 
 /// Cap on ball-method period detection when hunting a nucleus
@@ -155,6 +156,31 @@ impl MapId {
     pub fn manowar() -> Self {
         Self { power: 2, ship: false, variant: MAP_MANOWAR, params: [1.0, 0.0] }
     }
+
+    /// Newton root-finder: `z - R * step(z)` for a scheme and function.
+    pub fn newton(p: u32, scheme: u32, func: u32, relax: [f32; 2]) -> Self {
+        Self { power: p.max(2), ship: false, variant: newton_variant(scheme, func), params: relax }
+    }
+
+    /// Nova: the Newton step over `z^p - 1`, plus c.
+    pub fn nova(p: u32, relax: [f32; 2]) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_NOVA, params: relax }
+    }
+
+    /// Kaliset: `|z|/<z,z> -+ c`.
+    pub fn kaliset(plus_c: bool) -> Self {
+        Self {
+            power: 2,
+            ship: false,
+            variant: MAP_KALISET,
+            params: [if plus_c { 1.0 } else { 0.0 }, 0.0],
+        }
+    }
+
+    /// Ducks: `log(fold(z) + c)`, the formula's variant.
+    pub fn ducks(variant: u32) -> Self {
+        Self { power: 2, ship: false, variant: MAP_DUCKS, params: [variant as f32, 0.0] }
+    }
     /// Bytes for the on-disk key and the serialized identity.
     pub fn key_bytes(&self) -> [u8; 17] {
         let mut b = [0u8; 17];
@@ -240,6 +266,53 @@ pub const MAP_MCMULLEN: u32 = 6;
 /// Without it a converging pixel would run to `max_iter` and the
 /// perturbed image would differ from the direct one.
 pub const MAP_MAGNET: u32 = 7;
+
+/// Newton root-finder plane: a FAMILY of variants,
+/// `MAP_NEWTON_BASE + scheme + 3*func`, for the three schemes
+/// (Newton, Halley, Chebyshev) over the three polynomial functions
+/// (`z^p - 1`, `z^3 - 2z + 2`, `z^8 + 15z^4 - 16`). The power rides
+/// `power`, the complex relaxation rides `map_params`. Seeded at the
+/// pixel and c-free (`DynamicalOnly`): the renderer requests it with
+/// `julia_c = Some((0, 0))`, which seeds the reference at the centre
+/// and gives the pixels a Julia-style delta (d0 seed, no dc term).
+///
+/// The first of the BIG-FLOAT families (see [`map_is_big`]): the
+/// Newton map sends a neighbourhood of every zero of f' to the far
+/// plane (|Z| reaches ~1/(3|Z|^2) past a pole approach -- 1e12 from
+/// a 1e-6 miss), which no fixed binary point holds, so the live
+/// state is a [`BigComplex`].
+pub const MAP_NEWTON_BASE: u32 = 8;
+/// The last Newton variant (scheme 2 over func 2), inclusive.
+pub const MAP_NEWTON_END: u32 = 16;
+/// Nova: the Newton step over `z^p - 1` plus c, seeded at the critical
+/// point z_0 = 1 on the parameter plane. Relaxation in `map_params`.
+pub const MAP_NOVA: u32 = 17;
+/// Kaliset: `|z|/<z,z> -+ c` (component abs), seeded at the pixel on
+/// the parameter plane. `map_params[0]` = 1 selects the `+ c` branch.
+/// Its inversion sends a near-zero iterate to 1/|z| -- 1.8e11 was
+/// measured on an ordinary orbit -- hence big-float.
+pub const MAP_KALISET: u32 = 18;
+/// Ducks: `log(fold(z) + c)`; `map_params[0]` is the formula's
+/// variant (0 and 4 perturb). The step is transcendental, so the
+/// reference runs on the big-float `ln`/`atan2` core.
+pub const MAP_DUCKS: u32 = 19;
+
+/// Whether a (ship, variant) pair names one of the families whose
+/// reference state lives in a [`BigComplex`] rather than fixed point.
+pub fn map_is_big(ship: bool, variant: u32) -> bool {
+    !ship && (MAP_NEWTON_BASE..=MAP_DUCKS).contains(&variant)
+}
+
+/// The Newton family's variant for a (scheme, func) pair.
+pub fn newton_variant(scheme: u32, func: u32) -> u32 {
+    MAP_NEWTON_BASE + scheme.min(2) + 3 * func.min(2)
+}
+
+/// Inverse of [`newton_variant`]: (scheme, func).
+pub fn newton_decode(variant: u32) -> (u32, u32) {
+    let k = variant.saturating_sub(MAP_NEWTON_BASE).min(8);
+    (k % 3, k / 3)
+}
 
 /// The period of the reference the renderer is CURRENTLY using, for
 /// the panel to display: 0 = aperiodic (or none yet). Progressive
@@ -366,6 +439,91 @@ fn split_entry(z: &FixedComplex, x: f64, y: f64) -> ([f32; 2], [f32; 2], i32) {
     )
 }
 
+/// The big-float twin of [`split_entry`]: the (hi, lo, exponent)
+/// storage triple plus the correction's DD value. Huge iterates
+/// (Newton's pole excursions) are clamped inside f32's range so the
+/// triple stays finite -- a NaN residual would poison every delta
+/// that rebases through it, while a clamped hi still trips the escape
+/// margin exactly as it should.
+fn split_entry_big(z: &BigComplex) -> ([f32; 2], [f32; 2], i32, [f64; 4]) {
+    const DEEP: f64 = 8.077_935_669_463_16e-28; // 2^-90
+    const HUGE: f64 = 3.0e38;
+    let x = z.re.to_f64().clamp(-HUGE, HUGE);
+    let y = z.im.to_f64().clamp(-HUGE, HUGE);
+    if x.abs().max(y.abs()) >= DEEP {
+        let hix = x as f32;
+        let hiy = y as f32;
+        return (
+            [hix, hiy],
+            [(x - hix as f64) as f32, (y - hiy as f64) as f32],
+            0,
+            [x, 0.0, y, 0.0],
+        );
+    }
+    let e = match (z.re.mag_exp(), z.im.mag_exp()) {
+        (None, None) => return ([0.0, 0.0], [0.0, 0.0], 0, [0.0; 4]),
+        (None, Some(e)) | (Some(e), None) => e,
+        (Some(a), Some(b)) => a.max(b),
+    };
+    let comp = |v: &BigFloat| -> f64 {
+        if v.is_zero() {
+            0.0
+        } else {
+            v.mul_pow2(-e).to_f64()
+        }
+    };
+    let mx = comp(&z.re);
+    let my = comp(&z.im);
+    let hix = mx as f32;
+    let hiy = my as f32;
+    (
+        [hix, hiy],
+        [(mx - hix as f64) as f32, (my - hiy as f64) as f32],
+        e.clamp(-2_000_000_000, 2_000_000_000) as i32,
+        [x, 0.0, y, 0.0],
+    )
+}
+
+/// (f, f', f'') of the Newton family's function `func` at z, in big
+/// float -- the CPU twin of the formula's `newton_jet` for the
+/// polynomial functions (0: z^p - 1, 1: z^3 - 2z + 2, 2: z^8 + 15z^4
+/// - 16).
+fn rootfinder_jet(
+    z: &BigComplex,
+    func: u32,
+    p: u32,
+    n: usize,
+) -> (BigComplex, BigComplex, BigComplex) {
+    let real = |v: f64| BigComplex::from_f64(v, 0.0, n);
+    let pow = |k: u32| -> BigComplex {
+        let mut acc = real(1.0);
+        for _ in 0..k {
+            acc = acc.mul(z);
+        }
+        acc
+    };
+    match func {
+        1 => (
+            pow(3).sub(&z.mul_pow2(1)).add(&real(2.0)),
+            pow(2).mul_f64(3.0).sub(&real(2.0)),
+            z.mul_f64(6.0),
+        ),
+        2 => (
+            pow(8).add(&pow(4).mul_f64(15.0)).sub(&real(16.0)),
+            pow(7).mul_f64(8.0).add(&pow(3).mul_f64(60.0)),
+            pow(6).mul_f64(56.0).add(&pow(2).mul_f64(180.0)),
+        ),
+        _ => {
+            let p = p.max(2);
+            (
+                pow(p).sub(&real(1.0)),
+                pow(p - 1).mul_f64(p as f64),
+                pow(p - 2).mul_f64((p * (p - 1)) as f64),
+            )
+        }
+    }
+}
+
 /// A computed reference orbit plus the live state to extend it.
 pub struct ReferenceOrbit {
     /// Exact center, as the config's decimal strings.
@@ -454,6 +612,15 @@ pub struct ReferenceOrbit {
     /// cache key and compared by `serves`.
     pub map_params: [f32; 2],
     p_fixed: FixedComplex,
+    /// Live BIG-FLOAT state for the families in [`map_is_big`]: the
+    /// iterate, the map's c and its complex parameter (Newton/Nova
+    /// relaxation). Fixed point can neither hold these orbits
+    /// (Newton's pole excursions, Kaliset's inversions) nor step them
+    /// (Ducks' log), so they iterate here and only their storage
+    /// triples reach the arrays. Zero-limb dummies elsewhere.
+    zb: BigComplex,
+    cb: BigComplex,
+    pb: BigComplex,
     /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
     /// f64 magnitudes underflow at 2^-537 and would falsely read as
     /// closures) and its index — the ball-method candidate tracker.
@@ -736,6 +903,31 @@ impl ReferenceOrbit {
             };
             first = [0.5, 0.0];
         }
+        // Nova seeds its parameter plane at the CRITICAL POINT z_0 = 1
+        // (the formula's `wgsl_param_seed`); in Julia mode the pixel.
+        if !ship && ship_variant == MAP_NOVA && julia_c.is_none() {
+            z0 = FixedComplex {
+                re: FixedPoint::from_f64(1.0, n),
+                im: FixedPoint::zero(n),
+            };
+            first = [1.0, 0.0];
+        }
+        // Kaliset seeds at the pixel: zero is its 0/0, as for McMullen.
+        if !ship && ship_variant == MAP_KALISET && julia_c.is_none() {
+            z0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
+        }
+        // The big-float families iterate a BigComplex; the fixed-point
+        // `z` is their seed and nothing more after this.
+        let (zb, cb, pb) = if map_is_big(ship, ship_variant) {
+            (
+                BigComplex::from_fixed(&z0),
+                BigComplex::from_fixed(&c),
+                BigComplex::from_f64(map_params[0] as f64, map_params[1] as f64, n),
+            )
+        } else {
+            (BigComplex::zero(0), BigComplex::zero(0), BigComplex::zero(0))
+        };
         let mut orbit = Self {
             center_re: center_re.to_string(),
             center_im: center_im.to_string(),
@@ -758,6 +950,9 @@ impl ReferenceOrbit {
                 re: FixedPoint::from_f64(map_params[0] as f64, n),
                 im: FixedPoint::from_f64(map_params[1] as f64, n),
             },
+            zb,
+            cb,
+            pb,
             store_grown: true,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
@@ -856,6 +1051,115 @@ impl ReferenceOrbit {
         self.orbit_e.push(ee);
     }
 
+    /// One step of a big-float family (see [`map_is_big`]), pushing
+    /// the new iterate. False when the step is impossible (a divisor
+    /// exactly zero), which the caller records as the orbit's end.
+    fn step_big(&mut self) -> bool {
+        match self.ship_variant {
+            MAP_NEWTON_BASE..=MAP_NEWTON_END => self.step_rootfinder(false),
+            MAP_NOVA => self.step_rootfinder(true),
+            MAP_KALISET => self.step_kaliset(),
+            MAP_DUCKS => self.step_ducks(),
+            _ => false,
+        }
+    }
+
+    /// Newton / Halley / Chebyshev over the polynomial functions, with
+    /// complex relaxation; Nova adds c. The big-float twin of the
+    /// formula's `newton_delta`.
+    fn step_rootfinder(&mut self, nova: bool) -> bool {
+        let n = self.n_limbs;
+        let (scheme, func) = if nova { (0, 0) } else { newton_decode(self.ship_variant) };
+        let (f, fp, fpp) = rootfinder_jet(&self.zb, func, self.power, n);
+        // Every division here takes the SHADER's pole guard rather
+        // than ending the orbit. It is not a corner case: `z^p - 1`
+        // has f'(0) = 0, and Newton's own shipped preset is centred
+        // at exactly z = 0 -- so an orbit that stopped at a critical
+        // point would hand the perturbed path a one-entry reference
+        // and render nothing like the direct image (measured: 603 of
+        // 768 blocks). Feeding `esc_cdiv`'s 1e20 instead keeps the
+        // reference and the formula in step, and the next iterate
+        // contracts straight back off the singularity.
+        let guard = |a: &BigComplex, b: &BigComplex| -> BigComplex {
+            if b.norm_sqr_f64() < 1e-30 {
+                BigComplex::from_f64(1e20, 0.0, n)
+            } else {
+                a.div(b)
+            }
+        };
+        let step = match scheme {
+            0 => guard(&f, &fp),
+            1 => {
+                // Halley: 2 f f' / (2 f'^2 - f f'')
+                let num = f.mul(&fp).mul_pow2(1);
+                let den = fp.mul(&fp).mul_pow2(1).sub(&f.mul(&fpp));
+                guard(&num, &den)
+            }
+            _ => {
+                // Chebyshev: (f/f') (1 + f f'' / (2 f'^2))
+                let q = guard(&f, &fp);
+                let corr = guard(&f.mul(&fpp), &fp.mul(&fp).mul_pow2(1));
+                q.mul(&BigComplex::from_f64(1.0, 0.0, n).add(&corr))
+            }
+        };
+        let mut next = self.zb.sub(&self.pb.mul(&step));
+        if nova {
+            next = next.add(&self.cb);
+        }
+        self.zb = next;
+        self.push_entry_big();
+        true
+    }
+
+    /// Kaliset: `|z| / <z,z> -+ c`, with the shader's 0/0 guard.
+    fn step_kaliset(&mut self) -> bool {
+        let n = self.n_limbs;
+        let r2 = self.zb.norm_sqr();
+        let folded = if r2.is_zero() || r2.to_f64() <= 1e-30 {
+            BigComplex::zero(n)
+        } else {
+            let inv = r2.recip();
+            BigComplex { re: self.zb.re.abs().mul(&inv), im: self.zb.im.abs().mul(&inv) }
+        };
+        self.zb = if self.map_params[0] > 0.5 {
+            folded.add(&self.cb)
+        } else {
+            folded.sub(&self.cb)
+        };
+        self.push_entry_big();
+        true
+    }
+
+    /// Ducks: `log(fold(z) + c)` with the upper fold (Im <- |Im|);
+    /// variant 4 logs the square. Only these two variants perturb.
+    fn step_ducks(&mut self) -> bool {
+        let folded = BigComplex { re: self.zb.re.clone(), im: self.zb.im.abs() };
+        let t = folded.add(&self.cb);
+        // `u32(clamp(v, 0, 4)) == 4` -- the formula's own truncation,
+        // not a rounding, so the reference and the WGSL pick the same
+        // variant for every value the slider can hold.
+        let variant = self.map_params[0].clamp(0.0, 4.0) as u32;
+        let arg = if variant == 4 { t.mul(&t) } else { t };
+        self.zb = arg.ln();
+        self.push_entry_big();
+        true
+    }
+
+    /// Push the big-float iterate's storage triple. These families do
+    /// not ride the DD shadow (its step is the power map's), so every
+    /// entry is recorded as a correction -- always correct, merely
+    /// uncompressed; their orbits are short and never stored anyway
+    /// (`orbit_store` refuses them).
+    fn push_entry_big(&mut self) {
+        let (hi, lo, ee, dd) = split_entry_big(&self.zb);
+        let idx = self.orbit.len() as u32;
+        self.shadow = [f64::NAN; 4];
+        self.corrections.push(Correction { idx, hi, lo, e: ee, dd });
+        self.orbit.push(hi);
+        self.orbit_lo.push(lo);
+        self.orbit_e.push(ee);
+    }
+
     /// Extend the orbit so it covers `max_iter` iterations (no-op if
     /// it already does, or if the reference escaped earlier).
     pub fn extend(&mut self, max_iter: u32) {
@@ -876,6 +1180,17 @@ impl ReferenceOrbit {
             return;
         }
         while (self.orbit.len() as u32) <= max_iter {
+            if map_is_big(self.ship, self.ship_variant) {
+                // The big-float families: their own step, their own
+                // end (a divisor exactly zero ends the orbit the way an
+                // escape does -- pixels past it wrap), and no bailout,
+                // because none of them escapes at |Z| = 2.
+                if !self.step_big() {
+                    self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                    break;
+                }
+                continue;
+            }
             if self.ship {
                 // Ship-family step from the plain square's parts:
                 // sqr gives (x^2 - y^2, 2xy); every variant is a
@@ -1450,6 +1765,11 @@ impl ReferenceOrbit {
             n_limbs,
             escaped_at,
         } = read_header(&mut r)?;
+        // The big-float families are never written (see orbit_store)
+        // and could not deepen from a fixed-point live state anyway.
+        if map_is_big(ship, ship_variant) {
+            return None;
+        }
         let mode = r.u8()?;
         if mode == 0 {
             // RAW mode: FFORBIT5-style arrays (the dip-dense case).
@@ -1514,6 +1834,9 @@ impl ReferenceOrbit {
                         re: FixedPoint::from_f64(map_params[0] as f64, n_limbs),
                         im: FixedPoint::from_f64(map_params[1] as f64, n_limbs),
                     },
+                    zb: BigComplex::zero(0),
+                    cb: BigComplex::zero(0),
+                    pb: BigComplex::zero(0),
                     corrections: vec![seed],
                     shadow: [f64::NAN; 4],
                     c_dd,
@@ -1676,6 +1999,9 @@ impl ReferenceOrbit {
                 re: FixedPoint::from_f64(map_params[0] as f64, n_limbs),
                 im: FixedPoint::from_f64(map_params[1] as f64, n_limbs),
             },
+            zb: BigComplex::zero(0),
+            cb: BigComplex::zero(0),
+            pb: BigComplex::zero(0),
             corrections,
             shadow,
             c_dd,
@@ -2896,6 +3222,334 @@ impl OrbitCache {
 
     pub fn clear(&mut self) {
         self.slot = None;
+    }
+}
+
+/// The big-float families' reference orbits against f64 twins of
+/// their steps, plus the range events that put them on big float in
+/// the first place.
+#[cfg(test)]
+mod big_family_tests {
+    use super::*;
+
+    type C = (f64, f64);
+
+    fn cmul(a: C, b: C) -> C {
+        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+    }
+
+    fn cdiv(a: C, b: C) -> C {
+        let d = b.0 * b.0 + b.1 * b.1;
+        ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
+    }
+
+    fn cpow(z: C, k: u32) -> C {
+        let mut acc = (1.0, 0.0);
+        for _ in 0..k {
+            acc = cmul(acc, z);
+        }
+        acc
+    }
+
+    fn jet(z: C, func: u32, p: u32) -> (C, C, C) {
+        match func {
+            1 => (
+                (cpow(z, 3).0 - 2.0 * z.0 + 2.0, cpow(z, 3).1 - 2.0 * z.1),
+                (3.0 * cpow(z, 2).0 - 2.0, 3.0 * cpow(z, 2).1),
+                (6.0 * z.0, 6.0 * z.1),
+            ),
+            2 => {
+                let (z8, z7, z6, z4, z3, z2) =
+                    (cpow(z, 8), cpow(z, 7), cpow(z, 6), cpow(z, 4), cpow(z, 3), cpow(z, 2));
+                (
+                    (z8.0 + 15.0 * z4.0 - 16.0, z8.1 + 15.0 * z4.1),
+                    (8.0 * z7.0 + 60.0 * z3.0, 8.0 * z7.1 + 60.0 * z3.1),
+                    (56.0 * z6.0 + 180.0 * z2.0, 56.0 * z6.1 + 180.0 * z2.1),
+                )
+            }
+            _ => {
+                let pf = p as f64;
+                let zp = cpow(z, p);
+                let zp1 = cpow(z, p - 1);
+                let zp2 = cpow(z, p - 2);
+                (
+                    (zp.0 - 1.0, zp.1),
+                    (pf * zp1.0, pf * zp1.1),
+                    (pf * (pf - 1.0) * zp2.0, pf * (pf - 1.0) * zp2.1),
+                )
+            }
+        }
+    }
+
+    /// The shader's `newton_delta`, in f64.
+    fn rootfinder_step(z: C, scheme: u32, func: u32, p: u32, relax: C) -> C {
+        let (f, fp, fpp) = jet(z, func, p);
+        let step = match scheme {
+            0 => cdiv(f, fp),
+            1 => {
+                let num = cmul((2.0, 0.0), cmul(f, fp));
+                let fp2 = cmul(fp, fp);
+                let ffpp = cmul(f, fpp);
+                cdiv(num, (2.0 * fp2.0 - ffpp.0, 2.0 * fp2.1 - ffpp.1))
+            }
+            _ => {
+                let q = cdiv(f, fp);
+                let fp2 = cmul(fp, fp);
+                let corr = cdiv(cmul(f, fpp), (2.0 * fp2.0, 2.0 * fp2.1));
+                cmul(q, (1.0 + corr.0, corr.1))
+            }
+        };
+        let rs = cmul(relax, step);
+        (z.0 - rs.0, z.1 - rs.1)
+    }
+
+    fn entry(o: &ReferenceOrbit, i: usize) -> C {
+        let v = o.z_f32(i);
+        (v[0] as f64 + o.orbit_lo[i][0] as f64, v[1] as f64 + o.orbit_lo[i][1] as f64)
+    }
+
+    /// The stored seed is the centre's f32 HI (that is the storage
+    /// format), so an exact-decimal compare cannot hold.
+    fn assert_seed(o: &ReferenceOrbit, want: C, what: &str) {
+        let got = entry(o, 0);
+        assert!(
+            (got.0 - want.0).abs() < 1e-6 && (got.1 - want.1).abs() < 1e-6,
+            "{what}: seed {got:?} is not {want:?}"
+        );
+    }
+
+    /// The stored orbit must track an f64 iteration of the same step
+    /// from the same seed for `n` steps, to `tol` relative -- f64's
+    /// own error growth bounds `n` for the expanding maps.
+    /// `z0` must be the orbit's TRUE seed, not `entry(o, 0)`: the
+    /// stored entry is an f32 hi, while the live state carries the
+    /// centre at full precision, and starting the twin from the
+    /// truncation puts the two orbits 4e-8 apart after one step.
+    fn assert_tracks(
+        o: &ReferenceOrbit,
+        z0: C,
+        mut step: impl FnMut(C) -> C,
+        n: usize,
+        tol: f64,
+    ) {
+        assert!(o.len() as usize > n, "orbit too short: {}", o.len());
+        let mut z = z0;
+        for i in 1..=n {
+            z = step(z);
+            let got = entry(o, i);
+            let scale = 1.0 + z.0.abs() + z.1.abs();
+            assert!(
+                (got.0 - z.0).abs() + (got.1 - z.1).abs() < tol * scale,
+                "step {i}: reference {got:?} vs f64 {z:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn newton_variants_round_trip_and_the_big_range_is_contiguous() {
+        for scheme in 0..3 {
+            for func in 0..3 {
+                let v = newton_variant(scheme, func);
+                assert!((MAP_NEWTON_BASE..=MAP_NEWTON_END).contains(&v));
+                assert_eq!(newton_decode(v), (scheme, func));
+                assert!(map_is_big(false, v));
+            }
+        }
+        for v in [MAP_NOVA, MAP_KALISET, MAP_DUCKS] {
+            assert!(map_is_big(false, v));
+        }
+        for v in [MAP_PLAIN, MAP_CONJ, MAP_PHOENIX, MAP_MANOWAR, MAP_LAMBDA, MAP_FEATHER, MAP_MCMULLEN, MAP_MAGNET] {
+            assert!(!map_is_big(false, v));
+        }
+        // A Ship fold variant never reads as a big family.
+        assert!(!map_is_big(true, MAP_NEWTON_BASE));
+    }
+
+    #[test]
+    fn newton_reference_tracks_f64_and_converges_to_a_root() {
+        let o = ReferenceOrbit::compute(
+            "0.3", "0.6", 20.0, None, 60, Some((0.0, 0.0)), 3, false, newton_variant(0, 0), [1.0, 0.0],
+        )
+        .unwrap();
+        assert_eq!(o.len(), 61);
+        assert_eq!(o.escaped_at, None);
+        assert_seed(&o, (0.3, 0.6), "newton");
+        assert_tracks(&o, (0.3, 0.6), |z| rootfinder_step(z, 0, 0, 3, (1.0, 0.0)), 25, 1e-10);
+        let last = entry(&o, 60);
+        let f = cpow(last, 3);
+        assert!((f.0 - 1.0).abs() + f.1.abs() < 1e-6, "not at a root: {last:?}");
+    }
+
+    #[test]
+    fn newton_reference_survives_a_pole_excursion() {
+        // f'(1e-5) ~ 3e-10: the first step lands near 3e9, which fixed
+        // point's +-128 range could never hold. The orbit must stay
+        // finite and come back to the root at 1.
+        let o = ReferenceOrbit::compute(
+            "0.00001", "0.000002", 20.0, None, 200, Some((0.0, 0.0)), 3, false, newton_variant(0, 0), [1.0, 0.0],
+        )
+        .unwrap();
+        assert_eq!(o.escaped_at, None);
+        let z1 = entry(&o, 1);
+        assert!(z1.0.abs() > 1e8, "no excursion: {z1:?}");
+        for i in 0..o.len() as usize {
+            let e = entry(&o, i);
+            assert!(e.0.is_finite() && e.1.is_finite(), "entry {i} not finite");
+            assert!(o.orbit_lo[i][0].is_finite() && o.orbit_lo[i][1].is_finite());
+        }
+        let last = entry(&o, 199);
+        assert!((last.0 - 1.0).abs() + last.1.abs() < 1e-6, "did not return to the root: {last:?}");
+    }
+
+    #[test]
+    fn every_scheme_and_function_tracks_f64() {
+        for scheme in 0..3 {
+            for func in 0..3 {
+                let relax = [1.05f32, -0.2];
+                let o = ReferenceOrbit::compute(
+                    "0.31", "0.57", 20.0, None, 40, Some((0.0, 0.0)), 3, false,
+                    newton_variant(scheme, func), relax,
+                )
+                .unwrap();
+                assert_tracks(
+                    &o,
+                    (0.31, 0.57),
+                    |z| rootfinder_step(z, scheme, func, 3, (relax[0] as f64, relax[1] as f64)),
+                    12,
+                    1e-9,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nova_reference_seeds_at_one_and_tracks_f64() {
+        let o = ReferenceOrbit::compute(
+            "-0.3", "0.05", 20.0, None, 60, None, 3, false, MAP_NOVA, [1.0, 0.0],
+        )
+        .unwrap();
+        assert_seed(&o, (1.0, 0.0), "nova critical point");
+        let c = (-0.3f64, 0.05f64);
+        assert_tracks(
+            &o,
+            (1.0, 0.0),
+            |z| {
+                let n = rootfinder_step(z, 0, 0, 3, (1.0, 0.0));
+                (n.0 + c.0, n.1 + c.1)
+            },
+            30,
+            1e-10,
+        );
+        // Julia mode seeds the pixel and keeps c fixed.
+        let j = ReferenceOrbit::compute(
+            "0.2", "0.1", 20.0, None, 30, Some((-0.3, 0.05)), 3, false, MAP_NOVA, [1.0, 0.0],
+        )
+        .unwrap();
+        assert_seed(&j, (0.2, 0.1), "nova julia");
+        // The Julia constant round-trips through f32, so the twin
+        // must use the same value the reference stored.
+        let jc = (-0.3f32 as f64, 0.05f32 as f64);
+        assert_tracks(
+            &j,
+            (0.2, 0.1),
+            |z| {
+                let n = rootfinder_step(z, 0, 0, 3, (1.0, 0.0));
+                (n.0 + jc.0, n.1 + jc.1)
+            },
+            20,
+            1e-10,
+        );
+    }
+
+    fn kaliset_step(z: C, c: C, plus: bool) -> C {
+        let r2 = z.0 * z.0 + z.1 * z.1;
+        let folded = if r2 > 1e-30 { (z.0.abs() / r2, z.1.abs() / r2) } else { (0.0, 0.0) };
+        if plus {
+            (folded.0 + c.0, folded.1 + c.1)
+        } else {
+            (folded.0 - c.0, folded.1 - c.1)
+        }
+    }
+
+    #[test]
+    fn kaliset_reference_seeds_at_the_pixel_and_tracks_f64() {
+        for plus in [false, true] {
+            let o = ReferenceOrbit::compute(
+                "0.35", "0.28", 20.0, None, 40, None, 2, false, MAP_KALISET,
+                [if plus { 1.0 } else { 0.0 }, 0.0],
+            )
+            .unwrap();
+            assert_seed(&o, (0.35, 0.28), "kaliset");
+            assert_eq!(o.escaped_at, None, "Kaliset never escapes");
+            assert_tracks(&o, (0.35, 0.28), |z| kaliset_step(z, (0.35, 0.28), plus), 10, 1e-8);
+        }
+    }
+
+    #[test]
+    fn kaliset_reference_holds_an_inversion_fixed_point_could_not() {
+        // c = 1 + 1e-7: z_1 = 1/c - c ~ -2e-7, so z_2 = 1/|z_1| - c ~ 5e6.
+        let o = ReferenceOrbit::compute(
+            "1.0000001", "0", 20.0, None, 10, None, 2, false, MAP_KALISET, [0.0, 0.0],
+        )
+        .unwrap();
+        let z2 = entry(&o, 2);
+        assert!(z2.0 > 1e6, "no inversion: {z2:?}");
+        assert_tracks(&o, (1.0000001, 0.0), |z| kaliset_step(z, (1.0000001, 0.0), false), 4, 1e-6);
+        assert_eq!(o.escaped_at, None);
+    }
+
+    fn ducks_step(z: C, c: C, square: bool) -> C {
+        let mut t = (z.0 + c.0, z.1.abs() + c.1);
+        if square {
+            t = cmul(t, t);
+        }
+        let r2 = t.0 * t.0 + t.1 * t.1;
+        if r2 < 1e-30 {
+            return (-34.5, 0.0);
+        }
+        (0.5 * r2.ln(), t.1.atan2(t.0))
+    }
+
+    #[test]
+    fn ducks_reference_tracks_f64_on_both_planes_and_variants() {
+        for (variant, square) in [(0.0f32, false), (4.0, true)] {
+            let o = ReferenceOrbit::compute(
+                "-0.4", "0.3", 20.0, None, 60, None, 2, false, MAP_DUCKS, [variant, 0.0],
+            )
+            .unwrap();
+            assert_seed(&o, (0.0, 0.0), "ducks parameter plane");
+            assert_tracks(&o, (0.0, 0.0), |z| ducks_step(z, (-0.4, 0.3), square), 40, 1e-9);
+            let j = ReferenceOrbit::compute(
+                "0.15", "-0.2", 20.0, None, 60, Some((0.1, -0.62)), 2, false, MAP_DUCKS, [variant, 0.0],
+            )
+            .unwrap();
+            assert_seed(&j, (0.15, -0.2), "ducks julia");
+            assert_tracks(
+                &j,
+                (0.15, -0.2),
+                |z| ducks_step(z, (0.1f32 as f64, -0.62f32 as f64), square),
+                // 25, not 40: past there the TWIN is the inaccurate
+                // one -- f64's 1e-16 amplified by this map reaches
+                // 4.5e-8 by step 40, while the reference is big float.
+                25,
+                1e-9,
+            );
+        }
+    }
+
+    #[test]
+    fn big_family_orbits_are_never_stored() {
+        let dir = std::env::temp_dir().join(format!("fflame-bigfam-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut o = ReferenceOrbit::compute(
+            "0.3", "0.6", 200.0, None, 4000, Some((0.0, 0.0)), 3, false, newton_variant(0, 0), [1.0, 0.0],
+        )
+        .unwrap();
+        assert!(!super::super::orbit_store::save_to(&dir, &o));
+        super::super::orbit_store::maybe_save_to(&dir, &mut o);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a big-family orbit reached the store");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

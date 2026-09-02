@@ -320,6 +320,186 @@ impl BigFloat {
         out.neg = self.neg;
         out
     }
+
+    /// |self|.
+    pub fn abs(&self) -> Self {
+        let mut out = self.clone();
+        out.neg = false;
+        out
+    }
+
+    /// Magnitude comparison. Both operands must be normalized (every
+    /// constructor and operation here normalizes), so the exponent
+    /// orders them and the limbs break the tie.
+    pub fn cmp_abs(&self, other: &Self) -> std::cmp::Ordering {
+        match (self.is_zero(), other.is_zero()) {
+            (true, true) => return std::cmp::Ordering::Equal,
+            (true, false) => return std::cmp::Ordering::Less,
+            (false, true) => return std::cmp::Ordering::Greater,
+            _ => {}
+        }
+        match self.exp.cmp(&other.exp) {
+            std::cmp::Ordering::Equal => cmp_mag(&self.limbs, &other.limbs),
+            ord => ord,
+        }
+    }
+
+    /// Division by a small positive integer, truncating: the
+    /// `1/(2j+1)` of the transcendental series. Long division over
+    /// the limbs -- the one division the format does on its own
+    /// limbs; everything wider is the Newton reciprocal.
+    pub fn div_small(&self, d: u32) -> Self {
+        assert!(d > 0, "division by zero");
+        if self.is_zero() || d == 1 {
+            return self.clone();
+        }
+        let mut out = self.clone();
+        let mut rem: u128 = 0;
+        for i in (0..out.limbs.len()).rev() {
+            let cur = (rem << 64) | out.limbs[i] as u128;
+            out.limbs[i] = (cur / d as u128) as u64;
+            rem = cur % d as u128;
+        }
+        out.normalize();
+        out
+    }
+
+    /// Square root of a non-negative value, to the format's width:
+    /// Newton on the RECIPROCAL root (multiplication only, like
+    /// [`Self::recip`]), then one multiply.
+    pub fn sqrt(&self) -> Self {
+        assert!(!self.neg, "sqrt of a negative value");
+        if self.is_zero() {
+            return self.clone();
+        }
+        let n = self.n_limbs();
+        // self = m * 2^(2k) with m in [1, 4): an even exponent split
+        // so the root's scale is exact.
+        let e = self.mag_exp().unwrap();
+        let k = e.div_euclid(2);
+        let m = self.mul_pow2(-2 * k);
+        let mut r = Self::from_f64(1.0 / m.to_f64().sqrt(), n);
+        let three = Self::from_f64(3.0, n);
+        let target = 64 * n as i64 + 8;
+        let mut have = 50i64;
+        while have < target {
+            // r <- r (3 - m r^2) / 2
+            let mr2 = m.mul(&r).mul(&r);
+            r = r.mul(&three.sub(&mr2)).mul_pow2(-1);
+            have *= 2;
+        }
+        m.mul(&r).mul_pow2(k)
+    }
+
+    /// Natural logarithm of a positive value, to the format's width.
+    ///
+    /// `ln(m 2^k) = k ln 2 + 2 atanh((m-1)/(m+1))` with m in [1, 2):
+    /// the series argument is at most 1/3, so each term gains three
+    /// bits. This is what the Ducks reference needs per iteration.
+    pub fn ln(&self) -> Self {
+        assert!(!self.neg && !self.is_zero(), "ln of a non-positive value");
+        let n = self.n_limbs();
+        let k = self.mag_exp().unwrap();
+        let m = self.mul_pow2(-k);
+        let one = Self::from_f64(1.0, n);
+        let s = m.sub(&one).mul(&m.add(&one).recip());
+        let ln_m = odd_series(&s, false).mul_pow2(1);
+        ln2(n).mul(&Self::from_f64(k as f64, n)).add(&ln_m)
+    }
+
+    /// Principal-value `atan2(y, x)` in (-pi, pi], to the format's
+    /// width: reduce to |t| <= tan(pi/16) by two half-angle steps
+    /// (each one square root), then the alternating odd series.
+    pub fn atan2(y: &Self, x: &Self) -> Self {
+        let n = y.n_limbs();
+        let pi = pi(n);
+        let half_pi = pi.mul_pow2(-1);
+        if y.is_zero() {
+            return if x.neg && !x.is_zero() { pi } else { Self::zero(n) };
+        }
+        if x.is_zero() {
+            return if y.neg { half_pi.neg() } else { half_pi };
+        }
+        let ax = x.abs();
+        let ay = y.abs();
+        let swap = ay.cmp_abs(&ax) == std::cmp::Ordering::Greater;
+        let (num, den) = if swap { (&ax, &ay) } else { (&ay, &ax) };
+        let one = Self::from_f64(1.0, n);
+        // t in (0, 1]; atan(t) = 2 atan(t / (1 + sqrt(1 + t^2))).
+        let mut t = num.mul(&den.recip());
+        for _ in 0..2 {
+            let root = one.add(&t.mul(&t)).sqrt();
+            t = t.mul(&one.add(&root).recip());
+        }
+        let mut a = odd_series(&t, true).mul_pow2(2);
+        if swap {
+            a = half_pi.sub(&a);
+        }
+        if x.neg {
+            a = pi.sub(&a);
+        }
+        if y.neg {
+            a = a.neg();
+        }
+        a
+    }
+}
+
+/// `sum_j s^(2j+1)/(2j+1)`, plain (atanh) or alternating (atan), for
+/// |s| well inside 1. Stops when a term drops below the sum's
+/// resolution at the format's width.
+fn odd_series(s: &BigFloat, alternating: bool) -> BigFloat {
+    let n = s.n_limbs();
+    if s.is_zero() {
+        return BigFloat::zero(n);
+    }
+    let cutoff = s.mag_exp().unwrap() - 64 * n as i64 - 4;
+    let s2 = s.mul(s);
+    let mut term = s.clone();
+    let mut sum = BigFloat::zero(n);
+    let mut j = 0u32;
+    loop {
+        let t = term.div_small(2 * j + 1);
+        sum = if alternating && j % 2 == 1 { sum.sub(&t) } else { sum.add(&t) };
+        term = term.mul(&s2);
+        j += 1;
+        if term.is_zero() || term.mag_exp().unwrap() < cutoff || j > 200_000 {
+            break;
+        }
+    }
+    sum
+}
+
+type ConstCache = std::sync::Mutex<std::collections::HashMap<usize, BigFloat>>;
+
+fn cached(cache: &std::sync::OnceLock<ConstCache>, n: usize, build: impl FnOnce() -> BigFloat) -> BigFloat {
+    let cache = cache.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(v) = cache.lock().unwrap().get(&n) {
+        return v.clone();
+    }
+    let v = build();
+    cache.lock().unwrap().insert(n, v.clone());
+    v
+}
+
+/// ln 2 at `n` limbs: 2 atanh(1/3). Cached per width -- `ln` is
+/// called once per reference iteration.
+fn ln2(n: usize) -> BigFloat {
+    static CACHE: std::sync::OnceLock<ConstCache> = std::sync::OnceLock::new();
+    cached(&CACHE, n, || {
+        let third = BigFloat::from_f64(1.0, n).div_small(3);
+        odd_series(&third, false).mul_pow2(1)
+    })
+}
+
+/// pi at `n` limbs by Machin: 16 atan(1/5) - 4 atan(1/239). Cached.
+fn pi(n: usize) -> BigFloat {
+    static CACHE: std::sync::OnceLock<ConstCache> = std::sync::OnceLock::new();
+    cached(&CACHE, n, || {
+        let a = odd_series(&BigFloat::from_f64(1.0, n).div_small(5), true);
+        let b = odd_series(&BigFloat::from_f64(1.0, n).div_small(239), true);
+        a.mul_pow2(4).sub(&b.mul_pow2(2))
+    })
 }
 
 /// Complex big-float, for the Newton nucleus iteration.
@@ -370,6 +550,38 @@ impl BigComplex {
         let r = self.re.to_f64();
         let i = self.im.to_f64();
         r * r + i * i
+    }
+
+    /// From a fixed-point value (exact).
+    pub fn from_fixed(v: &super::fixedpoint::FixedComplex) -> Self {
+        Self { re: BigFloat::from_fixed(&v.re), im: BigFloat::from_fixed(&v.im) }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.re.is_zero() && self.im.is_zero()
+    }
+
+    pub fn mul_pow2(&self, k: i64) -> Self {
+        Self { re: self.re.mul_pow2(k), im: self.im.mul_pow2(k) }
+    }
+
+    /// Scale by a real f64 (a small integer coefficient, typically).
+    pub fn mul_f64(&self, k: f64) -> Self {
+        let r = BigFloat::from_f64(k, self.re.n_limbs());
+        Self { re: self.re.mul(&r), im: self.im.mul(&r) }
+    }
+
+    /// Principal complex log. The origin (a log singularity) returns
+    /// the shader's own sentinel, `esc_clog`'s (-34.5, 0) for
+    /// |z|^2 < 1e-30, so a reference iterate agrees with the pixel
+    /// formula there instead of evaluating atan2 at a zero pair.
+    pub fn ln(&self) -> Self {
+        let n = self.re.n_limbs();
+        let r2 = self.norm_sqr();
+        if r2.is_zero() || r2.to_f64() < 1e-30 {
+            return Self::from_f64(-34.5, 0.0, n);
+        }
+        Self { re: r2.ln().mul_pow2(-1), im: BigFloat::atan2(&self.im, &self.re) }
     }
 }
 
@@ -453,5 +665,89 @@ mod tests {
         assert_eq!(back, fx, "fixed -> big -> fixed must be exact");
         // Out of headroom: refused, not wrapped.
         assert!(bf(1e9).to_fixed(4).is_none());
+    }
+
+    /// The error's magnitude exponent must sit far below the format's
+    /// width (256 bits at N = 4): "full precision" as `recip` tests it.
+    fn assert_tiny(err: &BigFloat, what: &str) {
+        if let Some(e) = err.mag_exp() {
+            assert!(e < -(64 * N as i64 - 24), "{what}: error 2^{e}");
+        }
+    }
+
+    #[test]
+    fn small_division_and_sqrt_are_full_precision() {
+        // 1/7 * 7 = 1 to the width.
+        let seventh = bf(1.0).div_small(7);
+        assert_tiny(&seventh.mul(&bf(7.0)).sub(&bf(1.0)), "1/7");
+        for v in [2.0, 0.75, 1.9e-30, 7.7e25, 3.0e100] {
+            let x = bf(v);
+            let r = x.sqrt();
+            assert!((r.to_f64() - v.sqrt()).abs() <= v.sqrt() * 1e-15, "sqrt({v})");
+            // sqrt(x)^2 - x at the width, relative to x.
+            let err = r.mul(&r).sub(&x);
+            if let (Some(ee), Some(xe)) = (err.mag_exp(), x.mag_exp()) {
+                assert!(ee - xe < -(64 * N as i64 - 24), "sqrt({v}) error 2^{}", ee - xe);
+            }
+        }
+    }
+
+    #[test]
+    fn ln_matches_f64_and_its_identities_hold_at_width() {
+        for v in [2.0, 10.0, 0.5, 1.0 + 1e-9, 3.7e20, 2.2e-18] {
+            let l = bf(v).ln();
+            assert!((l.to_f64() - v.ln()).abs() <= 2e-15 * v.ln().abs().max(1.0), "ln({v}) = {}", l.to_f64());
+        }
+        assert!(bf(1.0).ln().is_zero(), "ln 1 = 0 exactly");
+        // ln(a b) = ln a + ln b, and ln(x^2) = 2 ln x, to the width.
+        let (a, b) = (bf(3.25), bf(0.71));
+        assert_tiny(&a.mul(&b).ln().sub(&a.ln().add(&b.ln())), "ln(ab)");
+        let x = bf(1.7e9);
+        assert_tiny(&x.mul(&x).ln().sub(&x.ln().mul_pow2(1)), "ln(x^2)");
+        // ln 2 itself against the f64 constant.
+        assert!((ln2(N).to_f64() - std::f64::consts::LN_2).abs() < 1e-16);
+    }
+
+    #[test]
+    fn atan2_matches_f64_in_every_quadrant_and_at_width() {
+        for (y, x) in [
+            (1.0, 1.0),
+            (1.0, -1.0),
+            (-1.0, -1.0),
+            (-1.0, 1.0),
+            (0.3, 2.0),
+            (2.0, 0.3),
+            (-2.0, 0.3),
+            (0.0, 1.0),
+            (0.0, -1.0),
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (1e-12, 1.0),
+            (1.0, 1e-12),
+            (-5.0, 1e-300),
+        ] {
+            let a = BigFloat::atan2(&bf(y), &bf(x));
+            assert!((a.to_f64() - y.atan2(x)).abs() < 2e-15, "atan2({y}, {x}) = {}", a.to_f64());
+        }
+        assert!((pi(N).to_f64() - std::f64::consts::PI).abs() < 1e-15);
+        // The double-angle identity at the width: for a first-quadrant
+        // (y, x), atan2(2xy, x^2 - y^2) = 2 atan2(y, x) as long as the
+        // doubled angle stays below pi/2.
+        let (y, x) = (bf(0.3), bf(1.1));
+        let lhs = BigFloat::atan2(&x.mul(&y).mul_pow2(1), &x.mul(&x).sub(&y.mul(&y)));
+        let rhs = BigFloat::atan2(&y, &x).mul_pow2(1);
+        assert_tiny(&lhs.sub(&rhs), "double angle");
+    }
+
+    #[test]
+    fn complex_ln_agrees_with_f64_and_guards_the_origin() {
+        let z = BigComplex::from_f64(-0.4, 0.9, N);
+        let l = z.ln();
+        let r = (0.4f64 * 0.4 + 0.9 * 0.9).sqrt().ln();
+        assert!((l.re.to_f64() - r).abs() < 2e-15);
+        assert!((l.im.to_f64() - 0.9f64.atan2(-0.4)).abs() < 2e-15);
+        let o = BigComplex::zero(N).ln();
+        assert_eq!(o.re.to_f64(), -34.5);
+        assert!(o.im.is_zero());
     }
 }

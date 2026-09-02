@@ -2855,6 +2855,738 @@ mod tests {
         }
     }
 
+    // ------------------------------------------------------------
+    // The big-float families (Newton, Nova, Kaliset, Ducks) against
+    // exact orbits at zoom 30, on both rungs.
+    // ------------------------------------------------------------
+
+    /// Render `esc` through the perturbed path (scaled or deep rung)
+    /// to settled and read back every pixel's terminal record.
+    fn perturbed_records(
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        deep: bool,
+    ) -> Vec<crate::escape::renderer::IterRecord> {
+        records_via(esc, w, h, deep, true)
+    }
+
+    /// As above, but choosing the path: `perturbed` false renders the
+    /// DIRECT template, so the two can be scored against the same
+    /// exact oracle.
+    fn records_via(
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        deep: bool,
+        perturbed: bool,
+    ) -> Vec<crate::escape::renderer::IterRecord> {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+            &config.flame,
+            config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_perturbed = perturbed;
+        escape.force_floatexp = deep && perturbed;
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("oracle frame"),
+            });
+            let settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled {
+                break;
+            }
+            guard += 1;
+            assert!(guard < 100_000, "render did not settle");
+        }
+        let out = escape
+            .read_results_full(&device, &queue)
+            .expect("records inactive -- results_fit failed?");
+        escape.destroy();
+        out
+    }
+
+    type C64 = (f64, f64);
+
+    fn c64_mul(a: C64, b: C64) -> C64 {
+        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+    }
+
+    fn c64_div(a: C64, b: C64) -> C64 {
+        let d = b.0 * b.0 + b.1 * b.1;
+        ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
+    }
+
+    /// The exact outcome of a root-finder orbit at one point, read off
+    /// a BIG-FLOAT orbit.
+    ///
+    /// f64 cannot serve as this oracle, which cost an afternoon to
+    /// establish: measured at these three boundary centres, an f64
+    /// orbit has already lost the trajectory by step 27-41 (the
+    /// Chebyshev centre passes |Z| ~ 958, which amplifies every
+    /// earlier rounding), and Chebyshev's orbits run to 83 iterations.
+    /// An f64 "truth" therefore disagrees with the exact answer on
+    /// ~3% of pixels by itself -- which reads exactly like a broken
+    /// delta step, and is not one.
+    ///
+    /// This shares `step_rootfinder` with the reference the shader
+    /// uses, so it cannot catch an error in that step; what pins the
+    /// step is `reference.rs`'s own pair of tests, which track it
+    /// against an f64 twin where f64 IS trustworthy (a benign point,
+    /// 12 steps) and check it lands on a true root. What is under
+    /// test here is the delta algebra, and that is independent.
+    fn exact_rootfinder_outcome(
+        re: &str,
+        im: &str,
+        zoom: f64,
+        variant: u32,
+        p: u32,
+        relax: [f32; 2],
+        julia_c: Option<(f32, f32)>,
+        max_iter: u32,
+        bailout: f64,
+    ) -> Outcome {
+        let o = crate::escape::reference::ReferenceOrbit::compute(
+            re, im, zoom, None, max_iter, julia_c, p, false, variant, relax,
+        )
+        .expect("oracle orbit");
+        let val = |i: usize| -> C64 {
+            let e = o.z_f32(i);
+            (
+                e[0] as f64 + o.orbit_lo[i][0] as f64,
+                e[1] as f64 + o.orbit_lo[i][1] as f64,
+            )
+        };
+        let last = (o.len() as usize).saturating_sub(1);
+        let mut prev = val(0);
+        for i in 1..=last.min(max_iter as usize) {
+            let z = val(i);
+            if z.0 * z.0 + z.1 * z.1 > bailout {
+                return Outcome::Escaped(i as u32);
+            }
+            let (dx, dy) = (z.0 - prev.0, z.1 - prev.1);
+            if dx * dx + dy * dy < 1e-12 {
+                return Outcome::Converged(z, i as u32);
+            }
+            prev = z;
+        }
+        Outcome::RanOut
+    }
+
+    /// A pixel's exact centre as decimal strings, optionally nudged by
+    /// a fraction of a pixel (the stability probe).
+    fn pixel_decimal(
+        px: u32,
+        py: u32,
+        w: u32,
+        h: u32,
+        cre: &str,
+        cim: &str,
+        zoom: f64,
+        nudge: f64,
+    ) -> (String, String) {
+        let span_y = 4.0 / zoom.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let s = span_y / h as f64;
+        let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x + nudge * s;
+        let dy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y) + nudge * s;
+        (
+            crate::escape::fixedpoint::FixedPoint::decimal_add_f64(cre, dx, zoom).unwrap(),
+            crate::escape::fixedpoint::FixedPoint::decimal_add_f64(cim, dy, zoom).unwrap(),
+        )
+    }
+
+    /// Outcome of an exact (f64) convergent orbit: `Some(z)` with the
+    /// iteration count when it settled, the escape count, or None for
+    /// ran-out -- the same three-way split the records carry.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Outcome {
+        Converged(C64, u32),
+        Escaped(u32),
+        RanOut,
+    }
+
+    fn record_outcome(r: &crate::escape::renderer::IterRecord) -> Outcome {
+        if r.tags & 2 != 0 {
+            Outcome::Converged((r.z[0] as f64, r.z[1] as f64), r.n)
+        } else if r.tags & 1 != 0 {
+            Outcome::Escaped(r.n)
+        } else {
+            Outcome::RanOut
+        }
+    }
+
+    /// Two outcomes agree when the class matches, a converged pixel
+    /// lands on the SAME point, and the settle/escape count is within
+    /// two (an f32-vs-f64 razor's edge on the 1e-12 settle test).
+    fn outcomes_agree(a: Outcome, b: Outcome) -> (bool, bool) {
+        match (a, b) {
+            (Outcome::Converged(za, na), Outcome::Converged(zb, nb)) => {
+                let close = (za.0 - zb.0).abs() + (za.1 - zb.1).abs() < 1e-3;
+                (close, close && (na as i64 - nb as i64).abs() <= 2)
+            }
+            (Outcome::Escaped(na), Outcome::Escaped(nb)) => (true, (na as i64 - nb as i64).abs() <= 2),
+            (Outcome::RanOut, Outcome::RanOut) => (true, true),
+            _ => (false, false),
+        }
+    }
+
+    /// Exact outcomes for every pixel, plus whether each is STABLE:
+    /// unchanged when the seed moves by 1e-4 of a pixel in either
+    /// axis. An unstable pixel is decided at a sub-pixel scale below
+    /// the f32 delta's own resolution (about 4e-6 of a pixel, before
+    /// the map amplifies it), so no f32 renderer -- direct or
+    /// perturbed -- can be held to it; the settle count near a slowly
+    /// converging fixed point is the common case (it jitters by
+    /// several iterations under a 1e-7 nudge of |dz|, and the direct
+    /// f32 path jitters with it).
+    fn convergent_truth(
+        w: u32,
+        h: u32,
+        cre: &str,
+        cim: &str,
+        zoom: f64,
+        oracle: impl Fn(&str, &str) -> Outcome + Sync,
+    ) -> (Vec<Outcome>, Vec<bool>) {
+        use rayon::prelude::*;
+        let pairs: Vec<(Outcome, bool)> = (0..w * h)
+            .into_par_iter()
+            .map(|i| {
+                let (px, py) = (i % w, i / w);
+                let (re, im) = pixel_decimal(px, py, w, h, cre, cim, zoom, 0.0);
+                let o = oracle(&re, &im);
+                // ONE probe, not four: every evaluation here is its own
+                // big-float orbit, and these tests run in a debug build.
+                let (nre, nim) = pixel_decimal(px, py, w, h, cre, cim, zoom, 1e-3);
+                let (c, k) = outcomes_agree(o, oracle(&nre, &nim));
+                (o, c && k)
+            })
+            .collect();
+        pairs.into_iter().unzip()
+    }
+
+    /// Compare perturbed records against exact outcomes for a
+    /// convergent map over the STABLE pixels (see `convergent_truth`):
+    /// outcome mismatches below 0.2%, count disagreements below 0.5%,
+    /// and the unstable set itself must stay small. Returns the
+    /// mismatch fraction.
+    fn compare_convergent(
+        what: &str,
+        gpu: &[crate::escape::renderer::IterRecord],
+        truth: &[Outcome],
+        stable: &[bool],
+    ) -> f64 {
+        let mut mismatched = 0usize;
+        let mut count_off = 0usize;
+        let mut considered = 0usize;
+        for ((g, t), s) in gpu.iter().zip(truth).zip(stable) {
+            if !s {
+                continue;
+            }
+            considered += 1;
+            let (same, count_ok) = outcomes_agree(record_outcome(g), *t);
+            if !same {
+                mismatched += 1;
+            } else if !count_ok {
+                count_off += 1;
+            }
+        }
+        let unstable = gpu.len() - considered;
+        let frac = mismatched as f64 / considered.max(1) as f64;
+        println!(
+            "{what}: {mismatched}/{considered} outcome mismatches ({:.2}%), {count_off} counts off by >2, {unstable} unstable pixels excluded ({:.1}%)",
+            frac * 100.0,
+            unstable as f64 * 100.0 / gpu.len() as f64
+        );
+        assert!(
+            unstable < gpu.len() / 5,
+            "{what}: {unstable} of {} pixels are unstable -- the view is too razor-edged to test",
+            gpu.len()
+        );
+        assert!(
+            count_off <= considered / 200,
+            "{what}: {count_off} stable pixels settle/escape at a different count"
+        );
+        frac
+    }
+
+    /// Every basin must be present, or the view proves nothing.
+    fn assert_three_basins(what: &str, truth: &[Outcome]) {
+        let mut buckets = [0usize; 3];
+        for t in truth {
+            if let Outcome::Converged(z, _) = t {
+                let ang = z.1.atan2(z.0);
+                let k = ((ang / (2.0 * std::f64::consts::PI / 3.0)).round() as i64).rem_euclid(3);
+                buckets[k as usize] += 1;
+            }
+        }
+        for (k, b) in buckets.iter().enumerate() {
+            assert!(
+                *b > truth.len() / 50,
+                "{what}: basin {k} holds only {b} of {} pixels -- degenerate view",
+                truth.len()
+            );
+        }
+    }
+
+    /// Newton over z^3 - 1 on a basin boundary: the Julia set of the
+    /// Newton map has the Wada property, so a zoom-30 view around any
+    /// boundary point holds all three basins. One boundary point per
+    /// scheme (each scheme is its own map), both rungs, and the
+    /// complex relaxation exercised on the Newton scheme.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_newton_matches_an_exact_orbit_at_depth() {
+        // A smaller grid and iteration cap than the escaping tiers
+        // use: every pixel of the oracle is its own big-float orbit,
+        // in a debug build. 150 is comfortably past where these views
+        // settle (measured: Chebyshev, the slowest, runs to 83).
+        let (w, h) = (48u32, 36u32);
+        let zoom = 30.0f64;
+        let max_iter = 150u32;
+        let bailout = 1e6f64;
+        // (scheme, center) -- centres bisected between two basins; the
+        // third appears at depth by the Wada property.
+        for (scheme, cre, cim) in [
+            (0u32, "-0.5", "0.23019701107058421"),
+            (1, "-0.5", "0.00365726284994825"),
+            (2, "-0.5", "0.14065853256683475"),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "newton".to_string();
+            esc.center_re = cre.to_string();
+            esc.center_im = cim.to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = max_iter;
+            esc.bailout = bailout as f32;
+            esc.formula_params.insert("power".to_string(), 3.0);
+            esc.formula_params.insert("scheme".to_string(), scheme as f32);
+            esc.formula_params.insert("func".to_string(), 0.0);
+            // Every shipped (scheme, func) pair must actually perturb:
+            // if one silently stopped selecting the tier this test
+            // would pass by rendering the direct path.
+            assert_eq!(
+                crate::escape::EscapeRenderer::perturb_tier(&esc),
+                Some(crate::escape::assembler::PerturbTier::Newton {
+                    p: 3,
+                    scheme,
+                    func: 0
+                }),
+                "scheme {scheme} over z^p - 1 must select the Newton tier"
+            );
+            let (truth, stable) = convergent_truth(w, h, cre, cim, zoom, |re, im| {
+                exact_rootfinder_outcome(
+                    re,
+                    im,
+                    zoom,
+                    crate::escape::reference::newton_variant(scheme, 0),
+                    3,
+                    [1.0, 0.0],
+                    Some((0.0, 0.0)),
+                    max_iter,
+                    bailout,
+                )
+            });
+            assert_three_basins(&format!("newton scheme {scheme}"), &truth);
+            for deep in [false, true] {
+                let gpu = perturbed_records(&esc, w, h, deep);
+                let frac = compare_convergent(
+                    &format!("newton scheme {scheme} deep {deep}"),
+                    &gpu,
+                    &truth,
+                    &stable,
+                );
+                assert!(frac < 0.002, "newton scheme {scheme} deep {deep}: {:.2}% mismatched", frac * 100.0);
+            }
+        }
+        // Complex relaxation on the Newton scheme: a different map,
+        // whose basins at the same boundary point are still mixed.
+        {
+            let (cre, cim) = ("-0.5", "0.23019701107058421");
+            let relax = [1.15f32, 0.35];
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "newton".to_string();
+            esc.center_re = cre.to_string();
+            esc.center_im = cim.to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = max_iter;
+            esc.bailout = bailout as f32;
+            esc.formula_params.insert("relax_re".to_string(), relax[0]);
+            esc.formula_params.insert("relax_im".to_string(), relax[1]);
+            let (truth, stable) = convergent_truth(w, h, cre, cim, zoom, |re, im| {
+                exact_rootfinder_outcome(
+                    re,
+                    im,
+                    zoom,
+                    crate::escape::reference::newton_variant(0, 0),
+                    3,
+                    relax,
+                    Some((0.0, 0.0)),
+                    max_iter,
+                    bailout,
+                )
+            });
+            let converged = truth.iter().filter(|t| matches!(t, Outcome::Converged(..))).count();
+            assert!(converged > truth.len() / 10, "relaxed newton: only {converged} converge");
+            for deep in [false, true] {
+                let gpu = perturbed_records(&esc, w, h, deep);
+                let frac =
+                    compare_convergent(&format!("relaxed newton deep {deep}"), &gpu, &truth, &stable);
+                assert!(frac < 0.002, "relaxed newton deep {deep}: {:.2}% mismatched", frac * 100.0);
+            }
+        }
+    }
+
+    /// Nova (p = 3): the parameter plane at a boundary mixing
+    /// convergence, escape and run-out, both rungs.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_nova_matches_an_exact_orbit_at_depth() {
+        let (w, h) = (48u32, 36u32);
+        let zoom = 30.0f64;
+        let max_iter = 150u32;
+        let bailout = 1e6f64;
+        let (cre, cim) = ("-0.36039383324484020", "0.22577954314649112");
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "nova".to_string();
+        esc.center_re = cre.to_string();
+        esc.center_im = cim.to_string();
+        esc.zoom_log2 = zoom;
+        esc.max_iter = max_iter;
+        esc.bailout = bailout as f32;
+        // The pixel is the PARAMETER here, so the oracle orbit is a
+        // PARAMETER-plane one: it seeds the critical point z_0 = 1 and
+        // takes c from the pixel, exactly as MAP_NOVA does.
+        let (truth, stable) = convergent_truth(w, h, cre, cim, zoom, |re, im| {
+            exact_rootfinder_outcome(
+                re,
+                im,
+                zoom,
+                crate::escape::reference::MAP_NOVA,
+                3,
+                [1.0, 0.0],
+                None,
+                max_iter,
+                bailout,
+            )
+        });
+        let converged = truth.iter().filter(|t| matches!(t, Outcome::Converged(..))).count();
+        let escaped = truth.iter().filter(|t| matches!(t, Outcome::Escaped(_))).count();
+        assert!(
+            converged > truth.len() / 20 && escaped > truth.len() / 100,
+            "nova view degenerate: {converged} converged, {escaped} escaped"
+        );
+        for deep in [false, true] {
+            let gpu = perturbed_records(&esc, w, h, deep);
+            let frac = compare_convergent(&format!("nova deep {deep}"), &gpu, &truth, &stable);
+            assert!(frac < 0.002, "nova deep {deep}: {:.2}% mismatched", frac * 100.0);
+        }
+    }
+
+    /// The exact mean |z| over `max_iter` steps of the pixel's own
+    /// orbit, from a big-float reference computed AT the pixel: the
+    /// oracle for the non-escaping families' orbit accumulators. The
+    /// map's own reference step is verified against f64 separately
+    /// (reference.rs), so this isolates the GPU delta algebra.
+    fn exact_mean_magnitude(
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        variant: u32,
+        map_params: [f32; 2],
+    ) -> Vec<f64> {
+        use rayon::prelude::*;
+        let zoom = esc.zoom_log2;
+        let span_y = 4.0 / zoom.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let julia_c = if esc.julia { Some((esc.julia_re, esc.julia_im)) } else { None };
+        let max_iter = esc.max_iter;
+        (0..w * h)
+            .into_par_iter()
+            .map(|i| {
+                let (px, py) = (i % w, i / w);
+                let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let dy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                let re = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_re, dx, zoom)
+                    .unwrap();
+                let im = crate::escape::fixedpoint::FixedPoint::decimal_add_f64(&esc.center_im, dy, zoom)
+                    .unwrap();
+                let orbit = crate::escape::reference::ReferenceOrbit::compute(
+                    &re, &im, zoom, None, max_iter, julia_c, 2, false, variant, map_params,
+                )
+                .unwrap();
+                assert_eq!(orbit.len(), max_iter + 1, "pixel orbit ended early");
+                let mut sum = 0.0f64;
+                for k in 1..=max_iter as usize {
+                    let z = orbit.z_f32(k);
+                    let (x, y) = (
+                        z[0] as f64 + orbit.orbit_lo[k][0] as f64,
+                        z[1] as f64 + orbit.orbit_lo[k][1] as f64,
+                    );
+                    sum += (x * x + y * y).sqrt();
+                }
+                sum / max_iter as f64
+            })
+            .collect()
+    }
+
+    /// Compare the records' `magnitude_average` accumulators against
+    /// the exact means: relative error per pixel, with the view's own
+    /// spread as the degeneracy guard.
+    fn compare_means(what: &str, gpu: &[crate::escape::renderer::IterRecord], truth: &[f64]) {
+        let n = truth.len() as f64;
+        let mean = truth.iter().sum::<f64>() / n;
+        let std = (truth.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / n).sqrt();
+        assert!(std > 1e-4 * mean.abs().max(1e-9), "{what}: flat view (std {std:.3e} on mean {mean:.4})");
+        let mut worst = 0.0f64;
+        let mut over = 0usize;
+        let mut total = 0.0f64;
+        for (g, t) in gpu.iter().zip(truth) {
+            let gm = g.accum[0] as f64 / (g.accum[1] as f64).max(1.0);
+            let rel = (gm - t).abs() / t.abs().max(1e-9);
+            total += rel;
+            worst = worst.max(rel);
+            if rel > 1e-3 {
+                over += 1;
+            }
+        }
+        println!(
+            "{what}: mean rel error {:.2e}, worst {:.2e}, {over}/{} pixels over 1e-3 (view std/mean {:.2e})",
+            total / n,
+            worst,
+            truth.len(),
+            std / mean.abs().max(1e-9)
+        );
+        assert!(total / n < 1e-4, "{what}: mean relative error {:.2e}", total / n);
+        assert!(over <= truth.len() / 100, "{what}: {over} pixels off by more than 1e-3");
+    }
+
+    /// Every family that declares a tier must ACTUALLY take the
+    /// perturbed path in a plain render.
+    ///
+    /// `wants_perturbation` is unit-testable and was green while the
+    /// app still rendered Ducks direct, so the gap this closes is
+    /// between "the gate says yes" and "the renderer did it". Reads
+    /// the renderer's own diagnostic label, which is what the app's
+    /// panel shows.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_new_tiers_take_the_perturbed_path_in_a_plain_render() {
+        let _guard = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (64u32, 48u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        // (formula, coloring, centre, zoom, julia, params)
+        let cases: &[(&str, &str, &str, &str, f64, bool, &[(&str, f32)])] = &[
+            ("newton", "root_basin", "0.35", "0.28", 20.0, false, &[]),
+            ("nova", "smooth", "-0.3", "0.05", 20.0, false, &[]),
+            ("ducks", "magnitude_average", "-0.4", "0.3", 20.0, false, &[]),
+            ("ducks", "magnitude_average", "-0.4", "0.3", 20.0, false, &[("variant", 4.0)]),
+            ("ducks", "magnitude_average", "0.15", "-0.2", 20.0, true, &[]),
+            // Kaliset carries a floor of 24 (tier_min_zoom).
+            ("kaliset", "magnitude_average", "0.35", "0.28", 26.0, false, &[]),
+        ];
+        for (formula, coloring, cre, cim, zoom, julia, params) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.to_string();
+            esc.coloring = coloring.to_string();
+            esc.center_re = cre.to_string();
+            esc.center_im = cim.to_string();
+            esc.zoom_log2 = *zoom;
+            esc.max_iter = 60;
+            esc.bailout = 1e6;
+            if *julia {
+                esc.julia = true;
+                esc.julia_re = 0.1;
+                esc.julia_im = -0.62;
+            }
+            for (k, v) in *params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("path probe"),
+                });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "{formula} did not settle");
+            }
+            let path = crate::escape::diag::snapshot().path;
+            escape.destroy();
+            println!("{formula} {params:?} @ zoom {zoom}: path = {path}");
+            assert!(
+                path.starts_with("perturbed"),
+                "{formula} {params:?} rendered `{path}` at zoom {zoom} -- the tier is                  selected but the renderer did not use it"
+            );
+        }
+    }
+
+    /// The non-escaping tiers must engage only where their delta
+    /// form is actually better than the path it replaces.
+    ///
+    /// This is the test the user's report earned: "it changes the
+    /// moment perturbation starts" is a real failure mode, and the
+    /// only way to answer it is to score BOTH paths against exact
+    /// per-pixel orbits rather than against each other.
+    ///
+    /// Measured (mean relative error of the orbit-average field vs
+    /// exact orbits, 96x72, 60 iterations):
+    ///
+    ///   kaliset (0.35, 0.28)   z10  direct 2.1e-3   perturbed 3.7e-1
+    ///                          z14  direct 2.3e-3   perturbed 2.0e-1
+    ///                          z18/24/30 perturbed 2.4e-2 / 3.6e-4 / 5.7e-6
+    ///   kaliset (1.226, 1.574) z14  direct 2.2e-2   perturbed 9.4e-3
+    ///   ducks   (-0.4, 0.3)    every depth 10..30: both ~4e-7
+    ///   ducks   (0.15, -0.2)   every depth 10..30: both ~1e-7
+    ///
+    /// So Ducks is safe from the ordinary threshold and Kaliset needs
+    /// its own floor -- see `tier_min_zoom`.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_non_escaping_tiers_engage_only_where_they_are_accurate() {
+        use crate::escape::EscapeRenderer;
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "magnitude_average".to_string();
+        esc.max_iter = 60;
+
+        esc.formula = "kaliset".to_string();
+        esc.center_re = "0.35".to_string();
+        esc.center_im = "0.28".to_string();
+        for z in [14.0, 18.0, 23.0] {
+            esc.zoom_log2 = z;
+            assert!(
+                !EscapeRenderer::wants_perturbation(&esc),
+                "kaliset must not perturb at zoom {z}: measured worse than direct there"
+            );
+        }
+        esc.zoom_log2 = 26.0;
+        assert!(
+            EscapeRenderer::wants_perturbation(&esc),
+            "kaliset must perturb past its floor, or it gains no depth at all"
+        );
+
+        // Ducks: accurate from the ordinary threshold, and the check
+        // that its delta really is as good as direct where both work.
+        esc.formula = "ducks".to_string();
+        esc.center_re = "-0.4".to_string();
+        esc.center_im = "0.3".to_string();
+        esc.zoom_log2 = 16.0;
+        assert!(EscapeRenderer::wants_perturbation(&esc));
+        esc.zoom_log2 = 10.0;
+        let (w, h) = (96u32, 72u32);
+        let truth =
+            exact_mean_magnitude(&esc, w, h, crate::escape::reference::MAP_DUCKS, [0.0, 0.0]);
+        let score = |what: &str, recs: &[crate::escape::renderer::IterRecord]| -> f64 {
+            let mut total = 0.0;
+            for (r, t) in recs.iter().zip(&truth) {
+                let m = r.accum[0] as f64 / (r.accum[1] as f64).max(1.0);
+                total += (m - t).abs() / t.abs().max(1e-9);
+            }
+            let mean = total / truth.len() as f64;
+            println!("ducks {what}: mean relative error vs exact orbits {mean:.3e}");
+            mean
+        };
+        let direct = score("direct", &records_via(&esc, w, h, false, false));
+        let perturbed = score("perturbed", &records_via(&esc, w, h, false, true));
+        assert!(
+            perturbed < 1e-5 && perturbed <= direct * 4.0,
+            "ducks perturbed {perturbed:.3e} vs direct {direct:.3e} -- the delta has regressed"
+        );
+    }
+
+    /// Kaliset on the parameter plane at zoom 30, both sign branches,
+    /// both rungs: the orbit-average field against exact orbits.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_kaliset_matches_an_exact_orbit_at_depth() {
+        let (w, h) = (96u32, 72u32);
+        // Each sign branch is its own map: the -c view is FLAT under
+        // +c (measured, std 0.0000), so each carries its own centre.
+        for (plus, cre, cim) in [
+            (false, "1.22551892238358673", "1.57367616586387160"),
+            (true, "-1.79112587335209006", "-0.87051608470578978"),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "kaliset".to_string();
+            esc.coloring = "magnitude_average".to_string();
+            esc.center_re = cre.to_string();
+            esc.center_im = cim.to_string();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = 60;
+            esc.formula_params.insert("plus_c".to_string(), if plus { 1.0 } else { 0.0 });
+            let truth = exact_mean_magnitude(
+                &esc, w, h, crate::escape::reference::MAP_KALISET,
+                [if plus { 1.0 } else { 0.0 }, 0.0],
+            );
+            for deep in [false, true] {
+                let gpu = perturbed_records(&esc, w, h, deep);
+                compare_means(&format!("kaliset plus_c {plus} deep {deep}"), &gpu, &truth);
+            }
+        }
+    }
+
+    /// Ducks on the Julia plane of the shipped preset (c = 0.1 - 0.62i)
+    /// at zoom 30, the plain log and the log of the square, both
+    /// rungs.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn perturbed_ducks_matches_an_exact_orbit_at_depth() {
+        let (w, h) = (96u32, 72u32);
+        // Variant 4 logs the SQUARE, doubling the expansion per step,
+        // and by 80 iterations its exact field is chaos-dominated:
+        // measured, a nudge of 1e-3 of a PIXEL moves the exact mean by
+        // 6.6e-3 relative on 6689 of 6912 pixels -- far more than any
+        // f32 renderer's own error, so a tight assertion there would
+        // be measuring noise rather than the tier. At 40 iterations
+        // the same field is fully determined (1e-3-pixel nudge: 3e-7,
+        // zero pixels past 1e-4) and still carries 8.7e-3 of contrast.
+        for (variant, cre, cim, max_iter) in [
+            (0.0f32, "-0.08431922458112219", "1.53503858856856801", 80u32),
+            (4.0, "0.15", "-0.2", 40),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "ducks".to_string();
+            esc.coloring = "magnitude_average".to_string();
+            esc.julia = true;
+            esc.julia_re = 0.1;
+            esc.julia_im = -0.62;
+            esc.center_re = cre.to_string();
+            esc.center_im = cim.to_string();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = max_iter;
+            esc.formula_params.insert("variant".to_string(), variant);
+            let truth = exact_mean_magnitude(
+                &esc, w, h, crate::escape::reference::MAP_DUCKS, [variant, 0.0],
+            );
+            for deep in [false, true] {
+                let gpu = perturbed_records(&esc, w, h, deep);
+                compare_means(&format!("ducks variant {variant} deep {deep}"), &gpu, &truth);
+            }
+        }
+    }
+
     fn magnet_exact_orbit_case(variant: u32, deep: bool) {
         let (device, queue) = repro_device();
         // Each variant is a DIFFERENT map, so each needs its own
@@ -6945,6 +7677,23 @@ mod tests {
                 bad_blocks < total_blocks / 25,
                 "[{label}] direct and perturbed disagree structurally on {bad_blocks}/{total_blocks} blocks"
             );
+            direct
+        };
+
+        // A view with no structure would let any two renders "agree".
+        // The escaping cases below are all recognisable fractals, but
+        // the non-escaping families paint a smooth field, where a
+        // mis-set coloring really can come out flat -- so those assert
+        // on this.
+        let assert_has_structure = |label: &str, img: &Vec<u8>| {
+            let lum: Vec<f64> = img
+                .chunks_exact(4)
+                .map(|p| 0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64)
+                .collect();
+            let mean = lum.iter().sum::<f64>() / lum.len() as f64;
+            let sd = (lum.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / lum.len() as f64).sqrt();
+            println!("structure[{label}]: luminance mean {mean:.1} sd {sd:.2}");
+            assert!(sd > 1.0, "[{label}] the direct render is nearly flat (sd {sd:.2}) -- nothing to compare");
         };
 
         // Parameter plane at a seahorse-valley center.
@@ -7074,6 +7823,100 @@ mod tests {
         }
         ship_cfg.formula_params.insert("variant".to_string(), 0.0);
         check("ship-floatexp", &ship_cfg, true);
+
+        // ---- the big-float families ----
+        // These four are the reason this test earns its keep: their
+        // references iterate in BIG FLOAT rather than fixed point, and
+        // the user-visible symptom of getting one wrong is exactly
+        // what this compares -- "the picture changes the moment
+        // perturbation starts".
+
+        // Newton: c-free, so the tier requests its reference
+        // JULIA-STYLE (seed at the centre, no dc term) whatever the
+        // toggle says. Every scheme that ships a delta is checked;
+        // Chebyshev over the other two functions declines the tier,
+        // which `perturb_tier` is asserted on below.
+        let mut nw_cfg = crate::config::escape::EscapeConfig::default();
+        nw_cfg.formula = "newton".to_string();
+        nw_cfg.coloring = "root_basin".to_string();
+        nw_cfg.center_re = "0.35".to_string();
+        nw_cfg.center_im = "0.28".to_string();
+        nw_cfg.zoom_log2 = 0.5;
+        nw_cfg.max_iter = 64;
+        nw_cfg.bailout = 1e6;
+        nw_cfg.coloring_params.insert("roots".to_string(), 3.0);
+        nw_cfg.coloring_params.insert("speed".to_string(), 0.01);
+        for scheme in [0.0f32, 1.0, 2.0] {
+            nw_cfg.formula_params.insert("scheme".to_string(), scheme);
+            let img = check(&format!("newton-s{scheme}"), &nw_cfg, false);
+            assert_has_structure(&format!("newton-s{scheme}"), &img);
+            check(&format!("newton-s{scheme}-floatexp"), &nw_cfg, true);
+        }
+        nw_cfg.formula_params.remove("scheme");
+        // The relaxation multiplies the step and rides the reference's
+        // identity: a tier that ignored it would render plain Newton.
+        nw_cfg.formula_params.insert("relax_re".to_string(), 1.1);
+        nw_cfg.formula_params.insert("relax_im".to_string(), 0.2);
+        check("newton-relaxed", &nw_cfg, false);
+        check("newton-relaxed-floatexp", &nw_cfg, true);
+
+        // Nova: the Newton step plus c, seeded at the CRITICAL POINT
+        // z_0 = 1 on the parameter plane -- a seed that is easy to get
+        // wrong quietly, since zero also produces a picture.
+        let mut nv_cfg = crate::config::escape::EscapeConfig::default();
+        nv_cfg.formula = "nova".to_string();
+        nv_cfg.center_re = "-0.3".to_string();
+        nv_cfg.center_im = "0".to_string();
+        nv_cfg.zoom_log2 = 0.5;
+        nv_cfg.max_iter = 128;
+        nv_cfg.bailout = 1e6;
+        nv_cfg.coloring_params.insert("scale".to_string(), 0.03);
+        let img = check("nova", &nv_cfg, false);
+        assert_has_structure("nova", &img);
+        check("nova-floatexp", &nv_cfg, true);
+
+        // Kaliset is deliberately NOT here. It is non-escaping and
+        // inverting, and its delta form only becomes accurate past
+        // zoom 24 (`tier_min_zoom`), so forcing it onto a shallow view
+        // would be testing it outside the regime the engine ever uses
+        // it in. Its accuracy is pinned by the exact-orbit test at
+        // zoom 30 and by
+        // `the_non_escaping_tiers_engage_only_where_they_are_accurate`.
+
+        // Ducks: the transcendental one. Its delta is log1p of the
+        // fold's ratio, and it is the tier whose branch cut bites --
+        // `Log(T) + Log1p(u)` is the principal value only up to a
+        // whole number of turns, and |z| is what the coloring
+        // averages, so a missed turn is an O(1) error rather than a
+        // cosmetic one. Both shipped variants, both planes.
+        let mut dk_cfg = crate::config::escape::EscapeConfig::default();
+        dk_cfg.formula = "ducks".to_string();
+        dk_cfg.coloring = "magnitude_average".to_string();
+        dk_cfg.center_re = "-0.4".to_string();
+        dk_cfg.center_im = "0.3".to_string();
+        dk_cfg.zoom_log2 = 8.0;
+        dk_cfg.max_iter = 60;
+        // A Ducks field spans ~0.01 around a mean of ~1.6 (measured),
+        // so it needs the offset/scale pair its own preset uses --
+        // without them the render is a flat wash and comparing it to
+        // anything proves nothing (the structure guard says so).
+        for (variant, offset, scale) in [(0.0f32, 1.600f32, 98.6f32), (4.0, 2.708, 54.9)] {
+            dk_cfg.formula_params.insert("variant".to_string(), variant);
+            dk_cfg.coloring_params.insert("offset".to_string(), offset);
+            dk_cfg.coloring_params.insert("scale".to_string(), scale);
+            let img = check(&format!("ducks-v{variant}"), &dk_cfg, false);
+            assert_has_structure(&format!("ducks-v{variant}"), &img);
+            check(&format!("ducks-v{variant}-floatexp"), &dk_cfg, true);
+        }
+        dk_cfg.formula_params.insert("variant".to_string(), 0.0);
+        dk_cfg.julia = true;
+        dk_cfg.julia_re = 0.1;
+        dk_cfg.julia_im = -0.62;
+        dk_cfg.coloring_params.insert("offset".to_string(), 1.648);
+        dk_cfg.coloring_params.insert("scale".to_string(), 11.64);
+        let img = check("ducks-julia", &dk_cfg, false);
+        assert_has_structure("ducks-julia", &img);
+        check("ducks-julia-floatexp", &dk_cfg, true);
 
         // BLA on-vs-off agreement: iteration skips must reproduce the
         // per-step images, including PAST direct's reach (the shallow

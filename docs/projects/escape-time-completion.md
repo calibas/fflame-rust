@@ -56,7 +56,7 @@ verified depth, notes) and regression configs for anything that
 moves. Expect this to find real bugs -- Ducks had two, and it was
 the formula someone happened to look at closely.
 
-## 2. Perturbation tiers — IN PROGRESS
+## 2. Perturbation tiers — DONE 2026-09-02 for the tractable set
 
 Shipped since this plan was written, each verified against an
 independent oracle and pinned by a visual config:
@@ -70,16 +70,27 @@ independent oracle and pinned by a visual config:
 | Feather | both | 0.00% / 0.00% vs an exact orbit at zoom 30, on the view that exposed the escape test's delta-blindness |
 | McMullen | both | 0.22% / 0.19% vs an exact orbit at zoom 30 (Julia plane; the parameter plane has no interior) |
 | Magnet I and II | both | 0.00% vs an exact orbit at zoom 30, all four combinations; convergence tracked at 0.58/255 |
+| Newton (schemes 0/1/2 over `z^p - 1`, + relaxation) | both | 0.00% outcome mismatches vs exact orbits at zoom 30 |
+| Nova | both | 0.00% vs exact orbits at zoom 30 |
+| Ducks (variants 0 and 4) | both | 1.1e-6 mean relative error vs exact orbits |
+| Kaliset (both sign branches) | both | 8.5e-7 / 5.4e-8 at zoom 30 — carries a zoom-24 FLOOR, see below |
 
 Plus 8 new `wgsl_derivative` blocks (tricorn, mcmullen, lambda,
 cactus, exponential, trig, tetration, barnsley).
 
 Still open, in the order the survey judged tractable:
 
-- **Kaliset / Ducks** — blocked, with the reason measured rather than
-  assumed: Kaliset needs a fixed-point reciprocal and about 37
-  integer bits (|Z| reaches 1.8e11), Ducks needs delta forms for
-  `ln` and `atan2`.
+- **Kaliset / Ducks — DONE 2026-09-02.** The measured blocker was
+  right and the answer was to stop using fixed point for them: both
+  now iterate their reference in BIG FLOAT (`bigfloat.rs` gained
+  `sqrt`, `ln` and a principal `atan2`), alongside Newton and Nova.
+  Ducks needed two fixes beyond its delta form — the branch cut is
+  NOT invisible (a missed turn is an O(1) error in the |z| the
+  colorings average) and the reference's f32 hi is not good enough
+  for its O(1) divisor. Kaliset is accurate only past about zoom 24
+  and carries a floor of its own rather than shipping a render worse
+  than direct at the threshold. Full account, with the numbers, in
+  [escape-time-fractals.md](escape-time-fractals.md).
 - **Lambda — DONE 2026-08-30.** The first tier whose PARAMETER
   MULTIPLIES, so its delta step reads the reference's own c and its
   parameter-plane term picks up `Z(1-Z)` rather than a bare `+ dc`.
@@ -146,15 +157,21 @@ Still open, in the order the survey judged tractable:
   tier, and inert (byte-identical WGSL) for every non-convergent
   formula.
 
-**Item 2's tractable four are complete**: Lambda, Feather, McMullen
-and Magnet all perturb. What remains in item 2 is the harder set —
-transcendentals (their own error analysis), Kaliset/Ducks (blocked for
-measured reasons), Newton/Nova (root-basin refinement, a different
-project), and the series-approximation-vs-BLA Phase-0 measurement.
+**Item 2 is now complete except for the transcendentals and the
+series-approximation measurement**: Lambda, Feather, McMullen, Magnet,
+Newton, Nova, Ducks and Kaliset all perturb. What remains is
+`tetration` / `exponential` / `trig` / `collatz` (each its own error
+analysis), Chebyshev over the two non-unity functions, and the
+series-approximation-vs-BLA Phase-0 measurement.
 - **Tetration / exponential / trig / Collatz** — transcendental
   deltas exist but the error analysis is its own study.
-- **Newton / Nova** — convergent, not escaping; deep zoom there wants
-  root-basin refinement, a different project.
+- **Newton / Nova — DONE 2026-09-02.** Convergence turned out not to
+  be the obstacle (the perturbed loop learned the settle test for
+  Magnet); the obstacle was the reference, which fixed point cannot
+  hold through a critical-point excursion. Chebyshev over the two
+  non-unity functions still declines the tier: its `r` is
+  asymptotically constant, so the quotient rule loses its delta, and
+  the symbolic cancellation that fixes it exists only for `z^p - 1`.
 - **Series approximation** — still absent, still unmeasured against
   BLA. Worth a Phase-0 measurement before building.
 

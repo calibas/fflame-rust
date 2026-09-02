@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "d1200ad3",
+  "git_hash": "c624a2ef",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -126,6 +126,10 @@
       "bytes": 32420,
       "sha256": "d1f0ed6a5afb0e342aa7487d18d8bb0d7295729860d18f0b530f6bec19c0eb84"
     },
+    "escape-ducks-deep.png": {
+      "bytes": 5512,
+      "sha256": "307406015281df4f907ba0dbafd0fca5f2dec844cbbe5f5d07984dbd9921e57e"
+    },
     "escape-ducks-julia.png": {
       "bytes": 40025,
       "sha256": "bd861c170421f9a233bbffa1a4b6236709dd5984742b811db3d255a0f8c13312"
@@ -169,6 +173,10 @@
     "escape-julia-dragon.png": {
       "bytes": 6467,
       "sha256": "6b368d907fb83062dedb916fea1299b163b1dc303efd3fdb05e2bf55e174363a"
+    },
+    "escape-kaliset-deep.png": {
+      "bytes": 8986,
+      "sha256": "9a9b7f0f93103f5dc153f7addd7d3dc96b31dc6be663fb98e4a485c3b2f81c71"
     },
     "escape-kaliset-glow.png": {
       "bytes": 19839,
@@ -286,9 +294,17 @@
       "bytes": 9753,
       "sha256": "92773594a61d4b3515f87295c13c8524020a9fedc8b9a5f738e533c5816d3c34"
     },
+    "escape-newton-deep.png": {
+      "bytes": 11546,
+      "sha256": "ed2e73fccee69bc74859d5744cbf3914ffc05141ae998e6819488dbc806a8192"
+    },
     "escape-newton-halley-cubic.png": {
       "bytes": 5613,
       "sha256": "1813c03c0c1422d3980aeb5f85cbf54118419b451bc20896ce58778e82865b21"
+    },
+    "escape-newton-halley-deep.png": {
+      "bytes": 6018,
+      "sha256": "35d2faac9d675e11ef6e89a1017ac9aad78f7a49647b15ec3d968a8c7b3ea0e4"
     },
     "escape-newton-octic-star.png": {
       "bytes": 22283,
@@ -309,6 +325,10 @@
     "escape-nova-3.png": {
       "bytes": 6089,
       "sha256": "9ad6bd2ea2ee133d3a5010db42443b57642f6eb14ecf3fbcb9c7727cf8249e68"
+    },
+    "escape-nova-deep.png": {
+      "bytes": 21102,
+      "sha256": "c33f8fd60342c63683d62fd9d1dd50fef3dd1eb23fbddbf9f9d07f453175d68d"
     },
     "escape-nova4-sphere.png": {
       "bytes": 24818,
