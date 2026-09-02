@@ -1995,6 +1995,41 @@ pub async fn export_animation_fast(
     #[cfg(feature = "engine-escape")]
     let mut escape_renderer: Option<crate::escape::EscapeRenderer> = None;
 
+    // A deep-zoom frame carries per-pixel resume state (48-72 bytes),
+    // and past a device's buffer limit that allocation is a wgpu
+    // VALIDATION ERROR -- which wgpu answers by panicking. Here that
+    // panic lands on this worker thread, so the app stays responsive
+    // while the export dialog waits forever for a frame that will
+    // never arrive (reported: a 4K Ducks zoom, 398 MB against a
+    // 256 MB limit). The renderer now declines the perturbed path
+    // rather than ask, but declining means the DIRECT path, which
+    // past zoom 14 is mush -- so a whole export would come out
+    // quietly wrong. Refuse it up front instead, with the size that
+    // would work.
+    #[cfg(feature = "engine-escape")]
+    if is_escape {
+        let ss = crate::escape::EscapeRenderer::affordable_supersample(
+            &device,
+            export_config.width,
+            export_config.height,
+            export_config.config.escape.supersample,
+        );
+        let (rw, rh) = (
+            export_config.width.saturating_mul(ss),
+            export_config.height.saturating_mul(ss),
+        );
+        if !crate::escape::EscapeRenderer::perturb_state_fits_at(
+            &device,
+            &export_config.config.escape,
+            rw,
+            rh,
+        ) {
+            return Err(AnimationExportError::InvalidConfig(format!(
+                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame.                  Export at a smaller size (or lower the antialiasing): past the                  perturbation threshold every pixel carries its own iteration                  state, and there is no way to render this size without it."
+            )));
+        }
+    }
+
     // Process frames sequentially
     for frame in 0..total_frames {
         if reporter.is_cancelled() {
