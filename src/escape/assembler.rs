@@ -2722,6 +2722,45 @@ fn delta_step_magnet_fe(variant: u32) -> String {
     format!("{head}{tail}")
 }
 
+/// Ducks: rebase ONLY when the reference runs out, never on the
+/// Zhuoran magnitude test.
+///
+/// This is the seam fix. Ducks' branch wrap (see `PerturbTier::Ducks`)
+/// legitimately moves a delta by a whole turn, so `|delta|` reaches
+/// ~2pi on more than half of all steps -- measured, 285914 of 552960.
+/// The magnitude test reads that as "the pixel has diverged from the
+/// reference" and re-anchors, but the turn is BOOKKEEPING, not
+/// divergence, and each re-anchor pays `z_full - Z_0` in f32: two O(1)
+/// iterates subtracted, so the new delta is only accurate to ulp(1)
+/// ~ 6e-8 however small it truly was. At zoom 14 a pixel's delta is
+/// ~1e-4, so that is three digits gone, on most steps -- and because
+/// the re-anchor points fall on curves in the plane, the loss lands as
+/// curved SEAMS that slide as you zoom, which is exactly how this was
+/// reported.
+///
+/// Measured at the reported view, mean relative error against exact
+/// orbits: 2.2e-3 with the magnitude test, 1.8e-5 without (and 1.0
+/// with the wrap removed instead -- the wrap is not the problem, it
+/// is load-bearing). Dropping the test is safe here because the
+/// reference is non-escaping and covers every iteration the render
+/// asks for; the orbit-end wrap it keeps is the case that must stay.
+fn rebase_only_at_orbit_end() -> String {
+    "        if (m >= perturb.orbit_len - 1u) {\n\
+     \x20           w = (z_full - ref_z(0u)) * perturb.inv_s;\n\
+     \x20           m = 0u;\n\
+     \x20       }"
+        .to_string()
+}
+
+/// The same on the deep rung, rebuilding the delta in double float.
+fn rebase_only_at_orbit_end_fe() -> String {
+    "        if (m >= perturb.orbit_len - 1u) {
+             w = fe_rebase_delta(w, min(m, perturb.orbit_len - 1u));
+             m = 0u;
+         }"
+    .to_string()
+}
+
 fn rebase_default_fe() -> String {
     "        let rebase_delta = z_full - ref_z(0u);
              if (m >= perturb.orbit_len - 1u
@@ -3773,6 +3812,8 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
                 (PerturbTier::Phoenix, true) => rebase_phoenix_fe(),
                 (PerturbTier::Manowar, false) => rebase_manowar(),
                 (PerturbTier::Manowar, true) => rebase_manowar_fe(),
+                (PerturbTier::Ducks(_), false) => rebase_only_at_orbit_end(),
+                (PerturbTier::Ducks(_), true) => rebase_only_at_orbit_end_fe(),
                 (_, false) => rebase_default(),
                 (_, true) => rebase_default_fe(),
             }),

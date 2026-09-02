@@ -2754,6 +2754,42 @@ like the direct image (603 of 768 blocks). And `rf_cinv` gained an
 upper guard, because Z^p at |Z| ~ 1e3 overflows f32 for the higher
 powers and the unguarded form would divide inf by inf.
 
+**The seam that came back, and what it actually was (2026-09-02).**
+Reported from the app: past the threshold Ducks grew curved lines that
+cut the image and slid as the zoom deepened, while the picture was
+otherwise the one direct rendered. It was the Zhuoran REBASE, firing
+on the branch wrap's own bookkeeping.
+
+The wrap legitimately moves a delta by a whole turn, so `|delta|`
+reaches ~2*pi on more than half of all steps -- measured, 285914 of
+552960 at the reported view. The magnitude test reads that as "this
+pixel has diverged from the reference" and re-anchors; but a turn is
+not divergence, and every re-anchor pays `z_full - Z_0` in f32 -- two
+O(1) iterates subtracted, so the rebuilt delta is accurate only to
+ulp(1) ~ 6e-8 however small it truly was. At zoom 14 a pixel's delta
+is ~1e-4, so that is three digits gone on most steps; and because the
+re-anchor points fall on curves in the plane, the loss lands as curved
+seams that slide with the zoom.
+
+Bisected on a CPU mirror of the shipped step, mean relative error
+against exact orbits at that view:
+
+| | mean | pixels over 1e-3 |
+|---|---|---|
+| as shipped | 2.2e-3 | 4898 / 6912 |
+| **rebase only at orbit end** | **1.8e-5** | **3 / 6912** |
+| wrap removed instead | 1.0 | 6912 / 6912 |
+
+So the wrap is load-bearing and the magnitude test is the fault.
+Ducks now rebases ONLY when the reference runs out
+(`rebase_only_at_orbit_end`), which is safe because its reference is
+non-escaping and covers every iteration the render asks for. The GPU
+reproduces the mirror exactly (1.830e-5, 3 pixels), and no existing
+visual baseline moved -- the fix is surgical. The same policy was
+tried on Kaliset and MEASURED not to help (identical at one centre,
+slightly worse at the other), so Kaliset keeps the default rebase and
+its floor: its problem is the inversion, not the rebase.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
