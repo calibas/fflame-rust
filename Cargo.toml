@@ -233,6 +233,29 @@ harness = false
 [profile.release]
 incremental = true
 
+# The shipped wasm (`dist`) is stripped, panics abort, and integer
+# overflow wraps -- so a browser trap arrives as a bare
+# `RuntimeError: memory access out of bounds` at `$func868`, with no
+# name, no location, and no way to tell a genuine bug from an
+# arithmetic wrap. This profile is that build made legible: same
+# optimisation level and the same simd/codegen shape, but symbols
+# kept, panics unwound through the console hook, and -- the part that
+# actually finds things -- debug assertions and overflow checks ON, so
+# a `debug_assert` or a wrapping subtraction fails AT ITS SOURCE
+# instead of corrupting an index and trapping somewhere else entirely.
+#
+# Build it with ./build-wasm.sh --debug. It is bigger and slower; it
+# is not for shipping.
+[profile.dist-debug]
+inherits = "dist"
+strip = false
+debug = true
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
+lto = "thin"
+codegen-units = 16
+
 [profile.dist]
 inherits = "release"
 incremental = false
