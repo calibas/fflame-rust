@@ -2790,6 +2790,38 @@ tried on Kaliset and MEASURED not to help (identical at one centre,
 slightly worse at the other), so Kaliset keeps the default rebase and
 its floor: its problem is the inversion, not the rebase.
 
+**Ducks goes flat at depth, and that is the COLORING, not the engine
+(2026-09-02).** Reported next: past about 1e8 zoom, panning Ducks
+rotates the image, and deeper still panning does nothing at all while
+the coordinates change. Both are real and neither is a perturbation
+bug -- the render matches exact orbits to 1.1e-7 (parameter plane) and
+1.2e-6 (Julia) AFTER a 2560-pixel pan.
+
+What is actually happening is that `magnitude_average` is a SMOOTH
+function of c, and a smooth function restricted to a shrinking window
+converges to its own first-order Taylor expansion. Measured: fit a
+plane to the field and report the fraction of variance it explains --
+
+| view | planarity | field std | gradient angle over five 512px pans |
+|---|---|---|---|
+| zoom 14, parameter | 1.0000 | 7.2e-5 | 87.5 -> 85.2 -> 82.7 -> 80.3 -> 77.7 |
+| zoom 26.6, parameter | 1.0000 | 1.2e-8 | 87.5 -> 87.5 -> 87.5 -> 87.5 -> 87.5 |
+| zoom 26.6, Julia | 0.8993 | 2.3e-4 | jumps around |
+
+So the field IS a plane, exactly. A cyclic palette turns a plane into
+parallel bands, the pan rotates the plane's gradient, and the bands
+rotate with it -- that is the "rotation". Deeper still the gradient
+direction freezes and its magnitude reaches 1e-8, so the bands stop
+moving: "panning does nothing". Raising `max_iter` does NOT recover
+the contrast (measured at zoom 26.6, parameter plane: 1.2e-8 at 80
+iterations, 1.1e-7 at 2000, 4.0e-8 at 10000).
+
+This is the general price of an orbit-STATISTIC coloring. An escaping
+fractal keeps detail at any depth because the escape count is a
+discontinuous integer; an orbit average is smooth, so it flattens. It
+bounds how deep the non-escaping families are worth taking, and no
+amount of reference precision changes it.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
