@@ -61,6 +61,18 @@ pub fn take_device_lost() -> bool {
     DEVICE_LOST.swap(false, std::sync::atomic::Ordering::AcqRel)
 }
 
+/// Set once by the device-lost callback and never cleared: on a
+/// platform that cannot rebuild the device (the browser has no window
+/// to recreate a surface on), this is what the UI reads to say
+/// "reload the page" instead of drawing nothing over a dead context.
+static DEVICE_EVER_LOST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the device has been lost at any point in this process.
+pub fn device_was_lost() -> bool {
+    DEVICE_EVER_LOST.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Raise the signal by hand (tests, and the device-lost callback's
 /// own path is the only other writer).
 #[cfg(test)]
@@ -322,6 +334,7 @@ impl GpuContext {
             // every call failing, which is the "never recovered" in
             // the field report.
             DEVICE_LOST.store(true, std::sync::atomic::Ordering::Release);
+            DEVICE_EVER_LOST.store(true, std::sync::atomic::Ordering::Release);
             log::error!(
                 "wgpu DEVICE LOST ({reason:?}): {message} -- the GPU context is gone \
                  and subsequent GPU calls will fail. A TDR here means a dispatch \

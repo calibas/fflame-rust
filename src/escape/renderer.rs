@@ -282,10 +282,57 @@ mod tuning {
     }
 }
 
+/// The browser mirror: same file, in localStorage through the
+/// storage backend. Without this the breaker could halve a budget
+/// within a session but every reload started unshifted -- and a
+/// browser does not recover a lost device at all (there is no window
+/// to rebuild a surface on), so "reload and lose it again at the same
+/// budget" was the whole loop.
 #[cfg(target_arch = "wasm32")]
 mod tuning {
-    pub(super) fn ensure_loaded() {}
-    pub(super) fn save() {}
+    use std::sync::atomic::Ordering;
+
+    const KEY: &str = "gpu_tuning.json";
+
+    pub(super) fn encode(direct: u32, perturb: u32) -> String {
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb }).to_string()
+    }
+
+    pub(super) fn decode(text: &str) -> (u32, u32) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+            return (0, 0);
+        };
+        let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
+        (get("direct_shift"), get("perturb_shift"))
+    }
+
+    pub(super) fn ensure_loaded() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let Ok(text) = crate::storage::backend::read_file(std::path::Path::new(KEY)) else {
+                return;
+            };
+            let (d, pt) = decode(&text);
+            super::DIRECT_BUDGET_SHIFT.store(d, Ordering::Relaxed);
+            super::PERTURB_BUDGET_SHIFT.store(pt, Ordering::Relaxed);
+            if d > 0 || pt > 0 {
+                log::info!(
+                    "escape: restored GPU tuning from a previous session \
+                     (direct shift {d}, perturbed shift {pt})"
+                );
+            }
+        });
+    }
+
+    pub(super) fn save() {
+        let _ = crate::storage::backend::write_file(
+            std::path::Path::new(KEY),
+            &encode(
+                super::DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+                super::PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+            ),
+        );
+    }
 }
 
 /// Called by the GPU device-lost callback (`gpu::device`): halve the
@@ -513,6 +560,18 @@ pub struct EscapeRenderer {
     /// Test-only: with `force_perturbed`, use the floatexp rung.
     #[cfg(test)]
     pub(crate) force_floatexp: bool,
+    /// Completion-time GPU cost, for a device with no timestamp
+    /// queries (WebGPU exposes none by default). Written by a
+    /// `Queue::on_submitted_work_done` callback, drained by
+    /// [`Self::ts_poll`] into the same fields the timestamp pacer
+    /// feeds, so `next_chunk` sizes from a MEASURED cost either way.
+    gpu_done: std::sync::Arc<std::sync::Mutex<Option<GpuDoneSample>>>,
+    /// The dispatch batch recorded by the last `render()` that has no
+    /// timestamp pacer: (iterations, from_start, regime, recorded at).
+    /// The next `render()` registers the completion callback for it
+    /// -- by then the caller has submitted the encoder it was
+    /// recorded into.
+    gpu_done_pending: Option<(u32, bool, CostRegime, web_time::Instant)>,
     /// Test-only: take the BROWSER's orbit path on the desktop — no
     /// worker thread, the reference sliced per frame under a budget,
     /// and the frame rendered against a PARTIAL orbit until it
@@ -861,6 +920,20 @@ impl TimestampPacer {
             done: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
+}
+
+/// One completed dispatch batch, timed from the moment it was
+/// recorded to the moment the queue reported it done. That span
+/// includes submission latency and any frame gap before the caller
+/// submitted, so it is an UPPER bound on the GPU time -- which is the
+/// conservative direction for a number whose only job is to keep a
+/// dispatch under the TDR window.
+#[derive(Clone, Copy)]
+struct GpuDoneSample {
+    ms: f32,
+    iters: u32,
+    from_start: bool,
+    regime: CostRegime,
 }
 
 /// What a GPU cost measurement is valid for. Anything that changes
@@ -1239,6 +1312,8 @@ impl EscapeRenderer {
             force_floatexp: false,
             #[cfg(test)]
             force_budgeted: false,
+            gpu_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            gpu_done_pending: None,
             orbit_cache: OrbitCache::default(),
             results_buffer: None,
             results_px: 0,
@@ -1695,6 +1770,17 @@ impl EscapeRenderer {
     /// phase. Call once per render, before deciding to measure.
     fn ts_poll(&mut self) {
         use std::sync::atomic::Ordering;
+        // A landed completion-time sample (the no-timestamp path)
+        // feeds exactly what a timestamp result would.
+        if let Some(sample) = self.gpu_done.lock().ok().and_then(|mut g| g.take()) {
+            if sample.ms > 0.0 && sample.iters > 0 {
+                self.apply_gpu_measurement(
+                    sample.ms / sample.iters as f32,
+                    sample.from_start,
+                    sample.regime,
+                );
+            }
+        }
         let Some(ts) = self.timestamps.as_mut() else {
             return;
         };
@@ -1716,17 +1802,8 @@ impl EscapeRenderer {
                 let (from_start, regime) = (ts.from_start, ts.regime);
                 if ms > 0.0 && ts.iters > 0 {
                     let mspi = ms / ts.iters as f32;
-                    // A measurement from a different regime is not a
-                    // slightly-stale number, it is a number about
-                    // something else: replace rather than blend.
-                    if self.gpu_regime != regime {
-                        self.gpu_regime = regime;
-                        self.gpu_ms_per_iter = None;
-                        self.gpu_ms_per_iter_cold = None;
-                    }
-                    self.gpu_ms_per_iter = Some(mspi);
-                    if from_start {
-                        self.gpu_ms_per_iter_cold = Some(mspi);
+                    if let Some(regime) = regime {
+                        self.apply_gpu_measurement(mspi, from_start, regime);
                     }
                 }
             }
@@ -1734,6 +1811,55 @@ impl EscapeRenderer {
                 // Map failed: nothing is mapped, so nothing to unmap.
                 ts.phase = TsPhase::Idle;
             }
+        }
+    }
+
+    /// Record a measured cost per iteration for `regime`, whichever
+    /// instrument produced it.
+    fn apply_gpu_measurement(&mut self, mspi: f32, from_start: bool, regime: CostRegime) {
+        // A measurement from a different regime is not a
+        // slightly-stale number, it is a number about something
+        // else: replace rather than blend.
+        if self.gpu_regime != Some(regime) {
+            self.gpu_regime = Some(regime);
+            self.gpu_ms_per_iter = None;
+            self.gpu_ms_per_iter_cold = None;
+        }
+        self.gpu_ms_per_iter = Some(mspi);
+        if from_start {
+            self.gpu_ms_per_iter_cold = Some(mspi);
+        }
+    }
+
+    /// Arm the completion callback for the batch the PREVIOUS render()
+    /// recorded, now that the caller has submitted it. Idle when a
+    /// timestamp pacer exists (it measures better) or nothing is
+    /// pending.
+    fn gpu_done_arm(&mut self, queue: &Queue) {
+        let Some((iters, from_start, regime, t0)) = self.gpu_done_pending.take() else {
+            return;
+        };
+        let slot = std::sync::Arc::clone(&self.gpu_done);
+        queue.on_submitted_work_done(move || {
+            let ms = t0.elapsed().as_secs_f32() * 1000.0;
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(GpuDoneSample { ms, iters, from_start, regime });
+            }
+        });
+    }
+
+    /// Test-only: feed one completion-time sample as the callback
+    /// would, so the drain and sizing can be exercised natively.
+    #[cfg(test)]
+    pub(crate) fn inject_gpu_done_sample(&mut self, ms: f32, iters: u32, from_start: bool) {
+        let regime = CostRegime {
+            floatexp: false,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        };
+        if let Ok(mut g) = self.gpu_done.lock() {
+            *g = Some(GpuDoneSample { ms, iters, from_start, regime });
         }
     }
 
@@ -1849,6 +1975,17 @@ impl EscapeRenderer {
         regime: CostRegime,
     ) {
         let Some(ts) = self.timestamps.as_mut() else {
+            // No timestamp queries on this device: remember what was
+            // just recorded so the next render() can time its
+            // completion instead. A batch of several dispatches
+            // accumulates into one sample; `from_start` is the first
+            // dispatch's.
+            self.gpu_done_pending = Some(match self.gpu_done_pending.take() {
+                Some((prev, fs, rg, t0)) if rg == regime => {
+                    (prev.saturating_add(iters), fs, rg, t0)
+                }
+                _ => (iters, from_start, regime, web_time::Instant::now()),
+            });
             return;
         };
         encoder.resolve_query_set(&ts.query_set, 0..2, &ts.resolve, 0);
@@ -2034,6 +2171,29 @@ impl EscapeRenderer {
             }
         }
 
+        // Without a measurement, the sizer below grows the chunk from
+        // CALL SPACING -- the time between render() calls -- on the
+        // assumption that a call waits for the GPU. In a browser
+        // nothing does: WebGPU cannot block on completion, so the
+        // spacing is just the frame period plus CPU work, and the
+        // chunk doubles every third call regardless of what the GPU
+        // is doing, up to 64x the seed. At 397x708 with 6x
+        // supersampling that ceiling is ~51k iterations over 10 MP in
+        // one dispatch -- a guaranteed multi-second submission, and
+        // the DXGI_ERROR_DEVICE_HUNG in the field report. It went
+        // unnoticed only because the CPU's orbit slice used to take
+        // 240 ms, making every call "late" and pinning the chunk at
+        // 16; the slice fix removed that accidental throttle. So: in
+        // a browser the chunk stays at the calibrated seed until a
+        // completion-time measurement arrives (`gpu_done_arm`), and
+        // then sizes from that.
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.chunk_iters = seed;
+            return seed;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let now = web_time::Instant::now();
         self.chunk_count = self.chunk_count.saturating_add(1);
         let Some(last) = self.chunk_last.replace(now) else {
@@ -2079,6 +2239,7 @@ impl EscapeRenderer {
         }
         self.chunk_iters = chunk;
         chunk
+        }
     }
 
     fn chunk_size(&self, floatexp: bool) -> u32 {
@@ -4286,13 +4447,19 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
         let ss = Self::affordable_supersample(device, width, height, supersample);
+        if width == self.out_width && height == self.out_height && ss == self.supersample {
+            return false;
+        }
+        // AFTER the no-change return: the viewport calls this every
+        // frame with the config's factor, and a factor the budget
+        // clamps is clamped identically every frame -- so the warning
+        // sat above the early return and repeated at frame rate
+        // (reported as console spam). Now it says so once, when the
+        // clamp actually takes effect.
         if ss != supersample.clamp(1, MAX_SUPERSAMPLE) {
             log::warn!(
                 "Escape supersample clamped to {ss}x at {width}x{height} (render-pixel budget)"
             );
-        }
-        if width == self.out_width && height == self.out_height && ss == self.supersample {
-            return false;
         }
         self.out_width = width;
         self.out_height = height;
@@ -5390,6 +5557,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 // Consume any landed GPU measurement first: next_chunk
                 // sizes from it.
                 self.ts_poll();
+                self.gpu_done_arm(queue);
                 let measure_gpu = self.ts_prepare(device, queue);
                 let tier = Self::perturb_tier(escape)
                     .unwrap_or(assembler::PerturbTier::Power(2));
