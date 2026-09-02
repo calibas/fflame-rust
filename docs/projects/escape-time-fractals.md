@@ -2996,6 +2996,61 @@ change to the chunk state machine, and nothing measured here asks
 for it. If a device turns up that does, `tile_y0` is already in the
 uniform.
 
+### A Ducks reference that grazes the log singularity (2026-09-02)
+
+Reported as: past about 1e12 the fractal changes completely, zooming
+back out does not undo it, and two saved views render wrongly when
+loaded directly though they look right if you zoom in to them. Read as
+orbit caching. It was arithmetic, and it was not depth-dependent at
+all -- measured against exact orbits, that centre was broken from zoom
+19 upward, which is as soon as it perturbs. 1e12 was where it became
+obvious, not where it began.
+
+**What the centre does.** At iteration 65 the reference reaches
+Z = (-0.1500, 0.6750) against c = (0.15, -0.675), so the Ducks step's
+`fold(Z) + c` cancels two O(1) f32 numbers down to |T| = 2.08e-8 --
+about a third of an ulp of the operands. The reference itself is fine
+(it is big-float, and its own value is exact); it is the DELTA step's
+f32 copy of T that is left holding nothing but rounding.
+
+**Two failures in series.** `rf_tinv` expands 1/(T_hi + T_lo) to first
+order in T_lo/T_hi, which is valid only while the hi half dominates.
+Here the true T lives entirely in the low word, so the correction was
+the size of the term it corrected. `rf_cinv` then returned its 1e20
+floor sentinel, |u| passed 1e19, and `dot(u, u)` OVERFLOWED f32 inside
+`rf_clog1p` -- +inf where log(1+u) is about 45, a value f32 holds
+comfortably. 898 of 1728 pixels went infinite and took the
+magnitude-average accumulator with them. Both rungs share `rf_tinv`,
+so both were affected.
+
+Fixed at both points. `rf_tinv` uses the f32 SUM of the halves when
+they are comparable -- they share an exponent there, so nothing is
+lost adding them, and t_hi is exact by Sterbenz -- and keeps the
+expansion where the hi half dominates. `rf_clog1p` factors the
+magnitude out for huge |u|: log|1+u| -> log(m) + log|u/m|, each term
+in range.
+
+| zoom | before | after |
+|---|---|---|
+| 19.27 | 1714/1728 non-finite | 0, mean err 2.1e-7 |
+| 41.47 (reported) | 898/1728 non-finite | 0, mean err 1.7e-7 |
+| 56 (deep rung) | -- | 0, mean err 1.7e-7 |
+
+**Two things worth recording about finding it.** The first hypothesis
+-- that the seam fix's removal of the magnitude rebase let the delta
+grow unbounded -- was WRONG, and a one-line experiment restoring
+`rebase_default` for Ducks produced byte-identical numbers, which
+killed it in a minute. And a `max_iter` sweep on the real GPU (clean
+through 64, broken at 66) localised the failure to a single iteration
+before any shader was read, which is what made the near-singularity
+findable at all.
+
+Every existing Ducks test passed throughout: their centres never pass
+close enough to the singularity for the expansion to break. The new
+test pins nine depths spanning the rung switch against exact
+big-float orbits, and `escape-ducks-singularity` renders the reported
+view.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
