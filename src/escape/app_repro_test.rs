@@ -3547,6 +3547,55 @@ mod tests {
         }
     }
 
+    /// The reported seam: Ducks just past the perturbation threshold.
+    ///
+    /// Curved lines cutting the image and sliding as you zoom deeper.
+    /// They were the Zhuoran rebase firing on the branch wrap's own
+    /// bookkeeping -- see `rebase_only_at_orbit_end`. This pins the
+    /// user's exact view, on both rungs.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn ducks_has_no_seams_at_the_perturbation_threshold() {
+        let (w, h) = (96u32, 72u32);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "ducks".to_string();
+        esc.coloring = "magnitude_average".to_string();
+        esc.center_re = "-0.10000534377415609364308126093".to_string();
+        esc.center_im = "-0.67499728780376093929034752896".to_string();
+        esc.julia = true;
+        esc.julia_re = 0.1;
+        esc.julia_im = -0.675;
+        esc.zoom_log2 = 14.061247;
+        esc.max_iter = 80;
+        esc.bailout = 4.0;
+        esc.formula_params.insert("variant".to_string(), 0.0);
+        assert!(
+            crate::escape::EscapeRenderer::wants_perturbation(&esc),
+            "the reported view must be past the threshold, or this tests nothing"
+        );
+        let truth =
+            exact_mean_magnitude(&esc, w, h, crate::escape::reference::MAP_DUCKS, [0.0, 0.0]);
+        for deep in [false, true] {
+            let recs = records_via(&esc, w, h, deep, true);
+            let (mut total, mut over) = (0.0f64, 0usize);
+            for (r, t) in recs.iter().zip(&truth) {
+                let m = r.accum[0] as f64 / (r.accum[1] as f64).max(1.0);
+                let rel = (m - t).abs() / t.abs().max(1e-9);
+                total += rel;
+                if rel > 1e-3 {
+                    over += 1;
+                }
+            }
+            let mean = total / truth.len() as f64;
+            println!("ducks threshold seam (deep={deep}): mean {mean:.3e}, {over} pixels over 1e-3");
+            // With the rebase seam: 2.2e-3 and 4899 of 6912 pixels.
+            assert!(
+                mean < 1e-4 && over < 20,
+                "seams are back (deep={deep}): mean {mean:.3e}, {over} pixels over 1e-3"
+            );
+        }
+    }
+
     /// Ducks on the Julia plane of the shipped preset (c = 0.1 - 0.62i)
     /// at zoom 30, the plain log and the log of the square, both
     /// rungs.
@@ -8132,3 +8181,4 @@ mod tests {
         renderer.destroy();
     }
 }
+
