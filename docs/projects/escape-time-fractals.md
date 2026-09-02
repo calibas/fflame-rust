@@ -2912,12 +2912,89 @@ The regression test asserts the predicate AT ITS OWN BOUNDARY rather
 than at a fixed 4K, so it means the same thing on a GPU with a 2 GB
 buffer limit as on one with 256 MB, and costs no allocation.
 
-**Still open**: this makes 4K deep-zoom video refuse rather than
-crash, not succeed. Succeeding needs the perturbed path banded by
-ROWS the way the direct path already is (`tile_y0` exists in the
-uniform for it) -- each band's state sized to fit, bands run to
-completion in turn. That is a change to the chunk state machine and
-has not been made.
+**Corrected the same day: the 256 MB was not the GPU.** 268,435,456
+is `wgpu::Limits::default().max_buffer_size` -- 256 MiB exactly. Both
+video-export device creations started from the defaults and raised
+only the storage-BINDING size from the adapter; `max_buffer_size` and
+`max_texture_dimension_2d` stayed at 256 MiB and 8192. The exporter
+asked wgpu for a buffer past the limit it had itself requested. The
+still-image exporter (`app/export.rs`) has raised all three from the
+adapter since it hit the same wall; the video exporter now matches
+it, and the reported frame renders perturbed in 0.14 s under adapter
+limits (`a_4k_deep_ducks_frame_renders_perturbed_under_adapter_limits`).
+The precheck and the decision-point guard stay: they read the
+device's limits, so they relax exactly as far as the device does.
+
+### 4K video with antialiasing: what it costs and what was chosen (2026-09-02)
+
+Asked for: 4K video at 8x antialiasing for every fractal, 2x at the
+least. Reviewed against what exists rather than designed fresh.
+
+**Three caps stood between the request and the render**, and only
+one of them was hardware:
+
+| cap | where | effect at 4K |
+|---|---|---|
+| `max_buffer_size` requested at wgpu's 256 MiB default | video exporter's device | panic on any perturbed frame (above) |
+| render-pixel budget: 1.5 GiB / 132 B = 12.2 MP | `affordable_supersample` | 4K is 8.3 MP, so the GRID is clamped to 1x on every GPU |
+| animated `Escape.Supersample` clamped to 3 | `apply_config_value` | a track set from the panel (which offers 8) exported softer than it previewed |
+
+The second is the one that decides the design. A supersampled grid at
+4K x 2 is 33 MP of per-pixel state; at x 8 it is 531 MP and 30720
+pixels wide, past the 16384 texture-dimension limit every adapter
+has. No budget tuning reaches 8x as a grid, at 4K or anywhere near.
+
+**The flame tiler does not transfer.** `export/high_res.rs` exists
+because the chaos game SCATTERS: a sample can land on any pixel, so a
+tile needs a sample-emit pass and a scatter into its own histogram.
+An escape render is independent per pixel -- a tile is just a
+sub-rectangle -- so the scatter machinery solves a problem escape
+does not have. What would transfer is the `TileLayout` row
+arithmetic, and the direct path already has its own (`tile_y0`,
+`direct_rows_per_dispatch`).
+
+**What was chosen: accumulation, which was already the still
+exporter's answer.** The same sample positions, taken as several
+ordinary renders each displaced within a pixel and averaged
+(`sample_grid`, `begin_accumulation`, `accumulate_sample`): identical
+total iteration work, memory fixed at one frame, no size limit, and
+the reference orbit shared by every sample. The video exporter
+rendered exactly one grid sample per frame and had none of this;
+it now runs the same loop the still path does, per frame, and the
+tail reads the averaged image. One property carries it: a per-frame
+`begin_accumulation` starts clean (pinned by
+`per_frame_accumulation_starts_clean` -- frame B after frame A equals
+frame B alone, worst channel delta 0/255). The track clamp is lifted
+to the panel's maximum.
+
+**Measured**, 4K, perturbed f32, on the development GPU (whose
+throughput is 11.3 Gpx-iter/s on Ducks, a non-escaping map where
+every pixel runs to `max_iter`; Mandelbrot escapes early and runs
+faster per nominal iteration):
+
+| frame | 1x | 2x (4 renders) | 8x (64 renders, extrapolated) |
+|---|---|---|---|
+| Mandelbrot, 2000 iterations | 0.43 s | 1.59 s | ~27 s |
+| Ducks, 500 iterations | 0.27 s | 0.99 s | ~17 s |
+
+Accumulation scales almost exactly linearly in samples (0.99 against
+4 x 0.27), which is the reference orbit being reused. For a 30-second
+video at 30 fps (900 frames) that is about 24 minutes at 2x and about
+seven hours at 8x for the Mandelbrot row. The cost is iteration work,
+not memory, and no rendering scheme changes it: 8x IS 64 renders'
+worth of iterations however they are arranged. That is the honest
+price of the request, and it is the user's to pay or not.
+
+**Row banding was considered and not done.** It would let the
+perturbed path hold frames larger than the device's buffer limit by
+sizing the state to a band, the way the direct path already does.
+With the exporter asking for adapter limits, that is now only needed
+on a GPU whose real `max_buffer_size` is under the frame's state
+(398 MB at 4K) -- integrated parts, mostly -- or for grids wider than
+the texture limit, which accumulation sidesteps entirely. It is a
+change to the chunk state machine, and nothing measured here asks
+for it. If a device turns up that does, `tile_y0` is already in the
+uniform.
 
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome

@@ -3702,6 +3702,150 @@ mod tests {
         );
     }
 
+    /// The reported 4K frame renders, perturbed, on a device that asks
+    /// for its adapter's real limits.
+    ///
+    /// The panic's 268,435,456 is not a GPU: it is wgpu's DEFAULT
+    /// `max_buffer_size` (256 MiB), which the video exporter requested
+    /// because it raised only the storage-BINDING limit from the
+    /// adapter. The still-image exporter raises buffer, binding and
+    /// texture limits alike. This test uses adapter limits (as
+    /// `repro_device` does) and renders the exact reported size on
+    /// the perturbed path; it is what the exporter can do once it
+    /// asks the same way.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_4k_deep_ducks_frame_renders_perturbed_under_adapter_limits() {
+        let (device, queue) = repro_device();
+        let lim = device.limits();
+        let need = 3840u64 * 2160 * 48;
+        if need > lim.max_buffer_size || need > lim.max_storage_buffer_binding_size as u64 {
+            eprintln!("this adapter really is under 398 MB; nothing to prove here");
+            return;
+        }
+        let (w, h) = (3840u32, 2160u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64,
+            &config.flame, config.palette_size);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "ducks".to_string();
+        esc.coloring = "magnitude_average".to_string();
+        esc.center_re = "-0.1000053437741560936430812".to_string();
+        esc.center_im = "-0.6749972878037609392903475".to_string();
+        esc.julia = true;
+        esc.julia_re = 0.1;
+        esc.julia_im = -0.675;
+        esc.zoom_log2 = 20.0;
+        esc.max_iter = 200;
+        esc.bailout = 4.0;
+        esc.formula_params.insert("variant".to_string(), 0.0);
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.set_chunk_time_target(200.0);
+        let t0 = std::time::Instant::now();
+        let mut guard = 0u32;
+        loop {
+            let mut e = device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("4k") });
+            let settled = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+            queue.submit(std::iter::once(e.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled { break; }
+            guard += 1;
+            assert!(guard < 5_000, "4K frame never settled");
+        }
+        println!("4K Ducks frame: {:.2}s, {guard} extra frames, path={}",
+            t0.elapsed().as_secs_f64(), escape.last_path);
+        assert_eq!(escape.last_path, "perturbed f32",
+            "under adapter limits the reported frame must take the perturbed path");
+        escape.destroy();
+    }
+
+    /// Per-frame accumulation must not bleed between frames.
+    ///
+    /// The video exporter now antialiases by accumulation like the
+    /// still path, but calls `begin_accumulation` once PER FRAME on
+    /// one long-lived renderer. This pins the property that makes
+    /// that correct: frame B accumulated after frame A equals frame B
+    /// accumulated on its own. If a later change made the reset
+    /// conditional on size alone, every frame of a video would carry
+    /// a ghost of the one before it, and no still-image test would
+    /// notice.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn per_frame_accumulation_starts_clean() {
+        let (device, queue) = repro_device();
+        let (w, h) = (96u32, 72u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size);
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+        let view = |zoom: f64| {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".to_string();
+            esc.coloring = "smooth".to_string();
+            esc.center_re = "-0.7436438870371587".to_string();
+            esc.center_im = "0.1318259042053119".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 300;
+            esc.supersample = 1;
+            esc
+        };
+        // One frame, accumulated 2x2, on a given renderer; returns the
+        // tonemapped pixels.
+        let mut frame = |escape: &mut crate::escape::EscapeRenderer, esc: &_| -> Vec<u8> {
+            let extra = 2u32;
+            escape.begin_accumulation(&device, &queue, extra);
+            for off in crate::escape::EscapeRenderer::sample_grid(extra) {
+                escape.set_sample_offset(off);
+                let mut enc = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("acc") });
+                let mut settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                let mut g = 0;
+                while !settled {
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    enc = device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("acc chunk") });
+                    settled = escape.render(&device, &queue, &mut enc, esc, renderer.palette_view());
+                    g += 1;
+                    assert!(g < 100_000);
+                }
+                escape.accumulate_sample(&device, &queue, &mut enc);
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            }
+            escape.set_sample_offset([0.0, 0.0]);
+            let mut enc = device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("tm") });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc,
+                escape.accumulated_view().expect("accumulated"));
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0])).expect("readback");
+            rgba
+        };
+        // A after B on one renderer, versus B alone on a fresh one.
+        let mut shared = crate::escape::EscapeRenderer::new(&device, w, h);
+        let a = frame(&mut shared, &view(2.0));
+        let b_after_a = frame(&mut shared, &view(5.0));
+        shared.destroy();
+        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+        let b_alone = frame(&mut fresh, &view(5.0));
+        fresh.destroy();
+        let diff_ab: usize = a.iter().zip(&b_after_a).filter(|(x, y)| x != y).count();
+        assert!(diff_ab > 0, "the two views must differ, or this tests nothing");
+        let worst = b_after_a.iter().zip(&b_alone)
+            .map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap_or(0);
+        println!("frames differ in {diff_ab} bytes; B-after-A vs B-alone worst channel delta {worst}");
+        assert!(worst <= 1,
+            "a frame accumulated after another must equal that frame alone (worst {worst}/255)");
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.
@@ -8336,6 +8480,8 @@ mod tests {
         renderer.destroy();
     }
 }
+
+
 
 
 

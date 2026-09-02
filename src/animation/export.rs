@@ -776,7 +776,13 @@ fn apply_config_value(
         (ConfigPath::EscapeDampingIm, ConfigValue::Float(v)) => config.escape.damping_im = *v,
         (ConfigPath::EscapeMaxIter, ConfigValue::UInt(v)) => config.escape.max_iter = *v,
         (ConfigPath::EscapeSupersample, ConfigValue::UInt(v)) => {
-            config.escape.supersample = (*v).clamp(1, 3);
+            // The panel's range, not a smaller one: an animated value
+            // used to be clamped to 3 here while the panel offers 8,
+            // so a track set from the UI silently exported softer
+            // than it previewed. Whatever the grid cannot hold is
+            // made up by accumulation in the frame loop below.
+            config.escape.supersample =
+                (*v).clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
         }
         (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
             config.escape.formula_params.insert(param.clone(), *v);
@@ -1346,10 +1352,14 @@ pub async fn export_animation(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
-    // Request adapter's max storage buffer size (matches main app behavior)
+    // The adapter's real limits, not wgpu's defaults -- see
+    // export_animation_fast for why (a 4K deep-zoom frame's 398 MB of
+    // iteration state against the 256 MiB default).
     let adapter_limits = adapter.limits();
     let mut limits = egui_wgpu::wgpu::Limits::default();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    limits.max_buffer_size = adapter_limits.max_buffer_size;
+    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
     // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
     limits.max_storage_buffers_per_shader_stage =
         adapter_limits.max_storage_buffers_per_shader_stage;
@@ -1856,10 +1866,22 @@ pub async fn export_animation_fast(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
-    // Request adapter's max storage buffer size (matches main app behavior)
+    // The adapter's real limits, not wgpu's defaults. `Limits::default()`
+    // caps max_buffer_size at 256 MiB (268,435,456) and textures at
+    // 8192 a side, and only the storage-BINDING size used to be raised
+    // here. A 4K deep-zoom frame carries 3840*2160*48 = 398 MB of
+    // per-pixel iteration state, so the exporter asked wgpu for a
+    // buffer past the limit it had itself requested, and wgpu answers
+    // a validation error by panicking -- on this worker thread, which
+    // left the export dialog waiting forever. The number in that panic
+    // was this default, not the GPU. The still-image exporter has
+    // raised all three from the adapter since it hit the same wall
+    // (app/export.rs); this now matches it.
     let adapter_limits = adapter.limits();
     let mut limits = wgpu::Limits::default();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    limits.max_buffer_size = adapter_limits.max_buffer_size;
+    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
     // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
     limits.max_storage_buffers_per_shader_stage =
         adapter_limits.max_storage_buffers_per_shader_stage;
@@ -1994,6 +2016,10 @@ pub async fn export_animation_fast(
     let is_escape = false;
     #[cfg(feature = "engine-escape")]
     let mut escape_renderer: Option<crate::escape::EscapeRenderer> = None;
+    // Accumulated samples per axis for the frame just rendered (1 =
+    // the grid alone); the tail picks the averaged image from it.
+    #[cfg(feature = "engine-escape")]
+    let mut escape_extra: u32 = 1;
 
     // A deep-zoom frame carries per-pixel resume state (48-72 bytes),
     // and past a device's buffer limit that allocation is a wgpu
@@ -2094,32 +2120,81 @@ pub async fn export_animation_fast(
                 export_config.height,
                 frame_config.escape.supersample,
             );
-            let mut guard = 0u32;
-            loop {
+            // Antialiasing past what the grid can hold is made up by
+            // ACCUMULATION, exactly as the still-image path does
+            // (render.rs): the same sample positions, taken as several
+            // ordinary renders each displaced within a pixel and
+            // averaged. The grid is capped by a render-pixel budget
+            // that 4K reaches at 1x, so before this a 4K video with
+            // antialiasing asked for got none, silently. Same total
+            // iteration work; fixed memory; the reference orbit is
+            // shared by every sample.
+            let want_ss = frame_config
+                .escape
+                .supersample
+                .clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+            let got_ss = esc.effective_supersample().max(1);
+            let extra = want_ss.div_ceil(got_ss).max(1);
+            escape_extra = extra;
+            if extra > 1 && frame == 0 {
+                log::info!(
+                    "Escape video: {want_ss}x antialiasing = {got_ss}x grid x {extra}x                      accumulated ({} renders per frame)",
+                    extra * extra
+                );
+            }
+            let offsets = if extra > 1 {
+                crate::escape::EscapeRenderer::sample_grid(extra)
+            } else {
+                vec![[0.0f32, 0.0]]
+            };
+            if extra > 1 {
+                esc.begin_accumulation(&device, &queue, extra);
+            }
+            for off in &offsets {
+                esc.set_sample_offset(*off);
+                let mut guard = 0u32;
                 let mut esc_encoder =
                     device.create_command_encoder(&CommandEncoderDescriptor {
                         label: Some("Escape Animation Frame"),
                     });
-                let settled = esc.render(
+                let mut settled = esc.render(
                     &device,
                     &queue,
                     &mut esc_encoder,
                     &frame_config.escape,
                     renderer.palette_view(),
                 );
-                queue.submit(std::iter::once(esc_encoder.finish()));
-                if settled {
-                    break;
-                }
-                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-                guard += 1;
-                if guard > 4_000_000 {
-                    log::error!(
-                        "escape animation frame failed to settle; encoding what we have"
+                while !settled {
+                    queue.submit(std::iter::once(esc_encoder.finish()));
+                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                    esc_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("Escape Animation Frame Chunk"),
+                    });
+                    settled = esc.render(
+                        &device,
+                        &queue,
+                        &mut esc_encoder,
+                        &frame_config.escape,
+                        renderer.palette_view(),
                     );
-                    break;
+                    guard += 1;
+                    if guard > 4_000_000 {
+                        log::error!(
+                            "escape animation frame failed to settle; encoding what we have"
+                        );
+                        break;
+                    }
                 }
+                // Fold this displaced render into the running mean.
+                // Recorded into the encoder that holds the settling
+                // chunk's resolve, so the fold is ordered after it.
+                if extra > 1 {
+                    esc.accumulate_sample(&device, &queue, &mut esc_encoder);
+                }
+                queue.submit(std::iter::once(esc_encoder.finish()));
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             }
+            esc.set_sample_offset([0.0, 0.0]);
         } else {
             render_frame_to_completion(
                 &device,
@@ -2164,12 +2239,13 @@ pub async fn export_animation_fast(
         // compiles clean and ships frames that were never tone-mapped.
         #[cfg(feature = "engine-escape")]
         let escape_view = if is_escape {
-            Some(
-                escape_renderer
-                    .as_ref()
-                    .expect("escape renderer exists: created in the generator branch")
-                    .output_view(),
-            )
+            let esc = escape_renderer
+                .as_ref()
+                .expect("escape renderer exists: created in the generator branch");
+            Some(match esc.accumulated_view() {
+                Some(v) if escape_extra > 1 => v,
+                _ => esc.output_view(),
+            })
         } else {
             None
         };
@@ -2647,6 +2723,27 @@ mod tests {
     use crate::config::{ConfigPath, ConfigValue};
     use crate::scene::transforms::{Flame, Transform};
 
+    /// An animated supersample keeps the panel's full range.
+    ///
+    /// It was clamped to 3 here while the panel offers 8, so a track
+    /// set from the UI exported softer than it previewed, with
+    /// nothing said. Whatever the grid cannot hold is now made up by
+    /// accumulation in the frame loop, so the value is honoured.
+    #[test]
+    fn an_animated_supersample_keeps_the_panel_range() {
+        use serde_json::json;
+        let mut config = FractalConfig::default();
+        apply_animation_values(&mut config, &[
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(8)),
+        ]);
+        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE);
+        apply_animation_values(&mut config, &[
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(40)),
+        ]);
+        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE,
+            "past the maximum still clamps");
+    }
+
     /// Every animatable escape parameter must survive the export's
     /// animation-apply path.
     ///
@@ -2706,7 +2803,11 @@ mod tests {
         ];
         apply_animation_values(&mut config, &wild);
         assert_eq!(config.escape.zoom_log2, 0.0, "overflowing zoom falls back");
-        assert_eq!(config.escape.supersample, 3, "supersample clamps to 3");
+        assert_eq!(
+            config.escape.supersample,
+            crate::escape::renderer::MAX_SUPERSAMPLE,
+            "supersample clamps to the panel's maximum (it used to stop at 3)"
+        );
     }
 
     /// A video frame must not render meaningfully past the
