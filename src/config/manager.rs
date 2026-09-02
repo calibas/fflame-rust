@@ -1741,6 +1741,12 @@ impl ConfigManager {
             ConfigPath::EscapeShadingField => Ok(ConfigValue::String(
                 crate::config::escape::shading_field_to_str(config.escape.shading.field).to_string(),
             )),
+            ConfigPath::EscapeContrastMode => Ok(ConfigValue::String(
+                crate::config::escape::contrast_mode_to_str(config.escape.contrast.mode).to_string(),
+            )),
+            ConfigPath::EscapeContrastClip => Ok(config.escape.contrast.clip.into()),
+            ConfigPath::EscapeContrastStrength => Ok(config.escape.contrast.strength.into()),
+            ConfigPath::EscapeContrastTurns => Ok(config.escape.contrast.turns.into()),
             ConfigPath::EscapeShadingShadowColor => {
                 Ok(ConfigValue::ColorRgb(config.escape.shading.shadow_color))
             }
@@ -2657,6 +2663,23 @@ impl ConfigManager {
                 let v: String = value.try_into()?;
                 self.current.escape.shading.field =
                     crate::config::escape::shading_field_from_str(&v);
+            }
+            ConfigPath::EscapeContrastMode => {
+                let v: String = value.try_into()?;
+                self.current.escape.contrast.mode =
+                    crate::config::escape::contrast_mode_from_str(&v);
+            }
+            ConfigPath::EscapeContrastClip => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.contrast.clip = v.clamp(0.0, 0.25);
+            }
+            ConfigPath::EscapeContrastStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.contrast.strength = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeContrastTurns => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.contrast.turns = v.clamp(0.05, 64.0);
             }
             ConfigPath::EscapeShadingShadowColor => {
                 self.current.escape.shading.shadow_color = value.try_into()?;

@@ -136,6 +136,11 @@ pub struct EscapeConfig {
     /// off, so every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "EscapeShading::is_default")]
     pub shading: EscapeShading,
+
+    /// Auto-exposure for the coloring's value field. Off by default
+    /// and skipped when off, so every existing file is byte-stable.
+    #[serde(default, skip_serializing_if = "EscapeContrast::is_default")]
+    pub contrast: EscapeContrast,
 }
 
 fn default_supersample() -> u32 {
@@ -247,6 +252,132 @@ pub fn shading_field_from_str(s: &str) -> ShadingField {
     match s {
         "banded" => ShadingField::Banded,
         _ => ShadingField::Smooth,
+    }
+}
+
+/// How the coloring's value range is fitted to the palette.
+///
+/// The problem this exists for: an orbit-STATISTIC coloring
+/// (`magnitude_average` and kin) is a SMOOTH function of c, and a
+/// smooth function restricted to a shrinking window converges to its
+/// own first-order Taylor expansion. Measured on Ducks: fit a plane to
+/// the field and it explains 1.0000 of the variance at zoom 14 AND at
+/// zoom 26.6 -- the field IS a plane -- while its spread falls from
+/// 7.2e-5 to 1.2e-8. Through a cyclic palette a plane is a set of
+/// parallel bands, so panning rotates them and eventually nothing
+/// moves at all. Raising `max_iter` does not recover it.
+///
+/// An escaping fractal never has this trouble: its escape count is a
+/// discontinuous integer, so it stays contrasty at any depth. This is
+/// the price of the non-escaping families, and it is a COLOURING
+/// problem, not a precision one -- the render agrees with exact orbits
+/// to ~1e-7 the whole way down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContrastMode {
+    /// The coloring's own `scale`/`offset` and nothing else.
+    #[default]
+    Off,
+    /// Map the field's measured range onto one palette turn. Turns an
+    /// invisible ramp into a full-range one -- still a ramp, but a
+    /// visible one, and it stops the exposure drifting as you zoom.
+    AutoRange,
+    /// Subtract the fitted PLANE, then range the residual. This is the
+    /// one that shows structure a plane was hiding; where the field is
+    /// a perfect plane it correctly shows almost nothing, because
+    /// there is nothing left.
+    Flatten,
+}
+
+impl ContrastMode {
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            ContrastMode::Off => 0,
+            ContrastMode::AutoRange => 1,
+            ContrastMode::Flatten => 2,
+        }
+    }
+    pub fn is_off(&self) -> bool {
+        *self == ContrastMode::Off
+    }
+}
+
+/// The wire strings ConfigValue carries for [`ContrastMode`].
+pub fn contrast_mode_to_str(m: ContrastMode) -> &'static str {
+    match m {
+        ContrastMode::Off => "off",
+        ContrastMode::AutoRange => "auto_range",
+        ContrastMode::Flatten => "flatten",
+    }
+}
+
+pub fn contrast_mode_from_str(s: &str) -> ContrastMode {
+    match s {
+        "auto_range" => ContrastMode::AutoRange,
+        "flatten" => ContrastMode::Flatten,
+        _ => ContrastMode::Off,
+    }
+}
+
+/// Auto-exposure for the coloring's value field.
+///
+/// Measured from the rendered field itself once it settles, then
+/// applied in the recolor pass -- so it costs one cheap dispatch and
+/// nothing during iteration. See [`ContrastMode`] for why it exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EscapeContrast {
+    #[serde(default, skip_serializing_if = "ContrastMode::is_off")]
+    pub mode: ContrastMode,
+    /// Fraction trimmed from EACH end before ranging, 0..0.25.
+    ///
+    /// A percentile rather than the raw min/max: one pixel sitting on
+    /// a singularity (Ducks' `log` guard returns -34.5) would
+    /// otherwise set the whole scale and flatten everything else back
+    /// out. Measured on the reported view, the guard value is ~5
+    /// orders of magnitude outside the rest of the field.
+    #[serde(default = "default_contrast_clip")]
+    pub clip: f32,
+    /// How far to travel from the coloring's own mapping toward the
+    /// fitted one. 1 is the fitted mapping; 0 is off with the
+    /// measurement still running, which makes the control continuous.
+    #[serde(default = "default_contrast_strength")]
+    pub strength: f32,
+    /// Palette turns the fitted range is mapped onto. 1 gives exactly
+    /// one turn (no repeats); higher values cycle the palette that
+    /// many times across the field, which is how these colorings are
+    /// usually driven.
+    #[serde(default = "default_contrast_turns")]
+    pub turns: f32,
+}
+
+fn default_contrast_clip() -> f32 {
+    0.005
+}
+fn default_contrast_strength() -> f32 {
+    1.0
+}
+fn default_contrast_turns() -> f32 {
+    1.0
+}
+
+impl Default for EscapeContrast {
+    fn default() -> Self {
+        Self {
+            mode: ContrastMode::default(),
+            clip: default_contrast_clip(),
+            strength: default_contrast_strength(),
+            turns: default_contrast_turns(),
+        }
+    }
+}
+
+impl EscapeContrast {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    /// Whether the renderer must measure the field at all.
+    pub fn is_active(&self) -> bool {
+        !self.mode.is_off() && self.strength > 0.0
     }
 }
 
@@ -592,6 +723,7 @@ impl Default for EscapeConfig {
             downsample: DownsampleMode::Box,
             reference_period: None,
             shading: EscapeShading::default(),
+            contrast: EscapeContrast::default(),
         }
     }
 }
@@ -670,6 +802,46 @@ mod shading_tests {
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.shading, EscapeShading::default());
         assert!(!back.shading.enabled);
+    }
+
+    /// Contrast is off by default and must stay out of the file, for
+    /// the same reason shading does: every existing config would
+    /// otherwise be rewritten the first time it was re-saved.
+    #[test]
+    fn default_contrast_serializes_to_nothing() {
+        let esc = EscapeConfig::default();
+        let json = serde_json::to_string(&esc).unwrap();
+        assert!(
+            !json.contains("contrast"),
+            "default contrast was written to the config: {json}"
+        );
+        let back: EscapeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.contrast, EscapeContrast::default());
+        assert!(!back.contrast.is_active());
+    }
+
+    #[test]
+    fn contrast_round_trips_and_gates_on_strength() {
+        let mut esc = EscapeConfig::default();
+        esc.contrast = EscapeContrast {
+            mode: ContrastMode::Flatten,
+            clip: 0.02,
+            strength: 0.75,
+            turns: 4.0,
+        };
+        let json = serde_json::to_string(&esc).unwrap();
+        let back: EscapeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.contrast, esc.contrast);
+        assert!(back.contrast.is_active());
+        // Strength 0 means "measure nothing": it is the continuous
+        // way to turn the stage off, so it must not cost a probe.
+        let mut off = esc.clone();
+        off.contrast.strength = 0.0;
+        assert!(!off.contrast.is_active());
+        // Every mode's wire string must survive.
+        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten] {
+            assert_eq!(contrast_mode_from_str(contrast_mode_to_str(m)), m);
+        }
     }
 
     /// Everything the layer can be set to must survive a round-trip.

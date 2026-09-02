@@ -335,6 +335,10 @@ pub enum ConfigPath {
     EscapeShadingLightAngle,
     EscapeShadingHeight,
     EscapeShadingField,
+    EscapeContrastMode,
+    EscapeContrastClip,
+    EscapeContrastStrength,
+    EscapeContrastTurns,
     EscapeShadingShadowColor,
     EscapeShadingShadowStrength,
     EscapeShadingShadowBlend,
@@ -852,6 +856,10 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingLightAngle => write!(f, "Relief Light Angle"),
             ConfigPath::EscapeShadingHeight => write!(f, "Relief Height"),
             ConfigPath::EscapeShadingField => write!(f, "Relief Source Field"),
+            ConfigPath::EscapeContrastMode => write!(f, "Auto Contrast"),
+            ConfigPath::EscapeContrastClip => write!(f, "Contrast Clip"),
+            ConfigPath::EscapeContrastStrength => write!(f, "Contrast Strength"),
+            ConfigPath::EscapeContrastTurns => write!(f, "Contrast Turns"),
             ConfigPath::EscapeShadingShadowColor => write!(f, "Relief Shadow Colour"),
             ConfigPath::EscapeShadingShadowStrength => write!(f, "Relief Shadow Strength"),
             ConfigPath::EscapeShadingShadowBlend => write!(f, "Relief Shadow Blend"),
@@ -1092,6 +1100,12 @@ impl ConfigPath {
             ConfigPath::EscapeShadingLightAngle => I18nKey::simple("history.param.escape_shading_light_angle"),
             ConfigPath::EscapeShadingHeight => I18nKey::simple("history.param.escape_shading_height"),
             ConfigPath::EscapeShadingField => I18nKey::simple("history.param.escape_shading_field"),
+            ConfigPath::EscapeContrastMode => I18nKey::simple("history.param.escape_contrast_mode"),
+            ConfigPath::EscapeContrastClip => I18nKey::simple("history.param.escape_contrast_clip"),
+            ConfigPath::EscapeContrastStrength => {
+                I18nKey::simple("history.param.escape_contrast_strength")
+            }
+            ConfigPath::EscapeContrastTurns => I18nKey::simple("history.param.escape_contrast_turns"),
             ConfigPath::EscapeShadingShadowColor => I18nKey::simple("history.param.escape_shading_shadow_color"),
             ConfigPath::EscapeShadingShadowStrength => I18nKey::simple("history.param.escape_shading_shadow_strength"),
             ConfigPath::EscapeShadingShadowBlend => I18nKey::simple("history.param.escape_shading_shadow_blend"),
@@ -2405,6 +2419,10 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingEnabled
             | ConfigPath::EscapeShadingLightAngle
             | ConfigPath::EscapeShadingHeight
+            | ConfigPath::EscapeContrastMode
+            | ConfigPath::EscapeContrastClip
+            | ConfigPath::EscapeContrastStrength
+            | ConfigPath::EscapeContrastTurns
             | ConfigPath::EscapeShadingField
             | ConfigPath::EscapeShadingShadowColor
             | ConfigPath::EscapeShadingShadowStrength
@@ -2677,6 +2695,10 @@ impl ConfigPath {
             ConfigPath::EscapeShadingLightAngle => "Escape.Shading.LightAngle".to_string(),
             ConfigPath::EscapeShadingHeight => "Escape.Shading.Height".to_string(),
             ConfigPath::EscapeShadingField => "Escape.Shading.Field".to_string(),
+            ConfigPath::EscapeContrastMode => "Escape.Contrast.Mode".to_string(),
+            ConfigPath::EscapeContrastClip => "Escape.Contrast.Clip".to_string(),
+            ConfigPath::EscapeContrastStrength => "Escape.Contrast.Strength".to_string(),
+            ConfigPath::EscapeContrastTurns => "Escape.Contrast.Turns".to_string(),
             ConfigPath::EscapeShadingShadowColor => "Escape.Shading.ShadowColor".to_string(),
             ConfigPath::EscapeShadingShadowStrength => "Escape.Shading.ShadowStrength".to_string(),
             ConfigPath::EscapeShadingShadowBlend => "Escape.Shading.ShadowBlend".to_string(),
@@ -2875,6 +2897,10 @@ impl ConfigPath {
                 ["Shading", "Enabled"] => return Some(ConfigPath::EscapeShadingEnabled),
                 ["Shading", "LightAngle"] => return Some(ConfigPath::EscapeShadingLightAngle),
                 ["Shading", "Height"] => return Some(ConfigPath::EscapeShadingHeight),
+                ["Contrast", "Mode"] => return Some(ConfigPath::EscapeContrastMode),
+                ["Contrast", "Clip"] => return Some(ConfigPath::EscapeContrastClip),
+                ["Contrast", "Strength"] => return Some(ConfigPath::EscapeContrastStrength),
+                ["Contrast", "Turns"] => return Some(ConfigPath::EscapeContrastTurns),
                 ["Shading", "Field"] => return Some(ConfigPath::EscapeShadingField),
                 ["Shading", "ShadowColor"] => return Some(ConfigPath::EscapeShadingShadowColor),
                 ["Shading", "ShadowStrength"] => return Some(ConfigPath::EscapeShadingShadowStrength),
@@ -3469,6 +3495,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // the on/off do not.
         ConfigPath::EscapeShadingLightAngle
         | ConfigPath::EscapeShadingHeight
+        | ConfigPath::EscapeContrastClip
+        | ConfigPath::EscapeContrastStrength
+        | ConfigPath::EscapeContrastTurns
         | ConfigPath::EscapeShadingShadowStrength
         | ConfigPath::EscapeShadingHighlightStrength
         | ConfigPath::EscapeShadingSoftness
@@ -3488,6 +3517,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             Some(ConfigValue::ColorRgb(rgb))
         }
         ConfigPath::EscapeShadingEnabled
+        | ConfigPath::EscapeContrastMode
         | ConfigPath::EscapeShadingField
         | ConfigPath::EscapeShadingTextureKind
         | ConfigPath::EscapeDownsample

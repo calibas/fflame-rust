@@ -8,7 +8,9 @@
 //! sliders are generated from the registry defs, the way variation
 //! params generate theirs.
 
-use crate::config::escape::{DownsampleMode, ShadingBlend, ShadingField, ShadingTexture};
+use crate::config::escape::{
+    ContrastMode, DownsampleMode, ShadingBlend, ShadingField, ShadingTexture,
+};
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
@@ -717,6 +719,82 @@ pub fn render_escape_content(
                 .on_hover_text(t!("escape_panel.tooltip_downsample"));
         });
     }
+    // ---- Auto contrast ----
+    // Sits above relief because it changes what relief slopes: both
+    // read the coloring's value field, and this one decides how much
+    // of it the palette actually spans.
+    egui::CollapsingHeader::new(t!("escape_panel.contrast"))
+        .default_open(!esc.contrast.mode.is_off())
+        .show(ui, |ui| {
+            let ct = esc.contrast.clone();
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.contrast_mode"));
+                let cur = ct.mode;
+                let name = |m: ContrastMode| match m {
+                    ContrastMode::Off => t!("escape_panel.contrast_off"),
+                    ContrastMode::AutoRange => t!("escape_panel.contrast_auto_range"),
+                    ContrastMode::Flatten => t!("escape_panel.contrast_flatten"),
+                };
+                egui::ComboBox::from_id_salt("escape_contrast_mode")
+                    .selected_text(name(cur))
+                    .show_ui(ui, |ui| {
+                        for m in [ContrastMode::Off, ContrastMode::AutoRange, ContrastMode::Flatten]
+                        {
+                            if ui.selectable_label(m == cur, name(m)).clicked() && m != cur {
+                                let _ = config_manager.update_param(
+                                    ConfigPath::EscapeContrastMode,
+                                    ConfigValue::String(
+                                        crate::config::escape::contrast_mode_to_str(m).to_string(),
+                                    ),
+                                );
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("escape_panel.tooltip_contrast"));
+            });
+            ui.add_enabled_ui(!ct.mode.is_off(), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.contrast_strength"));
+                    let mut v = ct.strength;
+                    if ui
+                        .add(egui::Slider::new(&mut v, 0.0..=1.0))
+                        .on_hover_text(t!("escape_panel.tooltip_contrast_strength"))
+                        .changed()
+                    {
+                        let _ = config_manager
+                            .update_param(ConfigPath::EscapeContrastStrength, v.into());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.contrast_turns"));
+                    let mut v = ct.turns;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut v, 0.05..=64.0)
+                                .logarithmic(true),
+                        )
+                        .on_hover_text(t!("escape_panel.tooltip_contrast_turns"))
+                        .changed()
+                    {
+                        let _ =
+                            config_manager.update_param(ConfigPath::EscapeContrastTurns, v.into());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.contrast_clip"));
+                    let mut v = ct.clip;
+                    if ui
+                        .add(egui::Slider::new(&mut v, 0.0..=0.25).fixed_decimals(3))
+                        .on_hover_text(t!("escape_panel.tooltip_contrast_clip"))
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(ConfigPath::EscapeContrastClip, v.into());
+                    }
+                });
+            });
+        });
+
     // ---- Relief shading ----
     // A LAYER, not a coloring: it runs after the palette lookup, so it
     // composes with whatever is above it. Collapsed by default because

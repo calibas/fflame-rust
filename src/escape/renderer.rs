@@ -749,6 +749,18 @@ pub struct EscapeRenderer {
     /// Whether `height_texture` is full-size (shading on) or the dummy.
     height_full: bool,
     shade_params_buffer: Buffer,
+    /// Uniform the RECOLOR pass reads the measured contrast fit from.
+    contrast_params: Buffer,
+    /// Destination of the probe pass: a PROBE_W x PROBE_H subsample of
+    /// the coloring's value field, plus a validity flag per cell.
+    contrast_probe: Option<Buffer>,
+    contrast_readback: Option<Buffer>,
+    /// The fit measured from the last settled frame. `None` until one
+    /// has been taken; cleared whenever the iteration identity moves,
+    /// because a fit belongs to the view it was measured on.
+    contrast_fit: Option<ContrastFit>,
+    /// Identity the current fit was measured under.
+    contrast_fit_key: Option<String>,
 }
 
 /// GPU-time pacing for the perturbed path (TDR-safety plan item C).
@@ -1167,6 +1179,21 @@ impl EscapeRenderer {
                         },
                         count: None,
                     },
+                    // The measured contrast fit. Only the RECOLOR pass
+                    // takes it, which is why it lives on this layout
+                    // and not in EscapeParams: the iterate templates
+                    // are untouched, so nothing about iteration
+                    // changes and their WGSL stays byte-identical.
+                    BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1175,6 +1202,13 @@ impl EscapeRenderer {
         let shade_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape Shade Params"),
             size: std::mem::size_of::<ShadeParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let contrast_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape Contrast Params"),
+            size: std::mem::size_of::<ContrastParamsGpu>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1227,6 +1261,11 @@ impl EscapeRenderer {
             height_view,
             height_full: false,
             shade_params_buffer,
+            contrast_params,
+            contrast_probe: None,
+            contrast_readback: None,
+            contrast_fit: None,
+            contrast_fit_key: None,
             current_ref_offset: [0.0, 0.0],
             iter_state_buffer: None,
             iter_state_px: 0,
@@ -2594,12 +2633,23 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn run_recolor(
         &mut self,
         device: &Device,
+        queue: &Queue,
         encoder: &mut CommandEncoder,
         escape: &EscapeConfig,
         palette_view: &TextureView,
     ) {
         let coloring = super::get_coloring(&escape.coloring);
         let deriv = self.derivative_active(escape);
+        // The fit the shader will apply. `None` (nothing measured yet,
+        // or the mode is off) writes the IDENTITY, so the recolor pass
+        // reproduces the iterate pass exactly -- which the
+        // cache-equivalence test depends on.
+        let fit = if escape.contrast.is_active() {
+            self.contrast_fit
+        } else {
+            None
+        };
+        queue_contrast(queue, &self.contrast_params, &escape.contrast, fit);
         let key = format!("recolor|{}|{}", coloring.name, deriv);
         if !self.pipelines.contains_key(&key) {
             let source = assembler::assemble_recolor(coloring, deriv);
@@ -2653,6 +2703,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         .as_ref()
                         .expect("recolor requires active results")
                         .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: self.contrast_params.as_entire_binding(),
                 },
             ],
         });
@@ -3808,6 +3862,184 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// one channel is all the surface needs, and at 4 bytes per render
     /// pixel it is a quarter of what carrying an analytic normal
     /// alongside it would cost.
+    /// Whether a settled frame still owes the user a contrast pass.
+    ///
+    /// The fit is measured FROM the finished field, so it cannot be
+    /// applied by the pass that produced it. Reporting "not settled"
+    /// once buys the frame that measures and recolors; the fit key
+    /// then matches and the render settles for real. Without this the
+    /// app stops at the uncorrected image, because it renders only
+    /// while dirty.
+    fn contrast_pending(&self, escape: &EscapeConfig, iterate_key: Option<&str>) -> bool {
+        escape.contrast.is_active()
+            && self.results_key.is_some()
+            && iterate_key.is_some()
+            && self.contrast_fit_key.as_deref() != iterate_key
+    }
+
+    /// Measure the coloring's value field and store the fit.
+    ///
+    /// Runs ONCE per settled view, not per frame: the fit belongs to
+    /// the view, and re-measuring while the image is still filling in
+    /// would chase a moving target. The readback is blocking, which is
+    /// affordable exactly because of that -- 28 KB, once, at the
+    /// moment the renderer is about to go idle anyway.
+    fn measure_contrast(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        key: &str,
+    ) {
+        if !escape.contrast.is_active() || self.contrast_fit_key.as_deref() == Some(key) {
+            return;
+        }
+        let cells = (PROBE_W * PROBE_H) as u64;
+        let bytes = cells * 8;
+        if self.contrast_probe.is_none() {
+            self.contrast_probe = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Contrast Probe"),
+                size: bytes,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }));
+            self.contrast_readback = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Contrast Readback"),
+                size: bytes,
+                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        let (Some(probe), Some(readback)) =
+            (self.contrast_probe.as_ref(), self.contrast_readback.as_ref())
+        else {
+            return;
+        };
+
+        const KEY: &str = "contrast-probe";
+        if !self.pipelines.contains_key(KEY) {
+            let src = format!(
+                r#"
+struct Probe {{ dims: vec2<u32>, grid: vec2<u32> }}
+@group(0) @binding(0) var height_tex: texture_2d<f32>;
+@group(0) @binding(1) var color_tex: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read_write> out_buf: array<vec2<f32>>;
+@group(0) @binding(3) var<uniform> pr: Probe;
+
+@compute @workgroup_size(8, 8, 1)
+fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if (gid.x >= pr.grid.x || gid.y >= pr.grid.y) {{ return; }}
+    // Centre of the cell this sample stands for.
+    let fx = (f32(gid.x) + 0.5) / f32(pr.grid.x);
+    let fy = (f32(gid.y) + 0.5) / f32(pr.grid.y);
+    let p = vec2<i32>(
+        clamp(i32(fx * f32(pr.dims.x)), 0, i32(pr.dims.x) - 1),
+        clamp(i32(fy * f32(pr.dims.y)), 0, i32(pr.dims.y) - 1),
+    );
+    let v = textureLoad(height_tex, p, 0).r;
+    // Coverage, from the colour the same pass wrote: a pixel with no
+    // value stores height 0, which is also a perfectly ordinary
+    // value, so the alpha channel is what distinguishes them.
+    let ok = textureLoad(color_tex, p, 0).a;
+    out_buf[gid.y * pr.grid.x + gid.x] = vec2<f32>(v, ok);
+}}
+"#
+            );
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Contrast Probe"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Contrast Probe"),
+                layout: None,
+                module: &module,
+                entry_point: Some("probe_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(KEY.to_string(), pipeline);
+        }
+        let pipeline = &self.pipelines[KEY];
+        let params = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Contrast Probe Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &params,
+            0,
+            bytemuck::cast_slice(&[self.width, self.height, PROBE_W, PROBE_H]),
+        );
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Contrast Probe Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: probe.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: params.as_entire_binding(),
+                },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Escape Contrast Probe"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Escape Contrast Probe Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(PROBE_W.div_ceil(8), PROBE_H.div_ceil(8), 1);
+        }
+        enc.copy_buffer_to_buffer(probe, 0, readback, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let polled = device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .is_ok();
+        if !polled || !rx.recv().unwrap_or(false) {
+            return;
+        }
+        let samples: Vec<(f32, f32)> = {
+            let data = readback.slice(..).get_mapped_range();
+            data.chunks_exact(8)
+                .map(|c| {
+                    (
+                        f32::from_le_bytes(c[0..4].try_into().unwrap()),
+                        f32::from_le_bytes(c[4..8].try_into().unwrap()),
+                    )
+                })
+                .collect()
+        };
+        readback.unmap();
+        self.contrast_fit = fit_contrast(
+            &samples,
+            PROBE_W,
+            PROBE_H,
+            escape.contrast.mode,
+            escape.contrast.clip,
+        );
+        self.contrast_fit_key = Some(key.to_string());
+    }
+
     fn create_height(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
         let texture = device.create_texture(&TextureDescriptor {
             label: Some("Escape Height Field"),
@@ -4821,7 +5053,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
         // an escape view with shading off carries neither.
-        self.ensure_height(device, escape.shading.enabled);
+        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active());
         self.ensure_resolve_target(device, escape.shading.enabled);
         // Diagnostics: CPU time of this whole call, whatever path or
         // early return it takes (the drop guard writes on exit).
@@ -4850,7 +5082,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some(ik) = iterate_key.as_deref() {
             if results_active && self.results_key.as_deref() == Some(ik) {
                 let t0 = web_time::Instant::now();
-                self.run_recolor(device, encoder, escape, palette_view);
+                self.measure_contrast(device, queue, escape, ik);
+                self.run_recolor(device, queue, encoder, escape, palette_view);
                 self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -5157,7 +5390,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     self.chunk_key = None;
                     self.reset_chunk_pacing();
                 }
-                return orbit_done && iterations_done;
+                // See `contrast_pending`: a settled frame that has not
+                // had its fit measured owes one more, which takes the
+                // recolor path and applies it.
+                return orbit_done
+                    && iterations_done
+                    && !self.contrast_pending(escape, iterate_key.as_deref());
             }
             log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
         }
@@ -5256,7 +5494,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         drop(pass);
         self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
         self.direct_tile_y = tile_y0.saturating_add(band);
-        let done = self.direct_tile_y >= self.height;
+        let mut done = self.direct_tile_y >= self.height;
         DIRECT_RENDER_IN_FLIGHT.store(
             !done && band < self.height,
             std::sync::atomic::Ordering::Relaxed,
@@ -5281,6 +5519,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // under this identity (None for a field formula).
             if results_active {
                 self.results_key = iterate_key.clone();
+            }
+            if self.contrast_pending(escape, iterate_key.as_deref()) {
+                // See `contrast_pending`: one more frame, which takes
+                // the recolor path and applies the measured fit.
+                done = false;
             }
             // A repeat of the same render starts from the top.
             self.chunk_key = None;
@@ -5695,6 +5938,162 @@ mod chunk_batch_tests {
         // A zero cap is treated as one, not zero dispatches.
         assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 0), 1);
     }
+}
+
+/// Width and height of the contrast probe grid.
+///
+/// A SUBSAMPLE, not a reduction. 96x72 cells is 6912 samples, which is
+/// far more than a percentile or a three-coefficient plane fit needs,
+/// and it buys three things a GPU reduction would have cost work for:
+/// no float atomics (WebGPU has none), true percentiles rather than a
+/// min/max that one singular pixel can dominate, and a 28 KB readback
+/// instead of a per-frame hierarchical pass.
+const PROBE_W: u32 = 96;
+const PROBE_H: u32 = 72;
+
+/// The measured mapping the recolor pass applies.
+///
+/// `value' = (value - (a + b*x + c*y) - lo) / (hi - lo)` with x, y the
+/// pixel position normalized to [0, 1]. AutoRange leaves b = c = 0, so
+/// one shader path serves both modes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ContrastFit {
+    pub plane: [f32; 3],
+    pub lo: f32,
+    pub hi: f32,
+}
+
+/// The recolor pass's contrast uniform.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ContrastParamsGpu {
+    plane: [f32; 3],
+    lo: f32,
+    hi: f32,
+    strength: f32,
+    turns: f32,
+    /// 0 = identity (the recolor pass then reproduces the iterate pass
+    /// exactly), 1 = apply.
+    enabled: u32,
+}
+
+/// Write the uniform. A `None` fit is the identity, which is what
+/// makes "contrast off" and "contrast on but not yet measured" both
+/// render exactly what they rendered before.
+fn queue_contrast(
+    queue: &Queue,
+    buf: &Buffer,
+    cfg: &crate::config::escape::EscapeContrast,
+    fit: Option<ContrastFit>,
+) {
+    let p = match fit {
+        Some(f) if f.hi > f.lo => ContrastParamsGpu {
+            plane: f.plane,
+            lo: f.lo,
+            hi: f.hi,
+            strength: cfg.strength.clamp(0.0, 1.0),
+            turns: cfg.turns.max(0.001),
+            enabled: 1,
+        },
+        _ => ContrastParamsGpu {
+            plane: [0.0; 3],
+            lo: 0.0,
+            hi: 1.0,
+            strength: 0.0,
+            turns: 1.0,
+            enabled: 0,
+        },
+    };
+    queue.write_buffer(buf, 0, bytemuck::bytes_of(&p));
+}
+
+/// Fit the field from the probe samples.
+///
+/// `samples` is (value, valid) per cell. Returns None when too little
+/// of the frame carried a value, or when the field is CONSTANT -- a
+/// zero range would divide by zero and, more importantly, means there
+/// is genuinely nothing to stretch.
+pub(crate) fn fit_contrast(
+    samples: &[(f32, f32)],
+    w: u32,
+    h: u32,
+    mode: crate::config::escape::ContrastMode,
+    clip: f32,
+) -> Option<ContrastFit> {
+    use crate::config::escape::ContrastMode;
+    if mode.is_off() {
+        return None;
+    }
+    // Non-finite values are dropped rather than clamped: Ducks' log
+    // guard emits -34.5 and a NaN would poison every sum.
+    let live: Vec<(f32, f32, f32)> = samples
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, ok))| *ok > 0.5)
+        .map(|(i, (v, _))| {
+            let x = (i as u32 % w) as f32 / (w.max(2) - 1) as f32;
+            let y = (i as u32 / w) as f32 / (h.max(2) - 1) as f32;
+            (*v, x, y)
+        })
+        .filter(|(v, _, _)| v.is_finite())
+        .collect();
+    if live.len() < 64 {
+        return None;
+    }
+    let n = live.len() as f64;
+    let mut plane = [0.0f32; 3];
+    if mode == ContrastMode::Flatten {
+        // Least squares f ~ a + b*x + c*y over the LIVE cells (the
+        // grid moments are not analytic when part of the frame is
+        // background). Solved by Cramer on the 3x3 normal equations.
+        let (mut sx, mut sy, mut sxx, mut sxy, mut syy) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
+        let (mut sf, mut sxf, mut syf) = (0.0f64, 0.0, 0.0);
+        for (v, x, y) in &live {
+            let (v, x, y) = (*v as f64, *x as f64, *y as f64);
+            sx += x;
+            sy += y;
+            sxx += x * x;
+            sxy += x * y;
+            syy += y * y;
+            sf += v;
+            sxf += x * v;
+            syf += y * v;
+        }
+        let m = [[n, sx, sy], [sx, sxx, sxy], [sy, sxy, syy]];
+        let det = |m: &[[f64; 3]; 3]| {
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        };
+        let d = det(&m);
+        // Degenerate only if the live cells are collinear; then the
+        // plane is not identifiable and AutoRange's constant fit is
+        // the honest fallback.
+        if d.abs() > 1e-9 * n * n {
+            let rhs = [sf, sxf, syf];
+            for k in 0..3 {
+                let mut mk = m;
+                for r in 0..3 {
+                    mk[r][k] = rhs[r];
+                }
+                plane[k] = (det(&mk) / d) as f32;
+            }
+        }
+    }
+    // Percentile clip on the RESIDUAL, so Flatten ranges what is left
+    // after the plane and AutoRange ranges the field itself.
+    let mut resid: Vec<f32> = live
+        .iter()
+        .map(|(v, x, y)| v - (plane[0] + plane[1] * x + plane[2] * y))
+        .collect();
+    resid.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let k = ((resid.len() as f32) * clip.clamp(0.0, 0.25)) as usize;
+    let lo = resid[k.min(resid.len() - 1)];
+    let hi = resid[(resid.len() - 1 - k.min(resid.len() - 1)).max(0)];
+    if !(hi > lo) || !lo.is_finite() || !hi.is_finite() {
+        return None;
+    }
+    Some(ContrastFit { plane, lo, hi })
 }
 
 /// One terminal record (the shader's `IterResult`), read back for the

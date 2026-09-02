@@ -817,6 +817,10 @@ history:
     escape_coloring: "Escape Coloring"
     escape_formula_param: "Formula %{param}"
     escape_coloring_param: "Coloring %{param}"
+    escape_contrast_mode: "Auto Contrast"
+    escape_contrast_clip: "Contrast Clip"
+    escape_contrast_strength: "Contrast Strength"
+    escape_contrast_turns: "Contrast Turns"
 
     # Transforms
     transform_count: "Transform Count"
@@ -1914,6 +1918,18 @@ login:
   remember_me: "Remember me"
 
 escape_panel:
+  contrast: "Auto Contrast"
+  contrast_mode: "Mode"
+  contrast_off: "Off"
+  contrast_auto_range: "Auto range"
+  contrast_flatten: "Flatten"
+  contrast_strength: "Strength"
+  contrast_turns: "Palette turns"
+  contrast_clip: "Clip"
+  tooltip_contrast: "Fits the palette to the coloring's measured value range. Orbit-average colorings are SMOOTH functions of c, so a deep zoom flattens them into a plane and the picture goes blank. Auto range stretches the measured range across the palette; Flatten subtracts the fitted plane first and shows what is left. Measured once per settled view."
+  tooltip_contrast_strength: "How far to travel from the coloring's own scale and offset toward the measured fit. 0 is off."
+  tooltip_contrast_turns: "How many times the palette cycles across the fitted range. 1 gives a single sweep with no repeats."
+  tooltip_contrast_clip: "Fraction trimmed from each end before fitting. Keeps one singular pixel (a log guard, say) from setting the whole scale."
   reference_period: "Reference Period"
   tooltip_reference_period: "Period of the nucleus this location targets (fraktaler-3's reference.period). Verified before use; 0 = none. Enables the periodic deep reference that carries dives to extreme depth."
   detect_period: "Detect"

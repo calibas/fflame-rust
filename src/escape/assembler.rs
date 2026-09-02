@@ -3944,6 +3944,32 @@ struct IterResult {
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 @group(0) @binding(5) var<storage, read> results: array<IterResult>;
 
+// The measured contrast fit (see EscapeContrast). `enabled = 0` makes
+// this the identity, so a recolor with contrast off reproduces the
+// iterate pass byte for byte -- which the recolor cache's equivalence
+// test depends on.
+struct ContrastParams {
+    plane: vec3<f32>,
+    lo: f32,
+    hi: f32,
+    strength: f32,
+    turns: f32,
+    enabled: u32,
+}
+@group(0) @binding(6) var<uniform> contrast: ContrastParams;
+
+// Re-expose the coloring's value on the measured range. `p` is the
+// pixel, normalized, because Flatten's fit is a PLANE in screen space.
+fn apply_contrast(raw: f32, p: vec2<f32>) -> f32 {
+    if (contrast.enabled == 0u) {
+        return raw;
+    }
+    let base = contrast.plane.x + contrast.plane.y * p.x + contrast.plane.z * p.y;
+    let span = max(contrast.hi - contrast.lo, 1e-30);
+    let mapped = ((raw - base) - contrast.lo) / span * contrast.turns;
+    return mix(raw, mapped, clamp(contrast.strength, 0.0, 1.0));
+}
+
 fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
 }
@@ -3982,8 +4008,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (escaped || COLORING_COLORS_INTERIOR) {
         let summary = OrbitSummary(r.z, r.n, escaped, converged, period, r.dz);
         let raw = coloring_map(summary, r.accum);
-        let t = select(fract(raw), clamp(raw, 0.0, 1.0), COLORING_IS_BOUNDED);
-        height = select(raw, t, params.shade_flags == 1u);
+        // The height field keeps the PRE-contrast value: the probe
+        // measures this texture, so remapping it here would feed the
+        // fit its own output and compound every frame.
+        height = select(raw, fract(raw), params.shade_flags == 1u);
+        let dims = vec2<f32>(f32(params.width), f32(params.height));
+        let rawc = apply_contrast(raw, vec2<f32>(f32(gid.x), f32(gid.y)) / max(dims - 1.0, vec2<f32>(1.0)));
+        let t = select(fract(rawc), clamp(rawc, 0.0, 1.0), COLORING_IS_BOUNDED);
         let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
         rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
         coverage = 1.0;
