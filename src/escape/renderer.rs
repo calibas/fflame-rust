@@ -3940,6 +3940,35 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// one channel is all the surface needs, and at 4 bytes per render
     /// pixel it is a quarter of what carrying an analytic normal
     /// alongside it would cost.
+    /// Reference iterations to compute in ONE frame slice.
+    ///
+    /// The browser has no worker thread, so a long reference is built
+    /// on the frame loop and every slice is time the UI does not get.
+    /// Size it from the SAME cost model the wait-predictor uses: a
+    /// reference iteration is two truncated big multiplies, so it
+    /// costs iterations x limbs^2 — not iterations x limbs, which is
+    /// what this divided by before. That undersizes the divisor by a
+    /// whole factor of `limbs`, and at the depths that need slicing
+    /// most it IS the problem: at 189 limbs (a 1e3591 zoom) the old
+    /// formula asked for 5291 iterations, which the model puts at
+    /// 239 ms of NATIVE work in one frame, and a browser is slower
+    /// still. Reported as the UI going "slightly responsive" with
+    /// nothing on screen to explain it.
+    ///
+    /// Same total work either way — this only decides how finely it is
+    /// cut. The floor keeps a very deep view progressing at all; the
+    /// ceiling keeps a shallow one from being cut pointlessly fine.
+    pub(crate) fn orbit_slice_budget(limbs: usize) -> u32 {
+        const SLICE_SECONDS: f64 = 0.03;
+        let per_iter = super::reference::predicted_orbit_seconds(1, limbs.max(1));
+        let want = if per_iter > 0.0 {
+            (SLICE_SECONDS / per_iter).clamp(0.0, u32::MAX as f64) as u32
+        } else {
+            50_000
+        };
+        want.clamp(64, 50_000)
+    }
+
     /// Whether a settled frame still owes the user a contrast pass.
     ///
     /// The fit is measured FROM the finished field, so it cannot be
@@ -5258,11 +5287,34 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 #[cfg(target_arch = "wasm32")]
                 {
                     let limbs =
-                        super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1) as u32;
-                    let budget = (1_000_000 / limbs).clamp(256, 50_000);
+                        super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1);
+                    let budget = Self::orbit_slice_budget(limbs);
                     match self.ensure_orbit_with(device, queue, escape, Some(budget)) {
-                        Some((len, done)) if len >= 2 => Some((len, done)),
-                        Some(_) => return false,
+                        Some((len, done)) if len >= 2 => {
+                            // Tell the user what the wait IS. The
+                            // worker path publishes this on the
+                            // desktop; the browser had no worker and
+                            // so published nothing, which is why a
+                            // long reference looked like a hang.
+                            // Only while the wait is worth naming --
+                            // the same threshold the worker path uses,
+                            // so an ordinary zoom does not flash an
+                            // overlay for two slices.
+                            let slow = super::reference::predicted_orbit_seconds(
+                                escape.max_iter,
+                                limbs,
+                            ) > Self::ORBIT_WAIT_SECONDS;
+                            if done || !slow {
+                                super::reference::set_orbit_progress(0, 0);
+                            } else {
+                                super::reference::set_orbit_progress(len, escape.max_iter);
+                            }
+                            Some((len, done))
+                        }
+                        Some((len, _)) => {
+                            super::reference::set_orbit_progress(len, escape.max_iter);
+                            return false;
+                        }
                         None => None,
                     }
                 }

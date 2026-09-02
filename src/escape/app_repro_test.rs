@@ -3990,6 +3990,54 @@ mod tests {
         }
     }
 
+    /// One frame slice of reference work must stay near a frame.
+    ///
+    /// The browser builds a long reference on the frame loop, so the
+    /// slice size IS the UI's responsiveness. It used to divide the
+    /// budget by `limbs` while the cost is `limbs^2` — the crate's own
+    /// `predicted_orbit_seconds` says so and is calibrated against a
+    /// measured reference — so the error grew with depth, which is
+    /// exactly backwards. Reported on a 1e3591 zoom (189 limbs) where
+    /// the UI went barely responsive.
+    ///
+    /// Needs no GPU: it is the arithmetic that was wrong.
+    #[test]
+    fn one_reference_slice_stays_near_a_frame() {
+        use crate::escape::reference::predicted_orbit_seconds;
+        use crate::escape::EscapeRenderer;
+        // The old rule, for contrast.
+        let old = |limbs: usize| (1_000_000u32 / limbs.max(1) as u32).clamp(256, 50_000);
+        let mut worst_new: f64 = 0.0;
+        for limbs in [2usize, 3, 5, 8, 16, 32, 64, 128, 189, 400, 1000] {
+            let b = EscapeRenderer::orbit_slice_budget(limbs);
+            let secs = predicted_orbit_seconds(b, limbs);
+            worst_new = worst_new.max(secs);
+            // At the floor (very deep) one iteration may already cost
+            // more than the target; nothing can slice below one.
+            let floor_bound = predicted_orbit_seconds(64, limbs);
+            assert!(
+                secs <= 0.05 || secs <= floor_bound,
+                "{limbs} limbs: a slice is {secs:.3}s of work (budget {b})"
+            );
+            println!(
+                "{limbs:5} limbs: budget {b:6} = {:7.1} ms   (old rule {:6} = {:8.1} ms)",
+                secs * 1000.0,
+                old(limbs),
+                predicted_orbit_seconds(old(limbs), limbs) * 1000.0
+            );
+        }
+        // The case that was reported: 189 limbs must not ask for a
+        // quarter-second of synchronous work.
+        let reported = predicted_orbit_seconds(EscapeRenderer::orbit_slice_budget(189), 189);
+        assert!(
+            reported < 0.05,
+            "189 limbs still asks for {reported:.3}s in one frame"
+        );
+        // Shallow views must not be cut pointlessly fine — the whole
+        // budget there is one slice.
+        assert_eq!(EscapeRenderer::orbit_slice_budget(2), 50_000);
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.

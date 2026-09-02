@@ -1935,7 +1935,7 @@ escape_panel:
   detect_period: "Detect"
   tooltip_detect_period: "Ball-method period detection at the center's intrinsic depth. Runs in the background; minutes for large periods."
   searching_period: "Detecting period…"
-  building_reference: "Computing reference orbit… %{percent}%"
+  building_reference: "Computing reference orbit… %{percent}% (%{have} / %{want} iterations)"
   period_found: "Period %{period} — wrap exact to 2^-%{octave}, i.e. zoom ~10^%{zoom}"
   period_none: "No period under 8,000,000 wraps at this depth — leave the field empty and let the plain reference run."
   detected_period: "In use: period %{period}"

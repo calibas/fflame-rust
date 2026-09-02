@@ -3200,6 +3200,53 @@ a wrapping subtraction fails at its source instead of corrupting an
 index and trapping elsewhere. About 250 MB, and not for shipping; the
 default path of both scripts is unchanged.
 
+### The browser had no way to say "I am working" (2026-09-02)
+
+Reported after the zoom-176 fix landed: a 1e3591 zoom (about 11,900 in
+log2, 189 limbs) at 10M iterations renders for a very long time, UI
+"slightly responsive", no errors, and nothing on screen to explain it.
+The desktop has a progress overlay; the browser showed none.
+
+Two separate reasons, and the second was a real defect:
+
+**The overlay was `#[cfg(not(target_arch = "wasm32"))]`, and progress
+was only published from the worker branch.** The browser needs it
+MORE, not less: it has no worker thread, so a long reference is built
+in slices on the frame loop and the canvas just sits there. Both are
+now shared, under the same "only when the wait is worth naming"
+threshold the desktop uses (`ORBIT_WAIT_SECONDS`), so an ordinary zoom
+does not flash an overlay for two slices.
+
+**The slice budget contradicted the crate's own cost model.** It was
+`1_000_000 / limbs`, while a reference iteration is two truncated big
+multiplies and therefore costs `iterations x limbs^2` — which
+`predicted_orbit_seconds` states outright and is calibrated against a
+measured reference (10,100,100 iterations at 197 limbs, 495 s). The
+missing factor is `limbs`, so the error GREW with depth, which is
+exactly backwards: the deeper the view, the more it over-asked.
+
+| limbs | old budget | old slice | new budget | new slice |
+|---|---|---|---|---|
+| 2 | 50,000 | 0.3 ms | 50,000 | 0.3 ms |
+| 16 | 50,000 | 16.2 ms | 50,000 | 16.2 ms |
+| 64 | 15,625 | 80.8 ms | 5,799 | 30.0 ms |
+| **189 (reported)** | 5,291 | **238.7 ms** | 664 | **30.0 ms** |
+| 400 | 2,500 | 505.2 ms | 148 | 29.9 ms |
+| 1000 | 1,000 | 1263.0 ms | 64 | 80.8 ms (at the floor) |
+
+Shallow views are byte-identical — the ceiling covers them — so this
+changes behaviour only where it was wrong. Total work is unchanged;
+it is the same reference cut more finely. `one_reference_slice_stays_near_a_frame`
+pins it against the cost model and needs no GPU, because the thing
+that was wrong was the arithmetic.
+
+The overlay shows COUNTS rather than an ETA
+(`1,234,567 / 10,000,000 iterations`): `predicted_orbit_seconds` is
+calibrated natively and a browser runs some multiple of it, so a
+wall-clock estimate would be confidently wrong, while the counts are
+exact and carry the scale — which is the part that matters at ten
+million iterations.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

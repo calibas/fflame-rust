@@ -1287,7 +1287,11 @@ impl<'a> PanelViewer<'a> {
             // Deep-zoom reference builds take minutes and the frame
             // cannot start until one exists, so say so rather than
             // leaving the last image up with no explanation.
-            #[cfg(not(target_arch = "wasm32"))]
+            // NOT desktop-only. The browser needs this more, not
+            // less: it has no worker thread, so a long reference is
+            // built in slices on the frame loop and the canvas simply
+            // sits there. Reported on a 1e3591 zoom -- minutes of work
+            // with nothing on screen to say so.
             if self.context.config_manager.active_config().render_mode
                 == crate::scene::transforms::RenderMode::Escape
             {
@@ -1298,9 +1302,28 @@ impl<'a> PanelViewer<'a> {
                     } else {
                         0.0
                     };
+                    // The COUNTS, not an ETA. `predicted_orbit_seconds`
+                    // is calibrated natively and a browser runs some
+                    // multiple of that, so a wall-clock estimate here
+                    // would be confidently wrong; the iteration counts
+                    // are exact and convey the scale, which is what a
+                    // ten-million-iteration reference needs.
+                    let group = |n: u32| {
+                        let s = n.to_string();
+                        let mut out = String::with_capacity(s.len() + s.len() / 3);
+                        for (i, c) in s.chars().enumerate() {
+                            if i > 0 && (s.len() - i) % 3 == 0 {
+                                out.push(',');
+                            }
+                            out.push(c);
+                        }
+                        out
+                    };
                     let text = t!(
                         "escape_panel.building_reference",
-                        percent = format!("{pct:.1}")
+                        percent = format!("{pct:.1}"),
+                        have = group(have),
+                        want = group(want)
                     );
                     let painter = ui.painter_at(rect);
                     let galley = painter.layout_no_wrap(
