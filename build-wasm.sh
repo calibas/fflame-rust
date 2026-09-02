@@ -9,7 +9,10 @@ echo "Building WASM module..."
 # list in .cargo/config.toml (cargo's flag sources are mutually
 # exclusive), so the getrandom cfg and simd128 from there must be
 # repeated here.
-export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128'
+# -zstack-size: see .cargo/config.toml. wasm-ld defaults to 1 MiB;
+# an overflow there traps as a bare "index out of bounds" with no
+# panic message, from whichever callback was running.
+export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=16777216'
 cargo build --lib --target wasm32-unknown-unknown --profile dist
 
 if [ $? -ne 0 ]; then

@@ -17,5 +17,15 @@
 # are mutually exclusive, env wins) -- so both flags here are repeated
 # there. This entry still covers the wasm-pack gallery crates and any
 # bare `cargo build --target wasm32-unknown-unknown`.
+# stack-size: wasm-ld defaults the shadow stack to 1 MiB, which is
+# small for this binary. GPU parameter blocks are plain arrays built BY
+# VALUE -- GpuVariationParams alone is [f32; 1600] (6.4 KB) and
+# GpuParams carries per-transform arrays over 128+ transforms -- and
+# `dist` builds with fat LTO and one codegen unit, which inlines deep
+# chains and sums their frames. A wasm shadow-stack overflow does not
+# announce itself: the stack pointer walks out of its region and the
+# next access traps as `RuntimeError: index out of bounds`, reported
+# from whatever requestAnimationFrame callback was running, with no
+# Rust panic message and no location. 16 MiB costs address space only.
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-Ctarget-feature=+simd128']
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-Ctarget-feature=+simd128', '-Clink-arg=-zstack-size=16777216']

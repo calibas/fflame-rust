@@ -3150,9 +3150,32 @@ The arithmetic itself is pinned by
 the index math for n = 2..64 on every platform, including the desktop
 where the code it describes is not compiled.
 
-**Honest status:** the trap has not been reproduced, so this is
-hardening plus attribution, not a confirmed fix. If it recurs, the
-message will now name a file and line.
+**It recurred, at the SAME wasm offset** (3529510 in both reports),
+which is itself evidence: an edit to `fixedpoint.rs` would move code
+around, so the second report was almost certainly the same binary --
+browsers cache `.wasm` aggressively, localhost included.
+
+**The stack is the better hypothesis, and it was never configured.**
+`wasm-ld` defaults the shadow stack to 1 MiB. This binary builds GPU
+parameter blocks as plain arrays BY VALUE -- `GpuVariationParams` is
+`[f32; 1600]` (6.4 KB) on its own, `GpuParams` carries per-transform
+arrays over 128+ transforms -- and `dist` builds with fat LTO and one
+codegen unit, which inlines deep chains and sums their frames. A wasm
+shadow-stack overflow does not announce itself: the stack pointer
+walks out of its region and the next access traps as
+`RuntimeError: index out of bounds`, from whatever callback was
+running, with no Rust panic and no location. That is every symptom,
+including why safe Rust could produce it and why the desktop (8 MB
+stack) never does.
+
+Raised to 16 MiB in `.cargo/config.toml` and both build scripts, and
+VERIFIED IN THE BINARY rather than assumed: the shadow-stack global
+reads 16,777,216 where it read 1,048,576. Address space only, no
+runtime cost.
+
+Still not a confirmed fix -- the trap has not been reproduced here.
+But it is now a decisive experiment: if a rebuild clears it, the cause
+was stack depth, and if it does not, the cause is not stack depth.
 
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome

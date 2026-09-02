@@ -4,7 +4,8 @@ echo Building for WASM...
 REM Build the WASM module
 REM RUSTFLAGS in the environment REPLACES .cargo/config.toml's list, so
 REM the getrandom cfg and simd128 from there are repeated here.
-set RUSTFLAGS=--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128
+REM -zstack-size: see .cargo/config.toml (wasm-ld defaults to 1 MiB).
+set RUSTFLAGS=--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=16777216
 cargo build --lib --target wasm32-unknown-unknown --profile dist
 if %errorlevel% neq 0 exit /b %errorlevel%
 
