@@ -2213,6 +2213,44 @@ impl EscapeRenderer {
     /// knowable up front and identical on every run. Running out of
     /// actual VRAM within those limits is not knowable here -- an
     /// error scope around the render catches that.
+    /// Whether the perturbed path's per-pixel resume state fits this
+    /// device at the CURRENT render size.
+    ///
+    /// The same arithmetic `allocation_error` does for the headless
+    /// precheck, applied where nothing can skip it. The video exporter
+    /// drives the renderer directly and never ran that precheck, so a
+    /// 4K deep-zoom frame asked wgpu for a 398 MB buffer against a
+    /// 256 MB limit -- a validation error, which wgpu answers by
+    /// panicking, on the exporter's worker thread. The app stayed
+    /// responsive and the export dialog waited forever.
+    ///
+    /// Nothing below supersample 1 can shrink this, so the honest
+    /// answer at a size that does not fit is the direct path, which
+    /// bands by rows.
+    fn perturb_state_fits(&self, device: &Device, escape: &EscapeConfig) -> bool {
+        Self::perturb_state_fits_at(device, escape, self.width, self.height)
+    }
+
+    /// The same question for a size the renderer does not hold yet, so
+    /// it can be checked (and tested) without allocating one.
+    pub(crate) fn perturb_state_fits_at(
+        device: &Device,
+        escape: &EscapeConfig,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        let tier = match Self::perturb_tier(escape) {
+            Some(t) => t,
+            None => return true,
+        };
+        let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
+            || matches!(tier, assembler::PerturbTier::Manowar);
+        let need = (width as u64) * (height as u64)
+            * assembler::iter_state_bytes(tier, floatexp);
+        let lim = device.limits();
+        need <= lim.max_buffer_size && need <= lim.max_storage_buffer_binding_size as u64
+    }
+
     pub fn allocation_error(
         device: &Device,
         escape: &EscapeConfig,
@@ -2747,8 +2785,34 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         )
     }
 
-    fn ensure_iter_state(&mut self, device: &Device, stride: u64) {
+    /// (Re)allocate the perturbed path's per-pixel resume state.
+    /// Returns false when this frame does not fit the device, WITHOUT
+    /// asking wgpu to create the buffer.
+    ///
+    /// It has to be checked here and not only in the caller's
+    /// precheck: `create_buffer` past `max_buffer_size` is a
+    /// validation error, and wgpu answers a validation error by
+    /// PANICKING. On the video exporter that panic lands on a worker
+    /// thread, so the app stays responsive while the export dialog
+    /// waits forever for a frame that will never arrive -- which is
+    /// exactly how it was reported. A 4K frame needs 3840*2160*48 =
+    /// 398 MB, past the 256 MB this GPU allows, and nothing below
+    /// supersample 1 can shrink it.
+    fn ensure_iter_state(&mut self, device: &Device, stride: u64) -> bool {
         let px = self.width * self.height;
+        let need = (px as u64) * stride;
+        let lim = device.limits();
+        if need > lim.max_buffer_size || need > lim.max_storage_buffer_binding_size as u64 {
+            log::error!(
+                "escape: a deep-zoom render of {}x{} needs a {} MB iteration-state buffer,                  past this GPU's {} MB limit -- rendering the direct path instead",
+                self.width,
+                self.height,
+                need / (1024 * 1024),
+                lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64)
+                    / (1024 * 1024),
+            );
+            return false;
+        }
         if self.iter_state_px != px
             || self.iter_state_stride != stride
             || self.iter_state_buffer.is_none()
@@ -2758,13 +2822,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             self.iter_state_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Escape Iter State"),
-                size: (px as u64) * stride,
+                size: need,
                 usage: BufferUsages::STORAGE,
                 mapped_at_creation: false,
             }));
             self.iter_state_px = px;
             self.iter_state_stride = stride;
         }
+        true
     }
 
     /// How deep this config can usefully go, for the UI to say so.
@@ -5119,6 +5184,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let use_perturbed = Self::wants_perturbation(escape) || self.force_perturbed;
         #[cfg(not(test))]
         let use_perturbed = Self::wants_perturbation(escape);
+        // ...unless this frame's per-pixel state will not fit the
+        // device. Decided HERE rather than deeper in, so the direct
+        // path below simply runs: it bands by rows and fits any size.
+        let use_perturbed = use_perturbed && self.perturb_state_fits(device, escape);
         if use_perturbed {
             // Not a banded direct render: close its loss-attribution
             // window (a stale one would blame an unrelated loss).
@@ -5255,10 +5324,15 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 let first_start = self.chunk_next.min(escape.max_iter);
                 let batch = self.chunk_batch(chunk, first_start, regime);
                 self.ensure_params_pool(device, batch);
-                self.ensure_iter_state(
+                if !self.ensure_iter_state(
                     device,
                     assembler::iter_state_bytes(tier, floatexp),
-                );
+                ) {
+                    // `perturb_state_fits` should have routed this to
+                    // the direct path already; report settled rather
+                    // than spin if it ever does not.
+                    return true;
+                }
                 // BLA table: build/refresh when skipping applies,
                 // else bind the zeroed dummy (n_levels = 0).
                 let bla_ready = self.ensure_bla(

@@ -2874,6 +2874,51 @@ spread is 1.2e-8 -- tonemapped luminance spread across the image:
 A factor of 1150. Off is the default and writes nothing to the config,
 so every existing file is byte-stable.
 
+### The 4K video export hang (2026-09-02)
+
+Reported as a video export stuck on one frame forever with the app
+still responsive. It was a PANIC on the exporter's worker thread:
+
+    In Device::create_buffer, label = 'Escape Iter State'
+    Buffer size 398131200 is greater than the maximum buffer size
+    (268435456)
+
+3840 x 2160 x 48 bytes of per-pixel resume state for a 4K frame,
+against that GPU's 256 MB limit. wgpu answers a validation error by
+panicking; the worker died and the frame never arrived, so the dialog
+waited on it forever.
+
+**Ducks only exposed it.** Every perturbing formula was already
+subject to this -- Ducks simply had never taken the perturbed path
+before. The headless path has checked it since the tiers shipped
+(`allocation_error`, which does both limits correctly); the video
+exporter drives `EscapeRenderer` directly and never ran that check.
+Nothing below supersample 1 shrinks the state, so
+`affordable_supersample` could not save it either: it clamps the
+FACTOR, and at 1 a 4K frame still wants 398 MB.
+
+Fixed in two layers, because one of them has to hold for every caller:
+
+- `perturb_state_fits` is consulted where the perturbed path is
+  CHOSEN, so an unaffordable frame renders direct instead of asking
+  for a buffer that panics. `ensure_iter_state` returns a bool as
+  belt and braces rather than trusting that.
+- The exporter refuses up front with the size that would work.
+  Falling back to direct is right for a viewport frame, but past
+  zoom 14 direct is mush, and a whole export coming out quietly wrong
+  is worse than one that says why.
+
+The regression test asserts the predicate AT ITS OWN BOUNDARY rather
+than at a fixed 4K, so it means the same thing on a GPU with a 2 GB
+buffer limit as on one with 256 MB, and costs no allocation.
+
+**Still open**: this makes 4K deep-zoom video refuse rather than
+crash, not succeed. Succeeding needs the perturbed path banded by
+ROWS the way the direct path already is (`tile_y0` exists in the
+uniform for it) -- each band's state sized to fit, bands run to
+completion in turn. That is a change to the chunk state machine and
+has not been made.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

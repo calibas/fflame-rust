@@ -357,7 +357,7 @@ mod tests {
             (defs[0].default as f64, defs[1].default as f64)
         };
 
-        let (w, h) = (160u32, 120u32);
+        let (w, h) = (640u32, 480u32);
         let mut config = crate::config::FractalConfig::default();
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -3625,6 +3625,81 @@ mod tests {
         // is little left, which is the honest answer -- it must at
         // least not be broken.
         assert!(flat.is_finite());
+    }
+
+    /// A frame whose per-pixel state cannot fit must not ask for it.
+    ///
+    /// Reported as a video export that hung: the dialog sat on one
+    /// frame forever while the app stayed responsive. The cause was a
+    /// PANIC on the exporter's worker thread --
+    ///
+    ///   In Device::create_buffer, label = 'Escape Iter State'
+    ///   Buffer size 398131200 is greater than the maximum buffer
+    ///   size (268435456)
+    ///
+    /// -- 3840*2160*48 bytes of per-pixel resume state for a 4K frame,
+    /// against that GPU's 256 MB limit. wgpu answers a validation
+    /// error by panicking, so the worker died and the frame never
+    /// arrived. Nothing below supersample 1 shrinks it.
+    ///
+    /// It surfaced with Ducks only because Ducks had never taken the
+    /// perturbed path before; every perturbing formula was exposed.
+    /// The headless path checks this (`allocation_error`); the video
+    /// exporter drives the renderer directly and did not.
+    ///
+    /// Asserts the predicate at its own boundary rather than a fixed
+    /// 4K, so it means the same thing on a GPU with a 2 GB limit as on
+    /// one with 256 MB -- and costs no allocation.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_frame_whose_state_cannot_fit_is_not_perturbed() {
+        use crate::escape::EscapeRenderer;
+        let (device, _queue) = repro_device();
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "ducks".to_string();
+        esc.center_re = "-0.1".to_string();
+        esc.center_im = "-0.675".to_string();
+        esc.julia = true;
+        esc.julia_re = 0.1;
+        esc.julia_im = -0.675;
+        esc.zoom_log2 = 20.0;
+        esc.formula_params.insert("variant".to_string(), 0.0);
+        assert!(
+            EscapeRenderer::wants_perturbation(&esc),
+            "the view must want perturbation, or this tests nothing"
+        );
+
+        let stride = crate::escape::assembler::iter_state_bytes(
+            crate::escape::assembler::PerturbTier::Ducks(0),
+            false,
+        );
+        let lim = device.limits();
+        let cap = lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64);
+        let px_cap = cap / stride;
+        let w = 3840u32;
+        let fits_h = (px_cap / w as u64) as u32;
+        println!(
+            "cap {} MB, stride {stride} B -> {w}x{fits_h} fits, {w}x{} does not",
+            cap / (1024 * 1024),
+            fits_h + 1
+        );
+        assert!(
+            EscapeRenderer::perturb_state_fits_at(&device, &esc, w, fits_h),
+            "a frame exactly at the limit must still perturb"
+        );
+        assert!(
+            !EscapeRenderer::perturb_state_fits_at(&device, &esc, w, fits_h + 2),
+            "a frame past the limit must decline the perturbed path rather than              ask wgpu for the buffer (which panics)"
+        );
+        // The reported case, stated concretely: 4K needs 398 MB, so
+        // any device allowing less than that must decline it.
+        let need_4k = 3840u64 * 2160 * stride;
+        assert_eq!(need_4k, 398_131_200, "the reported buffer size");
+        assert_eq!(
+            EscapeRenderer::perturb_state_fits_at(&device, &esc, 3840, 2160),
+            need_4k <= cap,
+            "4K must perturb exactly when this device can hold its state"
+        );
     }
 
     /// The reported seam: Ducks just past the perturbation threshold.
@@ -8261,5 +8336,6 @@ mod tests {
         renderer.destroy();
     }
 }
+
 
 
