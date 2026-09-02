@@ -5,7 +5,7 @@
 [simulation-pipeline.md](simulation-pipeline.md) (GPU design) and
 [simulation-integration.md](simulation-integration.md) (file checklist).
 
-Every model the seed document ([field-type-fractals.md](field-type-fractals.md))
+Every model the seed document ([field-type-fractals.md](../archive/escape-time/field-type-fractals.md))
 mentions, plus the few its sources lead to directly. For each: the
 governing rule as the source states it, the discretisation this plan
 ships, parameters and starting presets, which pipeline stages it uses,

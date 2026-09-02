@@ -136,7 +136,7 @@ persistent spin-barrier pool, because dispatching through a work
 queue 10 million times would cost more than it saves.
 
 Tracked as an item in
-[escape-time-completion.md](../projects/escape-time-completion.md),
+[escape-time-completion.md](../archive/escape-time/escape-time-completion.md),
 where it can be scheduled; it does not depend on anything in this
 shelved document.
 

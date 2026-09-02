@@ -34,7 +34,7 @@ default). Verified against the closed form at `max_iter = 1`, where
 the image IS the distance field: 0.40/255 colour spread within a
 distance bin, against 68.39 for a deliberately wrong quarter-turn
 factor. Details in
-[escape-time-fractals.md](escape-time-fractals.md).
+[escape-time-fractals.md](../../projects/escape-time-fractals.md).
 
 One thing the plan below got wrong: it says to use `ff_atan2`. That
 helper belongs to the FLAME shader's `utilities.wgsl` and is not in
@@ -91,7 +91,7 @@ periodicity and mirror symmetry. The plan missed one thing: the
 parameter plane cannot seed at zero, because `sin 0 = 0` makes zero a
 fixed point for every λ — the plane would render one flat colour. It
 seeds at the critical point π/2, as `lambda` does at 1/2. Details in
-[escape-time-fractals.md](escape-time-fractals.md).
+[escape-time-fractals.md](../../projects/escape-time-fractals.md).
 
 ### The original plan, for reference
 
@@ -153,13 +153,13 @@ source washes out by zoom ~5 no matter the geometry. The discrete
 channel — WHICH folds moved the point — survives at every scale where
 creases exist; `position_map.address_mix` carries it, measured still
 structured at zoom 22. Full story in
-[escape-time-fractals.md](escape-time-fractals.md).
+[escape-time-fractals.md](../../projects/escape-time-fractals.md).
 
 The plan's "seeded line hash" survived, but with an integer hash
 rather than the usual `fract(sin(x)*k)`, which is precision-sensitive
 enough to make the image device-dependent. One fold per iteration
 needed a new `FormulaFeature::NeedsIndex`. Details in
-[escape-time-fractals.md](escape-time-fractals.md).
+[escape-time-fractals.md](../../projects/escape-time-fractals.md).
 
 ### The original plan, for reference
 
@@ -266,7 +266,7 @@ Two things the plan did not anticipate:
   The numerical check could not see it (1.74/255 with the bug, 1.38
   without) — a person looking at the image could.
 
-Details in [escape-time-fractals.md](escape-time-fractals.md).
+Details in [escape-time-fractals.md](../../projects/escape-time-fractals.md).
 
 ### The original plan, for reference
 
@@ -321,7 +321,7 @@ Shipped as `EscapeConfig::shading`, and it turned out to be a bigger
 idea than "the fallback for the formulas with no derivative": it is a
 LAYER rather than a coloring, which is the thing the plan had not
 articulated. Full account in
-[escape-time-fractals.md](escape-time-fractals.md); the parts that
+[escape-time-fractals.md](../../projects/escape-time-fractals.md); the parts that
 correct this section:
 
 - **It is not a `ColoringDef`, and could not be.** A coloring returns
