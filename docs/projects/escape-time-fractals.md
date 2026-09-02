@@ -3173,9 +3173,32 @@ VERIFIED IN THE BINARY rather than assumed: the shadow-stack global
 reads 16,777,216 where it read 1,048,576. Address space only, no
 runtime cost.
 
-Still not a confirmed fix -- the trap has not been reproduced here.
-But it is now a decisive experiment: if a rebuild clears it, the cause
-was stack depth, and if it does not, the cause is not stack depth.
+**The experiment answered.** The rebuild cleared SOME of the freezes,
+so stack depth was a real contributor, and Chrome named the trap class
+Firefox could not: `memory access out of bounds` -- linear memory, not
+a table or indirect-call error. One case survives: Mandelbrot loaded
+at zoom 176.
+
+**What the desktop cannot show.** That view was run natively at 1, 2,
+4, 8 and 16 MiB of thread stack, in release AND in debug (where
+`debug_assert`s and overflow checks are live), at 160x120 and at
+1920x1080 with 3x supersampling, on the browser's own budgeted orbit
+path via `force_budgeted`. Every one passes. The fault does not
+reproduce off the browser, and the shipped `dist` profile answers a
+trap with an address and nothing else: stripped symbols,
+`panic = "abort"`, and wrapping arithmetic, so `$func868` cannot be
+told from an integer wrap three frames away.
+
+So there is now a `dist-debug` profile, reachable as
+`./build-wasm.sh --debug` AND `build-wasm.bat --debug` (both scripts --
+the Windows one is what gets used here). Same optimisation level and
+the same simd/codegen shape, but symbols kept (verified: a name
+section and 6052 symbols in the bindgen output), panics unwound
+through the console hook, and -- the part that actually finds things
+-- **debug assertions and overflow checks ON**, so a `debug_assert` or
+a wrapping subtraction fails at its source instead of corrupting an
+index and trapping elsewhere. About 250 MB, and not for shipping; the
+default path of both scripts is unchanged.
 
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome

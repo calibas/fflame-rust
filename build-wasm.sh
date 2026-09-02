@@ -13,7 +13,17 @@ echo "Building WASM module..."
 # an overflow there traps as a bare "index out of bounds" with no
 # panic message, from whichever callback was running.
 export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=16777216'
-cargo build --lib --target wasm32-unknown-unknown --profile dist
+PROFILE=dist
+BINDGEN_FLAGS=""
+if [ "$1" = "--debug" ]; then
+    # See [profile.dist-debug] in Cargo.toml: symbols, debug
+    # assertions and overflow checks, so a browser trap names a
+    # function instead of an address.
+    PROFILE=dist-debug
+    BINDGEN_FLAGS="--keep-debug"
+    echo "  (debug profile: symbols + debug_assert + overflow checks)"
+fi
+cargo build --lib --target wasm32-unknown-unknown --profile "$PROFILE"
 
 if [ $? -ne 0 ]; then
     echo "❌ Cargo build failed"
@@ -22,7 +32,7 @@ fi
 
 # Generate bindings with wasm-bindgen
 echo "Generating JavaScript bindings..."
-wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/dist/fractal_flame_wgpu.wasm
+wasm-bindgen $BINDGEN_FLAGS --out-dir ./pkg --target web "./target/wasm32-unknown-unknown/$PROFILE/fractal_flame_wgpu.wasm"
 
 if [ $? -ne 0 ]; then
     echo "❌ wasm-bindgen failed"
