@@ -3547,6 +3547,86 @@ mod tests {
         }
     }
 
+    /// Auto-contrast makes a flat deep field visible again.
+    ///
+    /// The problem it answers, measured on Ducks: an orbit-STATISTIC
+    /// coloring is a smooth function of c, so under deep zoom it
+    /// converges to its own first-order Taylor expansion -- a PLANE,
+    /// 1.0000 of the variance, spread 1.2e-8. Through a cyclic palette
+    /// that is a set of parallel bands nobody can see.
+    ///
+    /// Asserts the thing the user actually cares about: the RENDERED
+    /// image gains dynamic range. Compared on luminance spread, which
+    /// is palette-agnostic.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn auto_contrast_restores_a_flat_deep_field() {
+        use crate::config::escape::ContrastMode;
+        let (device, queue) = repro_device();
+        let (w, h) = (96u32, 72u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size);
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+
+        let mut spread = |mode: ContrastMode| -> f64 {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "ducks".to_string();
+            esc.coloring = "magnitude_average".to_string();
+            esc.center_re = "-0.1000053437741560936430812".to_string();
+            esc.center_im = "-0.6749972878037609392903475".to_string();
+            esc.julia = true;
+            esc.julia_re = 0.1;
+            esc.julia_im = -0.675;
+            esc.zoom_log2 = 26.6;
+            esc.max_iter = 80;
+            esc.bailout = 4.0;
+            esc.formula_params.insert("variant".to_string(), 0.0);
+            esc.contrast.mode = mode;
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let mut guard = 0;
+            loop {
+                let mut e = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("contrast") });
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(e.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if done { break; }
+                guard += 1;
+                assert!(guard < 100_000, "{mode:?} did not settle");
+            }
+            // Contrast moves the palette COORDINATE, so measure what
+            // the viewer sees: tonemapped luminance spread.
+            let mut enc = device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("tm") });
+            renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            let (_, _, rgba) = pollster::block_on(renderer.read_fractal_pixels(
+                &device, &queue, false, [0.0, 0.0, 0.0])).expect("readback");
+            escape.destroy();
+            let lum: Vec<f64> = rgba.chunks_exact(4)
+                .map(|p| 0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64)
+                .collect();
+            let mean = lum.iter().sum::<f64>() / lum.len() as f64;
+            (lum.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / lum.len() as f64).sqrt()
+        };
+
+        let off = spread(ContrastMode::Off);
+        let auto = spread(ContrastMode::AutoRange);
+        let flat = spread(ContrastMode::Flatten);
+        println!("luminance spread -- off {off:.3} auto_range {auto:.3} flatten {flat:.3}");
+        assert!(off < 1.0, "the view is supposed to be FLAT without contrast (got {off:.3})");
+        assert!(auto > 20.0, "auto_range did not open the field up (spread {auto:.3})");
+        // Flatten subtracts the plane; on a field that IS a plane there
+        // is little left, which is the honest answer -- it must at
+        // least not be broken.
+        assert!(flat.is_finite());
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.

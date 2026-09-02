@@ -2822,6 +2822,58 @@ discontinuous integer; an orbit average is smooth, so it flattens. It
 bounds how deep the non-escaping families are worth taking, and no
 amount of reference precision changes it.
 
+### Auto contrast: fitting the palette to the field (2026-09-02)
+
+The answer to the flattening above. The field goes smooth under zoom
+and the palette does not follow, so the fix belongs on the palette
+side: measure what the coloring's values actually span and map THAT
+onto the palette, rather than whatever `scale`/`offset` were set to
+three zoom levels ago.
+
+**Where it runs.** In the RECOLOR pass, which already exists to make
+palette and coloring edits real-time over the cached per-pixel
+records. Nothing about iteration changes, so the iterate templates are
+untouched and their WGSL is byte-identical -- which the 236 unchanged
+visual baselines confirm.
+
+**How it measures.** A probe pass subsamples the coloring's own value
+field (the R32Float height target every template already writes) onto
+a 96x72 grid and reads back 28 KB, once per SETTLED view. A subsample
+rather than a GPU reduction, deliberately: WebGPU has no float
+atomics, and a CPU-side sample set buys true percentiles -- which
+matters here, because Ducks' `log` guard emits -34.5 and a raw min/max
+would let one singular pixel set the whole scale. Validity comes from
+the colour target's alpha, since a pixel with no value stores height 0
+and 0 is an ordinary value.
+
+Two modes over the same fit. **Auto range** maps the measured range
+onto the palette. **Flatten** first subtracts a least-squares PLANE
+(three coefficients, solved by Cramer on the normal equations over the
+live cells) and ranges the residual -- the plane being exactly what
+deep zoom leaves behind. Where the field really is a plane, Flatten
+correctly shows almost nothing, because there is nothing left.
+
+**The ordering trap.** The fit is measured FROM the finished field, so
+the pass that produces the field cannot apply it. A settled frame
+therefore reports "not settled" once (`contrast_pending`); that frame
+takes the recolor path, measures, applies, and settles for real.
+Without it the app stops at the uncorrected image, because it renders
+only while dirty. The height field also keeps the PRE-contrast value:
+the probe reads that texture, so remapping it there would feed the fit
+its own output and compound every frame.
+
+**Measured**, on the reported view at zoom 26.6 where the field's
+spread is 1.2e-8 -- tonemapped luminance spread across the image:
+
+| contrast | spread |
+|---|---|
+| off | 0.062 |
+| auto range | 71.6 |
+| flatten | 69.3 |
+
+A factor of 1150. Off is the default and writes nothing to the config,
+so every existing file is byte-stable.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
