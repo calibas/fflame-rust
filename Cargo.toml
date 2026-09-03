@@ -256,10 +256,31 @@ incremental = true
 # shipped one and still names its frames.
 #
 # Build it with ./build-wasm.sh --symbols (or build-wasm.bat).
+# NOTE `debug` is deliberately OFF. Function names live in wasm's
+# `name` custom section, which `strip` removes and `debug` has nothing
+# to do with; turning debug ON additionally emits ~190 MB of DWARF,
+# taking the module from 17 MB to 206 MB. That is not free: a module
+# twelve times the size compiles and instantiates on a completely
+# different schedule, which is enough to hide a race -- measured, the
+# 206 MB build did not reproduce a crash the shipped one hits on the
+# first load. Names cost about 3 MB; DWARF costs the reproduction.
+# `debug` MUST stay off, and that is not an optimisation nicety.
+# Function names live in wasm's `name` custom section, which only
+# `strip` removes; `debug` is a separate thing that additionally emits
+# ~190 MB of DWARF and takes the module from 17 MB to 206 MB.
+#
+# Measured, that difference decides whether the bug this profile
+# exists for is even present: the 206 MB build did NOT reproduce a
+# crash the shipped build hits on the first or second load -- a dozen
+# tries, forced refreshes -- while this one is 18.9 MiB against dist's
+# 16.0 and its CODE section differs by 738 bytes, 0.007%. Same code,
+# so what the DWARF changed was TIMING: a module twelve times the size
+# compiles and instantiates on a different schedule, which is enough
+# to hide a race. Names cost ~3 MB; DWARF costs the reproduction.
 [profile.dist-symbols]
 inherits = "dist"
 strip = false
-debug = true
+debug = false
 
 [profile.dist-debug]
 inherits = "dist"

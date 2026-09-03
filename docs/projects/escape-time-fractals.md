@@ -4085,6 +4085,48 @@ the stack. That leaves unsafe inside a dependency, which is exactly
 the case a symbolicated optimized build is for -- five wasm frames,
 currently all anonymous, and one of them will name the crate.
 
+### The observation tool was changing the thing observed (2026-09-03)
+
+`dist-symbols` was built to reproduce a dist-only crash with names
+attached. It did not reproduce it -- a dozen loads, forced refreshes,
+nothing -- while the shipped build fails on the first or second load
+every time. That is not a fact about the bug; it was a fact about the
+profile, for the SECOND time in this investigation.
+
+The first time, `dist-debug` changed codegen (thin LTO, 16 codegen
+units) and emitted 50.6% more code. The fix was a profile with dist's
+codegen. But that profile carried `debug = true`, which does not
+change codegen at all -- it emits ~190 MB of DWARF, taking the module
+from 17 MB to 206 MB. Function names do not need it: they live in
+wasm's `name` custom section, which only `strip` removes.
+
+| profile | size | CODE vs dist | reproduces? |
+|---|---|---|---|
+| dist | 16.01 MiB | — | yes, 1st-2nd load |
+| dist-symbols, `debug = true` | 206 MB | +0.03% | **no**, 12+ loads |
+| dist-symbols, `debug = false` | 18.90 MiB | **-0.007%** | to be tested |
+
+The middle row is the lesson. Its code was within 0.03% of the
+shipped build, so what suppressed the crash was not the code -- it was
+that a module twelve times the size compiles and instantiates on a
+different schedule. Enough to close a race window. The observation
+changed the thing observed, and it took a second round to notice
+because the first round's failure had a different cause with the same
+symptom.
+
+Names cost about 3 MB and 738 bytes of code drift. DWARF cost the
+reproduction.
+
+**What this says about the bug itself**, before any symbol arrives:
+identical code plus different timing equals different outcome IS the
+definition of a race, which is what was suspected from the
+intermittency ("sometimes first try") and is now supported by a
+controlled comparison rather than a hunch. Combined with the earlier
+eliminations -- not the stack (64 MiB, first load), not accumulation
+(first load), no reachable `unsafe` in this crate -- the remaining
+shape is an ordering hazard around asynchronous work in a dependency,
+disturbed by whatever a config load does.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
