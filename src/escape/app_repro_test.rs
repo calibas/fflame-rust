@@ -4081,6 +4081,94 @@ mod tests {
         escape.destroy();
     }
 
+    /// While a slow reference builds, the browser draws NOTHING.
+    ///
+    /// Reported as the app "drawing the flame while calculating the
+    /// reference orbit, ruining performance". The browser has no
+    /// worker, so the reference is sliced on the frame loop -- and the
+    /// same frame was also running a full perturbed dispatch against a
+    /// prefix too short to mean anything, competing with the slice
+    /// that is the actual work. The desktop worker path has held the
+    /// frame since it was written; the browser arm had not.
+    ///
+    /// Measures the win rather than asserting a flag: the same view,
+    /// same settle loop, with the hold and with a forced dispatch
+    /// every frame.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_slow_reference_holds_the_frame_instead_of_dispatching() {
+        let (device, queue) = repro_device();
+        // Big enough that a wasted dispatch costs real time.
+        let (w, h) = (1280u32, 720u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64,
+            &config.flame, config.palette_size);
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "smooth".to_string();
+        esc.center_re = "-1.7492046334590016288000000000000000000".to_string();
+        esc.center_im = "0.0".to_string();
+        // Deep and long: predicted well past ORBIT_WAIT_SECONDS, so
+        // the reference takes many slices.
+        // 189 limbs -- the reported view's depth -- so the slice
+        // budget is 664 iterations and the reference takes ~100
+        // slices, each of which used to also pay a full dispatch.
+        esc.zoom_log2 = 11_960.0;
+        esc.max_iter = 66_400;
+        esc.bailout = 4.0;
+
+        let mut run = |hold: bool| -> (f64, u32) {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.force_budgeted = true;
+            escape.force_dispatch_while_building = !hold;
+            let t0 = std::time::Instant::now();
+            let mut frames = 0u32;
+            loop {
+                let mut e = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("hold") });
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(e.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                frames += 1;
+                if done { break; }
+                assert!(frames < 200_000, "never settled");
+            }
+            let secs = t0.elapsed().as_secs_f64();
+            escape.destroy();
+            (secs, frames)
+        };
+
+        // Dispatching every frame first, so the held run cannot be
+        // flattered by a warm shader cache.
+        let (busy_s, busy_f) = run(false);
+        let (held_s, held_f) = run(true);
+        println!(
+            "dispatch-every-frame: {busy_s:.2}s over {busy_f} frames\n\
+             hold-while-building:  {held_s:.2}s over {held_f} frames"
+        );
+        // The held run takes a FEW MORE frames, and should: it defers
+        // the pixel iteration until the reference is complete instead
+        // of re-running it against every prefix. That is the trade --
+        // a handful of frames at the end against ~100 full dispatches
+        // thrown away. Measured 9.04s over 105 frames against 3.11s
+        // over 112.
+        assert!(
+            held_f >= busy_f && held_f < busy_f + 40,
+            "held {held_f} frames vs {busy_f}: the deferral should cost              a few frames, not a different order"
+        );
+        assert!(
+            held_s * 1.5 < busy_s,
+            "holding a slow reference should be much cheaper              ({held_s:.2}s vs {busy_s:.2}s)"
+        );
+        // And the wait is reported while it happens.
+        assert!(
+            crate::escape::reference::orbit_progress().is_none(),
+            "progress must be cleared once the reference is complete"
+        );
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.

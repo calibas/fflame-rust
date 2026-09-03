@@ -3302,6 +3302,45 @@ function (`$func868`) and does not reproduce natively. The
 `dist-debug` build exists for exactly this; its trace names the
 function and its overflow checks fire at the source.
 
+### The browser drew every frame of a reference it did not have yet (2026-09-02)
+
+Reported as "it looks like it is trying to draw the flame while
+calculating the reference orbit, which is ruining performance". It
+was: not the flame (the chaos game is correctly skipped in escape
+mode) but the ESCAPE dispatch, running full-frame on every slice of a
+reference that was nowhere near complete.
+
+The desktop worker path has held the frame since it was written --
+`if !done && slow { set_orbit_progress(...); return false; }` -- for a
+reason recorded there: rendering against a small fraction of a long
+reference is not progressive refinement, it is noise, because every
+pixel rebases almost immediately and the frame is flat colour that
+changes wholesale as the prefix grows. The browser arm published
+progress but still dispatched, so each frame paid a full perturbed
+pass over every pixel AND the CPU slice that is the actual work, with
+the two competing.
+
+Measured on the reported depth (189 limbs, 66,400 iterations,
+1280x720), same view and same settle loop, dispatching every frame
+versus holding:
+
+| | wall clock | frames |
+|---|---|---|
+| dispatch every frame | 8.85 s | 105 |
+| **hold while building** | **3.17 s** | 114 |
+
+**2.8x**, and the extra nine frames are the point rather than a cost:
+the held run defers pixel iteration until the reference is complete
+instead of re-running it against every prefix. A handful of frames at
+the end against ~100 full dispatches thrown away.
+
+**The two arms now share one function.** They had already drifted:
+the desktop test knob -- the ONLY coverage of the browser's path --
+still carried the old `1_000_000 / limbs` budget after the real path
+moved to the cost model, so it was testing something the browser does
+not do. `budgeted_orbit_step` is now called by both, and the knob
+cannot diverge from what ships.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
