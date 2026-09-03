@@ -572,6 +572,11 @@ pub struct EscapeRenderer {
     /// -- by then the caller has submitted the encoder it was
     /// recorded into.
     gpu_done_pending: Option<(u32, bool, CostRegime, web_time::Instant)>,
+    /// Test-only: dispatch every frame while the reference is still
+    /// building, as the browser arm did before it learned to hold.
+    /// Exists so the cost of that can be MEASURED rather than argued.
+    #[cfg(test)]
+    pub(crate) force_dispatch_while_building: bool,
     /// Test-only: take the BROWSER's orbit path on the desktop — no
     /// worker thread, the reference sliced per frame under a budget,
     /// and the frame rendered against a PARTIAL orbit until it
@@ -920,6 +925,20 @@ impl TimestampPacer {
             done: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
+}
+
+/// What one budgeted orbit slice leaves the frame able to do.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BudgetedOrbit {
+    /// Render the perturbed pass against this prefix (`done` = the
+    /// reference is complete).
+    Ready(u32, bool),
+    /// Render NOTHING this frame. The slice advanced; the prefix is
+    /// too short a fraction of the reference to be worth a dispatch.
+    Hold,
+    /// No reference at all (centre parse failed) -- fall through to
+    /// the direct path.
+    NoOrbit,
 }
 
 /// One completed dispatch batch, timed from the moment it was
@@ -1312,6 +1331,8 @@ impl EscapeRenderer {
             force_floatexp: false,
             #[cfg(test)]
             force_budgeted: false,
+            #[cfg(test)]
+            force_dispatch_while_building: false,
             gpu_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
             gpu_done_pending: None,
             orbit_cache: OrbitCache::default(),
@@ -4101,6 +4122,58 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// one channel is all the surface needs, and at 4 bytes per render
     /// pixel it is a quarter of what carrying an analytic normal
     /// alongside it would cost.
+    /// Advance the reference by one budgeted slice and say what the
+    /// frame may then draw.
+    ///
+    /// Shared by the browser and by the desktop test knob, because
+    /// they drifted the moment they were written twice: the knob kept
+    /// the old `1_000_000 / limbs` budget after the real path moved to
+    /// the cost model, so the only coverage of the browser's path was
+    /// testing something else.
+    ///
+    /// The HOLD is the part that matters for performance. Rendering a
+    /// full perturbed dispatch against a small fraction of a long
+    /// reference is not progressive refinement -- every pixel rebases
+    /// almost immediately and the frame is flat colour that changes
+    /// wholesale as the prefix grows -- and in a browser that dispatch
+    /// competes with the very CPU slice that is building the
+    /// reference. Reported as the app "drawing the flame while
+    /// calculating the reference orbit". The desktop worker path has
+    /// held the frame this way since it was written; the browser arm
+    /// published progress but still dispatched.
+    fn budgeted_orbit_step(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+    ) -> BudgetedOrbit {
+        let limbs = super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1);
+        let budget = Self::orbit_slice_budget(limbs);
+        let Some((len, done)) = self.ensure_orbit_with(device, queue, escape, Some(budget))
+        else {
+            return BudgetedOrbit::NoOrbit;
+        };
+        if done && len >= 2 {
+            super::reference::set_orbit_progress(0, 0);
+            return BudgetedOrbit::Ready(len, true);
+        }
+        // Whole-reference cost, not the slice's: below this the
+        // slices finish in a frame or two and holding would flicker
+        // where rendering refines. Same threshold the worker uses.
+        let slow = super::reference::predicted_orbit_seconds(escape.max_iter, limbs)
+            > Self::ORBIT_WAIT_SECONDS;
+        if slow || len < 2 {
+            super::reference::set_orbit_progress(len, escape.max_iter);
+            #[cfg(test)]
+            if self.force_dispatch_while_building && len >= 2 {
+                return BudgetedOrbit::Ready(len, false);
+            }
+            return BudgetedOrbit::Hold;
+        }
+        super::reference::set_orbit_progress(0, 0);
+        BudgetedOrbit::Ready(len, false)
+    }
+
     /// Reference iterations to compute in ONE frame slice.
     ///
     /// The browser has no worker thread, so a long reference is built
@@ -5453,36 +5526,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 // and deterministic.
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let limbs =
-                        super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1);
-                    let budget = Self::orbit_slice_budget(limbs);
-                    match self.ensure_orbit_with(device, queue, escape, Some(budget)) {
-                        Some((len, done)) if len >= 2 => {
-                            // Tell the user what the wait IS. The
-                            // worker path publishes this on the
-                            // desktop; the browser had no worker and
-                            // so published nothing, which is why a
-                            // long reference looked like a hang.
-                            // Only while the wait is worth naming --
-                            // the same threshold the worker path uses,
-                            // so an ordinary zoom does not flash an
-                            // overlay for two slices.
-                            let slow = super::reference::predicted_orbit_seconds(
-                                escape.max_iter,
-                                limbs,
-                            ) > Self::ORBIT_WAIT_SECONDS;
-                            if done || !slow {
-                                super::reference::set_orbit_progress(0, 0);
-                            } else {
-                                super::reference::set_orbit_progress(len, escape.max_iter);
-                            }
-                            Some((len, done))
-                        }
-                        Some((len, _)) => {
-                            super::reference::set_orbit_progress(len, escape.max_iter);
-                            return false;
-                        }
-                        None => None,
+                    match self.budgeted_orbit_step(device, queue, escape) {
+                        BudgetedOrbit::Ready(len, done) => Some((len, done)),
+                        // Nothing drawn: the overlay carries the frame,
+                        // and the whole frame budget goes to the slice.
+                        BudgetedOrbit::Hold => return false,
+                        BudgetedOrbit::NoOrbit => None,
                     }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -5492,14 +5541,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     #[cfg(not(test))]
                     let budgeted = false;
                     if budgeted {
-                        // Byte-for-byte the wasm32 arm above.
-                        let limbs =
-                            super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1) as u32;
-                        let budget = (1_000_000 / limbs).clamp(256, 50_000);
-                        match self.ensure_orbit_with(device, queue, escape, Some(budget)) {
-                            Some((len, done)) if len >= 2 => Some((len, done)),
-                            Some(_) => return false,
-                            None => None,
+                        // The SAME call the wasm32 arm makes, so the
+                        // knob cannot test something the browser does
+                        // not do (it already had: a stale budget).
+                        match self.budgeted_orbit_step(device, queue, escape) {
+                            BudgetedOrbit::Ready(len, done) => Some((len, done)),
+                            BudgetedOrbit::Hold => return false,
+                            BudgetedOrbit::NoOrbit => None,
                         }
                     } else {
                         self.ensure_orbit(device, queue, escape).map(|l| (l, true))
