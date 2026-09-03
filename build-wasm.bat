@@ -14,6 +14,13 @@ REM an address, and a wrapping subtraction fails at its source. Much
 REM bigger and slower; not for shipping.
 set PROFILE=dist
 set BINDGEN_FLAGS=
+if /I "%~1"=="--symbols" (
+    REM dist codegen exactly, symbols kept: the build for a fault that
+    REM only appears when optimized.
+    set PROFILE=dist-symbols
+    set BINDGEN_FLAGS=--keep-debug
+    echo   ^(dist codegen + symbols^)
+)
 if /I "%~1"=="--debug" (
     set PROFILE=dist-debug
     set BINDGEN_FLAGS=--keep-debug

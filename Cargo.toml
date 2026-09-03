@@ -246,6 +246,21 @@ incremental = true
 #
 # Build it with ./build-wasm.sh --debug. It is bigger and slower; it
 # is not for shipping.
+# `dist-debug` does not reproduce dist-only bugs, and that is not an
+# accident: it changes CODEGEN (thin LTO, 16 codegen units, debug
+# assertions), so a fault that depends on how the shipped build is
+# optimized simply is not there. This profile keeps dist's codegen
+# EXACTLY -- same opt-level, fat LTO, one codegen unit, panic=abort --
+# and only stops stripping the symbol table. Debug info does not
+# change what the optimizer emits, so this binary behaves like the
+# shipped one and still names its frames.
+#
+# Build it with ./build-wasm.sh --symbols (or build-wasm.bat).
+[profile.dist-symbols]
+inherits = "dist"
+strip = false
+debug = true
+
 [profile.dist-debug]
 inherits = "dist"
 strip = false

@@ -4043,6 +4043,48 @@ is a defect on exactly the path the report implicates, and the per-load
 memory report added alongside will now say whether the growth it was
 causing has stopped.
 
+### Why dist-debug could never have caught this (2026-09-03)
+
+64 MiB of stack, and it crashed on the FIRST load. That kills both
+standing theories at once: stack depth (nothing has accumulated on
+load one, and 64 MiB needs unbounded recursion to exhaust) and the
+closure leak (four table entries, none of them live yet). Neither was
+the fault.
+
+**And the debugging tool was the wrong one.** `dist-debug` does not
+reproduce the crash, which was read as information about the bug. It
+is information about the PROFILE: measured, `dist-debug` emits **50.6%
+more code** than `dist` --
+
+| profile | CODE bytes | vs dist |
+|---|---|---|
+| dist | 10,406,322 | — |
+| **dist-symbols** | 10,409,387 | **+0.03%** |
+| dist-debug | 15,672,247 | +50.6% |
+
+-- because it changes thin LTO, sixteen codegen units and debug
+assertions. That is a different program. A fault that depends on how
+the shipped build is optimized cannot be there to find, so "it does
+not happen in debug" says nothing about the bug and everything about
+the build. Two rounds were spent reading it the other way.
+
+`dist-symbols` is the tool that was missing: dist's codegen EXACTLY --
+same opt-level, fat LTO, one codegen unit, panic=abort -- with only
+`strip` turned off and debug info added, neither of which changes what
+the optimizer emits. The 0.03% residual is debug-info bookkeeping, not
+different code. It should reproduce the crash AND name the frames.
+Built with `--symbols` on either build script; ~206 MB, localhost
+only.
+
+**What remains standing.** The trap is a linear-memory access out of
+range (Chrome's wording; Firefox says "index out of bounds" for that
+as well as for table faults, which sent an earlier round chasing
+dangling closures that do not exist). Safe Rust cannot produce it, no
+`unsafe` in this crate is reachable from a flame load, and it is not
+the stack. That leaves unsafe inside a dependency, which is exactly
+the case a symbolicated optimized build is for -- five wasm frames,
+currently all anonymous, and one of them will name the crate.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

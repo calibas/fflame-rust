@@ -15,7 +15,13 @@ echo "Building WASM module..."
 export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=67108864'
 PROFILE=dist
 BINDGEN_FLAGS=""
-if [ "$1" = "--debug" ]; then
+if [ "$1" = "--symbols" ]; then
+    # dist codegen exactly, symbols kept: the build for a fault that
+    # only appears when optimized.
+    PROFILE=dist-symbols
+    BINDGEN_FLAGS="--keep-debug"
+    echo "  (dist codegen + symbols)"
+elif [ "$1" = "--debug" ]; then
     # See [profile.dist-debug] in Cargo.toml: symbols, debug
     # assertions and overflow checks, so a browser trap names a
     # function instead of an address.
