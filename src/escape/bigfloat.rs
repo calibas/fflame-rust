@@ -15,7 +15,7 @@
 //! chosen by the caller from the target precision.
 
 use super::fixedpoint::{
-    add_mag, cmp_mag, frac_bits, shl_small, shr_small, sub_mag, FixedPoint,
+    add_mag, cmp_mag, frac_bits, scale_pow2, shl_small, shr_small, sub_mag, FixedPoint,
 };
 
 /// `± (limbs as integer) · 2^exp`.
@@ -100,13 +100,12 @@ impl BigFloat {
             v += (self.limbs[n - 2] as f64) / 2f64.powi(64);
         }
         let e = self.exp + 64 * (n as i64 - 1);
-        let mag = if e > 1023 {
-            f64::INFINITY
-        } else if e < -1070 {
-            0.0
-        } else {
-            v * 2f64.powi(e as i32)
-        };
+        // `scale_pow2` carries its own saturation, and unlike the
+        // `2f64.powi` it replaces it does not zero representable
+        // values: the old low guard cut off at exponent -1070, but `v`
+        // is a 64-bit mantissa, so magnitudes stayed representable
+        // roughly 64 octaves further down than that.
+        let mag = scale_pow2(v, e);
         if self.neg { -mag } else { mag }
     }
 
