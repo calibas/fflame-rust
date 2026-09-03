@@ -3704,6 +3704,31 @@ a much narrower place. If Metal also declines to fuse it, the row is
 common-mode like the df fold and the mirror is simply correct
 everywhere.
 
+**M2 result (2026-09-03): Metal also declines.** Bit-identical to the
+Windows column, same inputs, same three candidates:
+
+| form | Windows / Vulkan | macOS / Metal |
+|---|---|---|
+| GPU `x*y - z*w` | `c0800004` | `c0800004` |
+| GPU explicit `fma(x,y,-(z*w))` | `c0800005` | `c0800005` |
+| CPU separate | **`c0800004`** matches | **`c0800004`** matches |
+| CPU `mul_add` (either association) | `c0800005` | `c0800005` |
+
+So this row is common-mode: the second divergence it was probing for
+is NOT there, the CFe complex multiply is ruled out as a cause of the
+deep-zoom cluster, and `bla.rs`'s separate-ops mirror is correct on
+both platforms rather than only on Windows. Explicit `fma()` is fused
+on both, which is the property the laundered `df_two_prod` relies on;
+it is contraction of the WRITTEN form that neither driver performs
+here.
+
+The correction stands as recorded: the earlier "that change can land"
+was inferred from the fingerprint's `a*b + c` row rather than measured
+at the complex multiply, and inference across shapes is exactly what
+this file keeps catching. Two drivers, seven fingerprint rows and one
+site probe in, the tally is one divergence (general reassociation) and
+everything else common-mode.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
