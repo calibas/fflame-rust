@@ -3341,6 +3341,72 @@ moved to the cost model, so it was testing something the browser does
 not do. `budgeted_orbit_step` is now called by both, and the knob
 cannot diverge from what ships.
 
+### Why the browser's reference is slow, and the part that was a bug (2026-09-02)
+
+Asked: deep-zoom reference building is much slower in the browser than
+on the desktop -- is something slowing it down that we are not
+noticing? Yes, one thing, and it was quadratic.
+
+**First, what is NOT the cause.** The obvious suspect is the multiply:
+wasm has no hardware 64x64 -> 128 product, so the browser runs a u32
+half-limb COLUMN form where the desktop runs a u128 row scan. Measured
+natively, both compiled, at the depth of the report:
+
+| limbs | row scan (desktop) | columns, scalar | with simd128 (est.) |
+|---|---|---|---|
+| 64 | 2.8 us | 6.4 us | ~3.4 us (1.21x) |
+| 128 | 9.6 us | 19.3 us | ~10.2 us (1.05x) |
+| **189** | **20.1 us** | 38.9 us | **~20.5 us (1.02x)** |
+| 256 | 36.1 us | 66.4 us | ~35.0 us (0.97x) |
+
+At 189 limbs simd128 buys back exactly what the u32 split costs: the
+browser's multiply is at PARITY with the desktop's. Nor is it
+parallelism -- `PAR_THRESHOLD_LIMBS` is 192, so a 189-limb reference
+is serial on the desktop too. And Karatsuba is not the missing lever
+either: `mul_trunc` is TRUNCATED and already computes only the ~n^2/2
+products inside its window, which is the same factor of two Karatsuba
+would buy at this size.
+
+**The bug was the upload.** Every call to the non-progressive orbit
+path re-sent all four GPU buffers from offset zero and recomputed
+`r2_channel` over EVERY entry to do it. Harmless while only the CLI
+came here -- one call, orbit already complete -- and the comment said
+so outright ("append-only uploads are a later optimization; a full
+orbit at max_iter 100k is 800 KB"). But the browser calls it once per
+FRAME SLICE, so the cost went quadratic in the slice count: a
+reference of N iterations built in N/budget slices re-derived O(N)
+entries on each. Measured at 189 limbs, 640x480:
+
+| max_iter | before | after |
+|---|---|---|
+| 66,400 | 2.92 s | 2.90 s |
+| 199,200 (3x) | 10.62 s (3.6x) | 8.82 s (3.0x) |
+| 398,400 (6x) | 22.33 s (7.6x) | 17.94 s (6.2x) |
+
+Superlinear before, linear after. The 20% at 600 slices is not the
+point -- the term grows as slices squared, and the reported view
+(10M iterations, ~15,000 slices) was paying on the order of tens of
+minutes of pure re-derivation. Fixed by appending only the tail, with
+the same from-scratch guard the worker path carries for a
+buffer-capacity crossing mid-growth -- that one is not hypothetical,
+it rendered a structurally wrong frame a user caught by eye.
+`a_sliced_orbit_upload_renders_what_a_whole_one_does` renders the same
+view both ways and demands they agree exactly, because the failure
+mode here is a wrong image rather than a crash.
+
+**What is left is inherent**, and worth stating so it is not chased
+again: wasm executes this integer code somewhat slower than native,
+and the browser has no worker thread, so the reference is built in
+frame slices instead of continuously on a spare core. Closing that
+needs a Web Worker, which is infrastructure rather than a fix.
+
+**A latent test flake, found on the way.** `the_new_tiers_take_the_perturbed_path_in_a_plain_render`
+asserted on `diag::snapshot().path` -- a process-global, while cargo
+runs tests in parallel. `EscapeRenderer::last_path` exists precisely
+for this and says so in its own doc comment. It passed until the new
+longer-running tests started interleaving with it; it now reads the
+per-renderer field.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

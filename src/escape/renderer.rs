@@ -4086,32 +4086,65 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.orbit_uploaded = 0;
         }
         if self.orbit_uploaded != len || self.orbit_generation != gen {
-            // Upload the whole orbit (append-only uploads are a later
-            // optimization; a full orbit at max_iter 100k is 800 KB).
+            // APPEND the new tail, do not re-send the whole orbit.
+            //
+            // This wrote all four buffers from zero every call, and
+            // recomputed `r2_channel` over every entry to do it. That
+            // was harmless while only the CLI and tests came here --
+            // one call, with the orbit already complete. The browser
+            // calls it once per FRAME SLICE, so the cost became
+            // quadratic in the slice count: a reference of N
+            // iterations built in N/budget slices re-derived O(N)
+            // entries on each, and the re-derivation dwarfed the
+            // arithmetic it was there to publish. Measured at 189
+            // limbs, 640x480, tripling and sextupling the iteration
+            // count: 2.92 s / 10.62 s / 22.33 s -- 6x the work for
+            // 7.6x the time, the superlinear part being this.
+            //
             // The generation compare matters even at equal length: a
             // pan at fixed max_iter swaps in a DIFFERENT orbit of the
             // same length, which a length test alone leaves stale on
             // the GPU.
-            queue.write_buffer(
-                self.orbit_buffer.as_ref().unwrap(),
-                0,
-                bytemuck::cast_slice(&orbit.orbit),
-            );
-            queue.write_buffer(
-                self.orbit_lo_buffer.as_ref().unwrap(),
-                0,
-                bytemuck::cast_slice(&orbit.orbit_lo),
-            );
-            queue.write_buffer(
-                self.orbit_r2_buffer.as_ref().unwrap(),
-                0,
-                bytemuck::cast_slice(&r2_channel(&orbit.orbit, &orbit.orbit_lo, &orbit.orbit_e)),
-            );
-            queue.write_buffer(
-                self.orbit_e_buffer.as_ref().unwrap(),
-                0,
-                bytemuck::cast_slice(&orbit.orbit_e),
-            );
+            //
+            // FRESH forces the whole-orbit path. A recreated buffer
+            // must be filled from scratch even under an unchanged
+            // generation -- appending only the tail would leave
+            // everything before it garbage in the new allocation.
+            // That is not hypothetical: the worker path carries the
+            // same guard because a reference streamed over minutes
+            // crosses several capacity boundaries, and without it
+            // rendered a structurally wrong frame that a user caught
+            // by eye.
+            let fresh = self.orbit_generation != gen || self.orbit_uploaded > len;
+            let start = if fresh { 0usize } else { self.orbit_uploaded as usize };
+            let start = start.min(orbit.orbit.len());
+            if start < orbit.orbit.len() {
+                queue.write_buffer(
+                    self.orbit_buffer.as_ref().unwrap(),
+                    (start as u64) * 8,
+                    bytemuck::cast_slice(&orbit.orbit[start..]),
+                );
+                queue.write_buffer(
+                    self.orbit_lo_buffer.as_ref().unwrap(),
+                    (start as u64) * 8,
+                    bytemuck::cast_slice(&orbit.orbit_lo[start.min(orbit.orbit_lo.len())..]),
+                );
+                let e_start = start.min(orbit.orbit_e.len());
+                queue.write_buffer(
+                    self.orbit_r2_buffer.as_ref().unwrap(),
+                    (start as u64) * 8,
+                    bytemuck::cast_slice(&r2_channel(
+                        &orbit.orbit[start..],
+                        &orbit.orbit_lo[start.min(orbit.orbit_lo.len())..],
+                        &orbit.orbit_e[e_start..],
+                    )),
+                );
+                queue.write_buffer(
+                    self.orbit_e_buffer.as_ref().unwrap(),
+                    (e_start as u64) * 4,
+                    bytemuck::cast_slice(&orbit.orbit_e[e_start..]),
+                );
+            }
             self.orbit_uploaded = len;
             self.orbit_generation = gen;
         }
