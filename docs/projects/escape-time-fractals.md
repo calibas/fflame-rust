@@ -3661,6 +3661,196 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### The reduction generalised: correct, cheap, and it closes nothing yet (2026-09-03)
+
+`esc_reduce` moved out of the Weierstrass field into a shared helper
+and is now applied wherever an UNBOUNDED argument reaches trig:
+`esc_csin`, `esc_ccos`, `esc_cexp` in the direct template, plus
+`standard_map_ftle`, whose `theta` accumulates without bound through
+`t_new = theta + i_new`. `esc_cpow`'s angle is `atan2 * p`, bounded by
+a few tens, and is left alone.
+
+It is duplicated between `TEMPLATE` and `FIELD_TEMPLATE` because the
+field template has no access to the complex-helper block, and
+`the_trig_reduction_is_identical_in_both_templates` keeps the two
+byte-identical -- a reduction accurate in one template and stale in
+the other would be worse than one wrong in both, because the failure
+would be per-formula and would read as a formula bug.
+
+**Cost, GPU time isolated as before (2400x1800 minus 64x48, min of 7):**
+
+| config | without | with | |
+|---|---|---|---|
+| standard-map-ftle | 0.155 | 0.162 | +4.5% |
+| newton-sine-roots | 0.093 | 0.094 | +1.1% |
+| tetration | 0.068 | 0.069 | +1.5% |
+| collatz | 0.067 | 0.066 | -1.5% |
+| trig-sin | 0.072 | 0.070 | -2.8% |
+
+At or below the ~4% noise floor everywhere. `standard-map-ftle` is the
+only one clear of it and it is the heaviest trig user in the corpus --
+sin and cos in a 400-iteration per-pixel loop.
+
+**Ten renders change**: standard-map-ftle (60% of pixels),
+newton-sine-roots (33%), trig-sin, tetration, tetration-period,
+lambda-sine-plane, exponential, collatz, ducks-sec,
+lambda-sine-bouquet.
+
+**And it closes nothing.** The escape category still reads 66/87, the
+SAME 21 failures, with the metrics essentially unmoved -- collatz 5.84
+to 5.85, standard-map-ftle 5.43 to 5.45, tetration unchanged at 1.49.
+That is the expected result and it is worth stating rather than
+dressing up: the baselines record WINDOWS with unreduced trig, so
+computing the true value moves macOS away from a wrong reference, the
+same way it did for Weierstrass.
+
+**What is measured, and what is not.** Measured: the trig itself, from
+7.8e-1 worst error to 3.3e-7 against an f64 reference, flat with
+magnitude. That is a real correctness improvement and it is not
+contingent on anything. NOT measured, and NOT demonstrable from this
+side: that it closes the platform gap. The claim it rests on is that
+both drivers then compute the same function of the same bits, so a
+render is reproducible across platforms rather than depending on whose
+reduction gives up first -- and only a Windows run of the same change
+can show whether that is enough, because the reassociation divergence
+is still present underneath and may dominate for the chaotic formulas.
+
+**The caveat that does not go away.** For an iterated `z`, the
+argument is an exact f32 whose MEANING has already drifted through
+chaotic iteration. Accurate reduction makes the computation
+well-defined and identical across drivers; it does not make the
+trajectory meaningful. Weierstrass was the clean case precisely
+because `b^n * x` is exact. This is a determinism fix for the rest,
+not an accuracy one.
+
+### Weierstrass gets accurate argument reduction (2026-09-03)
+
+The previous entry identified the mechanism; this fixes it.
+`weier_reduce` is Cody-Waite with a three-term 2*pi split, evaluated
+with `fma` -- fused on both Vulkan and Metal (measured; it is
+CONTRACTION of a written product that neither driver performs, not the
+explicit call). Applied ONCE per octave in `field_step` and shared by
+`weier_g` and `weier_dg`, so it costs two reductions per octave rather
+than four.
+
+**Measured against an f64 reference, on the GPU, lifting the shipped
+helper out of the assembled shader:**
+
+| octave | max abs `cos` err, raw | reduced |
+|---|---|---|
+| 11 | 1.4e-4 | 8.0e-8 |
+| 16 | 5.5e-3 | 1.2e-7 |
+| 20 | 1.1e-1 | 1.1e-7 |
+| 23 | **7.8e-1** | **1.9e-7** |
+| worst, all octaves | 7.8e-1 | **3.3e-7** |
+
+The reduced column is FLAT at ulp level across the whole range instead
+of growing with the octave. That is the property that matters: the
+error no longer tracks the argument, so the `(ab)^n` gradient
+weighting has nothing left to amplify.
+
+**Cost: none measurable.** GPU time isolated the same way as the
+Windows df measurement (2400x1800 minus 64x48, min of 9): 0.095 s
+without, 0.095 s with, against a run-to-run noise floor of ~4%. Five
+cheap ALU ops -- one multiply, one round, three fma -- next to
+hardware transcendentals that dominate them.
+
+**The visual test cannot confirm this fix, and now reads WORSE.**
+`escape-weierstrass-hillshade` goes from mean 2.32 to 2.64 against its
+baseline, and that is the expected direction: the baseline records
+WINDOWS computing the wrong value, and macOS now computes the right
+one. Being closer to a wrong reference was a coincidence, not
+evidence. The validation here is the probe against f64 ground truth,
+not the baseline -- and the test can only confirm the fix once Windows
+carries it too and the baseline moves, at which point both platforms
+compute the true value and should agree tightly. 90.1% of the render's
+pixels move, mean 1.48, max 24.
+
+**On generalising to the rest of the shallow cluster.** `collatz`
+(`esc_ccos` of `pi*z`), `lambda_sine`, `tetration` and
+`standard_map_ftle` all feed growing iterates to trig and are
+candidates for the same treatment. The distinction worth keeping in
+view: Weierstrass is the clean case because `b^n * x` is EXACT in f32
+for b = 2, so the argument carries full information and the true
+cosine is well defined. For an iterated `z`, the argument is an exact
+f32 whose MEANING has already drifted -- but accurate reduction still
+makes both drivers compute the same function of the same bits, which
+restores cross-platform determinism even where the trajectory itself
+is chaotic. That is a shared `esc_cos`/`esc_sin` touching every escape
+formula and moving every affected baseline, so it wants its own
+change and its own decision.
+
+### The f3 location on macOS: the same fix, the same size (2026-09-03)
+
+The Windows column measured the df fix at `output/f3-final.fflame`
+(zoom_log2 9316.69, 197 limbs, 10,100,100 iterations, 3756-digit
+centre). Here is the M2's, same config, same 640x384, reference served
+from the orbit store so both builds iterate an IDENTICAL orbit and
+only the DF arithmetic differs. Pre-fix build from a worktree at
+`fef93691`, the commit before the hybrid.
+
+| | Windows / Vulkan | macOS / Metal |
+|---|---|---|
+| pixels differing | 6.66% | **6.91%** |
+| max channel delta | 203 | **192** |
+| past 40 | 0.106% | **0.105%** |
+
+The two platforms move almost identically, which is what the fold
+being common-mode predicts: the same defect removed on both, so the
+same pixels move. It is a consistency check on the fix rather than a
+new finding, and it is the first time the two columns have agreed
+this closely on anything.
+
+Two things confirmed on the way. **macOS renders z9316 correctly** --
+the double-scepter valley with spiral filigree, no glitch dust, no
+interior collapse, `sd` 59.7 across the frame. And the cost really is
+invisible at this depth: 3.15 s warm, dominated by loading the 14 MB
+reference rather than the GPU pass, matching the Windows observation
+that the ~24% DF penalty bites where the GPU dominates -- roughly zoom
+48 to a few hundred -- and not at f3-class depths.
+
+The differing pixels are ISOLATED points scattered through the
+filigree, not a structural region: mean absolute delta 0.132 across
+the frame against a max of 192. That is the signature of near-boundary
+pixels whose escape iteration flips, which is what a change in delta
+precision should do and where the direction question lives.
+
+**Independently confirmed by eye:** the macOS frame matches both the
+Windows render and an online reference image of this location. That
+rules out the class of concern a pixel statistic cannot -- neither
+build is grossly wrong at f3, and the fix introduces no visible
+regression at the depth DF was built for, which is what "safe to
+ship" needs. It cannot settle direction, and for the same reason it
+is reassuring: a mean absolute delta of 0.132 is invisible by
+construction, so no visual comparison can discriminate the two.
+
+**Which render is correct is NOT established, and that question is
+deliberately closed.** A difference is not a direction, and the M2
+column adds none -- two platforms agreeing says the fix is consistent,
+not that it is right.
+
+It is closed on the STAKE, not on difficulty. Inspected directly,
+even the pixels that diverge most are visually identical between the
+two builds, against the Windows render and against an online
+reference of this location. Mean absolute delta is 0.132 across the
+frame. So the answer could only move pixels no viewer can distinguish,
+while costing roughly a reference build per pixel to obtain. That is
+not a good trade, and saying so is worth more than leaving an open
+item that reads like an invitation.
+
+For the record, the route if it ever matters: take pixels where the
+builds disagree and compute their escape iteration EXACTLY, with
+`ReferenceOrbit::compute` at the PIXEL's own coordinates rather than
+the view centre's -- ground truth rather than a better approximation,
+with per-pixel counts read through the `IterRecord` path instead of
+inferred from colour. It needs no reference-independence, which is
+what defeated the two earlier attempts (orbit relocation collapses
+back onto the same orbit). What would REOPEN it is a case where the
+two builds differ VISIBLY; the argument above is entirely contingent
+on that not happening, and nothing guarantees it at every location.
+
+The fixes stay as they are.
+
 ### weierstrass-hillshade is trig range reduction, not reassociation (2026-09-03)
 
 Reassociation was the standing candidate for the 21, so

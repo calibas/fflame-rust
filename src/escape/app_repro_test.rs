@@ -4535,16 +4535,53 @@ fn main() {{
             }
         }
         let n_t = ts.len();
+        // Second half of each buffer carries the reduced column.
+        ts.extend(std::iter::repeat(0.0).take(n_t));
 
-        let src = r#"
+        // Lift the SHIPPED reduction out of the assembled weierstrass
+        // shader by brace matching, so this measures the real thing and
+        // cannot drift from it.
+        let field = crate::escape::fields::get_field("weierstrass").expect("field");
+        let shipped = crate::escape::assembler::assemble_field(
+            field,
+            crate::escape::fields::get_field_coloring("field_hillshade", field),
+        );
+        let reduce = {
+            let head = "fn esc_reduce(";
+            let start = shipped.find(head).expect("esc_reduce is not in the shader");
+            let (mut depth, mut seen) = (0usize, false);
+            let mut end = None;
+            for (i, ch) in shipped[start..].char_indices() {
+                if ch == '{' {
+                    depth += 1;
+                    seen = true;
+                } else if ch == '}' {
+                    depth -= 1;
+                    if seen && depth == 0 {
+                        end = Some(start + i + 1);
+                        break;
+                    }
+                }
+            }
+            shipped[start..end.expect("unterminated esc_reduce")].to_string()
+        };
+
+        let src = format!(
+            r#"
+{reduce}
+
 @group(0) @binding(0) var<storage, read> t: array<f32>;
 @group(0) @binding(1) var<storage, read_write> out: array<f32>;
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= arrayLength(&t)) { return; }
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let n = arrayLength(&t) / 2u;
+    if (gid.x >= n) {{ return; }}
+    // Raw, then the shipped reduction, on the same argument.
     out[gid.x] = cos(t[gid.x]);
-}
-"#;
+    out[gid.x + n] = cos(esc_reduce(t[gid.x]));
+}}
+"#
+        );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("trig probe"),
             source: wgpu::ShaderSource::Wgsl(src.into()),
@@ -4557,7 +4594,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             compilation_options: Default::default(),
             cache: None,
         });
-        let bytes = (n_t * 4) as u64;
+        let bytes = (n_t * 2 * 4) as u64;
         let tbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("t"),
             size: bytes,
@@ -4610,27 +4647,31 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         read.unmap();
 
         println!("--- GPU cos vs f64 reference, by Weierstrass octave ---");
-        println!("{:>6}{:>14}{:>16}{:>12}", "octave", "max |t|", "max abs err", "max ulp err");
+        println!(
+            "{:>6}{:>14}{:>16}{:>16}",
+            "octave", "max |t|", "raw abs err", "reduced abs err"
+        );
         let mut worst_lo = 0.0f64;
         let mut worst_hi = 0.0f64;
+        let mut worst_red = 0.0f64;
         for n in 0..24usize {
-            let (mut mt, mut me, mut mu) = (0.0f64, 0.0f64, 0.0f64);
+            let (mut mt, mut me, mut mr) = (0.0f64, 0.0f64, 0.0f64);
             for k in 0..4usize {
                 let t = ts[n * 4 + k];
                 let want = (t as f64).cos();
                 let err = (got[n * 4 + k] as f64 - want).abs();
-                // ulp of the reference value in f32 terms.
-                let ulp = (want.abs() as f32).max(f32::MIN_POSITIVE);
-                let ulp = (f32::from_bits(ulp.to_bits() + 1) - ulp) as f64;
+                let red = (got[n_t + n * 4 + k] as f64 - want).abs();
                 mt = mt.max((t as f64).abs());
                 me = me.max(err);
-                mu = mu.max(err / ulp);
+                mr = mr.max(red);
             }
             if n < 12 { worst_lo = worst_lo.max(me); } else { worst_hi = worst_hi.max(me); }
-            println!("{:>6}{:>14.4e}{:>16.3e}{:>12.1}", n, mt, me, mu);
+            worst_red = worst_red.max(mr);
+            println!("{:>6}{:>14.4e}{:>16.3e}{:>16.3e}", n, mt, me, mr);
         }
         println!("\nworst abs err, octaves 0-11:  {worst_lo:.3e}");
         println!("worst abs err, octaves 12-23: {worst_hi:.3e}");
+        println!("worst abs err, REDUCED (all): {worst_red:.3e}");
         println!(
             "(cos is bounded by 1, so an abs err near 1 means the value is unrelated\n\
              to the true cosine of that argument -- not a rounding difference.)"
