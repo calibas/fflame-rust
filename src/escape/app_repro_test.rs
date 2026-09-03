@@ -4517,35 +4517,68 @@ fn main() {
         )
         .validate(&module)
         .expect("validate");
-        let spv = wgpu::naga::back::spv::write_vec(
-            &module,
-            &info,
-            &wgpu::naga::back::spv::Options::default(),
-            None,
-        )
-        .expect("spv");
-        let (mut fadd, mut fsub) = (0usize, 0usize);
-        let mut i = 5usize; // skip the 5-word header
-        while i < spv.len() {
-            let wc = (spv[i] >> 16) as usize;
-            let op = spv[i] & 0xFFFF;
-            if wc == 0 {
-                break;
+        // Check the backend each platform's driver actually receives.
+        // wgpu-core routes `vulkan` and `metal` through target-specific
+        // dependency crates, so naga's SPIR-V writer is not compiled on
+        // Apple targets at all, and its MSL writer is not compiled
+        // elsewhere -- an unconditional `back::spv` broke `cargo test`
+        // on macOS outright. The attribution has to hold for the
+        // toolchain path the folding driver sits behind, which on
+        // Metal is MSL text, not SPIR-V.
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            let spv = wgpu::naga::back::spv::write_vec(
+                &module,
+                &info,
+                &wgpu::naga::back::spv::Options::default(),
+                None,
+            )
+            .expect("spv");
+            let (mut fadd, mut fsub) = (0usize, 0usize);
+            let mut i = 5usize; // skip the 5-word header
+            while i < spv.len() {
+                let wc = (spv[i] >> 16) as usize;
+                let op = spv[i] & 0xFFFF;
+                if wc == 0 {
+                    break;
+                }
+                if op == 129 {
+                    fadd += 1;
+                }
+                if op == 131 {
+                    fsub += 1;
+                }
+                i += wc;
             }
-            if op == 129 {
-                fadd += 1;
-            }
-            if op == 131 {
-                fsub += 1;
-            }
-            i += wc;
+            println!("naga SPIR-V: OpFAdd x{fadd}, OpFSub x{fsub}");
+            assert_eq!(
+                (fadd, fsub),
+                (1, 2),
+                "naga no longer emits the source arithmetic verbatim -- the \
+                 defect's attribution changes with it"
+            );
         }
-        println!("naga SPIR-V: OpFAdd x{fadd}, OpFSub x{fsub}");
-        assert_eq!(
-            (fadd, fsub),
-            (1, 2),
-            "naga no longer emits the source arithmetic verbatim -- the              defect's attribution changes with it"
-        );
+        #[cfg(target_vendor = "apple")]
+        {
+            let (msl, _) = wgpu::naga::back::msl::write_string(
+                &module,
+                &info,
+                &Default::default(),
+                &Default::default(),
+            )
+            .expect("msl");
+            // The entry point's body is everything after its signature.
+            let body = &msl[msl.find("kernel void").expect("entry point")..];
+            let adds = body.matches(" + ").count();
+            let subs = body.matches(" - ").count();
+            println!("naga MSL: {adds} float add(s), {subs} float sub(s)\n{msl}");
+            assert_eq!(
+                (adds, subs),
+                (1, 2),
+                "naga no longer emits the source arithmetic verbatim -- the \
+                 defect's attribution changes with it"
+            );
+        }
     }
 
     /// The reported seam: Ducks just past the perturbation threshold.
