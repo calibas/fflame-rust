@@ -3661,6 +3661,63 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### Weierstrass gets accurate argument reduction (2026-09-03)
+
+The previous entry identified the mechanism; this fixes it.
+`weier_reduce` is Cody-Waite with a three-term 2*pi split, evaluated
+with `fma` -- fused on both Vulkan and Metal (measured; it is
+CONTRACTION of a written product that neither driver performs, not the
+explicit call). Applied ONCE per octave in `field_step` and shared by
+`weier_g` and `weier_dg`, so it costs two reductions per octave rather
+than four.
+
+**Measured against an f64 reference, on the GPU, lifting the shipped
+helper out of the assembled shader:**
+
+| octave | max abs `cos` err, raw | reduced |
+|---|---|---|
+| 11 | 1.4e-4 | 8.0e-8 |
+| 16 | 5.5e-3 | 1.2e-7 |
+| 20 | 1.1e-1 | 1.1e-7 |
+| 23 | **7.8e-1** | **1.9e-7** |
+| worst, all octaves | 7.8e-1 | **3.3e-7** |
+
+The reduced column is FLAT at ulp level across the whole range instead
+of growing with the octave. That is the property that matters: the
+error no longer tracks the argument, so the `(ab)^n` gradient
+weighting has nothing left to amplify.
+
+**Cost: none measurable.** GPU time isolated the same way as the
+Windows df measurement (2400x1800 minus 64x48, min of 9): 0.095 s
+without, 0.095 s with, against a run-to-run noise floor of ~4%. Five
+cheap ALU ops -- one multiply, one round, three fma -- next to
+hardware transcendentals that dominate them.
+
+**The visual test cannot confirm this fix, and now reads WORSE.**
+`escape-weierstrass-hillshade` goes from mean 2.32 to 2.64 against its
+baseline, and that is the expected direction: the baseline records
+WINDOWS computing the wrong value, and macOS now computes the right
+one. Being closer to a wrong reference was a coincidence, not
+evidence. The validation here is the probe against f64 ground truth,
+not the baseline -- and the test can only confirm the fix once Windows
+carries it too and the baseline moves, at which point both platforms
+compute the true value and should agree tightly. 90.1% of the render's
+pixels move, mean 1.48, max 24.
+
+**On generalising to the rest of the shallow cluster.** `collatz`
+(`esc_ccos` of `pi*z`), `lambda_sine`, `tetration` and
+`standard_map_ftle` all feed growing iterates to trig and are
+candidates for the same treatment. The distinction worth keeping in
+view: Weierstrass is the clean case because `b^n * x` is EXACT in f32
+for b = 2, so the argument carries full information and the true
+cosine is well defined. For an iterated `z`, the argument is an exact
+f32 whose MEANING has already drifted -- but accurate reduction still
+makes both drivers compute the same function of the same bits, which
+restores cross-platform determinism even where the trajectory itself
+is chaotic. That is a shared `esc_cos`/`esc_sin` touching every escape
+formula and moving every affected baseline, so it wants its own
+change and its own decision.
+
 ### The f3 location on macOS: the same fix, the same size (2026-09-03)
 
 The Windows column measured the df fix at `output/f3-final.fflame`
