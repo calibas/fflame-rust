@@ -4798,6 +4798,153 @@ fn main() {
         );
     }
 
+    /// WHICH `mul_add` form matches the GPU's contracted complex
+    /// multiply.
+    ///
+    /// The CPU mirror in `bla.rs` and the shader compute the same
+    /// expression:
+    ///
+    /// ```text
+    /// CPU  bla.rs:68        re: self.re * o.re - self.im * o.im
+    /// GPU  assembler.rs     a.m.x * b.x - a.m.y * b.y
+    /// ```
+    ///
+    /// The fingerprint showed both drivers CONTRACT `a*b + c`, so the
+    /// GPU evaluates that with one rounding where the mirror uses two.
+    /// "Switch the twin to fma" is therefore right in direction -- but
+    /// `x*y - z*w` has TWO contractions available, `fma(x, y, -(z*w))`
+    /// and `-fma(z, w, -(x*y))`, and they differ in the last bit. The
+    /// choice is the compiler's, so guessing it would swap a known
+    /// mismatch for an unknown one.
+    ///
+    /// This asks the GPU. Opaque inputs, the product computed there,
+    /// and the three CPU candidates compared BIT-EXACTLY against it.
+    /// The winner is the form the mirror should use; if none wins, the
+    /// driver contracted in a way none of them reproduces and the
+    /// mirror should stay as it is.
+    #[test]
+    #[ignore = "diagnostic"]
+    fn which_fma_form_matches_the_gpu_complex_multiply() {
+        let (device, queue) = repro_device();
+
+        // Inputs whose three CPU forms all differ, so the row can
+        // actually pick a winner. Verified below before anything is
+        // read off the GPU.
+        let (x, y, z, w): (f32, f32, f32, f32) = (1.0000001, 3.0000002, 1.0000003, 7.0000005);
+        let separate = x * y - z * w;
+        let fuse_first = x.mul_add(y, -(z * w));
+        let fuse_second = -z.mul_add(w, -(x * y));
+        println!("CPU forms: separate {separate:e}  fuse_first {fuse_first:e}  fuse_second {fuse_second:e}");
+        assert!(
+            separate != fuse_first || separate != fuse_second,
+            "these inputs do not separate the candidate forms"
+        );
+
+        let src = r#"
+@group(0) @binding(0) var<storage, read> i: array<f32>;
+@group(0) @binding(1) var<storage, read_write> o: array<f32>;
+@compute @workgroup_size(1)
+fn main() {
+    let x = i[0]; let y = i[1]; let z = i[2]; let w = i[3];
+    // Exactly the shader's own expression, verbatim.
+    o[0] = x * y - z * w;
+    // The imaginary half, same shape with an add.
+    o[1] = x * w + z * y;
+    // And the two explicit contractions, so the output shows what the
+    // driver would produce if asked directly.
+    o[2] = fma(x, y, -(z * w));
+    o[3] = -fma(z, w, -(x * y));
+}
+"#;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fma form"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("fma form"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let inp = [x, y, z, w];
+        let in_buf = {
+            use wgpu::util::DeviceExt;
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("in"),
+                contents: bytemuck::cast_slice(&inp),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        };
+        let cnt = 4u64;
+        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("out"),
+            size: cnt * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("read"),
+            size: cnt * 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: in_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("fma form"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fma form"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&out_buf, 0, &read, 0, cnt * 4);
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        assert!(rx.recv().unwrap_or(false));
+        let g: Vec<f32> = {
+            let d = read.slice(..).get_mapped_range();
+            d.chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        };
+        read.unmap();
+
+        let bits = |v: f32| format!("{:08x}", v.to_bits());
+        println!("GPU  x*y - z*w        = {:e}  ({})", g[0], bits(g[0]));
+        println!("GPU  fma(x,y,-(z*w))  = {:e}  ({})", g[2], bits(g[2]));
+        println!("GPU -fma(z,w,-(x*y))  = {:e}  ({})", g[3], bits(g[3]));
+        println!("CPU  separate         = {:e}  ({})", separate, bits(separate));
+        println!("CPU  fuse_first       = {:e}  ({})", fuse_first, bits(fuse_first));
+        println!("CPU  fuse_second      = {:e}  ({})", fuse_second, bits(fuse_second));
+        let winner = if g[0].to_bits() == fuse_first.to_bits() {
+            "fuse_first  -> re: self.re.mul_add(o.re, -(self.im * o.im))"
+        } else if g[0].to_bits() == fuse_second.to_bits() {
+            "fuse_second -> re: -self.im.mul_add(o.im, -(self.re * o.re))"
+        } else if g[0].to_bits() == separate.to_bits() {
+            "separate    -> the mirror already matches; do NOT switch to fma"
+        } else {
+            "none        -> the driver contracted in a form none of these reproduces"
+        };
+        println!("=> matching CPU form: {winner}");
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.
