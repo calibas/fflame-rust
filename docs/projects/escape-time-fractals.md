@@ -3661,6 +3661,68 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### The reduction generalised: correct, cheap, and it closes nothing yet (2026-09-03)
+
+`esc_reduce` moved out of the Weierstrass field into a shared helper
+and is now applied wherever an UNBOUNDED argument reaches trig:
+`esc_csin`, `esc_ccos`, `esc_cexp` in the direct template, plus
+`standard_map_ftle`, whose `theta` accumulates without bound through
+`t_new = theta + i_new`. `esc_cpow`'s angle is `atan2 * p`, bounded by
+a few tens, and is left alone.
+
+It is duplicated between `TEMPLATE` and `FIELD_TEMPLATE` because the
+field template has no access to the complex-helper block, and
+`the_trig_reduction_is_identical_in_both_templates` keeps the two
+byte-identical -- a reduction accurate in one template and stale in
+the other would be worse than one wrong in both, because the failure
+would be per-formula and would read as a formula bug.
+
+**Cost, GPU time isolated as before (2400x1800 minus 64x48, min of 7):**
+
+| config | without | with | |
+|---|---|---|---|
+| standard-map-ftle | 0.155 | 0.162 | +4.5% |
+| newton-sine-roots | 0.093 | 0.094 | +1.1% |
+| tetration | 0.068 | 0.069 | +1.5% |
+| collatz | 0.067 | 0.066 | -1.5% |
+| trig-sin | 0.072 | 0.070 | -2.8% |
+
+At or below the ~4% noise floor everywhere. `standard-map-ftle` is the
+only one clear of it and it is the heaviest trig user in the corpus --
+sin and cos in a 400-iteration per-pixel loop.
+
+**Ten renders change**: standard-map-ftle (60% of pixels),
+newton-sine-roots (33%), trig-sin, tetration, tetration-period,
+lambda-sine-plane, exponential, collatz, ducks-sec,
+lambda-sine-bouquet.
+
+**And it closes nothing.** The escape category still reads 66/87, the
+SAME 21 failures, with the metrics essentially unmoved -- collatz 5.84
+to 5.85, standard-map-ftle 5.43 to 5.45, tetration unchanged at 1.49.
+That is the expected result and it is worth stating rather than
+dressing up: the baselines record WINDOWS with unreduced trig, so
+computing the true value moves macOS away from a wrong reference, the
+same way it did for Weierstrass.
+
+**What is measured, and what is not.** Measured: the trig itself, from
+7.8e-1 worst error to 3.3e-7 against an f64 reference, flat with
+magnitude. That is a real correctness improvement and it is not
+contingent on anything. NOT measured, and NOT demonstrable from this
+side: that it closes the platform gap. The claim it rests on is that
+both drivers then compute the same function of the same bits, so a
+render is reproducible across platforms rather than depending on whose
+reduction gives up first -- and only a Windows run of the same change
+can show whether that is enough, because the reassociation divergence
+is still present underneath and may dominate for the chaotic formulas.
+
+**The caveat that does not go away.** For an iterated `z`, the
+argument is an exact f32 whose MEANING has already drifted through
+chaotic iteration. Accurate reduction makes the computation
+well-defined and identical across drivers; it does not make the
+trajectory meaningful. Weierstrass was the clean case precisely
+because `b^n * x` is exact. This is a determinism fix for the rest,
+not an accuracy one.
+
 ### Weierstrass gets accurate argument reduction (2026-09-03)
 
 The previous entry identified the mechanism; this fixes it.

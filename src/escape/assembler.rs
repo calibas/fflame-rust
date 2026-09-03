@@ -115,6 +115,35 @@ struct OrbitSummary {
     dz: vec2<f32>,     // derivative orbit (seed value if not compiled)
 }
 
+// Accurate argument reduction for trig.
+//
+// The hardware cos/sin lose their argument well before these formulas
+// stop handing them large values: measured on an M2, `cos` error
+// reaches 0.78 -- on a function bounded by 1 -- at |t| ~ 1.7e7, where
+// one f32 ulp is about 2 radians. Cody-Waite with a three-term 2*pi
+// split, evaluated with `fma`, which is fused on both Vulkan and
+// Metal (that is the explicit call; it is CONTRACTION of a written
+// product that neither driver performs). Worst error across the
+// Weierstrass octaves goes from 7.8e-1 to 3.3e-7, and flat with
+// magnitude instead of growing with it.
+//
+// This does NOT rescue an argument whose MEANING has already drifted
+// through chaotic iteration -- nothing can. What it buys there is
+// that both drivers compute the same function of the same bits, so a
+// render is reproducible across platforms instead of depending on
+// whose reduction gives up first.
+//
+// DUPLICATED between TEMPLATE and FIELD_TEMPLATE (the field template
+// has no access to the complex-helper block). Kept byte-identical by
+// `the_trig_reduction_is_identical_in_both_templates`.
+fn esc_reduce(t: f32) -> f32 {
+    let k = round(t * 0.15915494309189535);
+    var r = fma(-k, 6.2831855, t);
+    r = fma(-k, -1.7484555e-7, r);
+    r = fma(-k, -7.1054274e-15, r);
+    return r;
+}
+
 // Complex multiply.
 fn esc_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
@@ -139,7 +168,8 @@ fn esc_cpow(z: vec2<f32>, p: f32) -> vec2<f32> {
 // escape test far below the clamp.
 fn esc_cexp(z: vec2<f32>) -> vec2<f32> {
     let ex = exp(min(z.x, 80.0));
-    return ex * vec2<f32>(cos(z.y), sin(z.y));
+    let y = esc_reduce(z.y);
+    return ex * vec2<f32>(cos(y), sin(y));
 }
 
 // Complex log. The origin (a log singularity) returns a large
@@ -156,11 +186,13 @@ fn esc_clog(z: vec2<f32>) -> vec2<f32> {
 // Complex sine / cosine. sinh/cosh overflow to inf for |Im| ≳ 89;
 // the trig family's |Im| escape test fires long before.
 fn esc_csin(z: vec2<f32>) -> vec2<f32> {
-    return vec2<f32>(sin(z.x) * cosh(z.y), cos(z.x) * sinh(z.y));
+    let x = esc_reduce(z.x);
+    return vec2<f32>(sin(x) * cosh(z.y), cos(x) * sinh(z.y));
 }
 
 fn esc_ccos(z: vec2<f32>) -> vec2<f32> {
-    return vec2<f32>(cos(z.x) * cosh(z.y), -sin(z.x) * sinh(z.y));
+    let x = esc_reduce(z.x);
+    return vec2<f32>(cos(x) * cosh(z.y), -sin(x) * sinh(z.y));
 }
 
 // Complex division, pole-guarded: a near-zero denominator returns a
@@ -4212,6 +4244,35 @@ fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
 }
 
+// Accurate argument reduction for trig.
+//
+// The hardware cos/sin lose their argument well before these formulas
+// stop handing them large values: measured on an M2, `cos` error
+// reaches 0.78 -- on a function bounded by 1 -- at |t| ~ 1.7e7, where
+// one f32 ulp is about 2 radians. Cody-Waite with a three-term 2*pi
+// split, evaluated with `fma`, which is fused on both Vulkan and
+// Metal (that is the explicit call; it is CONTRACTION of a written
+// product that neither driver performs). Worst error across the
+// Weierstrass octaves goes from 7.8e-1 to 3.3e-7, and flat with
+// magnitude instead of growing with it.
+//
+// This does NOT rescue an argument whose MEANING has already drifted
+// through chaotic iteration -- nothing can. What it buys there is
+// that both drivers compute the same function of the same bits, so a
+// render is reproducible across platforms instead of depending on
+// whose reduction gives up first.
+//
+// DUPLICATED between TEMPLATE and FIELD_TEMPLATE (the field template
+// has no access to the complex-helper block). Kept byte-identical by
+// `the_trig_reduction_is_identical_in_both_templates`.
+fn esc_reduce(t: f32) -> f32 {
+    let k = round(t * 0.15915494309189535);
+    var r = fma(-k, 6.2831855, t);
+    r = fma(-k, -1.7484555e-7, r);
+    r = fma(-k, -7.1054274e-15, r);
+    return r;
+}
+
 // Eight floats of per-pixel loop state (the FTLE tangent matrix plus
 // the map's own point needs more than a vec4).
 struct FieldState {
@@ -4703,6 +4764,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The two copies of `esc_reduce` must not drift.
+    ///
+    /// It is duplicated because the field template has no access to
+    /// the complex-helper block, and a reduction that is accurate in
+    /// one template and stale in the other would be worse than one
+    /// that is wrong in both -- the failure would be per-formula and
+    /// would look like a formula bug.
+    #[test]
+    fn the_trig_reduction_is_identical_in_both_templates() {
+        let lift = |src: &str| -> String {
+            let head = "fn esc_reduce(";
+            let start = src.find(head).expect("esc_reduce missing from a template");
+            let (mut depth, mut seen) = (0usize, false);
+            for (i, ch) in src[start..].char_indices() {
+                if ch == '{' {
+                    depth += 1;
+                    seen = true;
+                } else if ch == '}' {
+                    depth -= 1;
+                    if seen && depth == 0 {
+                        return src[start..start + i + 1].to_string();
+                    }
+                }
+            }
+            panic!("unterminated esc_reduce");
+        };
+        assert_eq!(
+            lift(TEMPLATE),
+            lift(FIELD_TEMPLATE),
+            "esc_reduce has drifted between the direct and field templates"
+        );
     }
 
     #[test]
