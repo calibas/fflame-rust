@@ -3949,6 +3949,51 @@ still matched their plain-reference renders exactly, which is equally
 consistent with the hint being verified and discarded. Settling it
 wants a reference the pipeline cannot collapse back to the same orbit.
 
+### The WASM crash is not escape-time, and what that rules out (2026-09-03)
+
+Narrowed on the reporting side: `RuntimeError: memory access out of
+bounds` in the frame callback, after loading at least a couple of
+files, and it happens with FLAMES as readily as with escape configs.
+Every earlier hypothesis in this file assumed the escape engine. They
+were all looking in the wrong place.
+
+**What the new facts rule out, and it is most of the search space.**
+The panic hook IS installed, so a checked Rust index would print a
+located message rather than trapping -- a raw trap means unsafe code
+or a stack overflow. Every `unsafe` in the crate is now accounted
+for: bytemuck `Pod`/`Zeroable` impls (compile-time marker traits, no
+memory access), a desktop-only `ManuallyDrop` on the surface, a
+Windows-only `extern "system"` block in `main.rs`, and the wasm simd
+multiply in `fixedpoint.rs` -- which is escape-only and so cannot
+explain a flame crash. That leaves stack overflow, or unsafe inside a
+dependency.
+
+The 16 MiB shadow stack cleared SOME freezes and not this one, which
+is consistent with either: a demand above 16 MiB, or a different
+mechanism entirely.
+
+**The report suspects state not being freed between loads, so this
+measures that** rather than arguing it. `log_wasm_memory_after_load`
+fires once per load (hooked to `load_generation`, so exactly the
+user-visible loads and not animation playback) and prints three
+numbers:
+
+- **wasm linear memory.** It only ever grows -- there is no shrink --
+  so a climb that never levels off IS a leak, and a plateau says
+  memory is being reused and the fault is elsewhere.
+- **stack headroom.** The shadow stack grows down from its top, so
+  the address of a local is the remaining space. Read at the same
+  point in the frame loop every time, it is comparable across loads:
+  falling load-over-load means call depth is growing and the trap is
+  an overflow; steady means the stack is not the story.
+- **undo depth.** The one thing that grows by design -- a full config
+  clone per entry, 500 deep -- so it separates expected growth from a
+  leak.
+
+Those three separate the two surviving mechanisms in one run, which
+is what the earlier rounds could not do: every previous attempt
+inferred the mechanism instead of measuring it, and was wrong twice.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

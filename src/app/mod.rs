@@ -1210,6 +1210,49 @@ impl App {
         Ok(())
     }
 
+    /// Report linear-memory growth per load, in the browser.
+    ///
+    /// A reported crash -- `RuntimeError: memory access out of bounds`
+    /// in the frame callback, after loading a couple of files, on
+    /// EITHER fractal type -- came with the reasonable suspicion that
+    /// something is not being freed between loads. This says whether
+    /// that is true, rather than leaving it a guess: wasm linear
+    /// memory only ever GROWS (there is no shrink), so a load-over-load
+    /// climb that never levels off is a leak, and a plateau means the
+    /// memory is being reused and the fault is elsewhere.
+    ///
+    /// The undo depth rides along because it is the one thing that
+    /// grows by design on every load -- a full config clone per entry,
+    /// 500 deep -- so it separates "expected growth" from "leak".
+    ///
+    /// Browser only: on the desktop this is neither interesting nor
+    /// available (`memory_size` is a wasm intrinsic).
+    fn log_wasm_memory_after_load(&self, load_gen: u64) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // One page is 64 KiB.
+            let pages = core::arch::wasm32::memory_size(0);
+            let mib = (pages as f64) * 65536.0 / (1024.0 * 1024.0);
+            // The shadow stack grows DOWN from its top (16 MiB, set by
+            // -zstack-size), so the address of a local IS the remaining
+            // headroom. Read at the same point in the frame loop every
+            // time, so it is comparable: if it falls load over load the
+            // call depth is growing and the eventual trap is a stack
+            // overflow; if it holds steady the stack is not the story.
+            let probe = 0u8;
+            let sp = core::ptr::addr_of!(probe) as usize;
+            log::info!(
+                "load #{load_gen}: wasm memory {mib:.1} MiB ({pages} pages),                  stack headroom {:.2} MiB, undo depth {}",
+                sp as f64 / (1024.0 * 1024.0),
+                self.config_manager.history_len()
+            );
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = load_gen;
+        }
+    }
+
     /// Put the workspace in front of the fractal that was just
     /// loaded.
     ///
@@ -1446,6 +1489,7 @@ impl App {
         if self.last_load_generation != load_gen {
             self.last_load_generation = load_gen;
             self.follow_loaded_render_mode();
+            self.log_wasm_memory_after_load(load_gen);
         }
 
         // Consume fly-mode responses produced by the UI this frame.
