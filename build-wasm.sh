@@ -12,7 +12,7 @@ echo "Building WASM module..."
 # -zstack-size: see .cargo/config.toml. wasm-ld defaults to 1 MiB;
 # an overflow there traps as a bare "index out of bounds" with no
 # panic message, from whichever callback was running.
-export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=16777216'
+export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=67108864'
 PROFILE=dist
 BINDGEN_FLAGS=""
 if [ "$1" = "--debug" ]; then

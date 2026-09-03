@@ -3994,6 +3994,55 @@ Those three separate the two surviving mechanisms in one run, which
 is what the earlier rounds could not do: every previous attempt
 inferred the mechanism instead of measuring it, and was wrong twice.
 
+### dist crashes where dist-debug does not, and the leak found on the way (2026-09-03)
+
+Two more facts, and the first is the one that discriminates: the crash
+reproduces in the `dist` build ONLY -- never in `dist-debug` -- and it
+sometimes fails on the first load and sometimes not.
+
+**"Optimized only" narrows the mechanism hard.** `dist-debug` has
+debug assertions and overflow checks ON, so an integer overflow or a
+tripped `debug_assert` on this path would PANIC there with a located
+message rather than passing silently; it does not. What differs
+between the profiles besides those is INLINING: `dist` is fat LTO with
+one codegen unit, `dist-debug` thin LTO with sixteen. Aggressive
+inlining merges callees' locals into a single frame, so the same call
+path costs substantially more stack in the shipped build than in the
+debuggable one -- which is the only difference between the two that
+would make a stack overflow appear in one and not the other. The
+intermittency fits too: which path a frame takes decides the depth.
+
+Raised the shadow stack again, 16 -> 64 MiB, and verified it in the
+binary (the stack-top global reads 67,108,864). Address space only;
+nothing is committed until touched. If the crash survives 64 MiB it is
+not stack depth -- at that size an overflow needs genuinely unbounded
+recursion, which is a different bug with a different fix.
+
+**Firefox's wording sent the earlier rounds the wrong way.** It says
+"index out of bounds" for a TABLE error as well as for memory, and the
+innermost frame here is a closure invocation inside an
+`addEventListener` handler, which reads as a `Closure` whose
+function-table slot was freed. Chased and cleared: every
+`add_event_listener` closure in the crate (`web_clipboard`,
+`web_text_agent`, `lib.rs`) is `forget()`-ten, so none dangles.
+
+**But that audit found a real leak, matching the report's own
+suspicion.** Both browser file pickers built their handlers with
+`Closure::wrap(..)` + `forget()`, under a comment claiming the
+closure "will be cleaned up when reader is done". `forget` never
+cleans anything up: each file loaded leaked two boxed closures and
+their function-table entries for the life of the page -- an onchange
+and a FileReader onload, in both the text and binary pickers. A
+picker fires its change event once and a FileReader its onload once,
+so `Closure::once_into_js` is both correct and self-freeing: JS owns
+it until it runs, then the Rust side is dropped. Four sites.
+
+Whether that leak is THIS crash is unproven -- four table entries over
+a couple of loads is not obviously enough to break anything -- but it
+is a defect on exactly the path the report implicates, and the per-load
+memory report added alongside will now say whether the growth it was
+causing has stopped.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

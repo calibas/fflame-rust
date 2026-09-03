@@ -5,7 +5,7 @@ REM Build the WASM module
 REM RUSTFLAGS in the environment REPLACES .cargo/config.toml's list, so
 REM the getrandom cfg and simd128 from there are repeated here.
 REM -zstack-size: see .cargo/config.toml (wasm-ld defaults to 1 MiB).
-set RUSTFLAGS=--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=16777216
+set RUSTFLAGS=--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=67108864
 REM --debug selects [profile.dist-debug] (Cargo.toml): same
 REM optimisation level and simd/codegen shape, but symbols kept,
 REM panics unwound through the console hook, and debug assertions plus
