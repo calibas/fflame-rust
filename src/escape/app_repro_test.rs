@@ -4495,6 +4495,158 @@ fn main() {{
         assert!(got[5] != 0.0, "df_two_prod lost its error term ({:e})", got[5]);
     }
 
+    /// How accurate is the GPU's `cos` across the Weierstrass
+    /// octaves? Diff this column between platforms.
+    ///
+    /// `weierstrass-hillshade` fails on macOS at mean 2.32 with
+    /// **zero** pixels past the outlier threshold -- broad, uniform,
+    /// sub-threshold drift, which is not the signature of a
+    /// structural difference. It also uses no deep rung, so the df
+    /// fold never touched it, and its accumulation is a serial
+    /// 24-term dependency chain that general reassociation cannot
+    /// reorder. That leaves the generator.
+    ///
+    /// The field is `sum a^n * cos(b^n * x) * cos(b^n * y)` with
+    /// a=0.55, b=2, 24 terms, over a plane spanning +-2. So the last
+    /// octaves evaluate `cos` near `2^23 * 2` ~ 1.7e7, where ONE f32
+    /// ulp is about 2 radians -- a third of a period. The value is
+    /// still well defined for an exact f32 input; what differs
+    /// between implementations is the argument reduction, and this
+    /// measures exactly that: identical f32 inputs handed to the GPU,
+    /// compared against an f64 reference of the SAME bits.
+    ///
+    /// This is CLAUDE.md's documented "trig of huge arguments is
+    /// garbage everywhere, differently" class. If the error climbs
+    /// with the octave here, the failure is that class rather than a
+    /// bug, and the disposition is an accepted-divergence entry --
+    /// but only once both columns exist, because a divergence needs
+    /// two measurements.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn trig_accuracy_across_the_weierstrass_octaves() {
+        let (device, queue) = repro_device();
+
+        // t = b^n * x in f32, exactly as the shader forms it.
+        let mut ts: Vec<f32> = Vec::new();
+        for n in 0..24u32 {
+            let bn = 2f32.powi(n as i32);
+            for x in [0.3f32, 1.3, -1.7, 2.0] {
+                ts.push(bn * x);
+            }
+        }
+        let n_t = ts.len();
+
+        let src = r#"
+@group(0) @binding(0) var<storage, read> t: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= arrayLength(&t)) { return; }
+    out[gid.x] = cos(t[gid.x]);
+}
+"#;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("trig probe"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("trig probe"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let bytes = (n_t * 4) as u64;
+        let tbuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("t"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&tbuf, 0, bytemuck::cast_slice(&ts));
+        let obuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("out"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("read"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: tbuf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: obuf.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("trig"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(((n_t as u32) + 63) / 64, 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&obuf, 0, &read, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        assert!(rx.recv().unwrap_or(false), "readback failed");
+        let got: Vec<f32> = {
+            let d = read.slice(..).get_mapped_range();
+            d.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+        };
+        read.unmap();
+
+        println!("--- GPU cos vs f64 reference, by Weierstrass octave ---");
+        println!("{:>6}{:>14}{:>16}{:>12}", "octave", "max |t|", "max abs err", "max ulp err");
+        let mut worst_lo = 0.0f64;
+        let mut worst_hi = 0.0f64;
+        for n in 0..24usize {
+            let (mut mt, mut me, mut mu) = (0.0f64, 0.0f64, 0.0f64);
+            for k in 0..4usize {
+                let t = ts[n * 4 + k];
+                let want = (t as f64).cos();
+                let err = (got[n * 4 + k] as f64 - want).abs();
+                // ulp of the reference value in f32 terms.
+                let ulp = (want.abs() as f32).max(f32::MIN_POSITIVE);
+                let ulp = (f32::from_bits(ulp.to_bits() + 1) - ulp) as f64;
+                mt = mt.max((t as f64).abs());
+                me = me.max(err);
+                mu = mu.max(err / ulp);
+            }
+            if n < 12 { worst_lo = worst_lo.max(me); } else { worst_hi = worst_hi.max(me); }
+            println!("{:>6}{:>14.4e}{:>16.3e}{:>12.1}", n, mt, me, mu);
+        }
+        println!("\nworst abs err, octaves 0-11:  {worst_lo:.3e}");
+        println!("worst abs err, octaves 12-23: {worst_hi:.3e}");
+        println!(
+            "(cos is bounded by 1, so an abs err near 1 means the value is unrelated\n\
+             to the true cosine of that argument -- not a rounding difference.)"
+        );
+
+        // Self-check, in the fingerprint's discipline: the low octaves
+        // must come back ACCURATE, or this probe is measuring a broken
+        // buffer rather than argument reduction, and every row below
+        // it would be unreadable.
+        assert!(
+            worst_lo < 1e-3,
+            "octaves 0-11 are already wrong ({worst_lo:.2e}) -- the probe is not \
+             measuring range reduction, so no row here can be interpreted"
+        );
+    }
+
     /// naga emits the error-free transform faithfully; the rewrite
     /// belongs to the DRIVER.
     ///
