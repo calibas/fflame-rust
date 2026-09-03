@@ -4317,6 +4317,51 @@ eliminations -- not the stack (64 MiB, first load), not accumulation
 shape is an ordering hazard around asynchronous work in a dependency,
 disturbed by whatever a config load does.
 
+### The wasm load freeze is not this branch, and can be symbolised offline (2026-09-03)
+
+Two results, and the first retires a lot of work.
+
+**It reproduces on `main`.** So none of the escape-time work caused
+it, and the 198-commit bisect that was about to start would have
+searched the wrong range entirely. One build answered that, which is
+why it was worth doing before the bisect rather than after.
+
+**The Heisenbug does not have to be caught in the act.** Every
+instrumented build fails to reproduce it -- `dist-debug` (+50.6%
+code), `dist-symbols` with DWARF (12x module size), and even
+names-only at 1.18x -- so three rounds went into chasing a build that
+both reproduces AND names frames. That was the wrong goal. The
+browser already reports what is needed: a byte offset into the module.
+Map it afterwards, against a names build of the same source, and the
+crash never has to survive anything.
+
+`scripts/wasm-symbolize.py` does that. The two profiles differ only by
+`strip`, which leaves the code section within 738 bytes (0.007%) and
+shifts its start by 19 -- close enough that an offset lands in the
+right function body.
+
+**The pairing rule is the whole discipline, and it caught itself
+twice.** Both builds must come from the SAME commit with no `src/`
+change between. Ignore that and the script still answers, plausibly
+and wrongly:
+
+- against a stale `dist` (5.9% code delta) it named
+  `rhai::module::FuncRegistration::set_into_module_raw`;
+- against a source that had moved under a merge it named
+  `script::api::register_builtins`.
+
+Both look like real answers. Neither means anything. The script now
+prints the code-section geometry of both builds first, so a bad
+pairing is visible before the name is read -- a size delta beyond a
+few KB means rebuild, not interpret.
+
+**Protocol from here:** build `dist` and `dist-symbols` from one
+commit, reproduce with the `dist` bundle, and pass the offset to the
+script. The remaining shape of the bug is unchanged -- a linear-memory
+trap, in an event-handler-driven path, timing-sensitive, present on
+main, with no reachable `unsafe` in this crate -- so the name will
+most likely land in a dependency.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
