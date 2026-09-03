@@ -3494,6 +3494,72 @@ than suspected, and the fix is to rebuild those two transforms out of
 operations a reassociating compiler cannot touch -- as `df_split`
 already is.
 
+### The double-float fold is not a Mac problem (2026-09-02)
+
+The confirming run the previous commit asked for, on Windows/Vulkan.
+It predicted the corrected probe "should still pass" here. It does
+not, and that changes the conclusion.
+
+    opaque inputs (what the deep rung runs):
+      df_two_sum   lo 0        df_quick_sum lo 0
+      df_split     lo 1.19e-7  df_two_prod  lo 1.42e-14
+
+Same zeros as the M2. The earlier "no folding on Windows" reading was
+itself the constant-folding artifact the previous commit identified --
+it was measuring the compiler's constant folder on both platforms.
+
+**The proof is an internal contradiction**, printed by the test rather
+than argued. In ONE shader, on opaque storage-buffer inputs:
+
+| expression | value |
+|---|---|
+| `s == a` | true |
+| `s - a` | 1e-8 |
+| `b` | 1e-8 |
+| `b - (s - a)` | 0 |
+
+`s == a` and `s - a != 0` cannot both hold under evaluation. They hold
+because `(a + b) - a` was REWRITTEN to `b` -- not rounded differently,
+rewritten. Bitcast laundering does not help: a `bitcast<u32>` round
+trip is the identity, and the optimizer sees through it.
+
+**It is the driver, not our toolchain.** naga -- the WGSL front end
+wgpu uses -- emits one OpFAdd and two OpFSub for that expression,
+exactly the source. Pinned by
+`naga_emits_the_error_free_transform_faithfully`, which needs no GPU
+and so runs in the default suite: if a future naga starts folding this
+itself, the fix moves from "work around the driver" to "configure the
+front end", and nothing else would notice.
+
+**What this does and does not mean.**
+
+- The deep rung's double-float is degraded on EVERY platform tested,
+  not just Metal. `df_add` bottoms out in both zeroed transforms;
+  `df_mul`'s `df_two_prod` survives (its split is the immune bitmask)
+  but its result then passes through `df_quick_sum`, whose low half is
+  zeroed. So the pair degrades to plain f32 after one operation --
+  2^-24 where the algorithm assumes 2^-48 -- and the extra
+  instructions buy nothing.
+- It therefore CANNOT explain the macOS-versus-Windows divergence.
+  A defect present identically on both is common-mode; it cannot
+  produce a difference between them. The previous commit's
+  "hypothesis CONFIRMED" is right about the mechanism and wrong about
+  what it accounts for. The 14 deep-zoom failures still need a cause,
+  and this is no longer a candidate for it -- though the two platforms
+  folding in DIFFERENT places remains possible and unmeasured.
+- The accuracy tests do not contradict this: the deep-rung Ducks
+  checks pass at ~1.7e-7 mean error, which is f32-consistent. They
+  were calibrated against what the rung actually produces, so they
+  cannot distinguish 2^-24 from 2^-48.
+
+**Not fixed here**, and the fix is not obvious. The immune primitive
+in the file (`df_split`) is immune because it is integer work, and an
+error-free SUM has no equally cheap integer form; the options are an
+exponent-aligned integer construction, or accepting f32 on the deep
+rung and deleting the machinery that is not paying for itself. Either
+changes deep-zoom arithmetic on every platform and wants its own pass
+over the visual suite.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

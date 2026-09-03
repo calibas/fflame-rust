@@ -4365,6 +4365,14 @@ fn main() {{
     out[6] = df_two_sum(1.0, 1.0e-8).y;
     out[7] = df_quick_sum(1.0, 1.0e-8).y;
     out[8] = df_two_prod(1.0000001, 1.0000001).y;
+    // The PARTS of one expression, so the output carries its own
+    // proof. `s == a` and `s - a != 0` cannot both hold under
+    // evaluation; they do hold here, which is a rewrite rather than a
+    // rounding difference.
+    let s2 = a + b;
+    out[9]  = select(0.0, 1.0, s2 == a);
+    out[10] = s2 - a;
+    out[11] = b;
 }}
 "#
         );
@@ -4392,7 +4400,7 @@ fn main() {{
             0,
             bytemuck::cast_slice(&[1.0f32, 1.0e-8f32, 1.0000001f32, 0.0f32]),
         );
-        let n = 9u64;
+        let n = 12u64;
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("df out"),
             size: n * 4,
@@ -4447,8 +4455,12 @@ fn main() {{
              df_quick_sum-> hi {:e}  lo {:e}\n  \
              df_split lo {:e}   df_two_prod lo {:e}\n\
              literal inputs (constant-folded, for contrast):\n  \
-             df_two_sum lo {:e}   df_quick_sum lo {:e}   df_two_prod lo {:e}",
-            got[0], got[1], got[2], got[3], got[4], got[5], got[6], got[7], got[8]
+             df_two_sum lo {:e}   df_quick_sum lo {:e}   df_two_prod lo {:e}
+             the parts of one expression (s = a + b):
+               s == a is {}   s - a = {:e}   b = {:e}
+               both cannot hold under evaluation -- that is a rewrite,              not a rounding difference",
+            got[0], got[1], got[2], got[3], got[4], got[5], got[6], got[7], got[8],
+            got[9] != 0.0, got[10], got[11]
         );
 
         assert_eq!(got[0], 1.0, "df_two_sum's sum should round to exactly 1.0");
@@ -4467,6 +4479,73 @@ fn main() {{
         );
         assert!(got[4] != 0.0, "df_split lost its low half ({:e})", got[4]);
         assert!(got[5] != 0.0, "df_two_prod lost its error term ({:e})", got[5]);
+    }
+
+    /// naga emits the error-free transform faithfully; the rewrite
+    /// belongs to the DRIVER.
+    ///
+    /// Attribution for the double-float defect, and the half of it
+    /// that needs no GPU. `b - ((a + b) - a)` must evaluate to the
+    /// rounding error of the sum; on Vulkan AND on Metal it comes
+    /// back 0, because the shader compiler rewrites `(a + b) - a` to
+    /// `b`. This pins where that happens: naga -- the WGSL front end
+    /// wgpu uses -- emits one OpFAdd and two OpFSub, exactly the
+    /// source. Nothing in our toolchain folds it, so no change to how
+    /// we hand WGSL to wgpu can prevent it.
+    ///
+    /// Worth a standing test because the attribution is what makes
+    /// the defect actionable: if a future naga starts folding this
+    /// itself, the fix moves from "work around the driver" to
+    /// "configure the front end", and nothing else would notice.
+    #[test]
+    fn naga_emits_the_error_free_transform_faithfully() {
+        let src = r#"
+@group(0) @binding(0) var<storage, read> inp: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(1)
+fn main() {
+    let a = inp[0];
+    let b = inp[1];
+    let s = a + b;
+    out[0] = b - (s - a);
+}
+"#;
+        let module = wgpu::naga::front::wgsl::parse_str(src).expect("parse");
+        let info = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("validate");
+        let spv = wgpu::naga::back::spv::write_vec(
+            &module,
+            &info,
+            &wgpu::naga::back::spv::Options::default(),
+            None,
+        )
+        .expect("spv");
+        let (mut fadd, mut fsub) = (0usize, 0usize);
+        let mut i = 5usize; // skip the 5-word header
+        while i < spv.len() {
+            let wc = (spv[i] >> 16) as usize;
+            let op = spv[i] & 0xFFFF;
+            if wc == 0 {
+                break;
+            }
+            if op == 129 {
+                fadd += 1;
+            }
+            if op == 131 {
+                fsub += 1;
+            }
+            i += wc;
+        }
+        println!("naga SPIR-V: OpFAdd x{fadd}, OpFSub x{fsub}");
+        assert_eq!(
+            (fadd, fsub),
+            (1, 2),
+            "naga no longer emits the source arithmetic verbatim -- the              defect's attribution changes with it"
+        );
     }
 
     /// The reported seam: Ducks just past the perturbation threshold.
