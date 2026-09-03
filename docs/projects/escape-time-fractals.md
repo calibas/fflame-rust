@@ -4409,6 +4409,13 @@ so the program is unchanged while the module drops from 19.8 MB to
   the entire approach and says the next move is bisection on main's
   history, where the bug actually lives.
 
+**The strip comparison is not build noise**, checked because the whole
+retraction rests on it: two `dist` builds from identical source have
+the same size, the same 13,214 functions and ZERO bodies differing in
+size, and differ in exactly 11 bytes -- the embedded git hash and
+build timestamp in the data section. The build is deterministic in
+code, so `strip` really is what changes the link.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
