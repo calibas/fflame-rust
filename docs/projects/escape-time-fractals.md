@@ -3607,6 +3607,48 @@ mirror image, and harder to see because the twin is what we would then
 be trusting to judge the GPU. The fingerprint wants running on the M2
 and diffing before that change lands.
 
+**macOS / Metal / M2 (2026-09-03):**
+
+| identity | Windows / Vulkan | macOS / Metal |
+|---|---|---|
+| `(a+b) - a` | REWRITTEN to `b` | REWRITTEN to `b` |
+| `(x+y)+z` vs `x+(y+z)` | evaluated -- NOT reassociated | **REASSOCIATED** |
+| `a*b + c` | CONTRACTED to fma | CONTRACTED to fma |
+| `(m*n)/n` vs `m` | REWRITTEN | REWRITTEN |
+| `m/n` vs `m*(1/n)` | SUBSTITUTED | SUBSTITUTED |
+| `sqrt(v)^2` vs `v` | REWRITTEN | REWRITTEN |
+| `(-0) + 0` | REWRITTEN to `-0` | REWRITTEN to `-0` |
+
+**One row differs, and it is the one that was the useful negative on
+Windows.** Metal reassociates general float sums; Vulkan/NVIDIA does
+not. Six of seven rows agree, so this is not "Metal is loose and
+Vulkan is strict" -- it is one specific, measured divergence in
+rewriting, which is exactly the shape the previous entry predicted and
+could not yet find.
+
+That makes it the leading candidate for the 21 macOS failures, and it
+fits both clusters rather than just one. Any expression with three or
+more float terms may be summed in a different ORDER on Metal, so its
+rounding differs -- depth-gated where the deep rung sums the most
+terms per iteration, and equally reachable in the shallow
+transcendental formulas (`weierstrass`'s series, `collatz`'s
+`esc_ccos`, `lambda_sine`, `tetration`) whose failures the df fold
+never explained. It is depth-dependent, structural rather than a tone
+offset, and perfectly reproducible: the profile the suite reports.
+
+Worth being clear about the scope: general reassociation is far wider
+exposure than the df helpers. Every flame visual test passes on
+macOS, so it is not breaking stochastic renders -- a chaos game
+averages over sample order. It bites where arithmetic is
+precision-critical and the result is a single deterministic value per
+pixel, which is escape-time all over.
+
+**The FMA question the previous entry left open is answered:** Metal
+contracts `a*b + c` too, and its explicit `fma()` returns the fused
+value as expected. So a CPU twin using `mul_add` matches BOTH
+platforms' arithmetic, and the mirror-image trap the entry worried
+about does not exist here. That change can land on this evidence.
+
 **On regenerating the Windows baselines:** the full suite reads
 **238/238 on Windows** with the current tree, so the baselines already
 represent this platform's output and regenerating them changes no
