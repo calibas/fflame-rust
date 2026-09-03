@@ -502,6 +502,10 @@ struct PerturbParamsGpu {
     /// MULTIPLIES (Lambda). Occupies what used to be padding, so the
     /// layout is unchanged.
     ref_c: [f32; 2],
+    /// Always zero — the deep rung's optimization barrier. See
+    /// `df_l` in the perturbed template.
+    df_zero: u32,
+    _pad_df: [u32; 3],
 }
 
 /// The |Z|² channel for the delta-aware escape margin, computed on
@@ -5711,6 +5715,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     iter_start: first_start,
                     iter_end: first_start,
                     ref_c,
+                    df_zero: 0,
+                    _pad_df: [0; 3],
                 };
                 let key = self.ensure_perturbed_pipeline(device, escape, floatexp);
                 let mut start = first_start;

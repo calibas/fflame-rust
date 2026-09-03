@@ -384,6 +384,21 @@ struct PerturbParams {
     // relative error matters, and that is the same 2^-24 the scaled
     // rung already accepts for the reference itself.
     ref_c: vec2<f32>,
+    // Always zero. XORing a float's bits with it is the identity, but
+    // the compiler cannot know that, so it cannot rewrite across it --
+    // the barrier the deep rung's error-free transforms need. See
+    // `df_l`.
+    //
+    // Scalar padding, NOT vec3<u32>: a vec3 carries 16-byte alignment,
+    // which would push the pad to offset 64 and the struct to 80
+    // against the 64-byte Rust twin. wgpu rejects that as a
+    // min-binding-size mismatch at BIND time, so it surfaces only on
+    // the paths that build this layout -- it killed 14 deep renders
+    // and left every other test green.
+    df_zero: u32,
+    _pad_df0: u32,
+    _pad_df1: u32,
+    _pad_df2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -851,6 +866,21 @@ struct PerturbParams {
     // relative error matters, and that is the same 2^-24 the scaled
     // rung already accepts for the reference itself.
     ref_c: vec2<f32>,
+    // Always zero. XORing a float's bits with it is the identity, but
+    // the compiler cannot know that, so it cannot rewrite across it --
+    // the barrier the deep rung's error-free transforms need. See
+    // `df_l`.
+    //
+    // Scalar padding, NOT vec3<u32>: a vec3 carries 16-byte alignment,
+    // which would push the pad to offset 64 and the struct to 80
+    // against the 64-byte Rust twin. wgpu rejects that as a
+    // min-binding-size mismatch at BIND time, so it surfaces only on
+    // the paths that build this layout -- it killed 14 deep renders
+    // and left every other test green.
+    df_zero: u32,
+    _pad_df0: u32,
+    _pad_df1: u32,
+    _pad_df2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -1174,35 +1204,70 @@ fn cfe_from_sfe(re: SFe, im: SFe) -> CFe {
     return cfe_norm(CFe(vec2<f32>(rm, im2), e));
 }
 
-// ---- double-f32 ("DF") arithmetic: error-free transforms with
-// BITMASK splits (integer ops — immune to fast-math folding on
-// Metal). A value is hi + lo with |lo| <= ulp(hi)/2: ~2^-48 relative
-// precision, doubling the crush-survival depth of the delta
-// iteration (each near-nucleus pass reseeds deltas toward d0 scale
-// and truncates pixel history to the mantissa width). ----
+// ---- double-f32 ("DF") arithmetic: error-free transforms carrying a
+// value as hi + lo with |lo| <= ulp(hi)/2, ~2^-48 relative precision,
+// doubling the crush-survival depth of the delta iteration (each
+// near-nucleus pass reseeds deltas toward d0 scale and truncates
+// pixel history to the mantissa width).
+//
+// EVERY rounding-sensitive intermediate goes through `df_l`. Without
+// it these transforms are not error-free on real drivers and this
+// whole block silently computes plain f32 -- which is what it did
+// from the day it shipped until 2026-09-02. Both Vulkan/NVIDIA and
+// Metal rewrite `(a + b) - a` to `b`, so every `lo` came back zero:
+// 2^-24 where the algorithm assumes 2^-48, on every platform tested.
+// `the_deep_rungs_error_free_transforms_are_not_folded_away` pins it,
+// and prints a literal-input column beside the opaque one -- a form
+// that survives only the opaque path is riding on which shape the
+// optimizer happened to pick, not on a barrier. ----
+
+// The barrier: identity at runtime (df_zero is always 0), opaque to
+// the compiler, and integer work, which no float rewrite touches.
+// Laundering only the sum is NOT enough -- measured: `b - (s - a)`
+// then reassociates to `(a + b) - s` and cancels there instead,
+// however `s` was produced.
+fn df_l(x: f32) -> f32 {
+    return bitcast<f32>(bitcast<u32>(x) ^ perturb.df_zero);
+}
+
 fn df_two_sum(a: f32, b: f32) -> vec2<f32> {
-    let s = a + b;
-    let bb = s - a;
-    let err = (a - (s - bb)) + (b - bb);
-    return vec2<f32>(s, err);
+    let s = df_l(a + b);
+    let bb = df_l(s - a);
+    let t1 = df_l(s - bb);
+    let t2 = df_l(b - bb);
+    return vec2<f32>(s, (a - t1) + t2);
 }
 
 fn df_quick_sum(a: f32, b: f32) -> vec2<f32> {
     // Requires |a| >= |b| (true for a value + its rounding error).
-    let s = a + b;
-    return vec2<f32>(s, b - (s - a));
+    let s = df_l(a + b);
+    let d = df_l(s - a);
+    return vec2<f32>(s, b - d);
 }
 
+// Unused since df_two_prod moved to fma, and deliberately kept: the
+// fold probe lifts it as the immune CONTROL. Its split is integer
+// work, so it survives where the sums do not, which is what lets a
+// probe failure be attributed to the sums rather than to the split.
+// naga drops it from the compiled module, so it costs nothing.
 fn df_split(a: f32) -> vec2<f32> {
     let hi = bitcast<f32>(bitcast<u32>(a) & 0xFFFFF000u);
-    return vec2<f32>(hi, a - hi);
+    return vec2<f32>(hi, df_l(a - hi));
 }
 
 fn df_two_prod(a: f32, b: f32) -> vec2<f32> {
     let p = a * b;
-    let aa = df_split(a);
-    let bb = df_split(b);
-    let err = ((aa.x * bb.x - p) + aa.x * bb.y + aa.y * bb.x) + aa.y * bb.y;
+    // fma computes a*b exactly before subtracting, so the error term
+    // is one unrewritable operation -- explicit fma() is fused on both
+    // Vulkan and Metal (measured; it is CONTRACTION of a written
+    // `x*y - z*w` that neither driver performs).
+    //
+    // This replaces a Dekker split whose four partial products the
+    // driver re-factored into (aa.x+aa.y)*(bb.x+bb.y) -- the rounded
+    // product -- cancelling the error to zero. Laundering those four
+    // also works, but costs ~4x here (DF-rung median +108% against
+    // +28%) and leaves the sum that combines them reassociable.
+    let err = fma(a, b, -df_l(p));
     return vec2<f32>(p, err);
 }
 
