@@ -3661,6 +3661,49 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### The fma suggestion, measured at the site it would change (2026-09-02)
+
+The M2 column answered the FMA question -- both drivers contract
+`a*b + c` -- and that was read as clearing "switch the CPU twin to
+fma". Measured at the actual site, on Windows, it does the opposite:
+the mirror already matches and the change would break it.
+
+The site is the complex multiply, which CPU and GPU write identically:
+
+    CPU  bla.rs:68     re: self.re * o.re - self.im * o.im
+    GPU  assembler.rs  a.m.x * b.x - a.m.y * b.y
+
+`which_fma_form_matches_the_gpu_complex_multiply` computes it on the
+GPU from opaque inputs and compares all three CPU candidates
+BIT-EXACTLY:
+
+| form | bits |
+|---|---|
+| GPU `x*y - z*w` | `c0800004` |
+| GPU explicit `fma(x,y,-(z*w))` | `c0800005` |
+| CPU separate | **`c0800004`** -- matches the GPU |
+| CPU `mul_add` (either association) | `c0800005` |
+
+**The driver does not contract this expression.** That is not a
+contradiction of the fingerprint: the fingerprint's FMA row is
+`a*b + c` with `c` a plain value, and the GPU fuses THAT (separate
+gives 0 for its inputs, fused gives 1, the GPU gives 1). Product minus
+PRODUCT is a different shape and this driver leaves it alone. So
+"contracts multiply-add" is true and does not transfer to the site the
+change was aimed at -- the shapes have to be measured where they
+occur, not inferred from a neighbouring row.
+
+On this evidence the `bla.rs` mirror should stay as it is on Windows.
+
+**And the probe is worth running on the M2 for its own sake.** If
+Metal fuses `x*y - z*w` where Vulkan does not, that is a SECOND
+measured divergence, sitting directly in the CFe complex multiply that
+the BLA table and the deep rung both depend on -- a candidate cause
+for the deep-zoom cluster independent of general reassociation, and in
+a much narrower place. If Metal also declines to fuse it, the row is
+common-mode like the df fold and the mirror is simply correct
+everywhere.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
