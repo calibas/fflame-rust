@@ -4150,7 +4150,10 @@ The hybrid commit said the fix "matters most where the corpus cannot
 see: the deepest test here is z426, and DF was built for the z9000
 class". The f3 file IS that class, so it was the place to look.
 
-`output/f3-final.fflame`: zoom_log2 9316.69 -- 10^2804 -- 197 limbs,
+`output/f3-final.fflame` (NOTE: `output/` is gitignored, so this
+config and `output/001.f3.toml` are local artifacts, not in the repo --
+a fresh clone cannot reproduce the f3 measurements without them):
+zoom_log2 9316.69 -- 10^2804 -- 197 limbs,
 10,100,100 iterations, a 3756-digit centre, imported from
 `output/001.f3.toml` (fraktaler-3's own parameter file, zoom "4e2804",
 period 1137764). Rendered 640x384 with the reference served from the
