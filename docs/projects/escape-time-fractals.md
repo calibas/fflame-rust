@@ -3431,6 +3431,69 @@ instead, mirroring what an animation opened from a URL already does.
 An explicit layout choice survives everything except loading a
 fractal of the other kind.
 
+### The macOS visual divergence: one lead closed, one opened (2026-09-02)
+
+Follow-up to the `powi` fix, which said plainly what it did not solve:
+the M2 runs the visual suite at 217/238, and all 21 failures are
+escape-time -- 14 deep-zoom (every one at `zoom_log2 >= 13.5`) and 7
+transcendental-heavy formulas.
+
+**The caveat it left is answered, and the answer is no.** That commit
+predicted "the mechanism is platform-independent, so this almost
+certainly fails on Windows too... it deserves a run on the main
+machine". Run: `2f64.powi(e)` was compared against the exact bit
+pattern for EVERY `e` in -1074..=0 with a `black_box` exponent, and it
+is exact at all of them on this Windows x86-64 toolchain. `powi(-1060)`
+returns 8.095e-320 here where the M2 returns literally 0. So the trap
+is real but NOT platform-independent in practice -- it is a property
+of that target's `__powidf2` lowering. The fix stays, because building
+powers of two from the bit pattern is exact everywhere and cheaper
+than a libcall; only the prediction was wrong.
+
+**The atan2 lead is closed too, and closed clean.** Metal's `atan2` at
+a zero pair is the documented hazard that cost `npolar` 73% of its
+pixels, and `ff_atan2` -- the guard -- lives in the FLAME shader
+library, which escape WGSL cannot see. Escape has ten raw `atan2`
+sites. Every one of them turns out to be already guarded by an
+explicit magnitude test, several with comments naming this exact
+hazard: `esc_cpow` and `esc_clog` return early below `r2 < 1e-30`, the
+stripe / basin / position colorings all test their accumulator first,
+and the orbit-trap spiral returns 1e30. Not a lead; a thing already
+done.
+
+**The open lead is the deep rung's double-float arithmetic**, and it
+fits the shape of the failures exactly. The floatexp rung carries its
+delta as hi+lo f32 pairs, and 36 call sites route every complex
+multiply and square through `df_add` / `df_mul`, both of which bottom
+out in `df_two_sum` / `df_quick_sum`:
+
+    fn df_quick_sum(a, b) { let s = a + b; return vec2(s, b - (s - a)); }
+
+An error-free transform is only error-free under strict IEEE
+evaluation. A compiler permitted to REASSOCIATE folds `s - a` to `b`,
+so the error term becomes `b - b` = 0 and the double-float silently
+degrades to plain f32 -- 2^-24 where the algorithm assumes 2^-48.
+Metal runs shaders with fast-math on. That predicts divergence that is
+depth-dependent (the deep rung only engages past the perturbation
+threshold), structural rather than a tone offset, and perfectly
+reproducible -- which is what the suite reports, down to the 13.5
+floor.
+
+Worth noting the near-miss: `df_split` WAS made immune with a bitmask,
+and the comment above the block claims integer-op immunity for the
+whole of it. The split is immune. The two sums are not.
+
+`the_deep_rungs_error_free_transforms_are_not_folded_away` settles it
+in one run. It lifts the shipped helpers out of a real assembled
+deep-rung shader by brace matching -- not a copy, so it cannot drift
+-- and feeds them `1e-8` added to `1.0`, which is below half an ulp,
+so the sum rounds to exactly 1.0 and the whole addend IS the error
+term. On Vulkan/Windows both return `1e-8` (measured; the test
+passes). If they return 0 on Metal, the mechanism is identified rather
+than suspected, and the fix is to rebuild those two transforms out of
+operations a reassociating compiler cannot touch -- as `df_split`
+already is.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

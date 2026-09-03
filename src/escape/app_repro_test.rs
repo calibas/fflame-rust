@@ -4251,6 +4251,184 @@ mod tests {
         );
     }
 
+    /// The deep rung's error-free transforms must actually produce
+    /// error terms.
+    ///
+    /// A diagnostic for the open macOS divergence, and the cheapest
+    /// way to settle it. On the M2 the visual suite is 217/238 and
+    /// FOURTEEN of the 21 failures are deep-zoom, every one at
+    /// `zoom_log2 >= 13.5` -- i.e. the perturbed path, whose deep rung
+    /// carries its delta in double-f32. Thirty-six call sites route
+    /// every complex multiply and square there through `df_add` /
+    /// `df_mul`, and both bottom out in `df_two_sum` / `df_quick_sum`.
+    ///
+    /// Those two are the classic reassociation victims:
+    ///
+    /// ```wgsl
+    /// fn df_quick_sum(a, b) { let s = a + b; return vec2(s, b - (s - a)); }
+    /// ```
+    ///
+    /// A compiler permitted to reassociate folds `s - a` to `b`, so
+    /// the error term becomes `b - b` = 0 and the double-float
+    /// silently degrades to plain f32 -- 2^-24 where the algorithm
+    /// assumes 2^-48. Metal runs shaders with fast-math ON (see
+    /// CLAUDE.md), and that is exactly the depth-dependent, structural
+    /// divergence the suite reports. `df_split` was already made
+    /// immune with a bitmask; these two were not, and the comment
+    /// above them claims the immunity for the whole block.
+    ///
+    /// So: run the SHIPPED helpers, extracted from a real assembled
+    /// deep-rung shader rather than copied, on inputs whose error term
+    /// IEEE requires to be exactly `1e-8`. Passing means the transform
+    /// survived the compiler; failing means it was folded, which
+    /// identifies the mechanism rather than merely suspecting it.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_deep_rungs_error_free_transforms_are_not_folded_away() {
+        let (device, queue) = repro_device();
+
+        // The real thing: whatever the deep rung actually compiles.
+        let shipped = crate::escape::assembler::assemble_perturbed(
+            crate::escape::get_coloring("smooth"),
+            true,
+            crate::escape::assembler::PerturbTier::Power(2),
+        );
+        // Lift one function out by brace matching, so this tests the
+        // shipped text and cannot drift from it.
+        let lift = |name: &str| -> String {
+            let head = format!("fn {name}(");
+            let start = shipped
+                .find(&head)
+                .unwrap_or_else(|| panic!("{name} is not in the assembled deep-rung shader"));
+            let mut depth = 0usize;
+            let mut seen = false;
+            for (i, ch) in shipped[start..].char_indices() {
+                if ch == '{' {
+                    depth += 1;
+                    seen = true;
+                } else if ch == '}' {
+                    depth -= 1;
+                    if seen && depth == 0 {
+                        return shipped[start..start + i + 1].to_string();
+                    }
+                }
+            }
+            panic!("unterminated {name}");
+        };
+        let helpers = ["df_two_sum", "df_quick_sum", "df_split", "df_two_prod"]
+            .iter()
+            .map(|n| lift(n))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let src = format!(
+            r#"
+{helpers}
+
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+
+@compute @workgroup_size(1)
+fn main() {{
+    // 1e-8 is below half an ulp of 1.0 in f32 (5.96e-8), so the sum
+    // rounds to exactly 1.0 and the whole addend IS the error term.
+    let a = 1.0;
+    let b = 1.0e-8;
+    out[0] = df_two_sum(a, b).x;   // 1.0
+    out[1] = df_two_sum(a, b).y;   // 1e-8, or 0 if folded
+    out[2] = df_quick_sum(a, b).x; // 1.0
+    out[3] = df_quick_sum(a, b).y; // 1e-8, or 0 if folded
+    // The split is bitmask-based and already immune; included so a
+    // failure can be attributed to the sums rather than to it.
+    out[4] = df_split(1.0000001).y;
+    // two_prod's split is immune, but its error assembly is float.
+    out[5] = df_two_prod(1.0000001, 1.0000001).y;
+}}
+"#
+        );
+
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("df probe"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("df probe"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let n = 6u64;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("df out"),
+            size: n * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("df read"),
+            size: n * 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("df bg"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("df"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("df"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&buf, 0, &read, 0, n * 4);
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        assert!(rx.recv().unwrap_or(false), "readback failed");
+        let got: Vec<f32> = {
+            let d = read.slice(..).get_mapped_range();
+            d.chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        };
+        read.unmap();
+
+        println!(
+            "df_two_sum  -> hi {:e}  lo {:e}\n\
+             df_quick_sum-> hi {:e}  lo {:e}\n\
+             df_split lo {:e}   df_two_prod lo {:e}",
+            got[0], got[1], got[2], got[3], got[4], got[5]
+        );
+
+        assert_eq!(got[0], 1.0, "df_two_sum's sum should round to exactly 1.0");
+        assert_eq!(got[2], 1.0, "df_quick_sum's sum should round to exactly 1.0");
+        assert!(
+            got[1] != 0.0 && (got[1] - 1.0e-8).abs() < 1.0e-12,
+            "df_two_sum lost its error term ({:e}, wanted 1e-8) -- the \
+             error-free transform was folded away, so the deep rung is \
+             running at f32 precision instead of double-f32",
+            got[1]
+        );
+        assert!(
+            got[3] != 0.0 && (got[3] - 1.0e-8).abs() < 1.0e-12,
+            "df_quick_sum lost its error term ({:e}, wanted 1e-8) -- see above",
+            got[3]
+        );
+        assert!(got[4] != 0.0, "df_split lost its low half ({:e})", got[4]);
+        assert!(got[5] != 0.0, "df_two_prod lost its error term ({:e})", got[5]);
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.
