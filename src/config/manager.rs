@@ -3771,6 +3771,14 @@ impl ConfigManager {
     }
 
     /// Get current position in history
+    /// How many undo entries are held. Each is a full config clone,
+    /// so this is the main thing that grows on every load -- which is
+    /// what separates expected growth from a leak when reading the
+    /// browser's per-load memory report.
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
     pub fn position(&self) -> usize {
         self.position
     }
