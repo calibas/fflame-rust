@@ -3900,6 +3900,55 @@ against baselines that still record the folded arithmetic. macOS saw
 five change; Windows sees two exceed tolerance. The baselines remain
 deliberately un-regenerated.
 
+### Does the df fix matter? Measured at the f3 location (2026-09-03)
+
+The hybrid commit said the fix "matters most where the corpus cannot
+see: the deepest test here is z426, and DF was built for the z9000
+class". The f3 file IS that class, so it was the place to look.
+
+`output/f3-final.fflame`: zoom_log2 9316.69 -- 10^2804 -- 197 limbs,
+10,100,100 iterations, a 3756-digit centre, imported from
+`output/001.f3.toml` (fraktaler-3's own parameter file, zoom "4e2804",
+period 1137764). Rendered 640x384 with the reference served from the
+orbit store, so both builds iterate an IDENTICAL reference and only
+the DF arithmetic differs:
+
+| | pre-hybrid | post-hybrid |
+|---|---|---|
+| pixels differing | — | **6.66%** |
+| max channel delta | — | 203 |
+| pixels past 40 | — | 0.106% |
+
+**So the fix is not inert where DF exists to work.** That is the
+evidence the hybrid commit could not supply from the corpus, and it is
+the strongest argument for keeping it: the deep rung's arithmetic
+changes materially at the depth it was built for.
+
+**And the cost is invisible there.** The same renders: 9.85 s
+pre against 9.33 s post, both dominated by loading a 14 MB reference
+rather than by the GPU pass. The measured +24% DF penalty bites in the
+band where the GPU dominates -- roughly zoom 48 to a few hundred --
+not at f3-class depths, where the reference build or load is the whole
+cost.
+
+The z700 / z900 / z1100 ladder in `output/` renders with full
+structure (luminance sd ~47) on BOTH builds, diverging 6.5% / 3.9% /
+2.0% of pixels as depth increases. The "interior stall at z900+"
+recorded earlier in this file is gone -- fixed by the periodic
+reference work, not by DF.
+
+**What is NOT established: which render is correct.** A difference is
+not a direction. Reference-independence would answer it (this file
+already treats reference-dependent fine structure as the symptom of a
+starved delta), but the two attempts here were inconclusive: a
+sub-pixel centre perturbation was absorbed by orbit RELOCATION -- the
+cached reference re-anchored rather than rebuilding, so both renders
+used the same orbit and came out bit-identical -- and adding f3's
+`reference.period` produced a 4-minute build after which both builds
+still matched their plain-reference renders exactly, which is equally
+consistent with the hint being verified and discarded. Settling it
+wants a reference the pipeline cannot collapse back to the same orbit.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
