@@ -3661,6 +3661,52 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### The df fold, fixed: a barrier the drivers cannot rewrite (2026-09-03)
+
+`df_two_sum` / `df_quick_sum` / `df_two_prod` now launder every
+rounding-sensitive intermediate through `df_l`, a bitcast-XOR against
+an always-zero uniform field (`PerturbParams.df_zero`). Identity at
+runtime, opaque to the compiler, and INTEGER work -- the same property
+that made `df_split` immune all along. The probe passes on Metal for
+the first time: `lo` comes back `1e-8` and `1.42e-14` instead of `0`.
+
+**Placement is not negotiable, and the literal column is the canary.**
+Laundering only the sum fails: `b - (s - a)` reassociates to
+`(a + b) - s` and cancels there instead. A single barrier on the
+cancelled operand passed the opaque path but read `0` on the LITERAL
+path -- i.e. still reassociable, surviving on which shape the
+optimizer happened to pick. Full laundering reads correct on both
+columns, which is the bar.
+
+**`df_two_prod` uses `fma(a, b, -df_l(p))`**, not a laundered Dekker
+split. Both are exact; the fma form is one unrewritable operation
+where the split leaves the sum that combines its four partial products
+still reassociable. It is also ~4x cheaper (below).
+
+**Cost, on the rung that pays it.** Only 5 configs in the visual
+corpus run above `PERTURB_FLOATEXP_ZOOM = 48`:
+
+| variant | DF-rung median | worst |
+|---|---|---|
+| laundered Dekker split | +108% | +347% |
+| **fma (shipped)** | **+28%** | **+75%** |
+
+**What it changes, and what it does not.** 5 of 87 escape renders move
+-- and 4 of those 5 are the corpus's only DF-rung tests, so the hit
+rate on the code that runs it is ~80%, not 6%. It does NOT close the
+macOS/Windows gap: the fold was common-mode, present identically on
+both platforms, so removing it cannot produce a difference that was
+not there. The 21 macOS failures still point at general float-sum
+reassociation on Metal, the one divergence the fingerprint found.
+This is a correctness fix for the deep rung, and should be judged as
+one.
+
+**Baselines are unchanged deliberately.** They record the folded
+arithmetic on both platforms; moving them is a decision to move the
+reference, which wants the Windows diff read first. macOS still reads
+66/87 on the escape category, the same 21, with 4 renders' metrics
+shifted.
+
 ### The fma suggestion, measured at the site it would change (2026-09-02)
 
 The M2 column answered the FMA question -- both drivers contract

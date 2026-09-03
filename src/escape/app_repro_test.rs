@@ -4327,7 +4327,7 @@ mod tests {
             }
             panic!("unterminated {name}");
         };
-        let helpers = ["df_two_sum", "df_quick_sum", "df_split", "df_two_prod"]
+        let helpers = ["df_l", "df_two_sum", "df_quick_sum", "df_split", "df_two_prod"]
             .iter()
             .map(|n| lift(n))
             .collect::<Vec<_>>()
@@ -4336,6 +4336,12 @@ mod tests {
         let src = format!(
             r#"
 {helpers}
+
+// `df_l` reads its zero from the perturb uniform. Stub just that
+// field, so the lifted helper text stays verbatim -- and so the
+// barrier is as opaque here as it is in the real shader.
+struct PerturbParams {{ df_zero: u32 }}
+@group(0) @binding(2) var<uniform> perturb: PerturbParams;
 
 // Opaque to the compiler: it cannot fold what it cannot see.
 @group(0) @binding(0) var<storage, read> inp: array<f32>;
@@ -4400,6 +4406,13 @@ fn main() {{
             0,
             bytemuck::cast_slice(&[1.0f32, 1.0e-8f32, 1.0000001f32, 0.0f32]),
         );
+        let pbuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("df perturb"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&pbuf, 0, bytemuck::cast_slice(&[0u32, 0, 0, 0]));
         let n = 12u64;
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("df out"),
@@ -4419,6 +4432,7 @@ fn main() {{
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: inp.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: pbuf.as_entire_binding() },
             ],
         });
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
