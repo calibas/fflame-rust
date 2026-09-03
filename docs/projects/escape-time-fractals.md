@@ -3849,6 +3849,57 @@ this file keeps catching. Two drivers, seven fingerprint rows and one
 site probe in, the tally is one divergence (general reassociation) and
 everything else common-mode.
 
+### The df-launder cost, measured on Windows (2026-09-02)
+
+The hybrid landed with macOS numbers and no Windows column. Measured
+here against the pre-hybrid commit built in a worktree, so this is the
+actual before/after rather than a reconstruction. Wall clock, min of
+9, GPU time isolated by subtracting a 64x48 run of the SAME config
+from a 2400x1800 one -- process start and the reference-orbit build
+are resolution-independent, so the difference is the dispatch.
+
+| rung | config | pre | post | delta |
+|---|---|---|---|---|
+| DF | manowar-deep | 1.420 | 2.085 | **+46.8%** |
+| DF | multibrot-dip-seam | 0.343 | 0.432 | +25.9% |
+| DF | phoenix-past-floatexp | 0.209 | 0.259 | +24.2% |
+| DF | fe-threshold-floatexp | 1.247 | 1.541 | +23.6% |
+| DF | fe-zoom-60-edge | 0.769 | 0.843 | +9.7% |
+| DF | ship-deep-floatexp | 0.647 | 0.651 | +0.5% |
+| scaled | deep-zoom-30 | 0.376 | 0.376 | -0.1% |
+| scaled | deep-zoom-42 | 0.472 | 0.466 | -1.3% |
+
+**DF median +23.9%, worst +46.8%; non-DF unchanged.** The scaled-rung
+controls at -0.1% and -1.3% are the attribution: `df_l` exists only in
+the floatexp template, and paths that never reach it do not move. That
+tight a noise floor is also what makes the DF column readable.
+
+Against the macOS figures (+28% median, +75% worst) Windows pays
+somewhat less, same order. No platform-specific regression.
+
+**A correction to the config set, which affects both columns.** The
+DF rung is entered by `zoom_log2 > 48` OR the Manowar tier, which
+takes the deep rung AT EVERY DEPTH. `manowar-deep` sits at zoom 26, so
+a zoom-only filter misses it -- and it is the WORST-affected config in
+the corpus at +46.8%, being a two-term recurrence with 72 bytes of
+per-pixel state and correspondingly more DF work per iteration. The
+corpus has SIX DF-rung tests, not five.
+
+**Two things this rules out.** An export of
+`fe-threshold-floatexp` at 4200x2150 loses the device -- and the
+PRE-hybrid binary loses it at the same size, so that TDR is inherent
+to the config at an extreme size, not something the slowdown caused.
+Both complete at ordinary export sizes. And the flame corpus is
+untouched: the full suite reads median 51 Miter/s with every flame
+test passing.
+
+**Visual state on Windows: 236/238**, the two failures being
+`escape-fe-threshold-floatexp` (mean 4.64) and `escape-manowar-deep`
+(mean 4.81) -- both DF-rung, both renders the fix legitimately moves,
+against baselines that still record the folded arithmetic. macOS saw
+five change; Windows sees two exceed tolerance. The baselines remain
+deliberately un-regenerated.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
