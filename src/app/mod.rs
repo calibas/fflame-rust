@@ -520,6 +520,13 @@ pub struct App {
 
     // Surface recovery: set on surface error, handled at top of next RedrawRequested
     pub(super) needs_surface_recreate: bool,
+    /// `ConfigManager::load_generation` as of the last frame, so a
+    /// newly LOADED fractal can be noticed exactly once. Loads are
+    /// the only thing that bumps it (preset, file import, the online
+    /// browser) -- animation playback and undo snapshots go through
+    /// `load_config_silent` / `load_config_with_explicit_before` and
+    /// deliberately do not.
+    last_load_generation: u64,
 
     // Audio system
     pub(super) audio_manager: crate::audio::AudioManager,
@@ -696,6 +703,9 @@ impl App {
 
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
+        // Read before the move below: a boot must not look like a
+        // load, or it would override the layout the user left.
+        let initial_load_generation = config_manager.load_generation();
 
         // Get initial size before moving gpu
         let initial_viewport_size = (gpu.size.width, gpu.size.height);
@@ -771,6 +781,9 @@ impl App {
             histogram_in_flight: false,
             effect_chain,
             needs_surface_recreate: false,
+            // Whatever the config manager starts at, so a boot does
+            // not fight the layout the user left the app in.
+            last_load_generation: initial_load_generation,
             window_fullscreen: false,
             ui_hidden: false,
             fly_mode: false,
@@ -1197,6 +1210,43 @@ impl App {
         Ok(())
     }
 
+    /// Put the workspace in front of the fractal that was just
+    /// loaded.
+    ///
+    /// Both directions, because the Escape layout deliberately
+    /// carries NONE of the flame-only editors (there is a test that
+    /// holds it to that): a flame loaded while it is up is not
+    /// editable at all, which is the same trap in reverse. Compact
+    /// mode is single-panel, so it opens the panel rather than
+    /// rearranging a dock it does not have -- mirroring what an
+    /// animation opened from a URL already does.
+    ///
+    /// Only ever called when `load_generation` moved, so an explicit
+    /// layout choice survives everything except loading a fractal of
+    /// the other kind.
+    fn follow_loaded_render_mode(&mut self) {
+        use crate::ui::workspace::{PanelType, WorkspaceLayout};
+        let is_escape = self.config_manager.active_config().render_mode
+            == crate::scene::transforms::RenderMode::Escape;
+        let compact = self
+            .config_manager
+            .system_settings()
+            .compact_mode
+            .unwrap_or(false);
+        if is_escape {
+            if compact {
+                let ctx = self.egui_layer.ctx.clone();
+                self.workspace.open_compact_panel(PanelType::Escape, &ctx);
+            } else if self.workspace.current_layout != WorkspaceLayout::EscapeTime {
+                log::info!("Loaded an escape fractal: switching to the Escape workspace");
+                self.workspace.apply_layout(WorkspaceLayout::EscapeTime);
+            }
+        } else if !compact && self.workspace.current_layout == WorkspaceLayout::EscapeTime {
+            log::info!("Loaded a flame: leaving the Escape workspace");
+            self.workspace.apply_layout(WorkspaceLayout::Standard);
+        }
+    }
+
     fn update(&mut self) {
         // Update performance metrics
         self.metrics.update();
@@ -1380,6 +1430,22 @@ impl App {
             if self.workspace.current_layout != layout {
                 self.workspace.apply_layout(layout);
             }
+        }
+
+        // A newly loaded fractal may be a different KIND of fractal
+        // than the layout in front of the user. Escape-time controls
+        // live in a panel the Standard layout does not carry, so an
+        // escape fractal opened from a file or the online browser
+        // used to arrive with nothing on screen that could edit it.
+        //
+        // Placed here for the same reason the request above is: the
+        // workspace is borrowed by the UI for the whole frame, and
+        // switching mid-draw would rebuild the dock tree the caller
+        // is still walking.
+        let load_gen = self.config_manager.load_generation();
+        if self.last_load_generation != load_gen {
+            self.last_load_generation = load_gen;
+            self.follow_loaded_render_mode();
         }
 
         // Consume fly-mode responses produced by the UI this frame.

@@ -3407,6 +3407,30 @@ for this and says so in its own doc comment. It passed until the new
 longer-running tests started interleaving with it; it now reads the
 per-renderer field.
 
+### The workspace follows the fractal that was loaded (2026-09-02)
+
+An escape fractal opened from a file or the online browser arrived
+into whatever layout was up -- usually Standard, which carries no
+Escape panel at all, so nothing on screen could edit the thing that
+had just been loaded.
+
+The hook is `ConfigManager::load_generation`, a counter bumped only by
+`load_config` -- preset, file import, and the browser/API path all go
+through it, while animation playback (`load_config_silent`) and the
+animation-exit undo snapshot (`load_config_with_explicit_before`)
+deliberately do not, so playback cannot rearrange the workspace under
+the user. The app compares it once per frame and switches after the
+UI has drawn, for the same reason the panel-requested layout change
+does: the workspace is borrowed for the whole frame, and switching
+mid-draw would rebuild the dock tree the caller is still walking.
+
+BOTH directions, because the Escape layout deliberately carries none
+of the flame-only editors -- a flame loaded while it is up is the same
+trap in reverse. Compact mode is single-panel, so it opens the panel
+instead, mirroring what an animation opened from a URL already does.
+An explicit layout choice survives everything except loading a
+fractal of the other kind.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

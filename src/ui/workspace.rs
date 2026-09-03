@@ -621,6 +621,40 @@ mod layout_tests {
         }
     }
 
+    /// Loading a fractal of the other KIND must move the workspace,
+    /// in both directions.
+    ///
+    /// The app watches `ConfigManager::load_generation` and calls
+    /// into `apply_layout`; what this holds is the property that
+    /// makes the switch worth making -- each layout carries the
+    /// panel that edits its own kind of fractal and not the other's.
+    /// If that ever stopped being true the switch would be pointless
+    /// churn, and nothing else would notice.
+    #[test]
+    fn each_layout_carries_the_editor_for_its_own_fractal() {
+        let mut ws = Workspace::default();
+
+        ws.apply_layout(WorkspaceLayout::EscapeTime);
+        assert!(
+            ws.panel_exists(PanelType::Escape),
+            "the Escape layout must carry the Escape panel"
+        );
+        assert!(
+            !ws.panel_exists(PanelType::Transforms),
+            "the Escape layout must not carry the flame transform editor"
+        );
+
+        ws.apply_layout(WorkspaceLayout::Standard);
+        assert!(
+            ws.panel_exists(PanelType::Transforms),
+            "the Standard layout must carry the flame transform editor"
+        );
+        assert!(
+            !ws.panel_exists(PanelType::Escape),
+            "the Standard layout has no Escape panel -- which is why an              escape fractal loaded into it had nothing to edit it with"
+        );
+    }
+
     /// The Escape layout must not carry the flame-only editors.
     ///
     /// Their presence is exactly the confusion this layout exists to
