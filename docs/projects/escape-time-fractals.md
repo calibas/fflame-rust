@@ -4416,6 +4416,57 @@ size, and differ in exactly 11 bytes -- the embedded git hash and
 build timestamp in the data section. The build is deterministic in
 code, so `strip` really is what changes the link.
 
+### The Windows column for the trig reduction, and the baselines move (2026-09-03)
+
+The generalisation commit named what it could not measure from macOS:
+whether accurate reduction closes the platform gap, and whether ten
+moved baselines earn their place. Here is the Windows side.
+
+**Windows was computing the same wrong value.** That was asserted from
+macOS and is now measured, with the shipped helper lifted out of the
+assembled shader so the probe cannot drift from what runs:
+
+| | macOS | Windows |
+|---|---|---|
+| worst raw error, octaves 12-23 | 7.8e-1 | **7.857e-1** |
+| worst reduced error | 3.3e-7 | **3.280e-7** |
+
+Not merely both wrong -- wrong by the same amount, and right to the
+same amount afterwards. `cos` is bounded by 1, so 0.786 means the
+returned value carried no information about the cosine of that
+argument on EITHER driver. The baselines recorded that.
+
+**So the baselines were regenerated**, and this is the first point in
+the investigation where that was justified. Earlier the request was
+declined because Windows read 238/238: regenerating would have moved
+the reference to no purpose. Now the reference records a value both
+platforms independently compute as wrong, which makes moving it a
+correction rather than a capitulation. Four renders rewritten, 234
+left byte-identical: `standard-map-ftle` and `weierstrass-hillshade`
+from the trig reduction, `fe-threshold-floatexp` and `manowar-deep`
+from the df fix. Windows now reads 87/87 escape and 238/238 overall.
+
+**Cost on Windows, and a false alarm worth recording.** The first
+measurement showed collatz +36.2% and trig-sin +14.9%. Re-run with
+more repetitions they became -6.6% and +1.2%, while a CONTROL swung
+-25.4% -- at 0.06-0.14 s of GPU time the subtract-a-small-run method
+amplifies noise past the signal, and the first reading was noise
+wearing a plausible shape. Measured where GPU work dominates instead
+(4000x3000, fixed cost down to ~half the run):
+
+    standard-map-ftle      +4.9%
+    weierstrass-hillshade  +2.7%
+
+against macOS's +4.5%. Small, real, consistent across platforms.
+
+**What is now testable and was not.** Both platforms compute the true
+value and the reference records it. If macOS re-runs and those two
+tests pass, the reduction closed the gap for them and the ten moved
+baselines earned their place. If they still fail, the residual is the
+reassociation divergence underneath, and the disposition question the
+generalisation commit raised comes back open -- with the difference
+that the trig is no longer a confounder.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error

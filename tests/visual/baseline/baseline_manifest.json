@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "3620360e",
+  "git_hash": "a5b0bc0e",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -159,8 +159,8 @@
       "sha256": "4437da9a7ea49ae3a76af849a7f962306dafe7f255da522bb324d2bd27b3cf42"
     },
     "escape-fe-threshold-floatexp.png": {
-      "bytes": 49479,
-      "sha256": "6c13cc801f1b4a0c933d2d255de2ae05fe34718dba284102aded35e609b9dd4c"
+      "bytes": 49473,
+      "sha256": "cb81fb983c456e46b951e42b493f59d4fd0f051b9228908c6db20014ceda7227"
     },
     "escape-fe-threshold-scaled.png": {
       "bytes": 49080,
@@ -271,8 +271,8 @@
       "sha256": "97b0034afd92ab60d08378bb97d283ed7b1632cc1c81b3f96bf04df847e95aab"
     },
     "escape-manowar-deep.png": {
-      "bytes": 36489,
-      "sha256": "0fda5244caced1f51feb7b727d1969016ee01f1b7022be4306dfb63198ed340c"
+      "bytes": 36492,
+      "sha256": "db34248534f93f4c548a4e87ce7cbac893699d91426e20e55f79a07efbdae681"
     },
     "escape-manowar.png": {
       "bytes": 2321,
@@ -411,8 +411,8 @@
       "sha256": "c928023874b5a46dadbfa8f28b473688823ffc4f1a2726001d13675f3c3a9289"
     },
     "escape-standard-map-ftle.png": {
-      "bytes": 38302,
-      "sha256": "2f9b491c5b0ce55924e477c2a385f5b5feb878d5017e7cbd63a57adde006b1a5"
+      "bytes": 38330,
+      "sha256": "d906dc7cdd7505ba163b29c02d7b9084ee51fb58d1556e52d8d616f660c4a6ea"
     },
     "escape-tetration-period.png": {
       "bytes": 11866,
@@ -435,8 +435,8 @@
       "sha256": "84a2713f6fedb713bdefe34998a31e82a4850e130a0f03809c99c365a60fb350"
     },
     "escape-weierstrass-hillshade.png": {
-      "bytes": 38325,
-      "sha256": "8c8fc2ee35ee4a85153d7daa57723151da578bfe9a89e1a40c33d7a6178f648f"
+      "bytes": 38486,
+      "sha256": "ca74f7984395b2590d71983e8466010f716190e6b3ed3dade1060cb0bf902570"
     },
     "general-warmup.png": {
       "bytes": 35605,
