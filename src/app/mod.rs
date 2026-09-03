@@ -99,7 +99,7 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
     // Set up change handler
     let input_clone = input.clone();
     let ctx_clone = ctx.clone();
-    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+    let on_change = move |_event: web_sys::Event| {
         let files = match input_clone.files() {
             Some(f) => f,
             None => return,
@@ -121,7 +121,7 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
 
         let reader_clone = reader.clone();
         let ctx_for_load = ctx_clone.clone();
-        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let on_load = move |_event: web_sys::Event| {
             let result = match reader_clone.result() {
                 Ok(r) => r,
                 Err(_) => return,
@@ -143,10 +143,18 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
                 data.insert_temp(egui::Id::new(result_id), text);
             });
             ctx_for_load.request_repaint();
-        }) as Box<dyn FnMut(_)>);
+        };
 
-        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+        // `once_into_js`, NOT `wrap(..).forget()`. The old comment here
+        // said the closure "will be cleaned up when reader is done";
+        // `forget` never cleans anything up -- it leaks the box and its
+        // function-table entry for the life of the page, once per file
+        // loaded. A FileReader onload fires exactly once, so a
+        // once-closure is both correct and self-freeing: JS owns it
+        // until it runs, then the Rust side is dropped.
+        reader.set_onload(Some(
+            Closure::once_into_js(move |e: web_sys::Event| on_load(e)).unchecked_ref(),
+        ));
 
         let _ = reader.read_as_array_buffer(&file);
 
@@ -154,10 +162,13 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
         if let Some(parent) = input_clone.parent_node() {
             let _ = parent.remove_child(&input_clone);
         }
-    }) as Box<dyn FnMut(_)>);
+    };
 
-    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
-    closure.forget(); // Leak closure - it will be called when file is selected
+    // Same again: one picker, one change event, one closure that frees
+    // itself afterwards instead of accumulating per load.
+    input.set_onchange(Some(
+        Closure::once_into_js(move |e: web_sys::Event| on_change(e)).unchecked_ref(),
+    ));
 
     // Trigger file picker
     input.click();
@@ -201,7 +212,7 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
     // Set up change handler
     let input_clone = input.clone();
     let ctx_clone = ctx.clone();
-    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+    let on_change = move |_event: web_sys::Event| {
         let files = match input_clone.files() {
             Some(f) => f,
             None => return,
@@ -223,7 +234,7 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
 
         let reader_clone = reader.clone();
         let ctx_for_load = ctx_clone.clone();
-        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let on_load = move |_event: web_sys::Event| {
             let result = match reader_clone.result() {
                 Ok(r) => r,
                 Err(_) => return,
@@ -243,10 +254,18 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
                 data.insert_temp(egui::Id::new(result_id), contents);
             });
             ctx_for_load.request_repaint();
-        }) as Box<dyn FnMut(_)>);
+        };
 
-        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+        // `once_into_js`, NOT `wrap(..).forget()`. The old comment here
+        // said the closure "will be cleaned up when reader is done";
+        // `forget` never cleans anything up -- it leaks the box and its
+        // function-table entry for the life of the page, once per file
+        // loaded. A FileReader onload fires exactly once, so a
+        // once-closure is both correct and self-freeing: JS owns it
+        // until it runs, then the Rust side is dropped.
+        reader.set_onload(Some(
+            Closure::once_into_js(move |e: web_sys::Event| on_load(e)).unchecked_ref(),
+        ));
 
         let _ = reader.read_as_array_buffer(&file);
 
@@ -254,10 +273,13 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
         if let Some(parent) = input_clone.parent_node() {
             let _ = parent.remove_child(&input_clone);
         }
-    }) as Box<dyn FnMut(_)>);
+    };
 
-    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
-    closure.forget(); // Leak closure - it will be called when file is selected
+    // Same again: one picker, one change event, one closure that frees
+    // itself afterwards instead of accumulating per load.
+    input.set_onchange(Some(
+        Closure::once_into_js(move |e: web_sys::Event| on_change(e)).unchecked_ref(),
+    ));
 
     // Trigger file picker
     input.click();

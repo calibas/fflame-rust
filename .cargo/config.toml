@@ -28,4 +28,4 @@
 # from whatever requestAnimationFrame callback was running, with no
 # Rust panic message and no location. 16 MiB costs address space only.
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-Ctarget-feature=+simd128', '-Clink-arg=-zstack-size=16777216']
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-Ctarget-feature=+simd128', '-Clink-arg=-zstack-size=67108864']
