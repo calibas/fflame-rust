@@ -3705,20 +3705,32 @@ ship" needs. It cannot settle direction, and for the same reason it
 is reassuring: a mean absolute delta of 0.132 is invisible by
 construction, so no visual comparison can discriminate the two.
 
-**Still not established: which render is correct.** The Windows entry
-is right that a difference is not a direction, and the M2 column adds
-no direction either -- two platforms agreeing tells us the fix is
-consistent, not that it is right. What would settle it, and needs no
-reference-independence (the thing that defeated both earlier attempts,
-since orbit relocation collapses back onto the same orbit): take
-pixels where the two builds disagree and compute their escape
-iteration EXACTLY, with `ReferenceOrbit::compute` at the pixel's own
-coordinates rather than the view centre's. That is the same
-fixed-point machinery the z700 wall was settled with, it is ground
-truth rather than a better approximation, and the per-pixel iteration
-counts can be read directly through the `IterRecord` path instead of
-being inferred from colour. Cost is roughly a reference build per
-pixel, so a handful of pixels, not a frame.
+**Which render is correct is NOT established, and that question is
+deliberately closed.** A difference is not a direction, and the M2
+column adds none -- two platforms agreeing says the fix is consistent,
+not that it is right.
+
+It is closed on the STAKE, not on difficulty. Inspected directly,
+even the pixels that diverge most are visually identical between the
+two builds, against the Windows render and against an online
+reference of this location. Mean absolute delta is 0.132 across the
+frame. So the answer could only move pixels no viewer can distinguish,
+while costing roughly a reference build per pixel to obtain. That is
+not a good trade, and saying so is worth more than leaving an open
+item that reads like an invitation.
+
+For the record, the route if it ever matters: take pixels where the
+builds disagree and compute their escape iteration EXACTLY, with
+`ReferenceOrbit::compute` at the PIXEL's own coordinates rather than
+the view centre's -- ground truth rather than a better approximation,
+with per-pixel counts read through the `IterRecord` path instead of
+inferred from colour. It needs no reference-independence, which is
+what defeated the two earlier attempts (orbit relocation collapses
+back onto the same orbit). What would REOPEN it is a case where the
+two builds differ VISIBLY; the argument above is entirely contingent
+on that not happening, and nothing guarantees it at every location.
+
+The fixes stay as they are.
 
 ### weierstrass-hillshade is trig range reduction, not reassociation (2026-09-03)
 
