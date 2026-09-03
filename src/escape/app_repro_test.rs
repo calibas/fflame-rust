@@ -4581,6 +4581,223 @@ fn main() {
         }
     }
 
+    /// Which algebraic rewrites this driver applies -- a fingerprint.
+    ///
+    /// The df fold turned out to be common to Vulkan and Metal, so it
+    /// cannot explain a DIFFERENCE between them. What could is the two
+    /// drivers rewriting in different PLACES. This measures that: a
+    /// battery of identities that hold in real arithmetic and fail in
+    /// floating point, on opaque inputs. Run on both platforms, diff
+    /// the verdict column.
+    ///
+    /// Every case CHECKS ITS OWN DISCRIMINATION FIRST. A first cut of
+    /// this test reported `(7*3)/3 == 7` as a rewrite; 21 and 7 are
+    /// both exact in f32, so IEEE gives the same answer and the case
+    /// said nothing. Each row now computes both forms in Rust f32 and
+    /// asserts they differ before the GPU's answer is interpreted --
+    /// otherwise a verdict is unearned.
+    ///
+    /// FMA contraction is the row with an immediate consequence: if
+    /// the GPU fuses `a*b + c` and a CPU twin does not, the twin is
+    /// checking different arithmetic than it believes.
+    #[test]
+    #[ignore = "diagnostic"]
+    fn driver_rewrite_fingerprint() {
+        let (device, queue) = repro_device();
+
+        // --- inputs, and the two IEEE answers each one separates ---
+        // FMA: a*b needs 25 bits, so the rounded product loses the
+        // low 1 that a fused multiply-add keeps.
+        let (fa, fb): (f32, f32) = (4097.0, 4097.0);
+        let fc: f32 = -16_785_408.0;
+        let fma_separate = fa * fb + fc;
+        let fma_fused = fa.mul_add(fb, fc);
+        // (m*n)/n with an inexact product.
+        let (m, n): (f32, f32) = (7.7, 3.3);
+        let mn_div = (m * n) / n;
+        // reciprocal substitution.
+        let (rm, rn): (f32, f32) = (3.0, 7.0);
+        let div_direct = rm / rn;
+        let div_recip = rm * (1.0f32 / rn);
+        // sqrt round trip.
+        // 3.0 does NOT discriminate (sqrt(3)^2 is exactly 3 in f32);
+        // the self-check below caught that. 2.0 does.
+        let v: f32 = 2.0;
+        let sqrt_sq = v.sqrt() * v.sqrt();
+
+        // Each row is only readable if IEEE separates the two forms.
+        assert_ne!(fma_separate, fma_fused, "the FMA row does not discriminate");
+        assert_ne!(mn_div, m, "the (m*n)/n row does not discriminate");
+        assert_ne!(div_direct, div_recip, "the reciprocal row does not discriminate");
+        assert_ne!(sqrt_sq, v, "the sqrt row does not discriminate");
+
+        let src = r#"
+@group(0) @binding(0) var<storage, read> i: array<f32>;
+@group(0) @binding(1) var<storage, read_write> o: array<f32>;
+
+@compute @workgroup_size(1)
+fn main() {
+    // 1. (a + b) - a, with b below half an ulp of a. IEEE: 0.
+    let a = i[0]; let b = i[1];
+    o[0] = (a + b) - a;
+
+    // 2. Associativity, with catastrophic cancellation.
+    //    IEEE: (x+y)+z = 1, x+(y+z) = 0.
+    let x = i[2]; let y = i[3]; let z = i[4];
+    o[1] = (x + y) + z;
+    o[2] = x + (y + z);
+
+    // 3. FMA contraction. Separate rounds the product; fused does not.
+    let fa = i[5]; let fb = i[6]; let fc = i[7];
+    o[3] = fa * fb + fc;
+    o[4] = fma(fa, fb, fc);
+
+    // 4. (m*n)/n vs m, inexact product.
+    let m = i[8]; let n = i[9];
+    o[5] = (m * n) / n;
+    o[6] = m;
+
+    // 5. Reciprocal substitution.
+    let rm = i[10]; let rn = i[11];
+    o[7] = rm / rn;
+    o[8] = rm * (1.0 / rn);
+
+    // 6. sqrt round trip.
+    let v = i[12];
+    o[9] = sqrt(v) * sqrt(v);
+
+    // 7. (-0) + 0 : IEEE gives +0. Sign bit reported as a clean 0/1.
+    let nz = i[13];
+    let sum = nz + 0.0;
+    o[10] = select(0.0, 1.0, (bitcast<u32>(sum) & 0x80000000u) != 0u);
+}
+"#;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fingerprint"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("fingerprint"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let inp: [f32; 14] = [
+            1.0, 1.0e-8, 1.0e8, -1.0e8, 1.0, fa, fb, fc, m, n, rm, rn, v, -0.0,
+        ];
+        let in_buf = {
+            use wgpu::util::DeviceExt;
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("in"),
+                contents: bytemuck::cast_slice(&inp),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        };
+        let cnt = 11u64;
+        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("out"),
+            size: cnt * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("read"),
+            size: cnt * 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bg"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: in_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("fp"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fp"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&out_buf, 0, &read, 0, cnt * 4);
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        assert!(rx.recv().unwrap_or(false));
+        let g: Vec<f32> = {
+            let d = read.slice(..).get_mapped_range();
+            d.chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        };
+        read.unmap();
+
+        println!("--- driver rewrite fingerprint (diff this between platforms) ---");
+        println!(
+            "1. (a+b)-a          got {:e}   IEEE 0            -> {}",
+            g[0],
+            if g[0] == 0.0 { "evaluated" } else { "REWRITTEN to b" }
+        );
+        println!(
+            "2. assoc  (x+y)+z {:e}  x+(y+z) {:e}   IEEE 1 and 0  -> {}",
+            g[1],
+            g[2],
+            if g[1] != g[2] { "evaluated" } else { "REASSOCIATED" }
+        );
+        println!(
+            "3. a*b+c  got {}   separate {}  fused {}  -> {}",
+            g[3],
+            fma_separate,
+            fma_fused,
+            if g[3] == fma_fused && g[3] != fma_separate {
+                "CONTRACTED to fma"
+            } else if g[3] == fma_separate {
+                "separate (no contraction)"
+            } else {
+                "neither -- investigate"
+            }
+        );
+        println!(
+            "   explicit fma()   got {}   expected {}",
+            g[4], fma_fused
+        );
+        println!(
+            "4. (m*n)/n vs m     got {:e} vs {:e}   IEEE differ  -> {}",
+            g[5],
+            g[6],
+            if g[5] != g[6] { "evaluated" } else { "REWRITTEN" }
+        );
+        println!(
+            "5. m/n vs m*(1/n)   got {:e} vs {:e}   IEEE differ  -> {}",
+            g[7],
+            g[8],
+            if g[7] != g[8] { "evaluated" } else { "SUBSTITUTED" }
+        );
+        println!(
+            "6. sqrt(v)^2 vs v   got {:e} vs {:e}   IEEE differ  -> {}",
+            g[9],
+            v,
+            if g[9] != v { "evaluated" } else { "REWRITTEN" }
+        );
+        println!(
+            "7. (-0)+0 sign bit  got {}   IEEE 0 (result +0) -> {}",
+            g[10],
+            if g[10] == 0.0 { "evaluated" } else { "REWRITTEN to -0" }
+        );
+    }
+
     /// The reported seam: Ducks just past the perturbation threshold.
     ///
     /// Curved lines cutting the image and sliding as you zoom deeper.

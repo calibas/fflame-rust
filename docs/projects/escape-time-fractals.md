@@ -3560,6 +3560,65 @@ rung and deleting the machinery that is not paying for itself. Either
 changes deep-zoom arithmetic on every platform and wants its own pass
 over the visual suite.
 
+### A driver rewrite fingerprint, and what it says about FMA (2026-09-02)
+
+The df fold is common to Vulkan and Metal, so it cannot produce a
+DIFFERENCE between them. The surviving possibility is the two drivers
+rewriting in different PLACES, and
+`driver_rewrite_fingerprint` measures that: identities true in real
+arithmetic and false in floating point, on opaque inputs, verdict per
+row. Run it on both platforms and diff the column.
+
+Every row CHECKS ITS OWN DISCRIMINATION FIRST, in Rust f32, before the
+GPU answer is interpreted. That guard earned itself twice
+immediately: a first cut reported `(7*3)/3 == 7` as a rewrite (both
+values are exact in f32, so IEEE agrees and the row said nothing), and
+the assertion then caught `sqrt(3)^2 == 3` being exact too. A verdict
+read off a row that does not separate the two forms is worse than no
+verdict.
+
+**Windows / Vulkan / NVIDIA:**
+
+| identity | verdict |
+|---|---|
+| `(a+b) - a` | REWRITTEN to `b` |
+| `(x+y)+z` vs `x+(y+z)` | evaluated -- NOT reassociated |
+| `a*b + c` | **CONTRACTED to fma** |
+| `(m*n)/n` vs `m` | REWRITTEN |
+| `m/n` vs `m*(1/n)` | SUBSTITUTED |
+| `sqrt(v)^2` vs `v` | REWRITTEN |
+| `(-0) + 0` | REWRITTEN to `-0` (IEEE says `+0`) |
+
+The second row is the interesting negative: this driver does NOT
+reassociate in general, yet does cancel a common term in `(a+b) - a`.
+The fold is a specific narrow rewrite, not blanket fast-math.
+
+**On switching a CPU twin to `fma`:** measured, the GPU contracts
+`a*b + c` here -- separate gives 0 for the chosen inputs, fused gives
+1, and the GPU gives 1. So a twin using `mul_add` would match this
+platform's arithmetic where a twin using separate ops does not. That
+is a real basis for the change.
+
+The caveat is the whole reason this file exists, though: contraction
+is a DRIVER choice, and this table is one platform's. If Metal does
+not contract, or contracts elsewhere, hard-coding `mul_add` in the
+twin makes it right on Windows and wrong on macOS -- the same trap in
+mirror image, and harder to see because the twin is what we would then
+be trusting to judge the GPU. The fingerprint wants running on the M2
+and diffing before that change lands.
+
+**On regenerating the Windows baselines:** the full suite reads
+**238/238 on Windows** with the current tree, so the baselines already
+represent this platform's output and regenerating them changes no
+verdict here. It only means something if code has changed --
+and then it is not a refresh, it is a decision to move the reference,
+which wants the diff read first. What a cross-platform comparison
+actually needs already exists: a suite run leaves 238 full-resolution
+renders in `tests/visual/current/` (untracked), against baselines that
+are normalised thumbnails (160x120, metadata stripped) compared with a
+tolerance rather than a hash -- so `current/` is the artifact to diff
+between machines, not `baseline/`.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
