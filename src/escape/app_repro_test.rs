@@ -4282,6 +4282,18 @@ mod tests {
     /// IEEE requires to be exactly `1e-8`. Passing means the transform
     /// survived the compiler; failing means it was folded, which
     /// identifies the mechanism rather than merely suspecting it.
+    ///
+    /// The inputs MUST arrive through a buffer. Written as WGSL
+    /// literals the whole body is constant-foldable, and Metal folds
+    /// it — at which point the test measures the compiler's
+    /// constant folder, which is exact, instead of the runtime code
+    /// the deep rung actually executes. Measured on an M2, that
+    /// distinction is the entire result: literal inputs report a
+    /// healthy `1e-8` from both sums, and the same helpers on opaque
+    /// inputs report `0`. (Exactly how `2f64.powi` hid its own
+    /// underflow behind constant folding — same trap, other language.)
+    /// Both paths are computed here so the contrast stays visible in
+    /// the output, but only the opaque one is asserted on.
     #[test]
     #[ignore = "needs a GPU"]
     fn the_deep_rungs_error_free_transforms_are_not_folded_away() {
@@ -4325,23 +4337,34 @@ mod tests {
             r#"
 {helpers}
 
-@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+// Opaque to the compiler: it cannot fold what it cannot see.
+@group(0) @binding(0) var<storage, read> inp: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(1)
 fn main() {{
     // 1e-8 is below half an ulp of 1.0 in f32 (5.96e-8), so the sum
     // rounds to exactly 1.0 and the whole addend IS the error term.
-    let a = 1.0;
-    let b = 1.0e-8;
+    let a = inp[0];        // 1.0
+    let b = inp[1];        // 1e-8
+    let c = inp[2];        // 1.0000001
     out[0] = df_two_sum(a, b).x;   // 1.0
     out[1] = df_two_sum(a, b).y;   // 1e-8, or 0 if folded
     out[2] = df_quick_sum(a, b).x; // 1.0
     out[3] = df_quick_sum(a, b).y; // 1e-8, or 0 if folded
     // The split is bitmask-based and already immune; included so a
     // failure can be attributed to the sums rather than to it.
-    out[4] = df_split(1.0000001).y;
+    out[4] = df_split(c).y;
     // two_prod's split is immune, but its error assembly is float.
-    out[5] = df_two_prod(1.0000001, 1.0000001).y;
+    out[5] = df_two_prod(c, c).y;
+
+    // The same calls on literals, for contrast only. A compiler that
+    // folds these reports the IEEE answer no matter what it does to
+    // the opaque path above, which is precisely the false negative
+    // this layout exists to expose.
+    out[6] = df_two_sum(1.0, 1.0e-8).y;
+    out[7] = df_quick_sum(1.0, 1.0e-8).y;
+    out[8] = df_two_prod(1.0000001, 1.0000001).y;
 }}
 "#
         );
@@ -4358,7 +4381,18 @@ fn main() {{
             compilation_options: Default::default(),
             cache: None,
         });
-        let n = 6u64;
+        let inp = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("df in"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &inp,
+            0,
+            bytemuck::cast_slice(&[1.0f32, 1.0e-8f32, 1.0000001f32, 0.0f32]),
+        );
+        let n = 9u64;
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("df out"),
             size: n * 4,
@@ -4374,7 +4408,10 @@ fn main() {{
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("df bg"),
             layout: &pipeline.get_bind_group_layout(0),
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: inp.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buf.as_entire_binding() },
+            ],
         });
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("df"),
@@ -4405,10 +4442,13 @@ fn main() {{
         read.unmap();
 
         println!(
-            "df_two_sum  -> hi {:e}  lo {:e}\n\
-             df_quick_sum-> hi {:e}  lo {:e}\n\
-             df_split lo {:e}   df_two_prod lo {:e}",
-            got[0], got[1], got[2], got[3], got[4], got[5]
+            "opaque inputs (what the deep rung runs):\n  \
+             df_two_sum  -> hi {:e}  lo {:e}\n  \
+             df_quick_sum-> hi {:e}  lo {:e}\n  \
+             df_split lo {:e}   df_two_prod lo {:e}\n\
+             literal inputs (constant-folded, for contrast):\n  \
+             df_two_sum lo {:e}   df_quick_sum lo {:e}   df_two_prod lo {:e}",
+            got[0], got[1], got[2], got[3], got[4], got[5], got[6], got[7], got[8]
         );
 
         assert_eq!(got[0], 1.0, "df_two_sum's sum should round to exactly 1.0");
