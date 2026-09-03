@@ -121,7 +121,8 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
         },
     ],
     wgsl: r#"
-// Generator pair: g(t) and g'(t), selected by fparam(2).
+// Generator pair: g(t) and g'(t), selected by fparam(2). `t` arrives
+// already reduced to [-pi, pi] by esc_reduce.
 fn weier_g(t: f32, gen: i32) -> f32 {
     if (gen == 0) {
         return cos(t);
@@ -156,8 +157,10 @@ fn field_step(n: u32, p: vec2<f32>, s: FieldState) -> FieldStep {
     let phase = fparam(3u);
     let an = s.a.x;
     let bn = s.a.y;
-    let tx = bn * p.x + phase;
-    let ty = bn * p.y + phase;
+    // Reduced once here and shared by g and dg, so the cost is two
+    // reductions per octave rather than four.
+    let tx = esc_reduce(bn * p.x + phase);
+    let ty = esc_reduce(bn * p.y + phase);
     let gx = weier_g(tx, gen);
     let gy = weier_g(ty, gen);
     let value = an * gx * gy;
@@ -288,11 +291,14 @@ fn field_step(n: u32, p: vec2<f32>, s: FieldState) -> FieldStep {
     let k = fparam(0u);
     let theta = s.a.x;
     let i_old = s.a.y;
-    let i_new = i_old + k * sin(theta);
+    // theta accumulates without bound through `t_new`, so it needs
+    // the same reduction the Weierstrass octaves do.
+    let th = esc_reduce(theta);
+    let i_new = i_old + k * sin(th);
     let t_new = theta + i_new;
     // Jacobian of (theta, I) -> (theta + I + K sin theta, I + K sin theta)
     // at the PRE-step point.
-    let kc = k * cos(theta);
+    let kc = k * cos(th);
     let m = s.b;
     let j00 = 1.0 + kc;
     // Row-major tangent update: M <- J * M.
