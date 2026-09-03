@@ -3661,6 +3661,65 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### The f3 location on macOS: the same fix, the same size (2026-09-03)
+
+The Windows column measured the df fix at `output/f3-final.fflame`
+(zoom_log2 9316.69, 197 limbs, 10,100,100 iterations, 3756-digit
+centre). Here is the M2's, same config, same 640x384, reference served
+from the orbit store so both builds iterate an IDENTICAL orbit and
+only the DF arithmetic differs. Pre-fix build from a worktree at
+`fef93691`, the commit before the hybrid.
+
+| | Windows / Vulkan | macOS / Metal |
+|---|---|---|
+| pixels differing | 6.66% | **6.91%** |
+| max channel delta | 203 | **192** |
+| past 40 | 0.106% | **0.105%** |
+
+The two platforms move almost identically, which is what the fold
+being common-mode predicts: the same defect removed on both, so the
+same pixels move. It is a consistency check on the fix rather than a
+new finding, and it is the first time the two columns have agreed
+this closely on anything.
+
+Two things confirmed on the way. **macOS renders z9316 correctly** --
+the double-scepter valley with spiral filigree, no glitch dust, no
+interior collapse, `sd` 59.7 across the frame. And the cost really is
+invisible at this depth: 3.15 s warm, dominated by loading the 14 MB
+reference rather than the GPU pass, matching the Windows observation
+that the ~24% DF penalty bites where the GPU dominates -- roughly zoom
+48 to a few hundred -- and not at f3-class depths.
+
+The differing pixels are ISOLATED points scattered through the
+filigree, not a structural region: mean absolute delta 0.132 across
+the frame against a max of 192. That is the signature of near-boundary
+pixels whose escape iteration flips, which is what a change in delta
+precision should do and where the direction question lives.
+
+**Independently confirmed by eye:** the macOS frame matches both the
+Windows render and an online reference image of this location. That
+rules out the class of concern a pixel statistic cannot -- neither
+build is grossly wrong at f3, and the fix introduces no visible
+regression at the depth DF was built for, which is what "safe to
+ship" needs. It cannot settle direction, and for the same reason it
+is reassuring: a mean absolute delta of 0.132 is invisible by
+construction, so no visual comparison can discriminate the two.
+
+**Still not established: which render is correct.** The Windows entry
+is right that a difference is not a direction, and the M2 column adds
+no direction either -- two platforms agreeing tells us the fix is
+consistent, not that it is right. What would settle it, and needs no
+reference-independence (the thing that defeated both earlier attempts,
+since orbit relocation collapses back onto the same orbit): take
+pixels where the two builds disagree and compute their escape
+iteration EXACTLY, with `ReferenceOrbit::compute` at the pixel's own
+coordinates rather than the view centre's. That is the same
+fixed-point machinery the z700 wall was settled with, it is ground
+truth rather than a better approximation, and the per-pixel iteration
+counts can be read directly through the `IterRecord` path instead of
+being inferred from colour. Cost is roughly a reference build per
+pixel, so a handful of pixels, not a frame.
+
 ### weierstrass-hillshade is trig range reduction, not reassociation (2026-09-03)
 
 Reassociation was the standing candidate for the 21, so
