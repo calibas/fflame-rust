@@ -3433,7 +3433,13 @@ mod tests {
                 guard += 1;
                 assert!(guard < 100_000, "{formula} did not settle");
             }
-            let path = crate::escape::diag::snapshot().path;
+            // The RENDERER's own path, not `diag::snapshot()`. The
+            // global carries the same string for the panel but is
+            // shared across renderers, and cargo runs tests in
+            // parallel -- `last_path` exists for exactly this and
+            // says so. Latent until longer-running neighbours started
+            // interleaving with it.
+            let path = escape.last_path;
             escape.destroy();
             println!("{formula} {params:?} @ zoom {zoom}: path = {path}");
             assert!(
@@ -4166,6 +4172,82 @@ mod tests {
         assert!(
             crate::escape::reference::orbit_progress().is_none(),
             "progress must be cleared once the reference is complete"
+        );
+    }
+
+    /// An orbit uploaded in SLICES must render what the whole orbit
+    /// renders.
+    ///
+    /// The browser builds its reference a slice per frame, and each
+    /// slice used to re-upload the entire orbit -- correct, but
+    /// quadratic in the slice count, and at the reported depth
+    /// (189 limbs, millions of iterations) the re-derivation dwarfed
+    /// the arithmetic it existed to publish. Measured at 640x480,
+    /// tripling and sextupling the iteration count: 2.92/10.62/22.33 s
+    /// before, 2.90/8.82/17.94 s after -- 6x the work in 6.2x the
+    /// time instead of 7.6x, the superlinear part being the upload.
+    ///
+    /// Appending only the tail is what makes that linear, and the
+    /// failure mode if it is wrong is not a crash but a WRONG IMAGE:
+    /// stale or garbage entries before the tail. So this renders the
+    /// same view both ways -- ~100 appended slices against one whole
+    /// upload -- and demands they agree exactly.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_sliced_orbit_upload_renders_what_a_whole_one_does() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64,
+            &config.flame, config.palette_size);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".to_string();
+        esc.coloring = "smooth".to_string();
+        esc.center_re = "-1.7492046334590016288".to_string();
+        esc.center_im = "0.0".to_string();
+        // Deep enough that the slice budget is small, so the sliced
+        // run crosses buffer-capacity boundaries mid-growth -- the
+        // case that produced a structurally wrong frame when the
+        // worker path got this wrong.
+        esc.zoom_log2 = 11_960.0;
+        esc.max_iter = 66_400;
+        esc.bailout = 4.0;
+
+        let mut run = |budgeted: bool| -> Vec<crate::escape::renderer::IterRecord> {
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            escape.force_budgeted = budgeted;
+            let mut frames = 0u32;
+            loop {
+                let mut e = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("slice") });
+                let done = escape.render(&device, &queue, &mut e, &esc, renderer.palette_view());
+                queue.submit(std::iter::once(e.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                frames += 1;
+                if done { break; }
+                assert!(frames < 200_000, "never settled");
+            }
+            if budgeted {
+                assert!(frames > 50, "only {frames} frames -- not actually sliced");
+            }
+            let recs = escape.read_results_full(&device, &queue).unwrap();
+            escape.destroy();
+            recs
+        };
+
+        let whole = run(false);
+        let sliced = run(true);
+        assert_eq!(whole.len(), sliced.len());
+        let differing = whole
+            .iter()
+            .zip(&sliced)
+            .filter(|(a, b)| a.n != b.n || a.z != b.z)
+            .count();
+        assert_eq!(
+            differing, 0,
+            "{differing}/{} pixels differ between a sliced upload and a whole one",
+            whole.len()
         );
     }
 
