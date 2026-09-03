@@ -4547,8 +4547,8 @@ fn main() {{
             crate::escape::fields::get_field_coloring("field_hillshade", field),
         );
         let reduce = {
-            let head = "fn weier_reduce(";
-            let start = shipped.find(head).expect("weier_reduce is not in the shader");
+            let head = "fn esc_reduce(";
+            let start = shipped.find(head).expect("esc_reduce is not in the shader");
             let (mut depth, mut seen) = (0usize, false);
             let mut end = None;
             for (i, ch) in shipped[start..].char_indices() {
@@ -4563,7 +4563,7 @@ fn main() {{
                     }
                 }
             }
-            shipped[start..end.expect("unterminated weier_reduce")].to_string()
+            shipped[start..end.expect("unterminated esc_reduce")].to_string()
         };
 
         let src = format!(
@@ -4578,7 +4578,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     if (gid.x >= n) {{ return; }}
     // Raw, then the shipped reduction, on the same argument.
     out[gid.x] = cos(t[gid.x]);
-    out[gid.x + n] = cos(weier_reduce(t[gid.x]));
+    out[gid.x + n] = cos(esc_reduce(t[gid.x]));
 }}
 "#
         );

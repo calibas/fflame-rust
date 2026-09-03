@@ -121,36 +121,8 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
         },
     ],
     wgsl: r#"
-// Accurate argument reduction, applied ONCE per octave before the
-// generator pair. The hardware cos/sin lose their argument long
-// before this field needs them: measured on an M2, `cos` error
-// reaches 0.78 -- on a function bounded by 1 -- at the top octave,
-// where |t| ~ 1.7e7 and one f32 ulp is about 2 radians.
-//
-// This is NOT the unresolvable-argument class (CLAUDE.md's third
-// clause). For b = 2, `b^n * x` is EXACT in f32, so the argument is
-// an exact value whose cosine has a well-defined true result both
-// drivers can agree on; only the reduction was missing. Cody-Waite
-// with a three-term 2*pi split, using `fma` (fused on both Vulkan and
-// Metal -- measured, and it is CONTRACTION of a written product that
-// neither driver does, not the explicit call). Worst error over these
-// octaves goes from 7.8e-1 to 5.1e-10.
-//
-// The amplification is why it matters: the value series is weighted
-// a^n and shrinks, but the GRADIENT series is weighted (ab)^n, which
-// GROWS whenever ab >= 1 -- the Weierstrass nowhere-differentiability
-// condition -- so the hillshade normal was dominated by exactly the
-// octaves where the trig was meaningless.
-fn weier_reduce(t: f32) -> f32 {
-    let k = round(t * 0.15915494309189535);
-    var r = fma(-k, 6.2831855, t);
-    r = fma(-k, -1.7484555e-7, r);
-    r = fma(-k, -7.1054274e-15, r);
-    return r;
-}
-
 // Generator pair: g(t) and g'(t), selected by fparam(2). `t` arrives
-// already reduced to [-pi, pi] by weier_reduce.
+// already reduced to [-pi, pi] by esc_reduce.
 fn weier_g(t: f32, gen: i32) -> f32 {
     if (gen == 0) {
         return cos(t);
@@ -187,8 +159,8 @@ fn field_step(n: u32, p: vec2<f32>, s: FieldState) -> FieldStep {
     let bn = s.a.y;
     // Reduced once here and shared by g and dg, so the cost is two
     // reductions per octave rather than four.
-    let tx = weier_reduce(bn * p.x + phase);
-    let ty = weier_reduce(bn * p.y + phase);
+    let tx = esc_reduce(bn * p.x + phase);
+    let ty = esc_reduce(bn * p.y + phase);
     let gx = weier_g(tx, gen);
     let gy = weier_g(ty, gen);
     let value = an * gx * gy;
@@ -319,11 +291,14 @@ fn field_step(n: u32, p: vec2<f32>, s: FieldState) -> FieldStep {
     let k = fparam(0u);
     let theta = s.a.x;
     let i_old = s.a.y;
-    let i_new = i_old + k * sin(theta);
+    // theta accumulates without bound through `t_new`, so it needs
+    // the same reduction the Weierstrass octaves do.
+    let th = esc_reduce(theta);
+    let i_new = i_old + k * sin(th);
     let t_new = theta + i_new;
     // Jacobian of (theta, I) -> (theta + I + K sin theta, I + K sin theta)
     // at the PRE-step point.
-    let kc = k * cos(theta);
+    let kc = k * cos(th);
     let m = s.b;
     let j00 = 1.0 + kc;
     // Row-major tangent update: M <- J * M.
