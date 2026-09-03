@@ -4362,6 +4362,53 @@ trap, in an event-handler-driven path, timing-sensitive, present on
 main, with no reachable `unsafe` in this crate -- so the name will
 most likely land in a dependency.
 
+### Two retractions, and the experiment that separates the causes (2026-09-03)
+
+The offline symbolizer named
+`rhai::module::FuncRegistration::set_into_module_raw` for the crash
+offset. **That name is not trustworthy, and neither was the reasoning
+that led to building the tool.** Both retractions come from the same
+measurement, and it is one that should have been made three rounds
+earlier.
+
+`dist` and `dist-symbols` were treated as the same program because
+their code sections differ by 738 bytes -- 0.007%. That is a TOTAL,
+and a total hides everything:
+
+| | dist | dist-symbols |
+|---|---|---|
+| functions | 13,214 | 13,205 |
+| bodies differing in size | — | 4,638 |
+| bodies matching by content hash | — | **0** |
+| table minimum | 4,488 | 4,483 |
+
+Not one function body is byte-identical between them. `strip` changes
+the LINK, not just the symbol table, so:
+
+- **Offsets cannot be mapped across it.** An offset landing 987 bytes
+  into a 5,686-byte body in one build says nothing about the other.
+  The rhai name is an artifact of assuming index alignment that does
+  not hold.
+- **"Identical code, different timing, therefore a race" was
+  unfounded.** The code is not identical. The intermittency is still
+  real and still suggests a race, but the controlled comparison that
+  was supposed to establish it did not compare what it claimed to.
+
+**The experiment that does separate them** deletes the name and DWARF
+sections from the names build by BYTE EDIT rather than relinking
+(`scripts/wasm-strip-names.py`, driven by `scripts/wasm-sizetest.bat`).
+The code section is untouched -- offset shift measured at exactly 0 --
+so the program is unchanged while the module drops from 19.8 MB to
+16.79 MB, essentially the shipped size. Two outcomes, both decisive:
+
+- **It crashes** -> module size or load timing was the variable, and
+  every offset maps 1:1 onto the retained named module. The
+  symbolization then works, exactly rather than approximately.
+- **It does not** -> the crash requires the stripped LINK itself, and
+  no symbol-preserving build will ever observe it. That closes off
+  the entire approach and says the next move is bisection on main's
+  history, where the bug actually lives.
+
 **Verified.** Against exact orbits at zoom 30, both rungs: Newton
 schemes 0/1/2 over `z^p - 1` and the relaxed map at 0.00% outcome
 mismatches; Nova 0.00%; Kaliset 8.5e-7 / 5.4e-8 mean relative error
