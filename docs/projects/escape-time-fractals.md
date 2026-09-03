@@ -3661,6 +3661,80 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### weierstrass-hillshade is trig range reduction, not reassociation (2026-09-03)
+
+Reassociation was the standing candidate for the 21, so
+`weierstrass-hillshade` was picked to test it at a real site: mean
+2.32, **zero** pixels past the outlier threshold, no deep rung, and an
+accumulation that is a serial 24-term dependency chain reassociation
+cannot reorder. It is not reassociation. It is the generator.
+
+The field is `sum a^n * cos(b^n x) * cos(b^n y)`, a=0.55, b=2, 24
+terms, plane spanning +-2 -- so the last octaves evaluate `cos` near
+`2^23 * 2` ~ 1.7e7, where one f32 ulp is about 2 radians, a third of a
+period. `trig_accuracy_across_the_weierstrass_octaves` hands identical
+f32 arguments to the GPU and compares against an f64 reference of the
+same bits. On the M2:
+
+| octave | max abs cos error |
+|---|---|
+| 0-11 | 1.4e-4 |
+| 16 | 5.5e-3 |
+| 20 | 1.1e-1 |
+| 23 | **7.8e-1** |
+
+`cos` is bounded by 1, so an error of 0.78 means the returned value is
+unrelated to the cosine of that argument. Metal's argument reduction
+gives up long before 1.7e7.
+
+**The amplification is the whole story, and it is structural.** The
+value series is weighted `a^n` (shrinking) and comes out fine; the
+GRADIENT series is weighted `a^n b^n = (ab)^n` with ab = 1.1, which
+GROWS with the octave -- so the hillshade is dominated by exactly the
+terms where the trig is meaningless:
+
+| series | weight | relative error |
+|---|---|---|
+| value | 0.55^n, shrinking | 3.3e-6 -- negligible |
+| gradient | 1.1^n, growing | **14.1%** |
+
+A ~14% error in the shading normal is a broad luminance shift with no
+localised blowup, which is precisely the failure's signature: high
+mean, zero outlier pixels.
+
+The irony is worth recording, because it is the actual mathematics:
+`ab >= 1` is the Weierstrass NOWHERE-DIFFERENTIABILITY condition. The
+analytic gradient series does not converge -- that is the point of the
+function -- so asking for it in f32 over 24 octaves is asking for a
+number that does not exist. Both platforms compute garbage; they
+compute DIFFERENT garbage, and the render diff is that difference.
+
+**This is fixable, and it is not the accepted-divergence class.**
+CLAUDE.md's third clause covers trig whose argument exceeds f32
+resolution, where no reference class exists. That does not apply here:
+b = 2, so `b^n * x` is exact in f32 (power-of-two scaling), the
+argument is an exact value, and `cos` of it has a well-defined true
+result both platforms could agree on. What is missing is accurate
+range reduction. Reducing mod 2*pi in double-f32 before calling `cos`
+-- the machinery the previous commit just repaired -- would give the
+true value on both drivers and make them agree. Cost is a few ops per
+octave, on a 24-term loop.
+
+**Scope beyond this test.** The same shape covers most of the shallow
+cluster the df fold never explained: `collatz` (`esc_ccos` of `pi*z`
+with z growing), `lambda_sine`, `tetration`, `standard_map_ftle` all
+feed unbounded arguments to trig. So the 21 now split into two
+mechanisms rather than one -- range reduction for the shallow
+transcendental failures, general reassociation still the candidate for
+the deep-zoom cluster -- and neither is the df fold.
+
+Caveat, in the file's own discipline: only the Metal column is
+measured. The render diff already proves the platforms differ; the
+Windows run of this probe would say whether NVIDIA reduces better,
+worse, or merely differently, and the probe carries a self-check that
+the low octaves are accurate so a broken buffer cannot be read as a
+result.
+
 ### The df fold, fixed: a barrier the drivers cannot rewrite (2026-09-03)
 
 `df_two_sum` / `df_quick_sum` / `df_two_prod` now launder every
