@@ -3661,6 +3661,60 @@ are normalised thumbnails (160x120, metadata stripped) compared with a
 tolerance rather than a hash -- so `current/` is the artifact to diff
 between machines, not `baseline/`.
 
+### The reduction did not close the gap, and the residual is not reassociation (2026-09-03)
+
+The baseline-regeneration commit set up the test: both platforms now
+compute the true trig and the reference records it, so if macOS
+re-runs and the two tests pass, the reduction closed the gap. It did
+not. macOS reads **217/238**, the same 21, all four regenerated
+baselines still failing:
+
+| test | vs OLD baseline | vs NEW baseline | moved |
+|---|---|---|---|
+| weierstrass-hillshade | 2.64 | **2.43** | -8.0% |
+| standard-map-ftle | 5.45 | **5.41** | -0.7% |
+| fe-threshold-floatexp | 6.53 | **6.50** | -0.5% |
+| manowar-deep | 15.95 | **15.78** | -1.1% |
+
+Limit is 2.0. Weierstrass moved most and is closest, still 20% over.
+
+**So the residual was chased locally, and two candidates are dead.**
+
+*Reassociation is not it.* Every accumulation and every product in the
+Weierstrass field was wrapped in an optimization barrier off an
+always-zero uniform pad -- `sum`, `grad`, and the `an*bn*dg*gy` chains
+-- forcing strict evaluation order. The render moved by **0.00% of
+pixels, max channel delta 1**. Metal is not reassociating this shader,
+so whatever the fingerprint's row 2 licenses, it is not what this
+failure is made of.
+
+*Nor is it amplified ulp noise.* The worry was that finite-differencing
+a height field makes any 1-ulp difference visible. Perturbing the
+generator by 1.2e-7 -- the order of the residual difference between
+two accurate `cos` implementations -- moved the render by **mean 0.00,
+max 2 at full resolution**. The render is robust at that scale, which
+also means the remaining trig difference (both platforms now within
+3.3e-7 of an f64 reference) cannot produce mean 2.43.
+
+**That is the useful part: the difference is not ulp-scale.** Something
+computes a materially different value, and the arithmetic the field
+itself performs has been eliminated. What is left is unexamined and
+all of it sits in the coloring and the output path rather than the
+field:
+
+- `normalize()` on a gradient whose components reach ~176 against a
+  z of 1 -- a fast `inversesqrt` is a common fast-math substitution
+  and the fingerprint has no row for it
+- the `clamp(dot(normal, light), 0, 1)` discontinuity, which turns a
+  small difference into a large one for pixels near `dot = 0`
+- `pow(srgb, 2.2)` in the output conversion
+- `fract()`, and palette `textureSampleLevel` filtering weights
+
+Those are four new fingerprint rows, and the instrument for them
+already exists. Worth noting the shape of the answer either way: the
+first three are arithmetic that a barrier or a reformulation could
+fix; texture filtering is not, and would be an accepted divergence.
+
 ### The reduction generalised: correct, cheap, and it closes nothing yet (2026-09-03)
 
 `esc_reduce` moved out of the Weierstrass field into a shared helper
