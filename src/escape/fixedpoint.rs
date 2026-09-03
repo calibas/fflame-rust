@@ -861,7 +861,7 @@ impl FixedPoint {
         // Normalize |m| into [1, 2) and fold the remainder into the
         // exponent so the f64 seed always fits the headroom window.
         let lg = m.abs().log2().floor();
-        let mant = m / 2f64.powi(lg as i32);
+        let mant = scale_pow2(m, -(lg as i64));
         let mut v = Self::from_f64(mant, n_limbs);
         v.shift_pow2(e2.saturating_add(lg as i64));
         v
@@ -1011,6 +1011,51 @@ fn take_int_part(limbs: &mut [u64]) -> u64 {
 }
 
 // ============================================================
+// Exact power-of-two scaling
+// ============================================================
+
+/// `2^e`, exact for every `e` f64 can represent — normal, subnormal,
+/// and saturating to 0 / ∞ outside. Built from the bit pattern, so no
+/// libm call and nothing for a fast-math flag to reassociate.
+fn pow2_exact(e: i64) -> f64 {
+    if e > 1023 {
+        f64::INFINITY
+    } else if e >= -1022 {
+        // Normal: bias the exponent field, zero mantissa.
+        f64::from_bits(((e + 1023) as u64) << 52)
+    } else if e >= -1074 {
+        // Subnormal: a single mantissa bit, still exactly 2^e.
+        f64::from_bits(1u64 << (e + 1074))
+    } else {
+        0.0
+    }
+}
+
+/// `v · 2^e`, correct across the whole f64 range.
+///
+/// NOT `v * 2f64.powi(e as i32)`. With a RUNTIME exponent that lowers
+/// to the `__powidf2` libcall, which forms `2^-k` as `1 / 2^k` by
+/// repeated squaring — so for k past 1023 the intermediate overflows
+/// to infinity and the reciprocal comes back **0**. Values f64
+/// represents perfectly well then scale silently to zero: measured
+/// here, `2f64.powi(-1060)` is 0, and `BigFloat::to_f64` turned every
+/// magnitude below ~2.2e-308 into ±0. LLVM constant-folds `powi`
+/// correctly, which is why the bug only appears once the exponent
+/// stops being a literal — i.e. at every call site in this module.
+///
+/// Scaling in two halves keeps both factors inside the range
+/// `pow2_exact` represents exactly. The halves always share a sign, so
+/// the two multiplies move the same direction and the result rounds
+/// once, at the end, the way IEEE would.
+pub(crate) fn scale_pow2(v: f64, e: i64) -> f64 {
+    if v == 0.0 || !v.is_finite() {
+        return v;
+    }
+    let half = e.div_euclid(2);
+    v * pow2_exact(half) * pow2_exact(e - half)
+}
+
+// ============================================================
 // FloatExp — mantissa + wide exponent (CPU side)
 // ============================================================
 
@@ -1033,7 +1078,7 @@ impl FloatExp {
             return Self { m: 0.0, e: 0 };
         }
         let e = v.abs().log2().floor() as i64;
-        let m = v / 2f64.powi(e as i32);
+        let m = scale_pow2(v, -e);
         Self { m, e }
     }
 
@@ -1041,13 +1086,9 @@ impl FloatExp {
         if self.m == 0.0 {
             return 0.0;
         }
-        if self.e > 1023 {
-            return if self.m > 0.0 { f64::INFINITY } else { f64::NEG_INFINITY };
-        }
-        if self.e < -1070 {
-            return 0.0;
-        }
-        self.m * 2f64.powi(self.e as i32)
+        // `scale_pow2` saturates on its own: ±∞ past the top of the
+        // range, 0 past the bottom, subnormals in between.
+        scale_pow2(self.m, self.e)
     }
 
     fn renorm(self) -> Self {
@@ -1055,7 +1096,7 @@ impl FloatExp {
             return Self::zero();
         }
         let shift = self.m.abs().log2().floor() as i64;
-        Self { m: self.m / 2f64.powi(shift as i32), e: self.e + shift }
+        Self { m: scale_pow2(self.m, -shift), e: self.e + shift }
     }
 
     /// Product (exact exponent bookkeeping, f64 mantissa rounding).
@@ -1522,6 +1563,38 @@ mod tests {
                 x.to_f64()
             );
         }
+    }
+
+    /// The `2f64.powi(runtime_exponent)` trap, pinned directly.
+    ///
+    /// `powi` lowers to `__powidf2`, which builds `2^-k` as `1 / 2^k`
+    /// by repeated squaring — so past k = 1023 the intermediate is
+    /// infinity and the reciprocal is 0. LLVM constant-folds the
+    /// literal case correctly, so this only reproduces with an
+    /// exponent the optimizer cannot see; `black_box` guarantees that
+    /// regardless of how well a future compiler inlines.
+    #[test]
+    fn scaling_by_a_runtime_power_of_two_does_not_underflow_to_zero() {
+        use std::hint::black_box;
+
+        // The shape that was silently returning zero.
+        for e in [-1023i64, -1040, -1060, -1074] {
+            let got = scale_pow2(1.0, black_box(e));
+            assert!(got > 0.0, "2^{e} scaled to {got}");
+            // Exactly a power of two: halving it e times returns 1.
+            assert_eq!(scale_pow2(got, -e), 1.0, "2^{e} did not round-trip");
+        }
+
+        // Saturation at both ends stays correct.
+        assert_eq!(scale_pow2(1.0, black_box(-1075)), 0.0);
+        assert_eq!(scale_pow2(1.0, black_box(2000)), f64::INFINITY);
+        assert_eq!(scale_pow2(-1.0, black_box(2000)), f64::NEG_INFINITY);
+        assert_eq!(scale_pow2(0.0, black_box(-1060)), 0.0);
+
+        // A subnormal operand scaled back into the normal range — the
+        // case a `1 / 2^k` formulation cannot express at all.
+        let sub = scale_pow2(1.0, black_box(-1070));
+        assert_eq!(scale_pow2(sub, black_box(1070)), 1.0);
     }
 
     #[test]
