@@ -25,7 +25,7 @@ Four artifacts, built four different ways, from one repository.
 |---|---|---|---|
 | Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
-| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
+| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
 | Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |
 
 ### The version problem
@@ -125,6 +125,7 @@ than under-checking. Measured, not assumed:
 | new field / limit | **yes** | re-pin deliberately |
 | new variation | no | re-import the corpus; no re-pin |
 | **new `Feature`, category, or param type** | **no** ← | see below |
+| new render mode | **no** (the value) | published as `render_modes.known`; their conformance test reads it |
 
 **A new vocabulary entry does not move the fingerprint.** `key_paths`
 walks structure, and a new feature is one more element in `features[]`
@@ -136,6 +137,23 @@ the one dimension the contract exists to convey.
 **Until that is fixed** (a second fingerprint over vocabulary *values*),
 adding a `Feature`, a `VariationCategory` or a `ParamType` requires
 telling the API repository directly. Do not rely on the pin.
+
+**Render modes are the exception, and show the general fix.** Adding
+`escape` had to be communicated by hand for exactly the reason above —
+it was one more element in an enum the contract did not even publish.
+The repair was to publish the vocabulary as a NEW KEY,
+`render_modes.known`: adding the key moved the fingerprint once,
+deliberately (`0441465e249b6911` → `81a4d090385275c0`), which fired the
+API's pin, and from then on their
+`render_mode_enum_covers_every_contract_mode` reads the values. Between
+the two there is an automatic signal where there was none.
+
+`RenderMode::ALL` feeds that list, and
+`every_render_mode_is_published_in_the_contract` keeps it honest: Rust
+cannot iterate a plain enum, so a fourth mode fails to compile in that
+test's exhaustive match rather than quietly missing the contract. The
+same trick would work for the other vocabularies whenever they are
+worth the same treatment.
 
 Also update `docs/main/openapi.json` when the client's expectations of
 the API change — it is the wire authority for both repositories, and it
@@ -233,7 +251,7 @@ Host-specific packaging runs automatically as the second step — the
 | macOS bundle | `python3 scripts/make_macos_app.py --zip` | macOS |
 | Windows zip | `python scripts/make_windows_zip.py` | Windows |
 | web app | `./build-wasm.sh` / `build-wasm.bat` (they build `--profile dist`) | either |
-| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/script` | either |
+| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/script` | either |
 | python wheel | `maturin build --release` in `python/` | per-platform wheel |
 
 `--profile dist`, never `--release`, for **desktop and web alike** — §4c
@@ -552,6 +570,9 @@ they are the one surface that does **not** use `build-wasm.sh`:
 
 ```bash
 cd wasm/render && wasm-pack build --target web --release   # -> wasm/render/pkg/
+# ...and the engine-specific pair, same source, different Cargo features:
+cd wasm/flame  && wasm-pack build --target web --release   # flame only,  0.73 MB gzip
+cd wasm/escape && wasm-pack build --target web --release   # escape only, 0.41 MB gzip
 cd wasm/script && wasm-pack build --target web --release   # -> wasm/script/pkg/
 ```
 

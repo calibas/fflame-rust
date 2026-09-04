@@ -66,6 +66,13 @@ pub struct SystemSettings {
     #[serde(default = "default_burn_in")]
     pub burn_in: u32,
 
+    /// Disk budget for cached deep-zoom reference orbits, in MB.
+    /// A 10M-iteration reference is ~200 MB and takes minutes of
+    /// single-threaded arithmetic to rebuild, so this is the knob
+    /// that decides how many deep locations stay instant.
+    #[serde(default = "default_orbit_cache_mb")]
+    pub orbit_cache_mb: u32,
+
     // UI/UX
     /// Application language (ISO 639-1 code, e.g., "en", "es", "fr")
     #[serde(default = "default_language")]
@@ -185,6 +192,17 @@ fn default_burn_in() -> u32 {
     20
 }
 
+fn default_orbit_cache_mb() -> u32 {
+    // 1 GB, not the 256 MB the store used to hard-code. One
+    // 10M-iteration reference is ~200 MB and costs minutes of
+    // single-threaded arithmetic, so 256 MB held barely one deep
+    // location - observed in practice: a second deep dive evicted an
+    // f3-depth reference and the next visit spent eight minutes
+    // rebuilding a file that had been on disk. Users who want the
+    // space back can turn it down in Settings.
+    1024
+}
+
 fn default_language() -> String {
     "en".to_string()
 }
@@ -228,6 +246,7 @@ impl Default for SystemSettings {
             target_fps: default_target_fps(),
             iterations_per_thread: default_iterations_per_thread(),
             burn_in: default_burn_in(),
+            orbit_cache_mb: default_orbit_cache_mb(),
             language: default_language(),
             show_help_on_startup: default_show_help_on_startup(),
             compact_mode: None,

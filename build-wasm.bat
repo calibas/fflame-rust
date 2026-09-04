@@ -2,13 +2,36 @@
 echo Building for WASM...
 
 REM Build the WASM module
-set RUSTFLAGS=--cfg=web_sys_unstable_apis
-cargo build --lib --target wasm32-unknown-unknown --profile dist
+REM RUSTFLAGS in the environment REPLACES .cargo/config.toml's list, so
+REM the getrandom cfg and simd128 from there are repeated here.
+REM -zstack-size: see .cargo/config.toml (wasm-ld defaults to 1 MiB).
+set RUSTFLAGS=--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=67108864
+REM --debug selects [profile.dist-debug] (Cargo.toml): same
+REM optimisation level and simd/codegen shape, but symbols kept,
+REM panics unwound through the console hook, and debug assertions plus
+REM overflow checks ON -- so a browser trap names a function instead of
+REM an address, and a wrapping subtraction fails at its source. Much
+REM bigger and slower; not for shipping.
+set PROFILE=dist
+set BINDGEN_FLAGS=
+if /I "%~1"=="--symbols" (
+    REM dist codegen exactly, symbols kept: the build for a fault that
+    REM only appears when optimized.
+    set PROFILE=dist-symbols
+    set BINDGEN_FLAGS=--keep-debug
+    echo   ^(dist codegen + symbols^)
+)
+if /I "%~1"=="--debug" (
+    set PROFILE=dist-debug
+    set BINDGEN_FLAGS=--keep-debug
+    echo   ^(debug profile: symbols + debug_assert + overflow checks^)
+)
+cargo build --lib --target wasm32-unknown-unknown --profile %PROFILE%
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 REM Generate bindings with wasm-bindgen
 echo Generating JavaScript bindings...
-wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/dist/fractal_flame_wgpu.wasm
+wasm-bindgen %BINDGEN_FLAGS% --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/%PROFILE%/fractal_flame_wgpu.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 REM Copy assets for runtime loading

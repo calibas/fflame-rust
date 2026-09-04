@@ -8,5 +8,24 @@
 # Target-scoped, so native builds are untouched. Cargo discovers config
 # by walking parent directories, so this also applies to the standalone
 # crates under wasm/ even though they are separate workspaces.
+# simd128: the escape engine's reference-orbit bignum multiply has a
+# vectorized column form on wasm (src/escape/fixedpoint.rs, measured
+# 1.9x over the scalar row scan). Every WebGPU-capable browser shipped
+# simd128 years before WebGPU, and the app requires WebGPU, so this
+# costs no compatibility. NOTE: the build-wasm scripts set RUSTFLAGS in
+# the environment, which REPLACES this whole list (cargo's flag sources
+# are mutually exclusive, env wins) -- so both flags here are repeated
+# there. This entry still covers the wasm-pack gallery crates and any
+# bare `cargo build --target wasm32-unknown-unknown`.
+# stack-size: wasm-ld defaults the shadow stack to 1 MiB, which is
+# small for this binary. GPU parameter blocks are plain arrays built BY
+# VALUE -- GpuVariationParams alone is [f32; 1600] (6.4 KB) and
+# GpuParams carries per-transform arrays over 128+ transforms -- and
+# `dist` builds with fat LTO and one codegen unit, which inlines deep
+# chains and sums their frames. A wasm shadow-stack overflow does not
+# announce itself: the stack pointer walks out of its region and the
+# next access traps as `RuntimeError: index out of bounds`, reported
+# from whatever requestAnimationFrame callback was running, with no
+# Rust panic message and no location. 16 MiB costs address space only.
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-Ctarget-feature=+simd128', '-Clink-arg=-zstack-size=67108864']

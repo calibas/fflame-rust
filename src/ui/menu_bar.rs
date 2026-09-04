@@ -218,6 +218,11 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::View, ctx);
                 }
 
+                let escape_open = workspace.panel_exists(super::workspace::PanelType::Escape);
+                if ui.selectable_label(escape_open, t!("menu.window_escape").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Escape, ctx);
+                }
+
                 let solid_open = workspace.panel_exists(super::workspace::PanelType::SolidLighting);
                 if ui.selectable_label(solid_open, t!("menu.window_solid_lighting").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::SolidLighting, ctx);
@@ -346,6 +351,9 @@ pub fn render_menu_bar(
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Scripting, t!("menu.layout_scripting").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Scripting);
+                    }
+                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::EscapeTime, t!("menu.layout_escape").as_ref()).clicked() {
+                        workspace.apply_layout(super::workspace::WorkspaceLayout::EscapeTime);
                     }
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
                     //     workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);

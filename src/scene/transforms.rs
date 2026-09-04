@@ -1491,6 +1491,10 @@ impl<'de> Deserialize<'de> for Transform {
     }
 }
 
+// The flame engine's own tests: they build flames, compile flame
+// shaders, or exercise the flame renderer's caches, all of which
+// need the variation catalog.
+#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1835,6 +1839,33 @@ pub enum RenderMode {
     /// 3D rendering with pseudo-3D projection. Wire/cloud-blob form: `"3d"`.
     #[serde(rename = "3d", alias = "ThreeD")]
     ThreeD,
+    /// Escape-time fragment rendering (Mandelbrot and kin) — the whole
+    /// chaos game is replaced by a per-pixel fragment pass; see
+    /// `docs/projects/escape-time-fractals.md`. Wire form `"escape"`.
+    /// An older build loading a config with this mode fails the parse
+    /// (unknown variant), which is honest: it cannot render it.
+    /// NOTE: the server's Postgres `render_mode` enum does not know
+    /// this value yet — Save Online is guarded client-side until the
+    /// API adds it (see `api::sync`).
+    #[serde(rename = "escape")]
+    Escape,
+}
+
+impl RenderMode {
+    /// Every mode, in wire order — the vocabulary the engine contract
+    /// publishes as `render_modes.known`.
+    ///
+    /// It exists because adding a value to an enum adds an ARRAY
+    /// ELEMENT to the contract, not a key path, so the shape
+    /// fingerprint cannot see it: `escape` had to be told to the API
+    /// by hand, with no automatic signal. Publishing the list gives
+    /// their conformance test something to check from now on.
+    ///
+    /// Keeping it in step with the enum is enforced below by an
+    /// exhaustive match plus a length assertion, which is the closest
+    /// Rust gets to iterating a plain enum.
+    pub const ALL: &'static [RenderMode] =
+        &[RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Escape];
 }
 
 impl Default for RenderMode {

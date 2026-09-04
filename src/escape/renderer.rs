@@ -1,0 +1,6521 @@
+//! The escape-time GPU stage.
+//!
+//! A single compute pass per render: iterate every pixel, classify,
+//! color, write an `Rgba32Float` image the flame tonemap tail consumes
+//! via `tonemap_pass_with_input`. No accumulation loop — one dispatch
+//! is the whole image at the configured `max_iter`.
+//!
+//! WebGPU discipline: buffer/texture `Drop` frees nothing on wasm, so
+//! everything created here is destroyed in [`EscapeRenderer::destroy`]
+//! (mirrors `EffectChainRunner`). Pipelines/bind-group layouts carry
+//! no memory and are left to `Drop`.
+
+use std::collections::HashMap;
+
+use egui_wgpu::wgpu::{
+    self, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
+    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
+    BufferDescriptor, BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,
+    ComputePipelineDescriptor, Device, Extent3d, PipelineLayoutDescriptor, Queue,
+    SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
+    StorageTextureAccess, Texture, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
+};
+
+use crate::config::escape::EscapeConfig;
+
+use super::assembler::{self, PARAM_VEC4S};
+use super::reference::OrbitCache;
+
+/// Above this zoom the direct path's f32 pixel mapping visibly
+/// pixelates: the center's f32 ulp (~6e-8 near |c| = 1) stops
+/// resolving pixel spacing a couple of octaves before it equals it —
+/// field-observed at zoom 16, so the switch sits at 14. The scaled
+/// f32 delta pipeline holds to roughly zoom 54 (w-squared overflow);
+/// the floatexp rung takes over beyond [`PERTURB_FLOATEXP_ZOOM`].
+/// Highest supersampling factor offered: 8x is 64 samples per display
+/// pixel. Whether a given view can actually have it is decided by the
+/// render-pixel budget in [`EscapeRenderer::resize`], which reduces
+/// the factor rather than failing.
+pub const MAX_SUPERSAMPLE: u32 = 8;
+
+pub const PERTURB_MIN_ZOOM: f64 = 14.0;
+
+/// Above this zoom the scaled-f32 delta rung approaches its w-squared
+/// overflow (~zoom 54) and the floatexp rung takes over. Below it the
+/// scaled rung is preferred: same images, several times faster.
+///
+/// Every tier has a deep rung, so crossing this is a change of
+/// REPRESENTATION and nothing else. A tier that lacked one used to
+/// fall through to the direct path here, which past zoom 14 resolves
+/// nothing -- Phoenix shipped that way and rendered a single flat
+/// colour one thousandth of an octave past this line.
+pub const PERTURB_FLOATEXP_ZOOM: f64 = 48.0;
+
+/// How far through its iteration budget the current escape render is:
+/// (iterations done, iterations wanted).
+///
+/// Reported through a static for the same reason reference-build
+/// progress is: the panel has no handle on the renderer, and threading
+/// one through the whole UI to display a number would be a worse
+/// trade than two atomics. Both zero means nothing is in flight.
+static RENDER_DONE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static RENDER_WANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// (done, wanted) while an escape render still has chunks to submit,
+/// else None. A settled render reports nothing -- there is no progress
+/// to watch, which is itself the answer the panel shows.
+pub fn render_progress() -> Option<(u32, u32)> {
+    let want = RENDER_WANT.load(std::sync::atomic::Ordering::Relaxed);
+    if want == 0 {
+        return None;
+    }
+    Some((RENDER_DONE.load(std::sync::atomic::Ordering::Relaxed), want))
+}
+
+/// Why the derivative-based colorings have nothing to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivativeGap {
+    /// The formula defines no `wgsl_derivative` (13 of 25 do not).
+    Formula,
+    /// The perturbed rungs do not iterate a derivative orbit, whatever
+    /// the formula defines.
+    Perturbed,
+}
+
+/// What depth a config can reach, for the panel to report.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UsableDepth {
+    /// Deltas against a fixed-point reference: no practical limit.
+    Perturbed,
+    /// The direct path, which stops resolving past this zoom.
+    Direct(f64),
+}
+
+/// Iteration budget per perturbed dispatch, in pixel-iterations
+/// (pixels x iterations). One unbounded dispatch at high max_iter is
+/// a Windows TDR (driver reset; observed in the field as a 0xc0000409
+/// abort at 200k iterations deep, reproduced as "Parent device is
+/// lost" at 1080p). The budget targets a fraction of the 2-second TDR
+/// window on a mid-range GPU; the floatexp rung's iterations cost
+/// several times the scaled rung's, so its budget is smaller.
+pub const PERTURB_CHUNK_BUDGET: u64 = 8_000_000_000;
+
+/// Pixel-iterations the DIRECT path may put in one dispatch, which
+/// [`EscapeRenderer::direct_rows_per_dispatch`] turns into a row band.
+///
+/// The direct path has no per-pixel resume state, so its whole render
+/// is a single dispatch: cost is pixels x max_iter, with nothing
+/// bounding it. That is fine at the iteration counts a shallow view
+/// normally carries, and fatal when a deep-zoom config keeps its
+/// max_iter and the view zooms OUT past the perturbation threshold —
+/// 10.1M iterations over a supersampled viewport is tens of seconds
+/// in one submission, Windows resets the driver at two, and wgpu's
+/// device-lost aborts the process (0xc0000409). Reported from an app
+/// session zooming out of an f3-depth location, and again from an
+/// animation whose zoom track crossed the same line.
+///
+/// Deliberately fixed and conservative, not adaptive. Getting this
+/// wrong is not a slow frame but a LOST DEVICE, which is fatal and
+/// unrecoverable, and the wall-clock feedback that paces the
+/// iteration chunks does not transfer: a small band is latency-bound
+/// rather than throughput-bound, so several doublings all come back
+/// under target and the next one is the whole frame again. Measured
+/// exactly that - blind doubling lost the device in 2.6 s.
+///
+/// The numbers behind the value: at 4x this budget a supersampled
+/// 10M-iteration view lost the device, while this budget completed
+/// both that view and its non-supersampled twin. Small bands do cost
+/// throughput (they under-fill the GPU: this view renders in 20 s
+/// against ~3 s for one unbounded dispatch) and that is the price of
+/// not gambling the process on a config the user can reach with one
+/// zoom-out.
+pub const DIRECT_DISPATCH_BUDGET: u64 = 250_000_000_000;
+// DF mantissas cost ~3-5x per iteration vs plain f32 CFe.
+pub const PERTURB_CHUNK_BUDGET_FE: u64 = 600_000_000;
+
+/// Session-wide halvings of [`DIRECT_DISPATCH_BUDGET`] (clamped to 6).
+///
+/// The budget is a px-iteration bound, but the COST of a px-iteration
+/// is config-dependent (formula + coloring), and a band over the set
+/// interior runs every pixel to full max_iter -- observed in the
+/// field as a band that exceeded Windows' ~2 s TDR window on a config
+/// the calibrated budget survived elsewhere, giving a fatal loop:
+/// device loss -> recovery -> restart from the top -> the same band
+/// dies again. Two SHRINK-ONLY triggers feed this: a device loss
+/// while a banded direct render was in flight (the band is almost
+/// certainly what killed the device), and a surviving band measured
+/// over [`DIRECT_BAND_SLOW_MS`]. It never grows back within a session
+/// -- growth is exactly the feedback the ledger measured losing the
+/// device -- and it only affects renders big enough to be banded at
+/// all: even at shift 6 (~3.9e9 px-iters) an ordinary iteration count
+/// still renders in one full-height dispatch.
+static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// True while a banded (multi-dispatch) direct render still has bands
+/// to go -- the window in which a device loss is attributed to our
+/// band size. (A loss during the LAST band goes uncounted; the next
+/// attempt re-opens the window on its first band.)
+static DIRECT_RENDER_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// A surviving band slower than this still halves the session budget
+/// (shrink only -- see [`DIRECT_BUDGET_SHIFT`]): it is pushing the
+/// ~2 s window, and it is also what "the app hangs between lines" is.
+const DIRECT_BAND_SLOW_MS: u128 = 700;
+
+/// Halvings of the PERTURBED path's chunk budget and ceiling, the
+/// mirror of [`DIRECT_BUDGET_SHIFT`] for the other generator.
+///
+/// The perturbed path chunks by ITERATION, and its adaptive sizer has
+/// a structural blind spot: at high max_iter over a view containing
+/// set interior the early chunks are nearly free (most pixels escape
+/// at once, BLA skips the rest), so the size doubles to the ceiling
+/// -- and then the cost profile flips, because the pixels still alive
+/// are exactly the ones where skips stop applying and they grind
+/// per-step. Cost per iteration is violently non-stationary, so no
+/// feedback loop can see that cliff coming; this bounds what happens
+/// when it arrives.
+static PERTURB_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// True while a perturbed render still has chunks to go -- the window
+/// in which a device loss is attributed to our chunk size. Mutually
+/// exclusive with [`DIRECT_RENDER_IN_FLIGHT`] by construction: a
+/// render is one path or the other, and each closes the other's flag.
+static PERTURB_RENDER_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Ceiling on an adaptively grown chunk, before the session shift.
+/// The feedback loop stops well below this on any real configuration;
+/// it exists so a pathological measurement (a frame that reports
+/// ~0 ms) cannot run away into a TDR-length dispatch.
+const CHUNK_ITERS_MAX_BASE: u32 = 1_048_576;
+
+/// Both session shifts, persisted across runs.
+///
+/// Without persistence every session re-learns the same lesson by
+/// losing the device one to four times, and each loss is a spin of
+/// the driver-state roulette (the field crash.log shows losses
+/// ~10 s apart while a user hunted for a working setting). The file
+/// sits next to the orbit cache rather than in SystemSettings: this
+/// is renderer-side state written from a device-lost callback with no
+/// ConfigManager in reach, and it is machine tuning, not a user
+/// preference -- it should not travel with a synced profile.
+#[cfg(not(target_arch = "wasm32"))]
+mod tuning {
+    use std::sync::atomic::Ordering;
+
+    fn path() -> Option<std::path::PathBuf> {
+        Some(crate::storage::backend::get_app_data_dir().ok()?.join("gpu_tuning.json"))
+    }
+
+    /// The file's contents for a pair of shifts.
+    pub(super) fn encode(direct: u32, perturb: u32) -> String {
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb }).to_string()
+    }
+
+    /// Shifts from file contents. Anything unreadable, missing or out
+    /// of range reads as zero-to-six: a hand-edited or corrupted file
+    /// must never be able to shrink a budget into uselessness, and a
+    /// missing key just means that generator never lost a device.
+    pub(super) fn decode(text: &str) -> (u32, u32) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+            return (0, 0);
+        };
+        let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
+        (get("direct_shift"), get("perturb_shift"))
+    }
+
+    /// Load once per process, before the first read of either shift.
+    ///
+    /// Inert under `cfg(test)`: the shifts are process-global, so a
+    /// developer whose real machine has learned a shift would
+    /// otherwise get different test results than one whose has not.
+    /// [`decode`] carries the parsing, and is tested directly.
+    pub(super) fn ensure_loaded() {
+        #[cfg(test)]
+        {
+            // See above: tests start from an unshifted, deterministic
+            // state and never consult the machine's tuning file.
+        }
+        #[cfg(not(test))]
+        {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
+                let Some(p) = path() else { return };
+                let Ok(text) = std::fs::read_to_string(&p) else { return };
+                let (d, pt) = decode(&text);
+                super::DIRECT_BUDGET_SHIFT.store(d, Ordering::Relaxed);
+                super::PERTURB_BUDGET_SHIFT.store(pt, Ordering::Relaxed);
+                if d > 0 || pt > 0 {
+                    log::info!(
+                        "escape: restored GPU tuning from a previous session \
+                         (direct shift {d}, perturbed shift {pt}) -- this machine \
+                         lost the device at the unshifted budgets"
+                    );
+                }
+            });
+        }
+    }
+
+    /// Best effort: tuning is an optimization, never a correctness
+    /// input, so a write failure is silent.
+    ///
+    /// Inert under `cfg(test)` for a blunter reason than [`ensure_loaded`]:
+    /// the breaker tests drive the shift to its clamp, and writing that
+    /// to the developer's real tuning file would quietly cripple their
+    /// app's chunk budgets from then on.
+    pub(super) fn save() {
+        #[cfg(not(test))]
+        {
+            let Some(p) = path() else { return };
+            let _ = std::fs::write(
+                p,
+                encode(
+                    super::DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+                    super::PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+                ),
+            );
+        }
+    }
+}
+
+/// The browser mirror: same file, in localStorage through the
+/// storage backend. Without this the breaker could halve a budget
+/// within a session but every reload started unshifted -- and a
+/// browser does not recover a lost device at all (there is no window
+/// to rebuild a surface on), so "reload and lose it again at the same
+/// budget" was the whole loop.
+#[cfg(target_arch = "wasm32")]
+mod tuning {
+    use std::sync::atomic::Ordering;
+
+    const KEY: &str = "gpu_tuning.json";
+
+    pub(super) fn encode(direct: u32, perturb: u32) -> String {
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb }).to_string()
+    }
+
+    pub(super) fn decode(text: &str) -> (u32, u32) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+            return (0, 0);
+        };
+        let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
+        (get("direct_shift"), get("perturb_shift"))
+    }
+
+    pub(super) fn ensure_loaded() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let Ok(text) = crate::storage::backend::read_file(std::path::Path::new(KEY)) else {
+                return;
+            };
+            let (d, pt) = decode(&text);
+            super::DIRECT_BUDGET_SHIFT.store(d, Ordering::Relaxed);
+            super::PERTURB_BUDGET_SHIFT.store(pt, Ordering::Relaxed);
+            if d > 0 || pt > 0 {
+                log::info!(
+                    "escape: restored GPU tuning from a previous session \
+                     (direct shift {d}, perturbed shift {pt})"
+                );
+            }
+        });
+    }
+
+    pub(super) fn save() {
+        let _ = crate::storage::backend::write_file(
+            std::path::Path::new(KEY),
+            &encode(
+                super::DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+                super::PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+            ),
+        );
+    }
+}
+
+/// Called by the GPU device-lost callback (`gpu::device`): halve the
+/// budget of whichever generator was mid-render, so the
+/// post-recovery retry cannot repeat the fatal dispatch. The flags
+/// are mutually exclusive, and a loss with neither open (an
+/// unrelated cause -- a driver update, another app's fault) shifts
+/// nothing: this only learns from losses it can attribute.
+pub fn note_device_lost() {
+    use std::sync::atomic::Ordering;
+    tuning::ensure_loaded();
+    let mut changed = false;
+    if DIRECT_RENDER_IN_FLIGHT.swap(false, Ordering::Relaxed) {
+        let s = DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed).min(5) + 1;
+        DIRECT_BUDGET_SHIFT.store(s, Ordering::Relaxed);
+        changed = true;
+        log::warn!(
+            "escape: device lost during a banded direct render -- halving the \
+             direct dispatch budget to {} px-iters for this session",
+            DIRECT_DISPATCH_BUDGET >> s
+        );
+    }
+    if PERTURB_RENDER_IN_FLIGHT.swap(false, Ordering::Relaxed) {
+        let s = PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed).min(5) + 1;
+        PERTURB_BUDGET_SHIFT.store(s, Ordering::Relaxed);
+        changed = true;
+        log::warn!(
+            "escape: device lost during a perturbed render -- halving the \
+             perturbed chunk budget (ceiling now {} iterations) for this session",
+            CHUNK_ITERS_MAX_BASE >> s
+        );
+    }
+    if changed {
+        tuning::save();
+    }
+}
+
+/// The perturbed path's seed chunk for a pixel count, after the
+/// session shift. Free function so the sizing is testable without a
+/// GPU (the renderer method just supplies its own dimensions).
+fn perturb_chunk_seed(floatexp: bool, px: u64) -> u32 {
+    tuning::ensure_loaded();
+    let budget = if floatexp {
+        PERTURB_CHUNK_BUDGET_FE
+    } else {
+        PERTURB_CHUNK_BUDGET
+    };
+    let shift = PERTURB_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+    // Floor 16, not 256: at supersampled resolutions (or plain 4K+),
+    // 256 iterations x tens of megapixels is a multi-second dispatch --
+    // the TDR class of crash the budget exists to prevent. 16 still
+    // makes visible progress every frame.
+    ((budget >> shift) / px.max(1)).clamp(16, 65_536) as u32
+}
+
+/// The adaptively-grown ceiling, after the session shift.
+fn perturb_chunk_ceiling(seed: u32) -> u32 {
+    tuning::ensure_loaded();
+    let shift = PERTURB_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+    let base = (CHUNK_ITERS_MAX_BASE >> shift).max(64);
+    // A MULTIPLE OF THE CALIBRATED SEED, not an absolute count. The
+    // seed is `budget / pixels` -- the whole TDR calibration lives in
+    // it -- so a flat 1M-iteration ceiling means something completely
+    // different at 200x160 than at 4K with 3x supersampling, where it
+    // is thousands of times over budget. Measurement-driven growth
+    // still gets 64x of headroom over the static budget; what it can
+    // no longer do is grow to an absolute number that ignores how
+    // many pixels are paying it. Both device losses in this area
+    // ended in a dispatch this bound would have refused.
+    seed.saturating_mul(CHUNK_SEED_HEADROOM).clamp(64, base)
+}
+
+/// How far past the static per-dispatch budget a MEASURED chunk may
+/// grow. Generous enough that a cheap render still ramps (the seed is
+/// deliberately conservative), bounded enough that a measurement from
+/// the wrong cost regime cannot produce an unbounded dispatch.
+const CHUNK_SEED_HEADROOM: u32 = 64;
+
+/// Uniform block — must match `EscapeParams` in the WGSL template
+/// (std140: vec2 pairs pack the head, the vec4 arrays start at a
+/// 16-byte boundary, total 192 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct EscapeParamsGpu {
+    center: [f32; 2],
+    julia_c: [f32; 2],
+    span: [f32; 2],
+    rot_cs: [f32; 2],
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    /// First row of the band this dispatch covers (direct and field
+    /// templates; the perturbed ones chunk by iteration and leave it
+    /// zero). Occupies what used to be explicit padding, so the
+    /// uniform layout is unchanged.
+    tile_y0: u32,
+    /// Mann α (re, im); the shader reads it only in damped pipelines.
+    damping: [f32; 2],
+    /// 1 = the relief pass slopes the WRAPPED palette coordinate
+    /// rather than the coloring's raw value (`ShadingField::Banded`).
+    shade_flags: u32,
+    _pad_shade: [u32; 3],
+    fparams: [[f32; 4]; PARAM_VEC4S],
+    cparams: [[f32; 4]; PARAM_VEC4S],
+    /// CPU-derived formula data (`FormulaDef::derived_data`),
+    /// vec4-packed; zero for formulas without the hook.
+    fdata: [[f32; 4]; FDATA_VEC4S],
+}
+
+/// 64 vec4s = 256 floats — Origami's 64 fold lines exactly.
+const FDATA_VEC4S: usize = 64;
+
+/// Uniform for the relief pass — must match `ShadeParams` in
+/// [`EscapeRenderer::run_resolve`]'s WGSL.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShadeParamsGpu {
+    /// Unit vector toward the light, in pixel space.
+    light: [f32; 2],
+    /// Vertical exaggeration applied to the slope.
+    height: f32,
+    /// 0 = the pass only resolves (box downsample), 1 = shade first.
+    enabled: u32,
+    shadow_color: [f32; 3],
+    shadow_strength: f32,
+    highlight_color: [f32; 3],
+    highlight_strength: f32,
+    shadow_blend: u32,
+    highlight_blend: u32,
+    /// Gaussian sigma in RENDER pixels (the config's display pixels
+    /// times the supersample factor). 0 = no softening.
+    softness: f32,
+    texture_kind: u32,
+    texture_strength: f32,
+    texture_scale: f32,
+    /// Which combine the downsample uses (`DownsampleMode::to_gpu`).
+    downsample: u32,
+    /// std140 rounds the struct up to a multiple of its largest
+    /// member alignment (vec3 → 16), so WGSL sees 80 bytes where Rust
+    /// would otherwise pack 76. Without this the bind group is
+    /// rejected outright.
+    _pad: u32,
+}
+
+/// Uniform for the perturbed pipeline — must match `PerturbParams`
+/// in the WGSL template.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PerturbParamsGpu {
+    s: f32,
+    inv_s: f32,
+    orbit_len: u32,
+    /// bit 0: skip quadratic term; bit 1: Julia mode.
+    flags: u32,
+    /// Pixel spacing as mantissa * 2^exponent (floatexp rung) —
+    /// computed symbolically from zoom_log2, valid at any depth.
+    s_m: f32,
+    s_e: i32,
+    /// (view - reference) in pixel units (nucleus relocation).
+    ref_offset: [f32; 2],
+    /// Chunk window [iter_start, iter_end) for this dispatch.
+    iter_start: u32,
+    iter_end: u32,
+    /// The reference orbit's own `c`, for the maps whose parameter
+    /// MULTIPLIES (Lambda). Occupies what used to be padding, so the
+    /// layout is unchanged.
+    ref_c: [f32; 2],
+    /// Always zero — the deep rung's optimization barrier. See
+    /// `df_l` in the perturbed template.
+    df_zero: u32,
+    _pad_df: [u32; 3],
+}
+
+/// The |Z|² channel for the delta-aware escape margin, computed on
+/// the CPU in f64 from the DF entries the orbit already carries.
+///
+/// Stored as a DF pair (hi, lo) so the shader can form
+/// `(r2.x - bailout) + (r2.y + 2·Z·δ + |δ|²)` with the first
+/// subtraction EXACT near the threshold (both f32, within a factor of
+/// two of each other — Sterbenz) and the sub-ulp remainder carried in
+/// `r2.y`. A plain f32 |z_full|² test quantizes away the per-pixel
+/// delta once 2·Z·δ drops below one ulp of the bailout, which is what
+/// broke Feather past zoom ~22: its slow-growth escape boundary is
+/// decided by exactly those sub-ulp differences, where a
+/// chaos-amplified boundary (Mandelbrot's) never is.
+///
+/// Computed from hi + lo (the ~2^-48 DF shadow) rather than from the
+/// fixed-point value, so it can be rebuilt at UPLOAD time from data
+/// already in hand — no reference recompute, no orbit-store format
+/// change, and cache-loaded orbits get it for free. 2^-48 relative is
+/// the perturbation pipeline's own reference precision, so nothing
+/// downstream can tell the difference from an exact channel.
+fn r2_channel(hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]) -> Vec<[f32; 2]> {
+    hi.iter()
+        .zip(lo)
+        .zip(e)
+        .map(|((h, l), &ex)| {
+            let s = (ex as f64).exp2();
+            let x = (h[0] as f64 + l[0] as f64) * s;
+            let y = (h[1] as f64 + l[1] as f64) * s;
+            let r2 = x * x + y * y;
+            let r2_hi = r2 as f32;
+            [r2_hi, (r2 - r2_hi as f64) as f32]
+        })
+        .collect()
+}
+
+pub struct EscapeRenderer {
+    width: u32,
+    height: u32,
+    output_texture: Texture,
+    output_view: TextureView,
+    params_buffer: Buffer,
+    /// Linear-filtering sampler for the palette (the flame buffers'
+    /// shared sampler is non-filtering, chosen for the Rgba32Float
+    /// accumulator; the palette is Rgba8Unorm and filters fine).
+    palette_sampler: wgpu::Sampler,
+    bind_group_layout: BindGroupLayout,
+    /// Compiled pipelines keyed `"formula|coloring"` — tiny shaders,
+    /// but a live panel flips combinations and recompiles add up.
+    pipelines: HashMap<String, ComputePipeline>,
+    /// Test-only: force the perturbed path regardless of zoom so the
+    /// direct/perturbed agreement test can render the SAME shallow
+    /// view both ways.
+    #[cfg(test)]
+    pub(crate) force_perturbed: bool,
+    /// Test-only: with `force_perturbed`, use the floatexp rung.
+    #[cfg(test)]
+    pub(crate) force_floatexp: bool,
+    /// Completion-time GPU cost, for a device with no timestamp
+    /// queries (WebGPU exposes none by default). Written by a
+    /// `Queue::on_submitted_work_done` callback, drained by
+    /// [`Self::ts_poll`] into the same fields the timestamp pacer
+    /// feeds, so `next_chunk` sizes from a MEASURED cost either way.
+    gpu_done: std::sync::Arc<std::sync::Mutex<Option<GpuDoneSample>>>,
+    /// The dispatch batch recorded by the last `render()` that has no
+    /// timestamp pacer: (iterations, from_start, regime, recorded at).
+    /// The next `render()` registers the completion callback for it
+    /// -- by then the caller has submitted the encoder it was
+    /// recorded into.
+    gpu_done_pending: Option<(u32, bool, CostRegime, web_time::Instant)>,
+    /// Test-only: dispatch every frame while the reference is still
+    /// building, as the browser arm did before it learned to hold.
+    /// Exists so the cost of that can be MEASURED rather than argued.
+    #[cfg(test)]
+    pub(crate) force_dispatch_while_building: bool,
+    /// Test-only: take the BROWSER's orbit path on the desktop — no
+    /// worker thread, the reference sliced per frame under a budget,
+    /// and the frame rendered against a PARTIAL orbit until it
+    /// completes.
+    ///
+    /// That path had no desktop coverage at all, which is how an
+    /// index-out-of-bounds panic reached a released WASM build: it
+    /// only fires while the orbit is SHORT, and on the desktop the
+    /// orbit is always complete before the first perturbed dispatch.
+    #[cfg(test)]
+    pub(crate) force_budgeted: bool,
+    /// Deep-zoom state: CPU reference-orbit cache (append-on-deepen),
+    /// its GPU mirror, and the perturbed pipeline's own layout (two
+    /// extra bindings: the orbit buffer and the perturb uniform).
+    orbit_cache: OrbitCache,
+    /// Recolor cache: per-pixel terminal iteration records
+    /// (32 B/px), plus the identity of the settled iterate render
+    /// that produced them. When a frame's iterate identity matches,
+    /// the render is one cheap recolor dispatch -- no orbit, no BLA,
+    /// no iteration. `None` key = records absent or stale.
+    results_buffer: Option<Buffer>,
+    results_px: u32,
+    results_key: Option<String>,
+    /// 32-byte stand-in bound when the pixel count exceeds the
+    /// storage-binding limit (giant exports): layouts need SOMETHING
+    /// at the slot, and the shader's write is gated off.
+    results_dummy: Option<Buffer>,
+    recolor_bind_group_layout: BindGroupLayout,
+    /// Sub-pixel sampling offset, in RENDER pixels, applied to the
+    /// whole view. Zero for an ordinary render.
+    ///
+    /// This is how antialiasing reaches sizes a supersampled grid
+    /// cannot: instead of one enormous render, take several ordinary
+    /// ones displaced within a pixel and average them. No template
+    /// needed changing -- a sub-pixel shift of the sampling grid IS a
+    /// shift of the view, which the direct path already expresses
+    /// through its centre and the perturbed path through
+    /// `ref_offset`.
+    sample_offset: [f32; 2],
+    /// Whether the accumulation target has had its first fold (the
+    /// clear happens on that one rather than as a separate pass).
+    accum_cleared: bool,
+    /// Accumulation targets for that averaging, ping-ponged.
+    ///
+    /// A pair rather than one read-write texture because read-write
+    /// storage access is not supported for `rgba32float` (rejected at
+    /// bind-group-layout creation), and a storage BUFFER would not do
+    /// either: at export sizes it exceeds the 128 MB binding limit a
+    /// 4K frame of `vec4<f32>` needs. Write-only textures have
+    /// neither restriction.
+    accum: Option<(wgpu::Texture, TextureView, wgpu::Texture, TextureView)>,
+    /// Which of the pair currently holds the running mean.
+    accum_front: usize,
+    accum_pipeline: Option<(wgpu::ComputePipeline, BindGroupLayout)>,
+    accum_params: Option<Buffer>,
+    /// Which pipeline the last render() call ran ("direct",
+    /// "perturbed f32", "perturbed floatexp", "recolor"). The global
+    /// diag snapshot carries the same string for the panel, but that
+    /// is shared across renderers and cargo runs tests in parallel —
+    /// assertions read THIS.
+    pub(crate) last_path: &'static str,
+    /// True when the LAST ensure_orbit_progressive call served the
+    /// frame from the worker's previous publication (stale-serve):
+    /// the request was posted but not yet acknowledged, and the
+    /// published orbit's shape + a render-side offset composition
+    /// covered it. render() reads this to skip the slow-orbit hold —
+    /// a stale-servable request is a relocation away, never slow.
+    last_orbit_stale: bool,
+    /// Frames served that way since creation (test observability).
+    pub(crate) stale_serves: u64,
+    /// The config-derived render identity of the last frame; a CHANGE
+    /// here is a user edit, which restarts the settle clock. Orbit
+    /// progression restarts (same identity, longer reference) keep
+    /// the clock, so a deep reference's settle time stays honest.
+    diag_config_key: Option<String>,
+    /// Diagnostics: wall clock started when a change first shows up
+    /// (an orbit wait or a chunk restart), stopped when the render
+    /// settles. What the Escape panel's latency readout measures.
+    diag_settle_start: Option<web_time::Instant>,
+    /// Progressive mode (the app sets this): reference orbits come
+    /// from the worker thread and frames render with whatever prefix
+    /// has landed — `render` reports whether the image is final.
+    /// Off (the default), orbit compute is synchronous and exports
+    /// stay deterministic.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub progressive: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    orbit_worker: Option<super::reference::OrbitWorker>,
+    /// Generation of the orbit CONTENT currently uploaded (the
+    /// worker's generation in progressive mode,
+    /// `OrbitCache::generation` otherwise): re-upload only when it
+    /// changes, append when it does not. Keying this on the request
+    /// EPOCH re-uploaded the entire orbit on every request -- ~200 MB
+    /// per wheel notch at f3 orbit sizes, for content that had not
+    /// changed.
+    orbit_generation: u64,
+    orbit_buffer: Option<Buffer>,
+    /// DF residuals, parallel to orbit_buffer (binding 8).
+    orbit_lo_buffer: Option<Buffer>,
+    /// |Z|² as a DF pair per entry — see [`r2_channel`].
+    orbit_r2_buffer: Option<Buffer>,
+    /// Per-entry reference exponents (binding 9), parallel to the
+    /// orbit buffer.
+    orbit_e_buffer: Option<Buffer>,
+    orbit_capacity: u32,
+    orbit_uploaded: u32,
+    perturb_params_buffer: Buffer,
+    /// Params buffers for chunks 2..N of a BATCHED redraw. Each pass
+    /// needs its own because `Queue::write_buffer` applies at the
+    /// submission boundary, not between passes — several passes
+    /// reading one buffer would all see the last write.
+    perturb_params_pool: Vec<Buffer>,
+    perturb_bind_group_layout: BindGroupLayout,
+    /// Relocation of the current reference (pixel units); fed into
+    /// the perturb uniform each render.
+    current_ref_offset: [f32; 2],
+    /// Per-pixel iteration state for chunked perturbed dispatches
+    /// (48 B/px, created on demand, explicit destroy).
+    iter_state_buffer: Option<Buffer>,
+    iter_state_px: u32,
+    /// Bytes per pixel the live buffer was built for. Phoenix's deep
+    /// rung carries a second delta and needs a wider one, so a tier
+    /// switch reallocates just as a resize does.
+    iter_state_stride: u64,
+    /// Next chunk's starting iteration and the render it belongs to;
+    /// a key change restarts from chunk 0.
+    chunk_next: u32,
+    chunk_key: Option<String>,
+    /// Adaptive chunk sizing. The static `budget / pixels` rule is a
+    /// safe SEED, not a good steady state: it sized a chunk at ~1.6 ms
+    /// of GPU work on the measured hardware, and since the in-app path
+    /// runs exactly one chunk per redraw, a 10.1M-iteration render at
+    /// 3x supersampling needed ~140,000 frames — the GPU idle most of
+    /// each one. These three fields close a feedback loop on the
+    /// wall-clock time between calls instead.
+    chunk_iters: u32,
+    chunk_count: u32,
+    /// First row the next DIRECT dispatch covers (row-band chunking;
+    /// the perturbed path chunks by iteration instead).
+    direct_tile_y: u32,
+    /// When the previous direct band was dispatched (same render):
+    /// while the escape-dirty loop is saturated the inter-frame gap
+    /// approximates that band's GPU time, and a slow band shrinks the
+    /// session budget (see [`DIRECT_BUDGET_SHIFT`]).
+    direct_last: Option<web_time::Instant>,
+
+    /// Largest chunk that PROVABLY completed inside the target: the
+    /// next call after it came in on time. Growth is capped at a
+    /// multiple of this rather than at the raw ceiling, so a cliff
+    /// costs one honest doubling over proven ground instead of a jump
+    /// to the maximum (see [`GROWTH_HEADROOM`]).
+    chunk_proven: u32,
+    /// Calls since the last doubling. Growth waits for
+    /// [`GROWTH_INTERVAL`] of them so the measurement is not taken
+    /// while earlier submissions are still in flight.
+    chunk_since_growth: u32,
+
+    /// Running minimum of the observed inter-call time: the cost of a
+    /// frame whose chunk work is negligible. Under vsync this settles
+    /// at the refresh period, which is exactly the baseline the target
+    /// must be measured against — a fixed millisecond target would
+    /// read 16.7 ms as "over budget" and shrink to the floor forever.
+    chunk_base_ms: f32,
+    chunk_last: Option<web_time::Instant>,
+    /// Explicit per-chunk time target (headless sets one). Zero means
+    /// derive it from `chunk_base_ms`, the interactive behaviour.
+    chunk_target_ms: f32,
+    /// Diagnostic escape hatch (ESCAPE_CHUNK_MS): force a per-chunk
+    /// time target. The render must be IDENTICAL at every setting -
+    /// that is the property the chunk-invariance test checks.
+    chunk_target_env: Option<f32>,
+    /// Diagnostic escape hatch (ESCAPE_CHUNK_BATCH): cap the chunk
+    /// dispatches per redraw (1 disables batching). The render must be
+    /// IDENTICAL at every setting — the batching test checks that.
+    chunk_batch_env: Option<u32>,
+    /// GPU-time pacing, when the device supports timestamp queries.
+    timestamps: Option<TimestampPacer>,
+    /// Milliseconds per iteration measured on the GPU by the most
+    /// recent completed query. None until the first result lands, and
+    /// on devices without the feature -- the wall-clock path then
+    /// carries the pacing unchanged.
+    gpu_ms_per_iter: Option<f32>,
+    /// Cost per iteration measured on a FIRST chunk only (all pixels
+    /// alive) -- the only measurement a restart may be sized from.
+    /// See `TimestampPacer::from_start`.
+    gpu_ms_per_iter_cold: Option<f32>,
+    /// The cost regime both measurements were taken in. A measurement
+    /// is only meaningful for the regime that produced it: the
+    /// floatexp rung costs several times the scaled rung per
+    /// iteration, and cost per iteration scales with the pixel count.
+    /// Carrying an f32-rung measurement across the zoom-48 boundary
+    /// sized a floatexp restart from it and lost the device.
+    gpu_regime: Option<CostRegime>,
+    /// Test hook: shrink the chunk to force multi-chunk renders.
+    #[cfg(test)]
+    pub(crate) chunk_override: Option<u32>,
+    /// Disable the adaptive chunk feedback and use the static seed
+    /// every call (see [`EscapeRenderer::set_fixed_chunk`]).
+    chunk_fixed: bool,
+    /// BLA iteration-skip table (binding 7): GPU buffer + what it was
+    /// built for. A zeroed dummy (n_levels = 0) is bound whenever the
+    /// table is inapplicable, so there is no pipeline permutation.
+    bla_buffer: Option<Buffer>,
+    bla_dummy: Option<Buffer>,
+    bla_built: Option<BlaBuilt>,
+    /// Test hook: force per-step iteration to compare against skips.
+    #[cfg(test)]
+    pub(crate) disable_bla: bool,
+    /// Test hook: build the direct shader WITHOUT interior detection,
+    /// so the agreement test can render a view both ways.
+    #[cfg(test)]
+    pub(crate) disable_interior: bool,
+    /// Display (output) size. `width`/`height` are the RENDER size =
+    /// display × supersample; everything internal keys off those, so
+    /// the whole pipeline (pixel spacing, iteration state, chunk
+    /// keys, nucleus offsets) is supersampling-consistent for free.
+    out_width: u32,
+    out_height: u32,
+    supersample: u32,
+    /// Display-size target of the box downsample (None at 1×:
+    /// `output_view` then serves the render texture directly).
+    final_texture: Option<Texture>,
+    final_view: Option<TextureView>,
+    /// (factor, pipeline, layout) — the factor is spliced into the
+    /// WGSL, so a factor change recompiles (rare).
+    downsample: Option<(u32, wgpu::ComputePipeline, BindGroupLayout)>,
+    /// Separable low-pass of the height field, for relief softness.
+    /// Two ping-pong targets at RENDER resolution plus the pipeline;
+    /// allocated only when a config actually asks for softening.
+    height_blur: Option<(wgpu::Texture, TextureView, wgpu::Texture, TextureView)>,
+    blur_pipeline: Option<(wgpu::ComputePipeline, BindGroupLayout)>,
+    /// ONE PER PASS. `Queue::write_buffer` is ordered against
+    /// submissions, not against passes inside one: with a single
+    /// buffer both writes land before the command buffer runs, the
+    /// second wins, and BOTH passes blur in the same direction —
+    /// which is a 2x blur along one axis and none along the other.
+    blur_params: Option<[Buffer; 2]>,
+    /// The coloring's scalar field at RENDER resolution, written by
+    /// every escape template and finite-differenced by the relief
+    /// pass. A 1×1 dummy while shading is off: the templates store to
+    /// it unconditionally and WGSL discards the out-of-bounds writes,
+    /// which is what keeps one shader variant instead of two.
+    height_texture: Texture,
+    height_view: TextureView,
+    /// Whether `height_texture` is full-size (shading on) or the dummy.
+    height_full: bool,
+    shade_params_buffer: Buffer,
+    /// Uniform the RECOLOR pass reads the measured contrast fit from.
+    contrast_params: Buffer,
+    /// Destination of the probe pass: a PROBE_W x PROBE_H subsample of
+    /// the coloring's value field, plus a validity flag per cell.
+    contrast_probe: Option<Buffer>,
+    contrast_readback: Option<Buffer>,
+    /// The fit measured from the last settled frame. `None` until one
+    /// has been taken; cleared whenever the iteration identity moves,
+    /// because a fit belongs to the view it was measured on.
+    contrast_fit: Option<ContrastFit>,
+    /// Identity the current fit was measured under.
+    contrast_fit_key: Option<String>,
+}
+
+/// GPU-time pacing for the perturbed path (TDR-safety plan item C).
+///
+/// The fallback proxy for chunk cost is the wall-clock gap between
+/// calls, which is honest only once the queue has drained: with
+/// submissions in flight it reads short, so the size doubles on
+/// measurements that have not happened yet. A timestamp query around
+/// the dispatch measures the work itself.
+///
+/// The result returns through a buffer map, landing two or three
+/// calls later -- fine, since pacing is a trailing control loop
+/// either way. One measurement is in flight at a time; frames in
+/// between simply do not measure. What is kept is COST PER ITERATION
+/// rather than the raw duration, because the chunk size changes
+/// between a measurement and its use and the per-iteration cost is
+/// the part that transfers.
+struct TimestampPacer {
+    query_set: wgpu::QuerySet,
+    /// Resolve target for the two timestamps (u64 each).
+    resolve: Buffer,
+    /// Mappable copy of `resolve`.
+    staging: Buffer,
+    /// Nanoseconds per timestamp tick.
+    period_ns: f32,
+    phase: TsPhase,
+    /// Iterations the in-flight measurement covers.
+    iters: u32,
+    /// The regime the measured dispatch ran in.
+    regime: Option<CostRegime>,
+    /// The measured dispatch was a render's FIRST chunk (iteration
+    /// 0): every pixel alive, which is the cost regime a RESTART
+    /// faces. Late-chunk measurements are survivor-biased -- most
+    /// pixels have escaped and iterate for free -- and sizing a
+    /// restart from one is how a 100k-iteration view earned a device
+    /// loss (all pixels reborn into a chunk computed from the cheap
+    /// tail).
+    from_start: bool,
+    /// Map completion, set from the callback: 0 pending, 1 mapped,
+    /// 2 failed.
+    done: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TsPhase {
+    /// Nothing in flight: the next dispatch may be measured.
+    Idle,
+    /// Timestamps written and copied, but the caller has not
+    /// submitted that encoder yet -- so the map cannot be requested
+    /// until the next call.
+    Encoded,
+    /// Map requested; waiting on the callback.
+    Mapping,
+}
+
+impl TimestampPacer {
+    /// Two timestamps: 16 bytes resolved, 16 copied back.
+    const BYTES: u64 = 16;
+
+    fn new(device: &Device, period_ns: f32) -> Self {
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("Escape Chunk Timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolve = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Timestamp Resolve"),
+            size: Self::BYTES,
+            usage: BufferUsages::QUERY_RESOLVE | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Timestamp Staging"),
+            size: Self::BYTES,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            query_set,
+            resolve,
+            staging,
+            period_ns,
+            phase: TsPhase::Idle,
+            iters: 0,
+            regime: None,
+            from_start: false,
+            done: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
+}
+
+/// What one budgeted orbit slice leaves the frame able to do.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BudgetedOrbit {
+    /// Render the perturbed pass against this prefix (`done` = the
+    /// reference is complete).
+    Ready(u32, bool),
+    /// Render NOTHING this frame. The slice advanced; the prefix is
+    /// too short a fraction of the reference to be worth a dispatch.
+    Hold,
+    /// No reference at all (centre parse failed) -- fall through to
+    /// the direct path.
+    NoOrbit,
+}
+
+/// One completed dispatch batch, timed from the moment it was
+/// recorded to the moment the queue reported it done. That span
+/// includes submission latency and any frame gap before the caller
+/// submitted, so it is an UPPER bound on the GPU time -- which is the
+/// conservative direction for a number whose only job is to keep a
+/// dispatch under the TDR window.
+#[derive(Clone, Copy)]
+struct GpuDoneSample {
+    ms: f32,
+    iters: u32,
+    from_start: bool,
+    regime: CostRegime,
+}
+
+/// What a GPU cost measurement is valid for. Anything that changes
+/// the per-iteration cost of a full-frame dispatch belongs here.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CostRegime {
+    floatexp: bool,
+    width: u32,
+    height: u32,
+    tier: assembler::PerturbTier,
+}
+
+/// What the current BLA table was built for (rebuild trigger).
+struct BlaBuilt {
+    /// Orbit-content generation ([`EscapeRenderer`]'s
+    /// `orbit_generation`) the table was built from -- a different
+    /// orbit of the same length must not reuse it.
+    generation: u64,
+    /// EFFECTIVE length the table was built over:
+    /// min(orbit_len, max_iter + 1). A retained deep orbit can be
+    /// thousands of times longer than the view's max_iter, and
+    /// entries past max_iter are unreachable (a pixel's reference
+    /// index never exceeds its iteration count, and the shader
+    /// bounds every skip by `params.max_iter - i`).
+    orbit_len: u32,
+    /// Consecutive dc-growth rebuilds against this same orbit: each
+    /// one doubles the |dc| headroom, so a deep-to-shallow zoom
+    /// journey (thousands of octaves) costs ~a dozen rebuilds, not
+    /// one per fixed headroom step.
+    dc_rebuilds: u32,
+    power: u32,
+    julia: bool,
+    /// log2 of the |δc| bound the radii used (finite at ANY zoom).
+    /// Zooming IN shrinks the actual bound below it (still
+    /// conservative — no rebuild); widening the view past it forces
+    /// one. Julia renders carry −∞ (δc = 0 exactly).
+    dc_log2: f64,
+}
+
+impl EscapeRenderer {
+    pub fn new(device: &Device, width: u32, height: u32) -> Self {
+        let (output_texture, output_view) = Self::create_output(device, width, height);
+
+        let params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Params"),
+            size: std::mem::size_of::<EscapeParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let palette_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Escape Palette Sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let perturb_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Perturb Params"),
+            size: std::mem::size_of::<PerturbParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let perturb_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Escape Perturbed Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The coloring's scalar field, for the relief pass.
+                BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // |Z|² DF pair for the delta-aware escape margin.
+                BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Terminal iteration records (the recolor cache).
+                BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Escape Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // The coloring's scalar field, for the relief pass.
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // Terminal iteration records (the recolor cache). The
+                // field template ignores it; a 32-byte dummy is bound
+                // when the pixel count exceeds the binding limit
+                // (giant CLI exports), with the write gated off via
+                // params.flags bit 3.
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // Recolor pass: coloring + palette from the cached records.
+        // Same front half as the direct layout, records read-only.
+        let recolor_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Recolor Bind Group Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::R32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // The measured contrast fit. Only the RECOLOR pass
+                    // takes it, which is why it lives on this layout
+                    // and not in EscapeParams: the iterate templates
+                    // are untouched, so nothing about iteration
+                    // changes and their WGSL stays byte-identical.
+                    BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        // Dummy until shading turns on: see the field's doc comment.
+        let (height_texture, height_view) = Self::create_height(device, 1, 1);
+        let shade_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape Shade Params"),
+            size: std::mem::size_of::<ShadeParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let contrast_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape Contrast Params"),
+            size: std::mem::size_of::<ContrastParamsGpu>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            width,
+            height,
+            output_texture,
+            output_view,
+            params_buffer,
+            palette_sampler,
+            bind_group_layout,
+            pipelines: HashMap::new(),
+            #[cfg(test)]
+            force_perturbed: false,
+            #[cfg(test)]
+            force_floatexp: false,
+            #[cfg(test)]
+            force_budgeted: false,
+            #[cfg(test)]
+            force_dispatch_while_building: false,
+            gpu_done: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            gpu_done_pending: None,
+            orbit_cache: OrbitCache::default(),
+            results_buffer: None,
+            results_px: 0,
+            results_key: None,
+            results_dummy: None,
+            recolor_bind_group_layout,
+            sample_offset: [0.0, 0.0],
+            accum_cleared: false,
+            accum: None,
+            accum_front: 0,
+            accum_pipeline: None,
+            accum_params: None,
+            last_path: "",
+            last_orbit_stale: false,
+            stale_serves: 0,
+            diag_config_key: None,
+            diag_settle_start: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            progressive: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            orbit_worker: None,
+            orbit_generation: 0,
+            orbit_buffer: None,
+            orbit_lo_buffer: None,
+            orbit_r2_buffer: None,
+            orbit_e_buffer: None,
+            orbit_capacity: 0,
+            orbit_uploaded: 0,
+            perturb_params_buffer,
+            perturb_params_pool: Vec::new(),
+            perturb_bind_group_layout,
+            height_texture,
+            height_view,
+            height_full: false,
+            shade_params_buffer,
+            contrast_params,
+            contrast_probe: None,
+            contrast_readback: None,
+            contrast_fit: None,
+            contrast_fit_key: None,
+            current_ref_offset: [0.0, 0.0],
+            iter_state_buffer: None,
+            iter_state_px: 0,
+            iter_state_stride: 0,
+            chunk_next: 0,
+            chunk_key: None,
+            timestamps: None,
+            gpu_ms_per_iter: None,
+            gpu_ms_per_iter_cold: None,
+            gpu_regime: None,
+            chunk_iters: 0,
+            chunk_count: 0,
+            chunk_proven: 0,
+            chunk_since_growth: 0,
+            direct_tile_y: 0,
+            direct_last: None,
+            chunk_base_ms: f32::MAX,
+            chunk_last: None,
+            chunk_target_ms: 0.0,
+            chunk_target_env: std::env::var("ESCAPE_CHUNK_MS")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|v| *v > 0.0),
+            chunk_batch_env: std::env::var("ESCAPE_CHUNK_BATCH")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|v| *v > 0),
+            #[cfg(test)]
+            chunk_override: None,
+            chunk_fixed: false,
+            bla_buffer: None,
+            bla_dummy: None,
+            bla_built: None,
+            #[cfg(test)]
+            disable_bla: false,
+            #[cfg(test)]
+            disable_interior: false,
+            out_width: width,
+            out_height: height,
+            supersample: 1,
+            final_texture: None,
+            final_view: None,
+            downsample: None,
+            height_blur: None,
+            blur_pipeline: None,
+            blur_params: None,
+        }
+    }
+
+    /// Build/refresh the BLA table when skipping applies to this
+    /// render; returns whether `bla_buffer` is current. Inapplicable
+    /// (Ship tier, per-iteration colorings, unreachable CPU orbit):
+    /// false, and the caller binds the zeroed dummy.
+    fn ensure_bla(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        orbit_len: u32,
+        tier: assembler::PerturbTier,
+        progressive: bool,
+        orbit_done: bool,
+    ) -> bool {
+        // Diagnostic escape hatch, sibling to ESCAPE_CHUNK_MS /
+        // ESCAPE_CHUNK_BATCH: render without iteration skipping to
+        // bisect "is this artifact BLA's".
+        if std::env::var("ESCAPE_BLA").is_ok_and(|v| v == "0") {
+            return false;
+        }
+        #[cfg(test)]
+        if self.disable_bla {
+            return false;
+        }
+        // Diagnostic escape hatch (all builds): isolate BLA-dependent
+        // differences from per-step rendering.
+        if std::env::var("ESCAPE_DISABLE_BLA").is_ok() {
+            return false;
+        }
+        let power = match tier {
+            assembler::PerturbTier::Power(p) => p.clamp(2, 12),
+            assembler::PerturbTier::Ship(_) => return false,
+            // Anti-holomorphic: `conj` is not complex-linear, so the
+            // A*delta + B*delta_c model BLA is built on does not hold.
+            // Per-step iteration carries the Tricorn family.
+            assembler::PerturbTier::Tricorn(_) => return false,
+            // A skip advances the reference index without running the
+            // steps in between, but Phoenix's step also ADVANCES ITS
+            // HISTORY -- w_prev would be left measured against the
+            // wrong iterate. A two-term BLA needs 2x2 coefficients;
+            // until then Phoenix iterates per-step.
+            assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar => return false,
+            // Lambda's BLA is derivable -- the map is holomorphic, so
+            // A = C(1-2Z) and B = Z(1-Z) -- but the table builder is
+            // written for the power tier's A = p*Z^(p-1) and has no
+            // hook for a per-tier coefficient yet. Per-step until it
+            // does; correctness first, skips second.
+            assembler::PerturbTier::Lambda => return false,
+            // Feather's denominator reads the components of z
+            // separately, so the map is not holomorphic and the
+            // A*delta + B*delta_c model has no derivation -- the same
+            // reason the Tricorn family has no BLA.
+            assembler::PerturbTier::Feather(_) => return false,
+            // Rational with a pole: a BLA bound would have to model the
+            // pole term's growth, which the power-tier builder does not.
+            assembler::PerturbTier::McMullen(_, _) => return false,
+            // A BLA skip advances the reference index without running
+            // the steps between -- but Magnet's loop can TERMINATE in
+            // those steps, on convergence. Skipping past a settle
+            // would report the wrong iteration count.
+            assembler::PerturbTier::Magnet(_) => return false,
+            // Convergent, like Magnet: a skip could cross the settle.
+            assembler::PerturbTier::Newton { .. } | assembler::PerturbTier::Nova(_) => {
+                return false
+            }
+            // Abs-folds (and a log): not holomorphic, no linear model.
+            assembler::PerturbTier::Kaliset | assembler::PerturbTier::Ducks(_) => return false,
+        };
+        // Skipped iterations never run the accumulator/period updates,
+        // so those colorings keep the per-step path.
+        let coloring = super::get_coloring(&escape.coloring);
+        if coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum)
+            || coloring.has_feature(super::ColoringFeature::NeedsPeriod)
+        {
+            return false;
+        }
+        // |δc| bound over the viewport: half-diagonal plus the nucleus
+        // relocation offset, in PIXEL units, carried against the pixel
+        // spacing in LOG SPACE — an f64 absolute bound underflows past
+        // ~zoom 1000, which used to disable BLA exactly where deep
+        // renders need the skips most.
+        let h = self.height.max(1) as f64;
+        let dc_log2 = if escape.julia {
+            f64::NEG_INFINITY
+        } else {
+            let half_diag = 0.5 * (self.width as f64).hypot(h);
+            let off = (self.current_ref_offset[0] as f64).hypot(self.current_ref_offset[1] as f64);
+            (half_diag + off).max(1e-30).log2() + (2.0 - escape.zoom_log2 - h.log2())
+        };
+        // Entries past the view's max_iter are dead weight: a
+        // pixel's reference index never exceeds its iteration count
+        // (rebasing restarts it at 0), and the shader bounds every
+        // skip by `params.max_iter - i` -- so cap the build there.
+        // A 10.1M-entry orbit retained while the view sits at a few
+        // thousand iterations otherwise pays a ~2 GB transient and a
+        // seconds-long main-thread build for a table it cannot use.
+        let orbit_len_eff = orbit_len.min(escape.max_iter.saturating_add(1));
+        let mut dc_grew = false;
+        let mut dc_streak = 0u32;
+        if let Some(b) = &self.bla_built {
+            // A table from an earlier, SHORTER prefix of the same
+            // orbit stays valid while the orbit grows (its spans are
+            // a prefix of the appended orbit -- fewer skips, never
+            // wrong), so during growth the length mismatch alone
+            // does not force a rebuild.
+            if b.generation == self.orbit_generation
+                && b.power == power
+                && b.julia == escape.julia
+                && (b.orbit_len == orbit_len_eff || !orbit_done)
+            {
+                if dc_log2 <= b.dc_log2 + 1e-9 {
+                    return self.bla_buffer.is_some();
+                }
+                // Same orbit, same shape -- invalidated ONLY because
+                // the view widened past the built |dc| bound. This is
+                // the rebuild that pads (see below).
+                dc_grew = true;
+                dc_streak = b.dc_rebuilds;
+            }
+        }
+        // While the reference is still GROWING, never (re)build:
+        // the table would be rebuilt every frame as the orbit
+        // lengthens -- a full f64 copy of the orbit taken under the
+        // worker mutex plus an O(n) merge tree, per frame -- and
+        // per-step iteration is exact anyway. Build once, when the
+        // orbit completes.
+        if !orbit_done {
+            return false;
+        }
+        // The CPU copy of the orbit the GPU mirror holds.
+        // BLA takes the reference at FULL precision: hi + lo, scaled
+        // by the per-entry exponent, in f64. The deltas iterate in DF
+        // at ~2^-48, so an A coefficient built from the f32 half alone
+        // would inject 2^-24 of error on every skip - error BLA_EPS
+        // never bounds, since it governs the dropped nonlinear term
+        // rather than the coefficient. f64 also carries the deep dips
+        // (2^-183 and below) that f32 flushes to zero, which is what
+        // made those steps un-skippable.
+        let cap = orbit_len_eff as usize;
+        // Parallel on native: this runs holding the worker's progress
+        // lock, so at 10M entries a serial conversion also stalled
+        // the orbit worker's next publish.
+        let with_exp = |hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]| -> Vec<[f64; 2]> {
+            let n = hi.len().min(cap);
+            let one = |i: usize| -> [f64; 2] {
+                let z = hi[i];
+                let l = lo.get(i).copied().unwrap_or([0.0, 0.0]);
+                let scale = match e.get(i).copied().unwrap_or(0) {
+                    0 => 1.0,
+                    k => (k as f64).exp2(),
+                };
+                [
+                    (z[0] as f64 + l[0] as f64) * scale,
+                    (z[1] as f64 + l[1] as f64) * scale,
+                ]
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                (0..n).into_par_iter().map(one).collect()
+            }
+            #[cfg(target_arch = "wasm32")]
+            (0..n).map(one).collect()
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let orbit_data: Option<Vec<[f64; 2]>> = if progressive {
+            self.orbit_worker.as_ref().map(|wk| {
+                let p = wk.progress.lock().unwrap();
+                with_exp(&p.orbit, &p.orbit_lo, &p.orbit_e)
+            })
+        } else {
+            self.orbit_cache
+                .peek()
+                .map(|o| with_exp(&o.orbit, &o.orbit_lo, &o.orbit_e))
+        };
+        #[cfg(target_arch = "wasm32")]
+        let orbit_data: Option<Vec<[f64; 2]>> = {
+            let _ = progressive;
+            self.orbit_cache
+                .peek()
+                .map(|o| with_exp(&o.orbit, &o.orbit_lo, &o.orbit_e))
+        };
+        let Some(orbit_data) = orbit_data else {
+            return false;
+        };
+        let t_bla = web_time::Instant::now();
+        let usable = (orbit_len as usize).min(orbit_data.len());
+        if usable < 3 {
+            return false;
+        }
+        // Truncate at the reference's own escape: a skip riding the
+        // escaped tail would overshoot the pixel's escape iteration
+        // by up to the span.
+        let bail = escape.bailout.max(1e-6) as f64;
+        let mut prefix = usable;
+        for (i, z) in orbit_data[..usable].iter().enumerate() {
+            let q = z[0] * z[0] + z[1] * z[1];
+            if q > bail {
+                prefix = (i + 1).max(2);
+                break;
+            }
+        }
+        // A rebuild forced by |dc| GROWTH builds for a padded bound,
+        // not the view exactly: dc grows monotonically as the view
+        // zooms OUT, so an exact bound forced a full O(n) rebuild on
+        // every zoom-out tick -- at 10M-entry orbits a main-thread
+        // stall and a ~half-GB buffer rewrite per wheel notch. Four
+        // octaves makes further rebuilds a once-per-16x-widening
+        // event; the cost is slightly smaller skip radii (the dc
+        // term in the merge), which is conservative, never wrong.
+        //
+        // A FRESH build (new orbit, new shape -- every one-shot
+        // headless render) keeps the exact bound: padding there would
+        // change settled pixels for no churn benefit, and the visual
+        // suite pins those. Measured: uniform padding moved up to 13%
+        // of pixels on the deep parameter-plane suite frames.
+        const DC_HEADROOM_LOG2: f64 = 4.0;
+        // Each consecutive dc-growth rebuild doubles the headroom
+        // (4, 8, 16, 32, 64 octaves): a zoom-out from an f3-depth
+        // location to the perturbation threshold crosses ~2300
+        // octaves, which at a fixed 4-octave pad is ~580 rebuilds --
+        // with backoff it is ~a dozen. The wider pad only shrinks
+        // skip radii further (conservative), and the streak resets
+        // on any fresh build.
+        let pad = if dc_grew {
+            DC_HEADROOM_LOG2 * f64::from(1u32 << dc_streak.min(4))
+        } else {
+            0.0
+        };
+        let dc_built = if dc_log2 == f64::NEG_INFINITY {
+            f64::NEG_INFINITY
+        } else {
+            dc_log2 + pad
+        };
+        let dc = if dc_built == f64::NEG_INFINITY {
+            super::bla::MagFe::zero()
+        } else {
+            let e = dc_built.floor();
+            super::bla::MagFe { m: 2f64.powf(dc_built - e), e: e as i64 }
+        };
+        let table =
+            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_built);
+        let n_levels = table.levels.len().min(30);
+        let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
+        if total == 0 {
+            self.bla_built = None;
+            return false;
+        }
+        let mut bytes = vec![0u8; 144 + total * 32];
+        let mut offsets = [0u32; 32];
+        let mut acc = 0u32;
+        for (l, lev) in table.levels[..n_levels].iter().enumerate() {
+            offsets[l] = acc;
+            acc += lev.len() as u32;
+        }
+        for (l, o) in offsets.iter().enumerate() {
+            bytes[l * 4..l * 4 + 4].copy_from_slice(&o.to_le_bytes());
+        }
+        bytes[128..132].copy_from_slice(&(n_levels as u32).to_le_bytes());
+        bytes[132..136].copy_from_slice(&((prefix - 1) as u32).to_le_bytes());
+        // [136..144] stays zero (padding).
+        let clamp_e = |e: i64| -> i32 { e.clamp(-1_000_000_000, 1_000_000_000) as i32 };
+        let pack_one = |ent: &super::bla::BlaEntry, dst: &mut [u8]| {
+            dst[0..4].copy_from_slice(&(ent.a.re as f32).to_le_bytes());
+            dst[4..8].copy_from_slice(&(ent.a.im as f32).to_le_bytes());
+            dst[8..12].copy_from_slice(&(ent.b.re as f32).to_le_bytes());
+            dst[12..16].copy_from_slice(&(ent.b.im as f32).to_le_bytes());
+            dst[16..20].copy_from_slice(&clamp_e(ent.a.e).to_le_bytes());
+            dst[20..24].copy_from_slice(&clamp_e(ent.b.e).to_le_bytes());
+            let (rm, re) = if ent.r.m > 0.0 {
+                (ent.r.m as f32, clamp_e(ent.r.e))
+            } else {
+                (0.0f32, 0)
+            };
+            dst[24..28].copy_from_slice(&rm.to_le_bytes());
+            dst[28..32].copy_from_slice(&re.to_le_bytes());
+        };
+        // Entries pack into fixed 32-byte slots — independent, so the
+        // ~320 MB table for a 10M orbit packs across threads instead
+        // of stalling the render thread (identical bytes either way).
+        let mut base = 144usize;
+        for lev in &table.levels[..n_levels] {
+            let region = &mut bytes[base..base + lev.len() * 32];
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                region
+                    .par_chunks_exact_mut(32)
+                    .zip(lev.par_iter())
+                    .for_each(|(dst, ent)| pack_one(ent, dst));
+            }
+            #[cfg(target_arch = "wasm32")]
+            for (dst, ent) in region.chunks_exact_mut(32).zip(lev.iter()) {
+                pack_one(ent, dst);
+            }
+            base += lev.len() * 32;
+        }
+        let size = bytes.len() as u64;
+        let recreate = match &self.bla_buffer {
+            Some(b) => b.size() < size,
+            None => true,
+        };
+        if recreate {
+            if let Some(old) = self.bla_buffer.take() {
+                old.destroy();
+            }
+            // Headroom so progressive deepening doesn't recreate
+            // every rebuild.
+            self.bla_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape BLA Table"),
+                size: (size + size / 2).max(176),
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        queue.write_buffer(self.bla_buffer.as_ref().unwrap(), 0, &bytes);
+        super::diag::update(|d| {
+            d.bla_build_ms = t_bla.elapsed().as_secs_f32() * 1000.0;
+            d.bla_bytes = bytes.len() as u64;
+        });
+        self.bla_built = Some(BlaBuilt {
+            generation: self.orbit_generation,
+            orbit_len: orbit_len_eff,
+            power,
+            julia: escape.julia,
+            dc_log2: dc_built,
+            dc_rebuilds: if dc_grew { dc_streak.saturating_add(1) } else { 0 },
+        });
+        true
+    }
+
+    /// Use the static per-dispatch seed for every chunk instead of
+    /// the adaptive feedback loop.
+    ///
+    /// The feedback loop measures WALL-CLOCK TIME BETWEEN CALLS as a
+    /// proxy for GPU cost. That proxy holds for a caller that lets
+    /// the queue drain between chunks (an interactive frame loop, or
+    /// the headless path, which waits). It is a LIE for a caller that
+    /// submits chunk after chunk without waiting -- the measurement
+    /// then covers CPU command-encoding only, every chunk reads as
+    /// free, and the size doubles until it hits the ceiling. That is
+    /// how a browser export earns a GPU-watchdog device loss: the
+    /// same failure mode as a desktop TDR, with the same cause (one
+    /// dispatch too long).
+    ///
+    /// The seed is the TDR-calibrated `budget / pixels`, so a fixed
+    /// chunk is bounded by construction. The cost is loop count: a
+    /// high-iteration export runs many small dispatches rather than
+    /// few large ones. The render is chunk-INVARIANT (pinned by the
+    /// chunk-invariance test), so this cannot change the image.
+    pub fn set_fixed_chunk(&mut self, fixed: bool) {
+        self.chunk_fixed = fixed;
+    }
+
+    /// Per-chunk wall-clock target for callers that are not driving a
+    /// UI. A headless export only needs the FINAL image, so its chunks
+    /// should be big enough that the per-chunk downsample stops
+    /// mattering; interactive callers leave this at zero and get a
+    /// target derived from the observed frame baseline.
+    pub fn set_chunk_time_target(&mut self, ms: f32) {
+        self.chunk_target_ms = ms.max(0.0);
+    }
+
+    /// Consume a landed timestamp result, and advance the pacer's
+    /// phase. Call once per render, before deciding to measure.
+    fn ts_poll(&mut self) {
+        use std::sync::atomic::Ordering;
+        // A landed completion-time sample (the no-timestamp path)
+        // feeds exactly what a timestamp result would.
+        if let Some(sample) = self.gpu_done.lock().ok().and_then(|mut g| g.take()) {
+            if sample.ms > 0.0 && sample.iters > 0 {
+                self.apply_gpu_measurement(
+                    sample.ms / sample.iters as f32,
+                    sample.from_start,
+                    sample.regime,
+                );
+            }
+        }
+        let Some(ts) = self.timestamps.as_mut() else {
+            return;
+        };
+        if ts.phase != TsPhase::Mapping {
+            return;
+        }
+        match ts.done.load(Ordering::Relaxed) {
+            0 => {}
+            1 => {
+                let elapsed = {
+                    let view = ts.staging.slice(..).get_mapped_range();
+                    let start = u64::from_le_bytes(view[0..8].try_into().unwrap_or_default());
+                    let end = u64::from_le_bytes(view[8..16].try_into().unwrap_or_default());
+                    end.saturating_sub(start)
+                };
+                ts.staging.unmap();
+                ts.phase = TsPhase::Idle;
+                let ms = elapsed as f32 * ts.period_ns * 1e-6;
+                let (from_start, regime) = (ts.from_start, ts.regime);
+                if ms > 0.0 && ts.iters > 0 {
+                    let mspi = ms / ts.iters as f32;
+                    if let Some(regime) = regime {
+                        self.apply_gpu_measurement(mspi, from_start, regime);
+                    }
+                }
+            }
+            _ => {
+                // Map failed: nothing is mapped, so nothing to unmap.
+                ts.phase = TsPhase::Idle;
+            }
+        }
+    }
+
+    /// Record a measured cost per iteration for `regime`, whichever
+    /// instrument produced it.
+    fn apply_gpu_measurement(&mut self, mspi: f32, from_start: bool, regime: CostRegime) {
+        // A measurement from a different regime is not a
+        // slightly-stale number, it is a number about something
+        // else: replace rather than blend.
+        if self.gpu_regime != Some(regime) {
+            self.gpu_regime = Some(regime);
+            self.gpu_ms_per_iter = None;
+            self.gpu_ms_per_iter_cold = None;
+        }
+        self.gpu_ms_per_iter = Some(mspi);
+        if from_start {
+            self.gpu_ms_per_iter_cold = Some(mspi);
+        }
+    }
+
+    /// Arm the completion callback for the batch the PREVIOUS render()
+    /// recorded, now that the caller has submitted it. Idle when a
+    /// timestamp pacer exists (it measures better) or nothing is
+    /// pending.
+    fn gpu_done_arm(&mut self, queue: &Queue) {
+        let Some((iters, from_start, regime, t0)) = self.gpu_done_pending.take() else {
+            return;
+        };
+        let slot = std::sync::Arc::clone(&self.gpu_done);
+        queue.on_submitted_work_done(move || {
+            let ms = t0.elapsed().as_secs_f32() * 1000.0;
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(GpuDoneSample { ms, iters, from_start, regime });
+            }
+        });
+    }
+
+    /// Test-only: feed one completion-time sample as the callback
+    /// would, so the drain and sizing can be exercised natively.
+    #[cfg(test)]
+    pub(crate) fn inject_gpu_done_sample(&mut self, ms: f32, iters: u32, from_start: bool) {
+        let regime = CostRegime {
+            floatexp: false,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        };
+        if let Ok(mut g) = self.gpu_done.lock() {
+            *g = Some(GpuDoneSample { ms, iters, from_start, regime });
+        }
+    }
+
+    /// The most recent GPU-measured cost per iteration, if the device
+    /// supports timestamps and a result has landed (test observation
+    /// point: the pacer is otherwise invisible by design).
+    #[cfg(test)]
+    pub(crate) fn gpu_ms_per_iter(&self) -> Option<f32> {
+        self.gpu_ms_per_iter
+    }
+
+    /// Test hooks for the pacer's sizing logic: inject measurements,
+    /// then observe what a restart's first chunk would be. The TDR
+    /// class of bug this guards cannot be tested by triggering it.
+    #[cfg(test)]
+    pub(crate) fn set_pacer_measurements(&mut self, general: Option<f32>, cold: Option<f32>) {
+        self.gpu_ms_per_iter = general;
+        self.gpu_ms_per_iter_cold = cold;
+        // Attributed to the regime the probes ask about, so a test
+        // that means "a measurement exists" gets one.
+        self.gpu_regime = Some(CostRegime {
+            floatexp: true,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        });
+    }
+
+    /// As [`set_pacer_measurements`], but attributed to the SCALED
+    /// rung — the cross-regime case that lost the device.
+    #[cfg(test)]
+    pub(crate) fn set_pacer_measurements_other_rung(
+        &mut self,
+        general: Option<f32>,
+        cold: Option<f32>,
+    ) {
+        self.gpu_ms_per_iter = general;
+        self.gpu_ms_per_iter_cold = cold;
+        self.gpu_regime = Some(CostRegime {
+            floatexp: false,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        });
+    }
+
+    #[cfg(test)]
+    fn probe_regime(&self, floatexp: bool) -> CostRegime {
+        CostRegime {
+            floatexp,
+            width: self.width,
+            height: self.height,
+            tier: assembler::PerturbTier::Power(2),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn probe_restart_chunk(&mut self, floatexp: bool) -> u32 {
+        self.reset_chunk_pacing();
+        let regime = self.probe_regime(floatexp);
+        self.next_chunk(floatexp, regime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn chunk_seed(&self, floatexp: bool) -> u32 {
+        self.chunk_size(floatexp)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_chunk_for_test(&mut self, floatexp: bool) -> u32 {
+        let regime = self.probe_regime(floatexp);
+        self.next_chunk(floatexp, regime)
+    }
+
+    /// The measured-growth ceiling for this render size (test view of
+    /// the pixel-aware bound).
+    #[cfg(test)]
+    pub(crate) fn chunk_ceiling(&self, floatexp: bool) -> u32 {
+        perturb_chunk_ceiling(self.chunk_size(floatexp))
+    }
+
+    /// Whether this dispatch should carry timestamp writes. Creates
+    /// the pacer on first use (the queue supplies the tick period),
+    /// and moves a previously-encoded measurement into its map -- by
+    /// now the caller has submitted the encoder that produced it.
+    fn ts_prepare(&mut self, device: &Device, queue: &Queue) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.timestamps.is_none() {
+            if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+                return false;
+            }
+            self.timestamps = Some(TimestampPacer::new(device, queue.get_timestamp_period()));
+        }
+        let ts = self.timestamps.as_mut().expect("created above");
+        if ts.phase == TsPhase::Encoded {
+            ts.done.store(0, Ordering::Relaxed);
+            let done = ts.done.clone();
+            ts.staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                done.store(if r.is_ok() { 1 } else { 2 }, Ordering::Relaxed);
+            });
+            ts.phase = TsPhase::Mapping;
+        }
+        ts.phase == TsPhase::Idle
+    }
+
+    /// Resolve the pair this dispatch just wrote, and remember how
+    /// many iterations it covered.
+    fn ts_after_dispatch(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        iters: u32,
+        from_start: bool,
+        regime: CostRegime,
+    ) {
+        let Some(ts) = self.timestamps.as_mut() else {
+            // No timestamp queries on this device: remember what was
+            // just recorded so the next render() can time its
+            // completion instead. A batch of several dispatches
+            // accumulates into one sample; `from_start` is the first
+            // dispatch's.
+            self.gpu_done_pending = Some(match self.gpu_done_pending.take() {
+                Some((prev, fs, rg, t0)) if rg == regime => {
+                    (prev.saturating_add(iters), fs, rg, t0)
+                }
+                _ => (iters, from_start, regime, web_time::Instant::now()),
+            });
+            return;
+        };
+        encoder.resolve_query_set(&ts.query_set, 0..2, &ts.resolve, 0);
+        encoder.copy_buffer_to_buffer(&ts.resolve, 0, &ts.staging, 0, TimestampPacer::BYTES);
+        ts.iters = iters;
+        ts.from_start = from_start;
+        ts.regime = Some(regime);
+        ts.phase = TsPhase::Encoded;
+    }
+
+    /// Per-chunk GPU-time target when timestamps are driving the
+    /// pacing. Well inside a 60 Hz frame, and an order of magnitude
+    /// inside the ~2 s window a driver reset watches.
+    const GPU_TARGET_MS: f32 = 10.0;
+
+    /// Chunk DISPATCHES per redraw at a measured cost: enough of them
+    /// to fill `target_ms` of GPU time, each individually still
+    /// ceiling-capped.
+    ///
+    /// The ceiling bounds one dispatch — that is the driver-watchdog
+    /// guard, and it stays untouched. But the in-app path runs chunks
+    /// once per redraw, so when the ceiling caps a chunk below the
+    /// frame's GPU budget the remainder of every frame was simply
+    /// discarded: measured on a cached 10.1M-iteration revisit, ~530
+    /// vsync frames (~9 s) with the GPU ~80% idle in each. Batching
+    /// fills the same budget the single-chunk design already declares
+    /// safe per redraw.
+    fn batch_for(chunk: u32, mspi: f32, target_ms: f32, cap: u32) -> u32 {
+        if chunk == 0 || !(mspi > 0.0) {
+            return 1;
+        }
+        let est = chunk as f32 * mspi;
+        if !(est > 0.0) {
+            return 1;
+        }
+        ((target_ms / est) as u32).clamp(1, cap.max(1))
+    }
+
+    /// Upper bound on dispatches per redraw, however cheap a chunk
+    /// measures — belt and braces against a mismeasured cost.
+    const MAX_CHUNK_BATCH: u32 = 16;
+
+    /// How many chunks THIS redraw may dispatch. One, unless this
+    /// exact cost regime has a real GPU-time measurement; one on a
+    /// restart frame (iteration 0 re-enters the all-pixels-alive
+    /// regime whose history includes a device loss — the batch
+    /// multiplier must not compound that bet).
+    fn chunk_batch(&self, chunk: u32, iter_start: u32, regime: CostRegime) -> u32 {
+        let cap = self
+            .chunk_batch_env
+            .unwrap_or(Self::MAX_CHUNK_BATCH)
+            .clamp(1, Self::MAX_CHUNK_BATCH);
+        if cap == 1 || iter_start == 0 || self.gpu_regime != Some(regime) {
+            return 1;
+        }
+        let Some(mspi) = self.gpu_ms_per_iter else {
+            return 1;
+        };
+        let target = if let Some(forced) = self.chunk_target_env {
+            forced
+        } else if self.chunk_target_ms > 0.0 {
+            self.chunk_target_ms
+        } else {
+            Self::GPU_TARGET_MS
+        };
+        Self::batch_for(chunk, mspi, target, cap)
+    }
+
+    /// Grow the params pool to serve `batch` dispatches this redraw.
+    fn ensure_params_pool(&mut self, device: &Device, batch: u32) {
+        while (self.perturb_params_pool.len() as u32) < batch.saturating_sub(1) {
+            self.perturb_params_pool.push(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Perturb Params (batch)"),
+                size: std::mem::size_of::<PerturbParamsGpu>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+    }
+
+    /// Reset the size feedback (new render state, or a finished one).
+    fn reset_chunk_pacing(&mut self) {
+        self.chunk_iters = 0;
+        self.chunk_base_ms = f32::MAX;
+        self.chunk_last = None;
+        self.chunk_count = 0;
+        self.chunk_proven = 0;
+        self.chunk_since_growth = 0;
+    }
+
+    /// Calls a doubling must wait between attempts.
+    ///
+    /// The wall-clock gap is only an honest proxy for GPU cost once
+    /// the queue has drained. With two or three submissions in flight
+    /// it reads short -- so doubling on every call hands out several
+    /// free passes before backpressure tells the truth, and the size
+    /// is already at the ceiling when the first real measurement
+    /// lands. Waiting three calls costs a slower ramp on genuinely
+    /// cheap renders and nothing else.
+    const GROWTH_INTERVAL: u32 = 3;
+
+    /// How far past PROVEN work a chunk may grow (see
+    /// [`Self::chunk_proven`]). Five doublings: enough to ramp
+    /// quickly on a cheap render, small enough that arriving at a
+    /// cost cliff overshoots by a bounded factor rather than by the
+    /// whole ceiling.
+    const GROWTH_HEADROOM: u32 = 32;
+
+    /// The next chunk's iteration count, grown or shrunk to hold the
+    /// caller's per-call time near its target.
+    ///
+    /// The first chunk of any render uses the static seed, so a
+    /// configuration that turns out to be expensive per iteration is
+    /// never met with a large chunk; growth is at most 2x per call and
+    /// only when the previous call came in under target, which bounds
+    /// an overshoot to roughly one target period.
+    fn next_chunk(&mut self, floatexp: bool, regime: CostRegime) -> u32 {
+        let seed = self.chunk_size(floatexp);
+        // A measurement from another regime says nothing about this
+        // dispatch's cost. Drop it and fall back to the static seed
+        // until this regime measures itself.
+        if self.gpu_regime != Some(regime) {
+            self.gpu_ms_per_iter = None;
+            self.gpu_ms_per_iter_cold = None;
+        }
+        #[cfg(test)]
+        if self.chunk_override.is_some() {
+            return seed;
+        }
+        if self.chunk_fixed {
+            return seed;
+        }
+        // Measured GPU cost, when a timestamp result has landed: size
+        // the chunk directly from cost per iteration instead of
+        // inferring it from call spacing. Growth stays bounded to 2x
+        // per call even here -- the measurement is honest, but the
+        // cost itself is non-stationary (pixels die as a render
+        // proceeds, and the survivors are the expensive ones).
+        if let Some(mspi) = self.gpu_ms_per_iter {
+            if mspi > 0.0 {
+                let now = web_time::Instant::now();
+                self.chunk_last = Some(now);
+                self.chunk_count = self.chunk_count.saturating_add(1);
+                let target = if let Some(forced) = self.chunk_target_env {
+                    forced
+                } else if self.chunk_target_ms > 0.0 {
+                    self.chunk_target_ms
+                } else {
+                    Self::GPU_TARGET_MS
+                };
+                let ceiling = perturb_chunk_ceiling(seed);
+                let ideal = (target / mspi).clamp(16.0, ceiling as f32) as u32;
+                // First chunk after a restart (a pan, a zoom notch):
+                // size it from the COLD measurement -- cost per
+                // iteration measured on a first chunk, where every
+                // pixel is alive, which is exactly the regime a
+                // restart re-enters. The general measurement is
+                // often survivor-biased (a late chunk of a long
+                // render iterates mostly-escaped pixels for nearly
+                // free) and sizing a restart from it is how a
+                // 100k-iteration view earned a DEVICE LOST: all
+                // pixels reborn into a chunk computed from the cheap
+                // tail, clamped only by the 1M ceiling. With no cold
+                // measurement yet, stay seed-bounded exactly as the
+                // pre-measurement path does.
+                let chunk = if self.chunk_iters == 0 {
+                    match self.gpu_ms_per_iter_cold {
+                        Some(cold) if cold > 0.0 => {
+                            (target / cold).clamp(16.0, ceiling as f32) as u32
+                        }
+                        _ => ideal.min(seed.saturating_mul(2).max(16)),
+                    }
+                } else {
+                    let current = self.chunk_iters.max(seed);
+                    ideal.clamp(
+                        (current / 2).max(16),
+                        current.saturating_mul(2),
+                    )
+                }
+                .clamp(16, ceiling);
+                self.chunk_iters = chunk;
+                return chunk;
+            }
+        }
+
+        // Without a measurement, the sizer below grows the chunk from
+        // CALL SPACING -- the time between render() calls -- on the
+        // assumption that a call waits for the GPU. In a browser
+        // nothing does: WebGPU cannot block on completion, so the
+        // spacing is just the frame period plus CPU work, and the
+        // chunk doubles every third call regardless of what the GPU
+        // is doing, up to 64x the seed. At 397x708 with 6x
+        // supersampling that ceiling is ~51k iterations over 10 MP in
+        // one dispatch -- a guaranteed multi-second submission, and
+        // the DXGI_ERROR_DEVICE_HUNG in the field report. It went
+        // unnoticed only because the CPU's orbit slice used to take
+        // 240 ms, making every call "late" and pinning the chunk at
+        // 16; the slice fix removed that accidental throttle. So: in
+        // a browser the chunk stays at the calibrated seed until a
+        // completion-time measurement arrives (`gpu_done_arm`), and
+        // then sizes from that.
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.chunk_iters = seed;
+            return seed;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+        let now = web_time::Instant::now();
+        self.chunk_count = self.chunk_count.saturating_add(1);
+        let Some(last) = self.chunk_last.replace(now) else {
+            // First chunk: seed, and start the clock.
+            self.chunk_iters = seed;
+            self.chunk_count = 0;
+            return seed;
+        };
+        let elapsed_ms = now.duration_since(last).as_secs_f32() * 1000.0;
+        if elapsed_ms > 0.0 {
+            self.chunk_base_ms = self.chunk_base_ms.min(elapsed_ms);
+        }
+        let target = if let Some(forced) = self.chunk_target_env {
+            forced
+        } else if self.chunk_target_ms > 0.0 {
+            self.chunk_target_ms
+        } else {
+            // Baseline plus headroom: under vsync this lands a little
+            // above the refresh period (grow until the chunk eats the
+            // frame's slack, then stop); with vsync off the 12 ms
+            // floor keeps the UI at ~60+ fps rather than chasing a
+            // 2 ms baseline.
+            (self.chunk_base_ms + 8.0).clamp(12.0, 33.0)
+        };
+        let mut chunk = self.chunk_iters.max(seed);
+        self.chunk_since_growth = self.chunk_since_growth.saturating_add(1);
+        if elapsed_ms < target {
+            // The chunk just measured came in on time, so it is
+            // proven-completable work: growth may build on it.
+            self.chunk_proven = self.chunk_proven.max(chunk);
+            let cap = self
+                .chunk_proven
+                .max(seed)
+                .saturating_mul(Self::GROWTH_HEADROOM)
+                .min(perturb_chunk_ceiling(seed));
+            if self.chunk_since_growth >= Self::GROWTH_INTERVAL && chunk < cap {
+                chunk = chunk.saturating_mul(2).min(cap);
+                self.chunk_since_growth = 0;
+            }
+        } else if elapsed_ms > target * 1.4 {
+            chunk = (chunk / 2).max(16);
+            self.chunk_since_growth = 0;
+        }
+        self.chunk_iters = chunk;
+        chunk
+        }
+    }
+
+    fn chunk_size(&self, floatexp: bool) -> u32 {
+        #[cfg(test)]
+        if let Some(c) = self.chunk_override {
+            return c;
+        }
+        perturb_chunk_seed(floatexp, self.width as u64 * self.height as u64)
+    }
+
+    /// Everything that invalidates in-flight chunk state.
+    /// A reference predicted to take longer than this is waited for
+    /// rather than rendered against progressively. Low enough that
+    /// anything interactive still refines in front of the user, high
+    /// enough that a minutes-long build does not flash flat colour
+    /// the whole time.
+    const ORBIT_WAIT_SECONDS: f64 = 0.75;
+
+    /// Whether one records buffer for the current render grid fits
+    /// the device's binding limits. Interactive sizes always do (the
+    /// resize clamp caps pixels against the WIDER iter-state stride);
+    /// giant CLI exports may not, and simply render uncached.
+    fn results_fit(&self, device: &Device) -> bool {
+        let bytes = (self.width as u64) * (self.height as u64) * 32;
+        bytes <= device.limits().max_storage_buffer_binding_size as u64
+            && bytes <= device.limits().max_buffer_size
+    }
+
+    /// (Re)create the records buffer for the current grid; returns
+    /// whether records are ACTIVE (fit the device). When they do not,
+    /// the 32-byte dummy is kept for the layouts and the shader-side
+    /// write is gated off via params.flags bit 3.
+    fn ensure_results(&mut self, device: &Device) -> bool {
+        if !self.results_fit(device) {
+            self.results_key = None;
+            if self.results_dummy.is_none() {
+                self.results_dummy = Some(device.create_buffer(&BufferDescriptor {
+                    label: Some("Escape Results Dummy"),
+                    size: 32,
+                    usage: BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }));
+            }
+            return false;
+        }
+        let px = self.width.max(1) * self.height.max(1);
+        if self.results_px != px || self.results_buffer.is_none() {
+            if let Some(old) = self.results_buffer.take() {
+                old.destroy();
+            }
+            self.results_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Iter Results"),
+                size: (px as u64) * 32,
+                // COPY_SRC: read back by ground-truth comparison
+                // tests; free otherwise.
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }));
+            self.results_px = px;
+            self.results_key = None;
+        }
+        true
+    }
+
+    /// The records binding for iterate bind groups: the real buffer
+    /// when active, the dummy otherwise. `ensure_results` has always
+    /// run first in `render`, so one of the two exists.
+    /// Test-only: read back the terminal records' iteration counts
+    /// (n, tags) per pixel, for ground-truth comparisons.
+    #[cfg(test)]
+    pub(crate) fn read_results_counts(
+        &self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Option<Vec<(u32, u32)>> {
+        self.read_results_full(device, queue)
+            .map(|v| v.into_iter().map(|r| (r.n, r.tags)).collect())
+    }
+
+    /// Test-only: every field of every terminal record (the recolor
+    /// cache), for ground-truth comparisons that need the final z or
+    /// the orbit accumulator rather than just the count.
+    #[cfg(test)]
+    pub(crate) fn read_results_full(
+        &self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Option<Vec<IterRecord>> {
+        let src = self.results_buffer.as_ref()?;
+        let px = (self.width as u64) * (self.height as u64);
+        let size = px * 32;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("results staging"),
+            size,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("results readback"),
+        });
+        enc.copy_buffer_to_buffer(src, 0, &staging, 0, size);
+        queue.submit(std::iter::once(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().ok()?.ok()?;
+        let data = slice.get_mapped_range();
+        let f = |rec: &[u8], at: usize| f32::from_le_bytes(rec[at..at + 4].try_into().unwrap());
+        let out = data
+            .chunks_exact(32)
+            .map(|rec| IterRecord {
+                z: [f(rec, 0), f(rec, 4)],
+                dz: [f(rec, 8), f(rec, 12)],
+                accum: [f(rec, 16), f(rec, 20)],
+                n: u32::from_le_bytes(rec[24..28].try_into().unwrap()),
+                tags: u32::from_le_bytes(rec[28..32].try_into().unwrap()),
+            })
+            .collect();
+        drop(data);
+        staging.unmap();
+        Some(out)
+    }
+
+    fn results_binding(&self) -> BindingResource<'_> {
+        self.results_buffer
+            .as_ref()
+            .or(self.results_dummy.as_ref())
+            .expect("ensure_results precedes every bind group")
+            .as_entire_binding()
+    }
+
+    /// Whether this device can hold a render of this size at all.
+    ///
+    /// Checked BEFORE anything is allocated, because the failure mode
+    /// otherwise is silent: wgpu reports a rejected allocation through
+    /// the uncaptured-error handler, which stops nothing, so every
+    /// dispatch runs against an invalid buffer and the export
+    /// "succeeds" with a black image.
+    ///
+    /// This catches the DECLARED limits (a buffer larger than the
+    /// device will bind, a texture wider than it will make), which are
+    /// knowable up front and identical on every run. Running out of
+    /// actual VRAM within those limits is not knowable here -- an
+    /// error scope around the render catches that.
+    /// Whether the perturbed path's per-pixel resume state fits this
+    /// device at the CURRENT render size.
+    ///
+    /// The same arithmetic `allocation_error` does for the headless
+    /// precheck, applied where nothing can skip it. The video exporter
+    /// drives the renderer directly and never ran that precheck, so a
+    /// 4K deep-zoom frame asked wgpu for a 398 MB buffer against a
+    /// 256 MB limit -- a validation error, which wgpu answers by
+    /// panicking, on the exporter's worker thread. The app stayed
+    /// responsive and the export dialog waited forever.
+    ///
+    /// Nothing below supersample 1 can shrink this, so the honest
+    /// answer at a size that does not fit is the direct path, which
+    /// bands by rows.
+    fn perturb_state_fits(&self, device: &Device, escape: &EscapeConfig) -> bool {
+        Self::perturb_state_fits_at(device, escape, self.width, self.height)
+    }
+
+    /// The same question for a size the renderer does not hold yet, so
+    /// it can be checked (and tested) without allocating one.
+    pub(crate) fn perturb_state_fits_at(
+        device: &Device,
+        escape: &EscapeConfig,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        let tier = match Self::perturb_tier(escape) {
+            Some(t) => t,
+            None => return true,
+        };
+        let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
+            || matches!(tier, assembler::PerturbTier::Manowar);
+        let need = (width as u64) * (height as u64)
+            * assembler::iter_state_bytes(tier, floatexp);
+        let lim = device.limits();
+        need <= lim.max_buffer_size && need <= lim.max_storage_buffer_binding_size as u64
+    }
+
+    pub fn allocation_error(
+        device: &Device,
+        escape: &EscapeConfig,
+        width: u32,
+        height: u32,
+        supersample: u32,
+    ) -> Option<String> {
+        let ss = supersample.max(1) as u64;
+        let (rw, rh) = (width.max(1) as u64 * ss, height.max(1) as u64 * ss);
+        let px = rw * rh;
+        let lim = device.limits();
+
+        let max_dim = lim.max_texture_dimension_2d as u64;
+        if rw > max_dim || rh > max_dim {
+            return Some(format!(
+                "{rw}x{rh} render pixels exceeds this GPU's {max_dim}-pixel texture limit"
+            ));
+        }
+        // The perturbed path's per-pixel state is one storage buffer,
+        // and it is by far the largest thing here.
+        if Self::wants_perturbation(escape) {
+            // The ACTUAL stride for this formula's tier and rung, not
+            // the widest one: only the two-term recurrences on the
+            // deep rung carry the larger state, and assuming it would
+            // refuse renders that fit.
+            let tier = Self::perturb_tier(escape)
+                .unwrap_or(assembler::PerturbTier::Power(2));
+            let floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM
+                || matches!(tier, assembler::PerturbTier::Manowar);
+            let need = px * assembler::iter_state_bytes(tier, floatexp);
+            let cap = lim.max_storage_buffer_binding_size as u64;
+            if need > cap {
+                return Some(format!(
+                    "a deep-zoom render of {rw}x{rh} needs a {} MB buffer, past this \
+                     GPU's {} MB limit",
+                    need / (1024 * 1024),
+                    cap / (1024 * 1024)
+                ));
+            }
+            if need > lim.max_buffer_size {
+                return Some(format!(
+                    "a deep-zoom render of {rw}x{rh} needs a {} MB buffer, past this \
+                     GPU's {} MB maximum",
+                    need / (1024 * 1024),
+                    lim.max_buffer_size / (1024 * 1024)
+                ));
+            }
+        }
+        None
+    }
+
+    /// Antialias by ACCUMULATION rather than by a bigger grid.
+    ///
+    /// A supersampled grid multiplies the render size, and past a
+    /// point that is simply unavailable: 8x over a 4000x3000 export
+    /// is 768 megapixels and 101 GB of per-pixel state, and 32000
+    /// pixels also exceeds the 16384 texture-dimension limit every
+    /// adapter has. No budget tuning reaches it. Averaging several
+    /// ordinary renders, each displaced within a pixel, costs the
+    /// same total iteration work and a FIXED amount of memory.
+    ///
+    /// `samples` is per axis: 4 means a 4x4 jittered grid, 16 renders,
+    /// the same sample count as 4x supersampling. Call
+    /// [`Self::accumulate_sample`] once per offset from
+    /// [`Self::sample_grid`], then read [`Self::accumulated_view`].
+    pub fn begin_accumulation(&mut self, device: &Device, queue: &Queue, samples: u32) {
+        let n = samples.max(1);
+        let (w, h) = (self.out_width.max(1), self.out_height.max(1));
+        let stale = match &self.accum {
+            Some((t, _, _, _)) => t.width() != w || t.height() != h,
+            None => true,
+        };
+        if stale {
+            if let Some((a, _, b, _)) = self.accum.take() {
+                a.destroy();
+                b.destroy();
+            }
+            let (ta, va) = Self::create_output(device, w, h);
+            let (tb, vb) = Self::create_output(device, w, h);
+            self.accum = Some((ta, va, tb, vb));
+        }
+        self.accum_front = 0;
+        if self.accum_params.is_none() {
+            self.accum_params = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Accum Params"),
+                size: 16,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        // Each sample is added pre-scaled by 1/n², so the target holds
+        // the MEAN throughout and can be shown after any number of
+        // samples rather than only the last.
+        let inv = 1.0f32 / (n * n) as f32;
+        let mut raw = [0u8; 16];
+        raw[0..4].copy_from_slice(&inv.to_le_bytes());
+        raw[4..8].copy_from_slice(&1u32.to_le_bytes()); // clear on first add
+        queue.write_buffer(self.accum_params.as_ref().unwrap(), 0, &raw);
+        self.accum_cleared = false;
+    }
+
+    /// The jittered sample offsets for an `n`-per-axis pattern, in
+    /// RENDER pixels.
+    ///
+    /// A regular grid over the pixel, offset by half a step so the
+    /// samples straddle the centre symmetrically — the same positions
+    /// a supersampled grid would take, which is what makes the two
+    /// methods agree rather than merely both look smooth.
+    pub fn sample_grid(n: u32) -> Vec<[f32; 2]> {
+        let n = n.max(1);
+        let mut out = Vec::with_capacity((n * n) as usize);
+        for j in 0..n {
+            for i in 0..n {
+                out.push([
+                    (i as f32 + 0.5) / n as f32 - 0.5,
+                    (j as f32 + 0.5) / n as f32 - 0.5,
+                ]);
+            }
+        }
+        out
+    }
+
+    /// Set the offset for the next render.
+    pub fn set_sample_offset(&mut self, off: [f32; 2]) {
+        self.sample_offset = off;
+    }
+
+    /// Fold the current (settled) image into the accumulation.
+    pub fn accumulate_sample(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+    ) {
+        let Some((_, va, _, vb)) = self.accum.as_ref() else {
+            return;
+        };
+        // Read what we have, write the sum to the other one.
+        let (prev_view, next_view) = if self.accum_front == 0 {
+            (va.clone(), vb.clone())
+        } else {
+            (vb.clone(), va.clone())
+        };
+        if self.accum_pipeline.is_none() {
+            let src = r#"
+struct AccumParams {
+    inv_n: f32,
+    clear: u32,
+}
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var<uniform> p: AccumParams;
+@group(0) @binding(3) var prev_tex: texture_2d<f32>;
+
+@compute @workgroup_size(8, 8, 1)
+fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = vec2<i32>(textureDimensions(dst_tex));
+    let q = vec2<i32>(i32(gid.x), i32(gid.y));
+    if (q.x >= dims.x || q.y >= dims.y) {
+        return;
+    }
+    let s = textureLoad(src_tex, q, 0) * p.inv_n;
+    let prev = select(textureLoad(prev_tex, q, 0), vec4<f32>(0.0), p.clear != 0u);
+    textureStore(dst_tex, q, prev + s);
+}
+"#;
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Accumulate"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Accumulate Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Accumulate Pipeline Layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Accumulate"),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some("accum_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.accum_pipeline = Some((pipeline, layout));
+        }
+        // After the first fold, stop clearing.
+        if !self.accum_cleared {
+            self.accum_cleared = true;
+        } else if let Some(buf) = self.accum_params.as_ref() {
+            let mut raw = [0u8; 8];
+            raw[4..8].copy_from_slice(&0u32.to_le_bytes());
+            queue.write_buffer(buf, 4, &raw[4..8]);
+        }
+        let src = self.output_view().clone();
+        let (pipeline, layout) = self.accum_pipeline.as_ref().unwrap();
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Accumulate Bind Group"),
+            layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&src) },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&next_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: self.accum_params.as_ref().unwrap().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&prev_view),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Accumulate Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(
+            self.out_width.max(1).div_ceil(8),
+            self.out_height.max(1).div_ceil(8),
+            1,
+        );
+        drop(pass);
+        self.accum_front ^= 1;
+    }
+
+    /// The averaged image, once samples have been folded in.
+    pub fn accumulated_view(&self) -> Option<&TextureView> {
+        self.accum.as_ref().map(
+            |(_, va, _, vb)| if self.accum_front == 0 { va } else { vb },
+        )
+    }
+
+    /// The sampling offset in the view's own frame.
+    ///
+    /// Both consumers add it to a quantity that has already been
+    /// y-flipped and rotated (the direct path's `d`, the perturbed
+    /// path's `d0`), so the offset makes the same trip: a shift of
+    /// the sampling grid is a shift of the view only when expressed
+    /// in the view's axes.
+    fn sample_offset_in_view(&self, escape: &EscapeConfig) -> [f32; 2] {
+        let (ox, oy) = (self.sample_offset[0], -self.sample_offset[1]);
+        if ox == 0.0 && oy == 0.0 {
+            return [0.0, 0.0];
+        }
+        let (c, s) = (escape.rotation.cos(), escape.rotation.sin());
+        [ox * c - oy * s, ox * s + oy * c]
+    }
+
+    /// The supersampling factor actually in use, after the budget
+    /// clamp in [`Self::resize`] — which is not always the one asked
+    /// for.
+    pub fn effective_supersample(&self) -> u32 {
+        self.supersample
+    }
+
+    /// Whether this config renders on the perturbed path.
+    fn perturbed_path(&self, escape: &EscapeConfig) -> bool {
+        #[cfg(test)]
+        {
+            Self::wants_perturbation(escape) || self.force_perturbed
+        }
+        #[cfg(not(test))]
+        {
+            Self::wants_perturbation(escape)
+        }
+    }
+
+    /// Whether the iterate pass compiles a real derivative orbit.
+    /// Direct path only: the perturbed rungs never iterate one (their
+    /// colorings see HAS_DERIVATIVE = false). Mirrors assemble_with.
+    fn derivative_active(&self, escape: &EscapeConfig) -> bool {
+        if self.perturbed_path(escape) {
+            return false;
+        }
+        let formula = super::get_formula(&escape.formula);
+        let coloring = super::get_coloring(&escape.coloring);
+        coloring.has_feature(super::ColoringFeature::NeedsDerivative)
+            && !formula.wgsl_derivative.is_empty()
+    }
+
+    /// Identity of everything the ITERATION depends on -- the recolor
+    /// cache key. Deliberately omits the palette (a texture, never
+    /// iterated over) and the relief settings (applied by the resolve
+    /// pass), and folds the coloring in ONLY when it participates in
+    /// iteration: an accumulator or period test runs inside the loop,
+    /// so its identity and params shape the records; a map-only
+    /// coloring touches nothing until the recolor pass re-runs it.
+    ///
+    /// The derivative and interior-detection flags are here because
+    /// assemble_with compiles DIFFERENT iteration loops for them --
+    /// records made without a derivative orbit must not serve a
+    /// coloring that reads one.
+    fn iterate_key_for(&self, escape: &EscapeConfig) -> String {
+        let coloring = super::get_coloring(&escape.coloring);
+        let needs_accum = coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum);
+        let needs_period = coloring.has_feature(super::ColoringFeature::NeedsPeriod);
+        let colors_interior = coloring.has_feature(super::ColoringFeature::ColorsInterior);
+        #[cfg(test)]
+        let interior = !self.disable_interior;
+        #[cfg(not(test))]
+        let interior = true;
+        let interior_ok = interior && !colors_interior && !needs_accum && !needs_period;
+        let perturbed = self.perturbed_path(escape);
+        #[cfg(test)]
+        let floatexp = perturbed
+            && (escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp);
+        #[cfg(not(test))]
+        let floatexp = perturbed && escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+        let floatexp = floatexp
+            || (perturbed
+                && matches!(
+                    Self::perturb_tier(escape),
+                    Some(assembler::PerturbTier::Manowar)
+                ));
+        let path = if !perturbed {
+            "direct"
+        } else if floatexp {
+            "pfe"
+        } else {
+            "p32"
+        };
+        #[cfg(test)]
+        let no_bla = self.disable_bla;
+        #[cfg(not(test))]
+        let no_bla = false;
+        let coloring_fold = if needs_accum || needs_period {
+            format!("{}|{:?}", escape.coloring, escape.coloring_params)
+        } else {
+            String::new()
+        };
+        format!(
+            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}|{:?}",
+            escape.formula,
+            escape.formula_params,
+            escape.center_re,
+            escape.center_im,
+            escape.zoom_log2,
+            escape.rotation,
+            escape.max_iter,
+            escape.bailout,
+            escape.julia,
+            escape.julia_re,
+            escape.julia_im,
+            escape.damping_re,
+            escape.damping_im,
+            escape.biomorph,
+            escape.reference_period,
+            self.width,
+            self.height,
+            self.derivative_active(escape),
+            interior_ok,
+            no_bla,
+            coloring_fold,
+            // The sub-pixel sampling offset moves WHICH POINTS are
+            // iterated, so it belongs to the iteration's identity.
+            // Left out, accumulation antialiasing silently returned
+            // the same cached image for every sample -- the recolor
+            // cache is keyed on the config, and this lives on the
+            // renderer.
+            self.sample_offset,
+        )
+    }
+
+    /// One recolor dispatch: coloring + palette from the cached
+    /// records into the output (and height) textures. The caller has
+    /// already written the params buffer for this frame, so changed
+    /// coloring params and relief field flags are in effect.
+    fn run_recolor(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        escape: &EscapeConfig,
+        palette_view: &TextureView,
+    ) {
+        let coloring = super::get_coloring(&escape.coloring);
+        let deriv = self.derivative_active(escape);
+        // The fit the shader will apply. `None` (nothing measured yet,
+        // or the mode is off) writes the IDENTITY, so the recolor pass
+        // reproduces the iterate pass exactly -- which the
+        // cache-equivalence test depends on.
+        let fit = if escape.contrast.is_active() {
+            self.contrast_fit
+        } else {
+            None
+        };
+        queue_contrast(queue, &self.contrast_params, &escape.contrast, fit);
+        let key = format!("recolor|{}|{}", coloring.name, deriv);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_recolor(coloring, deriv);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Recolor Pipeline Layout"),
+                bind_group_layouts: &[Some(&self.recolor_bind_group_layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("escape_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Recolor Bind Group"),
+            layout: &self.recolor_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(palette_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self
+                        .results_buffer
+                        .as_ref()
+                        .expect("recolor requires active results")
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: self.contrast_params.as_entire_binding(),
+                },
+            ],
+        });
+        let pipeline = &self.pipelines[&key];
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Recolor Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+    }
+
+    fn chunk_key_for(&self, escape: &EscapeConfig, orbit_tag: u64, orbit_done: bool) -> String {
+        format!(
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
+            escape.formula,
+            escape.formula_params,
+            escape.coloring,
+            escape.center_re,
+            escape.center_im,
+            escape.zoom_log2,
+            escape.rotation,
+            escape.max_iter,
+            escape.bailout,
+            escape.julia,
+            escape.julia_re,
+            escape.julia_im,
+            escape.damping_re,
+            escape.damping_im,
+            escape.biomorph,
+            escape.reference_period,
+            escape.coloring_params,
+            self.width,
+            self.height,
+            orbit_tag,
+            orbit_done,
+        )
+    }
+
+    /// (Re)allocate the perturbed path's per-pixel resume state.
+    /// Returns false when this frame does not fit the device, WITHOUT
+    /// asking wgpu to create the buffer.
+    ///
+    /// It has to be checked here and not only in the caller's
+    /// precheck: `create_buffer` past `max_buffer_size` is a
+    /// validation error, and wgpu answers a validation error by
+    /// PANICKING. On the video exporter that panic lands on a worker
+    /// thread, so the app stays responsive while the export dialog
+    /// waits forever for a frame that will never arrive -- which is
+    /// exactly how it was reported. A 4K frame needs 3840*2160*48 =
+    /// 398 MB, past the 256 MB this GPU allows, and nothing below
+    /// supersample 1 can shrink it.
+    fn ensure_iter_state(&mut self, device: &Device, stride: u64) -> bool {
+        let px = self.width * self.height;
+        let need = (px as u64) * stride;
+        let lim = device.limits();
+        if need > lim.max_buffer_size || need > lim.max_storage_buffer_binding_size as u64 {
+            log::error!(
+                "escape: a deep-zoom render of {}x{} needs a {} MB iteration-state buffer,                  past this GPU's {} MB limit -- rendering the direct path instead",
+                self.width,
+                self.height,
+                need / (1024 * 1024),
+                lim.max_buffer_size.min(lim.max_storage_buffer_binding_size as u64)
+                    / (1024 * 1024),
+            );
+            return false;
+        }
+        if self.iter_state_px != px
+            || self.iter_state_stride != stride
+            || self.iter_state_buffer.is_none()
+        {
+            if let Some(old) = self.iter_state_buffer.take() {
+                old.destroy();
+            }
+            self.iter_state_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Iter State"),
+                size: need,
+                usage: BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }));
+            self.iter_state_px = px;
+            self.iter_state_stride = stride;
+        }
+        true
+    }
+
+    /// How deep this config can usefully go, for the UI to say so.
+    ///
+    /// Two tiers, and the difference is four thousand octaves: a
+    /// formula with a perturbation tier iterates deltas against a
+    /// fixed-point reference and keeps resolving essentially without
+    /// limit, while the rest run the direct path, whose f32 pixel
+    /// mapping stops separating neighbouring pixels at about zoom 14.
+    /// Past that the image is honest mush, and the panel should say
+    /// which case the user is in rather than letting them zoom into a
+    /// wash and wonder what broke.
+    pub fn usable_depth(escape: &EscapeConfig) -> UsableDepth {
+        if Self::perturb_tier(escape).is_some()
+            && !escape.is_damped()
+            && escape.biomorph == crate::config::escape::BiomorphMode::Off
+        {
+            UsableDepth::Perturbed
+        } else {
+            UsableDepth::Direct(PERTURB_MIN_ZOOM)
+        }
+    }
+
+    /// Why a derivative-based coloring has nothing to work with here,
+    /// or `None` when it does.
+    ///
+    /// `distance_estimate` and `normal_map` read `sum.dz`, and when no
+    /// derivative is compiled that is the constant seed rather than a
+    /// derivative — so both return a flat value instead of a
+    /// confident wrong one. Flat is honest but silent, and the panel
+    /// is where the silence gets explained. Pinned against the
+    /// assembler's own `HAS_DERIVATIVE` decision by test, so the two
+    /// cannot drift.
+    pub fn derivative_gap(escape: &EscapeConfig) -> Option<DerivativeGap> {
+        // The deep rungs do not iterate a derivative orbit at all, so
+        // this outranks the formula: a Mandelbrot dive past
+        // PERTURB_MIN_ZOOM loses its derivative even though the
+        // formula defines one.
+        if Self::wants_perturbation(escape) {
+            return Some(DerivativeGap::Perturbed);
+        }
+        if super::fields::get_field(&escape.formula).is_some() {
+            return Some(DerivativeGap::Formula);
+        }
+        if super::get_formula(&escape.formula).wgsl_derivative.is_empty() {
+            return Some(DerivativeGap::Formula);
+        }
+        None
+    }
+
+    /// Whether this view renders through the perturbation path:
+    /// Mandelbrot parameter plane, plain iteration, past the direct
+    /// path's f32 ceiling. Everything else stays direct (and deep
+    /// zooms of unsupported combinations render the direct path's
+    /// f32 mush honestly rather than wrong perturbation math).
+    pub(crate) fn wants_perturbation(escape: &EscapeConfig) -> bool {
+        match Self::perturb_tier(escape) {
+            Some(tier) => {
+                escape.zoom_log2 > Self::tier_min_zoom(tier)
+                    && !escape.is_damped()
+                    && escape.biomorph == crate::config::escape::BiomorphMode::Off
+            }
+            None => false,
+        }
+    }
+
+    /// The depth a tier's delta form is ACCURATE from, which is not
+    /// the same question as the depth the direct path runs out at.
+    ///
+    /// Only Kaliset needs a floor of its own. Its map is an inversion,
+    /// so the delta picks up a 1/|Z|^2 amplification that the other
+    /// tiers have no analogue for, and it needs a genuinely small
+    /// delta before that settles. Measured against exact orbits on an
+    /// inverting view: 37% out at zoom 10 and 20% at 14 (the direct
+    /// path is 0.2% there), 2.4e-2 at 18, then 3.6e-4 at 24 and
+    /// 5.7e-6 at 30. Below the floor it renders direct -- which is
+    /// what it did before this tier existed, so the floor costs
+    /// nothing and shipping without one would have made the picture
+    /// WORSE exactly at the threshold.
+    fn tier_min_zoom(tier: assembler::PerturbTier) -> f64 {
+        match tier {
+            assembler::PerturbTier::Kaliset => 24.0,
+            _ => PERTURB_MIN_ZOOM,
+        }
+    }
+
+    /// Rows the direct path may cover in one dispatch.
+    ///
+    /// The direct and field templates have no per-pixel resume state,
+    /// so a whole render is one dispatch: cost is pixels x max_iter
+    /// with nothing bounding it. Fine at ordinary iteration counts,
+    /// fatal when a deep-zoom config keeps its max_iter and the view
+    /// zooms OUT past the perturbation threshold - tens of seconds in
+    /// one submission, which Windows answers by resetting the driver
+    /// and wgpu by aborting the process (0xc0000409). Reported from an
+    /// app session zooming out of an f3-depth location, and again from
+    /// an animation whose zoom track crossed the same line.
+    ///
+    /// Splitting by ROW BAND bounds the dispatch without needing any
+    /// resume state: each band is a complete render of its own rows,
+    /// and the output texture accumulates them. It also gives the
+    /// direct path progressive top-to-bottom feedback it never had.
+    fn direct_rows_per_dispatch(&self, escape: &EscapeConfig) -> u32 {
+        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
+        // The session shift only ever shrinks (see DIRECT_BUDGET_SHIFT),
+        // and carries over from previous sessions.
+        tuning::ensure_loaded();
+        let budget = DIRECT_DISPATCH_BUDGET
+            >> DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+        let rows = budget / per_row.max(1);
+        (rows.max(1) as u32).min(self.height.max(1))
+    }
+
+
+    /// The map's continuous parameter, which is part of the reference
+    /// orbit's identity (a different `p` is a different orbit, so a
+    /// cache keyed without it would silently reuse a stale one).
+    /// Zero for every family that has no such parameter.
+    fn map_params_for(escape: &EscapeConfig) -> [f32; 2] {
+        // Manowar is the same two-term map with p = 1, fixed by the
+        // formula rather than by a parameter.
+        if escape.formula == "manowar" {
+            return [1.0, 0.0];
+        }
+        // Newton and Nova carry their complex RELAXATION here: it
+        // multiplies the step, so it is part of the reference orbit.
+        // Resolved through the registry defaults, as Phoenix's p is.
+        if escape.formula == "newton" || escape.formula == "nova" {
+            let defs = super::get_formula(&escape.formula).parameters;
+            let get = |name: &str| {
+                escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                    defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.default)
+                })
+            };
+            return [get("relax_re"), get("relax_im")];
+        }
+        // Kaliset's sign branch and Ducks' variant select different
+        // maps, so they are part of the identity too. Carried RAW,
+        // exactly as `pack_params` hands them to the shader: the
+        // reference's own step then thresholds them the same way the
+        // WGSL does, so the two cannot describe different maps.
+        if escape.formula == "kaliset" || escape.formula == "ducks" {
+            let name = if escape.formula == "kaliset" { "plus_c" } else { "variant" };
+            let defs = super::get_formula(&escape.formula).parameters;
+            let v = escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.default)
+            });
+            return [v, 0.0];
+        }
+        // McMullen carries its POLE POWER here: a MapId has one
+        // integer exponent (n) and this family needs two. Resolved
+        // through the registry defaults for the same reason Phoenix's
+        // p is, below -- an absent key means "the default", and
+        // reading it as zero built the reference for c/z^1 while the
+        // delta step used c/z^3. Measured: every pixel escaped.
+        // Magnet's VARIANT selects between two different maps, so it
+        // is part of the reference orbit's identity.
+        if escape.formula == "magnet" {
+            let v = escape
+                .formula_params
+                .get("variant")
+                .copied()
+                .unwrap_or_else(|| {
+                    super::get_formula("magnet")
+                        .parameters
+                        .first()
+                        .map_or(0.0, |d| d.default)
+                });
+            return [v, 0.0];
+        }
+        if escape.formula == "mcmullen" {
+            let m = escape
+                .formula_params
+                .get("m")
+                .copied()
+                .unwrap_or_else(|| {
+                    super::get_formula("mcmullen")
+                        .parameters
+                        .iter()
+                        .find(|d| d.name == "m")
+                        .map_or(3.0, |d| d.default)
+                });
+            return [m, 0.0];
+        }
+        if escape.formula != "phoenix" {
+            return [0.0, 0.0];
+        }
+        // Resolve through the REGISTRY DEFAULTS, exactly as
+        // `pack_params` does when filling the shader's uniform. An
+        // absent key means "the default", not zero -- and reading it
+        // as zero here built the reference for p = 0, i.e. the plain
+        // quadratic, while the delta step used the real p. The two
+        // then describe different maps and the perturbed render is a
+        // different fractal, which is precisely what a fresh Phoenix
+        // config did (a config that had been edited carried the keys
+        // and worked, which is why the agreement test missed it).
+        let defs = super::get_formula("phoenix").parameters;
+        let mut out = [0.0f32; 2];
+        for (i, def) in defs.iter().take(2).enumerate() {
+            out[i] = escape
+                .formula_params
+                .get(def.name)
+                .copied()
+                .unwrap_or(def.default);
+        }
+        out
+    }
+
+    /// The delta tier this view can use, if any: Mandelbrot (p = 2)
+    /// and integer-power Multibrot (the binomial expansion needs an
+    /// integer exponent), the Burning Ship variants via diffabs,
+    /// Tricorn/Multicorn via the conjugated binomial, and Phoenix's
+    /// two-term recurrence. Every one of them has BOTH rungs, so a
+    /// tier is either supported at all depths or not supported at
+    /// all — a tier missing its deep rung silently becomes the direct
+    /// path's f32 mush at the threshold, which is how Phoenix came to
+    /// render one flat colour past zoom 48.
+    pub(crate) fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
+        match escape.formula.as_str() {
+            "mandelbrot" => Some(assembler::PerturbTier::Power(2)),
+            "multibrot" => {
+                let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=12.0).contains(&rounded) {
+                    Some(assembler::PerturbTier::Power(rounded as u32))
+                } else {
+                    None
+                }
+            }
+            "phoenix" => Some(assembler::PerturbTier::Phoenix),
+            // c*z*(1-z): the first tier whose parameter MULTIPLIES,
+            // so its delta step reads the reference's own c.
+            "lambda" => Some(assembler::PerturbTier::Lambda),
+            // c*z^p over a component-wise denominator. Gated off
+            // 2026-08-30 when its slow-growth escape boundary exposed
+            // the f32 escape test's delta-blindness; re-enabled the
+            // same day once the delta-aware margin (ref_r2 + the
+            // margin test in both rung templates) resolved it -- the
+            // full story is in escape-time-fractals.md.
+            // JULIA ONLY. Our McMullen seeds its parameter plane at
+            // z_0 = c, which is not a critical point of this map --
+            // measured, 0 of 4000 sampled parameters have a bounded
+            // orbit, so that plane has no interior to zoom into. The
+            // classic Sierpinski-carpet pictures are Julia sets.
+            "magnet" => {
+                let v = escape.formula_params.get("variant").copied().unwrap_or(0.0);
+                let rv = v.round();
+                if (v - rv).abs() < 1e-6 && (0.0..=1.0).contains(&rv) {
+                    Some(assembler::PerturbTier::Magnet(rv as u32))
+                } else {
+                    None
+                }
+            }
+            "mcmullen" if escape.julia => {
+                let n = escape.formula_params.get("n").copied().unwrap_or(2.0);
+                let m = escape.formula_params.get("m").copied().unwrap_or(3.0);
+                let (rn, rm) = (n.round(), m.round());
+                if (n - rn).abs() < 1e-6
+                    && (m - rm).abs() < 1e-6
+                    && (2.0..=8.0).contains(&rn)
+                    && (1.0..=8.0).contains(&rm)
+                {
+                    Some(assembler::PerturbTier::McMullen(rn as u32, rm as u32))
+                } else {
+                    None
+                }
+            }
+            "feather" => {
+                let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=8.0).contains(&rounded) {
+                    Some(assembler::PerturbTier::Feather(rounded as u32))
+                } else {
+                    None
+                }
+            }
+            // z^2 + z_prev + c: Phoenix's recurrence with p = 1 and a
+            // pixel seed, so it rides the same two-term machinery.
+            "manowar" => Some(assembler::PerturbTier::Manowar),
+            "tricorn" => {
+                // conj(z)^p: the binomial expansion needs an integer
+                // exponent, exactly as Multibrot does.
+                let p = escape.formula_params.get("power").copied().unwrap_or(2.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=12.0).contains(&rounded) {
+                    Some(assembler::PerturbTier::Tricorn(rounded as u32))
+                } else {
+                    None
+                }
+            }
+            "burning_ship" => {
+                let variant = escape.formula_params.get("variant").copied().unwrap_or(0.0);
+                let v = variant.round();
+                if (variant - v).abs() < 1e-6 && (0.0..=5.0).contains(&v) {
+                    Some(assembler::PerturbTier::Ship(v as u32))
+                } else {
+                    None
+                }
+            }
+            // The root-finder plane: an integer power (the binomial),
+            // one of the three closed-form schemes, and a POLYNOMIAL
+            // function -- the transcendental ones (sin, cosh, z^p sin)
+            // have no big-float sin yet and stay direct.
+            "newton" => {
+                let get = |k: &str, d: f32| escape.formula_params.get(k).copied().unwrap_or(d);
+                let (p, scheme, func) = (get("power", 3.0), get("scheme", 0.0), get("func", 0.0));
+                let (rp, rs, rf) = (p.round(), scheme.round(), func.round());
+                let integral = |v: f32, r: f32| (v - r).abs() < 1e-6;
+                if integral(p, rp)
+                    && (2.0..=12.0).contains(&rp)
+                    && integral(scheme, rs)
+                    && (0.0..=2.0).contains(&rs)
+                    && integral(func, rf)
+                    && (0.0..=2.0).contains(&rf)
+                    && assembler::rootfinder_has_delta(rs as u32, rf as u32)
+                {
+                    Some(assembler::PerturbTier::Newton {
+                        p: rp as u32,
+                        scheme: rs as u32,
+                        func: rf as u32,
+                    })
+                } else {
+                    None
+                }
+            }
+            "nova" => {
+                let p = escape.formula_params.get("power").copied().unwrap_or(3.0);
+                let rounded = p.round();
+                if (p - rounded).abs() < 1e-6 && (2.0..=12.0).contains(&rounded) {
+                    Some(assembler::PerturbTier::Nova(rounded as u32))
+                } else {
+                    None
+                }
+            }
+            // Both sign branches; the branch rides the reference's
+            // identity (map_params) and the step reads it at runtime.
+            "kaliset" => Some(assembler::PerturbTier::Kaliset),
+            // The plain log and the log of the square; the sin/sec
+            // variants have no big-float sin yet and stay direct.
+            "ducks" => {
+                let v = escape.formula_params.get("variant").copied().unwrap_or(0.0);
+                let rv = v.round();
+                if (v - rv).abs() < 1e-6 && (rv == 0.0 || rv == 4.0) {
+                    Some(assembler::PerturbTier::Ducks(rv as u32))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Ensure the perturbed pipeline for this coloring exists.
+    /// One perturbed chunk dispatch, recorded into the frame's
+    /// encoder. `pass_i` selects the params buffer: chunks after the
+    /// first use pooled buffers because `Queue::write_buffer` applies
+    /// at the submission boundary, not between passes — several
+    /// passes reading one buffer would all see the last write (the
+    /// same trap the relief blur once fell into). Only the first
+    /// dispatch of a redraw carries the timestamp pair.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_perturbed_chunk(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        palette_view: &TextureView,
+        key: &str,
+        pass_i: u32,
+        pp: &PerturbParamsGpu,
+        measure: bool,
+        regime: CostRegime,
+        bla_ready: bool,
+    ) {
+        let params_buf = if pass_i == 0 {
+            &self.perturb_params_buffer
+        } else {
+            &self.perturb_params_pool[pass_i as usize - 1]
+        };
+        queue.write_buffer(params_buf, 0, bytemuck::bytes_of(pp));
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Perturbed Bind Group"),
+            layout: &self.perturb_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(palette_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: self.orbit_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: params_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: self
+                        .iter_state_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: if bla_ready {
+                        self.bla_buffer.as_ref().unwrap().as_entire_binding()
+                    } else {
+                        self.bla_dummy.as_ref().unwrap().as_entire_binding()
+                    },
+                },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: self
+                        .orbit_lo_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 9,
+                    resource: self
+                        .orbit_e_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 10,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 11,
+                    resource: self
+                        .orbit_r2_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 12,
+                    resource: self.results_binding(),
+                },
+            ],
+        });
+        let ts_qs = if measure {
+            self.timestamps.as_ref().map(|t| &t.query_set)
+        } else {
+            None
+        };
+        let pipeline = &self.pipelines[key];
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Perturbed Pass"),
+            timestamp_writes: ts_qs.map(|qs| wgpu::ComputePassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: Some(1),
+            }),
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+        drop(pass);
+        if measure {
+            self.ts_after_dispatch(
+                encoder,
+                pp.iter_end.saturating_sub(pp.iter_start),
+                pp.iter_start == 0,
+                regime,
+            );
+        }
+    }
+
+    fn ensure_perturbed_pipeline(
+        &mut self,
+        device: &Device,
+        escape: &EscapeConfig,
+        floatexp: bool,
+    ) -> String {
+        let coloring = super::get_coloring(&escape.coloring);
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        let key = format!("perturbed|{}|{}|{:?}", coloring.name, floatexp, tier);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_perturbed(coloring, floatexp, tier);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Perturbed Pipeline Layout"),
+                bind_group_layouts: &[Some(&self.perturb_bind_group_layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("escape_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        key
+    }
+
+    /// Progressive orbit acquisition: post the request to the worker,
+    /// upload whatever prefix has landed. Returns
+    /// (usable_len, complete); (0, _) means nothing to render yet.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_orbit_progressive(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+    ) -> (u32, bool) {
+        use super::reference::{OrbitRequest, OrbitWorker};
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        // A c-free map (Newton) is requested Julia-style whatever the
+        // toggle says: the reference seeds at the centre and the
+        // pixels' deltas at d0, with no dc term -- see
+        // PerturbTier::is_dynamical.
+        let julia_c = if tier.is_dynamical() {
+            Some((0.0, 0.0))
+        } else if escape.julia {
+            Some((escape.julia_re, escape.julia_im))
+        } else {
+            None
+        };
+        let (power, ship, ship_variant) = match tier {
+            assembler::PerturbTier::Power(p) => (p, false, 0),
+            assembler::PerturbTier::Ship(v) => (2, true, v),
+            assembler::PerturbTier::Tricorn(p) => {
+                (p, false, super::reference::MAP_CONJ)
+            }
+            assembler::PerturbTier::Phoenix => {
+                (2, false, super::reference::MAP_PHOENIX)
+            }
+            assembler::PerturbTier::Manowar => {
+                (2, false, super::reference::MAP_MANOWAR)
+            }
+            assembler::PerturbTier::Lambda => {
+                (2, false, super::reference::MAP_LAMBDA)
+            }
+            assembler::PerturbTier::Feather(p) => {
+                (p, false, super::reference::MAP_FEATHER)
+            }
+            assembler::PerturbTier::McMullen(n, _) => {
+                (n, false, super::reference::MAP_MCMULLEN)
+            }
+            assembler::PerturbTier::Magnet(_) => {
+                (2, false, super::reference::MAP_MAGNET)
+            }
+            assembler::PerturbTier::Newton { p, scheme, func } => {
+                (p, false, super::reference::newton_variant(scheme, func))
+            }
+            assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
+            assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
+            assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
+        };
+        let height_px = self.height.max(1) as f64;
+        let req = OrbitRequest {
+            center_re: escape.center_re.clone(),
+            center_im: escape.center_im.clone(),
+            n_limbs: super::fixedpoint::limbs_for_view(
+                &escape.center_re,
+                &escape.center_im,
+                escape.zoom_log2,
+            ),
+            max_iter: escape.max_iter,
+            julia_c,
+            power,
+            ship,
+            ship_variant,
+            map_params: Self::map_params_for(escape),
+            reference_period: if julia_c.is_none() && !ship {
+                escape.reference_period.filter(|&p| p > 0)
+            } else {
+                None
+            },
+            zoom_log2: escape.zoom_log2,
+            height_px,
+        };
+        let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
+        let epoch = worker.request(req.clone());
+        self.last_orbit_stale = false;
+        let (len, done, gen, data, data_lo, data_e) = {
+            let p = worker.progress.lock().unwrap();
+            if p.epoch == epoch {
+                // Rescale to this view (see the blocking path). The
+                // reuse guard retires orbits whose relocation can't
+                // rescale, so a None here is at most one transitional
+                // frame — render it centered rather than displaced.
+                self.current_ref_offset = super::reference::rescale_offset(
+                    p.ref_offset,
+                    p.off_zoom_log2,
+                    p.off_height_px,
+                    escape.zoom_log2,
+                    self.height.max(1) as f64,
+                )
+                .unwrap_or([0.0, 0.0]);
+            }
+            if p.epoch == epoch {
+                super::reference::set_live_reference_period(p.detected_period);
+            }
+            if p.epoch != epoch {
+                // The worker has not acknowledged THIS request yet.
+                // During a continuous gesture (wheel zoom smoothing,
+                // a drag) a NEW request is posted every frame, so
+                // waiting for the ack would freeze the image for the
+                // whole gesture. If the last PUBLISHED orbit has the
+                // same shape and the render-side offset composition
+                // reaches the new center, draw this frame against it
+                // — the ack lands a frame later and produces the
+                // authoritative settled render.
+                let stale_off: Option<[f32; 2]> = (|| {
+                    let served = p.served.as_ref()?;
+                    // There must BE a published orbit to draw against.
+                    // (Its content is uploaded below exactly as on the
+                    // acknowledged path -- requiring the mirror to
+                    // already hold it would deadlock a glide that
+                    // starts on the direct path, where the mirror is
+                    // empty and no frame ever gets to fill it.)
+                    if p.orbit.len() < 2 {
+                        return None;
+                    }
+                    // Relocation is parameter-plane only, and the
+                    // shape must match the new request.
+                    if req.julia_c.is_some()
+                        || served.julia_c != req.julia_c
+                        || served.power != req.power
+                        || served.ship != req.ship
+                        || served.ship_variant != req.ship_variant
+                        || served.map_params != req.map_params
+                        || served.reference_period != req.reference_period
+                        || p.n_limbs < req.n_limbs
+                    {
+                        return None;
+                    }
+                    // periodic_serves, evaluated at the NEW zoom.
+                    if p.detected_period.is_some()
+                        && p.closure_octave
+                            > super::reference::closure_limit_for_zoom(escape.zoom_log2)
+                    {
+                        return None;
+                    }
+                    // Composed offset: published offset rescaled to
+                    // this view, plus the EXACT fixed-point delta
+                    // from the published anchor to the new center.
+                    let h = self.height.max(1) as f64;
+                    let base = super::reference::rescale_offset(
+                        p.ref_offset,
+                        p.off_zoom_log2,
+                        p.off_height_px,
+                        escape.zoom_log2,
+                        h,
+                    )?;
+                    let delta = super::reference::center_delta_px(
+                        &served.center_re,
+                        &served.center_im,
+                        &escape.center_re,
+                        &escape.center_im,
+                        p.n_limbs,
+                        escape.zoom_log2,
+                        h,
+                    )?;
+                    let off = [base[0] + delta[0] as f32, base[1] + delta[1] as f32];
+                    if !off[0].is_finite()
+                        || !off[1].is_finite()
+                        || (off[0] as f64).abs() > super::reference::MAX_RELOCATE_PX
+                        || (off[1] as f64).abs() > super::reference::MAX_RELOCATE_PX
+                    {
+                        return None;
+                    }
+                    Some(off)
+                })();
+                if let Some(off) = stale_off {
+                    self.current_ref_offset = off;
+                    self.last_orbit_stale = true;
+                    self.stale_serves += 1;
+                    super::diag::update(|d| d.orbit_stale_serves += 1);
+                    super::reference::set_live_reference_period(p.detected_period);
+                    // The published content, mirrored the same way the
+                    // acknowledged path mirrors it (append under an
+                    // unchanged generation, whole otherwise). `done`
+                    // is forced false: this frame is a preview, and
+                    // the acknowledged render still owes the
+                    // authoritative image.
+                    let start = if self.orbit_generation == p.generation {
+                        self.orbit_uploaded as usize
+                    } else {
+                        0
+                    };
+                    (
+                        p.orbit.len() as u32,
+                        false,
+                        p.generation,
+                        p.orbit[start.min(p.orbit.len())..].to_vec(),
+                        p.orbit_lo[start.min(p.orbit_lo.len())..].to_vec(),
+                        p.orbit_e[start.min(p.orbit_e.len())..].to_vec(),
+                    )
+                } else {
+                    super::diag::update(|d| d.orbit_wait_frames += 1);
+                    if self.diag_settle_start.is_none() {
+                        self.diag_settle_start = Some(web_time::Instant::now());
+                    }
+                    (0u32, false, 0u64, Vec::new(), Vec::new(), Vec::new())
+                }
+            } else {
+                super::diag::update(|d| {
+                    d.orbit_ms = p.compute_ms;
+                    d.orbit_source = p.source;
+                });
+                // Append onto what is already uploaded when the GPU
+                // mirror holds this same orbit CONTENT (generation);
+                // a mere epoch change -- a zoom tick reusing the
+                // orbit -- must not restart the upload.
+                let start = if self.orbit_generation == p.generation {
+                    self.orbit_uploaded as usize
+                } else {
+                    0
+                };
+                (
+                    p.orbit.len() as u32,
+                    p.done,
+                    p.generation,
+                    p.orbit[start.min(p.orbit.len())..].to_vec(),
+                    p.orbit_lo[start.min(p.orbit_lo.len())..].to_vec(),
+                    p.orbit_e[start.min(p.orbit_e.len())..].to_vec(),
+                )
+            }
+        };
+        if len < 2 {
+            return (0, false);
+        }
+        // (Re)create the buffer as needed, then append the new tail.
+        let recreate = self.orbit_buffer.is_none() || len > self.orbit_capacity;
+        // A recreated buffer must be filled FROM SCRATCH even under an
+        // unchanged generation: the append branch writes only the new
+        // tail, so a capacity crossing mid-growth otherwise leaves
+        // everything before that tail garbage in the new buffer. This
+        // was the cold-vs-warm divergence a user caught by eye: a
+        // reference STREAMED over minutes crosses several capacity
+        // boundaries and rendered a structurally wrong (self-similar
+        // sibling) frame, while the same orbit reloaded complete from
+        // the store uploads whole in one pass and renders correctly.
+        let fresh = recreate || self.orbit_generation != gen;
+        if recreate {
+            if let Some(old) = self.orbit_buffer.take() {
+                old.destroy();
+            }
+            if let Some(old) = self.orbit_lo_buffer.take() {
+                old.destroy();
+            }
+            if let Some(old) = self.orbit_r2_buffer.take() {
+                old.destroy();
+            }
+            if let Some(old) = self.orbit_e_buffer.take() {
+                old.destroy();
+            }
+            let capacity = (len + len / 2).max(1024);
+            self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_lo_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit Lo"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_r2_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit R2"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_e_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit Exp"),
+                size: (capacity as u64) * 4,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_capacity = capacity;
+            self.orbit_uploaded = 0;
+        }
+        if fresh {
+            // New orbit content: upload from scratch.
+            let worker = self.orbit_worker.as_ref().unwrap();
+            let p = worker.progress.lock().unwrap();
+            queue.write_buffer(
+                self.orbit_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&p.orbit),
+            );
+            queue.write_buffer(
+                self.orbit_lo_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&p.orbit_lo),
+            );
+            queue.write_buffer(
+                self.orbit_r2_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&r2_channel(&p.orbit, &p.orbit_lo, &p.orbit_e)),
+            );
+            queue.write_buffer(
+                self.orbit_e_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&p.orbit_e),
+            );
+            self.orbit_uploaded = p.orbit.len() as u32;
+            self.orbit_generation = p.generation;
+            super::diag::update(|d| {
+                d.upload_bytes = (p.orbit.len() as u64) * 28;
+                d.orbit_rebuilds += 1;
+            });
+        } else if !data.is_empty() {
+            queue.write_buffer(
+                self.orbit_buffer.as_ref().unwrap(),
+                (self.orbit_uploaded as u64) * 8,
+                bytemuck::cast_slice(&data),
+            );
+            queue.write_buffer(
+                self.orbit_lo_buffer.as_ref().unwrap(),
+                (self.orbit_uploaded as u64) * 8,
+                bytemuck::cast_slice(&data_lo),
+            );
+            queue.write_buffer(
+                self.orbit_r2_buffer.as_ref().unwrap(),
+                (self.orbit_uploaded as u64) * 8,
+                bytemuck::cast_slice(&r2_channel(&data, &data_lo, &data_e)),
+            );
+            queue.write_buffer(
+                self.orbit_e_buffer.as_ref().unwrap(),
+                (self.orbit_uploaded as u64) * 4,
+                bytemuck::cast_slice(&data_e),
+            );
+            self.orbit_uploaded += data.len() as u32;
+            super::diag::update(|d| d.upload_bytes += (data.len() as u64) * 28);
+        }
+        super::diag::update(|d| d.orbit_len = self.orbit_uploaded);
+        (self.orbit_uploaded, done)
+    }
+
+    /// Compute/extend the reference orbit and mirror it to the GPU.
+    /// Returns the usable orbit length, or None if the center failed
+    /// to parse (caller falls back to the direct path).
+    fn ensure_orbit(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) -> Option<u32> {
+        self.ensure_orbit_with(device, queue, escape, None).map(|(len, _)| len)
+    }
+
+    /// Per-renderer orbit-cache stats (relocations, rebuilds) — the
+    /// parallel-test-safe counterpart of the global diag counters.
+    #[cfg(test)]
+    pub(crate) fn orbit_stats(&self) -> (u64, u64) {
+        (self.orbit_cache.stat_relocations, self.orbit_cache.stat_rebuilds)
+    }
+
+    /// Blocking (`budget` None) or time-sliced (`budget` Some) orbit
+    /// acquisition + GPU mirror. The sliced form is the WASM path's
+    /// per-frame call — no worker thread exists there, so the orbit
+    /// grows a bounded amount each frame and partial-orbit renders
+    /// refine via rebasing, exactly like the desktop worker's
+    /// progressive prefixes.
+    fn ensure_orbit_with(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        budget: Option<u32>,
+    ) -> Option<(u32, bool)> {
+        let tier = Self::perturb_tier(escape)
+            .unwrap_or(assembler::PerturbTier::Power(2));
+        // A c-free map (Newton) is requested Julia-style whatever the
+        // toggle says: the reference seeds at the centre and the
+        // pixels' deltas at d0, with no dc term -- see
+        // PerturbTier::is_dynamical.
+        let julia_c = if tier.is_dynamical() {
+            Some((0.0, 0.0))
+        } else if escape.julia {
+            Some((escape.julia_re, escape.julia_im))
+        } else {
+            None
+        };
+        let (power, ship, ship_variant) = match tier {
+            assembler::PerturbTier::Power(p) => (p, false, 0),
+            assembler::PerturbTier::Ship(v) => (2, true, v),
+            assembler::PerturbTier::Tricorn(p) => {
+                (p, false, super::reference::MAP_CONJ)
+            }
+            assembler::PerturbTier::Phoenix => {
+                (2, false, super::reference::MAP_PHOENIX)
+            }
+            assembler::PerturbTier::Manowar => {
+                (2, false, super::reference::MAP_MANOWAR)
+            }
+            assembler::PerturbTier::Lambda => {
+                (2, false, super::reference::MAP_LAMBDA)
+            }
+            assembler::PerturbTier::Feather(p) => {
+                (p, false, super::reference::MAP_FEATHER)
+            }
+            assembler::PerturbTier::McMullen(n, _) => {
+                (n, false, super::reference::MAP_MCMULLEN)
+            }
+            assembler::PerturbTier::Magnet(_) => {
+                (2, false, super::reference::MAP_MAGNET)
+            }
+            assembler::PerturbTier::Newton { p, scheme, func } => {
+                (p, false, super::reference::newton_variant(scheme, func))
+            }
+            assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
+            assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
+            assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
+        };
+        let period_hint = if julia_c.is_none() && !ship {
+            escape.reference_period.filter(|&p| p > 0)
+        } else {
+            None
+        };
+        self.orbit_cache.set_reference_period(period_hint);
+        self.orbit_cache.set_height(self.height.max(1) as f64);
+        // Retire a cached relocation this view can't express (zoomed
+        // far out from where its nucleus was found) BEFORE borrowing
+        // the slot — the recompute then happens inside get() at the
+        // current view.
+        if self
+            .orbit_cache
+            .peek()
+            .is_some_and(|o| !o.relocation_serves(escape.zoom_log2, self.height.max(1) as f64))
+        {
+            self.orbit_cache.clear();
+        }
+        let gen_before = self.orbit_cache.generation();
+        let t_orbit = web_time::Instant::now();
+        let done = match budget {
+            None => {
+                self.orbit_cache.get(
+                    &escape.center_re,
+                    &escape.center_im,
+                    escape.zoom_log2,
+                    escape.max_iter,
+                    julia_c,
+                    power,
+                    ship,
+                    ship_variant,
+                    Self::map_params_for(escape),
+                )?;
+                true
+            }
+            Some(b) => {
+                self.orbit_cache.get_budgeted(
+                    &escape.center_re,
+                    &escape.center_im,
+                    escape.zoom_log2,
+                    escape.max_iter,
+                    julia_c,
+                    power,
+                    ship,
+                    ship_variant,
+                    Self::map_params_for(escape),
+                    b,
+                )?
+                .1
+            }
+        };
+        // Re-borrow immutably: the generation read must not overlap
+        // get()'s mutable borrow, and the slot is guaranteed Some
+        // after a successful get.
+        let gen = self.orbit_cache.generation();
+        {
+            let ms = t_orbit.elapsed().as_secs_f32() * 1000.0;
+            let rebuilt = gen != gen_before;
+            super::diag::update(|d| {
+                if rebuilt {
+                    d.orbit_source = super::diag::OrbitSource::Computed;
+                    d.orbit_ms = ms;
+                    d.orbit_rebuilds += 1;
+                } else {
+                    d.orbit_source = super::diag::OrbitSource::Reused;
+                }
+            });
+        }
+        let orbit = self.orbit_cache.peek()?;
+        // The offset's pixel units are rescaled to THIS view (zoom
+        // drags and supersampling change the units under a reused
+        // orbit). A fresh orbit is always at the current view, so the
+        // rescale is the identity there and the fallback never fires
+        // after the pre-borrow retirement above.
+        let h_px = self.height.max(1) as f64;
+        self.current_ref_offset = orbit
+            .offset_for_view(escape.zoom_log2, h_px)
+            .unwrap_or([0.0, 0.0]);
+        super::reference::set_live_reference_period(orbit.periodic);
+        let len = orbit.len();
+        let needed_bytes = (len as u64) * 8;
+        let recreate = match &self.orbit_buffer {
+            Some(_) => len > self.orbit_capacity,
+            None => true,
+        };
+        if recreate {
+            if let Some(old) = self.orbit_buffer.take() {
+                old.destroy();
+            }
+            if let Some(old) = self.orbit_lo_buffer.take() {
+                old.destroy();
+            }
+            if let Some(old) = self.orbit_r2_buffer.take() {
+                old.destroy();
+            }
+            if let Some(old) = self.orbit_e_buffer.take() {
+                old.destroy();
+            }
+            // Grow with headroom so deepening doesn't recreate every
+            // frame.
+            let capacity = (len + len / 2).max(1024);
+            self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_lo_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit Lo"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_r2_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit R2"),
+                size: (capacity as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_e_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Reference Orbit Exp"),
+                size: (capacity as u64) * 4,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.orbit_capacity = capacity;
+            self.orbit_uploaded = 0;
+        }
+        if self.orbit_uploaded != len || self.orbit_generation != gen {
+            // APPEND the new tail, do not re-send the whole orbit.
+            //
+            // This wrote all four buffers from zero every call, and
+            // recomputed `r2_channel` over every entry to do it. That
+            // was harmless while only the CLI and tests came here --
+            // one call, with the orbit already complete. The browser
+            // calls it once per FRAME SLICE, so the cost became
+            // quadratic in the slice count: a reference of N
+            // iterations built in N/budget slices re-derived O(N)
+            // entries on each, and the re-derivation dwarfed the
+            // arithmetic it was there to publish. Measured at 189
+            // limbs, 640x480, tripling and sextupling the iteration
+            // count: 2.92 s / 10.62 s / 22.33 s -- 6x the work for
+            // 7.6x the time, the superlinear part being this.
+            //
+            // The generation compare matters even at equal length: a
+            // pan at fixed max_iter swaps in a DIFFERENT orbit of the
+            // same length, which a length test alone leaves stale on
+            // the GPU.
+            //
+            // FRESH forces the whole-orbit path. A recreated buffer
+            // must be filled from scratch even under an unchanged
+            // generation -- appending only the tail would leave
+            // everything before it garbage in the new allocation.
+            // That is not hypothetical: the worker path carries the
+            // same guard because a reference streamed over minutes
+            // crosses several capacity boundaries, and without it
+            // rendered a structurally wrong frame that a user caught
+            // by eye.
+            let fresh = self.orbit_generation != gen || self.orbit_uploaded > len;
+            let start = if fresh { 0usize } else { self.orbit_uploaded as usize };
+            let start = start.min(orbit.orbit.len());
+            if start < orbit.orbit.len() {
+                queue.write_buffer(
+                    self.orbit_buffer.as_ref().unwrap(),
+                    (start as u64) * 8,
+                    bytemuck::cast_slice(&orbit.orbit[start..]),
+                );
+                queue.write_buffer(
+                    self.orbit_lo_buffer.as_ref().unwrap(),
+                    (start as u64) * 8,
+                    bytemuck::cast_slice(&orbit.orbit_lo[start.min(orbit.orbit_lo.len())..]),
+                );
+                let e_start = start.min(orbit.orbit_e.len());
+                queue.write_buffer(
+                    self.orbit_r2_buffer.as_ref().unwrap(),
+                    (start as u64) * 8,
+                    bytemuck::cast_slice(&r2_channel(
+                        &orbit.orbit[start..],
+                        &orbit.orbit_lo[start.min(orbit.orbit_lo.len())..],
+                        &orbit.orbit_e[e_start..],
+                    )),
+                );
+                queue.write_buffer(
+                    self.orbit_e_buffer.as_ref().unwrap(),
+                    (e_start as u64) * 4,
+                    bytemuck::cast_slice(&orbit.orbit_e[e_start..]),
+                );
+            }
+            self.orbit_uploaded = len;
+            self.orbit_generation = gen;
+        }
+        Some((len, done))
+    }
+
+    /// The scalar-field target the relief pass differences. R32Float:
+    /// one channel is all the surface needs, and at 4 bytes per render
+    /// pixel it is a quarter of what carrying an analytic normal
+    /// alongside it would cost.
+    /// Advance the reference by one budgeted slice and say what the
+    /// frame may then draw.
+    ///
+    /// Shared by the browser and by the desktop test knob, because
+    /// they drifted the moment they were written twice: the knob kept
+    /// the old `1_000_000 / limbs` budget after the real path moved to
+    /// the cost model, so the only coverage of the browser's path was
+    /// testing something else.
+    ///
+    /// The HOLD is the part that matters for performance. Rendering a
+    /// full perturbed dispatch against a small fraction of a long
+    /// reference is not progressive refinement -- every pixel rebases
+    /// almost immediately and the frame is flat colour that changes
+    /// wholesale as the prefix grows -- and in a browser that dispatch
+    /// competes with the very CPU slice that is building the
+    /// reference. Reported as the app "drawing the flame while
+    /// calculating the reference orbit". The desktop worker path has
+    /// held the frame this way since it was written; the browser arm
+    /// published progress but still dispatched.
+    fn budgeted_orbit_step(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+    ) -> BudgetedOrbit {
+        let limbs = super::fixedpoint::limbs_for_zoom(escape.zoom_log2).max(1);
+        let budget = Self::orbit_slice_budget(limbs);
+        let Some((len, done)) = self.ensure_orbit_with(device, queue, escape, Some(budget))
+        else {
+            return BudgetedOrbit::NoOrbit;
+        };
+        if done && len >= 2 {
+            super::reference::set_orbit_progress(0, 0);
+            return BudgetedOrbit::Ready(len, true);
+        }
+        // Whole-reference cost, not the slice's: below this the
+        // slices finish in a frame or two and holding would flicker
+        // where rendering refines. Same threshold the worker uses.
+        let slow = super::reference::predicted_orbit_seconds(escape.max_iter, limbs)
+            > Self::ORBIT_WAIT_SECONDS;
+        if slow || len < 2 {
+            super::reference::set_orbit_progress(len, escape.max_iter);
+            #[cfg(test)]
+            if self.force_dispatch_while_building && len >= 2 {
+                return BudgetedOrbit::Ready(len, false);
+            }
+            return BudgetedOrbit::Hold;
+        }
+        super::reference::set_orbit_progress(0, 0);
+        BudgetedOrbit::Ready(len, false)
+    }
+
+    /// Reference iterations to compute in ONE frame slice.
+    ///
+    /// The browser has no worker thread, so a long reference is built
+    /// on the frame loop and every slice is time the UI does not get.
+    /// Size it from the SAME cost model the wait-predictor uses: a
+    /// reference iteration is two truncated big multiplies, so it
+    /// costs iterations x limbs^2 — not iterations x limbs, which is
+    /// what this divided by before. That undersizes the divisor by a
+    /// whole factor of `limbs`, and at the depths that need slicing
+    /// most it IS the problem: at 189 limbs (a 1e3591 zoom) the old
+    /// formula asked for 5291 iterations, which the model puts at
+    /// 239 ms of NATIVE work in one frame, and a browser is slower
+    /// still. Reported as the UI going "slightly responsive" with
+    /// nothing on screen to explain it.
+    ///
+    /// Same total work either way — this only decides how finely it is
+    /// cut. The floor keeps a very deep view progressing at all; the
+    /// ceiling keeps a shallow one from being cut pointlessly fine.
+    pub(crate) fn orbit_slice_budget(limbs: usize) -> u32 {
+        const SLICE_SECONDS: f64 = 0.03;
+        let per_iter = super::reference::predicted_orbit_seconds(1, limbs.max(1));
+        let want = if per_iter > 0.0 {
+            (SLICE_SECONDS / per_iter).clamp(0.0, u32::MAX as f64) as u32
+        } else {
+            50_000
+        };
+        want.clamp(64, 50_000)
+    }
+
+    /// Whether a settled frame still owes the user a contrast pass.
+    ///
+    /// The fit is measured FROM the finished field, so it cannot be
+    /// applied by the pass that produced it. Reporting "not settled"
+    /// once buys the frame that measures and recolors; the fit key
+    /// then matches and the render settles for real. Without this the
+    /// app stops at the uncorrected image, because it renders only
+    /// while dirty.
+    fn contrast_pending(&self, escape: &EscapeConfig, iterate_key: Option<&str>) -> bool {
+        escape.contrast.is_active()
+            && self.results_key.is_some()
+            && iterate_key.is_some()
+            && self.contrast_fit_key.as_deref() != iterate_key
+    }
+
+    /// Measure the coloring's value field and store the fit.
+    ///
+    /// Runs ONCE per settled view, not per frame: the fit belongs to
+    /// the view, and re-measuring while the image is still filling in
+    /// would chase a moving target. The readback is blocking, which is
+    /// affordable exactly because of that -- 28 KB, once, at the
+    /// moment the renderer is about to go idle anyway.
+    fn measure_contrast(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        key: &str,
+    ) {
+        if !escape.contrast.is_active() || self.contrast_fit_key.as_deref() == Some(key) {
+            return;
+        }
+        let cells = (PROBE_W * PROBE_H) as u64;
+        let bytes = cells * 8;
+        if self.contrast_probe.is_none() {
+            self.contrast_probe = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Contrast Probe"),
+                size: bytes,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }));
+            self.contrast_readback = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Escape Contrast Readback"),
+                size: bytes,
+                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        let (Some(probe), Some(readback)) =
+            (self.contrast_probe.as_ref(), self.contrast_readback.as_ref())
+        else {
+            return;
+        };
+
+        const KEY: &str = "contrast-probe";
+        if !self.pipelines.contains_key(KEY) {
+            let src = format!(
+                r#"
+struct Probe {{ dims: vec2<u32>, grid: vec2<u32> }}
+@group(0) @binding(0) var height_tex: texture_2d<f32>;
+@group(0) @binding(1) var color_tex: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read_write> out_buf: array<vec2<f32>>;
+@group(0) @binding(3) var<uniform> pr: Probe;
+
+@compute @workgroup_size(8, 8, 1)
+fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if (gid.x >= pr.grid.x || gid.y >= pr.grid.y) {{ return; }}
+    // Centre of the cell this sample stands for.
+    let fx = (f32(gid.x) + 0.5) / f32(pr.grid.x);
+    let fy = (f32(gid.y) + 0.5) / f32(pr.grid.y);
+    let p = vec2<i32>(
+        clamp(i32(fx * f32(pr.dims.x)), 0, i32(pr.dims.x) - 1),
+        clamp(i32(fy * f32(pr.dims.y)), 0, i32(pr.dims.y) - 1),
+    );
+    let v = textureLoad(height_tex, p, 0).r;
+    // Coverage, from the colour the same pass wrote: a pixel with no
+    // value stores height 0, which is also a perfectly ordinary
+    // value, so the alpha channel is what distinguishes them.
+    let ok = textureLoad(color_tex, p, 0).a;
+    out_buf[gid.y * pr.grid.x + gid.x] = vec2<f32>(v, ok);
+}}
+"#
+            );
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Contrast Probe"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Contrast Probe"),
+                layout: None,
+                module: &module,
+                entry_point: Some("probe_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(KEY.to_string(), pipeline);
+        }
+        let pipeline = &self.pipelines[KEY];
+        let params = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Contrast Probe Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &params,
+            0,
+            bytemuck::cast_slice(&[self.width, self.height, PROBE_W, PROBE_H]),
+        );
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Contrast Probe Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: probe.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: params.as_entire_binding(),
+                },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Escape Contrast Probe"),
+        });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Escape Contrast Probe Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(PROBE_W.div_ceil(8), PROBE_H.div_ceil(8), 1);
+        }
+        enc.copy_buffer_to_buffer(probe, 0, readback, 0, bytes);
+        queue.submit(std::iter::once(enc.finish()));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let polled = device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .is_ok();
+        if !polled || !rx.recv().unwrap_or(false) {
+            return;
+        }
+        let samples: Vec<(f32, f32)> = {
+            let data = readback.slice(..).get_mapped_range();
+            data.chunks_exact(8)
+                .map(|c| {
+                    (
+                        f32::from_le_bytes(c[0..4].try_into().unwrap()),
+                        f32::from_le_bytes(c[4..8].try_into().unwrap()),
+                    )
+                })
+                .collect()
+        };
+        readback.unmap();
+        self.contrast_fit = fit_contrast(
+            &samples,
+            PROBE_W,
+            PROBE_H,
+            escape.contrast.mode,
+            escape.contrast.clip,
+        );
+        self.contrast_fit_key = Some(key.to_string());
+    }
+
+    fn create_height(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("Escape Height Field"),
+            size: Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::R32Float,
+            // COPY_SRC so a test can read the height field back and
+            // check the softening blur against a CPU one.
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Size the height field to match the render target, or shrink it
+    /// back to the 1×1 dummy when shading is off — an idle escape view
+    /// should not hold 81 MB of scalar field it never reads (the cost
+    /// at 4500², which is 3× supersampling of a 1500² viewport).
+    fn ensure_height(&mut self, device: &Device, want_full: bool) {
+        if want_full == self.height_full
+            && (!want_full
+                || (self.height_texture.width() == self.width
+                    && self.height_texture.height() == self.height))
+        {
+            return;
+        }
+        self.height_texture.destroy();
+        let (t, v) = if want_full {
+            Self::create_height(device, self.width, self.height)
+        } else {
+            Self::create_height(device, 1, 1)
+        };
+        self.height_texture = t;
+        self.height_view = v;
+        self.height_full = want_full;
+    }
+
+    /// The relief pass writes somewhere other than the colour it
+    /// reads, so it needs the display-sized target that supersampling
+    /// already allocates. At 1x with shading on there is no downsample
+    /// to borrow it from, so allocate one; turning shading back off at
+    /// 1x releases it and `output_view` goes back to serving the render
+    /// texture directly.
+    fn ensure_resolve_target(&mut self, device: &Device, shading: bool) {
+        let want = self.supersample > 1 || shading;
+        let sized_right = self
+            .final_texture
+            .as_ref()
+            .is_some_and(|t| t.width() == self.out_width && t.height() == self.out_height);
+        if want && sized_right {
+            return;
+        }
+        if let Some(t) = self.final_texture.take() {
+            t.destroy();
+        }
+        self.final_view = None;
+        if want {
+            let (t, v) = Self::create_output(device, self.out_width, self.out_height);
+            self.final_texture = Some(t);
+            self.final_view = Some(v);
+        }
+    }
+
+    fn create_output(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("Escape Output"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba32Float,
+            // Storage write from the compute pass; read (textureLoad)
+            // by the tonemap pass and the density-effect chain.
+            // COPY_SRC so a test can read the height field back and
+            // check the softening blur against a CPU one.
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// The rendered image, in the flame-accumulator format the tonemap
+    /// tail expects — display-sized (the downsampled target when
+    /// supersampling is on).
+    pub fn output_view(&self) -> &TextureView {
+        self.final_view.as_ref().unwrap_or(&self.output_view)
+    }
+
+    /// Recreate the output for new DISPLAY dimensions and
+    /// supersampling factor (render size = display × factor). Cheap
+    /// relative to a render; pipelines and params survive. Returns
+    /// true when anything changed — the output is stale until the
+    /// next `render`.
+    /// The supersampling factor this device can actually afford at
+    /// this size — the requested one, reduced until it fits.
+    ///
+    /// Shared with the allocation precheck so the two agree: checking
+    /// the REQUESTED factor there refused renders the renderer would
+    /// have clamped and then made up by accumulation.
+    pub fn affordable_supersample(
+        device: &Device,
+        width: u32,
+        height: u32,
+        supersample: u32,
+    ) -> u32 {
+        let mut ss = supersample.clamp(1, MAX_SUPERSAMPLE);
+        const BYTES_PER_RENDER_PX: u64 = assembler::ITER_STATE_BYTES_MAX + 32 + 16 + 4 + 8;
+        const RENDER_BUDGET_BYTES: u64 = 3 * 1024 * 1024 * 1024 / 2;
+        const MAX_RENDER_PX: u64 = RENDER_BUDGET_BYTES / BYTES_PER_RENDER_PX;
+        let device_px_cap = device.limits().max_storage_buffer_binding_size as u64
+            / assembler::ITER_STATE_BYTES_MAX;
+        let px_cap = MAX_RENDER_PX.min(device_px_cap.max(1)).min({
+            let d = device.limits().max_texture_dimension_2d as u64;
+            d * d
+        });
+        while ss > 1 && (width as u64 * ss as u64) * (height as u64 * ss as u64) > px_cap {
+            ss -= 1;
+        }
+        ss
+    }
+
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
+        let ss = Self::affordable_supersample(device, width, height, supersample);
+        if width == self.out_width && height == self.out_height && ss == self.supersample {
+            return false;
+        }
+        // AFTER the no-change return: the viewport calls this every
+        // frame with the config's factor, and a factor the budget
+        // clamps is clamped identically every frame -- so the warning
+        // sat above the early return and repeated at frame rate
+        // (reported as console spam). Now it says so once, when the
+        // clamp actually takes effect.
+        if ss != supersample.clamp(1, MAX_SUPERSAMPLE) {
+            log::warn!(
+                "Escape supersample clamped to {ss}x at {width}x{height} (render-pixel budget)"
+            );
+        }
+        self.out_width = width;
+        self.out_height = height;
+        self.supersample = ss;
+        let (rw, rh) = (width.saturating_mul(ss).max(1), height.saturating_mul(ss).max(1));
+        self.output_texture.destroy();
+        // The records describe pixels of the OLD grid.
+        self.results_key = None;
+        let (texture, view) = Self::create_output(device, rw, rh);
+        self.output_texture = texture;
+        self.output_view = view;
+        self.width = rw;
+        self.height = rh;
+        if let Some(t) = self.final_texture.take() {
+            t.destroy();
+        }
+        self.final_view = None;
+        if ss > 1 {
+            let (t, v) = Self::create_output(device, width, height);
+            self.final_texture = Some(t);
+            self.final_view = Some(v);
+        }
+        true
+    }
+
+    /// The box-downsample pass: render texture → display texture,
+    /// factor² samples averaged per output pixel. Linear-space (the
+    /// texture is pre-tonemap accumulator format), so the average is
+    /// the radiometrically correct one.
+    /// Shade and resolve: the relief layer and the supersample box
+    /// downsample, fused into one pass.
+    ///
+    /// Fused deliberately. Shading needs a destination distinct from
+    /// the colour it reads, and a third full-resolution RGBA32Float
+    /// target would cost another 16 bytes per render pixel — 324 MB at
+    /// 4500², on top of the 324 MB the colour already holds. Folding
+    /// the relief into the pass that was going to resolve anyway costs
+    /// nothing extra, and it puts the shading BEFORE the box average,
+    /// which is the correct order: the slope is then measured at
+    /// render resolution and antialiased along with everything else,
+    /// rather than being computed from already-blurred pixels.
+    ///
+    /// With shading off and a factor of 1 there is nothing to do and
+    /// `output_view` serves the render texture directly, exactly as
+    /// before this pass existed.
+    /// Read a height field back as f32 (test observation point):
+    /// `blurred` selects the softening pass's output over the raw
+    /// field the escape pass wrote.
+    #[cfg(test)]
+    pub(crate) async fn read_height(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        blurred: bool,
+    ) -> Option<Vec<f32>> {
+        let tex = if blurred {
+            &self.height_blur.as_ref()?.2
+        } else {
+            &self.height_texture
+        };
+        let (w, h) = (tex.width(), tex.height());
+        // 256-byte row alignment for the copy.
+        let row = (w * 4).div_ceil(256) * 256;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Height Readback"),
+            size: (row * h) as u64,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Escape Height Readback"),
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(h),
+                },
+            },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit(std::iter::once(enc.finish()));
+        let (tx, rx) = futures::channel::oneshot::channel();
+        staging.slice(..).map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.await.ok()?.ok()?;
+        let out = {
+            let view = staging.slice(..).get_mapped_range();
+            let mut out = Vec::with_capacity((w * h) as usize);
+            for y in 0..h {
+                let base = (y * row) as usize;
+                for x in 0..w {
+                    let i = base + (x * 4) as usize;
+                    out.push(f32::from_le_bytes(view[i..i + 4].try_into().ok()?));
+                }
+            }
+            out
+        };
+        staging.unmap();
+        staging.destroy();
+        Some(out)
+    }
+
+    /// Low-pass the height field so the relief can be SOFTENED.
+    ///
+    /// Two separable Gaussian passes rather than one wide stencil.
+    /// The wide stencil is what the first attempt did, and it does not
+    /// blur at all: sampling a ring of radius r leaves every tap a
+    /// sharp sample and merely displaces the structure, so each edge
+    /// prints ghost copies either side of itself. A real low-pass has
+    /// to average the INTERIOR, which at these radii (softness 8 at
+    /// 3x supersampling is 24 render pixels, a 49x49 window) is only
+    /// affordable separably: two passes of 2r+1 taps instead of one
+    /// of (2r+1)².
+    ///
+    /// Returns the view the shade pass should read: the blurred field
+    /// when softening is on, the raw one when it is not.
+    fn run_height_blur(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        sigma: f32,
+    ) -> Option<TextureView> {
+        if sigma <= 0.0 {
+            return None;
+        }
+        let (w, h) = (self.width.max(1), self.height.max(1));
+        let need_alloc = match &self.height_blur {
+            Some((a, _, _, _)) => a.width() != w || a.height() != h,
+            None => true,
+        };
+        if need_alloc {
+            if let Some((a, _, b, _)) = self.height_blur.take() {
+                a.destroy();
+                b.destroy();
+            }
+            let (ta, va) = Self::create_height(device, w, h);
+            let (tb, vb) = Self::create_height(device, w, h);
+            self.height_blur = Some((ta, va, tb, vb));
+        }
+        if self.blur_params.is_none() {
+            let mk = |i: usize| {
+                device.create_buffer(&BufferDescriptor {
+                    label: Some(if i == 0 {
+                        "Escape Height Blur Params H"
+                    } else {
+                        "Escape Height Blur Params V"
+                    }),
+                    size: 16,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            self.blur_params = Some([mk(0), mk(1)]);
+        }
+        if self.blur_pipeline.is_none() {
+            let src = r#"
+struct BlurParams {
+    // (1,0) horizontal, (0,1) vertical.
+    dir: vec2<i32>,
+    sigma: f32,
+    radius: i32,
+}
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(2) var<uniform> blur: BlurParams;
+
+@compute @workgroup_size(8, 8, 1)
+fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = vec2<i32>(textureDimensions(dst_tex));
+    let p = vec2<i32>(i32(gid.x), i32(gid.y));
+    if (p.x >= dims.x || p.y >= dims.y) {
+        return;
+    }
+    // Clamped at the edges, so the border does not darken the relief.
+    var acc = 0.0;
+    var wsum = 0.0;
+    let inv = 1.0 / (2.0 * blur.sigma * blur.sigma);
+    for (var i = -blur.radius; i <= blur.radius; i = i + 1) {
+        let fi = f32(i);
+        let wt = exp(-fi * fi * inv);
+        let q = clamp(p + blur.dir * i, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+        acc = acc + textureLoad(src_tex, q, 0).r * wt;
+        wsum = wsum + wt;
+    }
+    textureStore(dst_tex, p, vec4<f32>(acc / wsum, 0.0, 0.0, 0.0));
+}
+"#;
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Height Blur"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Height Blur Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::R32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Height Blur Pipeline Layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Height Blur"),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some("blur_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.blur_pipeline = Some((pipeline, layout));
+        }
+        // 3 sigma covers the kernel; capped so a silly radius cannot
+        // turn one frame into a minute.
+        let radius = ((sigma * 3.0).ceil() as i32).clamp(1, 96);
+        let (_, va, _, vb) = self.height_blur.as_ref().unwrap();
+        let (va, vb) = (va.clone(), vb.clone());
+        let (pipeline, layout) = self.blur_pipeline.as_ref().unwrap();
+        let params_bufs = self.blur_params.as_ref().unwrap();
+        for (pass_idx, (src, dst)) in
+            [(&self.height_view, &va), (&va, &vb)].into_iter().enumerate()
+        {
+            let dir: [i32; 2] = if pass_idx == 0 { [1, 0] } else { [0, 1] };
+            let mut raw = [0u8; 16];
+            raw[0..4].copy_from_slice(&dir[0].to_le_bytes());
+            raw[4..8].copy_from_slice(&dir[1].to_le_bytes());
+            raw[8..12].copy_from_slice(&sigma.to_le_bytes());
+            raw[12..16].copy_from_slice(&radius.to_le_bytes());
+            let params_buf = &params_bufs[pass_idx];
+            queue.write_buffer(params_buf, 0, &raw);
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Escape Height Blur Bind Group"),
+                layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(src) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(dst) },
+                    BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+                ],
+            });
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Escape Height Blur Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+        }
+        Some(vb)
+    }
+
+    fn run_resolve(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        shading: &crate::config::escape::EscapeShading,
+        mode: crate::config::escape::DownsampleMode,
+    ) {
+        let factor = self.supersample;
+        let shade_on = shading.enabled;
+        if factor <= 1 && !shade_on {
+            return;
+        }
+        // Cloned rather than borrowed: the blur below needs `&mut
+        // self`, and a view is a cheap refcounted handle.
+        let Some(final_view) = self.final_view.clone() else {
+            return;
+        };
+
+        // The light: azimuth from the config, elevation fixed at 45°.
+        // One angle rather than two because the elevation is the one
+        // nobody adjusts — too low and the relief is all shadow, too
+        // high and it vanishes — while the azimuth decides whether the
+        // surface reads as raised or sunken, which is a real choice.
+        let a = shading.light_angle.to_radians();
+        let params = ShadeParamsGpu {
+            light: [a.cos(), a.sin()],
+            // Per DISPLAY pixel, not per render pixel: the difference
+            // is taken on the supersampled grid, where a given slope
+            // spans `factor` times as many samples and would read
+            // `factor` times shallower. Without this, turning on 3x AA
+            // quietly flattens the relief.
+            height: shading.height * factor as f32,
+            enabled: u32::from(shade_on),
+            shadow_color: shading.shadow_color,
+            shadow_strength: shading.shadow_strength,
+            highlight_color: shading.highlight_color,
+            highlight_strength: shading.highlight_strength,
+            shadow_blend: shading.shadow_blend.to_gpu(),
+            highlight_blend: shading.highlight_blend.to_gpu(),
+            // Display pixels to render pixels, for the same reason the
+            // height is scaled: a radius fixed in render pixels would
+            // shrink as antialiasing raised the resolution.
+            softness: shading.softness * factor as f32,
+            texture_kind: shading.texture_kind.to_gpu(),
+            texture_strength: shading.texture_strength,
+            // Feature size in DISPLAY pixels, like the softness radius
+            // and for the same reason: antialiasing must not change
+            // how coarse the grain looks.
+            texture_scale: (shading.texture_scale * factor as f32).max(0.25),
+            downsample: mode.to_gpu(),
+            _pad: 0,
+        };
+        queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // Softening low-passes the height FIELD; the shade pass then
+        // takes its plain +-1 difference of whatever came back.
+        let softened = if shade_on {
+            self.run_height_blur(device, queue, encoder, params.softness)
+        } else {
+            None
+        };
+        let height_src = softened.unwrap_or_else(|| self.height_view.clone());
+
+        let rebuild = match &self.downsample {
+            Some((f, _, _)) => *f != factor,
+            None => true,
+        };
+        if rebuild {
+            let src = format!(
+                r#"
+struct ShadeParams {{
+    light: vec2<f32>,
+    height: f32,
+    enabled: u32,
+    shadow_color: vec3<f32>,
+    shadow_strength: f32,
+    highlight_color: vec3<f32>,
+    highlight_strength: f32,
+    shadow_blend: u32,
+    highlight_blend: u32,
+    softness: f32,
+    texture_kind: u32,
+    texture_strength: f32,
+    texture_scale: f32,
+    downsample: u32,
+}}
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var height_tex: texture_2d<f32>;
+@group(0) @binding(3) var<uniform> shade: ShadeParams;
+
+fn height_at(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
+    let q = clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
+    return textureLoad(height_tex, q, 0).r;
+}}
+
+// 0 multiply, 1 screen, 2 overlay, 3 mix. `amt` is how far to travel
+// from the base toward the blended result, so strength 0 is always
+// exactly the untouched image.
+fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f32> {{
+    // BLENDED IN A PERCEPTUAL SPACE, NOT IN LINEAR LIGHT, and that is
+    // what makes the two strength sliders mean the same thing.
+    //
+    // The escape pass emits linear light (the palette is raised to
+    // 2.2 on lookup). Multiplying linear light by black is what a
+    // shadow physically does -- but on a dark base there is almost
+    // nothing to take away, while `screen` toward white has the whole
+    // range to add into, and the tonemap's gamma then expands the dark
+    // end further. Measured on the shipped relief config, a
+    // full-strength black shadow moved 22.45/255 where a full-strength
+    // white highlight moved 52.53: the same control reading 2.3x
+    // weaker on one side, and far worse on a darker image (reported
+    // from the app as needing strength 1.0 against 0.03).
+    //
+    // Converting to ~sRGB first makes every mode reach its extreme at
+    // amt = 1 regardless of the base: multiply lands on the layer
+    // colour, screen lands on it too, and the sliders are symmetric.
+    // It also fixes the layer COLOUR, which comes from the picker in
+    // sRGB and was previously composited against linear light.
+    let inv_g = 1.0 / 2.2;
+    let bp = pow(max(base, vec3<f32>(0.0)), vec3<f32>(inv_g, inv_g, inv_g));
+    var res = layer;
+    if (mode == 0u) {{
+        res = bp * layer;
+    }} else if (mode == 1u) {{
+        res = 1.0 - (1.0 - bp) * (1.0 - layer);
+    }} else if (mode == 2u) {{
+        res = select(
+            1.0 - 2.0 * (1.0 - bp) * (1.0 - layer),
+            2.0 * bp * layer,
+            bp < vec3<f32>(0.5),
+        );
+    }}
+    // CLAMPED: the strengths now range past 1 so a shadow can be
+    // driven to saturation on an image with little room below it, and
+    // an unclamped mix would extrapolate past the layer colour into
+    // negative light instead of stopping there.
+    let outp = mix(bp, res, clamp(amt, 0.0, 1.0));
+    return pow(max(outp, vec3<f32>(0.0)), vec3<f32>(2.2, 2.2, 2.2));
+}}
+
+// Hash -> value noise -> the two texture kinds. Integer-based hash so
+// no trig or self-compare is involved (see the fast-math notes in
+// CLAUDE.md); the mix is smoothstep-interpolated value noise, which
+// is cheap and has no directional artefacts of its own.
+fn shade_hash(p: vec2<i32>) -> f32 {{
+    var h = u32(p.x) * 374761393u + u32(p.y) * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    return f32(h ^ (h >> 16u)) * (1.0 / 4294967296.0);
+}}
+
+fn shade_value_noise(q: vec2<f32>) -> f32 {{
+    let i = vec2<i32>(i32(floor(q.x)), i32(floor(q.y)));
+    let f = fract(q);
+    let w = f * f * (3.0 - 2.0 * f);
+    let a = shade_hash(i);
+    let b = shade_hash(i + vec2<i32>(1, 0));
+    let c = shade_hash(i + vec2<i32>(0, 1));
+    let d = shade_hash(i + vec2<i32>(1, 1));
+    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+}}
+
+fn shade_texture(q: vec2<f32>) -> f32 {{
+    // 1 = GRAIN: one octave, isotropic -- film grain / fine tooth.
+    if (shade.texture_kind == 1u) {{
+        return shade_value_noise(q) - 0.5;
+    }}
+    // 2 = PAPER: octaves at falling amplitude, each STRETCHED along a
+    // different axis. The stretch is what makes it read as fibre
+    // rather than as static: paper has long filaments laid in a felt,
+    // not isotropic speckle.
+    var v = 0.0;
+    v = v + (shade_value_noise(q * vec2<f32>(1.0, 0.35)) - 0.5) * 0.6;
+    v = v + (shade_value_noise(q * vec2<f32>(0.4, 2.1) + vec2<f32>(37.0, 11.0)) - 0.5) * 0.3;
+    v = v + (shade_value_noise(q * 3.7 + vec2<f32>(91.0, 53.0)) - 0.5) * 0.15;
+    return v;
+}}
+
+fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
+    let dims = vec2<i32>(textureDimensions(height_tex));
+    // Central differences: the slope of the coloring's own value
+    // field, in value units per pixel.
+    // A plain +-1 central difference, always. SOFTENING IS NOT DONE
+    // HERE: an earlier version widened this stencil to a ring of
+    // radius r, which does not blur anything -- every tap stays a
+    // single sharp sample, and estimating the slope at p from the
+    // height at p+-r simply DISPLACES the structure, printing ghost
+    // copies either side of every edge (reported as "it mirrors into
+    // 3 equally sharp parts"). Softness now low-passes the height
+    // field itself, in `run_height_blur`, and this reads whatever it
+    // produced.
+    let dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+    let dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
+
+    // Exaggerated gradient. +y is DOWN in pixel space, so dy is
+    // negated to put the light where the azimuth says it is.
+    var g = vec2<f32>(-dx, dy) * shade.height;
+
+    // Surface texture: its own micro-relief, added to the TILT rather
+    // than to the height. Added to the height it would be multiplied
+    // by `shade.height` along with everything else, so a strength
+    // that read well at height 50 would be a sandstorm at 1000 --
+    // the two controls would not be separable. As a tilt it is
+    // independent of both the coloring's value scale and the relief
+    // depth, and it is lit by the same light, so it reads as the
+    // surface being grainy rather than as an overlay.
+    if (shade.texture_strength > 0.0 && shade.texture_kind > 0u) {{
+        let sc = max(shade.texture_scale, 0.25);
+        let q = vec2<f32>(f32(p.x), f32(p.y)) / sc;
+        let e = 1.0 / sc;
+        let nx = shade_texture(q + vec2<f32>(e, 0.0)) - shade_texture(q - vec2<f32>(e, 0.0));
+        let ny = shade_texture(q + vec2<f32>(0.0, e)) - shade_texture(q - vec2<f32>(0.0, e));
+        g = g + vec2<f32>(-nx, ny) * (shade.texture_strength * 8.0);
+    }}
+
+    // THE SIGNED TILT TOWARD THE LIGHT, and not a Lambert dot product.
+    //
+    // `s` is the slope along the light's direction and the divide
+    // turns it into sin(tilt angle) -- so the response runs -1..+1,
+    // is exactly zero on flat ground, is MONOTONIC in the tilt, and
+    // is symmetric: the same slope facing toward or away gives the
+    // same magnitude to the highlight or the shadow.
+    //
+    // The Lambert version this replaces had none of those last two
+    // properties, and both were visible. Because the normal's z
+    // component is always positive, `dot(n, l)` could not fall below
+    // -|l.xy| = -0.707, while the highlight side was normalized over
+    // a span of only 1 - l.z = 0.293: at a 45-degree tilt the
+    // highlight was already saturated at 1.000 while the shadow had
+    // reached 0.414, which is why black-on-white at full strength
+    // came out mid-grey. It was also non-monotonic -- a vertical wall
+    // facing the light got NO highlight, since the dot product peaks
+    // at 45 degrees and falls back.
+    //
+    // The divide doubles as the saturation, so an over-large `height`
+    // walks the response toward +-1 instead of blowing out, which is
+    // what makes one log slider workable across colorings whose value
+    // scales differ by orders of magnitude.
+    let s = dot(g, shade.light);
+    let response = s * inverseSqrt(1.0 + dot(g, g));
+    let hi = clamp(response, 0.0, 1.0);
+    let lo = clamp(-response, 0.0, 1.0);
+    var out = rgb;
+    out = shade_blend(out, shade.shadow_color, shade.shadow_blend, lo * shade.shadow_strength);
+    out = shade_blend(out, shade.highlight_color, shade.highlight_blend, hi * shade.highlight_strength);
+    return out;
+}}
+
+@compute @workgroup_size(8, 8, 1)
+fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let dims = textureDimensions(dst_tex);
+    if (gid.x >= dims.x || gid.y >= dims.y) {{
+        return;
+    }}
+    var sum = vec4<f32>(0.0);
+    var wsum = 0.0;
+    var satsum = 0.0;
+    for (var dy = 0u; dy < {factor}u; dy = dy + 1u) {{
+        for (var dx = 0u; dx < {factor}u; dx = dx + 1u) {{
+            let p = vec2<i32>(i32(gid.x * {factor}u + dx), i32(gid.y * {factor}u + dy));
+            var texel = textureLoad(src_tex, p, 0);
+            if (shade.enabled == 1u) {{
+                texel = vec4<f32>(shade_pixel(texel.rgb, p), texel.a);
+            }}
+            // 0 BOX: the plain linear average -- what a sensor does.
+            // 1 PERCEPTUAL: average in gamma space, so two saturated
+            //   colours land between each other instead of at their
+            //   linear sum.
+            // 2 VIVID: weight by the sample's own saturation, so a
+            //   coloured filament is not diluted to grey by neutral
+            //   neighbours. Not energy-preserving, on purpose.
+            if (shade.downsample == 1u) {{
+                texel = vec4<f32>(
+                    pow(max(texel.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)),
+                    texel.a,
+                );
+            }}
+            // VIVID needs the samples' own saturation, because what
+            // dilutes fine colour is mixing HUES, not mixing colour
+            // with grey: nine saturated samples of different hues
+            // average to something far less saturated than any of
+            // them, and a per-sample weight cannot fix that since the
+            // weights come out nearly equal. So remember what the
+            // samples had, and restore it below.
+            let mx = max(texel.r, max(texel.g, texel.b));
+            let mn = min(texel.r, min(texel.g, texel.b));
+            satsum = satsum + select(0.0, (mx - mn) / mx, mx > 1e-6);
+            sum = sum + texel;
+            wsum = wsum + 1.0;
+        }}
+    }}
+    var outc = sum / max(wsum, 1e-6);
+    if (shade.downsample == 1u) {{
+        outc = vec4<f32>(pow(max(outc.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)), outc.a);
+    }} else if (shade.downsample == 2u) {{
+        // Put back the saturation the samples had, keeping the
+        // averaged hue and luminance. Deliberately not
+        // energy-preserving: it is the answer to "antialiasing washes
+        // the colour out of fine detail", which a correct average
+        // does by construction.
+        let want = satsum / max(wsum, 1e-6);
+        let mx = max(outc.r, max(outc.g, outc.b));
+        let mn = min(outc.r, min(outc.g, outc.b));
+        let have = select(0.0, (mx - mn) / mx, mx > 1e-6);
+        if (have > 1e-4 && want > have) {{
+            let luma = dot(outc.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            // Bounded, so a near-neutral pixel cannot be blown into a
+            // fully saturated one by a large ratio.
+            let k = min(want / have, 4.0);
+            outc = vec4<f32>(
+                max(vec3<f32>(luma) + (outc.rgb - vec3<f32>(luma)) * k, vec3<f32>(0.0)),
+                outc.a,
+            );
+        }}
+    }}
+    textureStore(dst_tex, vec2<i32>(i32(gid.x), i32(gid.y)), outc);
+}}
+"#
+            );
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Resolve Shader"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Escape Resolve Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Resolve Pipeline Layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Resolve Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some("downsample_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.downsample = Some((factor, pipeline, layout));
+        }
+        let (_, pipeline, layout) = self.downsample.as_ref().unwrap();
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Resolve Bind Group"),
+            layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&final_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&height_src),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: self.shade_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Resolve Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(self.out_width.div_ceil(8), self.out_height.div_ceil(8), 1);
+    }
+
+    /// Compile (or fetch from cache) the pipeline for this config's
+    /// (formula, coloring) pair; returns its cache key.
+    fn ensure_pipeline(&mut self, device: &Device, escape: &EscapeConfig) -> String {
+        // Mode B routing: a formula name resolving in the FIELD
+        // registry compiles the field template instead. Same bind
+        // group layout, same dispatch — only the shader differs.
+        let (key, source_for) = if let Some(field) = super::fields::get_field(&escape.formula) {
+            let coloring = super::fields::get_field_coloring(&escape.coloring, field);
+            (
+                format!("field|{}|{}", field.name, coloring.name),
+                Some(assembler::assemble_field(field, coloring)),
+            )
+        } else {
+            (String::new(), None)
+        };
+        if let Some(source) = source_for {
+            if !self.pipelines.contains_key(&key) {
+                let module = device.create_shader_module(ShaderModuleDescriptor {
+                    label: Some(&format!("Escape Shader {key}")),
+                    source: ShaderSource::Wgsl(source.into()),
+                });
+                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Escape Pipeline Layout"),
+                    bind_group_layouts: &[Some(&self.bind_group_layout)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Escape Pipeline {key}")),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("escape_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                self.pipelines.insert(key.clone(), pipeline);
+            }
+            return key;
+        }
+        let formula = super::get_formula(&escape.formula);
+        let coloring = super::get_coloring(&escape.coloring);
+        let damped = escape.is_damped();
+        #[cfg(test)]
+        let interior = !self.disable_interior;
+        #[cfg(not(test))]
+        let interior = true;
+        let key = format!("{}|{}|{}|{}", formula.name, coloring.name, damped, interior);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_with(formula, coloring, damped, interior);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape Pipeline Layout"),
+                bind_group_layouts: &[Some(&self.bind_group_layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("escape_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        key
+    }
+
+    fn params_for(&self, escape: &EscapeConfig) -> EscapeParamsGpu {
+        // zoom_log2 = 0 is the home view: vertical span 4 complex
+        // units (the EscapeConfig doc contract); width follows aspect.
+        let span_y = 4.0 / escape.zoom_factor();
+        let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
+        let (mut cx, mut cy) = escape.center_f64();
+        // Sub-pixel sampling offset (see `sample_offset`). The direct
+        // path is shallow by definition -- past zoom 14 the perturbed
+        // path takes over -- so an f64 centre carries a fraction of a
+        // pixel here without trouble.
+        {
+            let off = self.sample_offset_in_view(escape);
+            if off != [0.0, 0.0] {
+                let px = span_y / self.height.max(1) as f64;
+                cx += off[0] as f64 * px;
+                cy += off[1] as f64 * px;
+            }
+        }
+
+        let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
+        let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
+        let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
+        if let Some(field) = super::fields::get_field(&escape.formula) {
+            // Mode B: pack the field's params + its resolved coloring's.
+            let coloring = super::fields::get_field_coloring(&escape.coloring, field);
+            super::pack_params(field.parameters, &escape.formula_params, fparams.as_flattened_mut());
+            super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+        } else {
+            let formula = super::get_formula(&escape.formula);
+            let coloring = super::get_coloring(&escape.coloring);
+            super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
+            super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+
+            if let Some(derive) = formula.derived_data {
+                let flat = fdata.as_flattened_mut();
+                for (slot, v) in flat.iter_mut().zip(derive(fparams.as_flattened())) {
+                    *slot = v;
+                }
+            }
+        }
+
+        EscapeParamsGpu {
+            center: [cx as f32, cy as f32],
+            julia_c: [escape.julia_re, escape.julia_im],
+            span: [span_x as f32, span_y as f32],
+            rot_cs: [escape.rotation.cos(), escape.rotation.sin()],
+            width: self.width,
+            height: self.height,
+            max_iter: escape.max_iter.max(1),
+            flags: {
+                // bit 0 = Julia; bits 1-2 = biomorph classification axis.
+                let bio = match escape.biomorph {
+                    crate::config::escape::BiomorphMode::Off => 0u32,
+                    crate::config::escape::BiomorphMode::Re => 1,
+                    crate::config::escape::BiomorphMode::Im => 2,
+                };
+                (if escape.julia { 1 } else { 0 }) | (bio << 1)
+            },
+            bailout: escape.bailout.max(1e-6),
+            tile_y0: 0,
+            damping: [escape.damping_re, escape.damping_im],
+            shade_flags: escape.shading.field.to_gpu(),
+            _pad_shade: [0; 3],
+            fparams,
+            cparams,
+            fdata,
+        }
+    }
+
+    /// One full-image escape pass into the output texture.
+    ///
+    /// `palette_view` is the flame renderer's palette texture (already
+    /// carrying rotation/squeeze from `update_palette`), so escape mode
+    /// inherits the whole palette pipeline for free.
+    /// Returns whether the rendered image is FINAL (false only in
+    /// progressive mode while the reference orbit is still growing —
+    /// the caller should keep the escape image marked dirty).
+    pub fn render(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        escape: &EscapeConfig,
+        palette_view: &TextureView,
+    ) -> bool {
+        // Relief needs its scalar field and a destination distinct
+        // from the colour it reads; both are allocated on demand, so
+        // an escape view with shading off carries neither.
+        self.ensure_height(device, escape.shading.enabled || escape.contrast.is_active());
+        self.ensure_resolve_target(device, escape.shading.enabled);
+        // Diagnostics: CPU time of this whole call, whatever path or
+        // early return it takes (the drop guard writes on exit).
+        let _diag_cpu = super::diag::CpuTimer::start();
+        let results_active = self.ensure_results(device);
+        let mut params = self.params_for(escape);
+        if results_active {
+            // Bit 3: the iterate templates write their terminal
+            // records (the recolor cache).
+            params.flags |= 8;
+        }
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // The recolor cache: when the settled records were produced
+        // by an iterate pass with THIS identity, nothing about the
+        // iteration changed -- only the coloring map, the palette or
+        // the relief could have -- so the frame is one cheap coloring
+        // dispatch over the records plus the usual resolve. This is
+        // what makes palette and coloring edits real-time on the
+        // perturbed path. Field formulas write no records.
+        let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
+            Some(self.iterate_key_for(escape))
+        } else {
+            None
+        };
+        if let Some(ik) = iterate_key.as_deref() {
+            if results_active && self.results_key.as_deref() == Some(ik) {
+                let t0 = web_time::Instant::now();
+                self.measure_contrast(device, queue, escape, ik);
+                self.run_recolor(device, queue, encoder, escape, palette_view);
+                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+                DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
+                PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
+                self.diag_settle_start = None;
+                self.last_path = "recolor";
+                super::diag::update(|d| {
+                    d.path = "recolor";
+                    d.restarts += 1;
+                    d.settle_frames = 1;
+                    d.inflight_frames = 0;
+                    d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                });
+                return true;
+            }
+        }
+        // Anything the iterate passes write from here on describes a
+        // DIFFERENT identity: the stored records are stale.
+        if self.results_key.is_some() && self.results_key != iterate_key {
+            self.results_key = None;
+        }
+        // A changed render identity is a user edit: the settle clock
+        // measures from HERE. (Orbit-progression restarts under an
+        // unchanged identity keep the running clock, so a slow
+        // reference's settle time stays honest.)
+        if iterate_key.is_some() && self.diag_config_key != iterate_key {
+            self.diag_config_key = iterate_key.clone();
+            self.diag_settle_start = Some(web_time::Instant::now());
+        }
+
+        // Deep zoom: the perturbation path. Falls back to direct on a
+        // center-parse failure (matching center_f64's fallback view).
+        #[cfg(test)]
+        let use_perturbed = Self::wants_perturbation(escape) || self.force_perturbed;
+        #[cfg(not(test))]
+        let use_perturbed = Self::wants_perturbation(escape);
+        // ...unless this frame's per-pixel state will not fit the
+        // device. Decided HERE rather than deeper in, so the direct
+        // path below simply runs: it bands by rows and fits any size.
+        let use_perturbed = use_perturbed && self.perturb_state_fits(device, escape);
+        if use_perturbed {
+            // Not a banded direct render: close its loss-attribution
+            // window (a stale one would blame an unrelated loss).
+            DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
+            #[cfg(not(target_arch = "wasm32"))]
+            let progressive = self.progressive;
+            #[cfg(target_arch = "wasm32")]
+            let progressive = false;
+            let orbit_state: Option<(u32, bool)> = if progressive {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let (len, done) = self.ensure_orbit_progressive(device, queue, escape);
+                    if len == 0 {
+                        // Nothing to render yet: keep the previous
+                        // frame's texture, come back next frame.
+                        return false;
+                    }
+                    // Rendering against a small fraction of a long
+                    // reference is not progressive refinement, it is
+                    // noise: every pixel wraps almost immediately and
+                    // the frame is flat colour that changes wholesale
+                    // as the prefix grows. Where the reference is
+                    // quick that flicker is invisible and the early
+                    // frames are useful; where it takes minutes, it
+                    // is all the user sees. So: predict the build
+                    // cost, and if it is more than a moment, hold the
+                    // last good frame and report progress instead.
+                    let want = escape.max_iter;
+                    let limbs = super::fixedpoint::limbs_for_view(
+                        &escape.center_re,
+                        &escape.center_im,
+                        escape.zoom_log2,
+                    );
+                    let slow = super::reference::predicted_orbit_seconds(want, limbs)
+                        > Self::ORBIT_WAIT_SECONDS;
+                    // A stale-served frame already has pixels to draw
+                    // and its worker work is a relocation, not a slow
+                    // compute -- never hold it.
+                    if !done && slow && !self.last_orbit_stale {
+                        super::reference::set_orbit_progress(len, want);
+                        return false;
+                    }
+                    super::reference::set_orbit_progress(0, 0);
+                    Some((len, done))
+                }
+                #[cfg(target_arch = "wasm32")]
+                None
+            } else {
+                // WASM has no worker thread: slice the fixed-point
+                // compute per frame (budget shrinks with limb count so
+                // a slice stays in tens of milliseconds) and let the
+                // partial orbit render progressively via rebasing.
+                // Desktop non-progressive (CLI, tests) stays blocking
+                // and deterministic.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    match self.budgeted_orbit_step(device, queue, escape) {
+                        BudgetedOrbit::Ready(len, done) => Some((len, done)),
+                        // Nothing drawn: the overlay carries the frame,
+                        // and the whole frame budget goes to the slice.
+                        BudgetedOrbit::Hold => return false,
+                        BudgetedOrbit::NoOrbit => None,
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    #[cfg(test)]
+                    let budgeted = self.force_budgeted;
+                    #[cfg(not(test))]
+                    let budgeted = false;
+                    if budgeted {
+                        // The SAME call the wasm32 arm makes, so the
+                        // knob cannot test something the browser does
+                        // not do (it already had: a stale budget).
+                        match self.budgeted_orbit_step(device, queue, escape) {
+                            BudgetedOrbit::Ready(len, done) => Some((len, done)),
+                            BudgetedOrbit::Hold => return false,
+                            BudgetedOrbit::NoOrbit => None,
+                        }
+                    } else {
+                        self.ensure_orbit(device, queue, escape).map(|l| (l, true))
+                    }
+                }
+            };
+            if let Some((orbit_len, orbit_done)) = orbit_state {
+                #[cfg(test)]
+                let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
+                #[cfg(not(test))]
+                let mut floatexp = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
+                // Manowar perturbs on the DEEP rung at every depth.
+                // Its history term carries the delta forward with
+                // coefficient 1, so where a one-term map's delta
+                // decays near the reference, Manowar's persists and
+                // f32 mantissa error accumulates across hundreds of
+                // iterations. Measured against an exact orbit: 18.4%
+                // of pixels wrong at zoom 20 and 27.0% at zoom 26 on
+                // the scaled rung, against 1.6% and 2.1% on this one.
+                if matches!(
+                    Self::perturb_tier(escape),
+                    Some(assembler::PerturbTier::Manowar)
+                ) {
+                    floatexp = true;
+                }
+                // Pixel spacing S = 2^(2 - zoom) / height. The scaled
+                // rung takes it as f64->f32 (normal down to ~zoom 119,
+                // past its own ceiling); the floatexp rung takes it
+                // SYMBOLICALLY as mantissa * 2^exponent so no float
+                // ever underflows however deep the zoom goes.
+                let h = self.height.max(1) as f64;
+                let s_f64 = if escape.zoom_log2 < 1000.0 {
+                    4.0 / escape.zoom_factor() / h
+                } else {
+                    0.0
+                };
+                let x = 2.0 - escape.zoom_log2 - h.log2();
+                let s_e = x.floor();
+                let s_m = 2f64.powf(x - s_e);
+                // Chunk window: restart on any render-state change,
+                // else continue where the last dispatch stopped.
+                let key = self.chunk_key_for(escape, self.orbit_generation, orbit_done);
+                if self.chunk_key.as_deref() != Some(key.as_str()) {
+                    self.chunk_key = Some(key);
+                    self.chunk_next = 0;
+                    self.reset_chunk_pacing();
+                    super::diag::update(|d| {
+                        d.restarts += 1;
+                        d.inflight_frames = 0;
+                    });
+                    if self.diag_settle_start.is_none() {
+                        self.diag_settle_start = Some(web_time::Instant::now());
+                    }
+                }
+                // Consume any landed GPU measurement first: next_chunk
+                // sizes from it.
+                self.ts_poll();
+                self.gpu_done_arm(queue);
+                let measure_gpu = self.ts_prepare(device, queue);
+                let tier = Self::perturb_tier(escape)
+                    .unwrap_or(assembler::PerturbTier::Power(2));
+                // Everything that changes what one iteration COSTS.
+                // next_chunk only trusts a measurement taken here.
+                let regime = CostRegime {
+                    floatexp,
+                    width: self.width,
+                    height: self.height,
+                    tier,
+                };
+                let chunk = self.next_chunk(floatexp, regime);
+                let first_start = self.chunk_next.min(escape.max_iter);
+                let batch = self.chunk_batch(chunk, first_start, regime);
+                self.ensure_params_pool(device, batch);
+                if !self.ensure_iter_state(
+                    device,
+                    assembler::iter_state_bytes(tier, floatexp),
+                ) {
+                    // `perturb_state_fits` should have routed this to
+                    // the direct path already; report settled rather
+                    // than spin if it ever does not.
+                    return true;
+                }
+                // BLA table: build/refresh when skipping applies,
+                // else bind the zeroed dummy (n_levels = 0).
+                let bla_ready = self.ensure_bla(
+                    device, queue, escape, orbit_len, tier, progressive, orbit_done,
+                );
+                if self.bla_dummy.is_none() {
+                    self.bla_dummy = Some(device.create_buffer(&BufferDescriptor {
+                        label: Some("Escape BLA Dummy"),
+                        size: 176,
+                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
+                // The reference's own c: the Julia constant on the
+                // dynamical plane, the reference CENTRE on the
+                // parameter plane. Only the multiplying-parameter
+                // tiers read it, and only as a factor, so f32 of the
+                // exact decimal centre is enough.
+                let ref_c = if escape.julia {
+                    [escape.julia_re, escape.julia_im]
+                } else {
+                    let (cx, cy) = escape.center_f64();
+                    [cx as f32, cy as f32]
+                };
+                let mut pp = PerturbParamsGpu {
+                    s: s_f64 as f32,
+                    inv_s: if s_f64 > 0.0 { (1.0 / s_f64) as f32 } else { 0.0 },
+                    orbit_len: orbit_len.max(2),
+                    // Bit 1: Julia-style deltas (d0 seed, no dc term)
+                    // -- the Julia plane, and the c-free maps.
+                    flags: if escape.julia || tier.is_dynamical() { 2 } else { 0 },
+                    s_m: s_m as f32,
+                    s_e: s_e as i32,
+                    ref_offset: {
+                        // The sampling offset rides here for the same
+                        // reason the nucleus relocation does: both
+                        // are a displacement of the view measured in
+                        // pixel spacings, which is what this field
+                        // is. Exact at any depth.
+                        let o = self.sample_offset_in_view(escape);
+                        [
+                            self.current_ref_offset[0] + o[0],
+                            self.current_ref_offset[1] + o[1],
+                        ]
+                    },
+                    iter_start: first_start,
+                    iter_end: first_start,
+                    ref_c,
+                    df_zero: 0,
+                    _pad_df: [0; 3],
+                };
+                let key = self.ensure_perturbed_pipeline(device, escape, floatexp);
+                let mut start = first_start;
+                let mut iter_end = first_start;
+                let mut dispatched = 0u32;
+                for pass_i in 0..batch {
+                    let end = start.saturating_add(chunk).min(escape.max_iter);
+                    if pass_i > 0 && end == start {
+                        break;
+                    }
+                    pp.iter_start = start;
+                    pp.iter_end = end;
+                    self.dispatch_perturbed_chunk(
+                        device,
+                        queue,
+                        encoder,
+                        palette_view,
+                        &key,
+                        pass_i,
+                        &pp,
+                        measure_gpu && pass_i == 0,
+                        regime,
+                        bla_ready,
+                    );
+                    dispatched += 1;
+                    iter_end = end;
+                    start = end;
+                }
+                let iterations_done = iter_end >= escape.max_iter;
+                // Every chunk refreshes the display image, so
+                // progressive refinement stays visible under AA.
+                self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+                // Attribution window for the device-lost callback: open
+                // while this render still has chunks to submit.
+                PERTURB_RENDER_IN_FLIGHT.store(
+                    !(orbit_done && iterations_done),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                self.chunk_next = if iterations_done { 0 } else { iter_end };
+                // Progress for the panel: cleared the moment the last
+                // chunk lands, so "settled" needs no separate signal.
+                RENDER_WANT.store(
+                    if orbit_done && iterations_done { 0 } else { escape.max_iter },
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                RENDER_DONE.store(iter_end, std::sync::atomic::Ordering::Relaxed);
+                let settled = orbit_done && iterations_done;
+                self.last_path = if floatexp { "perturbed floatexp" } else { "perturbed f32" };
+                super::diag::update(|d| {
+                    d.path = if floatexp { "perturbed floatexp" } else { "perturbed f32" };
+                    d.bla_active = bla_ready;
+                    d.last_chunk_iters = chunk;
+                    d.chunk_batch = dispatched;
+                    d.inflight_frames += 1;
+                    if settled {
+                        d.settle_frames = d.inflight_frames;
+                        d.inflight_frames = 0;
+                    }
+                });
+                if settled {
+                    if let Some(t0) = self.diag_settle_start.take() {
+                        super::diag::update(|d| {
+                            d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                        });
+                    }
+                    // The final chunk wrote every pixel's terminal
+                    // record under this identity.
+                    if results_active {
+                        self.results_key = iterate_key.clone();
+                    }
+                }
+                if iterations_done {
+                    log::debug!(
+                        "escape: {} iterations in {} chunks (final chunk {}, baseline {:.1} ms)",
+                        escape.max_iter,
+                        self.chunk_count + 1,
+                        self.chunk_iters,
+                        self.chunk_base_ms,
+                    );
+                    // A repeat of the same render starts fresh.
+                    self.chunk_key = None;
+                    self.reset_chunk_pacing();
+                }
+                // See `contrast_pending`: a settled frame that has not
+                // had its fit measured owes one more, which takes the
+                // recolor path and applies it.
+                return orbit_done
+                    && iterations_done
+                    && !self.contrast_pending(escape, iterate_key.as_deref());
+            }
+            log::warn!("Deep zoom requested but the center failed to parse; rendering direct");
+        }
+
+        // Not a perturbed render: close its loss-attribution window
+        // (a stale one would blame an unrelated loss).
+        PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // Row-band chunking for the unchunkable-by-iteration templates
+        // (direct and field). A band is a complete render of its own
+        // rows, so no resume state is needed and the output texture
+        // accumulates the frame top to bottom.
+        let key = self.chunk_key_for(escape, 0, true);
+        if self.chunk_key.as_deref() != Some(key.as_str()) {
+            self.chunk_key = Some(key);
+            self.direct_tile_y = 0;
+            self.direct_last = None;
+            super::diag::update(|d| {
+                d.restarts += 1;
+                d.inflight_frames = 0;
+            });
+            if self.diag_settle_start.is_none() {
+                self.diag_settle_start = Some(web_time::Instant::now());
+            }
+        }
+        // Shrink-only pacing: while continuing a banded render, the
+        // gap since the previous band approximates that band's GPU
+        // time (the dirty loop redraws as fast as the GPU drains). A
+        // band that survived but ran long still halves the session
+        // budget; growth is never attempted (measured losing the
+        // device -- see DIRECT_BUDGET_SHIFT).
+        if self.direct_tile_y > 0 {
+            if let Some(t0) = self.direct_last {
+                if t0.elapsed().as_millis() > DIRECT_BAND_SLOW_MS {
+                    use std::sync::atomic::Ordering;
+                    let sh = DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed);
+                    if sh < 6 {
+                        DIRECT_BUDGET_SHIFT.store(sh + 1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        let rows = self.direct_rows_per_dispatch(escape);
+        if self.direct_tile_y >= self.height {
+            self.direct_tile_y = 0;
+        }
+        let tile_y0 = self.direct_tile_y;
+        let band = rows.min(self.height - tile_y0);
+        params.tile_y0 = tile_y0;
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // Built per pass: the palette view can be recreated under us
+        // (palette-size changes), and one bind group per render is
+        // noise next to the dispatch itself.
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(palette_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.results_binding(),
+                },
+            ],
+        });
+
+        let key = self.ensure_pipeline(device, escape);
+        let pipeline = &self.pipelines[&key];
+
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
+        drop(pass);
+        self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
+        self.direct_tile_y = tile_y0.saturating_add(band);
+        let mut done = self.direct_tile_y >= self.height;
+        DIRECT_RENDER_IN_FLIGHT.store(
+            !done && band < self.height,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.direct_last = Some(web_time::Instant::now());
+        self.last_path = "direct";
+        super::diag::update(|d| {
+            d.path = "direct";
+            d.inflight_frames += 1;
+            if done {
+                d.settle_frames = d.inflight_frames;
+                d.inflight_frames = 0;
+            }
+        });
+        if done {
+            if let Some(t0) = self.diag_settle_start.take() {
+                super::diag::update(|d| {
+                    d.settle_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                });
+            }
+            // Every band of this render wrote its rows' records
+            // under this identity (None for a field formula).
+            if results_active {
+                self.results_key = iterate_key.clone();
+            }
+            if self.contrast_pending(escape, iterate_key.as_deref()) {
+                // See `contrast_pending`: one more frame, which takes
+                // the recolor path and applies the measured fit.
+                done = false;
+            }
+            // A repeat of the same render starts from the top.
+            self.chunk_key = None;
+            self.direct_tile_y = 0;
+            self.direct_last = None;
+        }
+        done
+    }
+
+    /// Free GPU memory explicitly — on WebGPU `Drop` frees nothing.
+    /// Idempotent; safe once no submitted work references the texture.
+    pub fn destroy(&self) {
+        self.output_texture.destroy();
+        self.params_buffer.destroy();
+        self.perturb_params_buffer.destroy();
+        for b in &self.perturb_params_pool {
+            b.destroy();
+        }
+        if let Some(b) = &self.orbit_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.orbit_e_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.orbit_r2_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.orbit_lo_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.iter_state_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.bla_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.bla_dummy {
+            b.destroy();
+        }
+        if let Some(b) = &self.results_buffer {
+            b.destroy();
+        }
+        if let Some(b) = &self.results_dummy {
+            b.destroy();
+        }
+        if let Some(t) = &self.final_texture {
+            t.destroy();
+        }
+        if let Some((a, _, b, _)) = &self.accum {
+            a.destroy();
+            b.destroy();
+        }
+        if let Some((a, _, b, _)) = &self.height_blur {
+            a.destroy();
+            b.destroy();
+        }
+        if let Some(ts) = &self.timestamps {
+            ts.resolve.destroy();
+            ts.staging.destroy();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The budget shifts and in-flight flags are process-global, so
+    /// the tests that drive them must not run concurrently.
+    static BREAKER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_direct_render_is_split_into_bands_it_can_survive() {
+        // Zooming a 10M-iteration config OUT past the perturbation
+        // threshold used to hand the direct path a single dispatch of
+        // pixels x max_iter with nothing bounding it: tens of seconds
+        // in one submission, which Windows answers by resetting the
+        // driver and wgpu by aborting the process.
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.zoom_log2 = 10.0;
+        esc.max_iter = 10_100_100;
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+
+        // A band's work must respect the budget, and a render must
+        // still be reachable in a finite number of them.
+        let (w, h) = (1280u32, 768u32);
+        let rows = rows_for(w, h, esc.max_iter);
+        assert!(rows >= 1, "a band must cover at least one row");
+        let work = (w as u64) * (rows as u64) * (esc.max_iter as u64);
+        assert!(
+            work <= DIRECT_DISPATCH_BUDGET,
+            "a band is {work} pixel-iterations, over the {DIRECT_DISPATCH_BUDGET} budget"
+        );
+        assert!(rows < h, "10M iterations over this viewport must take several bands");
+
+        // Ordinary iteration counts still render in one pass, so
+        // nothing about the common case changes.
+        esc.max_iter = 2_000;
+        assert_eq!(rows_for(w, h, esc.max_iter), h);
+    }
+
+    /// The band size without needing a GPU: mirrors
+    /// EscapeRenderer::direct_rows_per_dispatch.
+    fn rows_for(width: u32, height: u32, max_iter: u32) -> u32 {
+        let per_row = (width as u64).saturating_mul(max_iter.max(1) as u64);
+        let rows = DIRECT_DISPATCH_BUDGET / per_row.max(1);
+        (rows.max(1) as u32).min(height.max(1))
+    }
+
+
+    #[test]
+    fn device_loss_halves_the_perturbed_budget_only_when_attributable() {
+        use std::sync::atomic::Ordering;
+        let _guard = BREAKER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        PERTURB_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        PERTURB_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        let seed0 = perturb_chunk_seed(false, 1920 * 1080);
+        let ceil0 = perturb_chunk_ceiling(seed0);
+
+        note_device_lost();
+        assert_eq!(
+            PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+            0,
+            "a loss with no perturbed render in flight must not shrink"
+        );
+
+        PERTURB_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+        note_device_lost();
+        assert_eq!(PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed), 1);
+        assert!(
+            !PERTURB_RENDER_IN_FLIGHT.load(Ordering::Relaxed),
+            "attribution consumes the in-flight window"
+        );
+        // Both the seed and the ceiling must actually shrink -- the
+        // ceiling is what a runaway growth loop would otherwise reach.
+        let seed1 = perturb_chunk_seed(false, 1920 * 1080);
+        assert_eq!(seed1, seed0 / 2);
+        // The ceiling is now a multiple of the seed, so the breaker
+        // still halves it -- through the seed rather than beside it.
+        assert_eq!(perturb_chunk_ceiling(seed1), ceil0 / 2);
+
+        for _ in 0..10 {
+            PERTURB_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+            note_device_lost();
+        }
+        assert_eq!(
+            PERTURB_BUDGET_SHIFT.load(Ordering::Relaxed),
+            6,
+            "clamped: even the floor is a usable budget"
+        );
+        assert!(perturb_chunk_seed(false, 1920 * 1080) >= 16, "floor holds");
+        PERTURB_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn device_loss_halves_the_direct_budget_only_when_attributable() {
+        use std::sync::atomic::Ordering;
+        let _guard = BREAKER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        DIRECT_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        PERTURB_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+        note_device_lost();
+        assert_eq!(
+            DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+            0,
+            "a loss with no banded render in flight must not shrink"
+        );
+        DIRECT_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+        note_device_lost();
+        assert_eq!(DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed), 1);
+        assert!(
+            !DIRECT_RENDER_IN_FLIGHT.load(Ordering::Relaxed),
+            "attribution consumes the in-flight window"
+        );
+        for _ in 0..10 {
+            DIRECT_RENDER_IN_FLIGHT.store(true, Ordering::Relaxed);
+            note_device_lost();
+        }
+        assert_eq!(
+            DIRECT_BUDGET_SHIFT.load(Ordering::Relaxed),
+            6,
+            "clamped: even the floor is a usable budget"
+        );
+        DIRECT_BUDGET_SHIFT.store(0, Ordering::Relaxed);
+        DIRECT_RENDER_IN_FLIGHT.store(false, Ordering::Relaxed);
+    }
+
+    /// The persisted tuning file: round-trip, and refuse to let a
+    /// broken one do damage. Persistence is the whole point of the
+    /// breaker -- without it every session re-learns by losing the
+    /// device -- but a file that says "shift 40" must not be believed.
+    #[test]
+    fn tuning_file_round_trips_and_clamps_hostile_input() {
+        assert_eq!(tuning::decode(&tuning::encode(0, 0)), (0, 0));
+        assert_eq!(tuning::decode(&tuning::encode(2, 5)), (2, 5));
+        assert_eq!(tuning::decode(&tuning::encode(6, 6)), (6, 6));
+        // Out of range, wrong types, missing keys, and outright
+        // garbage all read as "no tuning learned" or a clamp.
+        assert_eq!(tuning::decode(r#"{"direct_shift":40,"perturb_shift":99}"#), (6, 6));
+        assert_eq!(tuning::decode(r#"{"direct_shift":"lots"}"#), (0, 0));
+        assert_eq!(tuning::decode("{}"), (0, 0));
+        assert_eq!(tuning::decode("not json at all"), (0, 0));
+        assert_eq!(tuning::decode(""), (0, 0));
+    }
+
+    /// The reference orbit's parameter must be the SAME VALUE the
+    /// shader's uniform gets.
+    ///
+    /// They are resolved by different code (`map_params_for` here,
+    /// `pack_params` for the uniform), and they disagreed: an absent
+    /// key meant "the registry default" to one and "zero" to the
+    /// other. A fresh Phoenix config therefore iterated deltas for
+    /// p = -0.5 against a reference built for p = 0 -- the plain
+    /// quadratic -- so the perturbed render was a different fractal
+    /// entirely, while an EDITED config carried the keys and worked.
+    /// That is why the agreement test missed it: it set the
+    /// parameters explicitly.
+    #[test]
+    fn reference_parameters_match_the_shader_uniform() {
+        // Which of a formula's own parameters ride `map_params` into
+        // the reference orbit's identity. EVERY formula that can
+        // perturb needs an entry, and the assertion below enforces
+        // that — a new tier whose parameters change the MAP but never
+        // reach the reference is exactly the bug this table exists to
+        // stop, and it has now happened twice (Phoenix's p, then
+        // McMullen's pole power m, which built the reference for
+        // c/z^1 while the delta step used c/z^3; every pixel escaped).
+        let carried: &[(&str, &[&str])] = &[
+            ("mandelbrot", &[]),
+            ("multibrot", &[]),
+            ("tricorn", &[]),
+            ("burning_ship", &[]),
+            ("lambda", &[]),
+            ("feather", &[]),
+            ("phoenix", &["p_re", "p_im"]),
+            // Manowar's p = 1 is fixed by the formula, not a parameter.
+            ("manowar", &[]),
+            ("mcmullen", &["m"]),
+            // The VARIANT selects between two different maps.
+            ("magnet", &["variant"]),
+            // The root finders carry their complex RELAXATION: it
+            // multiplies the step, so a reference built without it
+            // iterates a different map.
+            ("newton", &["relax_re", "relax_im"]),
+            ("nova", &["relax_re", "relax_im"]),
+            // The sign branch and the log variant each select a
+            // different map, exactly as Magnet's variant does.
+            ("kaliset", &["plus_c"]),
+            ("ducks", &["variant"]),
+        ];
+
+        for (formula, names) in carried {
+            for edited in [false, true] {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = (*formula).to_string();
+                // McMullen only perturbs on the dynamical plane.
+                esc.julia = *formula == "mcmullen";
+                if edited {
+                    // Push every parameter off its default, so a
+                    // resolver that silently returns zero (or the
+                    // default) is caught.
+                    for (i, d) in super::super::get_formula(formula).parameters.iter().enumerate() {
+                        let v = if d.name == "m" || d.name == "n" {
+                            (d.default + 1.0).min(d.max)
+                        } else {
+                            d.default + 0.125 * (i as f32 + 1.0)
+                        };
+                        esc.formula_params.insert(d.name.to_string(), v);
+                    }
+                }
+                let mine = EscapeRenderer::map_params_for(&esc);
+                let mut packed = [0.0f32; 16];
+                super::super::pack_params(
+                    super::super::get_formula(formula).parameters,
+                    &esc.formula_params,
+                    &mut packed,
+                );
+                for (slot, name) in names.iter().enumerate() {
+                    let idx = super::super::get_formula(formula)
+                        .parameters
+                        .iter()
+                        .position(|d| d.name == *name)
+                        .expect("named parameter exists");
+                    assert_eq!(
+                        mine[slot], packed[idx],
+                        "{formula} (edited={edited}): the reference resolved \
+                         {name} as {} but the shader got {} -- they describe \
+                         different maps",
+                        mine[slot], packed[idx]
+                    );
+                }
+                for slot in names.len()..2 {
+                    // Manowar's fixed p = 1 is the one legitimate
+                    // nonzero that is not a config parameter.
+                    if *formula == "manowar" {
+                        continue;
+                    }
+                    assert_eq!(
+                        mine[slot], 0.0,
+                        "{formula}: map_params[{slot}] carries {} but the table \
+                         declares nothing there",
+                        mine[slot]
+                    );
+                }
+            }
+        }
+
+        // The table must cover every formula that can actually
+        // perturb. This is the half that catches the NEXT tier.
+        for f in crate::escape::FORMULAS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = f.name.to_string();
+            let plain = EscapeRenderer::perturb_tier(&esc).is_some();
+            esc.julia = true;
+            let julia = EscapeRenderer::perturb_tier(&esc).is_some();
+            if plain || julia {
+                assert!(
+                    carried.iter().any(|(n, _)| *n == f.name),
+                    "{} perturbs but is missing from the map_params table -- \
+                     declare which of its parameters reach the reference orbit \
+                     (an empty list is a valid answer, and saying so is the point)",
+                    f.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn perturbation_gate_is_tight() {
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.zoom_log2 = 30.0;
+        assert!(EscapeRenderer::wants_perturbation(&esc));
+        esc.zoom_log2 = 10.0;
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+        esc.zoom_log2 = 30.0;
+        esc.julia = true;
+        assert!(EscapeRenderer::wants_perturbation(&esc), "julia is in the trivial tier");
+        esc.julia = false;
+        esc.formula = "burning_ship".to_string();
+        assert!(
+            EscapeRenderer::wants_perturbation(&esc),
+            "the Ship family is in the diffabs tier"
+        );
+        esc.zoom_log2 = 60.0;
+        assert!(
+            EscapeRenderer::wants_perturbation(&esc),
+            "deep Ship rides the floatexp diffabs rung"
+        );
+        esc.zoom_log2 = 30.0;
+        esc.formula_params.insert("variant".to_string(), 3.0);
+        assert!(
+            EscapeRenderer::wants_perturbation(&esc),
+            "every fold variant has its own delta algebra now"
+        );
+        esc.formula_params.clear();
+        esc.formula = "weierstrass".to_string();
+        assert!(
+            !EscapeRenderer::wants_perturbation(&esc),
+            "mode B fields never perturb"
+        );
+        esc.formula = "burning_ship".to_string();
+        esc.formula = "multibrot".to_string();
+        assert!(EscapeRenderer::wants_perturbation(&esc), "integer multibrot is in the tier");
+        esc.formula_params.insert("power".to_string(), 3.5);
+        assert!(
+            !EscapeRenderer::wants_perturbation(&esc),
+            "non-integer power stays direct (binomial needs an integer exponent)"
+        );
+        esc.formula_params.clear();
+        esc.formula = "mandelbrot".to_string();
+        esc.damping_re = 0.5;
+        assert!(!EscapeRenderer::wants_perturbation(&esc), "damped not in v1");
+    }
+
+    #[test]
+    fn params_struct_matches_wgsl_layout() {
+        // 4 vec2 (32) + 4 u32 (16) + f32 + 3 pad (16) + the shading
+        // flags + 3 pad (16) + 2 param arrays (128) + the derived-data
+        // table (1024) = 1232, and the arrays must start 16-byte
+        // aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1232);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 80);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 144);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 208);
+    }
+}
+
+#[cfg(test)]
+mod chunk_batch_tests {
+    use super::EscapeRenderer;
+
+    /// The batch math must fill the target and nothing more, hold at
+    /// one without a usable measurement, and respect its cap however
+    /// cheap a chunk claims to be.
+    #[test]
+    fn batch_fills_the_target_and_respects_the_cap() {
+        // 2 ms chunks against a 10 ms target: five fit.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 16), 5);
+        // A chunk already at or past the target: one.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.010, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.050, 10.0, 16), 1);
+        // Absurdly cheap measurement: the cap holds.
+        assert_eq!(EscapeRenderer::batch_for(16, 1e-9, 10.0, 16), 16);
+        assert_eq!(EscapeRenderer::batch_for(16, 1e-9, 10.0, 4), 4);
+        // No measurement, zero, negative, NaN: one, never a panic.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.0, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(0, 0.002, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(1000, -1.0, 10.0, 16), 1);
+        assert_eq!(EscapeRenderer::batch_for(1000, f32::NAN, 10.0, 16), 1);
+        // A zero cap is treated as one, not zero dispatches.
+        assert_eq!(EscapeRenderer::batch_for(1000, 0.002, 10.0, 0), 1);
+    }
+}
+
+/// Width and height of the contrast probe grid.
+///
+/// A SUBSAMPLE, not a reduction. 96x72 cells is 6912 samples, which is
+/// far more than a percentile or a three-coefficient plane fit needs,
+/// and it buys three things a GPU reduction would have cost work for:
+/// no float atomics (WebGPU has none), true percentiles rather than a
+/// min/max that one singular pixel can dominate, and a 28 KB readback
+/// instead of a per-frame hierarchical pass.
+const PROBE_W: u32 = 96;
+const PROBE_H: u32 = 72;
+
+/// The measured mapping the recolor pass applies.
+///
+/// `value' = (value - (a + b*x + c*y) - lo) / (hi - lo)` with x, y the
+/// pixel position normalized to [0, 1]. AutoRange leaves b = c = 0, so
+/// one shader path serves both modes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ContrastFit {
+    pub plane: [f32; 3],
+    pub lo: f32,
+    pub hi: f32,
+}
+
+/// The recolor pass's contrast uniform.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ContrastParamsGpu {
+    plane: [f32; 3],
+    lo: f32,
+    hi: f32,
+    strength: f32,
+    turns: f32,
+    /// 0 = identity (the recolor pass then reproduces the iterate pass
+    /// exactly), 1 = apply.
+    enabled: u32,
+}
+
+/// Write the uniform. A `None` fit is the identity, which is what
+/// makes "contrast off" and "contrast on but not yet measured" both
+/// render exactly what they rendered before.
+fn queue_contrast(
+    queue: &Queue,
+    buf: &Buffer,
+    cfg: &crate::config::escape::EscapeContrast,
+    fit: Option<ContrastFit>,
+) {
+    let p = match fit {
+        Some(f) if f.hi > f.lo => ContrastParamsGpu {
+            plane: f.plane,
+            lo: f.lo,
+            hi: f.hi,
+            strength: cfg.strength.clamp(0.0, 1.0),
+            turns: cfg.turns.max(0.001),
+            enabled: 1,
+        },
+        _ => ContrastParamsGpu {
+            plane: [0.0; 3],
+            lo: 0.0,
+            hi: 1.0,
+            strength: 0.0,
+            turns: 1.0,
+            enabled: 0,
+        },
+    };
+    queue.write_buffer(buf, 0, bytemuck::bytes_of(&p));
+}
+
+/// Fit the field from the probe samples.
+///
+/// `samples` is (value, valid) per cell. Returns None when too little
+/// of the frame carried a value, or when the field is CONSTANT -- a
+/// zero range would divide by zero and, more importantly, means there
+/// is genuinely nothing to stretch.
+pub(crate) fn fit_contrast(
+    samples: &[(f32, f32)],
+    w: u32,
+    h: u32,
+    mode: crate::config::escape::ContrastMode,
+    clip: f32,
+) -> Option<ContrastFit> {
+    use crate::config::escape::ContrastMode;
+    if mode.is_off() {
+        return None;
+    }
+    // Non-finite values are dropped rather than clamped: Ducks' log
+    // guard emits -34.5 and a NaN would poison every sum.
+    let live: Vec<(f32, f32, f32)> = samples
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, ok))| *ok > 0.5)
+        .map(|(i, (v, _))| {
+            let x = (i as u32 % w) as f32 / (w.max(2) - 1) as f32;
+            let y = (i as u32 / w) as f32 / (h.max(2) - 1) as f32;
+            (*v, x, y)
+        })
+        .filter(|(v, _, _)| v.is_finite())
+        .collect();
+    if live.len() < 64 {
+        return None;
+    }
+    let n = live.len() as f64;
+    let mut plane = [0.0f32; 3];
+    if mode == ContrastMode::Flatten {
+        // Least squares f ~ a + b*x + c*y over the LIVE cells (the
+        // grid moments are not analytic when part of the frame is
+        // background). Solved by Cramer on the 3x3 normal equations.
+        let (mut sx, mut sy, mut sxx, mut sxy, mut syy) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
+        let (mut sf, mut sxf, mut syf) = (0.0f64, 0.0, 0.0);
+        for (v, x, y) in &live {
+            let (v, x, y) = (*v as f64, *x as f64, *y as f64);
+            sx += x;
+            sy += y;
+            sxx += x * x;
+            sxy += x * y;
+            syy += y * y;
+            sf += v;
+            sxf += x * v;
+            syf += y * v;
+        }
+        let m = [[n, sx, sy], [sx, sxx, sxy], [sy, sxy, syy]];
+        let det = |m: &[[f64; 3]; 3]| {
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        };
+        let d = det(&m);
+        // Degenerate only if the live cells are collinear; then the
+        // plane is not identifiable and AutoRange's constant fit is
+        // the honest fallback.
+        if d.abs() > 1e-9 * n * n {
+            let rhs = [sf, sxf, syf];
+            for k in 0..3 {
+                let mut mk = m;
+                for r in 0..3 {
+                    mk[r][k] = rhs[r];
+                }
+                plane[k] = (det(&mk) / d) as f32;
+            }
+        }
+    }
+    // Percentile clip on the RESIDUAL, so Flatten ranges what is left
+    // after the plane and AutoRange ranges the field itself.
+    let mut resid: Vec<f32> = live
+        .iter()
+        .map(|(v, x, y)| v - (plane[0] + plane[1] * x + plane[2] * y))
+        .collect();
+    resid.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let k = ((resid.len() as f32) * clip.clamp(0.0, 0.25)) as usize;
+    let lo = resid[k.min(resid.len() - 1)];
+    let hi = resid[(resid.len() - 1 - k.min(resid.len() - 1)).max(0)];
+    if !(hi > lo) || !lo.is_finite() || !hi.is_finite() {
+        return None;
+    }
+    Some(ContrastFit { plane, lo, hi })
+}
+
+/// One terminal record (the shader's `IterResult`), read back for the
+/// ground-truth tests: final z, derivative, orbit accumulator, the
+/// iteration count and the tag bits (1 escaped, 2 converged).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IterRecord {
+    pub z: [f32; 2],
+    pub dz: [f32; 2],
+    pub accum: [f32; 2],
+    pub n: u32,
+    pub tags: u32,
+}
+

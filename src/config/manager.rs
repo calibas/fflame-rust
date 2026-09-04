@@ -213,6 +213,12 @@ pub struct UpdateAction {
     /// `Animation::rebind_targets` so tracks follow the items they're
     /// bound to.
     pub structural_changed: bool,
+
+    /// Re-render the escape-time (fragment mode) frame. The fragment
+    /// renderer has no reset/accumulate split — any escape parameter
+    /// change means one whole-frame re-render. Ignored while the
+    /// render mode is a flame mode.
+    pub rerender_escape: bool,
 }
 
 impl UpdateAction {
@@ -260,6 +266,12 @@ impl UpdateAction {
                 rebuild_shader: false, // TODO: detect variation changes
                 update_shading: true, // Full updates refresh shading state too (update_flame carries it)
                 structural_changed: false, // Only set by explicit structural mutation sites
+                rerender_escape: false,
+            },
+
+            UpdateType::EscapeRerender => Self {
+                rerender_escape: true,
+                ..Default::default()
             },
         }
     }
@@ -274,6 +286,7 @@ impl UpdateAction {
         self.rebuild_shader |= other.rebuild_shader;
         self.update_shading |= other.update_shading;
         self.structural_changed |= other.structural_changed;
+        self.rerender_escape |= other.rerender_escape;
     }
 }
 
@@ -351,6 +364,12 @@ impl ConfigManager {
     pub fn new(config: FractalConfig) -> Self {
         // Load system settings from disk (or use defaults)
         let system_settings = crate::storage::SystemSettings::load();
+        // The orbit store's eviction cap lives in a runtime static, so
+        // the saved preference has to be pushed into it here as well
+        // as on every later edit.
+        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(feature = "engine-escape")]
+        crate::escape::orbit_store::set_max_total_mb(system_settings.orbit_cache_mb);
 
         Self {
             current: config,
@@ -891,6 +910,13 @@ impl ConfigManager {
             ConfigPath::SystemBurnIn => {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.burn_in = value;
+            }
+            ConfigPath::SystemOrbitCacheMb => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.orbit_cache_mb = value;
+                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(feature = "engine-escape")]
+                crate::escape::orbit_store::set_max_total_mb(value);
             }
             ConfigPath::SystemVsyncEnabled => {
                 let value: bool = new_value.try_into()?;
@@ -1693,6 +1719,92 @@ impl ConfigManager {
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
             ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
 
+            // Escape-time
+            ConfigPath::EscapeFormula => Ok(ConfigValue::String(config.escape.formula.clone())),
+            ConfigPath::EscapeJulia => Ok(config.escape.julia.into()),
+            ConfigPath::EscapeJuliaRe => Ok(config.escape.julia_re.into()),
+            ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
+            ConfigPath::EscapeCenterRe => Ok(ConfigValue::String(config.escape.center_re.clone())),
+            ConfigPath::EscapeCenterIm => Ok(ConfigValue::String(config.escape.center_im.clone())),
+            // f32 view of an f64 field — see the ConfigPath doc for why
+            // the precision ceiling is acceptable until phase 4.
+            ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
+            ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
+            ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
+            ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
+            ConfigPath::EscapeDownsample => Ok(ConfigValue::String(
+                config.escape.downsample.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingEnabled => Ok(config.escape.shading.enabled.into()),
+            ConfigPath::EscapeShadingLightAngle => Ok(config.escape.shading.light_angle.into()),
+            ConfigPath::EscapeShadingHeight => Ok(config.escape.shading.height.into()),
+            ConfigPath::EscapeShadingField => Ok(ConfigValue::String(
+                crate::config::escape::shading_field_to_str(config.escape.shading.field).to_string(),
+            )),
+            ConfigPath::EscapeContrastMode => Ok(ConfigValue::String(
+                crate::config::escape::contrast_mode_to_str(config.escape.contrast.mode).to_string(),
+            )),
+            ConfigPath::EscapeContrastClip => Ok(config.escape.contrast.clip.into()),
+            ConfigPath::EscapeContrastStrength => Ok(config.escape.contrast.strength.into()),
+            ConfigPath::EscapeContrastTurns => Ok(config.escape.contrast.turns.into()),
+            ConfigPath::EscapeShadingShadowColor => {
+                Ok(ConfigValue::ColorRgb(config.escape.shading.shadow_color))
+            }
+            ConfigPath::EscapeShadingShadowStrength => {
+                Ok(config.escape.shading.shadow_strength.into())
+            }
+            ConfigPath::EscapeShadingShadowBlend => Ok(ConfigValue::String(
+                crate::config::escape::shading_blend_to_str(config.escape.shading.shadow_blend)
+                    .to_string(),
+            )),
+            ConfigPath::EscapeShadingHighlightColor => {
+                Ok(ConfigValue::ColorRgb(config.escape.shading.highlight_color))
+            }
+            ConfigPath::EscapeShadingHighlightStrength => {
+                Ok(config.escape.shading.highlight_strength.into())
+            }
+            ConfigPath::EscapeShadingSoftness => Ok(config.escape.shading.softness.into()),
+            ConfigPath::EscapeShadingTextureKind => Ok(ConfigValue::String(
+                config.escape.shading.texture_kind.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingTextureStrength => {
+                Ok(config.escape.shading.texture_strength.into())
+            }
+            ConfigPath::EscapeShadingTextureScale => {
+                Ok(config.escape.shading.texture_scale.into())
+            }
+            ConfigPath::EscapeShadingHighlightBlend => Ok(ConfigValue::String(
+                crate::config::escape::shading_blend_to_str(config.escape.shading.highlight_blend)
+                    .to_string(),
+            )),
+            ConfigPath::EscapeReferencePeriod => {
+                Ok(ConfigValue::UInt(config.escape.reference_period.unwrap_or(0)))
+            }
+            ConfigPath::EscapeBailout => Ok(config.escape.bailout.into()),
+            ConfigPath::EscapeDampingRe => Ok(config.escape.damping_re.into()),
+            ConfigPath::EscapeDampingIm => Ok(config.escape.damping_im.into()),
+            ConfigPath::EscapeBiomorph => Ok(ConfigValue::String(
+                crate::config::escape::biomorph_to_str(config.escape.biomorph).to_string(),
+            )),
+            ConfigPath::EscapeColoring => Ok(ConfigValue::String(config.escape.coloring.clone())),
+            // Absent parameter reads as 0.0; the formula's declared
+            // default is a registry concern (the panel resolves it),
+            // mirroring how effect params behave here.
+            ConfigPath::EscapeFormulaParam { param } => Ok(config
+                .escape
+                .formula_params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
+            ConfigPath::EscapeColoringParam { param } => Ok(config
+                .escape
+                .coloring_params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
+
             // Transforms
             ConfigPath::TransformCount => {
                 Ok((flame.transforms.len() as u32).into())
@@ -2195,6 +2307,7 @@ impl ConfigManager {
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemOrbitCacheMb
             | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be accessed via get_value(). Use config_manager.system_settings() instead.");
             }
@@ -2490,6 +2603,153 @@ impl ConfigManager {
             }
             ConfigPath::DeterministicRng => {
                 self.current.deterministic_rng = value.try_into()?;
+            }
+
+            // Escape-time
+            ConfigPath::EscapeFormula => {
+                self.current.escape.formula = value.try_into()?;
+            }
+            ConfigPath::EscapeJulia => {
+                self.current.escape.julia = value.try_into()?;
+            }
+            ConfigPath::EscapeJuliaRe => {
+                self.current.escape.julia_re = value.try_into()?;
+            }
+            ConfigPath::EscapeJuliaIm => {
+                self.current.escape.julia_im = value.try_into()?;
+            }
+            ConfigPath::EscapeCenterRe => {
+                self.current.escape.center_re = value.try_into()?;
+            }
+            ConfigPath::EscapeCenterIm => {
+                self.current.escape.center_im = value.try_into()?;
+            }
+            ConfigPath::EscapeZoomLog2 => {
+                let v: f32 = value.try_into()?;
+                // Same travel range as the input paths; NaN from a
+                // wild animation signal must not poison the view.
+                let v = v as f64;
+                self.current.escape.zoom_log2 =
+                    if v.is_finite() { v.clamp(-8.0, 100_000_000.0) } else { 0.0 };
+            }
+            ConfigPath::EscapeRotation => {
+                self.current.escape.rotation = value.try_into()?;
+            }
+            ConfigPath::EscapeMaxIter => {
+                self.current.escape.max_iter = value.try_into()?;
+            }
+            ConfigPath::EscapeSupersample => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.supersample =
+                    v.clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+            }
+            ConfigPath::EscapeDownsample => {
+                let v: String = value.try_into()?;
+                self.current.escape.downsample =
+                    crate::config::escape::DownsampleMode::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeShadingEnabled => {
+                self.current.escape.shading.enabled = value.try_into()?;
+            }
+            ConfigPath::EscapeShadingLightAngle => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.light_angle = v.rem_euclid(360.0);
+            }
+            ConfigPath::EscapeShadingHeight => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.height = v.clamp(0.0, 100_000.0);
+            }
+            ConfigPath::EscapeShadingField => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.field =
+                    crate::config::escape::shading_field_from_str(&v);
+            }
+            ConfigPath::EscapeContrastMode => {
+                let v: String = value.try_into()?;
+                self.current.escape.contrast.mode =
+                    crate::config::escape::contrast_mode_from_str(&v);
+            }
+            ConfigPath::EscapeContrastClip => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.contrast.clip = v.clamp(0.0, 0.25);
+            }
+            ConfigPath::EscapeContrastStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.contrast.strength = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeContrastTurns => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.contrast.turns = v.clamp(0.05, 64.0);
+            }
+            ConfigPath::EscapeShadingShadowColor => {
+                self.current.escape.shading.shadow_color = value.try_into()?;
+            }
+            ConfigPath::EscapeShadingShadowStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.shadow_strength = v.clamp(0.0, 4.0);
+            }
+            ConfigPath::EscapeShadingShadowBlend => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.shadow_blend =
+                    crate::config::escape::shading_blend_from_str(&v);
+            }
+            ConfigPath::EscapeShadingHighlightColor => {
+                self.current.escape.shading.highlight_color = value.try_into()?;
+            }
+            ConfigPath::EscapeShadingHighlightStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.highlight_strength = v.clamp(0.0, 4.0);
+            }
+            ConfigPath::EscapeShadingSoftness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.softness = v.clamp(0.0, 16.0);
+            }
+            ConfigPath::EscapeShadingTextureKind => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.texture_kind =
+                    crate::config::escape::ShadingTexture::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeShadingTextureStrength => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.texture_strength = v.clamp(0.0, 4.0);
+            }
+            ConfigPath::EscapeShadingTextureScale => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.shading.texture_scale = v.clamp(0.25, 64.0);
+            }
+            ConfigPath::EscapeShadingHighlightBlend => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.highlight_blend =
+                    crate::config::escape::shading_blend_from_str(&v);
+            }
+            ConfigPath::EscapeReferencePeriod => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.reference_period = if v == 0 { None } else { Some(v) };
+            }
+            ConfigPath::EscapeBailout => {
+                self.current.escape.bailout = value.try_into()?;
+            }
+            ConfigPath::EscapeDampingRe => {
+                self.current.escape.damping_re = value.try_into()?;
+            }
+            ConfigPath::EscapeDampingIm => {
+                self.current.escape.damping_im = value.try_into()?;
+            }
+            ConfigPath::EscapeBiomorph => {
+                let s: String = value.try_into()?;
+                self.current.escape.biomorph = crate::config::escape::biomorph_from_str(&s)
+                    .ok_or(ConfigError::TypeMismatch)?;
+            }
+            ConfigPath::EscapeColoring => {
+                self.current.escape.coloring = value.try_into()?;
+            }
+            ConfigPath::EscapeFormulaParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.formula_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeColoringParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.coloring_params.insert(param.clone(), v);
             }
 
             // Transforms
@@ -3059,6 +3319,7 @@ impl ConfigManager {
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemOrbitCacheMb
             | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");
             }
@@ -3510,6 +3771,14 @@ impl ConfigManager {
     }
 
     /// Get current position in history
+    /// How many undo entries are held. Each is a full config clone,
+    /// so this is the main thing that grows on every load -- which is
+    /// what separates expected growth from a leak when reading the
+    /// browser's per-load memory report.
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
     pub fn position(&self) -> usize {
         self.position
     }
@@ -3682,6 +3951,16 @@ impl TryFrom<ConfigValue> for [f32; 3] {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::ColorRgb(c) => Ok(c),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for String {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::String(s) => Ok(s),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

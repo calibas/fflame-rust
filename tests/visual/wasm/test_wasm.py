@@ -116,7 +116,7 @@ class WasmTestRunner:
     def discover_configs(self) -> List[Dict]:
         """Discover test configs"""
         configs = []
-        categories = ['2d', '3d', 'tonemap', 'variations']
+        categories = ['2d', '3d', 'tonemap', 'variations', 'escape']
 
         for category in categories:
             category_dir = CONFIG['configs_dir'] / category

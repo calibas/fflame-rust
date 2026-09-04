@@ -614,6 +614,7 @@ impl FractalBrowserPanel {
                 let render_mode = match flame.render_mode {
                     crate::api::types::ApiRenderMode::TwoD => "2D",
                     crate::api::types::ApiRenderMode::ThreeD => "3D",
+                    crate::api::types::ApiRenderMode::Escape => "Escape",
                 };
 
                 let variations_summary = if flame.variation_names.len() <= 3 {
@@ -626,10 +627,18 @@ impl FractalBrowserPanel {
                     )
                 };
 
-                let label = format!(
-                    "{} — {} | {}T | {}",
-                    flame.name, render_mode, flame.transform_count, variations_summary
-                );
+                // An escape fractal legitimately has no transforms and no
+                // variations -- the formula IS the fractal -- so those
+                // columns would read "0T | " and look like a broken row
+                // rather than a different kind of fractal.
+                let label = if flame.render_mode == crate::api::types::ApiRenderMode::Escape {
+                    format!("{} — {}", flame.name, render_mode)
+                } else {
+                    format!(
+                        "{} — {} | {}T | {}",
+                        flame.name, render_mode, flame.transform_count, variations_summary
+                    )
+                };
 
                 ui.horizontal(|ui| {
                     // Load button (main flame row)

@@ -41,6 +41,7 @@ pub enum TargetCategory {
     Transform(usize),
     LinkedTransform(usize),
     FinalTransform(usize),
+    Escape,
 }
 
 impl TargetCategory {
@@ -55,6 +56,7 @@ impl TargetCategory {
             TargetCategory::Transform(i) => format!("Transform {}", i + 1),
             TargetCategory::LinkedTransform(i) => format!("Linked {}", i + 1),
             TargetCategory::FinalTransform(i) => format!("Final {}", i + 1),
+            TargetCategory::Escape => "Escape".to_string(),
         }
     }
 
@@ -69,6 +71,7 @@ impl TargetCategory {
             TargetCategory::Transform(i) => format!("transform_{}", i),
             TargetCategory::LinkedTransform(i) => format!("linked_transform_{}", i),
             TargetCategory::FinalTransform(i) => format!("final_transform_{}", i),
+            TargetCategory::Escape => "escape".to_string(),
         }
     }
 }
@@ -246,6 +249,19 @@ fn render_flame_group(
                 &effects_items, filter, has_filter, local_selection,
             ) { selected = Some(path); }
         }
+
+        // Escape-time parameters — offered while the config renders in
+        // escape mode (tracks keep applying if the mode changes; they
+        // just have nothing visible to drive). Selectors and the
+        // deep-zoom center strings are deliberately not animatable
+        // (see json_to_config_value's carve-outs).
+        if config.render_mode == crate::scene::transforms::RenderMode::Escape {
+            let escape_items = get_escape_items(config);
+            if let Some(path) = render_category(
+                ui, state, flame_target, TargetCategory::Escape,
+                &escape_items, filter, has_filter, local_selection,
+            ) { selected = Some(path); }
+        }
     }
 
     // Xaos
@@ -285,6 +301,50 @@ fn render_flame_group(
     }
 
     selected
+}
+
+/// Escape-mode animatable parameters: the numeric view/iteration
+/// state plus the ACTIVE formula's and coloring's parameters (from
+/// their registry defs, so the list follows the selection — the same
+/// dynamism `get_effects_items` has).
+fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
+    let esc = &config.escape;
+    let mut items = vec![
+        TargetItem::new(ConfigPath::EscapeZoomLog2, "Zoom (log2)"),
+        TargetItem::new(ConfigPath::EscapeRotation, "Rotation"),
+        TargetItem::new(ConfigPath::EscapeMaxIter, "Max Iterations"),
+        TargetItem::new(ConfigPath::EscapeBailout, "Bailout"),
+        TargetItem::new(ConfigPath::EscapeJuliaRe, "Julia Seed Re"),
+        TargetItem::new(ConfigPath::EscapeJuliaIm, "Julia Seed Im"),
+        TargetItem::new(ConfigPath::EscapeDampingRe, "Damping Re"),
+        TargetItem::new(ConfigPath::EscapeDampingIm, "Damping Im"),
+    ];
+    let (formula_params, formula_label): (&[crate::escape::EscapeParamDef], &str) =
+        match crate::escape::fields::get_field(&esc.formula) {
+            Some(f) => (f.parameters, f.display_name),
+            None => {
+                let f = crate::escape::get_formula(&esc.formula);
+                (f.parameters, f.display_name)
+            }
+        };
+    for p in formula_params {
+        items.push(TargetItem::new(
+            ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
+            &format!("{}: {}", formula_label, p.display_name),
+        ));
+    }
+    let coloring_params: &[crate::escape::EscapeParamDef] =
+        match crate::escape::fields::get_field(&esc.formula) {
+            Some(f) => crate::escape::fields::get_field_coloring(&esc.coloring, f).parameters,
+            None => crate::escape::get_coloring(&esc.coloring).parameters,
+        };
+    for p in coloring_params {
+        items.push(TargetItem::new(
+            ConfigPath::EscapeColoringParam { param: p.name.to_string() },
+            &format!("Coloring: {}", p.display_name),
+        ));
+    }
+    items
 }
 
 /// Render a single category with its items

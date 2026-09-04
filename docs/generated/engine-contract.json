@@ -186,6 +186,15 @@
       "wire": "any"
     }
   ],
+  "render_modes": {
+    "$comment": "The `render_mode` vocabulary, published so the API gets an AUTOMATIC signal when it grows. Adding a value to an enum adds an array element, not a key path, so the shape fingerprint cannot see it -- which is why `escape` had to be communicated by hand. Adding THIS KEY moved the fingerprint once, deliberately, and from now on the API's `render_mode_enum_covers_every_contract_mode` checks the values. Read from the config blob's ROOT `render_mode` (its home since config v3), never from `flame.render_mode`, which current clients do not write at all.",
+    "known": [
+      "2d",
+      "3d",
+      "escape"
+    ],
+    "wire_path": "/render_mode"
+  },
   "scripts": {
     "$comment": "Reserved stems, and the two vocabularies a script payload carries. `builtin_scripts` is the list the API rejects at CREATE time, regardless of visibility: a user script taking a shipped stem is refused by `script::library::merge_sources` on load, so storing one produces a script nobody — including its author — can ever run. Generated from the embedded starters, because a transcribed copy is exactly the kind of implicit cross-repo dependency this file exists to eliminate.",
     "builtin_scripts": [
@@ -196,6 +205,10 @@
       {
         "kind": "modifier",
         "name": "decompose_group"
+      },
+      {
+        "kind": "generator",
+        "name": "escape_deep"
       },
       {
         "kind": "modifier",
@@ -266,7 +279,7 @@
       "modifier"
     ]
   },
-  "shape": "0441465e249b6911",
+  "shape": "81a4d090385275c0",
   "shipped_variations": 647,
   "shipped_without_shader_3d": []
 }

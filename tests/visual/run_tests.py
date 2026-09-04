@@ -444,6 +444,15 @@ class VisualTestRunner:
             iters = int(text.get("Iterations", "0"))
             if not raw or iters <= 0:
                 return None, None
+            if text.get("RenderMode") == "Escape":
+                # An escape render's `Iterations` is the formula's
+                # max_iter (hundreds), not samples plotted (millions):
+                # iterations/second is meaningless for it, and feeding
+                # it through flagged every escape row as below the
+                # throughput floor (~0.01 Miter/s against a chaos-game
+                # median). Zero excludes the row from the throughput
+                # check entirely; the pixel-hash compare is untouched.
+                return float(raw), 0
             return float(raw), iters
         except Exception:
             return None, None
@@ -602,13 +611,20 @@ def main():
     )
     parser.add_argument(
         "--category",
-        choices=["2d", "3d", "tonemap", "variations"],
+        choices=["2d", "3d", "tonemap", "variations", "escape", "solid"],
         help="Run only tests in this category"
     )
     parser.add_argument(
         "--debug",
         action="store_true",
         help="Use debug build instead of release"
+    )
+    parser.add_argument(
+        "--binary",
+        type=Path,
+        help="Path to the FractalArtEditor executable (default: "
+             "target/<profile>/FractalArtEditor). Useful when the default "
+             "build is locked by a running instance of the app.",
     )
     parser.add_argument(
         "--skip-warmup",
@@ -621,7 +637,7 @@ def main():
         print("\nNote: Running without PIL/Pillow - using file hash comparison")
         print("For pixel-perfect comparison, install: pip install Pillow numpy\n")
 
-    runner = VisualTestRunner(use_release=not args.debug)
+    runner = VisualTestRunner(binary_path=args.binary, use_release=not args.debug)
 
     if args.update_baseline:
         print("Running tests and updating baselines...\n")

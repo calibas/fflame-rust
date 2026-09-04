@@ -369,6 +369,9 @@ pub struct PanelContext<'a> {
     pub open_save_online_dialog: &'a mut bool,
     pub load_api_animation_id: &'a mut Option<String>,
     pub clear_variation_cache_requested: &'a mut bool,
+    /// A panel asking for a different workspace layout (the Escape
+    /// toggle brings its own layout with it).
+    pub workspace_layout_requested: &'a mut Option<super::workspace::WorkspaceLayout>,
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
@@ -461,6 +464,11 @@ pub fn pan_fractal_view(
 ) {
     let config = config_manager.active_config();
 
+    if config.render_mode == crate::scene::transforms::RenderMode::Escape {
+        escape_pan_view(config_manager, drag_delta, panel_size);
+        return;
+    }
+
     // Convert screen pixel delta to fractal space.
     // Use the smaller dimension for both axes so drag speed is consistent
     // regardless of landscape vs portrait orientation.
@@ -501,6 +509,11 @@ pub fn zoom_fractal_view(
     zoom_to_cursor: bool,
 ) {
     let config = config_manager.active_config();
+
+    if config.render_mode == crate::scene::transforms::RenderMode::Escape {
+        escape_zoom_view(config_manager, scroll_delta, mouse_pos, panel_rect, panel_size, zoom_to_cursor);
+        return;
+    }
 
     // Use power-based zoom for smooth scrolling (matches original code)
     let zoom_factor = if scroll_delta.abs() > 0.1 {
@@ -573,8 +586,192 @@ pub fn zoom_fractal_view(
     }
 }
 
+/// Escape-mode complex-plane geometry shared by pan and zoom below.
+///
+/// The escape shader maps the viewport as: vertical span `4 / 2^zoom`
+/// across `height` pixels (horizontal follows aspect with the SAME
+/// per-pixel scale), screen y flipped (Im grows up), then the view
+/// rotation. So one pixel is `span_y / height` complex units in every
+/// direction, and a screen offset becomes a world offset via y-flip +
+/// rotation. Done in f64 from the exact-decimal center strings — the
+/// phase-1 precision ceiling (f64 formatting round-trips shortest, so
+/// writing back never loses what f64 held).
+fn escape_screen_to_world(
+    esc: &crate::config::escape::EscapeConfig,
+    dx_px: f64,
+    dy_px: f64,
+    panel_size: egui::Vec2,
+) -> (f64, f64) {
+    let height = f64::from(panel_size.y.max(1.0));
+    let per_pixel = (4.0 / esc.zoom_factor()) / height;
+    let (dx, dy) = (dx_px * per_pixel, -dy_px * per_pixel);
+    let (cos_r, sin_r) = (f64::from(esc.rotation).cos(), f64::from(esc.rotation).sin());
+    (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
+}
+
+/// Screen delta → world delta in SYMBOLIC form: rotated pixel
+/// offsets as f64 mantissas plus the pixel spacing's shared power-of-
+/// two exponent (S = 2^(2−zoom)/height = s_m·2^s_e). The f64 form
+/// underflows past ~zoom 1060; this form reaches any depth.
+fn escape_pan_delta_symbolic(
+    esc: &crate::config::escape::EscapeConfig,
+    dx_px: f64,
+    dy_px: f64,
+    panel_size: egui::Vec2,
+) -> (f64, f64, i64) {
+    let height = f64::from(panel_size.y.max(1.0));
+    let x = 2.0 - esc.zoom_log2 - height.log2();
+    let s_e = x.floor();
+    let s_m = 2f64.powf(x - s_e);
+    let (dx, dy) = (dx_px, -dy_px);
+    let (cos_r, sin_r) = (f64::from(esc.rotation).cos(), f64::from(esc.rotation).sin());
+    (
+        (dx * cos_r - dy * sin_r) * s_m,
+        (dx * sin_r + dy * cos_r) * s_m,
+        s_e as i64,
+    )
+}
+
+/// Pan the escape view: the image follows the cursor, so the center
+/// moves opposite the drag. One batch → one undo point per coalesced
+/// gesture, same as flame pan.
+fn escape_pan_view(
+    config_manager: &mut crate::config::ConfigManager,
+    drag_delta: egui::Vec2,
+    panel_size: egui::Vec2,
+) {
+    let esc = config_manager.active_config().escape.clone();
+    // The center accumulates in FIXED-POINT with a SYMBOLIC delta
+    // (mantissa · 2^exponent): an f64 round-trip caps the step at the
+    // center's own ulp (the zoom-45 "horizontal pan skips" bug), and
+    // a plain f64 delta underflows outright past ~zoom 1060. The
+    // rotated pixel offset carries the shape, the pixel spacing's
+    // exponent carries the scale — pan works at any depth the
+    // renderer reaches. Parse failure (mid-edit center text) falls
+    // back to the f64 path so panning never dead-stops.
+    let z = esc.zoom_log2;
+    let (mx, my, se) = escape_pan_delta_symbolic(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
+    let fx = crate::escape::fixedpoint::FixedPoint::decimal_add_floatexp(&esc.center_re, -mx, se, z);
+    let fy = crate::escape::fixedpoint::FixedPoint::decimal_add_floatexp(&esc.center_im, -my, se, z);
+    let (new_re, new_im) = match (fx, fy) {
+        (Some(re), Some(im)) => (re, im),
+        _ => {
+            let (cx, cy) = esc.center_f64();
+            let (wx, wy) = escape_screen_to_world(&esc, f64::from(drag_delta.x), f64::from(drag_delta.y), panel_size);
+            (format!("{}", cx - wx), format!("{}", cy - wy))
+        }
+    };
+    let _ = config_manager.update_batch(
+        vec![
+            (crate::config::ConfigPath::EscapeCenterRe, crate::config::ConfigValue::String(new_re)),
+            (crate::config::ConfigPath::EscapeCenterIm, crate::config::ConfigValue::String(new_im)),
+        ],
+        "history.param.escape_center_re".to_string(),
+    );
+}
+
+/// Wheel zoom for the escape view: zoom-in anchors to the cursor
+/// (the point under it stays put), zoom-out recedes from center —
+/// the same feel as the flame viewport.
+fn escape_zoom_view(
+    config_manager: &mut crate::config::ConfigManager,
+    scroll_delta: f32,
+    mouse_pos: Option<egui::Pos2>,
+    panel_rect: egui::Rect,
+    panel_size: egui::Vec2,
+    zoom_to_cursor: bool,
+) {
+    let esc = config_manager.active_config().escape.clone();
+
+    let zoom_factor = if scroll_delta.abs() > 0.1 {
+        f64::from(1.1f32).powf(f64::from(scroll_delta) * 0.03)
+    } else {
+        return;
+    };
+    // Ceiling far past practical use but far below the floatexp
+    // rung's i32-exponent arithmetic (~2^31): the old 300 was the
+    // phase-1 travel clamp and would COLLAPSE a deep session's zoom
+    // on the first wheel notch.
+    let new_zoom_log2 = (esc.zoom_log2 + zoom_factor.log2()).clamp(-8.0, 100_000_000.0);
+
+    let mut updates = vec![(
+        crate::config::ConfigPath::EscapeZoomLog2,
+        crate::config::ConfigValue::Float(new_zoom_log2 as f32),
+    )];
+
+    if zoom_factor > 1.0 {
+        if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
+            // Keep the point under the cursor fixed: with the offset o
+            // (screen → world) and scale ratio k = old/new span,
+            // center' = center + o·(1 − 1/k) — computed here as the
+            // difference of the offset at the two spans.
+            let off_x = f64::from(mouse_pos.x - panel_rect.center().x);
+            let off_y = f64::from(mouse_pos.y - panel_rect.center().y);
+            // Symbolic anchor: center += off·S_old − off·S_new, each
+            // term a mantissa·2^exponent added in fixed-point. The old
+            // f64 form (zoom_factor ratios) turns to inf/NaN past
+            // ~zoom 1023 and underflows past ~1060; this reaches any
+            // depth. Same exact-accumulation rule as panning.
+            let z = esc.zoom_log2.max(new_zoom_log2);
+            let (mx_o, my_o, se_o) = escape_pan_delta_symbolic(&esc, off_x, off_y, panel_size);
+            let mut esc_new = esc.clone();
+            esc_new.zoom_log2 = new_zoom_log2;
+            let (mx_n, my_n, se_n) = escape_pan_delta_symbolic(&esc_new, off_x, off_y, panel_size);
+            use crate::escape::fixedpoint::FixedPoint;
+            let fx = FixedPoint::decimal_add_floatexp(&esc.center_re, mx_o, se_o, z)
+                .and_then(|c| FixedPoint::decimal_add_floatexp(&c, -mx_n, se_n, z));
+            let fy = FixedPoint::decimal_add_floatexp(&esc.center_im, my_o, se_o, z)
+                .and_then(|c| FixedPoint::decimal_add_floatexp(&c, -my_n, se_n, z));
+            let (new_re, new_im) = match (fx, fy) {
+                (Some(re), Some(im)) => (re, im),
+                _ => {
+                    let (cx, cy) = esc.center_f64();
+                    let (wx_old, wy_old) =
+                        escape_screen_to_world(&esc, off_x, off_y, panel_size);
+                    let shrink =
+                        f64::exp2((esc.zoom_log2 - new_zoom_log2).clamp(-60.0, 60.0));
+                    let (dx, dy) = (wx_old * (1.0 - shrink), wy_old * (1.0 - shrink));
+                    (format!("{}", cx + dx), format!("{}", cy + dy))
+                }
+            };
+            updates.push((
+                crate::config::ConfigPath::EscapeCenterRe,
+                crate::config::ConfigValue::String(new_re),
+            ));
+            updates.push((
+                crate::config::ConfigPath::EscapeCenterIm,
+                crate::config::ConfigValue::String(new_im),
+            ));
+        }
+    }
+
+    let _ = config_manager.update_batch(updates, "history.action.wheel_zoom".to_string());
+}
+
 impl<'a> PanelViewer<'a> {
     fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
+        // Escape mode hides the flame-only editing panels rather than
+        // teaching them a second vocabulary (plan §3). Shared-tail
+        // panels (Colors, Palette, Effects, History, Animation,
+        // Export, ...) keep working — they edit state escape mode
+        // actually consumes.
+        if self.context.config_manager.active_config().render_mode
+            == crate::scene::transforms::RenderMode::Escape
+            && matches!(
+                tab,
+                PanelType::Transforms
+                    | PanelType::TriangleEditor
+                    | PanelType::View
+                    | PanelType::XaosEditor
+                    | PanelType::Variations
+                    | PanelType::Subflames
+                    | PanelType::SolidLighting
+                    | PanelType::PathEditor
+            )
+        {
+            ui.label(t!("escape_panel.flame_only_hint"));
+            return;
+        }
         match tab {
             PanelType::FractalViewport => {
                 self.render_fractal_viewport(ui);
@@ -663,6 +860,13 @@ impl<'a> PanelViewer<'a> {
             }
             PanelType::Scripts => {
                 self.render_scripts_panel(ui);
+            }
+            PanelType::Escape => {
+                super::escape_panel::render_escape_content(
+                    ui,
+                    self.context.config_manager,
+                    self.context.workspace_layout_requested,
+                );
             }
             PanelType::Subflames => {
                 super::subflames::render_subflames_content(
@@ -1080,6 +1284,99 @@ impl<'a> PanelViewer<'a> {
 
             let response = ui.add(image);
 
+            // Deep-zoom reference builds take minutes and the frame
+            // cannot start until one exists, so say so rather than
+            // leaving the last image up with no explanation.
+            // A lost GPU device in the browser is not recoverable in
+            // place (no window to rebuild a surface on), and every
+            // call after it fails quietly, so the canvas would simply
+            // stop -- reported as a freeze with a DXGI_ERROR_DEVICE_HUNG
+            // in the console. Say what happened and what to do.
+            #[cfg(target_arch = "wasm32")]
+            if crate::gpu::device::device_was_lost() {
+                let rect = response.rect;
+                let painter = ui.painter_at(rect);
+                let galley = painter.layout_no_wrap(
+                    t!("escape_panel.gpu_lost_reload").to_string(),
+                    egui::FontId::proportional(15.0),
+                    egui::Color32::from_rgb(255, 210, 200),
+                );
+                let pad = egui::vec2(12.0, 7.0);
+                let box_size = galley.size() + pad * 2.0;
+                let origin = egui::pos2(
+                    rect.center().x - box_size.x * 0.5,
+                    rect.center().y - box_size.y * 0.5,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_size(origin, box_size),
+                    6.0,
+                    egui::Color32::from_black_alpha(220),
+                );
+                painter.galley(origin + pad, galley, egui::Color32::WHITE);
+            }
+
+            // NOT desktop-only. The browser needs this more, not
+            // less: it has no worker thread, so a long reference is
+            // built in slices on the frame loop and the canvas simply
+            // sits there. Reported on a 1e3591 zoom -- minutes of work
+            // with nothing on screen to say so.
+            if self.context.config_manager.active_config().render_mode
+                == crate::scene::transforms::RenderMode::Escape
+            {
+                if let Some((have, want)) = crate::escape::reference::orbit_progress() {
+                    let rect = response.rect;
+                    let pct = if want > 0 {
+                        (have as f64 / want as f64 * 100.0).min(99.9)
+                    } else {
+                        0.0
+                    };
+                    // The COUNTS, not an ETA. `predicted_orbit_seconds`
+                    // is calibrated natively and a browser runs some
+                    // multiple of that, so a wall-clock estimate here
+                    // would be confidently wrong; the iteration counts
+                    // are exact and convey the scale, which is what a
+                    // ten-million-iteration reference needs.
+                    let group = |n: u32| {
+                        let s = n.to_string();
+                        let mut out = String::with_capacity(s.len() + s.len() / 3);
+                        for (i, c) in s.chars().enumerate() {
+                            if i > 0 && (s.len() - i) % 3 == 0 {
+                                out.push(',');
+                            }
+                            out.push(c);
+                        }
+                        out
+                    };
+                    let text = t!(
+                        "escape_panel.building_reference",
+                        percent = format!("{pct:.1}"),
+                        have = group(have),
+                        want = group(want)
+                    );
+                    let painter = ui.painter_at(rect);
+                    let galley = painter.layout_no_wrap(
+                        text.to_string(),
+                        egui::FontId::proportional(15.0),
+                        egui::Color32::from_rgb(235, 235, 245),
+                    );
+                    let pad = egui::vec2(12.0, 7.0);
+                    let box_size = galley.size() + pad * 2.0;
+                    let origin = egui::pos2(
+                        rect.center().x - box_size.x * 0.5,
+                        rect.top() + 16.0,
+                    );
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(origin, box_size),
+                        6.0,
+                        egui::Color32::from_black_alpha(190),
+                    );
+                    painter.galley(origin + pad, galley, egui::Color32::WHITE);
+                    // The worker publishes a longer prefix every chunk;
+                    // keep repainting so the percentage actually moves.
+                    ui.ctx().request_repaint();
+                }
+            }
+
             // Handle pinch-to-zoom on touchscreens (check before drag to avoid conflicts)
             // Uses custom TouchTracker because egui's multi_touch() doesn't work on web
             // (winit assigns different TouchDeviceId per finger, so egui never sees 2 fingers)
@@ -1202,6 +1499,55 @@ impl<'a> PanelViewer<'a> {
         panel_size: egui::Vec2,
     ) {
         let config = self.context.config_manager.active_config();
+
+        // Escape mode: pinch = zoom anchored at the finger midpoint
+        // plus the two-finger translation as a pan, expressed in the
+        // escape view's own center/zoom_log2 vocabulary.
+        if config.render_mode == crate::scene::transforms::RenderMode::Escape {
+            let esc = config.escape.clone();
+            let mut updates = Vec::new();
+            let (mut cx, mut cy) = esc.center_f64();
+            if zoom_delta != 1.0 {
+                let new_zoom_log2 =
+                    (esc.zoom_log2 + f64::from(zoom_delta).log2()).clamp(-8.0, 300.0);
+                let off_x = f64::from(pinch_center.x - panel_rect.center().x);
+                let off_y = f64::from(pinch_center.y - panel_rect.center().y);
+                let (wx_old, wy_old) = escape_screen_to_world(&esc, off_x, off_y, panel_size);
+                let shrink = esc.zoom_factor() / f64::exp2(new_zoom_log2);
+                cx += wx_old * (1.0 - shrink);
+                cy += wy_old * (1.0 - shrink);
+                updates.push((
+                    crate::config::ConfigPath::EscapeZoomLog2,
+                    crate::config::ConfigValue::Float(new_zoom_log2 as f32),
+                ));
+            }
+            if translation != egui::Vec2::ZERO {
+                let (wx, wy) = escape_screen_to_world(
+                    &esc,
+                    f64::from(translation.x),
+                    f64::from(translation.y),
+                    panel_size,
+                );
+                cx -= wx;
+                cy -= wy;
+            }
+            if zoom_delta != 1.0 || translation != egui::Vec2::ZERO {
+                updates.push((
+                    crate::config::ConfigPath::EscapeCenterRe,
+                    crate::config::ConfigValue::String(format!("{}", cx)),
+                ));
+                updates.push((
+                    crate::config::ConfigPath::EscapeCenterIm,
+                    crate::config::ConfigValue::String(format!("{}", cy)),
+                ));
+                let _ = self.context.config_manager.update_batch(
+                    updates,
+                    "history.action.wheel_zoom".to_string(),
+                );
+            }
+            return;
+        }
+
         let new_zoom = (config.zoom * zoom_delta).clamp(0.01, 1000.0);
 
         // Start with current pan, then apply zoom-toward-center adjustment

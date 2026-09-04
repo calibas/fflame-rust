@@ -77,6 +77,7 @@ pub mod embedded_shaders {
     pub const VIGNETTE: &str = include_str!("../../shaders/effects/color/vignette.wgsl");
     pub const WORLEY_NOISE: &str = include_str!("../../shaders/effects/color/worley_noise.wgsl");
     pub const JULIA: &str = include_str!("../../shaders/effects/color/julia.wgsl");
+    pub const DISTANCE_FIELD: &str = include_str!("../../shaders/effects/color/distance_field.wgsl");
 
     // Density effects
     pub const BILATERAL_BLUR: &str = include_str!("../../shaders/effects/density/bilateral_blur.wgsl");
@@ -1546,11 +1547,110 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
         ],
     });
+
+    // Distance Field - jump-flood the rendered attractor into an
+    // exterior distance field, then shade it (glow / contour bands /
+    // nearest fill). The escape-time plan's §7.3 bridge: DE-style
+    // looks for ARBITRARY flames, no invertibility required. The
+    // chain runner special-cases its execution into a multi-pass
+    // pipeline (seed + ~log2(max dim) floods + composite).
+    registry.register(EffectInfo {
+        name: "distance_field".to_string(),
+        // Empty on purpose: built-ins are labelled from
+        // `locales/*.yml`, where the curated names live.
+        display_name: String::new(),
+        category: EffectCategory::Color,
+        source: EffectSource::Builtin {
+            embedded: embedded_shaders::DISTANCE_FIELD,
+            path: "effects/color/distance_field.wgsl",
+        },
+        provenance: crate::provenance::Provenance::Builtin,
+        parameters: vec![
+            EffectParameter {
+                name: "threshold".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.15,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+                display_name: "Seed Threshold".to_string(),
+                description: Some(
+                    "Pixels brighter than this seed the distance field.".to_string(),
+                ),
+            },
+            EffectParameter {
+                name: "spread".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.25,
+                min_value: Some(0.01),
+                max_value: Some(1.0),
+                display_name: "Spread".to_string(),
+                description: Some(
+                    "Field range as a fraction of the image's larger dimension.".to_string(),
+                ),
+            },
+            EffectParameter {
+                name: "mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // 0=Glow, 1=Contours, 2=Nearest fill
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+                display_name: "Mode".to_string(),
+                description: Some(
+                    "0 = glow, 1 = contour bands, 2 = nearest-color fill.".to_string(),
+                ),
+            },
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+                display_name: "Intensity".to_string(),
+                description: None,
+            },
+            EffectParameter {
+                name: "band_count".to_string(),
+                param_type: ParamType::Float,
+                default_value: 12.0,
+                min_value: Some(1.0),
+                max_value: Some(64.0),
+                display_name: "Band Count".to_string(),
+                description: Some("Contour rings across the range (mode 1).".to_string()),
+            },
+        ],
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distance_field_shader_validates_all_entry_points() {
+        // The chain runner builds three pipelines from this one
+        // module (fs_seed / fs_flood / fs_composite); a WGSL error in
+        // any of them is a runtime pipeline panic, so validate at
+        // test time like the escape templates do.
+        use egui_wgpu::wgpu::naga;
+        let src = embedded_shaders::DISTANCE_FIELD;
+        let module = naga::front::wgsl::parse_str(src)
+            .unwrap_or_else(|e| panic!("distance_field parse: {e}"));
+        for entry in ["vs_main", "fs_seed", "fs_flood", "fs_composite"] {
+            assert!(
+                module.entry_points.iter().any(|ep| ep.name == entry),
+                "missing entry point {entry}"
+            );
+        }
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("distance_field validation: {e:?}"));
+        use crate::variations::shader_lint;
+        assert!(shader_lint::self_operations(src).is_empty());
+        assert!(shader_lint::subnormal_literals(src).is_empty());
+    }
 
     #[test]
     fn test_registry_has_builtin_effects() {

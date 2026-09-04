@@ -97,6 +97,44 @@ pub fn render_settings_content(
                 );
             }
 
+            // Deep-zoom reference orbit cache (desktop only: the wasm
+            // build has no orbit store).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let mut temp_cache_mb = config_manager.system_settings().orbit_cache_mb;
+                let response = ui
+                    .add(
+                        super::VkbSlider::new(&mut temp_cache_mb, 64..=8192)
+                            .text(t!("settings.orbit_cache_mb")),
+                    )
+                    .on_hover_text(t!("settings.tooltip_orbit_cache_mb"));
+                if response.changed() {
+                    let _ = config_manager.update_system_setting(
+                        crate::config::ConfigPath::SystemOrbitCacheMb,
+                        temp_cache_mb.into(),
+                    );
+                }
+                ui.horizontal(|ui| {
+                    let used_mb =
+                        crate::escape::orbit_store::bytes_in_use() as f64 / (1024.0 * 1024.0);
+                    ui.label(
+                        egui::RichText::new(t!(
+                            "settings.orbit_cache_in_use",
+                            used = format!("{used_mb:.0}")
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                    if ui
+                        .small_button(t!("settings.orbit_cache_clear").as_ref())
+                        .on_hover_text(t!("settings.tooltip_orbit_cache_clear"))
+                        .clicked()
+                    {
+                        crate::escape::orbit_store::clear();
+                    }
+                });
+            }
+
             let mut temp_deterministic = config.deterministic_rng;
             if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
                 .on_hover_text(t!("settings.tooltip_deterministic_rng"))

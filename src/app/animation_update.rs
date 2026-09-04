@@ -27,9 +27,36 @@ impl App {
         // Handle animation stop/pause (user-initiated)
         self.handle_animation_stop(is_controller_playing, was_fsm_animating);
 
-        // Process animation playback
+        // Process animation playback.
+        //
+        // Escape mode paces differently. A flame frame refines
+        // continuously, so advancing the controller every display
+        // frame looks right; an escape frame is a chunked render that
+        // is not a picture until it SETTLES, so sampling every frame
+        // showed a smear of partial renders of successive configs
+        // (reported as animation "making a mess"). Instead: hold the
+        // controller while a frame renders, then advance it by
+        // everything that elapsed meanwhile. Playback may run at 1 fps
+        // or slower, but every displayed frame is a real frame at a
+        // real timestamp -- and audio, which runs on wall time, stays
+        // in sync to within one settled frame because the controller
+        // jumps to wall time at each sample.
         if is_controller_playing {
-            self.advance_animation(delta_time);
+            let is_escape = self.config_manager.active_config().render_mode
+                == crate::scene::transforms::RenderMode::Escape;
+            if is_escape {
+                // `escape_dirty` is the frame loop's "not settled yet"
+                // flag: it is cleared only when render() reports final.
+                if let Some(dt) = escape_playback_tick(
+                    &mut self.escape_anim_pending,
+                    delta_time,
+                    !self.escape_dirty,
+                ) {
+                    self.advance_animation(dt);
+                }
+            } else {
+                self.advance_animation(delta_time);
+            }
         }
 
         is_controller_playing
@@ -63,6 +90,10 @@ impl App {
     /// This catches manual stop/pause clicks from UI - auto-stop is handled in advance_animation().
     fn handle_animation_stop(&mut self, is_playing: bool, was_animating: bool) {
         if was_animating && !is_playing {
+            // Escape playback banks wall time against the frame being
+            // rendered; on stop that frame is never sampled, so drop
+            // it rather than jump by it when playback resumes.
+            self.escape_anim_pending = 0.0;
             // Disable animation mode before exit so undo entry creation works
             self.config_manager.set_animation_mode(false);
             self.handle_animation_exit();
@@ -100,6 +131,7 @@ impl App {
         // Check if animation auto-stopped (LoopMode::Once reached end)
         let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
         if auto_stopped {
+            self.escape_anim_pending = 0.0;
             // Disable animation mode before exit so undo entry creation works
             self.config_manager.set_animation_mode(false);
             // Animation finished naturally - exit animation mode and create undo snapshot
@@ -161,5 +193,56 @@ impl App {
 
         self.use_overwrite_next_frame = true;
         self.config_manager.request_reset();
+    }
+}
+
+/// Escape playback pacing: accumulate wall time while the current
+/// frame is still rendering, and hand it over in one piece once it
+/// settles. Returns the time to advance the controller by, or None
+/// while the frame is still being rendered.
+///
+/// A free function, not a method: the rule IS the design, and it
+/// deserves a test that needs neither a GPU nor an App.
+pub(super) fn escape_playback_tick(pending: &mut f64, delta: f64, settled: bool) -> Option<f64> {
+    *pending += delta.max(0.0);
+    if settled && *pending > 0.0 {
+        Some(std::mem::take(pending))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_playback_tick;
+
+    /// Settle-then-jump: the controller is sampled once per COMPLETED
+    /// escape frame, and advanced by everything that elapsed while it
+    /// rendered. Sampling every display frame instead is what made
+    /// escape playback a smear of partial renders of successive
+    /// configs.
+    #[test]
+    fn escape_playback_samples_only_on_settled_frames() {
+        let mut pending = 0.0;
+        // Frame still rendering: bank the time, do not advance.
+        assert_eq!(escape_playback_tick(&mut pending, 0.016, false), None);
+        assert_eq!(escape_playback_tick(&mut pending, 0.016, false), None);
+        // It settles: advance by everything banked, in one jump.
+        let dt = escape_playback_tick(&mut pending, 0.016, true).expect("sample");
+        assert!((dt - 0.048).abs() < 1e-9, "dt = {dt}");
+        assert_eq!(pending, 0.0, "the bank empties on sample");
+
+        // A settled frame with no elapsed time is not a sample point:
+        // advancing by zero would re-render an identical frame.
+        assert_eq!(escape_playback_tick(&mut pending, 0.0, true), None);
+
+        // Long renders keep banking, however many frames they take --
+        // playback slows down, it does not skip or blend.
+        let mut pending = 0.0;
+        for _ in 0..600 {
+            assert_eq!(escape_playback_tick(&mut pending, 0.016, false), None);
+        }
+        let dt = escape_playback_tick(&mut pending, 0.016, true).expect("sample");
+        assert!((dt - 9.616).abs() < 1e-6, "dt = {dt}");
     }
 }

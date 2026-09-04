@@ -1031,6 +1031,8 @@ pub fn specialize_wgsl_3d(flame: &Flame) -> String {
     specialize(MONDRIANOMIES.wgsl_3d, flame)
 }
 
+// Reads the catalog's definition defaults.
+#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests {
     use super::*;

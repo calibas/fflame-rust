@@ -19,6 +19,11 @@ pub enum FetchError {
     Unauthorized,
     /// Access denied (403)
     Forbidden,
+    /// The request is well-formed but this build/server pairing cannot
+    /// honor it (e.g. an escape-mode config before the server's
+    /// render_mode enum knows "escape"). Client-side refusal — nothing
+    /// was sent.
+    Unsupported(String),
 }
 
 impl fmt::Display for FetchError {
@@ -33,6 +38,7 @@ impl fmt::Display for FetchError {
             FetchError::Cancelled => write!(f, "Request cancelled"),
             FetchError::Unauthorized => write!(f, "Authentication required"),
             FetchError::Forbidden => write!(f, "Access denied"),
+            FetchError::Unsupported(msg) => write!(f, "{}", msg),
         }
     }
 }

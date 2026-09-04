@@ -567,6 +567,7 @@ impl FractalConfigGallery {
                 let render_mode = match config.render_mode {
                     crate::scene::transforms::RenderMode::TwoD => t!("fractal_gallery.render_mode_2d"),
                     crate::scene::transforms::RenderMode::ThreeD => t!("fractal_gallery.render_mode_3d"),
+                    crate::scene::transforms::RenderMode::Escape => t!("fractal_gallery.render_mode_escape"),
                 };
                 ui.label(format!(
                     "{}, {}, {}",

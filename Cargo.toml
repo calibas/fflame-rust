@@ -174,15 +174,40 @@ aes-gcm = "0.10"
 base64 = "0.22"
 
 [features]
-# `web-app`: the browser application's wasm-bindgen export surface
+# `web-app`: the EDITOR -- its wasm-bindgen export surface
 # (`wasm_main` boot + the `WasmApi` bindings). ON by default so the
 # desktop app, the wasm-pack app build and pyfflame are unchanged.
 # wasm-bindgen collects `#[wasm_bindgen]` exports from the ENTIRE
 # dependency graph, so the thin gallery crates (wasm/render,
 # wasm/script) depend on this crate with default-features = false —
 # without the gate they would silently inherit the whole application.
-default = ["web-app"]
+#
+# It also gates `mod app` and `mod ui` themselves. Those are compiled
+# even for a module that links none of them, and being compiled is
+# what makes them count: they are most of the surface any
+# engine-level feature has to thread `#[cfg]` through. Off, a
+# rendering module compiles the engine and nothing else.
+default = ["web-app", "engine-flame", "engine-escape"]
 web-app = []
+# The flame engine's VARIATION CATALOG. On by default, so the app and
+# every existing build are unchanged.
+#
+# Off, the registry holds `linear` alone and the other 646 defs become
+# unreachable, so the linker drops them: measured at HALF the gallery
+# renderer's download (0.80 MB gzip to 0.41 MB). That is the entire
+# point of the flag -- an escape-time module has no use for 1.1 MB of
+# flame shader source.
+#
+# One entry rather than none: a default FractalConfig carries a flame
+# whose transforms name `linear`, and code that resolves it should
+# find a variation rather than a hole. Nothing in an escape render
+# reaches it.
+engine-flame = []
+# The escape-time engine: formulas, colorings, and the perturbation
+# machinery (fixed point, reference orbits, the double-double shadow,
+# the orbit store). Its shader source is under 1% of a module's
+# download; the deep-zoom code is the weight.
+engine-escape = []
 
 [build-dependencies]
 chrono = "0.4"
@@ -207,6 +232,65 @@ harness = false
 
 [profile.release]
 incremental = true
+
+# The shipped wasm (`dist`) is stripped, panics abort, and integer
+# overflow wraps -- so a browser trap arrives as a bare
+# `RuntimeError: memory access out of bounds` at `$func868`, with no
+# name, no location, and no way to tell a genuine bug from an
+# arithmetic wrap. This profile is that build made legible: same
+# optimisation level and the same simd/codegen shape, but symbols
+# kept, panics unwound through the console hook, and -- the part that
+# actually finds things -- debug assertions and overflow checks ON, so
+# a `debug_assert` or a wrapping subtraction fails AT ITS SOURCE
+# instead of corrupting an index and trapping somewhere else entirely.
+#
+# Build it with ./build-wasm.sh --debug. It is bigger and slower; it
+# is not for shipping.
+# `dist-debug` does not reproduce dist-only bugs, and that is not an
+# accident: it changes CODEGEN (thin LTO, 16 codegen units, debug
+# assertions), so a fault that depends on how the shipped build is
+# optimized simply is not there. This profile keeps dist's codegen
+# EXACTLY -- same opt-level, fat LTO, one codegen unit, panic=abort --
+# and only stops stripping the symbol table. Debug info does not
+# change what the optimizer emits, so this binary behaves like the
+# shipped one and still names its frames.
+#
+# Build it with ./build-wasm.sh --symbols (or build-wasm.bat).
+# NOTE `debug` is deliberately OFF. Function names live in wasm's
+# `name` custom section, which `strip` removes and `debug` has nothing
+# to do with; turning debug ON additionally emits ~190 MB of DWARF,
+# taking the module from 17 MB to 206 MB. That is not free: a module
+# twelve times the size compiles and instantiates on a completely
+# different schedule, which is enough to hide a race -- measured, the
+# 206 MB build did not reproduce a crash the shipped one hits on the
+# first load. Names cost about 3 MB; DWARF costs the reproduction.
+# `debug` MUST stay off, and that is not an optimisation nicety.
+# Function names live in wasm's `name` custom section, which only
+# `strip` removes; `debug` is a separate thing that additionally emits
+# ~190 MB of DWARF and takes the module from 17 MB to 206 MB.
+#
+# Measured, that difference decides whether the bug this profile
+# exists for is even present: the 206 MB build did NOT reproduce a
+# crash the shipped build hits on the first or second load -- a dozen
+# tries, forced refreshes -- while this one is 18.9 MiB against dist's
+# 16.0 and its CODE section differs by 738 bytes, 0.007%. Same code,
+# so what the DWARF changed was TIMING: a module twelve times the size
+# compiles and instantiates on a different schedule, which is enough
+# to hide a race. Names cost ~3 MB; DWARF costs the reproduction.
+[profile.dist-symbols]
+inherits = "dist"
+strip = false
+debug = false
+
+[profile.dist-debug]
+inherits = "dist"
+strip = false
+debug = true
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
+lto = "thin"
+codegen-units = 16
 
 [profile.dist]
 inherits = "release"

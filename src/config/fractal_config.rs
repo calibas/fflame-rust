@@ -173,6 +173,13 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "SolidShadingSettings::is_default")]
     pub solid_shading: SolidShadingSettings,
 
+    /// Escape-time (fragment mode) settings — active when `render_mode`
+    /// selects the escape engine, preserved (but inert) otherwise so
+    /// switching modes round-trips. Skip-if-default keeps every
+    /// pre-escape `.fflame` byte-stable. See `config::escape`.
+    #[serde(default, skip_serializing_if = "super::escape::EscapeConfig::is_default")]
+    pub escape: super::escape::EscapeConfig,
+
     /// Spatial filter — Gaussian blur applied to the per-batch histogram
     /// before accumulation. Mirrors Apophysis's `filter` attribute: a
     /// small per-sample-spread Gaussian that smooths per-iteration grain.
@@ -711,6 +718,7 @@ impl Default for FractalConfig {
             solid_strength: super::defaults::DEFAULT_SOLID_STRENGTH,
             surface_thickness: super::defaults::DEFAULT_SURFACE_THICKNESS,
             solid_shading: SolidShadingSettings::default(),
+            escape: super::escape::EscapeConfig::default(),
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,

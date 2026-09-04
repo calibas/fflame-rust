@@ -748,6 +748,49 @@ fn apply_config_value(
             }
         }
 
+        // Escape-time parameters (FractalConfig-level, like effects).
+        // Without these arms every Escape.* track fell through to the
+        // per-flame catch-all below and was silently dropped: an
+        // escape animation exported as a STILL image while previewing
+        // correctly in-app (field report on Escape.JuliaIm). Palette
+        // and other FractalConfig-level tracks kept working, which is
+        // what made it look like a partial failure.
+        //
+        // The animatable set is exactly what `json_to_config_value`
+        // accepts (selectors, the reference-period hint and the exact
+        // decimal centers are deliberately not animatable), and the
+        // clamps mirror ConfigManager::apply_value so an exported
+        // frame equals the in-app frame at the same time.
+        (ConfigPath::EscapeJulia, ConfigValue::Bool(v)) => config.escape.julia = *v,
+        (ConfigPath::EscapeJuliaRe, ConfigValue::Float(v)) => config.escape.julia_re = *v,
+        (ConfigPath::EscapeJuliaIm, ConfigValue::Float(v)) => config.escape.julia_im = *v,
+        (ConfigPath::EscapeZoomLog2, ConfigValue::Float(v)) => {
+            // NaN from a wild signal must not poison the view.
+            let v = *v as f64;
+            config.escape.zoom_log2 =
+                if v.is_finite() { v.clamp(-8.0, 100_000_000.0) } else { 0.0 };
+        }
+        (ConfigPath::EscapeRotation, ConfigValue::Float(v)) => config.escape.rotation = *v,
+        (ConfigPath::EscapeBailout, ConfigValue::Float(v)) => config.escape.bailout = *v,
+        (ConfigPath::EscapeDampingRe, ConfigValue::Float(v)) => config.escape.damping_re = *v,
+        (ConfigPath::EscapeDampingIm, ConfigValue::Float(v)) => config.escape.damping_im = *v,
+        (ConfigPath::EscapeMaxIter, ConfigValue::UInt(v)) => config.escape.max_iter = *v,
+        (ConfigPath::EscapeSupersample, ConfigValue::UInt(v)) => {
+            // The panel's range, not a smaller one: an animated value
+            // used to be clamped to 3 here while the panel offers 8,
+            // so a track set from the UI silently exported softer
+            // than it previewed. Whatever the grid cannot hold is
+            // made up by accumulation in the frame loop below.
+            config.escape.supersample =
+                (*v).clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+        }
+        (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
+            config.escape.formula_params.insert(param.clone(), *v);
+        }
+        (ConfigPath::EscapeColoringParam { param }, ConfigValue::Float(v)) => {
+            config.escape.coloring_params.insert(param.clone(), *v);
+        }
+
         // Everything else is per-flame. Resolve the target flame and
         // delegate to apply_flame_value. Broken targets (missing
         // subflame) silently drop — UI surfaces these.
@@ -1309,10 +1352,14 @@ pub async fn export_animation(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
-    // Request adapter's max storage buffer size (matches main app behavior)
+    // The adapter's real limits, not wgpu's defaults -- see
+    // export_animation_fast for why (a 4K deep-zoom frame's 398 MB of
+    // iteration state against the 256 MiB default).
     let adapter_limits = adapter.limits();
     let mut limits = egui_wgpu::wgpu::Limits::default();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    limits.max_buffer_size = adapter_limits.max_buffer_size;
+    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
     // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
     limits.max_storage_buffers_per_shader_stage =
         adapter_limits.max_storage_buffers_per_shader_stage;
@@ -1819,10 +1866,22 @@ pub async fn export_animation_fast(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
-    // Request adapter's max storage buffer size (matches main app behavior)
+    // The adapter's real limits, not wgpu's defaults. `Limits::default()`
+    // caps max_buffer_size at 256 MiB (268,435,456) and textures at
+    // 8192 a side, and only the storage-BINDING size used to be raised
+    // here. A 4K deep-zoom frame carries 3840*2160*48 = 398 MB of
+    // per-pixel iteration state, so the exporter asked wgpu for a
+    // buffer past the limit it had itself requested, and wgpu answers
+    // a validation error by panicking -- on this worker thread, which
+    // left the export dialog waiting forever. The number in that panic
+    // was this default, not the GPU. The still-image exporter has
+    // raised all three from the adapter since it hit the same wall
+    // (app/export.rs); this now matches it.
     let adapter_limits = adapter.limits();
     let mut limits = wgpu::Limits::default();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    limits.max_buffer_size = adapter_limits.max_buffer_size;
+    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
     // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
     limits.max_storage_buffers_per_shader_stage =
         adapter_limits.max_storage_buffers_per_shader_stage;
@@ -1937,6 +1996,66 @@ pub async fn export_animation_fast(
         &frame_config.flame,
     );
 
+    // Escape-time animation: the generator is the escape renderer --
+    // PERSISTENT across frames so the reference-orbit cache and BLA
+    // table carry from frame to frame (a zoom track re-uses its orbit
+    // instead of recomputing per frame). The flame renderer still
+    // owns the shared tail: load_config keeps palette/tonemap/curve/
+    // levels in sync each frame exactly as the headless single-frame
+    // path does. Before this branch existed the video export ran the
+    // chaos game regardless of render_mode and animated the FLAME
+    // while the app previewed the escape render (field report).
+    // Without the engine there is nothing to draw these frames
+     // with; the flag stays false and the single-frame render call
+     // reports the missing engine rather than this loop exporting a
+     // flame the config never described.
+    #[cfg(feature = "engine-escape")]
+    let is_escape = export_config.config.render_mode
+        == crate::scene::transforms::RenderMode::Escape;
+    #[cfg(not(feature = "engine-escape"))]
+    let is_escape = false;
+    #[cfg(feature = "engine-escape")]
+    let mut escape_renderer: Option<crate::escape::EscapeRenderer> = None;
+    // Accumulated samples per axis for the frame just rendered (1 =
+    // the grid alone); the tail picks the averaged image from it.
+    #[cfg(feature = "engine-escape")]
+    let mut escape_extra: u32 = 1;
+
+    // A deep-zoom frame carries per-pixel resume state (48-72 bytes),
+    // and past a device's buffer limit that allocation is a wgpu
+    // VALIDATION ERROR -- which wgpu answers by panicking. Here that
+    // panic lands on this worker thread, so the app stays responsive
+    // while the export dialog waits forever for a frame that will
+    // never arrive (reported: a 4K Ducks zoom, 398 MB against a
+    // 256 MB limit). The renderer now declines the perturbed path
+    // rather than ask, but declining means the DIRECT path, which
+    // past zoom 14 is mush -- so a whole export would come out
+    // quietly wrong. Refuse it up front instead, with the size that
+    // would work.
+    #[cfg(feature = "engine-escape")]
+    if is_escape {
+        let ss = crate::escape::EscapeRenderer::affordable_supersample(
+            &device,
+            export_config.width,
+            export_config.height,
+            export_config.config.escape.supersample,
+        );
+        let (rw, rh) = (
+            export_config.width.saturating_mul(ss),
+            export_config.height.saturating_mul(ss),
+        );
+        if !crate::escape::EscapeRenderer::perturb_state_fits_at(
+            &device,
+            &export_config.config.escape,
+            rw,
+            rh,
+        ) {
+            return Err(AnimationExportError::InvalidConfig(format!(
+                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame.                  Export at a smaller size (or lower the antialiasing): past the                  perturbation threshold every pixel carries its own iteration                  state, and there is no way to render this size without it."
+            )));
+        }
+    }
+
     // Process frames sequentially
     for frame in 0..total_frames {
         if reporter.is_cancelled() {
@@ -1980,26 +2099,126 @@ pub async fn export_animation_fast(
         );
         queue.submit(std::iter::once(setup_encoder.finish()));
 
-        render_frame_to_completion(
-            &device,
-            &queue,
-            &mut renderer,
-            &frame_config,
-            export_config.iterations_per_thread,
-        )
-        .await;
+        #[cfg(feature = "engine-escape")]
+        if is_escape {
+            // Settle loop, mirroring the headless escape path
+            // (render.rs): bounded chunked dispatches, each its own
+            // submission, so the driver never sees an unbounded pass.
+            let esc = escape_renderer.get_or_insert_with(|| {
+                let mut e = crate::escape::EscapeRenderer::new(
+                    &device,
+                    export_config.width,
+                    export_config.height,
+                );
+                // Throughput chunking: no UI to keep responsive.
+                e.set_chunk_time_target(200.0);
+                e
+            });
+            esc.resize(
+                &device,
+                export_config.width,
+                export_config.height,
+                frame_config.escape.supersample,
+            );
+            // Antialiasing past what the grid can hold is made up by
+            // ACCUMULATION, exactly as the still-image path does
+            // (render.rs): the same sample positions, taken as several
+            // ordinary renders each displaced within a pixel and
+            // averaged. The grid is capped by a render-pixel budget
+            // that 4K reaches at 1x, so before this a 4K video with
+            // antialiasing asked for got none, silently. Same total
+            // iteration work; fixed memory; the reference orbit is
+            // shared by every sample.
+            let want_ss = frame_config
+                .escape
+                .supersample
+                .clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+            let got_ss = esc.effective_supersample().max(1);
+            let extra = want_ss.div_ceil(got_ss).max(1);
+            escape_extra = extra;
+            if extra > 1 && frame == 0 {
+                log::info!(
+                    "Escape video: {want_ss}x antialiasing = {got_ss}x grid x {extra}x                      accumulated ({} renders per frame)",
+                    extra * extra
+                );
+            }
+            let offsets = if extra > 1 {
+                crate::escape::EscapeRenderer::sample_grid(extra)
+            } else {
+                vec![[0.0f32, 0.0]]
+            };
+            if extra > 1 {
+                esc.begin_accumulation(&device, &queue, extra);
+            }
+            for off in &offsets {
+                esc.set_sample_offset(*off);
+                let mut guard = 0u32;
+                let mut esc_encoder =
+                    device.create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("Escape Animation Frame"),
+                    });
+                let mut settled = esc.render(
+                    &device,
+                    &queue,
+                    &mut esc_encoder,
+                    &frame_config.escape,
+                    renderer.palette_view(),
+                );
+                while !settled {
+                    queue.submit(std::iter::once(esc_encoder.finish()));
+                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                    esc_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("Escape Animation Frame Chunk"),
+                    });
+                    settled = esc.render(
+                        &device,
+                        &queue,
+                        &mut esc_encoder,
+                        &frame_config.escape,
+                        renderer.palette_view(),
+                    );
+                    guard += 1;
+                    if guard > 4_000_000 {
+                        log::error!(
+                            "escape animation frame failed to settle; encoding what we have"
+                        );
+                        break;
+                    }
+                }
+                // Fold this displaced render into the running mean.
+                // Recorded into the encoder that holds the settling
+                // chunk's resolve, so the fold is ordered after it.
+                if extra > 1 {
+                    esc.accumulate_sample(&device, &queue, &mut esc_encoder);
+                }
+                queue.submit(std::iter::once(esc_encoder.finish()));
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            }
+            esc.set_sample_offset([0.0, 0.0]);
+        } else {
+            render_frame_to_completion(
+                &device,
+                &queue,
+                &mut renderer,
+                &frame_config,
+                export_config.iterations_per_thread,
+            )
+            .await;
+        }
 
         // Solid rendering finalize — mirrors the interactive frame and the
         // CLI export: exact brightness renormalization for occluded
         // renders, then the shade pass (lighting/SSAO), then tonemap from
         // the shaded output.
-        renderer.apply_exact_density_fraction(&device, &queue);
+        if !is_escape {
+            renderer.apply_exact_density_fraction(&device, &queue);
+        }
 
         // Tonemap
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Tonemap"),
         });
-        let shade_ran = renderer.run_shade_pass(
+        let shade_ran = !is_escape && renderer.run_shade_pass(
             &device,
             &queue,
             &mut tonemap_encoder,
@@ -2014,7 +2233,27 @@ pub async fn export_animation_fast(
             frame_config.camera_y,
             frame_config.camera_z,
         );
-        if shade_ran {
+        // The escape arm resolves to an Option FIRST: a cfg cannot
+        // sit on one arm of an if/else chain, and putting it on the
+        // whole chain would delete the FLAME arms with it -- which
+        // compiles clean and ships frames that were never tone-mapped.
+        #[cfg(feature = "engine-escape")]
+        let escape_view = if is_escape {
+            let esc = escape_renderer
+                .as_ref()
+                .expect("escape renderer exists: created in the generator branch");
+            Some(match esc.accumulated_view() {
+                Some(v) if escape_extra > 1 => v,
+                _ => esc.output_view(),
+            })
+        } else {
+            None
+        };
+        #[cfg(not(feature = "engine-escape"))]
+        let escape_view: Option<&wgpu::TextureView> = None;
+        if let Some(view) = escape_view {
+            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, view);
+        } else if shade_ran {
             renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());
         } else {
             renderer.tonemap_pass(&queue, &mut tonemap_encoder);
@@ -2483,6 +2722,93 @@ mod tests {
     use super::*;
     use crate::config::{ConfigPath, ConfigValue};
     use crate::scene::transforms::{Flame, Transform};
+
+    /// An animated supersample keeps the panel's full range.
+    ///
+    /// It was clamped to 3 here while the panel offers 8, so a track
+    /// set from the UI exported softer than it previewed, with
+    /// nothing said. Whatever the grid cannot hold is now made up by
+    /// accumulation in the frame loop, so the value is honoured.
+    #[test]
+    fn an_animated_supersample_keeps_the_panel_range() {
+        use serde_json::json;
+        let mut config = FractalConfig::default();
+        apply_animation_values(&mut config, &[
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(8)),
+        ]);
+        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE);
+        apply_animation_values(&mut config, &[
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(40)),
+        ]);
+        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE,
+            "past the maximum still clamps");
+    }
+
+    /// Every animatable escape parameter must survive the export's
+    /// animation-apply path.
+    ///
+    /// `apply_config_value` had no Escape arms at all, so escape
+    /// tracks fell through to the per-flame catch-all and vanished:
+    /// the exported video showed a STILL fractal while the app
+    /// animated correctly (reported on Escape.JuliaIm). Palette
+    /// tracks kept working, which disguised it as a partial failure.
+    /// This drives `apply_animation_values` itself — path parsing and
+    /// JSON conversion included — so a path that stops round-tripping
+    /// fails here too.
+    #[test]
+    fn escape_parameters_survive_the_export_animation_path() {
+        use serde_json::json;
+
+        let mut config = FractalConfig::default();
+        config.escape.supersample = 1;
+        let values = vec![
+            (EditingTarget::Main, "Escape.Julia".to_string(), json!(true)),
+            (EditingTarget::Main, "Escape.JuliaRe".to_string(), json!(0.25)),
+            (EditingTarget::Main, "Escape.JuliaIm".to_string(), json!(-0.62)),
+            (EditingTarget::Main, "Escape.ZoomLog2".to_string(), json!(3.5)),
+            (EditingTarget::Main, "Escape.Rotation".to_string(), json!(0.75)),
+            (EditingTarget::Main, "Escape.Bailout".to_string(), json!(16.0)),
+            (EditingTarget::Main, "Escape.DampingRe".to_string(), json!(0.5)),
+            (EditingTarget::Main, "Escape.DampingIm".to_string(), json!(0.125)),
+            (EditingTarget::Main, "Escape.MaxIter".to_string(), json!(512)),
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(2)),
+            (EditingTarget::Main, "Escape.FormulaParam.variant".to_string(), json!(2.0)),
+            (EditingTarget::Main, "Escape.ColoringParam.offset".to_string(), json!(1.86)),
+        ];
+        apply_animation_values(&mut config, &values);
+
+        assert!(config.escape.julia, "Julia toggle");
+        assert_eq!(config.escape.julia_re, 0.25);
+        assert_eq!(config.escape.julia_im, -0.62, "the reported path");
+        assert_eq!(config.escape.zoom_log2, 3.5);
+        assert_eq!(config.escape.rotation, 0.75);
+        assert_eq!(config.escape.bailout, 16.0);
+        assert_eq!(config.escape.damping_re, 0.5);
+        assert_eq!(config.escape.damping_im, 0.125);
+        assert_eq!(config.escape.max_iter, 512);
+        assert_eq!(config.escape.supersample, 2);
+        assert_eq!(config.escape.formula_params.get("variant"), Some(&2.0));
+        assert_eq!(config.escape.coloring_params.get("offset"), Some(&1.86));
+
+        // Clamps mirror ConfigManager: a wild signal cannot poison
+        // the view or ask for an unsupported supersample factor.
+        // (A literal NaN cannot travel this route at all -- JSON has
+        // no NaN, and serde_json renders it as Null, which fails the
+        // as_f64 conversion and never reaches the arm. A value that
+        // OVERFLOWS f32 does reach it, and is the reachable path to
+        // the non-finite fallback.)
+        let wild = vec![
+            (EditingTarget::Main, "Escape.ZoomLog2".to_string(), json!(1e300)),
+            (EditingTarget::Main, "Escape.Supersample".to_string(), json!(9)),
+        ];
+        apply_animation_values(&mut config, &wild);
+        assert_eq!(config.escape.zoom_log2, 0.0, "overflowing zoom falls back");
+        assert_eq!(
+            config.escape.supersample,
+            crate::escape::renderer::MAX_SUPERSAMPLE,
+            "supersample clamps to the panel's maximum (it used to stop at 3)"
+        );
+    }
 
     /// A video frame must not render meaningfully past the
     /// `max_iterations` it was given.
