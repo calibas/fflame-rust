@@ -150,9 +150,24 @@ measurements are in the pipeline document.
   the seed".** Interactive use runs, pauses and steps; a still is
   reproducible because `steps` and `seed` are in the config and the
   PNG metadata. Video export keeps one renderer alive and advances it
-  `steps_per_frame` per frame (integration §6). Rejected: re-running
-  from the seed every frame (quadratic; and it makes "never stills"
-  models impossible to export as video).
+  per frame (integration §6). Rejected: re-running from the seed every
+  frame (quadratic; and it makes "never stills" models impossible to
+  export as video).
+- **D5b — The timeline animates a cumulative STEP COUNT, not a rate**
+  (decided 2026-09-04, prompted by asking whether the progression
+  itself can be animated — it can, and this is how). A `Sim.StepCount`
+  track makes the state at time *t* equal `round(track(t))` steps from
+  the seed, so a frame stays a function of its time the way every other
+  animatable quantity is. Advancing `steps_per_frame` per rendered
+  frame instead would have made the simulation **frame-rate
+  dependent**: the same project at 30 and 60 fps would differ at the
+  same timestamp, and in-app playback (which advances by wall-clock
+  delta) would diverge from export (which advances by `frame / fps`).
+  Easing the track gives slow-in/slow-out on the simulation itself and
+  a hold gives a freeze-frame that keeps animating colour; a decrease
+  costs a reseed and re-run, the honest price of a non-invertible rule.
+  `steps_per_frame` remains the interactive Run speed only, and is not
+  an animation target. Integration §6.
 - **D6 — Linear tonemap on entry, the coverage-alpha output
   convention.** The tonemap shader interprets alpha as hit count;
   simulations write alpha = 1 for covered cells and rgb in [0, 1] so
