@@ -1,7 +1,7 @@
 # Escape-Time, Field & Orbit-Trap Fractals
 
-**Status:** SHIPPED and live on the `escape-time` branch — 25
-formulas, 14 colorings, 2 field formulas, deep zoom by perturbation
+**Status:** SHIPPED and live on the `escape-time` branch — 26
+formulas, 14 colorings, 3 field formulas, deep zoom by perturbation
 with big-float references, relief shading, auto contrast, and the
 whole shared tail (palette, tone mapping, effects, export, animation,
 scripting, online sync). This began as a plan and is now the design
