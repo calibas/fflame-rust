@@ -32,11 +32,32 @@ use crate::sim::ColoringFeature;
 use wgpu::util::DeviceExt;
 use wgpu::*;
 
-/// Steps per submission. Phase 0 measured a 1080p stencil step at
-/// 0.5 ms and a 4K one at 2.0 ms, so 256 steps is ~0.5 s at 4K —
-/// comfortably inside the ~2 s GPU watchdog with room for a slower
-/// card, and far above the point where per-submit overhead matters.
-const STEPS_PER_SUBMIT: u32 = 256;
+/// Most steps in one submission, and the size of the uniform ring.
+///
+/// This used to be THE batch size, justified by phase 0's numbers
+/// (a 1080p stencil step at 0.5 ms, so 256 steps is ~0.1 s). Those
+/// numbers were for a 3×3 stencil. Cyclic CA at range 5 is 121 reads
+/// a cell and 9.7 ms a step at 1080p, so one 256-step submit is 2.5 s
+/// — past Windows' 2 s GPU watchdog, which resets the device. The
+/// fence signals anyway, the run reports a fictional cost, and the
+/// process aborts at teardown; the shipped binary's `export` of that
+/// config failed with "Parent device is lost". Pinned between 192
+/// steps (1.8 s, clean) and 224 (2.3 s, lost). So the batch is now
+/// sized from measured cost, and this is only its ceiling.
+const MAX_STEPS_PER_SUBMIT: u32 = 256;
+
+/// Steps in the first submission after a pipeline or grid change,
+/// before anything has been measured. Small enough that even a kernel
+/// an order of magnitude slower than range-5 cyclic CA (phase 3's
+/// large-kernel models) stays well inside the watchdog: 8 steps at
+/// 60 ms is half a second.
+const FIRST_SUBMIT: u32 = 8;
+
+/// Wall-clock budget for one submission. An eighth of the watchdog,
+/// so a card half as fast as the one measured on, or a frame that
+/// shares the GPU with something else, still has margin; and long
+/// enough that at 0.3 ms a step the ceiling is what binds.
+const SUBMIT_BUDGET_MS: f64 = 250.0;
 
 /// Cap on a single dimension of the grid. The real limit is the
 /// device's `max_texture_dimension_2d`, which [`SimRenderer::allocation_error`]
@@ -45,7 +66,7 @@ const MAX_GRID_DIM: u32 = 8192;
 
 /// Ring slots for per-step uniforms. One per step in a submission, so
 /// each step reads its own step index.
-const RING_SLOTS: u32 = STEPS_PER_SUBMIT;
+const RING_SLOTS: u32 = MAX_STEPS_PER_SUBMIT;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -131,6 +152,11 @@ pub struct SimRenderer {
 
     /// Steps applied since the last reseed. The state's identity.
     step_index: u32,
+    /// Steps in the next submission: adapted from the measured cost
+    /// of the previous one, reset to [`FIRST_SUBMIT`] whenever the
+    /// pipeline or the grid changes and the old measurement no longer
+    /// describes the kernel.
+    steps_per_submit: u32,
     /// Set when the field has not been seeded yet, or the config
     /// changed in a way that invalidates it.
     needs_seed: bool,
@@ -181,6 +207,7 @@ impl SimRenderer {
             pipelines: None,
             step_bind_groups: None,
             step_index: 0,
+            steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
         }
     }
@@ -368,6 +395,7 @@ impl SimRenderer {
         // reference the field views, so they go with the field.
         if grid_changed {
             self.step_bind_groups = None;
+            self.steps_per_submit = FIRST_SUBMIT;
         }
         true
     }
@@ -516,6 +544,7 @@ impl SimRenderer {
         // New layouts and modules: any cached bind group refers to the
         // old ones.
         self.step_bind_groups = None;
+        self.steps_per_submit = FIRST_SUBMIT;
         self.pipelines = Some(Pipelines {
             seed: pipeline("Sim Seed", &seed_layout, &seed_mod),
             step: pipeline("Sim Step", &step_layout, &step_mod),
@@ -549,9 +578,11 @@ impl SimRenderer {
             // Capped at the model's stability bound here as well as at
             // the config manager: a hand-edited file can carry any value,
             // and past the bound the [0,1] clamp turns divergence into
-            // plausible-looking garbage rather than NaN.
+            // plausible-looking garbage rather than NaN. The bound
+            // depends on the diffusion rates in force, not just the
+            // model, which is why it is computed from the params.
             dt: {
-                let max_dt = model_or_default(&cfg.model).max_dt;
+                let max_dt = model_or_default(&cfg.model).max_dt_for(&cfg.model_params);
                 if cfg.dt.is_finite() { cfg.dt.clamp(1e-4, max_dt) } else { 1.0 }
             },
             init_p0: p0,
@@ -704,6 +735,15 @@ impl SimRenderer {
     /// produce identical fields. There is a test for that, because it
     /// is the property that lets an export batch freely while a still
     /// stays reproducible.
+    ///
+    /// "Watchdog-sized" is measured, not assumed: each submission is
+    /// waited on and timed, and the next is sized to
+    /// [`SUBMIT_BUDGET_MS`] from that cost. The wait means the CPU
+    /// stalls for the simulation's GPU time inside this call -- for an
+    /// interactive frame that is a few milliseconds and for an export
+    /// it was already the case. On wasm the wait returns at once (no
+    /// blocking poll in WebGPU), the measured cost is ~0, and the
+    /// batch sits at the ceiling; browsers have no 2 s reset to avoid.
     pub fn run_steps(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig, count: u32) {
         if count == 0 {
             return;
@@ -719,7 +759,7 @@ impl SimRenderer {
 
         let mut done = 0;
         while done < count {
-            let batch = STEPS_PER_SUBMIT.min(count - done);
+            let batch = self.steps_per_submit.clamp(1, MAX_STEPS_PER_SUBMIT).min(count - done);
             // One write for the whole batch, and one compute pass: the
             // dispatches inside it are ordered against each other, and
             // each reads its own ring slot by dynamic offset.
@@ -750,6 +790,21 @@ impl SimRenderer {
             }
             queue.submit(std::iter::once(enc.finish()));
             done += batch;
+
+            // Time this submission and size the next one from it. The
+            // measurement can include unrelated work still in flight
+            // (the seed pass, a previous frame's tonemap), which only
+            // overestimates the cost and shrinks the next batch: the
+            // safe direction.
+            let started = web_time::Instant::now();
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let ms = started.elapsed().as_secs_f64() * 1e3;
+            let per_step = ms / batch as f64;
+            self.steps_per_submit = if per_step > 0.0 {
+                (SUBMIT_BUDGET_MS / per_step).floor().clamp(1.0, MAX_STEPS_PER_SUBMIT as f64) as u32
+            } else {
+                MAX_STEPS_PER_SUBMIT
+            };
         }
     }
 

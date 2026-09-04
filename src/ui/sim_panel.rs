@@ -428,7 +428,7 @@ pub fn render_sim_content(
     if !model.has(crate::sim::ModelFeature::NoTimeStep)
         && ui
         .add(
-            egui::Slider::new(&mut dt, 0.001..=model.max_dt)
+            egui::Slider::new(&mut dt, 0.001..=model.max_dt_for(&sim.model_params))
                 .text(t!("sim_panel.dt").as_ref()),
         )
         .on_hover_text(t!("sim_panel.dt_tip"))

@@ -2855,10 +2855,12 @@ impl ConfigManager {
             }
             ConfigPath::SimDt => {
                 let d: f32 = f32::try_from(value)?;
-                // The model's measured/derived stability bound, not a
-                // fixed 10: the explicit solver diverges past it.
+                // The model's measured/derived stability bound at the
+                // diffusion rates in force, not a fixed 10: the explicit
+                // solver diverges past it.
                 #[cfg(feature = "engine-sim")]
-                let max_dt = crate::sim::model_or_default(&self.current.sim.model).max_dt;
+                let max_dt = crate::sim::model_or_default(&self.current.sim.model)
+                    .max_dt_for(&self.current.sim.model_params);
                 #[cfg(not(feature = "engine-sim"))]
                 let max_dt = 10.0f32;
                 self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, max_dt) } else { 1.0 };
@@ -2884,6 +2886,19 @@ impl ConfigManager {
             ConfigPath::SimModelParam { param } => {
                 let v: f32 = f32::try_from(value)?;
                 self.current.sim.model_params.insert(param.clone(), v);
+                // Raising a diffusion rate lowers the stability cap, so
+                // the dt already set may now be past it. Pull it down
+                // rather than leave the solver to diverge on the next
+                // step; the renderer clamps too, but a config that reads
+                // one dt and runs at another is a lie in the export.
+                #[cfg(feature = "engine-sim")]
+                {
+                    let max_dt = crate::sim::model_or_default(&self.current.sim.model)
+                        .max_dt_for(&self.current.sim.model_params);
+                    if self.current.sim.dt > max_dt {
+                        self.current.sim.dt = max_dt;
+                    }
+                }
             }
             ConfigPath::SimColoringParam { param } => {
                 let v: f32 = f32::try_from(value)?;

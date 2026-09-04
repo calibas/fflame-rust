@@ -120,6 +120,19 @@ pub enum ColoringFeature {
     NeedsGradient,
 }
 
+/// The Sims 3×3 Laplacian's most negative eigenvalue (centre −1,
+/// edges 0.2, corners 0.05, at the checkerboard mode): −1.6. Diffusion
+/// at rate D contributes `1.6 · D` to the stiffness of that mode.
+pub const SIMS_LAPLACIAN_EIGENVALUE: f32 = 1.6;
+
+/// Explicit Euler is stable for `dt · λ < 2`. The cap sits at 0.96 of
+/// that rather than AT it, because at the bound the checkerboard is
+/// neutrally stable rather than damped: measured, Gray–Scott at
+/// exactly `dt · 1.6 · D = 2.00` carries a checkerboard of rms 0.445
+/// held in place only by its [0, 1] clamp; at 0.96 the mode decays 8%
+/// a step and the rms is 0.0003.
+pub const STABILITY_MARGIN: f32 = 0.96;
+
 /// One simulation model: the rule, its parameters, and how a cell's
 /// state is laid out in the four channels.
 ///
@@ -145,12 +158,20 @@ pub struct ModelDef {
     pub presets: &'static [SimPreset],
     /// The step rule. See the type docs for the signature.
     pub wgsl: &'static str,
-    /// Largest `dt` the explicit scheme is stable at, for the default
-    /// diffusion rates. Enforced by the config manager's write arm, the
-    /// panel slider's range and the renderer's uniform, so no path can
-    /// drive the solver past it. Derived per model from the stencil's
-    /// most negative eigenvalue, not guessed (see each model's note).
+    /// Largest `dt` the explicit scheme is stable at, for the DEFAULT
+    /// diffusion rates. Measured per model (see each model's note); the
+    /// reaction terms usually bind before diffusion does.
+    ///
+    /// Not the whole cap. The diffusion bound scales as `1 / D`, and
+    /// the sliders reach several times the default rate, so the cap
+    /// that is actually enforced is [`ModelDef::max_dt_for`], which
+    /// takes the current parameters. The config manager's write arms,
+    /// the panel slider's range and the renderer's uniform all go
+    /// through it, so no path can drive the solver past the bound.
     pub max_dt: f32,
+    /// Names of the parameters that are diffusion rates on the Sims
+    /// stencil. Empty for a rule with no time step.
+    pub diffusion: &'static [&'static str],
     /// The initial state for a cell, given the init shape's mask.
     ///
     /// ```wgsl
@@ -172,6 +193,51 @@ pub struct ModelDef {
     /// diverges above 0.02 -- so carrying one model's dt into another
     /// is either unusably slow or unstable.
     pub default_dt: f32,
+}
+
+impl ModelDef {
+    /// The stability cap for THESE parameters.
+    ///
+    /// Linear stability of explicit Euler on the checkerboard mode:
+    /// `dt · (λ_reaction + 1.6 · D) < 2`. The reaction stiffness
+    /// `λ_reaction` is not derived here; it is INFERRED from the
+    /// model's measured cap at its default diffusion rates,
+    /// `λ_reaction = 2 / max_dt − 1.6 · D_default`, and the cap at any
+    /// other D follows by adding the diffusion term back. A diffusion-
+    /// only bound (`1.25 / D`) is not enough: FitzHugh–Nagumo at
+    /// D = 4 railed at ±3 under it, because the reaction term
+    /// contributes even at rest (`1 − v²` ≈ −0.44, and −8 at the rails).
+    ///
+    /// `D` is the largest of the diffusion parameters, current value
+    /// or default. Using the largest is conservative when the channels
+    /// differ, and covers FitzHugh–Nagumo's `D_w / τ` since τ ≥ 1.
+    ///
+    /// Before this existed the cap was `max_dt` alone, and the sliders
+    /// reach 4–5× the default rates. Measured before the fix, 128²
+    /// after 200 steps: Brusselator and Schnakenberg infinite in half
+    /// their cells, FitzHugh–Nagumo railed with a checkerboard of
+    /// rms 5.1.
+    pub fn max_dt_for(&self, params: &std::collections::BTreeMap<String, f32>) -> f32 {
+        if self.diffusion.is_empty() {
+            return self.max_dt;
+        }
+        let mut d_now = 0.0f32;
+        let mut d_def = 0.0f32;
+        for name in self.diffusion {
+            let def = self
+                .parameters
+                .iter()
+                .find(|p| p.name == *name)
+                .map(|p| p.default)
+                .unwrap_or(0.0);
+            let v = params.get(*name).copied().filter(|v| v.is_finite()).unwrap_or(def);
+            d_now = d_now.max(v.max(0.0));
+            d_def = d_def.max(def);
+        }
+        let lambda_reaction = (2.0 / self.max_dt - SIMS_LAPLACIAN_EIGENVALUE * d_def).max(0.0);
+        let lambda = lambda_reaction + SIMS_LAPLACIAN_EIGENVALUE * d_now;
+        (STABILITY_MARGIN * 2.0 / lambda).max(1e-4)
+    }
 }
 
 impl ModelDef {
@@ -387,6 +453,52 @@ mod tests {
                 m.name,
                 m.default_dt,
                 m.max_dt
+            );
+        }
+    }
+
+    /// The declared cap must be consistent with the default diffusion
+    /// rates, and every parameter named as a diffusion rate must
+    /// exist -- a typo there would silently drop the bound.
+    #[test]
+    fn the_declared_cap_respects_the_default_diffusion_bound() {
+        for m in MODELS {
+            for name in m.diffusion {
+                let def = m
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == *name)
+                    .unwrap_or_else(|| panic!("{}: diffusion parameter {name} does not exist", m.name));
+                assert!(
+                    m.max_dt * def.default * 1.6 <= 2.0 + 1e-5,
+                    "{}: max_dt {} at default {name} = {} gives dt·D·1.6 = {} > 2",
+                    m.name,
+                    m.max_dt,
+                    def.default,
+                    m.max_dt * def.default * 1.6
+                );
+            }
+            // With no parameters set, the cap is the declared one under
+            // the safety margin.
+            let at_defaults = m.max_dt_for(&std::collections::BTreeMap::new());
+            assert!(
+                at_defaults <= m.max_dt && at_defaults > 0.0,
+                "{}: cap at defaults {} vs declared {}",
+                m.name,
+                at_defaults,
+                m.max_dt
+            );
+            assert!(
+                m.default_dt <= at_defaults + 1e-6,
+                "{}: default_dt {} exceeds the cap at defaults {}",
+                m.name,
+                m.default_dt,
+                at_defaults
+            );
+            assert!(
+                m.has(ModelFeature::NoTimeStep) == m.diffusion.is_empty(),
+                "{}: a model has a time step exactly when it has diffusion rates",
+                m.name
             );
         }
     }
