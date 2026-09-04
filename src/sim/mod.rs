@@ -242,11 +242,18 @@ pub static MODELS: &[&ModelDef] = &[
     &models::EDEN,
     &models::BALLISTIC_DEPOSITION,
     &models::WOLFRAM_ECA,
+    &models::PACKARD_SNOWFLAKE,
+    &models::PERCOLATION,
 ];
 
 /// Every colouring, in registration order. Append only.
 pub static COLORINGS: &[&SimColoringDef] =
-    &[&colorings::CHANNEL, &colorings::TWO_CHANNEL, &colorings::AGE];
+    &[
+    &colorings::CHANNEL,
+    &colorings::TWO_CHANNEL,
+    &colorings::AGE,
+    &colorings::LABEL,
+];
 
 /// Look up a model by name, falling back to the first registered one.
 ///

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "c2859f4d",
+  "git_hash": "ed8e4725",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -513,6 +513,26 @@
     "sim-ising-critical.png": {
       "bytes": 28206,
       "sha256": "96288821e6f52bc43b639de96829cfbc5c08814bb8e15f809a98273a98e0c5e9"
+    },
+    "sim-packard-rule-1.png": {
+      "bytes": 16318,
+      "sha256": "2ad18c6912f68cb0a1f652492eb823b9f51bca07a239332f94167c470dea7557"
+    },
+    "sim-packard-rule-134.png": {
+      "bytes": 13406,
+      "sha256": "002df2502256241190fd430df190153141a938d8fbea6d42a7c2fecc18d76d11"
+    },
+    "sim-percolation-critical.png": {
+      "bytes": 33933,
+      "sha256": "a9b63e9b9b36b43d4b4a126228defe25249f8e27d7562fac909e4e240be203b8"
+    },
+    "sim-percolation-subcritical.png": {
+      "bytes": 35445,
+      "sha256": "f8dcaec76cac3a1cda14575049d76322dccf3210b47bedd374666f832474adc8"
+    },
+    "sim-percolation-supercritical.png": {
+      "bytes": 17274,
+      "sha256": "79ff53f3a5a93baab919ccb21becaa7b210d7a6591dbc3bab50230ad6e08b998"
     },
     "sim-random-deposition.png": {
       "bytes": 10337,

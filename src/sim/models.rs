@@ -1426,3 +1426,249 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 1.0,
     default_dt: 1.0,
 };
+
+
+// ---------------------------------------------------------------------
+// The two that need addressing the square stencil does not provide: a
+// hexagonal lattice, and a gather at an arbitrary cell.
+// ---------------------------------------------------------------------
+
+/// Packard's digital snowflake on a hexagonal lattice.
+///
+/// A vacant cell freezes when its number of frozen neighbours is in a
+/// chosen set S; Packard's rules are named by that set (1, 13, 134,
+/// 1345, 1356). Rule 1 -- freeze on exactly one frozen neighbour --
+/// grows the classic plate with branches.
+///
+/// **The lattice is hexagonal, stored as offset rows**: odd rows sit
+/// half a cell to the right, so the six neighbour offsets depend on row
+/// parity. That is the awkward part and it is written once here. A
+/// wrong parity is not subtle in the output -- the six-fold symmetry
+/// collapses to four-fold, which is exactly what the visual baseline
+/// pins.
+///
+/// The resolve still samples the offset grid as a square one, which
+/// shears each cell by half a width. At the scale a snowflake is viewed
+/// this reads as a clean hexagon (the CPU prototype's images agree); a
+/// true axial-to-pixel resolve is a later refinement, not a
+/// correctness gap.
+///
+/// Measured: rules {1}, {1,3} and {1,3,4} all reach the edge of a 256
+/// grid in exactly 125 steps, which is the radius. `steps ~ radius` is
+/// exact rather than approximate, because the fastest growth direction
+/// advances one cell per step whatever the rule. What the rule changes
+/// is density -- 45%, 57% and 66% of the disc filled.
+///
+/// Channels: `.x` = frozen, `.z` = freeze step, `.w` spare.
+pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
+    name: "packard_snowflake",
+    display_name: "Packard Snowflake",
+    description: "Hexagonal solidification: a vacant cell freezes on a chosen count of \
+                  frozen neighbours. Plates, branches and dendrites.",
+    features: &[ModelFeature::NoTimeStep],
+    parameters: &[SimParamDef {
+        name: "rule_mask",
+        display_name: "Freeze on",
+        default: 2.0,
+        min: 1.0,
+        max: 126.0,
+        tooltip: "A 6-bit mask: bit n set means a cell freezes when exactly n of its six \
+                  neighbours are frozen. 2 is Packard's rule 1 (one neighbour), 10 is \
+                  rule 13, 26 is rule 134.",
+        choices: &[],
+    }],
+    presets: &[
+        SimPreset {
+            name: "rule_1",
+            display_name: "Rule 1 (plate)",
+            params: &[("rule_mask", 2.0)],
+            steps: 125,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "rule_13",
+            display_name: "Rule 13",
+            params: &[("rule_mask", 10.0)],
+            steps: 125,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "rule_134",
+            display_name: "Rule 134",
+            params: &[("rule_mask", 26.0)],
+            steps: 125,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+    ],
+    wgsl: r#"
+// The six neighbours of an offset-row hex lattice. Odd rows are shifted
+// half a cell right, so the two diagonals on each side move with the
+// parity -- the two horizontal neighbours do not.
+fn hex_frozen_count(p: vec2<i32>) -> f32 {
+    var n = sim_read(p + vec2<i32>(-1, 0)).x + sim_read(p + vec2<i32>(1, 0)).x;
+    if ((p.y & 1) == 1) {
+        n = n + sim_read(p + vec2<i32>(0, -1)).x
+              + sim_read(p + vec2<i32>(1, -1)).x
+              + sim_read(p + vec2<i32>(0, 1)).x
+              + sim_read(p + vec2<i32>(1, 1)).x;
+    } else {
+        n = n + sim_read(p + vec2<i32>(0, -1)).x
+              + sim_read(p + vec2<i32>(-1, -1)).x
+              + sim_read(p + vec2<i32>(0, 1)).x
+              + sim_read(p + vec2<i32>(-1, 1)).x;
+    }
+    return n;
+}
+
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // Frozen is permanent: this is solidification, not an automaton
+    // that breathes.
+    if (s.x > 0.5) {
+        return s;
+    }
+    let count = i32(round(hex_frozen_count(p)));
+    if (count < 1 || count > 6) {
+        return s;
+    }
+    let mask = u32(clamp(round(mparam(0u)), 0.0, 126.0));
+    if (((mask >> u32(count)) & 1u) == 0u) {
+        return s;
+    }
+    return vec4<f32>(1.0, 0.0, f32(sim_step_index()), 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // The crystal nucleus. Center is the single seed the named rules
+    // are defined from.
+    return vec4<f32>(select(0.0, 1.0, inside >= 0.5), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 125,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+/// Site percolation, coloured by connected component.
+///
+/// A static random field -- each site open with probability `p` -- and
+/// then LABEL PROPAGATION: every open site takes the smallest label
+/// among itself and its open neighbours, until nothing changes. At
+/// `p_c = 0.592746` the spanning cluster is a fractal of dimension
+/// 91/48.
+///
+/// **The label also chases its own pointer.** Plain propagation moves
+/// a label one cell per step, so it costs the longest CHEMICAL path in
+/// the cluster -- measured at p_c, a median 645 rounds at 256² with a
+/// range of 485 to 760, and a 4x spread between samples at one size
+/// because a critical cluster's longest path is not self-averaging.
+/// Reading the cell a label points AT compresses the path, and the
+/// count drops by more than an order of magnitude (measured below).
+///
+/// Measured with compression, against phase 0's plain-propagation
+/// medians: 53 rounds at 64², 93 at 128², **167 at 256² against 645**,
+/// and 491 at 512² against 1,409 -- so it is worth 3.9x and 2.9x at the
+/// two sizes there is a comparison for.
+///
+/// Labels only ever decrease, so extra steps are no-ops: over-running
+/// is safe and only costs time. That is why this model needs no settle
+/// reduction to be CORRECT -- a settle would be an optimisation, and
+/// the plan's reduction stage is deferred on that basis. The presets
+/// carry roughly twice the measured count because the requirement is
+/// NOT self-averaging: at p_c the longest chemical path varied
+/// four-fold between samples at one size.
+///
+/// Channels: `.x` = label (a cell index, exact in f32 to 2²⁴),
+/// `.y` = open, `.z` = the step it last changed.
+pub static PERCOLATION: ModelDef = ModelDef {
+    name: "percolation",
+    display_name: "Percolation",
+    description: "Random open sites, coloured by which connected cluster they belong to. \
+                  At the critical threshold the spanning cluster is fractal.",
+    features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
+    parameters: &[SimParamDef {
+        name: "p_open",
+        display_name: "Open probability",
+        default: 0.592746,
+        min: 0.3,
+        max: 0.9,
+        tooltip: "Fraction of sites that are open. The square-lattice site threshold is \
+                  0.592746: below it every cluster is finite, above it one spans the \
+                  grid, and at it the spanning cluster is fractal at every scale.",
+        choices: &[],
+    }],
+    presets: &[
+        SimPreset {
+            name: "critical",
+            display_name: "Critical (p_c)",
+            params: &[("p_open", 0.592746)],
+            steps: 400,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "subcritical",
+            display_name: "Below threshold",
+            params: &[("p_open", 0.45)],
+            steps: 400,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "supercritical",
+            display_name: "Above threshold",
+            params: &[("p_open", 0.75)],
+            steps: 400,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // Closed sites never carry a label.
+    if (s.y < 0.5) {
+        return s;
+    }
+    let g = sim_grid();
+    var best = s.x;
+
+    // One cell of propagation, through OPEN neighbours only -- a label
+    // must not cross a closed site or the clusters merge into one.
+    let n0 = sim_read(p + vec2<i32>(-1, 0));
+    let n1 = sim_read(p + vec2<i32>(1, 0));
+    let n2 = sim_read(p + vec2<i32>(0, -1));
+    let n3 = sim_read(p + vec2<i32>(0, 1));
+    if (n0.y > 0.5) { best = min(best, n0.x); }
+    if (n1.y > 0.5) { best = min(best, n1.x); }
+    if (n2.y > 0.5) { best = min(best, n2.x); }
+    if (n3.y > 0.5) { best = min(best, n3.x); }
+
+    // Path compression: a label is a cell index, so read the cell it
+    // points at and take ITS label. This is what turns a walk down the
+    // cluster's longest chemical path into something logarithmic.
+    let li = i32(clamp(best, 0.0, f32(g.x * g.y - 1)));
+    let lp = vec2<i32>(li % g.x, li / g.x);
+    // `target` is a WGSL reserved keyword; the assembler's naga matrix
+    // caught it before it could reach a device.
+    let root = sim_read(lp);
+    if (root.y > 0.5) {
+        best = min(best, root.x);
+    }
+
+    let moved = best != s.x;
+    let age = select(s.z, f32(sim_step_index()), moved);
+    return vec4<f32>(best, s.y, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Each site open with probability p, and every open site starts as
+    // its own cluster: the label is the cell's own index, so the
+    // smallest index in a component wins and names it.
+    let g = sim_grid();
+    let open = select(0.0, 1.0, sim_rand(p, 0xf1u) < mparam(0u));
+    let idx = f32(p.y * g.x + p.x);
+    return vec4<f32>(idx, open, 0.0, 0.0);
+}
+"#,
+    default_steps: 400,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};

@@ -894,3 +894,155 @@ fn lateral_sticking_correlates_the_interface() {
          (uncorrelated columns): got {random:.2} against {ballistic:.2}"
     );
 }
+
+/// Percolation must label CONNECTED COMPONENTS, checked against a CPU
+/// flood fill rather than against a previous run.
+///
+/// Two open cells must share a label exactly when they are connected
+/// through open cells. That is a property no baseline image can check:
+/// a labelling that leaks across a closed site, or that stops short of
+/// converging, still renders as plausible coloured blobs.
+///
+/// It also measures how many steps convergence took, because the count
+/// is the model's headline cost and phase 0 found it is NOT
+/// self-averaging: at p_c a critical cluster's longest chemical path
+/// varies four-fold between samples at one size.
+#[test]
+fn percolation_labels_match_a_cpu_flood_fill() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "percolation".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Zero;
+    cfg.seed = 9;
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+
+    // Run until the labels stop moving, and report how long that took.
+    let mut prev: Vec<u32> = Vec::new();
+    let mut converged_at = None;
+    for round in 1..=400u32 {
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let now: Vec<u32> = f.iter().map(|px| px[0].to_bits()).collect();
+        if now == prev {
+            converged_at = Some(round - 1);
+            break;
+        }
+        prev = now;
+    }
+    let rounds = converged_at.expect("labels should stop changing within 400 rounds");
+    println!("percolation at p_c converged in {rounds} rounds on {N}x{N} (with path compression)");
+
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    let open: Vec<bool> = f.iter().map(|px| px[1] > 0.5).collect();
+    let label: Vec<f32> = f.iter().map(|px| px[0]).collect();
+
+    // CPU connected components, four-neighbour, on the SAME open field
+    // the GPU generated -- so this tests the labelling, not the RNG.
+    let mut comp = vec![usize::MAX; N * N];
+    let mut next = 0usize;
+    for start in 0..N * N {
+        if !open[start] || comp[start] != usize::MAX {
+            continue;
+        }
+        let id = next;
+        next += 1;
+        let mut stack = vec![start];
+        comp[start] = id;
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % N, i / N);
+            let mut push = |nx: usize, ny: usize, st: &mut Vec<usize>, c: &mut Vec<usize>| {
+                let j = ny * N + nx;
+                if open[j] && c[j] == usize::MAX {
+                    c[j] = id;
+                    st.push(j);
+                }
+            };
+            if x > 0 { push(x - 1, y, &mut stack, &mut comp); }
+            if x + 1 < N { push(x + 1, y, &mut stack, &mut comp); }
+            if y > 0 { push(x, y - 1, &mut stack, &mut comp); }
+            if y + 1 < N { push(x, y + 1, &mut stack, &mut comp); }
+        }
+    }
+    println!("  {next} components over {} open cells", open.iter().filter(|o| **o).count());
+
+    // Same component => same label, and different component => different
+    // label. Checked through a pair of maps so a single leak or a single
+    // failure to merge is caught.
+    use std::collections::HashMap;
+    let mut comp_to_label: HashMap<usize, f32> = HashMap::new();
+    let mut label_to_comp: HashMap<u32, usize> = HashMap::new();
+    for i in 0..N * N {
+        if !open[i] {
+            continue;
+        }
+        let c = comp[i];
+        let l = label[i];
+        match comp_to_label.get(&c) {
+            Some(&seen) => assert_eq!(
+                seen.to_bits(),
+                l.to_bits(),
+                "component {c} has two labels ({seen} and {l}): it did not fully merge"
+            ),
+            None => {
+                comp_to_label.insert(c, l);
+            }
+        }
+        match label_to_comp.get(&l.to_bits()) {
+            Some(&seen) => assert_eq!(
+                seen, c,
+                "label {l} spans components {seen} and {c}: it leaked across a closed site"
+            ),
+            None => {
+                label_to_comp.insert(l.to_bits(), c);
+            }
+        }
+    }
+    assert!(next > 20, "expected many clusters at p_c, found {next}");
+}
+
+/// What path compression is worth, measured rather than asserted.
+///
+/// Plain propagation moves a label one cell per step, so it costs the
+/// cluster's longest chemical path -- phase 0 measured a median 645
+/// rounds at 256² and 1,409 at 512². Reading the cell a label points at
+/// short-circuits that.
+#[test]
+#[ignore = "diagnostic"]
+fn percolation_convergence_against_grid_size() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    for n in [64u32, 128, 256, 512] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "percolation".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: n, height: n };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Zero;
+        cfg.seed = 9;
+        let mut r = SimRenderer::new(&device, &cfg, n, n);
+        r.seed(&device, &queue, &cfg);
+        let mut prev: Vec<u32> = Vec::new();
+        let mut rounds = 0;
+        for round in 1..=3000u32 {
+            r.run_steps(&device, &queue, &cfg, 1);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let f = read_rgba32f(&device, &queue, r.field_texture(), n, n);
+            let now: Vec<u32> = f.iter().map(|px| px[0].to_bits()).collect();
+            if now == prev {
+                rounds = round - 1;
+                break;
+            }
+            prev = now;
+        }
+        println!("{n}x{n}: converged in {rounds} rounds");
+    }
+}
