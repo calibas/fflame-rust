@@ -239,32 +239,81 @@ today; this mode is comparable in surface and larger in models, and
 the phases are ordered so that a usable product exists from the end of
 phase 1 onward.
 
-### Phase 0 — measure (no product code)
+### Phase 0 — measure (no product code) — DONE 2026-09-03
 
-- ~~A scratch GPU microbenchmark (a Rust test, not shipped code): a
-  four-channel 3×3 stencil ping-pong at 1080p and 4K, ms per step.~~
-  **Done 2026-09-03**, `src/sim_microbench.rs`, results in
-  [pipeline §10](simulation-pipeline.md). 1080p **0.495 ms/step** (34
-  per 60 fps frame, against a gate asking for 4); 4K **2.04 ms/step**
-  (8 per frame); throughput flat at 3–4 cells/ns, so it is
-  bandwidth-bound and the numbers carry to the other Tier-1 models,
-  which differ only in arithmetic. A 256² Gray–Scott still — 10,000
-  steps — is **0.22 s**.
-  One design consequence: **submission batching is worth 0.8% across a
-  256× range**, so K in pipeline §5 is a pacing and watchdog device
-  only, and the driver may submit one step at a time and re-read the
-  clock between them.
-- ~~Move the prototypes to `scripts/sim_prototypes/` with a README.~~
-  **Done 2026-09-03.**
-- NumPy prototypes for each remaining Tier-1 catalogue model's step
-  budget and seeding (Gray–Scott and McCabe done; the rest are one
-  script each — the README lists them).
-- The Abelian sandpile's parallel bulk-toppling round count for 2²⁰
-  grains — the one cost the catalogue could not estimate.
+Every item ran, and the gate is met: a step-cost table with no entry
+marked "estimate". The grid axis is the GPU microbenchmark; the model
+axis is one NumPy prototype per Tier-1 model plus the sandpile, all
+under `scripts/sim_prototypes/` with a README, every number recorded
+against its model in the [catalogue](simulation-catalog.md) with the
+date and the method.
 
-**Gate:** a step-cost table (model × grid → ms/step, steps to a
-still) with no entries marked "estimate". The grid axis is measured;
-the per-model step counts are what remain.
+**ms per step, the shared 3×3 `rgba32float` ping-pong** (GTX 1660
+SUPER, Vulkan; bandwidth-bound at 3–4 cells/ns, so it carries across
+the Tier-1 models, which differ only in arithmetic):
+
+| 256² | 512² | 1024² | 1920×1080 | 3840×2160 |
+|---|---|---|---|---|
+| 0.022 | 0.077 | 0.284 | 0.495 | 2.04 |
+
+**Steps to a still, or to a developed picture for models that never
+still** (256² unless stated; "never" means the churn plateaus rather
+than decays, and the number is where the picture stops changing
+character):
+
+| model | steps | note |
+|---|---|---|
+| Gray–Scott | thousands, ∝ grid | settle metric fires early; sized from images |
+| FitzHugh–Nagumo (excitable) | never · developed ≈ 4,000 | spirals need a broken-wave seed; dt cap 0.75 on the spiral |
+| Brusselator (spots) | **1,180** | dt cap 0.04 |
+| Brusselator (oscillating) | never | |
+| Schnakenberg (spots) | **4,900** | dt cap 0.02; steps ∝ D, ∝ λ² |
+| Hodgepodge | never · developed ≈ 200 | |
+| Cyclic CA 1/1/14 · 1/3/3 | never · ≈ 300 · ≈ 7 | per-model defaults |
+| Spatial RPS | never · ≈ 27 | three species coexist |
+| Ising T=1.5 · T_c · T=3.5 | ≈ 436 · ≈ 27 · ≈ 1 sweeps | T_c figure is a coarsening snapshot, not equilibrium |
+| Wolfram ECA | = grid height | exact by construction |
+| Packard snowflake | = radius (125) | exact; rule changes density, not timing |
+| Eden | radius/p · 127 → 1,158 for p 1 → 0.05 | overestimates ~2× at small p |
+| Ballistic deposition | ≈ 1.4–1.8 × grid height | 361 / 452 to fill 256 rows |
+| Percolation labels, p_c | 645 (256²) · 1,409 (512²) · ≈ 3,250 (1024², fit) | **4× spread between samples**; needs `settle`, not a count |
+| Abelian sandpile, 2²⁰ grains | **190,006 rounds** | ∼ N^0.978; ≈ 55 s of GPU dispatches |
+| McCabe | never · developed ≈ 100 | pyramid stage, phase 3 |
+
+Tiers 2–4 (Oregonator, Swift–Hohenberg, Cahn–Hilliard, Lenia,
+SmoothLife, Kobayashi, the snowfake, DLA, DBM, Saffman–Taylor, invasion
+percolation, Physarum) are outside this gate by design — each needs a
+stage the skeleton does not have yet, and its budget is measured when
+that stage exists.
+
+**What the measurements changed** — the reason the phase exists:
+
+- A FitzHugh–Nagumo Turing preset that produces a **flat field**
+  (spatial sd 0.0000) is struck. The excitable preset is confirmed and
+  needs its broken-wave seed as the default.
+- Three dt caps corrected: Brusselator 0.04 (was an untested 0.02),
+  Schnakenberg 0.02 (every rung now run), FHN 0.75 (a first probe on a
+  resting field said 0.5).
+- Percolation's budget was **3–5× low**, and the sample-to-sample
+  spread (332 vs 1,232 at one size) means a fixed `steps` cannot serve
+  it.
+- The sandpile's cost, which the catalogue could not estimate, is
+  rounds ∝ radius² — mass diffuses rather than propagates.
+- Submission batching is worth **0.8%** (pipeline §10), so the driver
+  may submit one step at a time and re-read the clock.
+- Turing feature size costs steps **linearly in D, quadratically in
+  wavelength**, exactly as the dt argument predicts. A first
+  measurement said the opposite and is retracted in the catalogue —
+  its settle criterion loosened with dt.
+
+**Traps the shader's `settle` stage inherits**, each found by falling
+into it: a step that changes nothing is not the end of a run; the
+settle metric fires during nucleation before a pattern exists (require
+an amplitude floor); the window is counted in steps and the onset is
+what gets reported; where a model clamps, count cells at the rails
+rather than watching for NaN; probe stability on the active
+configuration; one stochastic sample gives neither an exponent nor a
+budget.
 
 ### Phase 1 — skeleton (the whole vertical slice, one model)
 
