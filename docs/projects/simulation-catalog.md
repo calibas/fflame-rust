@@ -743,6 +743,17 @@ number (as an integer track) or the seed density.
 **Parameters.** `rule` (0–255, integer — with a `choices` list for the
 named ones: 30, 90, 110, 184, 54, 22, 126, 150), `seed_kind` (choices:
 single, random), `density`. Periodic in x.
+
+**Verified 2026-09-03** (`proto_wolfram.py`). Nothing to measure here —
+`steps` = grid height, exactly, by construction. What was checked
+instead is the **bit convention**, which is easy to get backwards while
+still producing something that looks like a cellular automaton: with
+the next state taken as bit (4·left + 2·self + right) of the rule
+number, rule 90 from a single seed reproduces Pascal's triangle mod 2
+on **2,079 of 2,079 cells** against independently computed binomials.
+All eight named rules render; live-cell fractions from a single seed
+range from 0.002 (rule 184) to 0.38 (rule 54), which is a usable
+smoke-test signature for the shader port.
 **Stages.** `update` (row), `color`. **Colouring.** `channel` binary,
 `age` (row index — a gradient down the diagram).
 
