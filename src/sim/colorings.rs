@@ -178,3 +178,71 @@ fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+
+/// Time since a cell last changed, through the palette.
+///
+/// The colouring the automata and growth models want: a cyclic CA's
+/// spiral arms, a growth front's rings and an Ising domain's coarsening
+/// are all a story about WHEN, and `channel` on the state itself shows
+/// only the final frame of it.
+///
+/// Reads `.z`, which every model writes as the step at which the cell
+/// last changed appreciably. Held rather than counted, so it is a
+/// timestamp and this colouring is the thing that turns it into an age.
+pub static AGE: SimColoringDef = SimColoringDef {
+    name: "age",
+    display_name: "Age",
+    description: "How long since each cell last changed. Growth rings, spiral arms and \
+                  coarsening fronts.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "window",
+            display_name: "Window (steps)",
+            default: 64.0,
+            min: 1.0,
+            max: 10000.0,
+            tooltip: "How many steps back the palette spans. Anything older than this \
+                      lands at the far end.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "invert",
+            display_name: "Direction",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Whether recent changes take the near end of the palette or the far end.",
+            choices: &["Recent first", "Oldest first"],
+        },
+        SimParamDef {
+            name: "wrap",
+            display_name: "Wrap",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Wrapping repeats the palette every window, which draws growth rings \
+                      explicitly; clamping fades once.",
+            choices: &["Clamp", "Wrap"],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
+    let window = max(cparam(0u), 1.0);
+    // Age relative to NOW, so the picture reads the same at step 500
+    // and step 50,000 rather than saturating as the run goes on.
+    let elapsed = max(f32(sim_step_index()) - s.z, 0.0);
+    var t = elapsed / window;
+    if (cparam(2u) >= 0.5) {
+        t = fract(t);
+    } else {
+        t = clamp(t, 0.0, 1.0);
+    }
+    if (cparam(1u) >= 0.5) {
+        t = 1.0 - t;
+    }
+    return vec4<f32>(sim_palette(t), 1.0);
+}
+"#,
+};

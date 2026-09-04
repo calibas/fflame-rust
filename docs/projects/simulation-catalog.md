@@ -642,7 +642,8 @@ Rgba32Float, pipeline §3.1) or a float channel holding an integer;
 **Measured 2026-09-03** (`proto_cellular_automata.py`, 256²): the
 secondary-source parameters **q = 200, k₁ = 2, k₂ = 3, g = 70 are
 CONFIRMED** — a dense field of BZ spirals and scrolls from a uniform
-random seed, 129 of 201 states occupied. **Not** developed by step 50
+random seed, 129 of 201 states occupied. Shipped 2026-09-04 as the
+`spirals` preset. **Not** developed by step 50
 (one dominant state with scattered specks — checked, after a first
 draft of this note claimed otherwise without looking); fully spiralled
 by step 200. Never stills (churn plateau 0.97, i.e. almost every cell
@@ -679,7 +680,8 @@ taps). Periodic.
 **Presets.** 1/1/14 von Neumann; 1/3/3 Moore ("313"); R = 2..3
 "turbulent" sets `[verify each on the Wikipedia/MCell lists]`.
 
-**Measured 2026-09-03.** **1/1/14 von Neumann CONFIRMED**: the textbook
+**Measured 2026-09-03**, both shipped 2026-09-04 as presets.
+**1/1/14 von Neumann CONFIRMED**: the textbook
 debris → droplets → spirals sequence, fully spiralised by ~300 steps
 (churn plateau 0.99), giving the characteristic 45° diamond fronts of a
 range-1 von Neumann neighbourhood. All 14 states survive. **1/3/3
@@ -714,7 +716,8 @@ random-site Monte Carlo of the paper; spirals form either way.
 **Parameters.** `p_sel`, `p_rep`, `mobility`, `species` (3 or 5 —
 five-species RPS-lizard-Spock forms two-level spirals).
 
-**Measured 2026-09-03.** p_sel = p_rep = 1, three species, synchronous
+**Measured 2026-09-03**, shipped 2026-09-04. p_sel = p_rep = 1,
+three species, synchronous
 parallel update: developed by ~27 steps, churn plateau 0.15, and **all
 three species coexist** — the biodiversity the model is about survives
 the synchronous update, which the discretisation note flagged as a
@@ -1289,7 +1292,18 @@ right order with plausible magnitudes:
 
 Ordered below, disordered above, in between at T_c. That validates
 the checkerboard split as implemented (a broken one gives wrong
-statistics at every T). It is **not** an equilibrium measurement at
+statistics at every T).
+
+**The GPU port is checked against Onsager instead (2026-09-04), and
+the observable changed for a reason.** Magnetisation is global and
+equilibrates by domain coarsening, so on a 128² lattice at 600 sweeps
+it measured 0.090 for T = 1.5 — *below* its own critical value, purely
+because the lattice sat in a multi-domain state; left running it
+reaches 0.985. The nearest-neighbour correlation is local, flat from
+~100 sweeps, monotonic in T, and has an **exact** value at T_c:
+1/√2 = 0.7071. Measured on the GPU at 100 sweeps: **0.952 / 0.691 /
+0.332** for T = 1.5 / T_c / 3.5. That is a quantitative check against
+an analytic result rather than against a previous run. It is **not** an equilibrium measurement at
 T_c: 600 sweeps from a random start grows the correlation length to
 ~t^(1/z) ≈ 19 cells against L = 256, so the 0.33 is a coarsening
 snapshot and should not be quoted as the critical magnetisation. The

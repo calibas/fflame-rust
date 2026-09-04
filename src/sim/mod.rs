@@ -103,6 +103,10 @@ pub enum ModelFeature {
     /// the export contract is "the state at step N" rather than "the
     /// converged picture".
     NeverStills,
+    /// The rule has no time step: a cellular automaton advances by one
+    /// generation, not by `dt` of model time. The panel hides the dt
+    /// slider rather than showing a control that does nothing.
+    NoTimeStep,
 }
 
 /// Capability flags a colouring opts into.
@@ -231,11 +235,15 @@ pub static MODELS: &[&ModelDef] = &[
     &models::FITZHUGH_NAGUMO,
     &models::BRUSSELATOR,
     &models::SCHNAKENBERG,
+    &models::HODGEPODGE,
+    &models::CYCLIC_CA,
+    &models::SPATIAL_RPS,
+    &models::ISING,
 ];
 
 /// Every colouring, in registration order. Append only.
 pub static COLORINGS: &[&SimColoringDef] =
-    &[&colorings::CHANNEL, &colorings::TWO_CHANNEL];
+    &[&colorings::CHANNEL, &colorings::TWO_CHANNEL, &colorings::AGE];
 
 /// Look up a model by name, falling back to the first registered one.
 ///

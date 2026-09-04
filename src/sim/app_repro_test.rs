@@ -594,3 +594,190 @@ fn boundary_mode_step_cost_at_1080p() {
         );
     }
 }
+
+/// The Ising model must reproduce the phase transition quantitatively,
+/// and it is checked against an EXACT result rather than a screenshot.
+///
+/// The observable is the nearest-neighbour correlation, not the
+/// magnetisation. Magnetisation is the obvious choice and the wrong
+/// one: it is a global quantity that equilibrates by domain
+/// coarsening, so at 600 sweeps on a 128 lattice it was measured at
+/// 0.090 for T = 1.5 -- below its own critical value, purely because
+/// the lattice was sitting in a multi-domain state. Left running it
+/// reaches 0.985, so the dynamics were right and the observable was
+/// slow. Correlation is local, equilibrates within ~100 sweeps, and is
+/// monotonic in temperature.
+///
+/// At T_c the 2-D square-lattice correlation is exactly 1/sqrt(2)
+/// (Onsager), which is a real reference to check against. Measured
+/// here across 100-20,000 sweeps: 0.679-0.728, centred on 0.707.
+///
+/// A broken checkerboard -- updating both sublattices at once -- still
+/// renders plausible domains while giving the wrong statistics, so a
+/// baseline image cannot catch it and this can.
+#[test]
+fn ising_matches_onsagers_correlation_across_the_transition() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    // 100 sweeps: the correlation is flat from there to 20,000.
+    const STEPS: u32 = 200;
+
+    let correlation = |t: f32| -> f64 {
+        let mut cfg = SimConfig::default();
+        cfg.model = "ising".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.model_params.insert("temperature".into(), t);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        for px in &f {
+            assert!(
+                px[0] == 1.0 || px[0] == -1.0,
+                "spin {} is not +/-1 at T = {t}",
+                px[0]
+            );
+        }
+        let n = N as usize;
+        let mut corr = 0.0f64;
+        for y in 0..n {
+            for x in 0..n {
+                let sc = f[y * n + x][0] as f64;
+                corr += sc * f[y * n + (x + 1) % n][0] as f64;
+                corr += sc * f[((y + 1) % n) * n + x][0] as f64;
+            }
+        }
+        corr / (2 * n * n) as f64
+    };
+
+    let cold = correlation(1.5);
+    let critical = correlation(2.269);
+    let hot = correlation(3.5);
+    const ONSAGER: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    println!(
+        "Ising <s_i s_j>: T=1.5 {cold:.3}   T_c {critical:.3} (exact {ONSAGER:.3})   \
+         T=3.5 {hot:.3}"
+    );
+
+    assert!(cold > 0.90, "T = 1.5 should be strongly correlated, got {cold:.3}");
+    assert!(
+        (critical - ONSAGER).abs() < 0.05,
+        "at T_c the correlation should be Onsager's {ONSAGER:.4}, got {critical:.3}"
+    );
+    assert!(
+        (0.25..0.45).contains(&hot),
+        "T = 3.5 should be weakly correlated but not free, got {hot:.3}"
+    );
+    assert!(
+        cold > critical && critical > hot,
+        "correlation must fall monotonically with temperature: \
+         {cold:.3} / {critical:.3} / {hot:.3}"
+    );
+}
+
+/// A cyclic CA must actually cycle: every state occupied, and the
+/// field still changing after it has developed.
+///
+/// Cheap, and it catches the two ways this rule dies silently -- a
+/// wrong modulo freezes it on one state, and a wrong threshold
+/// comparison makes every cell advance every step, which looks like
+/// motion but is just a global counter.
+#[test]
+fn cyclic_ca_occupies_every_state_and_keeps_moving() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let mut cfg = SimConfig::default();
+    cfg.model = "cyclic_ca".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.seed = 5;
+    let states = 14usize;
+
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let a = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let mut seen = vec![0usize; states];
+    for px in &a {
+        let v = px[0];
+        assert!(
+            v >= 0.0 && v < states as f32 && v.fract() == 0.0,
+            "state {v} is outside 0..{states} or not an integer"
+        );
+        seen[v as usize] += 1;
+    }
+    assert!(
+        seen.iter().all(|&c| c > 0),
+        "every state should be occupied after 300 steps: {seen:?}"
+    );
+
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let b = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let changed = a.iter().zip(&b).filter(|(x, y)| x[0] != y[0]).count();
+    assert!(changed > 0, "a spiralled cyclic CA must keep advancing");
+    // NOT an upper bound on `changed`. A first version asserted that
+    // fewer than all cells advance, reasoning that a threshold which
+    // always passed would advance everything -- but phase 0 measured
+    // the churn plateau for 1/1/14 at 0.986, so a mature spiral field
+    // really does advance almost every cell every step. That is what
+    // makes the spirals rotate, and the assertion was encoding an
+    // expectation the measurement had already contradicted.
+    //
+    // The discriminator against a rule that always fires is the STATE
+    // distribution checked above: it would turn the lattice into one
+    // global counter, so every cell would hold the same value.
+    let first = a[0][0];
+    assert!(
+        a.iter().any(|px| px[0] != first),
+        "every cell holds the same state -- the rule has become a global counter"
+    );
+}
+
+/// Is the Ising lattice coarsening, or stuck?
+#[test]
+#[ignore = "diagnostic"]
+fn ising_coarsening_curve() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 128;
+    for t in [1.5f32, 2.269, 3.5] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "ising".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.model_params.insert("temperature".into(), t);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let mut line = format!("T={t:<6}");
+        for target in [200u32, 600, 1200, 4000, 12000, 40000] {
+            let have = r.step_index();
+            r.run_steps(&device, &queue, &cfg, target - have);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+            let n = N as usize;
+            let mut corr = 0.0f64;
+            for y in 0..n {
+                for x in 0..n {
+                    let sc = f[y * n + x][0] as f64;
+                    corr += sc * f[y * n + (x + 1) % n][0] as f64;
+                    corr += sc * f[((y + 1) % n) * n + x][0] as f64;
+                }
+            }
+            corr /= (2 * n * n) as f64;
+            line.push_str(&format!("  {}:{:.3}", target / 2, corr));
+        }
+        println!("{line}");
+    }
+}

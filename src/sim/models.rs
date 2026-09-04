@@ -607,3 +607,511 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 0.02,
     default_dt: 0.01,
 };
+
+
+// ---------------------------------------------------------------------
+// Cellular automata.
+//
+// Integer state rides in an f32 channel: every integer up to 2^24 is
+// exact, which covers every state count in the catalogue, and it keeps
+// one binding path instead of adding an r32uint texture for no gain.
+// None of these has a time step -- a generation is a generation -- so
+// they declare NoTimeStep and the panel hides the dt slider.
+// ---------------------------------------------------------------------
+
+/// The hodgepodge machine (Gerhardt-Schuster), a Belousov-Zhabotinsky
+/// cellular automaton.
+///
+/// States 0..q: 0 healthy, q ill, everything between infected. With A
+/// the count of infected neighbours, B the count of ill ones and S the
+/// sum of the cell and its neighbours,
+///
+/// ```text
+/// healthy:   s' = floor(A/k1) + floor(B/k2)
+/// infected:  s' = floor(S/(A+B+1)) + g
+/// ill:       s' = 0
+/// ```
+///
+/// capped at q. Measured on the CPU prototype: the secondary-source
+/// parameters q=200, k1=2, k2=3, g=70 give the BZ spiral field, but
+/// NOT by step 50 -- at 50 it is one state with scattered specks, and
+/// it is fully spiralled by 200.
+///
+/// Channels: `.x` = state, `.z` = age, `.w` spare.
+pub static HODGEPODGE: ModelDef = ModelDef {
+    name: "hodgepodge",
+    display_name: "Hodgepodge",
+    description: "Belousov–Zhabotinsky as a cellular automaton: dense interlocking \
+                  spirals and scrolls in an excitable integer medium.",
+    features: &[ModelFeature::NeverStills, ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "states",
+            display_name: "States (q)",
+            default: 200.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many levels of infection. Larger q gives smoother spiral arms \
+                      and a longer refractory period.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "k1",
+            display_name: "k₁ (infection)",
+            default: 2.0,
+            min: 1.0,
+            max: 16.0,
+            tooltip: "Divides the infected-neighbour count when a healthy cell is infected. \
+                      Larger values make infection harder to catch.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "k2",
+            display_name: "k₂ (illness)",
+            default: 3.0,
+            min: 1.0,
+            max: 16.0,
+            tooltip: "Divides the ill-neighbour count. With k₁ it sets how readily waves \
+                      nucleate.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "g",
+            display_name: "g (rate)",
+            default: 70.0,
+            min: 1.0,
+            max: 200.0,
+            tooltip: "How fast an infected cell progresses toward ill. Sets the wave speed \
+                      and therefore the spiral pitch.",
+            choices: &[],
+        },
+    ],
+    presets: &[SimPreset {
+        name: "spirals",
+        display_name: "BZ spirals",
+        params: &[("states", 200.0), ("k1", 2.0), ("k2", 3.0), ("g", 70.0)],
+        // Fully spiralled by 200; at 50 it is still one state with
+        // specks, which an earlier note claimed was "developed".
+        steps: 200,
+        init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+    }],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let q = floor(mparam(0u));
+    let k1 = max(floor(mparam(1u)), 1.0);
+    let k2 = max(floor(mparam(2u)), 1.0);
+    let g = floor(mparam(3u));
+
+    var infected = 0.0;
+    var ill = 0.0;
+    var total = s.x;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            let n = sim_read(p + vec2<i32>(dx, dy)).x;
+            total = total + n;
+            if (n >= q) {
+                ill = ill + 1.0;
+            } else if (n > 0.0) {
+                infected = infected + 1.0;
+            }
+        }
+    }
+
+    let cur = s.x;
+    var next = 0.0;
+    if (cur >= q) {
+        // Ill cells recover completely.
+        next = 0.0;
+    } else if (cur <= 0.0) {
+        next = floor(infected / k1) + floor(ill / k2);
+    } else {
+        next = floor(total / (infected + ill + 1.0)) + g;
+    }
+    next = clamp(next, 0.0, q);
+
+    let moved = next != cur;
+    let age = select(s.z, f32(sim_step_index()), moved);
+    return vec4<f32>(next, 0.0, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Uniform random states. The mask is ignored: this medium needs a
+    // disordered start everywhere, and seeding a shape into it just
+    // leaves the rest healthy and inert.
+    let q = floor(mparam(0u));
+    return vec4<f32>(floor(sim_rand(p, 0x91u) * (q + 1.0)), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 200,
+    // No time step: a generation is a generation. The value is unused,
+    // and the panel hides the slider.
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+/// Cyclic cellular automaton (Fisch-Gravner-Griffeath).
+///
+/// A cell in state `s` advances to `(s + 1) mod N` when at least `T` of
+/// its neighbours within range `R` are already there. From random
+/// states the system passes through debris, then droplets, then
+/// spirals.
+///
+/// Measured: 1/1/14 von Neumann is fully spiralled by ~300 steps and
+/// gives the characteristic 45-degree diamond fronts of a range-1 von
+/// Neumann neighbourhood; 1/3/3 Moore develops in ~7 and is far
+/// quieter. The two want very different `steps`, which is why the
+/// defaults are per-preset.
+///
+/// Channels: `.x` = state, `.z` = age, `.w` spare.
+pub static CYCLIC_CA: ModelDef = ModelDef {
+    name: "cyclic_ca",
+    display_name: "Cyclic CA",
+    description: "States chase each other around a cycle: debris coarsens into droplets \
+                  and then into spirals whose cores never settle.",
+    features: &[ModelFeature::NeverStills, ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "states",
+            display_name: "States (N)",
+            default: 14.0,
+            min: 3.0,
+            max: 24.0,
+            tooltip: "Length of the cycle. More states means a longer path back around, \
+                      so spirals have more arms and take longer to form.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "range",
+            display_name: "Range (R)",
+            default: 1.0,
+            min: 1.0,
+            max: 5.0,
+            tooltip: "Neighbourhood radius. Cost grows as R²: range 5 is 121 taps a cell.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "threshold",
+            display_name: "Threshold (T)",
+            default: 1.0,
+            min: 1.0,
+            max: 25.0,
+            tooltip: "How many neighbours must already hold the next state. Written R/T/N \
+                      in the literature.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "neighbourhood",
+            display_name: "Neighbourhood",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Von Neumann counts the diamond (|dx| + |dy| ≤ R) and gives 45° \
+                      fronts; Moore counts the square.",
+            choices: &["Von Neumann", "Moore"],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "spirals_1_1_14",
+            display_name: "1/1/14 spirals",
+            params: &[
+                ("states", 14.0),
+                ("range", 1.0),
+                ("threshold", 1.0),
+                ("neighbourhood", 0.0),
+            ],
+            steps: 300,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "moore_1_3_3",
+            display_name: "1/3/3 Moore",
+            params: &[
+                ("states", 3.0),
+                ("range", 1.0),
+                ("threshold", 3.0),
+                ("neighbourhood", 1.0),
+            ],
+            steps: 60,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let n_states = max(floor(mparam(0u)), 2.0);
+    let r = i32(clamp(floor(mparam(1u)), 1.0, 5.0));
+    let thresh = max(floor(mparam(2u)), 1.0);
+    let moore = mparam(3u) >= 0.5;
+
+    let cur = floor(s.x);
+    let want = fract_state(cur + 1.0, n_states);
+
+    var count = 0.0;
+    for (var dy = -r; dy <= r; dy = dy + 1) {
+        for (var dx = -r; dx <= r; dx = dx + 1) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            if (!moore && abs(dx) + abs(dy) > r) {
+                continue;
+            }
+            if (floor(sim_read(p + vec2<i32>(dx, dy)).x) == want) {
+                count = count + 1.0;
+            }
+        }
+    }
+
+    let advance = count >= thresh;
+    let next = select(cur, want, advance);
+    let age = select(s.z, f32(sim_step_index()), advance);
+    return vec4<f32>(next, 0.0, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    let n_states = max(floor(mparam(0u)), 2.0);
+    return vec4<f32>(floor(sim_rand(p, 0xa1u) * n_states), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 300,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+/// Spatial rock-paper-scissors: cyclic competition on a lattice.
+///
+/// Each cell picks one random neighbour; if that neighbour's species
+/// beats it, it is taken over with probability `p_sel`. An empty cell
+/// is colonised by a random non-empty neighbour with probability
+/// `p_rep`.
+///
+/// Measured: with p_sel = p_rep = 1 and three species, all three
+/// coexist and the field develops by ~27 steps. The synchronous
+/// parallel update differs from the paper's sequential random-site
+/// Monte Carlo; the coexistence survives it, which is the property
+/// worth checking.
+///
+/// Channels: `.x` = species (0 empty, 1..k), `.z` = age, `.w` spare.
+pub static SPATIAL_RPS: ModelDef = ModelDef {
+    name: "spatial_rps",
+    display_name: "Spatial RPS",
+    description: "Cyclic competition: each species beats the next and loses to the one \
+                  before, and no species can win. Rotating domain spirals.",
+    features: &[
+        ModelFeature::NeedsRng,
+        ModelFeature::NeverStills,
+        ModelFeature::NoTimeStep,
+    ],
+    parameters: &[
+        SimParamDef {
+            name: "species",
+            display_name: "Species",
+            default: 3.0,
+            min: 3.0,
+            max: 5.0,
+            tooltip: "Length of the dominance cycle. Five species (rock-paper-scissors-\
+                      lizard-Spock) forms two nested levels of spiral.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "p_select",
+            display_name: "Predation rate",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Chance a cell is taken over by a neighbour that beats it. Lower \
+                      values slow the fronts and widen the domains.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "p_reproduce",
+            display_name: "Colonisation rate",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Chance an empty cell is colonised by a neighbour.",
+            choices: &[],
+        },
+    ],
+    presets: &[SimPreset {
+        name: "three_species",
+        display_name: "Three species",
+        params: &[("species", 3.0), ("p_select", 1.0), ("p_reproduce", 1.0)],
+        steps: 400,
+        init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+    }],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let k = max(floor(mparam(0u)), 3.0);
+    let p_sel = mparam(1u);
+    let p_rep = mparam(2u);
+
+    // One random neighbour of the eight. Unrolled rather than indexed:
+    // WGSL has no dynamic vector indexing, and eight branches cost less
+    // than the array round-trip would.
+    let pick = i32(floor(sim_rand(p, 0xb1u) * 8.0));
+    var off = vec2<i32>(-1, -1);
+    if (pick == 1) { off = vec2<i32>(0, -1); }
+    else if (pick == 2) { off = vec2<i32>(1, -1); }
+    else if (pick == 3) { off = vec2<i32>(-1, 0); }
+    else if (pick == 4) { off = vec2<i32>(1, 0); }
+    else if (pick == 5) { off = vec2<i32>(-1, 1); }
+    else if (pick == 6) { off = vec2<i32>(0, 1); }
+    else if (pick >= 7) { off = vec2<i32>(1, 1); }
+
+    let cur = floor(s.x);
+    let other = floor(sim_read(p + off).x);
+    var next = cur;
+
+    if (cur <= 0.0) {
+        // Empty: colonised by whatever it happened to look at.
+        if (other > 0.0 && sim_rand(p, 0xb2u) < p_rep) {
+            next = other;
+        }
+    } else if (other > 0.0) {
+        // `other` beats `cur` when other == cur + 1 in the cycle, with
+        // species numbered 1..k.
+        let beats = fract_state(cur, k) + 1.0;
+        if (other == beats && sim_rand(p, 0xb3u) < p_sel) {
+            next = other;
+        }
+    }
+
+    let moved = next != cur;
+    let age = select(s.z, f32(sim_step_index()), moved);
+    return vec4<f32>(next, 0.0, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Species 0..k inclusive: 0 is empty, so a fraction of the lattice
+    // starts open and the fronts have somewhere to grow into.
+    let k = max(floor(mparam(0u)), 3.0);
+    return vec4<f32>(floor(sim_rand(p, 0xb0u) * (k + 1.0)), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 400,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+/// The Ising model, Metropolis dynamics on a checkerboard.
+///
+/// Spins ±1; a flip costs `dE = 2 s (J * sum_neighbours + H)` and is
+/// accepted with probability `min(1, exp(-dE / T))`. Onsager's critical
+/// temperature is `2 / ln(1 + sqrt(2)) ~= 2.269`.
+///
+/// **One step is one HALF-sweep.** The two sublattices update
+/// alternately, chosen by the step index's parity, because a cell's
+/// energy then depends only on cells that are not moving — a fully
+/// synchronous update breaks detailed balance and gives the wrong
+/// statistics. So a sweep is two steps, and the presets' step counts
+/// are twice their sweep counts.
+///
+/// Measured across the transition (600 sweeps from random, |m| over the
+/// last 50): 0.90 at T = 1.5, 0.33 at T_c, 0.007 at T = 3.5.
+///
+/// Channels: `.x` = spin, `.z` = age, `.w` spare.
+pub static ISING: ModelDef = ModelDef {
+    name: "ising",
+    display_name: "Ising",
+    description: "Spins on a lattice at temperature T. Domains coarsen below the critical \
+                  point, are fractal at it, and are noise above it.",
+    features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "temperature",
+            display_name: "Temperature",
+            default: 2.269,
+            min: 0.2,
+            max: 5.0,
+            tooltip: "Onsager's critical temperature is 2.269. Below it domains coarsen; \
+                      at it the clusters are fractal at every scale; above it the lattice \
+                      is uncorrelated noise.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "field",
+            display_name: "External field (H)",
+            default: 0.0,
+            min: -1.0,
+            max: 1.0,
+            tooltip: "Biases one spin direction. Any nonzero value eventually magnetises \
+                      the whole lattice.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "coupling",
+            display_name: "Coupling (J)",
+            default: 1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Positive couples neighbours (ferromagnetic); negative anti-couples \
+                      them and gives a checkerboard ground state.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "critical",
+            display_name: "Critical (T_c)",
+            params: &[("temperature", 2.269), ("field", 0.0), ("coupling", 1.0)],
+            // 600 sweeps; a step is a half-sweep.
+            steps: 1200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "coarsening",
+            display_name: "Coarsening",
+            params: &[("temperature", 1.5), ("field", 0.0), ("coupling", 1.0)],
+            // Measured to need ~436 sweeps before it looks like anything.
+            steps: 1000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // CHECKERBOARD. Only one sublattice moves per step, so every cell
+    // this pass considers has neighbours that are all standing still.
+    // A fully synchronous Metropolis update breaks detailed balance and
+    // gives the wrong equilibrium, which is a wrong picture rather than
+    // an obviously broken one.
+    let parity = i32(sim_step_index() % 2u);
+    if (((p.x + p.y) & 1) != parity) {
+        return s;
+    }
+
+    let temp = max(mparam(0u), 1.0e-3);
+    let h = mparam(1u);
+    let j = mparam(2u);
+
+    let spin = s.x;
+    let neighbours = sim_read(p + vec2<i32>(0, -1)).x
+        + sim_read(p + vec2<i32>(0, 1)).x
+        + sim_read(p + vec2<i32>(-1, 0)).x
+        + sim_read(p + vec2<i32>(1, 0)).x;
+    let de = 2.0 * spin * (j * neighbours + h);
+
+    // clamp before exp: at low temperature de/temp reaches the hundreds,
+    // and exp of that is an infinity the comparison would still answer
+    // correctly but which shows up in a NaN sweep as a false positive.
+    let accept = de <= 0.0 || sim_rand(p, 0xc1u) < exp(-clamp(de / temp, 0.0, 60.0));
+    let next = select(spin, -spin, accept);
+    let age = select(s.z, f32(sim_step_index()), accept);
+    return vec4<f32>(next, 0.0, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Infinite temperature: half up, half down.
+    return vec4<f32>(select(-1.0, 1.0, sim_rand(p, 0xc0u) < 0.5), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 1200,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
