@@ -599,6 +599,14 @@ Rgba32Float, pipeline §3.1) or a float channel holding an integer;
 
 **Parameters.** `q` (integer), `k1`, `k2`, `g` (integers), `variant`
 (choices: gerhardt_schuster, bz2).
+
+**Measured 2026-09-03** (`proto_cellular_automata.py`, 256²): the
+secondary-source parameters **q = 200, k₁ = 2, k₂ = 3, g = 70 are
+CONFIRMED** — a dense field of BZ spirals and scrolls from a uniform
+random seed, 129 of 201 states occupied. Developed by ~50 steps; never
+stills (churn plateau 0.97, i.e. almost every cell changes every step).
+The source attribution stays `[verify]` — running the rule confirms the
+rule, not the citation.
 **Stages.** `update`, `color`. Periodic.
 **Colouring.** `channel` on s/q through the palette (the classic
 rainbow spirals), `age`.
@@ -627,6 +635,14 @@ taps). Periodic.
 (choices: moore, von_neumann).
 **Presets.** 1/1/14 von Neumann; 1/3/3 Moore ("313"); R = 2..3
 "turbulent" sets `[verify each on the Wikipedia/MCell lists]`.
+
+**Measured 2026-09-03.** **1/1/14 von Neumann CONFIRMED**: the textbook
+debris → droplets → spirals sequence, fully spiralised by ~300 steps
+(churn plateau 0.99), giving the characteristic 45° diamond fronts of a
+range-1 von Neumann neighbourhood. All 14 states survive. **1/3/3
+Moore** develops far faster — ~7 steps — and is much quieter (churn
+0.12), so the two want very different default `steps`. Neither stills;
+per-model defaults are the right call (open question 7).
 **Stages.** `update`, `color`. **Colouring.** `channel` on s/N
 (cyclic palette).
 
@@ -654,6 +670,12 @@ Note the parallel synchronous update differs from the sequential
 random-site Monte Carlo of the paper; spirals form either way.
 **Parameters.** `p_sel`, `p_rep`, `mobility`, `species` (3 or 5 —
 five-species RPS-lizard-Spock forms two-level spirals).
+
+**Measured 2026-09-03.** p_sel = p_rep = 1, three species, synchronous
+parallel update: developed by ~27 steps, churn plateau 0.15, and **all
+three species coexist** — the biodiversity the model is about survives
+the synchronous update, which the discretisation note flagged as a
+difference from the paper's sequential Monte Carlo.
 **Stages.** `update` (RNG), `color`. **Colouring.** `channel` with a
 categorical palette.
 
@@ -787,6 +809,16 @@ cheapest way to get a "snowflake" on screen while §18 is being built.
 **Stages.** `update`, `color`. **Colouring.** `age` (freeze time as
 the palette coordinate gives the growth-ring snowflake).
 
+**Measured 2026-09-03** on the offset-row hex lattice the shader will
+use (row parity changes the six neighbour offsets — the prototype does
+it that way rather than pretending the lattice is square). Rules
+S = {1}, {1,3} and {1,3,4} all reach the edge of a 256² grid in
+**exactly 125 steps**, which is the radius: `steps ≈ radius` is exact,
+not approximate, because the fastest growth direction advances one cell
+per step regardless of the rule. What the rule changes is density —
+45%, 57% and 66% of the disc filled respectively — so `steps` can be
+derived from the grid and needs no per-rule tuning.
+
 ---
 
 ## 18. Gravner–Griffeath snowfake (mesoscopic 2-D model)
@@ -910,6 +942,29 @@ seed gives the growing rough front that shows the KPZ scaling).
 **Stages.** `update` (RNG), `color`. **Colouring.** `age` (the
 growth-ring texture is the whole point).
 
+**Measured 2026-09-03** (`proto_growth.py`, 256², steps until the
+cluster reaches the edge):
+
+| p | seed | steps |
+|---|---|---|
+| 1.0 | point | 127 (= the radius exactly) |
+| 0.3 | point | 256 |
+| 0.05 | point | 1,158 |
+| 0.3 | line | 505 |
+
+So `steps ≈ radius / p` **overestimates by about 2× at small p** — at
+p = 0.05 it predicts 2,560 against 1,158 measured, because the front is
+long and many sites get their chance each step. Use radius / (2p) as
+the default.
+
+Two implementation notes the prototype had to get right, and the shader
+will too. A step that grows **nothing** is not the end of the run: at
+p = 0.05 a four-neighbour front adds nothing on ~81% of steps, so a
+`settle` on "no change this step" stops the model almost immediately.
+And the neighbourhood must be **periodic in x only** — with a wrapping
+y a line seed on the bottom row grows straight into the top row on step
+one.
+
 ---
 
 ## 21. Ballistic deposition
@@ -934,6 +989,18 @@ side buffer. A `steps` of ~grid height fills the picture.
 on/off — off gives random deposition, no correlations).
 **Stages.** `update`, `color`. Periodic in x.
 **Colouring.** `age` (arrival time), `channel`.
+
+**Measured 2026-09-03**, 256 columns, p = 0.5, to fill the grid:
+**361 steps with sideways sticking, 452 without** — so "≈ grid height"
+is right to within a factor of 1.4–1.8, and lateral sticking fills
+faster because it builds overhangs.
+
+The interface width separates the two universality classes as it
+should: **w = 2.84 with sideways sticking against 10.59 without**. That
+is the KPZ β = 1/3 against random deposition's β = 1/2, and it is worth
+keeping as a regression check — the `sideways` toggle is the difference
+between a correlated interface and an uncorrelated one, and getting it
+backwards would still *look* like a rough surface.
 
 ---
 
@@ -1042,6 +1109,27 @@ distance_from_seed, spanning_only), `lattice` (choices: site, bond).
 **Colouring.** `channel` categorical on label (hash → hue), `age` on
 chemical distance.
 
+**Measured 2026-09-03, and the estimate above is 3–5× LOW.** Label
+propagation costs the longest *chemical* path in the cluster, which at
+p_c is far longer than the geometric diameter. Five seeds per size:
+
+| L | median rounds | range |
+|---|---|---|
+| 128 | 272 | 223 – 445 |
+| 256 | 645 | 485 – 760 |
+| 512 | 1,409 | 776 – 2,413 |
+
+Median rounds ∼ L^1.19, worst ∼ L^1.22, so **L = 1024 extrapolates to
+≈ 3,250 rounds typical and ≈ 5,100 worst** — against the "~10³ steps at
+1024²" guessed above.
+
+**The spread is the design constraint, not the median.** Two 256²
+samples measured 332 and 1,232 rounds — a 4× swing at one size, because
+at p_c the spanning cluster is critical and its longest path is not
+self-averaging. A fixed `steps` cannot serve this model: it needs the
+`settle` reduction to stop it, with a generous cap. Away from p_c it is
+cheaper and much better behaved (p = 0.5 → 100 rounds).
+
 ---
 
 ## 25. Invasion percolation
@@ -1092,6 +1180,21 @@ RNG; spins as a float channel ±1 (or bitcast u32). Periodic.
 **Parameters.** `T` (0.5–5, with T_c marked), `H` (−1–1), `J`,
 `algorithm` (choices: metropolis, heat_bath), `sweeps_per_step`.
 **Presets.** T = T_c (critical), T = 1.5 (coarsening from noise).
+
+**Measured 2026-09-03**, checkerboard Metropolis at 256², |m| averaged
+over the last 50 sweeps — the phase transition is reproduced
+quantitatively:
+
+| T | ⟨\|m\|⟩ | churn | developed |
+|---|---|---|---|
+| 1.5 (ordered) | **0.90** | 0.016 | 436 sweeps |
+| 2.269 (T_c) | **0.33** | 0.207 | 27 |
+| 3.5 (disordered) | **0.007** | 0.548 | 1 |
+
+Ordered below, critical at Onsager's T_c, noise above. The
+checkerboard split is therefore validated as implemented, and the
+`steps` default should be **per-preset**: coarsening needs ~400 sweeps
+to look like anything, the critical and hot states need almost none.
 **Stages.** `update` ×2, `color`. **Colouring.** `channel` binary,
 `age` (time since last flip — the coarsening fronts light up),
 `hillshade` on a locally averaged spin (the pyramid's level 2 gives
