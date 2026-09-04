@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "71fb0461",
+  "git_hash": "c2859f4d",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -442,6 +442,10 @@
       "bytes": 35605,
       "sha256": "b7237c6474131dd9ef1651fb040bd10daf254fbc9578641c8fb906eeb11ac459"
     },
+    "sim-ballistic-deposition.png": {
+      "bytes": 8735,
+      "sha256": "3a5470eb1a9516fd462cc7b5deda0d71de0df3e0b9288902591f6142cb65ed55"
+    },
     "sim-brusselator-oscillating.png": {
       "bytes": 14565,
       "sha256": "81f5e45e679788d5abeaf50fcfafe517e73cfd1b3eec32de620aa051f630f629"
@@ -461,6 +465,14 @@
     "sim-cyclic-ca-moore-1-3-3.png": {
       "bytes": 34210,
       "sha256": "b15424ab0b7861a3b6816c346af2fb42045dfdc5894891cf63aef07b310fd875"
+    },
+    "sim-eden-cluster.png": {
+      "bytes": 11681,
+      "sha256": "1edd7718021b6a47d9ab01e9233e043e8ba0de96f12196306363253b8d11a7e1"
+    },
+    "sim-eden-rough-front.png": {
+      "bytes": 9313,
+      "sha256": "a2826a96eaad62df3c33dcb2171b81e6e6331b67f7aefe55106d122dfcd677eb"
     },
     "sim-fitzhugh-nagumo-spiral.png": {
       "bytes": 4378,
@@ -502,6 +514,10 @@
       "bytes": 28206,
       "sha256": "96288821e6f52bc43b639de96829cfbc5c08814bb8e15f809a98273a98e0c5e9"
     },
+    "sim-random-deposition.png": {
+      "bytes": 10337,
+      "sha256": "25c31f48b2f921a8e37e47c0686721e2088819ee385b6fcefb24ed1d11ae184f"
+    },
     "sim-schnakenberg-turing.png": {
       "bytes": 37168,
       "sha256": "b623ea3be3b25c77209b030d5cc3f4309daea4158cc4d5f3841cb76a18835f03"
@@ -513,6 +529,18 @@
     "sim-spatial-rps.png": {
       "bytes": 24550,
       "sha256": "eeadf4be8612f0a95f9cbc27759c86bde3378323e13e01e724982684d1ab6c8a"
+    },
+    "sim-wolfram-rule-110.png": {
+      "bytes": 37241,
+      "sha256": "c21e612dd3674901fec2949b8bd5d3949efaf76c7f15fb9bfa181f49cab288e4"
+    },
+    "sim-wolfram-rule-30.png": {
+      "bytes": 26376,
+      "sha256": "7a404e5d381c1f17b7331e6a760922290daea9e63962a0c012685d358487279a"
+    },
+    "sim-wolfram-rule-90.png": {
+      "bytes": 1688,
+      "sha256": "4f859c4c52df182fab7896e7465702cba49a32ec45c24bf4c36f1e65792b8bf9"
     },
     "solid-solid-depth-effects.png": {
       "bytes": 15892,

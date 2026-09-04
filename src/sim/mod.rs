@@ -239,6 +239,9 @@ pub static MODELS: &[&ModelDef] = &[
     &models::CYCLIC_CA,
     &models::SPATIAL_RPS,
     &models::ISING,
+    &models::EDEN,
+    &models::BALLISTIC_DEPOSITION,
+    &models::WOLFRAM_ECA,
 ];
 
 /// Every colouring, in registration order. Append only.
