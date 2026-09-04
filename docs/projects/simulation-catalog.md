@@ -820,7 +820,20 @@ number (as an integer track) or the seed density.
 named ones: 30, 90, 110, 184, 54, 22, 126, 150), `seed_kind` (choices:
 single, random), `density`. Periodic in x.
 
-**Verified 2026-09-03** (`proto_wolfram.py`). Nothing to measure here —
+**Verified 2026-09-03** (`proto_wolfram.py`), shipped 2026-09-04 and
+re-verified on the shader: 2,079 of 2,079 cells again, this time with
+the parity taken from Kummer's theorem rather than the binomial itself,
+because C(63, 29)·63 overflows u64 and wraps silently in release.
+
+Two things a user will see and should not mistake for bugs. Rule 90 on
+a PERIODIC lattice of width 2^k self-annihilates at t = 2^k, so at the
+default 256 the diagram empties in its lower half — correct, and a
+property of the rule. And the seed is the centre COLUMN rather than
+the centre cell: the shapes are 2-D but generation 0 is one row, so
+sampling the mask at the cell put a `Center` seed in a row this model
+never writes, and the first render came out entirely black.
+
+Nothing to measure here —
 `steps` = grid height, exactly, by construction. What was checked
 instead is the **bit convention**, which is easy to get backwards while
 still producing something that looks like a cellular automaton: with
@@ -1039,8 +1052,8 @@ cluster reaches the edge):
 | 0.05 | point | 1,158 |
 | 0.3 | line | 505 |
 
-So `steps ≈ radius / p` is exact at p = 1 and **overestimates by about
-2× at small p** — at p = 0.05 it predicts 2,560 against 1,158 measured,
+Shipped 2026-09-04. So `steps ≈ radius / p` is exact at p = 1 and
+**overestimates by about 2× at small p** — at p = 0.05 it predicts 2,560 against 1,158 measured,
 because the front is long and many sites get their chance each step.
 The measured range is between radius/(2p) and radius/p; use radius / p
 as the default, since a `steps` that is too generous costs time and one
@@ -1079,7 +1092,11 @@ on/off — off gives random deposition, no correlations).
 **Stages.** `update`, `color`. Periodic in x.
 **Colouring.** `age` (arrival time), `channel`.
 
-**Measured 2026-09-03**, 256 columns, p = 0.5, to fill the grid:
+**Measured 2026-09-03**, shipped 2026-09-04. The GPU port keeps the
+column heights in channel `.y` of ROW 0 and has every cell read the
+three it needs from there, which keeps the rule cell-local — no
+separate height buffer and no second dispatch shape, at the cost of
+three extra reads per cell. 256 columns, p = 0.5, to fill the grid:
 **361 steps with sideways sticking, 452 without** — so "≈ grid height"
 is right to within a factor of 1.4–1.8, and lateral sticking fills
 faster because it builds overhangs.

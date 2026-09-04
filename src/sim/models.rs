@@ -1115,3 +1115,314 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 1.0,
     default_dt: 1.0,
 };
+
+
+// ---------------------------------------------------------------------
+// Growth and deposition.
+//
+// These grow into empty space rather than filling it, so `age` is the
+// colouring they are for: the growth rings ARE the picture, and
+// colouring the occupancy alone shows only the final silhouette.
+// ---------------------------------------------------------------------
+
+/// The Eden growth model: a compact cluster with a rough, KPZ-class
+/// interface.
+///
+/// Parallel formulation: every empty site with an occupied neighbour is
+/// occupied with probability `p` per step. For small `p` this
+/// approaches the sequential single-site process, and the interface
+/// universality class is unchanged.
+///
+/// Measured steps to reach the edge of a 256 grid from a point seed:
+/// 127 at p = 1 (exactly the radius), 256 at p = 0.3, 1,158 at
+/// p = 0.05. So `radius / p` is exact at p = 1 and overestimates by
+/// about 2x at small p, because the front is long and many sites get
+/// their chance each step.
+///
+/// Channels: `.x` = occupied, `.z` = arrival step, `.w` spare.
+pub static EDEN: ModelDef = ModelDef {
+    name: "eden",
+    display_name: "Eden Growth",
+    description: "A cluster grown one site at a time into its neighbourhood. Compact, with \
+                  a rough interface — the growth rings are the subject.",
+    features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
+    parameters: &[SimParamDef {
+        name: "p_grow",
+        display_name: "Growth probability",
+        default: 0.3,
+        min: 0.01,
+        max: 1.0,
+        tooltip: "Chance an eligible empty site is occupied each step. Lower values are \
+                  closer to the sequential Eden process and take proportionally longer; \
+                  at 1.0 the cluster is a diamond, because every front site fires at once.",
+        choices: &[],
+    }],
+    presets: &[
+        SimPreset {
+            name: "cluster",
+            display_name: "Cluster",
+            params: &[("p_grow", 0.3)],
+            // Measured: 256 steps to reach the edge of a 256 grid.
+            steps: 250,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "rough_front",
+            display_name: "Rough front",
+            params: &[("p_grow", 0.3)],
+            // A line seed grows upward; measured 505 steps to fill.
+            // NOTE the boundary: with Periodic the bottom row wraps to
+            // the top and the run ends on step one. The front cases
+            // want Zero.
+            steps: 500,
+            init: Some(crate::config::sim::SimInit::Line),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // Already grown: nothing ever un-grows.
+    if (s.x > 0.5) {
+        return s;
+    }
+    // Von Neumann adjacency: the diagonal-inclusive version rounds the
+    // cluster off and loses the interface roughness that is the point.
+    let n = sim_read(p + vec2<i32>(0, -1)).x
+        + sim_read(p + vec2<i32>(0, 1)).x
+        + sim_read(p + vec2<i32>(-1, 0)).x
+        + sim_read(p + vec2<i32>(1, 0)).x;
+    if (n < 0.5) {
+        return s;
+    }
+    if (sim_rand(p, 0xd1u) >= mparam(0u)) {
+        return s;
+    }
+    // Arrival step, which is what the `age` colouring draws as rings.
+    return vec4<f32>(1.0, 0.0, f32(sim_step_index()), 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // The init shape IS the initial cluster: Center for a compact
+    // cluster, Line for a growing front.
+    let occupied = select(0.0, 1.0, inside >= 0.5);
+    return vec4<f32>(occupied, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 250,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+/// Ballistic deposition: particles fall down columns and stick on
+/// contact, building a correlated rough surface.
+///
+/// `h(i) <- max(h(i-1), h(i) + 1, h(i+1))` for a column that receives a
+/// particle. The lateral term is what makes it ballistic: it builds
+/// overhangs and correlates neighbouring columns. Turn it off and the
+/// columns are independent (random deposition).
+///
+/// **The column heights live in channel `.y` of ROW 0**, and every cell
+/// reads the three it needs from there. That keeps the rule cell-local
+/// — no separate height buffer and no second dispatch shape — at the
+/// cost of three extra reads per cell.
+///
+/// Measured at 256 columns, p = 0.5: 361 steps to fill with lateral
+/// sticking and 452 without, so "about the grid height" is right to
+/// within a factor of 1.4-1.8. The interface widths separate the two
+/// variants cleanly (2.84 against 10.59), though a single realisation
+/// does not pin the KPZ exponent — see the catalogue.
+///
+/// Channels: `.x` = occupied, `.y` = column height (row 0 only),
+/// `.z` = arrival step.
+pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
+    name: "ballistic_deposition",
+    display_name: "Ballistic Deposition",
+    description: "Particles fall and stick where they first touch. Lateral sticking builds \
+                  overhangs and a correlated surface; without it the columns are independent.",
+    features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "p_drop",
+            display_name: "Drop probability",
+            default: 0.5,
+            min: 0.01,
+            max: 1.0,
+            tooltip: "Chance each column receives a particle per step. Lower values are \
+                      closer to the sequential process, where one particle lands at a time.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "sideways",
+            display_name: "Sticking",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Lateral sticking is what makes deposition BALLISTIC: a particle \
+                      catches on a taller neighbour and leaves a void. Off, the columns \
+                      never interact and the surface is uncorrelated.",
+            choices: &["Vertical only", "Lateral (ballistic)"],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "ballistic",
+            display_name: "Ballistic",
+            params: &[("p_drop", 0.5), ("sideways", 1.0)],
+            steps: 360,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "random_deposition",
+            display_name: "Random deposition",
+            params: &[("p_drop", 0.5), ("sideways", 0.0)],
+            steps: 450,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let g = sim_grid();
+    // Heights live in .y of row 0. Reading three of them makes the rule
+    // cell-local: every cell in a column derives the same new height.
+    let h_l = sim_read(vec2<i32>(p.x - 1, 0)).y;
+    let h_c = sim_read(vec2<i32>(p.x, 0)).y;
+    let h_r = sim_read(vec2<i32>(p.x + 1, 0)).y;
+
+    // One draw per COLUMN per step: keyed on (x, 0) so every cell in
+    // the column agrees about whether a particle arrived.
+    let hit = sim_rand(vec2<i32>(p.x, 0), 0xe1u) < mparam(0u);
+    var h_new = h_c;
+    if (hit) {
+        if (mparam(1u) >= 0.5) {
+            h_new = max(max(h_l, h_r), h_c + 1.0);
+        } else {
+            h_new = h_c + 1.0;
+        }
+    }
+    h_new = min(h_new, f32(g.y));
+
+    // Height is measured from the bottom, so a cell at row y sits at
+    // height (g.y - y).
+    let height_here = f32(g.y - p.y);
+    let filled = height_here <= h_new;
+    let was = s.x > 0.5;
+    let age = select(s.z, f32(sim_step_index()), filled && !was);
+    // Only row 0 carries the height register.
+    let store_h = select(0.0, h_new, p.y == 0);
+    return vec4<f32>(select(0.0, 1.0, filled), store_h, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // A flat substrate: nothing deposited, every column at height zero.
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 360,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+/// Wolfram's elementary cellular automata, drawn as a space-time
+/// diagram.
+///
+/// The next state of a cell is bit `(4*left + 2*self + right)` of the
+/// rule number. Rule 90 is left XOR right and draws Sierpinski's
+/// triangle from a single seed; rule 30 is chaotic; rule 110 is
+/// Turing-complete.
+///
+/// **The field is the diagram, not a state.** Row `t` is generation
+/// `t`, so `steps` is the grid height exactly, by construction, and a
+/// step writes one row rather than updating everything. Cells outside
+/// the active row return unchanged, which means most threads in a
+/// dispatch do nothing -- a 256-row image evaluates 256x more cells
+/// than it writes. Each is trivial and the whole diagram is under a
+/// millisecond, so the row-shaped dispatch the plan mentions stays a
+/// phase-3 option rather than a need.
+///
+/// The bit convention was verified against independently computed
+/// binomials: rule 90 from a single seed matches Pascal's triangle
+/// mod 2 on 2,079 of 2,079 cells.
+///
+/// Channels: `.x` = cell state, `.z` = row index (its generation).
+pub static WOLFRAM_ECA: ModelDef = ModelDef {
+    name: "wolfram_eca",
+    display_name: "Wolfram ECA",
+    description: "One-dimensional binary automata drawn as space-time: rule 90 is \
+                  Sierpinski's triangle, rule 30 is chaotic, rule 110 is Turing-complete.",
+    features: &[ModelFeature::NoTimeStep],
+    parameters: &[SimParamDef {
+        name: "rule",
+        display_name: "Rule",
+        default: 90.0,
+        min: 0.0,
+        max: 255.0,
+        tooltip: "The 8-bit rule number: bit (4·left + 2·self + right) gives the next \
+                  state. 90 draws Sierpinski's triangle, 30 is chaotic, 110 is \
+                  Turing-complete, 184 models traffic.",
+        choices: &[],
+    }],
+    presets: &[
+        SimPreset {
+            name: "rule_90",
+            display_name: "Rule 90 (Sierpinski)",
+            params: &[("rule", 90.0)],
+            steps: 256,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "rule_30",
+            display_name: "Rule 30 (chaotic)",
+            params: &[("rule", 30.0)],
+            steps: 256,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "rule_110",
+            display_name: "Rule 110 (universal)",
+            params: &[("rule", 110.0)],
+            steps: 256,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // Row t is generation t. Only the active row is written; everything
+    // already drawn stays drawn.
+    let t = i32(sim_step_index()) + 1;
+    if (p.y != t) {
+        return s;
+    }
+    let above = p.y - 1;
+    let l = sim_read(vec2<i32>(p.x - 1, above)).x;
+    let c = sim_read(vec2<i32>(p.x, above)).x;
+    let r = sim_read(vec2<i32>(p.x + 1, above)).x;
+    let idx = u32(4.0 * l + 2.0 * c + r);
+    let rule = u32(clamp(round(mparam(0u)), 0.0, 255.0));
+    let bit = (rule >> idx) & 1u;
+    return vec4<f32>(f32(bit), 0.0, f32(p.y), 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Only the top row is seeded; the diagram grows downward into the
+    // rest. Center gives the single cell that draws Sierpinski's
+    // triangle, Noise gives a random first generation.
+    if (p.y != 0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    // The init shapes are 2-D, but generation 0 is one row. Evaluating
+    // the mask AT THIS CELL would put a Center seed at the grid's
+    // middle -- a row this model never writes -- so the whole diagram
+    // came out blank. Sample the shape on the centre row instead and
+    // read it along x: Center becomes the centre COLUMN, which is the
+    // single seed rule 90 needs, and Noise still varies per column.
+    let g = sim_grid();
+    let m = sim_init_mask(vec2<i32>(p.x, g.y / 2));
+    return vec4<f32>(select(0.0, 1.0, m >= 0.5), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 256,
+    max_dt: 1.0,
+    default_dt: 1.0,
+};

@@ -781,3 +781,116 @@ fn ising_coarsening_curve() {
         println!("{line}");
     }
 }
+
+/// Rule 90 must be Pascal's triangle mod 2, checked against
+/// independently computed binomials.
+///
+/// The bit convention -- next state is bit (4*left + 2*self + right) --
+/// is easy to get backwards, and a reversed one still produces
+/// something that looks like a cellular automaton. The CPU prototype
+/// checked this on 2,079 cells; this is the same check on the shader.
+///
+/// Only the first 64 generations are compared: rule 90 on a PERIODIC
+/// lattice of width 2^k self-annihilates at t = 2^k, so past the point
+/// where the triangle reaches the edge the diagram is the wrapped sum
+/// rather than the binomial one. That is correct behaviour, not a bug,
+/// and the comparison simply stops before the wrap.
+#[test]
+fn wolfram_rule_90_matches_binomials_mod_two() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+    const GENS: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "wolfram_eca".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Center;
+    cfg.model_params.insert("rule".into(), 90.0);
+
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, GENS as u32);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let n = N as usize;
+    let centre = n / 2;
+    let mut checked = 0usize;
+    for t in 1..GENS {
+        for d in -(t as i64)..=(t as i64) {
+            if (t as i64 + d) % 2 != 0 {
+                continue;
+            }
+            // C(t, k) mod 2 by Kummer's theorem: the binomial is odd
+            // exactly when k's bits are a subset of t's. Computing the
+            // binomial itself overflowed here -- C(63, 29) times 63 is
+            // past u64, and in release that wraps silently, so the test
+            // failed at generation 63 while the shader was right.
+            let k = ((t as i64 + d) / 2) as u64;
+            let want = if (t as u64 & k) == k { 1.0f32 } else { 0.0f32 };
+            let x = (centre as i64 + d).rem_euclid(n as i64) as usize;
+            let got = f[t * n + x][0];
+            assert_eq!(
+                got, want,
+                "rule 90 at generation {t}, offset {d}: got {got}, binomial says {want}"
+            );
+            checked += 1;
+        }
+    }
+    println!("rule 90: {checked} cells match C(t, k) mod 2");
+    assert!(checked > 2000, "expected a few thousand comparisons, made {checked}");
+}
+
+/// Lateral sticking must actually change the physics, not just the
+/// picture.
+///
+/// Ballistic deposition and random deposition are different
+/// universality classes: without lateral sticking the columns are
+/// independent and the interface width grows as sqrt(t); with it the
+/// columns correlate and the width grows more slowly. Measured on the
+/// CPU prototype at the same point, 2.84 against 10.59.
+///
+/// Getting the toggle backwards would still render a rough surface, so
+/// this compares the two widths rather than eyeballing either.
+#[test]
+fn lateral_sticking_correlates_the_interface() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+
+    let width = |sideways: f32| -> f64 {
+        let mut cfg = SimConfig::default();
+        cfg.model = "ballistic_deposition".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Center;
+        cfg.seed = 11;
+        cfg.model_params.insert("sideways".into(), sideways);
+        cfg.model_params.insert("p_drop".into(), 0.5);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        // Column heights live in .y of row 0.
+        let h: Vec<f64> = (0..N as usize).map(|x| f[x][1] as f64).collect();
+        let mean = h.iter().sum::<f64>() / h.len() as f64;
+        (h.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / h.len() as f64).sqrt()
+    };
+
+    let ballistic = width(1.0);
+    let random = width(0.0);
+    println!("interface width: ballistic {ballistic:.2}   random {random:.2}");
+    assert!(
+        ballistic > 0.0 && random > 0.0,
+        "both variants must produce a rough interface, got {ballistic} and {random}"
+    );
+    assert!(
+        random > ballistic * 1.5,
+        "random deposition should be markedly rougher than ballistic at the same time \
+         (uncorrelated columns): got {random:.2} against {ballistic:.2}"
+    );
+}
