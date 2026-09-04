@@ -207,6 +207,18 @@ pub async fn render(
         }
     }
 
+    #[cfg(feature = "engine-sim")]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+        if let Some(why) = crate::sim::SimRenderer::allocation_error(
+            device,
+            &job.config.sim,
+            job.width,
+            job.height,
+        ) {
+            return Err(RenderError::OutOfMemory(why));
+        }
+    }
+
     // Create renderer with config's palette size
     let surface_format = TextureFormat::Rgba8Unorm;
     let mut renderer = FlameRenderer::with_palette_size(
@@ -278,6 +290,18 @@ pub async fn render_with(
     #[cfg(not(feature = "engine-escape"))]
     if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
         return Err(RenderError::EngineMissing("escape-time"));
+    }
+
+    // Simulation mode: a third generator on the same tail. Dispatching
+    // here is what gives thumbnails, CLI export, video and the gallery
+    // simulation rendering for free, exactly as it did for escape.
+    #[cfg(feature = "engine-sim")]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+        return render_sim(renderer, device, queue, job, progress, start_time).await;
+    }
+    #[cfg(not(feature = "engine-sim"))]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+        return Err(RenderError::EngineMissing("simulation"));
     }
 
     let target = job.target_iterations.unwrap_or(job.config.max_iterations);
@@ -620,6 +644,189 @@ pub async fn render_with(
 /// one-shot discipline as `EffectChainRunner` — the interactive app
 /// will hold a persistent one instead.
 #[cfg(feature = "engine-escape")]
+/// Render one simulation still: seed, run exactly `sim.steps`, colour.
+///
+/// The step count is the contract (master plan D5), so this does not
+/// settle or converge — it runs the number the config asks for and
+/// stops. That is what makes a still of a model that never settles
+/// reproducible.
+///
+/// Shares escape's tail verbatim: density effects → tonemap → colour
+/// effects → readback, all fed from an `Rgba32Float` image in the flame
+/// accumulator's layout.
+#[cfg(feature = "engine-sim")]
+async fn render_sim(
+    renderer: &mut FlameRenderer,
+    device: &Device,
+    queue: &Queue,
+    job: RenderJob<'_>,
+    progress: &mut dyn RenderProgress,
+    start_time: web_time::Instant,
+) -> Result<RenderOutput, RenderError> {
+    let (grid_w, grid_h) = crate::sim::SimRenderer::grid_for(&job.config.sim, job.width, job.height);
+    log::info!(
+        "Render: simulation {}x{} output, {}x{} grid, model {:?}, coloring {:?}, {} steps",
+        job.width,
+        job.height,
+        grid_w,
+        grid_h,
+        job.config.sim.model,
+        job.config.sim.coloring,
+        job.config.sim.steps
+    );
+    progress.on_progress(0, 1);
+
+    // Full config load, for the same reason escape does it: it is the
+    // one call guaranteed to keep every tail input (palette texture,
+    // tonemap uniform, curve LUT, background, levels) in exact sync
+    // with the flame path.
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Sim Config Encoder"),
+    });
+    renderer.load_config(
+        device,
+        &mut encoder,
+        queue,
+        job.config,
+        &job.config.palette,
+        job.iterations_per_thread,
+        job.burn_in,
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    if job.transparent {
+        renderer.set_transparent_mode(
+            queue,
+            true,
+            job.premultiplied,
+            job.config,
+            job.iterations_per_thread,
+        );
+    }
+
+    let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+
+    let mut sim = crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
+    sim.seed(device, queue, &job.config.sim);
+    // run_steps submits in watchdog-sized batches internally, so the
+    // driver never sees an unbounded pass however large `steps` is.
+    // Progress is reported per batch rather than per step: a 10,000-step
+    // export should move a bar, and polling between batches is also
+    // what keeps the queue from growing without bound.
+    const PROGRESS_BATCH: u32 = 512;
+    let total = job.config.sim.steps;
+    let mut done = 0u32;
+    while done < total {
+        let batch = PROGRESS_BATCH.min(total - done);
+        sim.run_steps(device, queue, &job.config.sim, batch);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        done += batch;
+        progress.on_progress(done as u64, total.max(1) as u64);
+    }
+    sim.color(device, queue, &job.config.sim, renderer.palette_view());
+
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Sim Tail"),
+    });
+
+    // Shared tail: density effects → tonemap → color effects → read.
+    let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
+    let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
+    let mut effect_chain = if has_density_effects || has_color_effects {
+        Some(EffectChainRunner::new(device, job.width, job.height))
+    } else {
+        None
+    };
+    if let Some(chain) = effect_chain.as_mut() {
+        chain.reset_slots();
+    }
+
+    let sim_view = sim.output_view();
+    if has_density_effects {
+        let chain = effect_chain.as_mut().expect("built above: has_density_effects");
+        let density_ran = chain.run_density_effects(
+            device,
+            queue,
+            &mut encoder,
+            sim_view,
+            &job.config.density_effects,
+        );
+        match (density_ran, chain.get_density_output()) {
+            (true, Some(density_output)) => {
+                renderer.tonemap_pass_with_input(device, queue, &mut encoder, density_output)
+            }
+            _ => renderer.tonemap_pass_with_input(device, queue, &mut encoder, sim_view),
+        }
+    } else {
+        renderer.tonemap_pass_with_input(device, queue, &mut encoder, sim_view);
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let color_effects_ran = if has_color_effects {
+        let chain = effect_chain.as_mut().expect("built above: has_color_effects");
+        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Sim Color Effects"),
+        });
+        let ran = chain.run_color_effects(
+            device,
+            queue,
+            &mut color_encoder,
+            renderer.get_fractal_texture_view(),
+            &job.config.color_effects,
+        );
+        queue.submit(std::iter::once(color_encoder.finish()));
+        ran
+    } else {
+        false
+    };
+
+    if let Some(err) = oom_scope.pop().await {
+        if let Some(chain) = &effect_chain {
+            chain.destroy();
+        }
+        return Err(RenderError::OutOfMemory(err.to_string()));
+    }
+
+    let pixels = if color_effects_ran {
+        effect_chain
+            .as_ref()
+            .expect("color_effects_ran implies a chain")
+            .read_color_output_pixels(device, queue)
+            .await
+            .map_err(RenderError::PixelReadFailed)
+    } else {
+        renderer
+            .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
+            .await
+            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
+    };
+
+    if let Some(chain) = &effect_chain {
+        chain.destroy();
+    }
+    let (width, height, rgba_data) = pixels?;
+
+    progress.on_progress(1, 1);
+    let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+    log::info!(
+        "Render: simulation complete - {}x{} in {:.1}ms",
+        width,
+        height,
+        render_time_ms
+    );
+
+    Ok(RenderOutput {
+        width,
+        height,
+        rgba_data,
+        // "Iterations" means the step count here, the way escape reports
+        // its per-pixel ceiling: it is what the PNG metadata should
+        // record to make the picture reproducible.
+        total_iterations: job.config.sim.steps as u64,
+        render_time_ms,
+    })
+}
+
 async fn render_escape(
     renderer: &mut FlameRenderer,
     device: &Device,
