@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "a5b0bc0e",
+  "git_hash": "e674e508",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -441,6 +441,30 @@
     "general-warmup.png": {
       "bytes": 35605,
       "sha256": "b7237c6474131dd9ef1651fb040bd10daf254fbc9578641c8fb906eeb11ac459"
+    },
+    "sim-gray-scott-bilinear-upscale.png": {
+      "bytes": 8300,
+      "sha256": "cdd883acaea09a5691c48f7b2c9cdea02c009b370efa6918a992f360f5816b60"
+    },
+    "sim-gray-scott-coral.png": {
+      "bytes": 21945,
+      "sha256": "4eef8f684e8819f0dfcde381264848f8b9d11e80e2d06038e3e82f964e0c0499"
+    },
+    "sim-gray-scott-maze.png": {
+      "bytes": 20780,
+      "sha256": "bba644c52b342de8f0c8ba2b46c0433695394b2706d66e268ca4705669ee9c32"
+    },
+    "sim-gray-scott-mitosis.png": {
+      "bytes": 15283,
+      "sha256": "0216b5764deeeaba9b9ba7f5fa94d7936665d0628c2d181368d5fae03b13ef2c"
+    },
+    "sim-gray-scott-worms.png": {
+      "bytes": 16403,
+      "sha256": "90fa332b61085872ab1e1c2885386caa8e2f7280f608dd772f6b6cfa1210f324"
+    },
+    "sim-gray-scott-zero-boundary.png": {
+      "bytes": 5947,
+      "sha256": "1db2346aa2ef7e4ea04b05d3bbab83e585ee9823fe0c9e75686de909c8ece51e"
     },
     "solid-solid-depth-effects.png": {
       "bytes": 15892,

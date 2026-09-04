@@ -97,6 +97,13 @@ pub struct EscapeHandle {
     cfg: Rc<RefCell<FractalConfig>>,
 }
 
+/// The `sim` global: simulation mode from a script.
+#[cfg(feature = "engine-sim")]
+#[derive(Clone)]
+pub struct SimHandle {
+    cfg: Rc<RefCell<FractalConfig>>,
+}
+
 use crate::animation::EasingFunction;
 
 /// The optional animation a script may define alongside its flame.
@@ -348,6 +355,8 @@ pub(crate) fn push_globals(
     scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
     #[cfg(feature = "engine-escape")]
     scope.push("escape", EscapeHandle { cfg: Rc::clone(&cfg) });
+    #[cfg(feature = "engine-sim")]
+    scope.push("sim", SimHandle { cfg: Rc::clone(&cfg) });
     scope.push("config", ConfigHandle { cfg });
     scope.push("anim", AnimHandle { state });
 }
@@ -363,6 +372,8 @@ pub(crate) fn register(
     engine.register_type_with_name::<AnimHandle>("Anim");
     #[cfg(feature = "engine-escape")]
     engine.register_type_with_name::<EscapeHandle>("Escape");
+    #[cfg(feature = "engine-sim")]
+    engine.register_type_with_name::<SimHandle>("Sim");
     register_anim(engine, Rc::clone(&state));
 
     register_meta(engine, Rc::clone(&state));
@@ -372,6 +383,8 @@ pub(crate) fn register(
     register_config(engine, Rc::clone(&state));
     #[cfg(feature = "engine-escape")]
     register_escape(engine);
+    #[cfg(feature = "engine-sim")]
+    register_sim(engine);
     register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
     register_palette_slots(engine);
@@ -1427,6 +1440,180 @@ fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltRes
 /// flame, which reads as a bug in the script rather than a missing
 /// line.
 #[cfg(feature = "engine-escape")]
+/// The `sim` script surface.
+///
+/// Every setter enters simulation mode first, the way the escape
+/// handle does, so a script that sets only a model produces a picture
+/// rather than a black frame: flame presets carry Log-calibrated tone
+/// mapping, which renders a unit-range simulation field invisible.
+#[cfg(feature = "engine-sim")]
+fn register_sim(engine: &mut Engine) {
+    use crate::scene::transforms::RenderMode;
+
+    fn enter(cfg: &mut FractalConfig) {
+        if cfg.render_mode != RenderMode::Simulation {
+            cfg.render_mode = RenderMode::Simulation;
+            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            cfg.exposure = 1.0;
+            cfg.gamma = 1.0;
+        }
+    }
+
+    engine.register_fn("enter", |e: &mut SimHandle| {
+        enter(&mut e.cfg.borrow_mut());
+    });
+    engine.register_fn(
+        "model",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            if crate::sim::MODELS.iter().all(|m| m.name != name) {
+                return Err(err(format!(
+                    "unknown simulation model `{name}` - see sim.models()"
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.sim.model != name {
+                // Parameters belong to the model that declared them.
+                cfg.sim.model_params.clear();
+            }
+            cfg.sim.model = name.to_string();
+            Ok(())
+        },
+    );
+    engine.register_fn("models", |_e: &mut SimHandle| -> rhai::Array {
+        crate::sim::MODELS
+            .iter()
+            .map(|m| rhai::Dynamic::from(m.name.to_string()))
+            .collect()
+    });
+    engine.register_fn(
+        "coloring",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            if crate::sim::COLORINGS.iter().all(|c| c.name != name) {
+                return Err(err(format!(
+                    "unknown simulation coloring `{name}` - see sim.colorings()"
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.sim.coloring != name {
+                cfg.sim.coloring_params.clear();
+            }
+            cfg.sim.coloring = name.to_string();
+            Ok(())
+        },
+    );
+    engine.register_fn("colorings", |_e: &mut SimHandle| -> rhai::Array {
+        crate::sim::COLORINGS
+            .iter()
+            .map(|c| rhai::Dynamic::from(c.name.to_string()))
+            .collect()
+    });
+    engine.register_fn("param", |e: &mut SimHandle, name: &str, v: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.model_params.insert(name.to_string(), v as f32);
+    });
+    engine.register_fn("coloring_param", |e: &mut SimHandle, name: &str, v: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.coloring_params.insert(name.to_string(), v as f32);
+    });
+    engine.register_fn("grid", |e: &mut SimHandle, w: i64, h: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.grid = crate::config::sim::SimGrid::Fixed {
+            width: (w.clamp(16, 8192)) as u32,
+            height: (h.clamp(16, 8192)) as u32,
+        };
+    });
+    engine.register_fn("grid_viewport", |e: &mut SimHandle, scale: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        let s = scale as f32;
+        cfg.sim.grid = crate::config::sim::SimGrid::Viewport {
+            scale: if s.is_finite() { s.clamp(0.125, 4.0) } else { 1.0 },
+        };
+    });
+    engine.register_fn("seed", |e: &mut SimHandle, n: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.seed = n.unsigned_abs();
+    });
+    engine.register_fn(
+        "init",
+        |e: &mut SimHandle, kind: &str| -> Result<(), Box<EvalAltResult>> {
+            if !crate::config::sim::SimInit::KINDS.contains(&kind) {
+                return Err(err(format!(
+                    "unknown simulation init `{kind}` - one of {:?}",
+                    crate::config::sim::SimInit::KINDS
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.sim.init = cfg.sim.init.with_kind(kind);
+            Ok(())
+        },
+    );
+    engine.register_fn("steps", |e: &mut SimHandle, n: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.steps = n.clamp(1, 10_000_000) as u32;
+    });
+    engine.register_fn("steps_per_frame", |e: &mut SimHandle, n: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.steps_per_frame = n.clamp(1, 4096) as u32;
+    });
+    engine.register_fn("dt", |e: &mut SimHandle, v: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        let d = v as f32;
+        cfg.sim.dt = if d.is_finite() { d.clamp(1e-4, 10.0) } else { 1.0 };
+    });
+    engine.register_fn(
+        "boundary",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            match crate::config::sim::SimBoundary::from_name(name) {
+                Some(b) => {
+                    let mut cfg = e.cfg.borrow_mut();
+                    enter(&mut cfg);
+                    cfg.sim.boundary = b;
+                    Ok(())
+                }
+                None => Err(err(format!(
+                    "unknown simulation boundary `{name}` - one of {:?}",
+                    crate::config::sim::SimBoundary::NAMES
+                ))),
+            }
+        },
+    );
+    engine.register_fn(
+        "preset",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            let model = crate::sim::model_or_default(&cfg.sim.model);
+            match model.preset(name) {
+                Some(p) => {
+                    // A preset is its parameters AND its measured step
+                    // count: the numbers without the steps show the
+                    // pattern half-formed.
+                    for (k, v) in p.params {
+                        cfg.sim.model_params.insert((*k).to_string(), *v);
+                    }
+                    cfg.sim.steps = p.steps;
+                    Ok(())
+                }
+                None => Err(err(format!(
+                    "model `{}` has no preset `{name}`",
+                    model.name
+                ))),
+            }
+        },
+    );
+}
+
 fn register_escape(engine: &mut Engine) {
     use crate::scene::transforms::RenderMode;
 

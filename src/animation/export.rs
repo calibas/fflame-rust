@@ -791,6 +791,32 @@ fn apply_config_value(
             config.escape.coloring_params.insert(param.clone(), *v);
         }
 
+        // Simulation. The clamps mirror ConfigManager's write arms so an
+        // exported frame equals the in-app frame at the same time --
+        // the same discipline the escape arms above follow, and the
+        // reason a track cannot drive dt somewhere the solver diverges.
+        //
+        // Sim.Steps is the one that animates the RUN: the state at time
+        // t is that many steps from the seed (master plan D5b), so a
+        // ramp on this track is the simulation progressing. The
+        // exporter reads it off the config it has just built.
+        (ConfigPath::SimSteps, ConfigValue::UInt(v)) => {
+            config.sim.steps = (*v).min(10_000_000);
+        }
+        (ConfigPath::SimStepsPerFrame, ConfigValue::UInt(v)) => {
+            config.sim.steps_per_frame = (*v).clamp(1, 4096);
+        }
+        (ConfigPath::SimDt, ConfigValue::Float(v)) => {
+            // NaN from a wild signal must not make the solver diverge.
+            config.sim.dt = if v.is_finite() { v.clamp(1e-4, 10.0) } else { 1.0 };
+        }
+        (ConfigPath::SimModelParam { param }, ConfigValue::Float(v)) => {
+            config.sim.model_params.insert(param.clone(), *v);
+        }
+        (ConfigPath::SimColoringParam { param }, ConfigValue::Float(v)) => {
+            config.sim.coloring_params.insert(param.clone(), *v);
+        }
+
         // Everything else is per-flame. Resolve the target flame and
         // delegate to apply_flame_value. Broken targets (missing
         // subflame) silently drop — UI surfaces these.
@@ -2016,6 +2042,19 @@ pub async fn export_animation_fast(
     let is_escape = false;
     #[cfg(feature = "engine-escape")]
     let mut escape_renderer: Option<crate::escape::EscapeRenderer> = None;
+
+    // Simulation: PERSISTENT across frames, and that is the whole
+    // point. The renderer holds the field and its step counter, so
+    // frame n continues from frame n-1 rather than re-running from the
+    // seed -- which would be quadratic and would make a model that
+    // never settles impossible to export as video.
+    #[cfg(feature = "engine-sim")]
+    let is_sim = export_config.config.render_mode
+        == crate::scene::transforms::RenderMode::Simulation;
+    #[cfg(not(feature = "engine-sim"))]
+    let is_sim = false;
+    #[cfg(feature = "engine-sim")]
+    let mut sim_renderer: Option<crate::sim::SimRenderer> = None;
     // Accumulated samples per axis for the frame just rendered (1 =
     // the grid alone); the tail picks the averaged image from it.
     #[cfg(feature = "engine-escape")]
@@ -2233,6 +2272,40 @@ pub async fn export_animation_fast(
             frame_config.camera_y,
             frame_config.camera_z,
         );
+        // Simulation: advance to the step count this frame's config
+        // asks for. `Sim.Steps` is an ordinary animatable track, so a
+        // ramp on it IS the simulation progressing, and the state at
+        // time t is a function of t rather than of how many frames
+        // happened to precede it (master plan D5b).
+        //
+        // Going BACKWARDS is not possible -- the rule is not
+        // invertible -- so a decreasing track reseeds and re-runs. That
+        // is the documented price, and doing it here means the
+        // exporter sees the decrease rather than discovering it.
+        #[cfg(feature = "engine-sim")]
+        if is_sim {
+            let sim = sim_renderer.get_or_insert_with(|| {
+                crate::sim::SimRenderer::new(
+                    &device,
+                    &frame_config.sim,
+                    export_config.width,
+                    export_config.height,
+                )
+            });
+            let target = frame_config.sim.steps;
+            if target < sim.step_index() {
+                sim.request_seed();
+            }
+            let from = if target < sim.step_index() { 0 } else { sim.step_index() };
+            sim.render_frame(
+                &device,
+                &queue,
+                &frame_config.sim,
+                renderer.palette_view(),
+                target.saturating_sub(from),
+            );
+        }
+
         // The escape arm resolves to an Option FIRST: a cfg cannot
         // sit on one arm of an if/else chain, and putting it on the
         // whole chain would delete the FLAME arms with it -- which
@@ -2251,7 +2324,20 @@ pub async fn export_animation_fast(
         };
         #[cfg(not(feature = "engine-escape"))]
         let escape_view: Option<&wgpu::TextureView> = None;
-        if let Some(view) = escape_view {
+        #[cfg(feature = "engine-sim")]
+        let sim_view = if is_sim {
+            Some(
+                sim_renderer
+                    .as_ref()
+                    .expect("sim renderer exists: created in the generator branch")
+                    .output_view(),
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "engine-sim"))]
+        let sim_view: Option<&wgpu::TextureView> = None;
+        if let Some(view) = escape_view.or(sim_view) {
             renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, view);
         } else if shade_ran {
             renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());
