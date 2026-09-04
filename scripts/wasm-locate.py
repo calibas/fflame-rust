@@ -33,14 +33,17 @@ USAGE:
   1. Build BOTH from the SAME commit, no `src/` change between:
        ./build-wasm.sh              -> pkg/fractal_flame_wgpu_bg.wasm
        ./build-wasm.sh --symbols    -> pkg/fractal_flame_wgpu_bg.names.wasm
-     Order does not matter: `--symbols` parks the shipped module and
-     puts it back, so the served bundle stays the one that reproduces.
-     (It did not always. wasm-bindgen writes a fixed filename into
-     --out-dir, so before this the names build silently overwrote the
-     shipped module -- destroying the only artifact the crash can be
-     reproduced with, and leaving a pairing of one build against
-     itself.)
-  2. Reproduce with the SHIPPED bundle and copy the offset.
+     Order does not matter: `--symbols` builds into ./pkg-names and
+     copies only the module out, so ./pkg is never written to.
+     (It did not always. wasm-bindgen writes fixed filenames into
+     --out-dir, so the names build overwrote the shipped module --
+     the only artifact the crash can be reproduced with -- and a first
+     fix that restored just the .wasm broke the app, because the JS
+     glue is emitted alongside the module and the two must match.)
+  2. Reproduce with the SHIPPED bundle and copy the offset. Better,
+     copy the WHOLE wasm stack: Chrome prints frames as
+     `wasm-function[N]`, each of which can be passed as `#N` below, and
+     several frames are several independent anchors.
   3. python scripts/wasm-locate.py <offset> [<offset> ...]
 
 Offsets may be decimal or 0x-hex. If the trace gives `wasm-function[N]`,

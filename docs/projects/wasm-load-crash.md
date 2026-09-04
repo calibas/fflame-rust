@@ -132,13 +132,24 @@ export section survives `strip`.
 2. Reproduce with the **shipped** bundle; copy the offset.
 3. `python scripts/wasm-locate.py <offset>`
 
-**`--symbols` used to destroy step 2's artifact.** wasm-bindgen writes
-a fixed filename into `--out-dir`, so the names build overwrote
-`pkg/fractal_flame_wgpu_bg.wasm` — the only module that reproduces the
-crash — and left a pairing of one build against itself. Both build
-scripts now park the shipped module and restore it, writing the names
-build to `…_bg.names.wasm`, so the served bundle is unchanged and the
-two are always available together.
+**Capture the whole wasm stack, not just the top frame.** Chrome shows
+the frames as `wasm-function[N]`, which can be passed straight to the
+locator as `#N` and skips the offset arithmetic entirely. Several
+frames give several independent anchors, so one unaligned frame no
+longer wastes the round.
+
+**`--symbols` used to destroy step 2's artifact, twice over.**
+wasm-bindgen writes fixed filenames into `--out-dir`, so the names
+build overwrote `pkg/fractal_flame_wgpu_bg.wasm` — the only module that
+reproduces the crash — leaving a pairing of one build against itself.
+The first fix parked and restored that file, and broke the app: the JS
+glue is emitted *alongside* the module and the two are a matched pair
+(the import object is generated from the specific module processed), so
+restoring only the `.wasm` left glue that would not link —
+`LinkError: import object field '__wbindgen_object_drop_ref' is not a
+Function`. `--symbols` now writes to `./pkg-names/` and copies just the
+module out as `…_bg.names.wasm`. `./pkg` is never written to at all,
+in any order, which is the property that was actually wanted.
 
 **Read the pairing line before the name.** The script prints both
 modules' geometry first. **Function-count drift is the check that

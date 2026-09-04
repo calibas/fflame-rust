@@ -73,3 +73,6 @@ docs/generated/variation-probe.progress
 # release, and the repository's record is the commit history the
 # changelog was generated from.
 NOTES.md
+# The --symbols wasm build, kept out of ./pkg so it cannot replace
+# the served bundle (see build-wasm.sh).
+/pkg-names/
