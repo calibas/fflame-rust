@@ -422,8 +422,11 @@ pub fn render_sim_content(
     {
         let _ = config_manager.update_param(ConfigPath::SimStepsPerFrame, spf.into());
     }
+    // An automaton advances by a generation, not by dt: showing the
+    // slider would be a control that does nothing.
     let mut dt = sim.dt;
-    if ui
+    if !model.has(crate::sim::ModelFeature::NoTimeStep)
+        && ui
         .add(
             egui::Slider::new(&mut dt, 0.001..=model.max_dt)
                 .text(t!("sim_panel.dt").as_ref()),

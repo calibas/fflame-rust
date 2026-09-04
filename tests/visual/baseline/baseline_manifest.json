@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "5ffe7462",
+  "git_hash": "71fb0461",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -450,6 +450,18 @@
       "bytes": 30116,
       "sha256": "2e3c6a4486b0c760023be8ab96589581e8a588aba579598cef50df33c56576c7"
     },
+    "sim-cyclic-ca-1-1-14.png": {
+      "bytes": 30600,
+      "sha256": "9bce899af1324682d83259bcb1c0993df4af3db94b2f723692146cc4dcd35514"
+    },
+    "sim-cyclic-ca-age.png": {
+      "bytes": 4667,
+      "sha256": "db937f8649a84b48947f3f581917c04334053608e648904a28ae9c112440a5c1"
+    },
+    "sim-cyclic-ca-moore-1-3-3.png": {
+      "bytes": 34210,
+      "sha256": "b15424ab0b7861a3b6816c346af2fb42045dfdc5894891cf63aef07b310fd875"
+    },
     "sim-fitzhugh-nagumo-spiral.png": {
       "bytes": 4378,
       "sha256": "f02e07f52307b87ef2b103899bf44849d4f82ad2a8e60c07ce66ef2cf828cf56"
@@ -478,6 +490,18 @@
       "bytes": 5947,
       "sha256": "1db2346aa2ef7e4ea04b05d3bbab83e585ee9823fe0c9e75686de909c8ece51e"
     },
+    "sim-hodgepodge-spirals.png": {
+      "bytes": 35172,
+      "sha256": "f83ff9b2dbe8efa14287a865f3d0b8dafdffc0281279127d4e4274d9845dcf98"
+    },
+    "sim-ising-coarsening.png": {
+      "bytes": 7320,
+      "sha256": "af351b7f43f8af0a326065ba1a41f7c3643f176a6951e3cdb1993f14fb4d1c3d"
+    },
+    "sim-ising-critical.png": {
+      "bytes": 28206,
+      "sha256": "96288821e6f52bc43b639de96829cfbc5c08814bb8e15f809a98273a98e0c5e9"
+    },
     "sim-schnakenberg-turing.png": {
       "bytes": 37168,
       "sha256": "b623ea3be3b25c77209b030d5cc3f4309daea4158cc4d5f3841cb76a18835f03"
@@ -485,6 +509,10 @@
     "sim-schnakenberg-two-channel.png": {
       "bytes": 36744,
       "sha256": "08ccfcb72f9f407f2957a3601f826ee40fc40cb18a2cc96013411caf762e0a95"
+    },
+    "sim-spatial-rps.png": {
+      "bytes": 24550,
+      "sha256": "eeadf4be8612f0a95f9cbc27759c86bde3378323e13e01e724982684d1ab6c8a"
     },
     "solid-solid-depth-effects.png": {
       "bytes": 15892,

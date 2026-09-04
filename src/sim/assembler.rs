@@ -62,6 +62,16 @@ fn sim_grid() -> vec2<i32> {
     return vec2<i32>(params.grid);
 }
 
+// Integer state lives in an f32 channel (exact to 2^24), so cycling a
+// state is a float modulo. `%` on floats in WGSL is a remainder like
+// its integer form, so the same bias-before-wrap applies as in the
+// periodic boundary -- a negative state would otherwise cycle the wrong
+// way rather than erroring.
+fn fract_state(v: f32, n: f32) -> f32 {
+    let m = v - floor(v / n) * n;
+    return floor(m);
+}
+
 // PCG, the same generator the flame shaders use. Keyed by (seed, cell,
 // step) so a run is reproducible from the config alone and does not
 // depend on dispatch order.
