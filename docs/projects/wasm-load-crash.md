@@ -1,6 +1,15 @@
 # The WASM load crash
 
-**Status:** OPEN, on `main`. Not caused by the escape-time work.
+**Status:** FIXED 2026-09-03 by moving the web build to winit's
+`EventLoopExtWebSys::spawn` (below). No longer reproducible after
+repeated attempts in Firefox, where it previously failed on the first
+or second file load every time. Held open as a record because the
+MECHANISM was never proved — the fix removes a documented hazard rather
+than a demonstrated one, and an intermittent bug that stops appearing
+is evidence, not proof. If it returns, the handler closure is still the
+place to look.
+
+Never caused by the escape-time work.
 
 A browser trap while loading fractal config files. Either fractal
 type, usually by the second file, sometimes the first. The app freezes;
@@ -320,15 +329,34 @@ what inside it holds a stale reference.
 
 ---
 
-## Next moves, in order of cost
+## If it comes back
 
-1. **One paired run of the protocol above.** It has never actually been
-   executed with a correct pairing on the correct files — every prior
-   attempt failed one of those two conditions. This is one build and
-   one reproduction.
-2. If the offset lands unaligned, **bisect `main`**. The report says
-   "introduced recently", so start shallow. `scripts/bisect-wasm.bat`
-   builds a step with the stack size pinned.
-3. If a name lands in a dependency, that dependency's async or
-   event-handler path is the suspect; `winit`'s web event loop and
-   `wasm-bindgen`'s closure machinery are the two on this path.
+1. Reproduce and capture the **whole** Firefox stack, not the top
+   frame. Its async chain is what located this one.
+2. `python scripts/wasm-locate.py <offset>` **before rebuilding** — an
+   offset is only meaningful against the module that produced it.
+3. The handler closure is the known site. The open question there is
+   what holds a stale reference across a config load.
+
+`scripts/bisect-wasm.bat` and the `dist-symbols` profile remain, and
+are now the fallback rather than the plan.
+
+## What this cost, and what it should have cost
+
+Four rounds went into instrumentation that could not work, and each
+one produced an answer that looked right:
+
+| attempt | why it failed |
+|---|---|
+| `dist-debug` | +50.6% code — a different program |
+| `dist-symbols` + DWARF | 12× module size; changed the timing enough to hide it |
+| offsets across `strip` | wrong file, then wrong index arithmetic |
+| body-size alignment | measured 40% wrong on ground truth |
+
+What finally worked needed no second build, no instrumented profile and
+no bisect: **read the string literals the crashing function references
+out of the shipped binary**. Two strings identified it exactly. That
+should have been the first move, not the fifth — a stripped Rust binary
+is far from anonymous, because every `expect`, `unreachable!` and
+format string is still sitting in the data section with the code that
+points at it.

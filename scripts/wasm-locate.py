@@ -1,71 +1,70 @@
-"""Name the function containing a wasm crash offset, by ALIGNING two builds.
+"""Identify the function containing a wasm crash offset, from the
+SHIPPED module alone.
 
-The shipped `dist` module is stripped, so a browser reports a trap as a
-bare byte offset. This maps that offset to a function name using a
-names build of the same commit -- but without the two assumptions that
-made the previous attempt produce confident, meaningless answers:
+A browser reports a trap in the stripped `dist` bundle as a bare byte
+offset. This turns that into an identification without needing the
+crash to survive an instrumented build, and -- the part that matters --
+without comparing against a second build at all.
+
+WHY NOT COMPARE BUILDS. Three earlier versions of this tool did, and
+each produced confident, meaningless names:
 
  1. It read `target/wasm32-unknown-unknown/<profile>/*.wasm`. The
     browser loads `pkg/*_bg.wasm`, which wasm-bindgen REWRITES from
-    that file -- different functions, different offsets. The offset was
-    being looked up in a module the browser never ran.
+    that file -- 11,443 function bodies against the raw module's
+    13,214. Offsets were being looked up in a module nobody ran.
  2. It assumed function index i in one build is function index i in the
-    other, and shifted offsets by the code-section delta. `strip`
-    renumbers, so that is false: measured on one pair, index-aligned
-    bodies match only 15% of the time. It is the case naive index
-    arithmetic gets wrong while looking perfectly plausible.
+    other. `strip` renumbers; index-aligned bodies match 15% of the
+    time.
+ 3. Aligning the two builds' body-size sequences with a diff looked
+    much better -- until it was MEASURED. Exports named in both modules
+    are ground truth, so map each shipped index through the alignment
+    and compare: of 22 testable, 9 correct, 6 WRONG, 7 unaligned, with
+    the wrong ones missing by thousands of indices
+    (`wasmapi_get_config_json` mapped to 4,752 against a truth of
+    8,971). A tool wrong 40% of the time it answers is worse than one
+    that stays quiet.
 
-So this aligns the two body-SIZE sequences with a diff and maps through
-the alignment. Measured on a real dist/dist-symbols pair: 13,214 vs
-13,205 bodies, 98.7% agreement on the size multiset, and 81.6% of
-bodies landing in a matching run. That 81.6% is the honest ceiling --
-richer alignment keys were tried and all did WORSE (body ends 61%,
-size+12 bytes each end 45%, exact content hash 19%), which says the two
-links differ in more than function numbering, so no cheap key
-identifies a body across them.
+WHAT WORKS. The module names itself, three ways, none involving a
+second build:
 
-That is why every answer carries a confidence line. An offset in a long
-matching run whose two bodies are byte-identical is a name worth acting
-on; an offset in an unaligned region gets no name rather than a guess.
+ - **String literals.** Rust materialises a `&str` as an
+   `i32.const <addr>, i32.const <len>` pair pointing into a data
+   segment. Read them back and a function announces what it is. This is
+   what actually solved the load crash: one 5,905-byte body holding
+   'handler woken up without user event' and the `unreachable!`
+   message -- two strings that occur together in exactly one place in
+   winit 0.30.13, its web event-loop handler closure.
+ - **Export names**, which survive `strip`. Several exports routinely
+   share one function index (`__wasm_bindgen_func_elem_10607_11`, `_12`,
+   `_13` ... are one trampoline), so they are reported as a list.
+ - **Body geometry** -- index, size, offset into it -- which at least
+   says whether two crash offsets are the same function.
 
 USAGE:
 
-  1. Build BOTH from the SAME commit, no `src/` change between:
-       ./build-wasm.sh              -> pkg/fractal_flame_wgpu_bg.wasm
-       ./build-wasm.sh --symbols    -> pkg/fractal_flame_wgpu_bg.names.wasm
-     Order does not matter: `--symbols` builds into ./pkg-names and
-     copies only the module out, so ./pkg is never written to.
-     (It did not always. wasm-bindgen writes fixed filenames into
-     --out-dir, so the names build overwrote the shipped module --
-     the only artifact the crash can be reproduced with -- and a first
-     fix that restored just the .wasm broke the app, because the JS
-     glue is emitted alongside the module and the two must match.)
-  2. Reproduce with the SHIPPED bundle and copy the offset. Better,
-     copy the WHOLE wasm stack: Chrome prints frames as
-     `wasm-function[N]`, each of which can be passed as `#N` below, and
-     several frames are several independent anchors.
-  3. python scripts/wasm-locate.py <offset> [<offset> ...]
+  python scripts/wasm-locate.py <offset|#index> [...]
 
-Offsets may be decimal or 0x-hex. If the trace gives `wasm-function[N]`,
-pass it as `#N` instead: that skips the offset lookup and is the more
-reliable input.
+Offsets may be decimal or 0x-hex; `#N` is a `wasm-function[N]` from a
+Chrome trace. Reads `pkg/fractal_flame_wgpu_bg.wasm`, whatever
+`./build-wasm.sh` last put there.
 
-READ THE PAIRING LINE FIRST. It compares DATA sections -- the constant
-pool, which the same source produces regardless of how the code is
-linked. Neither of the obvious alternatives works here: code-size drift
-is too coarse, and function COUNT rejects the very pairing this tool
-exists to make, because --keep-debug changes wasm-bindgen's closure
-strategy (the shipped module gets `__wasm_bindgen_func_elem_*`
-trampoline exports; the names build gets none), which on a genuine
-same-commit pair is 10,815 bodies against 11,443 -- 5.8% apart.
+AN OFFSET IS ONLY MEANINGFUL AGAINST THE MODULE THAT PRODUCED IT. Any
+rebuild moves every function, and a stale offset will still resolve --
+to a different function, with a straight face. Read the offset out of
+the browser and resolve it before rebuilding, or keep a copy of the
+module you reproduced with.
+
+Capture Firefox's async stack in full when you have one: it chains the
+causality (`init -> microtask -> addEventListener ->
+requestAnimationFrame -> trap`), and that alone placed the load crash
+in a rAF callback.
 """
 
 import io
 import sys
-import difflib
 
 SHIPPED = "pkg/fractal_flame_wgpu_bg.wasm"
-NAMED = "pkg/fractal_flame_wgpu_bg.names.wasm"
 
 
 def leb(b, o, signed=False):
@@ -94,7 +93,7 @@ def sections(d):
 
 def bodies(d):
     """[(module_offset, size)] per function body, in code-section order."""
-    for sid, off, size in sections(d):
+    for sid, off, _ in sections(d):
         if sid == 10:
             n, p = leb(d, off)
             out = []
@@ -108,7 +107,7 @@ def bodies(d):
 
 def n_imported_funcs(d):
     """Imports occupy the low function indices, so bodies start after them."""
-    for sid, off, size in sections(d):
+    for sid, off, _ in sections(d):
         if sid != 2:
             continue
         cnt, p = leb(d, off)
@@ -141,46 +140,11 @@ def n_imported_funcs(d):
     return 0
 
 
-def func_names(d):
-    """function index -> name, from the `name` section's subsection 1."""
-    for sid, off, size in sections(d):
-        if sid != 0:
-            continue
-        nl, p = leb(d, off)
-        if d[p:p + nl] != b"name":
-            continue
-        p += nl
-        end, names = off + size, {}
-        while p < end:
-            sub = d[p]
-            p += 1
-            ssz, p2 = leb(d, p)
-            p = p2
-            if sub == 1:
-                cnt, q = leb(d, p)
-                for _ in range(cnt):
-                    idx, q = leb(d, q)
-                    ln, q = leb(d, q)
-                    names[idx] = d[q:q + ln].decode("utf8", "replace")
-                    q += ln
-            p += ssz
-        return names
-    return {}
-
-
 def export_names(d):
-    """function index -> [exported names]. These survive `strip`, so when
-    the crash lands in an exported function it is named with NO
-    cross-build assumption at all -- read that in preference to the
-    aligned name whenever both appear.
+    """function index -> [exported names]; these survive `strip`.
 
-    A LIST, not a name: several exports routinely share one function
-    index. wasm-bindgen emits `__wasm_bindgen_func_elem_10607_11`,
-    `_12`, `_13`, `_14` ... all pointing at the same closure trampoline,
-    so a dict keyed by index silently kept only the last. That made the
-    module look as if it exported 9 of the 19 shims its own JS calls --
-    i.e. as if the bundle were mismatched, which it was not."""
-    for sid, off, size in sections(d):
+    A list, not a name: several exports routinely share one index."""
+    for sid, off, _ in sections(d):
         if sid != 7:
             continue
         cnt, p = leb(d, off)
@@ -198,133 +162,126 @@ def export_names(d):
     return {}
 
 
-def load(path):
-    try:
-        return io.open(path, "rb").read()
-    except FileNotFoundError:
-        sys.exit("missing " + path + " -- see the usage note at the top of this script")
+def data_segments(d):
+    """[(memory address, bytes)] for active data segments."""
+    for sid, off, _ in sections(d):
+        if sid != 11:
+            continue
+        cnt, p = leb(d, off)
+        segs = []
+        for _ in range(cnt):
+            flags, p = leb(d, p)
+            addr = 0
+            if flags == 2:
+                _, p = leb(d, p)
+            if flags in (0, 2):
+                if d[p] != 0x41:  # i32.const
+                    return segs
+                p += 1
+                addr, p = leb(d, p, signed=True)
+                if d[p] != 0x0B:  # end
+                    return segs
+                p += 1
+            ln, p = leb(d, p)
+            segs.append((addr, d[p:p + ln]))
+            p += ln
+        return segs
+    return []
+
+
+def strings_in(body, segs):
+    """String literals a function body references.
+
+    Rust materialises a `&str` as its address then its length, so an
+    `i32.const <addr>, i32.const <len>` pair whose target lands in a
+    data segment and decodes to printable bytes is a literal. Scanning
+    for the opcode rather than decoding instructions can in principle
+    match an immediate inside another instruction; the strings validate
+    themselves, so a false positive reads as noise rather than as a
+    plausible wrong answer."""
+    if not segs:
+        return {}
+    lo = min(a for a, _ in segs)
+    hi = max(a + len(b) for a, b in segs)
+
+    def read(addr, n):
+        for a, b in segs:
+            if a <= addr and addr + n <= a + len(b):
+                return b[addr - a:addr - a + n]
+        return None
+
+    found, i = {}, 0
+    while i < len(body) - 1:
+        if body[i] != 0x41:
+            i += 1
+            continue
+        try:
+            v, j = leb(body, i + 1, signed=True)
+        except IndexError:
+            break
+        if lo <= v < hi and j < len(body) - 1 and body[j] == 0x41:
+            try:
+                n, _ = leb(body, j + 1, signed=True)
+            except IndexError:
+                break
+            if 2 <= n <= 300:
+                s = read(v, n)
+                if s and all(32 <= c < 127 or c in (9, 10) for c in s):
+                    t = s.decode()
+                    found[t] = found.get(t, 0) + 1
+        i = j
+    return found
 
 
 def main():
     args = sys.argv[1:]
     if not args:
         sys.exit(__doc__)
+    try:
+        d = io.open(SHIPPED, "rb").read()
+    except FileNotFoundError:
+        sys.exit("missing " + SHIPPED + " -- run ./build-wasm.sh first")
 
-    ship, named = load(SHIPPED), load(NAMED)
-    sb, nb = bodies(ship), bodies(named)
-    if not sb or not nb:
-        sys.exit("no code section -- are these wasm modules?")
-    names = func_names(named)
-    # A stripped module is not simply nameless: wasm-bindgen leaves ~23
-    # of its own shims named, so `if not names` passes and every answer
-    # then comes back "<unnamed>" with EXACT confidence and 100%
-    # alignment -- a dist module compared against itself looks PERFECT
-    # by every other check here. Measured on exactly that accident:
-    # 23 names across 10,815 bodies. A real names build names nearly
-    # all of them.
-    covered = len(names) / max(len(nb), 1)
-    if covered < 0.5:
-        sys.exit(chr(10).join([
-            "{} names only {:,} of {:,} functions ({:.1%}).".format(
-                NAMED, len(names), len(nb), covered),
-            "That is a STRIPPED module, not a names build. Comparing it would look",
-            "perfect by every other check here -- 100% alignment, EXACT confidence",
-            "-- while saying nothing at all.",
-            "Rebuild with --symbols (it writes pkg-names/ and copies the module",
-            "out; ./pkg is not touched).",
-        ]))
-    s_imp, n_imp = n_imported_funcs(ship), n_imported_funcs(named)
-    s_exports = export_names(ship)
-
-    ssz = [z for _, z in sb]
-    nsz = [z for _, z in nb]
-
-    # --- pairing sanity, printed before any answer below it is readable ---
-    print("shipped : {}".format(SHIPPED))
-    print("          {:,} bytes, {:,} bodies, {:,} code bytes, {:,} imports".format(
-        len(ship), len(sb), sum(ssz), s_imp))
-    print("named   : {}".format(NAMED))
-    print("          {:,} bytes, {:,} bodies, {:,} code bytes, {:,} imports".format(
-        len(named), len(nb), sum(nsz), n_imp))
-    # Pairing check. NOT function count: at the pkg level the two builds
-    # legitimately differ by hundreds of functions, because --keep-debug
-    # changes wasm-bindgen's closure strategy -- the shipped module gets
-    # `__wasm_bindgen_func_elem_*` trampoline exports and the names build
-    # gets NONE. Measured on a genuine same-commit pair: 10,815 vs 11,443
-    # bodies, 5.8% apart. A count guard rejects the very pairing this
-    # tool exists to make.
-    #
-    # The DATA section is the stable one. It is the constant pool -- the
-    # same source compiles to the same strings and tables regardless of
-    # how the code is linked -- so it separates "different link" from
-    # "different commit", which is the distinction that matters.
-    def data_size(d):
-        return sum(sz for sid, _, sz in sections(d) if sid == 11)
-
-    dsz, nds = data_size(ship), data_size(named)
-    ddrift = abs(nds - dsz) / max(dsz, 1)
-    csdrift = abs(sum(nsz) - sum(ssz)) / max(sum(ssz), 1)
-    print("data-section drift: {:.3f}%   code-size drift: {:.3f}%".format(
-        ddrift * 100, csdrift * 100))
-    if ddrift > 0.01:
-        print("  *** THESE ARE NOT THE SAME COMMIT -- the constant pools differ.")
-        print("  *** Rebuild both and do not read the names below. A stale")
-        print("  *** pairing still answers, plausibly and wrongly.")
-    else:
-        print("  constant pools agree: consistent with one commit")
-
-    # --- align the two body-size sequences ---
-    sm = difflib.SequenceMatcher(None, ssz, nsz, autojunk=False)
-    blocks = sm.get_matching_blocks()
-    aligned = sum(n for _, _, n in blocks)
-    print("alignment: {:,} of {:,} bodies fall in matching runs ({:.2f}%), "
-          "{:,} runs".format(aligned, len(sb), 100.0 * aligned / len(sb), max(len(blocks) - 1, 0)))
+    sb = bodies(d)
+    if not sb:
+        sys.exit("no code section -- is that a wasm module?")
+    imp = n_imported_funcs(d)
+    exp = export_names(d)
+    segs = data_segments(d)
+    print("{}: {:,} bytes, {:,} bodies, {:,} imports, {:,} data segments".format(
+        SHIPPED, len(d), len(sb), imp, len(segs)))
     print()
-
-    def map_index(i):
-        for a, b, n in blocks:
-            if a <= i < a + n:
-                return b + (i - a), n
-        return None, 0
 
     for raw in args:
         if raw.startswith("#"):
-            fi = int(raw[1:])
-            i = fi - s_imp
+            i = int(raw[1:]) - imp
             if not 0 <= i < len(sb):
-                print("{}: function index outside the shipped module's defined range".format(raw))
+                print("{}: outside the module's defined function range".format(raw))
                 continue
-            where, into = "function #{}".format(fi), None
+            where, into = "function {}".format(raw), None
         else:
-            target = int(raw, 16) if raw.lower().startswith("0x") else int(raw)
-            i = next((k for k, (bo, bz) in enumerate(sb) if bo <= target < bo + bz), None)
+            t = int(raw, 16) if raw.lower().startswith("0x") else int(raw)
+            i = next((k for k, (bo, bz) in enumerate(sb) if bo <= t < bo + bz), None)
             if i is None:
-                print("offset {:,} -> not inside any function body of the shipped module".format(target))
+                print("offset {:,} -> not inside any function body".format(t))
                 continue
-            bo, bz = sb[i]
-            where, into = "offset {:,}".format(target), (target - bo, bz)
+            where, into = "offset {:,}".format(t), t - sb[i][0]
 
-        j, run = map_index(i)
         bo, bz = sb[i]
-        line = "{}  ->  shipped func #{}".format(where, i + s_imp)
-        if into:
-            line += "  ({:,} bytes into a {:,}-byte body)".format(into[0], into[1])
+        line = "{}  ->  func #{} (body #{}), {:,} bytes".format(where, i + imp, i, bz)
+        if into is not None:
+            line += ", trap at +{:,}".format(into)
         print(line)
-        exported = s_exports.get(i + s_imp)
-        if exported:
-            print("    exported as {}  <-- from the shipped module itself, "
-                  "no alignment involved".format(", ".join("`%s`" % e for e in exported)))
-        if j is None:
-            print("    <no aligned counterpart -- one of the bodies the two builds disagree on>")
-            print()
-            continue
-        nbo, nbz = nb[j]
-        same = ship[bo:bo + bz] == named[nbo:nbo + nbz]
-        conf = ("EXACT (the two bodies are byte-identical)" if same else
-                "high (same size, inside an aligned run)" if bz == nbz else
-                "LOW (aligned but the sizes differ)")
-        print("    {}".format(names.get(j + n_imp, "<unnamed>")))
-        print("    confidence: {}; its aligned run is {:,} bodies long".format(conf, run))
+        for nm in exp.get(i + imp, []):
+            print("    exported as `{}`".format(nm))
+        lits = strings_in(d[bo:bo + bz], segs)
+        if not lits:
+            print("    (references no string literals -- try the callers, or")
+            print("     another offset from the same stack)")
+        else:
+            print("    references {} string literal(s):".format(len(lits)))
+            for s, c in sorted(lits.items(), key=lambda kv: -len(kv[0])):
+                print("      {}x {!r}".format(c, s))
         print()
 
 
