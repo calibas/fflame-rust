@@ -407,6 +407,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             // so they reach winit as raw touch events for multi-touch handling
             canvas.style().set_property("touch-action", "none").unwrap();
 
+            // DIAGNOSTIC, temporary: `?no-touch-fix` in the URL skips both
+            // PointerEvent listeners below. The Firefox load crash traps
+            // inside the single `Closure<dyn FnMut(PointerEvent)>` adapter
+            // the module has, and every instance of that type shares it --
+            // ours and winit's alike -- so the adapter names the type and
+            // not the instance. This partitions them without a second
+            // build: still crashes with the flag on and the closure is
+            // winit's (its EventListenerHandles DROP theirs on
+            // re-registration, while ours are forget()-ten and cannot be
+            // freed); stops crashing and ours are implicated despite that.
+            // See docs/projects/wasm-load-crash.md. Remove once answered.
+            let touch_fixes_enabled = !web_window
+                .location()
+                .search()
+                .map(|q| q.contains("no-touch-fix"))
+                .unwrap_or(false);
+            if !touch_fixes_enabled {
+                log::warn!("?no-touch-fix: PointerEvent touch listeners NOT installed                             (diagnostic; touch input will misbehave)");
+            }
+
             // Release implicit pointer capture on touch so multi-touch events
             // reach the canvas (winit 0.30 doesn't do this; fixed in 0.31+)
             let canvas_for_touch = canvas.clone();
@@ -417,12 +437,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 },
             );
-            canvas
-                .add_event_listener_with_callback(
-                    "pointerdown",
-                    touch_fix.as_ref().unchecked_ref(),
-                )
-                .unwrap();
+            if touch_fixes_enabled {
+                canvas
+                    .add_event_listener_with_callback(
+                        "pointerdown",
+                        touch_fix.as_ref().unchecked_ref(),
+                    )
+                    .unwrap();
+            }
             touch_fix.forget(); // Leak closure so it lives for the app lifetime
 
             // When pointer capture is released (above), pointerup/pointercancel events
@@ -454,12 +476,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 },
             );
-            document
-                .add_event_listener_with_callback("pointerup", touch_up_fix.as_ref().unchecked_ref())
-                .unwrap();
-            document
-                .add_event_listener_with_callback("pointercancel", touch_up_fix.as_ref().unchecked_ref())
-                .unwrap();
+            if touch_fixes_enabled {
+                document
+                    .add_event_listener_with_callback(
+                        "pointerup",
+                        touch_up_fix.as_ref().unchecked_ref(),
+                    )
+                    .unwrap();
+                document
+                    .add_event_listener_with_callback(
+                        "pointercancel",
+                        touch_up_fix.as_ref().unchecked_ref(),
+                    )
+                    .unwrap();
+            }
             touch_up_fix.forget();
 
             let attributes = winit::window::Window::default_attributes()
