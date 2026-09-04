@@ -14,6 +14,12 @@ REM an address, and a wrapping subtraction fails at its source. Much
 REM bigger and slower; not for shipping.
 set PROFILE=dist
 set BINDGEN_FLAGS=
+REM Reset the flag every run. cmd variables persist for the life of
+REM the WINDOW, so without this a --symbols run leaves SYMBOLS=1 set
+REM and every later plain build in the same shell keeps writing to
+REM pkg-names, never regenerating ./pkg. That failure is silent and
+REM looks exactly like the script not working.
+set SYMBOLS=
 if /I "%~1"=="--symbols" (
     REM dist codegen exactly, symbols kept: the build for a fault that
     REM only appears when optimized.
@@ -43,7 +49,7 @@ REM Keeping it out of ./pkg entirely means the served bundle is never
 REM touched, in any order, and the locator gets its second module.
 set OUTDIR=./pkg
 if "%SYMBOLS%"=="1" set OUTDIR=./pkg-names
-if not exist "pkg-names" mkdir "pkg-names"
+if "%SYMBOLS%"=="1" if not exist "pkg-names" mkdir "pkg-names"
 wasm-bindgen %BINDGEN_FLAGS% --out-dir %OUTDIR% --target web ./target/wasm32-unknown-unknown/%PROFILE%/fractal_flame_wgpu.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
 

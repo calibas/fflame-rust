@@ -206,8 +206,24 @@ def main():
     if not sb or not nb:
         sys.exit("no code section -- are these wasm modules?")
     names = func_names(named)
-    if not names:
-        sys.exit(NAMED + " has no name section; build it with --symbols")
+    # A stripped module is not simply nameless: wasm-bindgen leaves ~23
+    # of its own shims named, so `if not names` passes and every answer
+    # then comes back "<unnamed>" with EXACT confidence and 100%
+    # alignment -- a dist module compared against itself looks PERFECT
+    # by every other check here. Measured on exactly that accident:
+    # 23 names across 10,815 bodies. A real names build names nearly
+    # all of them.
+    covered = len(names) / max(len(nb), 1)
+    if covered < 0.5:
+        sys.exit(chr(10).join([
+            "{} names only {:,} of {:,} functions ({:.1%}).".format(
+                NAMED, len(names), len(nb), covered),
+            "That is a STRIPPED module, not a names build. Comparing it would look",
+            "perfect by every other check here -- 100% alignment, EXACT confidence",
+            "-- while saying nothing at all.",
+            "Rebuild with --symbols (it writes pkg-names/ and copies the module",
+            "out; ./pkg is not touched).",
+        ]))
     s_imp, n_imp = n_imported_funcs(ship), n_imported_funcs(named)
     s_exports = export_names(ship)
 
