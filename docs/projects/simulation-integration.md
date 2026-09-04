@@ -177,9 +177,57 @@ Phase 1: sim ignores drag/wheel/pinch (`:460-513`, `:1442`). The overlay at `:12
 
 `src/animation/` has no mode-specific code; tracks address `ConfigPath` string keys, so `Sim.*` keys work through `to_string_key`/`from_string_key` unchanged.
 
-- `src/ui/target_selector.rs`: `TargetCategory::Simulation` (`:44`, label `:59`, id `:74`, gate `:258-264`) and `get_sim_items` next to `get_escape_items` `:310-348`: `SimStepsPerFrame`, `SimDt`, `SimWarpZoom`, `SimWarpRotation`, `SimWarpPanX/Y`, `SimWarpFlow`, plus the active model's and colouring's params. **Do not** offer `SimSeed`, `SimGridMode`, `SimGridWidth`/`Height` (each keyframe would reseed) or `SimGridScale` (each keyframe would resample).
+- `src/ui/target_selector.rs`: `TargetCategory::Simulation` (`:44`, label `:59`, id `:74`, gate `:258-264`) and `get_sim_items` next to `get_escape_items` `:310-348`: **`SimStepCount` first — it is the one that animates the simulation itself** — then `SimDt`, `SimWarpZoom`, `SimWarpRotation`, `SimWarpPanX/Y`, `SimWarpFlow`, plus the active model's and colouring's params. **Do not** offer `SimSeed`, `SimGridMode`, `SimGridWidth`/`Height` (each keyframe would reseed), `SimGridScale` (each keyframe would resample), or `SimStepsPerFrame` (it is the interactive Run speed; the timeline uses `SimStepCount`).
 - `src/animation/export.rs:751-786` — `apply_config_value` arms for every animatable `Sim*` path (with the same NaN/clamp discipline as `EscapeZoomLog2` at `:767-772`).
-- `src/animation/export.rs:1990-2145` — the escape per-frame settle loop is the template, but the semantics differ: **the simulation is stateful across frames**. Frame *n* of a video steps `steps_per_frame` more from frame *n−1*'s state; a scrub backwards must re-run from the seed. The exporter keeps one `SimRenderer` for the whole export and only reseeds when a reseed-class path changes.
+- `src/animation/export.rs:1990-2145` — the escape per-frame settle loop is the template, and **the structure already supports a stateful generator**: `escape_renderer` is declared outside the frame loop and created once with `get_or_insert_with`, so its orbit cache carries frame to frame. A `sim_renderer` sits in exactly the same place. Verified against the code 2026-09-04, not just assumed.
+
+  Per frame the order is: evaluate the tracks → `apply_animation_values` into a fresh `frame_config` → `renderer.load_config` for the shared palette/tonemap tail → advance and colour the sim. Keyframed model parameters therefore take effect **before** the step that frame runs, which is what makes "animate F and k while the pattern evolves" work rather than just cross-fading two stills.
+
+### The step count must come from animation TIME, not from frame count
+
+**Decided 2026-09-04.** The obvious design — advance `steps_per_frame`
+on every rendered frame — makes the simulation frame-rate dependent,
+and that breaks three things the rest of the animation system
+guarantees:
+
+- The same project exported at 30 fps and 60 fps gives **different
+  pictures at the same timestamp**: twice the frames means twice the
+  steps. Every other animatable quantity in this app is a function of
+  time and does not care about fps.
+- In-app playback advances by wall-clock `delta_time`
+  (`app/animation_update.rs:59`) while export advances by
+  `frame / fps` (`export.rs:472`). A frame-counted simulation would
+  make the preview and the export diverge, and the preview would differ
+  again on a slower machine.
+- Seeking is undefined. A track evaluated at time *t* has one value; a
+  frame-counted simulation has whatever history the playhead happened
+  to take to get there.
+
+So the timeline drives a **cumulative step count**, `Sim.StepCount`,
+which is an ordinary animatable float: the simulation state at time *t*
+is `round(track(t))` steps from the seed, full stop. That restores the
+property the animation system assumes everywhere else — a frame is a
+function of its time — and it is strictly more expressive than a rate,
+because easing the track gives slow-in/slow-out on the *simulation*
+and a hold gives a freeze-frame that keeps animating colour and warp.
+
+- Default track for a new animation: a linear ramp `0 → sim.steps` over
+  the duration, i.e. constant speed, which is what a rate would have
+  given.
+- Advancing is incremental and cheap: the renderer already holds
+  `step_index`, so a frame runs `target − step_index` steps.
+- **Going backwards costs a reseed and a re-run**, because the rule is
+  not invertible. That is the documented price of scrubbing back, the
+  timeline shows a "re-simulating" state, and it is why the track is
+  the right place for it: the exporter can see a decrease coming
+  instead of discovering it.
+- `steps_per_frame` stays in the config, but it means only what it says
+  for the interactive **Run** button — free-running speed when no
+  timeline is driving. It is not an animation target.
+
+The exporter keeps one `SimRenderer` for the whole export and reseeds
+only when a reseed-class path changes or the step count moves
+backwards.
 - `src/app/animation_update.rs:44-59` — playback in the app: same stateful rule; no settle-then-jump.
 - Built-in script `assets/scripts/modifiers/zoom_dive.rhai` style: a `sim_sweep.rhai` that keyframes F/k across a Pearson row is the obvious shipped example.
 
