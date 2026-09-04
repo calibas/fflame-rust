@@ -488,6 +488,110 @@ mod tests {
         assert_eq!(ring.with_kind("blobs"), SimInit::Blobs { count: 6, radius: 40 });
     }
 
+
+    // ---- ConfigPath / manager integration -------------------------
+    //
+    // These live here rather than in delta.rs because what they assert
+    // is about SimConfig's shape: that every path round-trips through a
+    // string key, that the three update types are routed by how much of
+    // a run survives, and that the clamps are the ones phase 0
+    // measured.
+
+    use crate::config::delta::{ConfigPath, ConfigValue, UpdateType};
+
+    /// Every Sim path must survive `to_string_key` -> `from_string_key`.
+    /// Animation tracks address paths BY THAT STRING, so a path that
+    /// does not round-trip is a track that silently stops working.
+    #[test]
+    fn every_sim_path_round_trips_through_its_string_key() {
+        let paths = vec![
+            ConfigPath::SimModel,
+            ConfigPath::SimColoring,
+            ConfigPath::SimGridMode,
+            ConfigPath::SimGridWidth,
+            ConfigPath::SimGridHeight,
+            ConfigPath::SimGridScale,
+            ConfigPath::SimSeed,
+            ConfigPath::SimInitKind,
+            ConfigPath::SimInitAmplitude,
+            ConfigPath::SimInitRadius,
+            ConfigPath::SimInitCount,
+            ConfigPath::SimSteps,
+            ConfigPath::SimStepsPerFrame,
+            ConfigPath::SimDt,
+            ConfigPath::SimBoundary,
+            ConfigPath::SimUpscale,
+            ConfigPath::SimDownscale,
+            ConfigPath::SimModelParam { param: "feed".into() },
+            ConfigPath::SimColoringParam { param: "scale".into() },
+        ];
+        for path in paths {
+            let key = path.to_string_key();
+            assert!(key.starts_with("Sim."), "{key} should be namespaced");
+            let back = ConfigPath::from_string_key(&key)
+                .unwrap_or_else(|| panic!("{key} did not parse back"));
+            assert_eq!(back, path, "{key} round-tripped to a different path");
+        }
+    }
+
+    /// The three update types exist to protect a long run from a cheap
+    /// edit. A colouring change that reseeded would throw away a
+    /// 10,000-step field; a model change that only recoloured would
+    /// show the old rule's output.
+    #[test]
+    fn update_types_are_routed_by_how_much_of_the_run_survives() {
+        for p in [
+            ConfigPath::SimColoring,
+            ConfigPath::SimSteps,
+            ConfigPath::SimDt,
+            ConfigPath::SimUpscale,
+            ConfigPath::SimModelParam { param: "feed".into() },
+            ConfigPath::SimColoringParam { param: "scale".into() },
+        ] {
+            assert_eq!(p.update_type(), UpdateType::SimRerender, "{p:?}");
+        }
+        assert_eq!(ConfigPath::SimGridScale.update_type(), UpdateType::SimResample);
+        for p in [
+            ConfigPath::SimModel,
+            ConfigPath::SimSeed,
+            ConfigPath::SimInitKind,
+            ConfigPath::SimInitRadius,
+            ConfigPath::SimGridWidth,
+            ConfigPath::SimGridHeight,
+            ConfigPath::SimGridMode,
+            ConfigPath::SimBoundary,
+        ] {
+            assert_eq!(p.update_type(), UpdateType::SimReseed, "{p:?}");
+        }
+    }
+
+    /// `merge` takes the Ord max, so a change set that both recolours
+    /// and reseeds must reseed. Getting this backwards would leave the
+    /// old field on screen after a model change.
+    #[test]
+    fn a_reseed_subsumes_a_rerender_when_merged() {
+        assert!(UpdateType::SimReseed > UpdateType::SimRerender);
+        assert!(UpdateType::SimReseed > UpdateType::SimResample);
+        assert!(UpdateType::SimResample > UpdateType::SimRerender);
+    }
+
+    /// Sim.Steps is the track that animates the simulation itself
+    /// (master plan D5b), so it must convert from JSON; a model name
+    /// must not, because there is no value between two names.
+    #[test]
+    fn the_step_count_is_animatable_and_the_discrete_choices_are_not() {
+        use crate::config::delta::json_to_config_value;
+        let n = serde_json::json!(1234);
+        assert_eq!(
+            json_to_config_value(&n, &ConfigPath::SimSteps),
+            Some(ConfigValue::UInt(1234)),
+            "Sim.Steps must be animatable -- it IS the progression"
+        );
+        assert!(json_to_config_value(&n, &ConfigPath::SimModel).is_none());
+        assert!(json_to_config_value(&n, &ConfigPath::SimBoundary).is_none());
+        assert!(json_to_config_value(&n, &ConfigPath::SimSeed).is_none());
+    }
+
     #[test]
     fn every_enum_name_round_trips() {
         for n in SimBoundary::NAMES {
