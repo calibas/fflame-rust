@@ -15,6 +15,10 @@ echo "Building WASM module..."
 export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=67108864'
 PROFILE=dist
 BINDGEN_FLAGS=""
+# Reset the flag every run: an exported SYMBOLS from the environment
+# would otherwise send a plain build into pkg-names and leave ./pkg
+# untouched, which fails silently and looks like a broken script.
+SYMBOLS=
 if [ "$1" = "--symbols" ]; then
     # dist codegen exactly, symbols kept: the build for a fault that
     # only appears when optimized.
