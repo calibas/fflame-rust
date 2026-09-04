@@ -219,11 +219,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let g = sim_grid();
-    // Cell-centre mapping: pixel centre (o + 0.5) in output space to
-    // grid space. Sampling at the pixel's corner instead shifts the
-    // image half a cell, which is invisible at 1:1 and obvious at 8x.
-    let uv = (vec2<f32>(o) + vec2<f32>(0.5, 0.5)) / vec2<f32>(out_size);
-    let gf = uv * vec2<f32>(g);
+    // LETTERBOX, do not stretch. The grid is its own quantity with its
+    // own aspect ratio, so a 256x256 model shown in a 16:9 window is a
+    // square picture with bars -- not an ellipse field. Stretching was
+    // the first behaviour here and it was obviously wrong the moment a
+    // square grid met a widescreen export.
+    let fit = min(vec2<f32>(out_size).x / vec2<f32>(g).x,
+                  vec2<f32>(out_size).y / vec2<f32>(g).y);
+    let shown = vec2<f32>(g) * fit;
+    let origin = (vec2<f32>(out_size) - shown) * 0.5;
+    // Cell-centre mapping: pixel centre (o + 0.5) to grid space.
+    // Sampling at the pixel's corner instead shifts the image half a
+    // cell, which is invisible at 1:1 and obvious at 8x.
+    let gf = (vec2<f32>(o) + vec2<f32>(0.5, 0.5) - origin) / fit;
+    if (gf.x < 0.0 || gf.y < 0.0 || gf.x >= vec2<f32>(g).x || gf.y >= vec2<f32>(g).y) {
+        // Outside the grid: zero coverage, so the shared tonemap
+        // composites the configured background exactly as it does for
+        // an empty region of a flame.
+        textureStore(out_image, o, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
 
 //__RESOLVE__
 
@@ -265,8 +280,12 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     // Average every cell the output pixel covers. The loop is bounded
     // so a pathological ratio cannot hang the GPU: past 16x16 the
     // extra taps change nothing a viewer can see.
-    let lo = vec2<i32>(floor((vec2<f32>(o) / vec2<f32>(out_size)) * vec2<f32>(g)));
-    let hi = vec2<i32>(ceil((vec2<f32>(o + vec2<i32>(1, 1)) / vec2<f32>(out_size)) * vec2<f32>(g)));
+    // Footprint of this output pixel in grid space, derived from the
+    // SAME letterboxed mapping as the point sample above -- computing
+    // it independently from o/out_size silently ignored the bars.
+    let half = 0.5 / fit;
+    let lo = vec2<i32>(floor(gf - vec2<f32>(half, half)));
+    let hi = vec2<i32>(ceil(gf + vec2<f32>(half, half)));
     let a = clamp(lo, vec2<i32>(0, 0), g - vec2<i32>(1, 1));
     let b = clamp(hi, a + vec2<i32>(1, 1), min(a + vec2<i32>(16, 16), g));
     var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);

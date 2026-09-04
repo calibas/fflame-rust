@@ -183,13 +183,26 @@ pub async fn export_headless(
         && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
     let hist_size = crate::export::histogram_size_bytes(render_width, render_height, solid_active);
 
+    // Route on the MODE first. The high-res path is the tiled
+    // chaos-game exporter; neither escape nor simulation has a
+    // histogram at all, so sizing the decision on one sends them to an
+    // engine that cannot render them. This was a live gap for escape
+    // (integration checklist section 7) -- a large escape export could
+    // be misrouted -- and is fixed here for both.
+    let non_flame_mode = matches!(
+        config.render_mode,
+        crate::scene::transforms::RenderMode::Escape
+            | crate::scene::transforms::RenderMode::Simulation
+    );
+
     // `Auto` routes by size; explicit variants force one engine (parity testing).
-    let use_highres = match engine {
-        ExportEngine::Auto => hist_size > max_binding,
-        ExportEngine::HighRes => true,
-        ExportEngine::FlameRenderer => false,
-    };
-    if engine == ExportEngine::FlameRenderer && hist_size > max_binding {
+    let use_highres = !non_flame_mode
+        && match engine {
+            ExportEngine::Auto => hist_size > max_binding,
+            ExportEngine::HighRes => true,
+            ExportEngine::FlameRenderer => false,
+        };
+    if !non_flame_mode && engine == ExportEngine::FlameRenderer && hist_size > max_binding {
         log::warn!(
             "--engine flamerenderer forced at {}x{}, but histogram {} MB > binding {} MB — allocation will likely fail.",
             render_width, render_height, hist_size / (1024 * 1024), max_binding / (1024 * 1024)
