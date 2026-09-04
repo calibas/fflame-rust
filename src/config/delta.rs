@@ -319,6 +319,60 @@ pub enum ConfigPath {
     EscapeDownsample,
     /// Reference-orbit period hint (0 = none). Verified before use.
     EscapeReferencePeriod,
+
+    // ---------------------------------------------------------------
+    // Simulation mode. Routed to one of three update types by how much
+    // of the run survives the change: SimRerender keeps the field,
+    // SimResample interpolates it into a new grid, SimReseed restarts.
+    // ---------------------------------------------------------------
+    /// Which model steps, by registry name.
+    SimModel,
+    /// Which colouring maps the field, by registry name.
+    SimColoring,
+    /// Whether the grid is Fixed or bound to the viewport.
+    SimGridMode,
+    /// Fixed-grid width in cells.
+    SimGridWidth,
+    /// Fixed-grid height in cells.
+    SimGridHeight,
+    /// Bound-grid cells per output pixel.
+    SimGridScale,
+    /// Seed for the initial field and every stochastic model.
+    SimSeed,
+    /// Which initial shape (`noise`, `blob`, `blobs`, `ring`, `line`,
+    /// `center`).
+    SimInitKind,
+    /// Noise init amplitude.
+    SimInitAmplitude,
+    /// Blob/blobs/ring radius, in cells.
+    SimInitRadius,
+    /// How many blobs the `blobs` init places.
+    SimInitCount,
+    /// **The step count, and the animation target that drives the
+    /// simulation's own progression.**
+    ///
+    /// A still is the state at exactly this many steps from the seed,
+    /// so animating it animates the run: the state at time *t* is
+    /// `round(track(t))` steps, which keeps a frame a function of its
+    /// time rather than of how many frames preceded it (master plan
+    /// D5b). A track that decreases costs a reseed and re-run, which is
+    /// the price of a rule that cannot be stepped backwards.
+    SimSteps,
+    /// Free-running speed for the interactive Run button. NOT an
+    /// animation target — the timeline uses `SimSteps`.
+    SimStepsPerFrame,
+    /// Model time step, where the model has one.
+    SimDt,
+    /// What a step reads outside the grid.
+    SimBoundary,
+    /// Resolve filter when the grid is smaller than the output.
+    SimUpscale,
+    /// Resolve filter when the grid is larger than the output.
+    SimDownscale,
+    /// One model parameter, by name.
+    SimModelParam { param: String },
+    /// One colouring parameter, by name.
+    SimColoringParam { param: String },
     /// Escape radius squared.
     EscapeBailout,
     /// Mann-iteration damping α (complex): `z ← (1−α)z + α·f(z)`.
@@ -845,6 +899,25 @@ impl Display for ConfigPath {
             ConfigPath::EscapeZoomLog2 => write!(f, "Escape Zoom"),
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
+            ConfigPath::SimModel => write!(f, "Simulation Model"),
+            ConfigPath::SimColoring => write!(f, "Simulation Coloring"),
+            ConfigPath::SimGridMode => write!(f, "Simulation Grid Mode"),
+            ConfigPath::SimGridWidth => write!(f, "Simulation Grid Width"),
+            ConfigPath::SimGridHeight => write!(f, "Simulation Grid Height"),
+            ConfigPath::SimGridScale => write!(f, "Simulation Grid Scale"),
+            ConfigPath::SimSeed => write!(f, "Simulation Seed"),
+            ConfigPath::SimInitKind => write!(f, "Simulation Init"),
+            ConfigPath::SimInitAmplitude => write!(f, "Simulation Init Amplitude"),
+            ConfigPath::SimInitRadius => write!(f, "Simulation Init Radius"),
+            ConfigPath::SimInitCount => write!(f, "Simulation Init Count"),
+            ConfigPath::SimSteps => write!(f, "Simulation Steps"),
+            ConfigPath::SimStepsPerFrame => write!(f, "Simulation Steps Per Frame"),
+            ConfigPath::SimDt => write!(f, "Simulation dt"),
+            ConfigPath::SimBoundary => write!(f, "Simulation Boundary"),
+            ConfigPath::SimUpscale => write!(f, "Simulation Upscale"),
+            ConfigPath::SimDownscale => write!(f, "Simulation Downscale"),
+            ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
+            ConfigPath::SimColoringParam { param } => write!(f, "Simulation Color {param}"),
             ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
             ConfigPath::EscapeDownsample => write!(f, "Escape Downsample"),
             ConfigPath::EscapeReferencePeriod => write!(f, "Escape Reference Period"),
@@ -1087,6 +1160,31 @@ impl ConfigPath {
             ConfigPath::EscapeZoomLog2 => I18nKey::simple("history.param.escape_zoom"),
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
+            ConfigPath::SimModel => I18nKey::simple("history.param.sim_model"),
+            ConfigPath::SimColoring => I18nKey::simple("history.param.sim_coloring"),
+            ConfigPath::SimGridMode => I18nKey::simple("history.param.sim_grid_mode"),
+            ConfigPath::SimGridWidth => I18nKey::simple("history.param.sim_grid_width"),
+            ConfigPath::SimGridHeight => I18nKey::simple("history.param.sim_grid_height"),
+            ConfigPath::SimGridScale => I18nKey::simple("history.param.sim_grid_scale"),
+            ConfigPath::SimSeed => I18nKey::simple("history.param.sim_seed"),
+            ConfigPath::SimInitKind => I18nKey::simple("history.param.sim_init_kind"),
+            ConfigPath::SimInitAmplitude => I18nKey::simple("history.param.sim_init_amplitude"),
+            ConfigPath::SimInitRadius => I18nKey::simple("history.param.sim_init_radius"),
+            ConfigPath::SimInitCount => I18nKey::simple("history.param.sim_init_count"),
+            ConfigPath::SimSteps => I18nKey::simple("history.param.sim_steps"),
+            ConfigPath::SimStepsPerFrame => I18nKey::simple("history.param.sim_steps_per_frame"),
+            ConfigPath::SimDt => I18nKey::simple("history.param.sim_dt"),
+            ConfigPath::SimBoundary => I18nKey::simple("history.param.sim_boundary"),
+            ConfigPath::SimUpscale => I18nKey::simple("history.param.sim_upscale"),
+            ConfigPath::SimDownscale => I18nKey::simple("history.param.sim_downscale"),
+            ConfigPath::SimModelParam { param } => I18nKey::with_params(
+                "history.param.sim_model_param",
+                vec![("param", param.clone())],
+            ),
+            ConfigPath::SimColoringParam { param } => I18nKey::with_params(
+                "history.param.sim_coloring_param",
+                vec![("param", param.clone())],
+            ),
             ConfigPath::EscapeSupersample => I18nKey::simple("history.param.escape_supersample"),
             ConfigPath::EscapeDownsample => I18nKey::simple("history.param.escape_downsample"),
             ConfigPath::EscapeReferencePeriod => {
@@ -2208,6 +2306,19 @@ pub enum UpdateType {
     /// set mixing escape and flame paths must still re-render escape,
     /// and the flame flags ride along in UpdateAction's union anyway.
     EscapeRerender,
+    /// Recolour the simulation from its current field: a colouring,
+    /// palette or resolve-filter change that must not disturb the run.
+    SimRerender,
+    /// Resample the running field into a new grid (a bound grid's
+    /// scale changed). Keeps the run; interpolates once.
+    SimResample,
+    /// Restart the run from the seed: model, seed, init, boundary or a
+    /// grid size changed, and none of those can be carried across.
+    ///
+    /// Last in the ordering deliberately. `merge` takes the Ord max, so
+    /// a change set that both recolours and reseeds reseeds — the
+    /// stronger action subsumes the weaker, never the other way round.
+    SimReseed,
 }
 
 impl UpdateType {
@@ -2437,6 +2548,38 @@ impl ConfigPath {
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
+
+            // Simulation: split by how much of the run survives. This
+            // grouping is the whole reason there are three update types
+            // rather than one -- a colouring tweak must not throw away
+            // a 10,000-step field, and a model change cannot keep it.
+            ConfigPath::SimColoring
+            | ConfigPath::SimUpscale
+            | ConfigPath::SimDownscale
+            | ConfigPath::SimSteps
+            | ConfigPath::SimStepsPerFrame
+            | ConfigPath::SimDt
+            | ConfigPath::SimModelParam { .. }
+            | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
+
+            // A bound grid's scale change resamples the live field
+            // rather than restarting: the run continues at a new
+            // resolution (pipeline section 7).
+            ConfigPath::SimGridScale => UpdateType::SimResample,
+
+            // Nothing here can be carried across: the model's rule, the
+            // field's contents, the lattice size or what a step reads
+            // at the edges all change what the state MEANS.
+            ConfigPath::SimModel
+            | ConfigPath::SimGridMode
+            | ConfigPath::SimGridWidth
+            | ConfigPath::SimGridHeight
+            | ConfigPath::SimSeed
+            | ConfigPath::SimInitKind
+            | ConfigPath::SimInitAmplitude
+            | ConfigPath::SimInitRadius
+            | ConfigPath::SimInitCount
+            | ConfigPath::SimBoundary => UpdateType::SimReseed,
 
             // Effects (post-processing, just need tonemap re-run)
             ConfigPath::DensityEffectEnabled { .. }
@@ -2684,6 +2827,25 @@ impl ConfigPath {
             ConfigPath::EscapeZoomLog2 => "Escape.ZoomLog2".to_string(),
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
+            ConfigPath::SimModel => "Sim.Model".to_string(),
+            ConfigPath::SimColoring => "Sim.Coloring".to_string(),
+            ConfigPath::SimGridMode => "Sim.GridMode".to_string(),
+            ConfigPath::SimGridWidth => "Sim.GridWidth".to_string(),
+            ConfigPath::SimGridHeight => "Sim.GridHeight".to_string(),
+            ConfigPath::SimGridScale => "Sim.GridScale".to_string(),
+            ConfigPath::SimSeed => "Sim.Seed".to_string(),
+            ConfigPath::SimInitKind => "Sim.InitKind".to_string(),
+            ConfigPath::SimInitAmplitude => "Sim.InitAmplitude".to_string(),
+            ConfigPath::SimInitRadius => "Sim.InitRadius".to_string(),
+            ConfigPath::SimInitCount => "Sim.InitCount".to_string(),
+            ConfigPath::SimSteps => "Sim.Steps".to_string(),
+            ConfigPath::SimStepsPerFrame => "Sim.StepsPerFrame".to_string(),
+            ConfigPath::SimDt => "Sim.Dt".to_string(),
+            ConfigPath::SimBoundary => "Sim.Boundary".to_string(),
+            ConfigPath::SimUpscale => "Sim.Upscale".to_string(),
+            ConfigPath::SimDownscale => "Sim.Downscale".to_string(),
+            ConfigPath::SimModelParam { param } => format!("Sim.ModelParam.{param}"),
+            ConfigPath::SimColoringParam { param } => format!("Sim.ColoringParam.{param}"),
             ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
             ConfigPath::EscapeDownsample => "Escape.Downsample".to_string(),
             ConfigPath::EscapeReferencePeriod => "Escape.ReferencePeriod".to_string(),
@@ -2922,6 +3084,38 @@ impl ConfigPath {
                 _ => return None,
             }
         }
+
+        // Simulation paths: Sim.{field} and Sim.{kind}Param.{param}
+        if let Some(rest) = s.strip_prefix("Sim.") {
+            let parts: Vec<&str> = rest.split('.').collect();
+            match parts.as_slice() {
+                ["Model"] => return Some(ConfigPath::SimModel),
+                ["Coloring"] => return Some(ConfigPath::SimColoring),
+                ["GridMode"] => return Some(ConfigPath::SimGridMode),
+                ["GridWidth"] => return Some(ConfigPath::SimGridWidth),
+                ["GridHeight"] => return Some(ConfigPath::SimGridHeight),
+                ["GridScale"] => return Some(ConfigPath::SimGridScale),
+                ["Seed"] => return Some(ConfigPath::SimSeed),
+                ["InitKind"] => return Some(ConfigPath::SimInitKind),
+                ["InitAmplitude"] => return Some(ConfigPath::SimInitAmplitude),
+                ["InitRadius"] => return Some(ConfigPath::SimInitRadius),
+                ["InitCount"] => return Some(ConfigPath::SimInitCount),
+                ["Steps"] => return Some(ConfigPath::SimSteps),
+                ["StepsPerFrame"] => return Some(ConfigPath::SimStepsPerFrame),
+                ["Dt"] => return Some(ConfigPath::SimDt),
+                ["Boundary"] => return Some(ConfigPath::SimBoundary),
+                ["Upscale"] => return Some(ConfigPath::SimUpscale),
+                ["Downscale"] => return Some(ConfigPath::SimDownscale),
+                ["ModelParam", param] => {
+                    return Some(ConfigPath::SimModelParam { param: param.to_string() })
+                }
+                ["ColoringParam", param] => {
+                    return Some(ConfigPath::SimColoringParam { param: param.to_string() })
+                }
+                _ => return None,
+            }
+        }
+
         let parts: Vec<&str> = s.split('.').collect();
 
         // Transform paths: Transform.{index}.{field}...
@@ -3332,6 +3526,20 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
 
+        // Simulation paths with no meaningful interpolation: a model
+        // name, a boundary rule or a grid mode has no value "between"
+        // two keyframes, so these get no track rather than a track that
+        // snaps. Listed explicitly instead of falling into a wildcard,
+        // so a future animatable field has to be classified here.
+        ConfigPath::SimModel
+        | ConfigPath::SimColoring
+        | ConfigPath::SimGridMode
+        | ConfigPath::SimSeed
+        | ConfigPath::SimInitKind
+        | ConfigPath::SimBoundary
+        | ConfigPath::SimUpscale
+        | ConfigPath::SimDownscale => None,
+
         // Vec2 (pan coordinates)
         ConfigPath::Pan => {
             if let Value::Array(arr) = json {
@@ -3488,6 +3696,26 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
         ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+
+        // Simulation. Only the quantities that mean something when
+        // interpolated between two keyframes are here; the rest fall
+        // through to None and cannot be given a track.
+        //
+        // Sim.Steps is the important one: it IS the animation of the
+        // simulation's progression (master plan D5b).
+        ConfigPath::SimSteps
+        | ConfigPath::SimStepsPerFrame
+        | ConfigPath::SimGridWidth
+        | ConfigPath::SimGridHeight
+        | ConfigPath::SimInitRadius
+        | ConfigPath::SimInitCount => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+        ConfigPath::SimDt
+        | ConfigPath::SimGridScale
+        | ConfigPath::SimInitAmplitude
+        | ConfigPath::SimModelParam { .. }
+        | ConfigPath::SimColoringParam { .. } => {
+            json.as_f64().map(|v| ConfigValue::Float(v as f32))
+        }
         ConfigPath::EscapeSupersample => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::EscapeJulia => json.as_bool().map(ConfigValue::Bool),
         // Relief shading: the continuous controls animate (sweeping the

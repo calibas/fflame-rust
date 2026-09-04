@@ -139,7 +139,20 @@ const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(500);
 /// Only paths in this exclusion list will create immediate undo points
 fn supports_coalescing(path: &ConfigPath) -> bool {
     match path {
-        // Add paths here that should NOT coalesce (discrete actions):
+        // Discrete actions, which must NOT coalesce. Coalescing merges
+        // rapid changes into one undo point, which is right for a
+        // slider being dragged and wrong for a choice: reseeding twice
+        // and undoing once should return the first run, not neither.
+        //
+        // The simulation's are the first entries here; the list was
+        // empty until this mode, so the flame examples below stay
+        // commented as the illustrations they were.
+        ConfigPath::SimSeed
+        | ConfigPath::SimModel
+        | ConfigPath::SimColoring
+        | ConfigPath::SimInitKind
+        | ConfigPath::SimGridMode
+        | ConfigPath::SimBoundary => false,
         // ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
         // ConfigPath::ColorMode => false,
@@ -219,6 +232,17 @@ pub struct UpdateAction {
     /// change means one whole-frame re-render. Ignored while the
     /// render mode is a flame mode.
     pub rerender_escape: bool,
+
+    /// Recolour the simulation from its current field. The cheap one:
+    /// a colouring or resolve change must not disturb a run that may be
+    /// thousands of steps deep.
+    pub rerender_sim: bool,
+    /// Resample the live field into a new grid, keeping the run.
+    pub resample_sim: bool,
+    /// Restart the simulation from its seed. Subsumes both of the
+    /// above, so `merge` sets them independently and the app checks
+    /// reseed first.
+    pub reseed_sim: bool,
 }
 
 impl UpdateAction {
@@ -267,10 +291,28 @@ impl UpdateAction {
                 update_shading: true, // Full updates refresh shading state too (update_flame carries it)
                 structural_changed: false, // Only set by explicit structural mutation sites
                 rerender_escape: false,
+                // A flame-side full update says nothing about the
+                // simulation; its own update types drive those.
+                rerender_sim: false,
+                resample_sim: false,
+                reseed_sim: false,
             },
 
             UpdateType::EscapeRerender => Self {
                 rerender_escape: true,
+                ..Default::default()
+            },
+
+            UpdateType::SimRerender => Self {
+                rerender_sim: true,
+                ..Default::default()
+            },
+            UpdateType::SimResample => Self {
+                resample_sim: true,
+                ..Default::default()
+            },
+            UpdateType::SimReseed => Self {
+                reseed_sim: true,
                 ..Default::default()
             },
         }
@@ -287,6 +329,9 @@ impl UpdateAction {
         self.update_shading |= other.update_shading;
         self.structural_changed |= other.structural_changed;
         self.rerender_escape |= other.rerender_escape;
+        self.rerender_sim |= other.rerender_sim;
+        self.resample_sim |= other.resample_sim;
+        self.reseed_sim |= other.reseed_sim;
     }
 }
 
@@ -1731,6 +1776,69 @@ impl ConfigManager {
             ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
+
+            // Simulation. The grid is one enum in the config but three
+            // paths in the UI, so each reads the field it controls and
+            // reports the other variant's default rather than failing:
+            // a width box has to show something while the grid is bound
+            // to the viewport.
+            ConfigPath::SimModel => Ok(ConfigValue::String(config.sim.model.clone())),
+            ConfigPath::SimColoring => Ok(ConfigValue::String(config.sim.coloring.clone())),
+            ConfigPath::SimGridMode => Ok(ConfigValue::String(
+                match config.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { .. } => "fixed",
+                    crate::config::sim::SimGrid::Viewport { .. } => "viewport",
+                }
+                .to_string(),
+            )),
+            ConfigPath::SimGridWidth => Ok(ConfigValue::UInt(match config.sim.grid {
+                crate::config::sim::SimGrid::Fixed { width, .. } => width,
+                crate::config::sim::SimGrid::Viewport { .. } => 512,
+            })),
+            ConfigPath::SimGridHeight => Ok(ConfigValue::UInt(match config.sim.grid {
+                crate::config::sim::SimGrid::Fixed { height, .. } => height,
+                crate::config::sim::SimGrid::Viewport { .. } => 512,
+            })),
+            ConfigPath::SimGridScale => Ok(ConfigValue::Float(match config.sim.grid {
+                crate::config::sim::SimGrid::Viewport { scale } => scale,
+                crate::config::sim::SimGrid::Fixed { .. } => 1.0,
+            })),
+            ConfigPath::SimSeed => Ok(ConfigValue::UInt(config.sim.seed as u32)),
+            ConfigPath::SimInitKind => {
+                Ok(ConfigValue::String(config.sim.init.kind_name().to_string()))
+            }
+            ConfigPath::SimInitAmplitude => Ok(ConfigValue::Float(match config.sim.init {
+                crate::config::sim::SimInit::Noise { amplitude } => amplitude,
+                _ => 0.05,
+            })),
+            ConfigPath::SimInitRadius => Ok(ConfigValue::UInt(match config.sim.init {
+                crate::config::sim::SimInit::Blob { radius }
+                | crate::config::sim::SimInit::Blobs { radius, .. }
+                | crate::config::sim::SimInit::Ring { radius } => radius,
+                _ => 24,
+            })),
+            ConfigPath::SimInitCount => Ok(ConfigValue::UInt(match config.sim.init {
+                crate::config::sim::SimInit::Blobs { count, .. } => count,
+                _ => 6,
+            })),
+            ConfigPath::SimSteps => Ok(ConfigValue::UInt(config.sim.steps)),
+            ConfigPath::SimStepsPerFrame => Ok(ConfigValue::UInt(config.sim.steps_per_frame)),
+            ConfigPath::SimDt => Ok(ConfigValue::Float(config.sim.dt)),
+            ConfigPath::SimBoundary => {
+                Ok(ConfigValue::String(config.sim.boundary.name().to_string()))
+            }
+            ConfigPath::SimUpscale => {
+                Ok(ConfigValue::String(config.sim.upscale.name().to_string()))
+            }
+            ConfigPath::SimDownscale => {
+                Ok(ConfigValue::String(config.sim.downscale.name().to_string()))
+            }
+            ConfigPath::SimModelParam { param } => Ok(ConfigValue::Float(
+                config.sim.model_params.get(param).copied().unwrap_or(0.0),
+            )),
+            ConfigPath::SimColoringParam { param } => Ok(ConfigValue::Float(
+                config.sim.coloring_params.get(param).copied().unwrap_or(0.0),
+            )),
             ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
             ConfigPath::EscapeDownsample => Ok(ConfigValue::String(
                 config.escape.downsample.as_str().to_string(),
@@ -2637,6 +2745,128 @@ impl ConfigManager {
             }
             ConfigPath::EscapeMaxIter => {
                 self.current.escape.max_iter = value.try_into()?;
+            }
+
+            // Simulation. Every bound here is a real one: an unclamped
+            // grid dimension allocates gigabytes, an unclamped dt makes
+            // the explicit solver diverge (phase 0 measured the caps per
+            // model), and a steps_per_frame of zero would make Run do
+            // nothing while looking like it worked.
+            ConfigPath::SimModel => {
+                self.current.sim.model = String::try_from(value)?;
+            }
+            ConfigPath::SimColoring => {
+                self.current.sim.coloring = String::try_from(value)?;
+            }
+            ConfigPath::SimGridMode => {
+                let mode = String::try_from(value)?;
+                let (w, h) = match self.current.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { width, height } => (width, height),
+                    crate::config::sim::SimGrid::Viewport { .. } => (512, 512),
+                };
+                self.current.sim.grid = if mode == "fixed" {
+                    crate::config::sim::SimGrid::Fixed { width: w, height: h }
+                } else {
+                    crate::config::sim::SimGrid::Viewport { scale: 1.0 }
+                };
+            }
+            ConfigPath::SimGridWidth => {
+                let w: u32 = u32::try_from(value)?;
+                let h = match self.current.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { height, .. } => height,
+                    crate::config::sim::SimGrid::Viewport { .. } => 512,
+                };
+                self.current.sim.grid = crate::config::sim::SimGrid::Fixed {
+                    width: w.clamp(16, 8192),
+                    height: h,
+                };
+            }
+            ConfigPath::SimGridHeight => {
+                let h: u32 = u32::try_from(value)?;
+                let w = match self.current.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { width, .. } => width,
+                    crate::config::sim::SimGrid::Viewport { .. } => 512,
+                };
+                self.current.sim.grid = crate::config::sim::SimGrid::Fixed {
+                    width: w,
+                    height: h.clamp(16, 8192),
+                };
+            }
+            ConfigPath::SimGridScale => {
+                let sc: f32 = f32::try_from(value)?;
+                let sc = if sc.is_finite() { sc.clamp(0.125, 4.0) } else { 1.0 };
+                self.current.sim.grid = crate::config::sim::SimGrid::Viewport { scale: sc };
+            }
+            ConfigPath::SimSeed => {
+                self.current.sim.seed = u32::try_from(value)? as u64;
+            }
+            ConfigPath::SimInitKind => {
+                let kind = String::try_from(value)?;
+                self.current.sim.init = self.current.sim.init.with_kind(&kind);
+            }
+            ConfigPath::SimInitAmplitude => {
+                let a: f32 = f32::try_from(value)?;
+                self.current.sim.init = crate::config::sim::SimInit::Noise {
+                    amplitude: if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.05 },
+                };
+            }
+            ConfigPath::SimInitRadius => {
+                let r = u32::try_from(value)?.clamp(1, 4096);
+                self.current.sim.init = match self.current.sim.init {
+                    crate::config::sim::SimInit::Blob { .. } => {
+                        crate::config::sim::SimInit::Blob { radius: r }
+                    }
+                    crate::config::sim::SimInit::Ring { .. } => {
+                        crate::config::sim::SimInit::Ring { radius: r }
+                    }
+                    crate::config::sim::SimInit::Blobs { count, .. } => {
+                        crate::config::sim::SimInit::Blobs { count, radius: r }
+                    }
+                    other => other,
+                };
+            }
+            ConfigPath::SimInitCount => {
+                let c = u32::try_from(value)?.clamp(1, 64);
+                if let crate::config::sim::SimInit::Blobs { radius, .. } = self.current.sim.init {
+                    self.current.sim.init =
+                        crate::config::sim::SimInit::Blobs { count: c, radius };
+                }
+            }
+            ConfigPath::SimSteps => {
+                self.current.sim.steps = u32::try_from(value)?.min(10_000_000);
+            }
+            ConfigPath::SimStepsPerFrame => {
+                self.current.sim.steps_per_frame = u32::try_from(value)?.clamp(1, 4096);
+            }
+            ConfigPath::SimDt => {
+                let d: f32 = f32::try_from(value)?;
+                self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, 10.0) } else { 1.0 };
+            }
+            ConfigPath::SimBoundary => {
+                let n = String::try_from(value)?;
+                if let Some(b) = crate::config::sim::SimBoundary::from_name(&n) {
+                    self.current.sim.boundary = b;
+                }
+            }
+            ConfigPath::SimUpscale => {
+                let n = String::try_from(value)?;
+                if let Some(u) = crate::config::sim::SimUpscale::from_name(&n) {
+                    self.current.sim.upscale = u;
+                }
+            }
+            ConfigPath::SimDownscale => {
+                let n = String::try_from(value)?;
+                if let Some(d) = crate::config::sim::SimDownscale::from_name(&n) {
+                    self.current.sim.downscale = d;
+                }
+            }
+            ConfigPath::SimModelParam { param } => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.model_params.insert(param.clone(), v);
+            }
+            ConfigPath::SimColoringParam { param } => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.coloring_params.insert(param.clone(), v);
             }
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;
