@@ -1,4 +1,12 @@
 @echo off
+REM setlocal, and it is not optional. A .bat runs IN the calling cmd
+REM process, so every `set` below would otherwise outlive this script
+REM and stay set for the life of that window -- including RUSTFLAGS.
+REM The symptom is a native `cargo run --release` afterwards emitting
+REM "'+simd128' is not a recognized feature for this target" once per
+REM crate, because it inherited the wasm flags. setlocal scopes them to
+REM this script and cmd restores the environment on exit.
+setlocal
 echo Building for WASM...
 
 REM Build the WASM module

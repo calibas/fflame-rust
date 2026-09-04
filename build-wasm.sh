@@ -12,7 +12,12 @@ echo "Building WASM module..."
 # -zstack-size: see .cargo/config.toml. wasm-ld defaults to 1 MiB;
 # an overflow there traps as a bare "index out of bounds" with no
 # panic message, from whichever callback was running.
-export RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=67108864'
+# Not `export`: passed inline to cargo below, so these flags cannot
+# escape into the caller if this script is ever `source`d. (The .bat
+# needs `setlocal` for the same reason -- it always runs in the
+# calling shell, and a leaked RUSTFLAGS makes a later native build
+# warn "+simd128 is not a recognized feature" once per crate.)
+WASM_RUSTFLAGS='--cfg=web_sys_unstable_apis --cfg getrandom_backend="wasm_js" -C target-feature=+simd128 -C link-arg=-zstack-size=67108864'
 PROFILE=dist
 BINDGEN_FLAGS=""
 # Reset the flag every run: an exported SYMBOLS from the environment
@@ -34,7 +39,7 @@ elif [ "$1" = "--debug" ]; then
     BINDGEN_FLAGS="--keep-debug"
     echo "  (debug profile: symbols + debug_assert + overflow checks)"
 fi
-cargo build --lib --target wasm32-unknown-unknown --profile "$PROFILE"
+RUSTFLAGS="$WASM_RUSTFLAGS" cargo build --lib --target wasm32-unknown-unknown --profile "$PROFILE"
 
 if [ $? -ne 0 ]; then
     echo "❌ Cargo build failed"
