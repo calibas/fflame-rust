@@ -50,12 +50,14 @@ Offsets may be decimal or 0x-hex. If the trace gives `wasm-function[N]`,
 pass it as `#N` instead: that skips the offset lookup and is the more
 reliable input.
 
-READ THE PAIRING LINE FIRST. Function-count drift over 1% means the two
-modules are from different commits and every name below is fiction --
-which is not hypothetical: a stale pair measured 0.129% code-size drift
-(inside any sane threshold) while differing by 628 function bodies, and
-reported a reassuring 92% alignment, better than a true pair's 82%.
-Count is the check that works.
+READ THE PAIRING LINE FIRST. It compares DATA sections -- the constant
+pool, which the same source produces regardless of how the code is
+linked. Neither of the obvious alternatives works here: code-size drift
+is too coarse, and function COUNT rejects the very pairing this tool
+exists to make, because --keep-debug changes wasm-bindgen's closure
+strategy (the shipped module gets `__wasm_bindgen_func_elem_*`
+trampoline exports; the names build gets none), which on a genuine
+same-commit pair is 10,815 bodies against 11,443 -- 5.8% apart.
 """
 
 import io
@@ -167,10 +169,17 @@ def func_names(d):
 
 
 def export_names(d):
-    """function index -> exported name. These survive `strip`, so when
+    """function index -> [exported names]. These survive `strip`, so when
     the crash lands in an exported function it is named with NO
     cross-build assumption at all -- read that in preference to the
-    aligned name whenever both appear."""
+    aligned name whenever both appear.
+
+    A LIST, not a name: several exports routinely share one function
+    index. wasm-bindgen emits `__wasm_bindgen_func_elem_10607_11`,
+    `_12`, `_13`, `_14` ... all pointing at the same closure trampoline,
+    so a dict keyed by index silently kept only the last. That made the
+    module look as if it exported 9 of the 19 shims its own JS calls --
+    i.e. as if the bundle were mismatched, which it was not."""
     for sid, off, size in sections(d):
         if sid != 7:
             continue
@@ -184,7 +193,7 @@ def export_names(d):
             p += 1
             idx, p = leb(d, p)
             if kind == 0:
-                out[idx] = nm
+                out.setdefault(idx, []).append(nm)
         return out
     return {}
 
@@ -237,26 +246,32 @@ def main():
     print("named   : {}".format(NAMED))
     print("          {:,} bytes, {:,} bodies, {:,} code bytes, {:,} imports".format(
         len(named), len(nb), sum(nsz), n_imp))
-    # Two pairing checks, and the FUNCTION COUNT is the one that works.
-    # Code-size drift alone is far too weak: a pair from different
-    # commits measured 0.129% drift -- inside any sane threshold --
-    # while differing by 628 function bodies. Strip renumbers but does
-    # not add or remove functions wholesale, so a genuine same-commit
-    # pair agrees on count to well under 1% (measured: 9 of 13,214,
-    # 0.07%). Alignment percentage is no help either; that stale pair
-    # reported a REASSURING 92%, better than the true pair's 82%.
-    drift = abs(sum(nsz) - sum(ssz)) / max(sum(ssz), 1)
-    cdrift = abs(len(nb) - len(sb)) / max(len(sb), 1)
-    bad = cdrift > 0.01 or drift > 0.01
-    print("code-size drift: {:.3f}%     function-count drift: {:.3f}%".format(
-        drift * 100, cdrift * 100))
-    if bad:
-        print("  *** THESE ARE NOT THE SAME COMMIT. Rebuild both and do not read")
-        print("  *** the names below. A stale pairing still answers, plausibly")
-        print("  *** and wrongly -- it has produced three confident, meaningless")
-        print("  *** names in this investigation already.")
+    # Pairing check. NOT function count: at the pkg level the two builds
+    # legitimately differ by hundreds of functions, because --keep-debug
+    # changes wasm-bindgen's closure strategy -- the shipped module gets
+    # `__wasm_bindgen_func_elem_*` trampoline exports and the names build
+    # gets NONE. Measured on a genuine same-commit pair: 10,815 vs 11,443
+    # bodies, 5.8% apart. A count guard rejects the very pairing this
+    # tool exists to make.
+    #
+    # The DATA section is the stable one. It is the constant pool -- the
+    # same source compiles to the same strings and tables regardless of
+    # how the code is linked -- so it separates "different link" from
+    # "different commit", which is the distinction that matters.
+    def data_size(d):
+        return sum(sz for sid, _, sz in sections(d) if sid == 11)
+
+    dsz, nds = data_size(ship), data_size(named)
+    ddrift = abs(nds - dsz) / max(dsz, 1)
+    csdrift = abs(sum(nsz) - sum(ssz)) / max(sum(ssz), 1)
+    print("data-section drift: {:.3f}%   code-size drift: {:.3f}%".format(
+        ddrift * 100, csdrift * 100))
+    if ddrift > 0.01:
+        print("  *** THESE ARE NOT THE SAME COMMIT -- the constant pools differ.")
+        print("  *** Rebuild both and do not read the names below. A stale")
+        print("  *** pairing still answers, plausibly and wrongly.")
     else:
-        print("  pairing looks consistent with one commit")
+        print("  constant pools agree: consistent with one commit")
 
     # --- align the two body-size sequences ---
     sm = difflib.SequenceMatcher(None, ssz, nsz, autojunk=False)
@@ -297,8 +312,8 @@ def main():
         print(line)
         exported = s_exports.get(i + s_imp)
         if exported:
-            print("    exported as `{}`  <-- from the shipped module itself, "
-                  "no alignment involved".format(exported))
+            print("    exported as {}  <-- from the shipped module itself, "
+                  "no alignment involved".format(", ".join("`%s`" % e for e in exported)))
         if j is None:
             print("    <no aligned counterpart -- one of the bodies the two builds disagree on>")
             print()
