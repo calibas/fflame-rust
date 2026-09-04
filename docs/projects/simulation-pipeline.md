@@ -210,7 +210,7 @@ For "run until settled" and for the HUD: a pyramid of `|field[write] − field[r
 ## 5. Driver: steps per frame, pacing, watchdog
 
 - **Continuous mode** (the panel's Run): each frame runs K steps. K is adaptive: start at 1, measure the batch's GPU time by timestamp query (reuse the `TimestampPacer` design — one query pair around the whole batch), grow K by 2× while the batch stays under budget, halve on overshoot. Budget = the pacer's same target (`GPU_TARGET_MS`, 10 ms) so the UI stays responsive; a "priority" slider can raise it for unattended runs.
-- **Hard bound**: no single *dispatch* exceeds one full-resolution pass, and K is capped so a batch never approaches the ~2 s watchdog window — measured, not assumed, exactly as the escape chunk ceiling is.
+- **Hard bound**: no single *dispatch* exceeds one full-resolution pass, and K is capped so a batch never approaches the ~2 s watchdog window — measured, not assumed, exactly as the escape chunk ceiling is. Measured 2026-09-03 (§10): batching steps into one command buffer is worth 0.8% across a 256× range, so K is a pacing and watchdog device only. Submitting one step at a time and re-reading the clock between them costs nothing and stops on a budget boundary instead of overshooting by a batch.
 - **Step mode**: the panel's Step button runs exactly one step; Pause stops; Reset re-seeds.
 - **Export mode**: `steps` from the config is the contract — run exactly that many from the seed, then colour. No pacing, no timestamps needed; batches are sized by the same watchdog bound. This is what makes an export reproducible on a given GPU.
 - **Continuous redraw**: the render branch calls `window.request_redraw()` while running; the frame loop's pacing condition gains a `sim_running` term so VSync-off `target_fps` pacing applies (both hooks named in the integration doc).
@@ -291,7 +291,79 @@ Both scripts live in the session scratchpad; they are validation of the *rules*,
 
 ---
 
-## 10. Feasibility numbers to take on the GPU first
+## 10. Feasibility, measured (2026-09-03)
+
+Phase 0's GPU microbenchmark, `src/sim_microbench.rs` (test-only;
+`cargo test --release --lib sim_microbench -- --ignored --nocapture`).
+It runs the shape every Tier-1 model shares — two `rgba32float`
+textures ping-ponged by a compute pass gathering 3×3 and writing one
+texel, with Gray–Scott's arithmetic and its mandatory clamp, so the
+cost is a real model's and not an empty kernel the compiler folds
+away. GTX 1660 SUPER, Vulkan, driver 581.57 — deliberately a modest
+card, so these are close to a floor rather than a best case.
+
+| grid | field MiB | ms/step | steps/s | steps per 16.7 ms | cells/ns |
+|---|---|---|---|---|---|
+| 256² | 2.0 | 0.0222 | 45,120 | 753 | 2.96 |
+| 512² | 8.0 | 0.0769 | 13,011 | 217 | 3.41 |
+| 1024² | 32.0 | 0.2844 | 3,516 | 59 | 3.69 |
+| **1920×1080** | 63.3 | **0.4954** | 2,019 | **34** | 4.19 |
+| **3840×2160** | 253.1 | **2.0389** | 490 | **8** | 4.07 |
+
+**The phase-1 gate is met with room.** It asks for ≥ 4 steps per frame
+at 1080p at 60 fps; the plain stencil gives 34 in a whole frame
+budget, so it still clears the gate with 88% of the frame left for the
+UI and the resolve. At 4K, 8 steps per frame.
+
+**Throughput is flat at 3–4 cells/ns and scaling is linear in cell
+count**, which is the signature of a bandwidth-bound kernel — as
+expected for two 16-byte-per-texel surfaces and nine loads. It also
+means the numbers above transfer to the other Tier-1 models: they
+differ in arithmetic, and arithmetic is not what this costs.
+
+**Stills at catalogue grids are effectively free.** Gray–Scott's
+10,000 steps to a settled 256² picture is **0.22 s**. The design
+worried about the wrong end of the range: a 256² still is instant, and
+it is the viewport-bound 4K grid that needs the driver's care.
+
+### Submission batching is worth nothing, and that simplifies §5
+
+The same 256 steps at 1080p, submitted in different batch sizes:
+
+| steps per submit | ms/step |
+|---|---|
+| 1 | 0.5221 |
+| 8 | 0.5134 |
+| 64 | 0.5146 |
+| 256 | 0.5179 |
+
+**0.8% across a 256× range**, which is inside the noise. Per-submit
+overhead is invisible next to a 0.5 ms dispatch, so batching steps into
+one command buffer buys nothing at 1080p and above. (The CPU still
+enqueues without waiting in every case, so this prices *submission*,
+not synchronisation — which is the right question for a driver that
+submits K steps per frame and polls once.)
+
+What that changes: K in §5 exists **only** for pacing and the watchdog,
+never to amortise submits. So the driver may submit one step at a time
+and re-read the clock between them, which is strictly better — it can
+stop on a budget boundary instead of overshooting by a whole batch, and
+the watchdog bound becomes a per-step check rather than a batch-size
+calculation. At 4K's 2.04 ms/step a 2 s watchdog window is ~980 steps,
+so a 10,000-step 4K export needs at least 11 submissions; with per-step
+submission the cap is simply "poll every N ms".
+
+### Still to measure
+
+- The pyramid stage (McCabe) and kernel-LUT gathers (Lenia,
+  SmoothLife) — the estimates below stand until phase 3.
+- The agent stage (Physarum, DLA) — phase 4.
+
+---
+
+## 10a. Original estimates, kept for comparison
+
+**The pre-measurement expectations were:**
 
 The one measurement the seed doc asked for, restated with the pyramid:
 

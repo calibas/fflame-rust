@@ -44,6 +44,11 @@ mod shader_cache;
 // Canonical WGSL for the SHIPPED flame catalog.
 #[cfg(all(test, feature = "engine-flame"))]
 mod shader_dumps;
+// Phase-0 measurement for simulation mode. Test-only on purpose: it
+// answers what a stencil step costs before the driver is designed
+// around an estimate, and nothing links it.
+#[cfg(test)]
+mod sim_microbench;
 
 // Gated on `web-app`, not just wasm32: its `#[wasm_bindgen]` exports
 // are collected into ANY wasm cdylib that depends on this crate, so
