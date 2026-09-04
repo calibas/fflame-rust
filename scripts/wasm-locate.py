@@ -33,12 +33,26 @@ USAGE:
   1. Build BOTH from the SAME commit, no `src/` change between:
        ./build-wasm.sh              -> pkg/fractal_flame_wgpu_bg.wasm
        ./build-wasm.sh --symbols    -> pkg/fractal_flame_wgpu_bg.names.wasm
+     Order does not matter: `--symbols` parks the shipped module and
+     puts it back, so the served bundle stays the one that reproduces.
+     (It did not always. wasm-bindgen writes a fixed filename into
+     --out-dir, so before this the names build silently overwrote the
+     shipped module -- destroying the only artifact the crash can be
+     reproduced with, and leaving a pairing of one build against
+     itself.)
   2. Reproduce with the SHIPPED bundle and copy the offset.
   3. python scripts/wasm-locate.py <offset> [<offset> ...]
 
 Offsets may be decimal or 0x-hex. If the trace gives `wasm-function[N]`,
 pass it as `#N` instead: that skips the offset lookup and is the more
 reliable input.
+
+READ THE PAIRING LINE FIRST. Function-count drift over 1% means the two
+modules are from different commits and every name below is fiction --
+which is not hypothetical: a stale pair measured 0.129% code-size drift
+(inside any sane threshold) while differing by 628 function bodies, and
+reported a reassuring 92% alignment, better than a true pair's 82%.
+Count is the check that works.
 """
 
 import io
@@ -204,12 +218,26 @@ def main():
     print("named   : {}".format(NAMED))
     print("          {:,} bytes, {:,} bodies, {:,} code bytes, {:,} imports".format(
         len(named), len(nb), sum(nsz), n_imp))
+    # Two pairing checks, and the FUNCTION COUNT is the one that works.
+    # Code-size drift alone is far too weak: a pair from different
+    # commits measured 0.129% drift -- inside any sane threshold --
+    # while differing by 628 function bodies. Strip renumbers but does
+    # not add or remove functions wholesale, so a genuine same-commit
+    # pair agrees on count to well under 1% (measured: 9 of 13,214,
+    # 0.07%). Alignment percentage is no help either; that stale pair
+    # reported a REASSURING 92%, better than the true pair's 82%.
     drift = abs(sum(nsz) - sum(ssz)) / max(sum(ssz), 1)
-    if drift > 0.01:
-        print("code-size drift: {:.3f}%  <-- TOO LARGE. Not the same commit; "
-              "rebuild both and do not read the names below.".format(drift * 100))
+    cdrift = abs(len(nb) - len(sb)) / max(len(sb), 1)
+    bad = cdrift > 0.01 or drift > 0.01
+    print("code-size drift: {:.3f}%     function-count drift: {:.3f}%".format(
+        drift * 100, cdrift * 100))
+    if bad:
+        print("  *** THESE ARE NOT THE SAME COMMIT. Rebuild both and do not read")
+        print("  *** the names below. A stale pairing still answers, plausibly")
+        print("  *** and wrongly -- it has produced three confident, meaningless")
+        print("  *** names in this investigation already.")
     else:
-        print("code-size drift: {:.3f}%  (consistent with one commit)".format(drift * 100))
+        print("  pairing looks consistent with one commit")
 
     # --- align the two body-size sequences ---
     sm = difflib.SequenceMatcher(None, ssz, nsz, autojunk=False)
