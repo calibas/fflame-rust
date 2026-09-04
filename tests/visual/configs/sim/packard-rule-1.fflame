@@ -1,0 +1,119 @@
+{
+  "flame": {
+    "name": "packard-rule-1",
+    "transforms": [
+      {
+        "a": 0.5,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.5,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 2.0
+        },
+        "variation_params": {},
+        "color": 0.0,
+        "color_speed": 0.5,
+        "opacity": 1.0
+      }
+    ],
+    "render_mode": "TwoD",
+    "projection": "Orthographic"
+  },
+  "zoom": 1.0,
+  "pan_x": 0.0,
+  "pan_y": 0.0,
+  "rotation": 0.0,
+  "camera_rotation_x": 0.0,
+  "camera_rotation_y": 0.0,
+  "camera_z": 0.0,
+  "density_scale": 1.0,
+  "speed_factor": 0.5,
+  "max_iterations": 1000,
+  "histogram_color_scale": 100.0,
+  "low_density_smoothing": 0.5,
+  "density_compression_strength": 0.0,
+  "blend_factor": 0.1,
+  "use_dynamic_blend": true,
+  "target_iterations_per_pixel": 0,
+  "iterations_per_thread": 500,
+  "speed_multiplier": 4,
+  "color_mode": "Palette",
+  "palette_index": 0,
+  "palette": {
+    "name": "Greyscale",
+    "stops": [
+      {
+        "position": 0.0,
+        "color": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "position": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    ],
+    "locked": false
+  },
+  "palette_rotation": 0.0,
+  "background_color": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "tonemap_mode": "linear",
+  "tonemap_curve": {
+    "points": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ]
+  },
+  "use_curve": false,
+  "exposure": 1.0,
+  "gamma": 1.0,
+  "gamma_threshold": 0.0025,
+  "brightness": 1.0,
+  "vibrancy": 1.0,
+  "saturation": 1.0,
+  "hue_shift": 0.0,
+  "value_scale": 1.0,
+  "deterministic_rng": true,
+  "version": 3,
+  "render_mode": "simulation",
+  "sim": {
+    "coloring": "age",
+    "grid": {
+      "fixed": {
+        "width": 256,
+        "height": 256
+      }
+    },
+    "seed": 1,
+    "boundary": "zero",
+    "model": "packard_snowflake",
+    "init": "center",
+    "steps": 125,
+    "model_params": {
+      "rule_mask": 2.0
+    },
+    "coloring_params": {
+      "window": 125.0
+    }
+  }
+}

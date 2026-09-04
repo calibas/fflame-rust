@@ -909,7 +909,16 @@ cheapest way to get a "snowflake" on screen while §18 is being built.
 **Stages.** `update`, `color`. **Colouring.** `age` (freeze time as
 the palette coordinate gives the growth-ring snowflake).
 
-**Measured 2026-09-03** on the offset-row hex lattice the shader will
+**Measured 2026-09-03**, shipped 2026-09-04. The GPU port keeps the
+six neighbour offsets varying with row parity, which is the whole
+awkwardness of an offset-row lattice; a wrong parity is not subtle, as
+the six-fold symmetry collapses to four-fold and the baseline pins it.
+The resolve still samples the offset grid as a square one, shearing
+each cell by half a width — at the scale a snowflake is viewed this
+reads as a clean hexagon, and a true axial-to-pixel resolve is a
+refinement rather than a correctness gap.
+
+Measured on the offset-row hex lattice the shader will
 use (row parity changes the six neighbour offsets — the prototype does
 it that way rather than pretending the lattice is square). Rules
 S = {1}, {1,3} and {1,3,4} all reach the edge of a 256² grid in
@@ -1224,6 +1233,28 @@ distance_from_seed, spanning_only), `lattice` (choices: site, bond).
 **Stages.** `update`, `settle`, `color`. Boundary Zero.
 **Colouring.** `channel` categorical on label (hash → hue), `age` on
 chemical distance.
+
+**Shipped 2026-09-04 with PATH COMPRESSION, which changes the cost
+below by an order of magnitude.** A label is a cell index, so the
+shader reads the cell its own label points at and takes that label
+too — a union-find "find" step, valid because the cell a label came
+from is by construction in the same cluster. Measured against the
+plain-propagation medians below: 53 rounds at 64², 93 at 128²,
+**167 at 256² against 645**, and 491 at 512² against 1,409 — worth
+3.9× and 2.9× at the two sizes there is a comparison for.
+
+The labelling is verified against a CPU flood fill rather than a
+baseline image: same component ⇒ same label and same label ⇒ same
+component, checked both ways over 122 components and 2,455 open cells,
+which catches a label leaking across a closed site or a component
+failing to merge. Neither shows up as anything but plausible coloured
+blobs.
+
+**No settle reduction was needed.** Labels only ever decrease, so extra
+steps are no-ops and over-running is safe — a settle would be an
+optimisation, not a correctness requirement, and the plan's reduction
+stage is deferred on that basis. The presets carry about twice the
+measured count, because of the spread below.
 
 **Measured 2026-09-03, and the estimate above is 3–5× LOW.** Label
 propagation costs the longest *chemical* path in the cluster, which at

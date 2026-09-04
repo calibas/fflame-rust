@@ -246,3 +246,64 @@ fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+
+/// Categorical colour from a cluster label.
+///
+/// Percolation's labels are CELL INDICES, so they correlate with
+/// position: colouring them directly through `channel` draws horizontal
+/// stripes, because a label is roughly its row number times the width.
+/// Hashing decorrelates them, which is what makes neighbouring clusters
+/// legible as different things.
+pub static LABEL: SimColoringDef = SimColoringDef {
+    name: "label",
+    display_name: "Label",
+    description: "Hashes a cluster label to a palette position, so adjacent clusters get \
+                  unrelated colours instead of a positional gradient.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "channel",
+            display_name: "Label from",
+            default: 0.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Which channel holds the label.",
+            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
+        },
+        SimParamDef {
+            name: "mask_channel",
+            display_name: "Masked by",
+            default: 1.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Cells whose mask channel is below 0.5 are drawn as background — \
+                      percolation's closed sites, or a growth model's empty space.",
+            choices: &["None", "B / y", "Age / z", "Spare / w"],
+        },
+    ],
+    wgsl: r#"
+fn lab_pick(s: vec4<f32>, which: f32) -> f32 {
+    let i = i32(round(clamp(which, 0.0, 3.0)));
+    var v = s.x;
+    if (i == 1) { v = s.y; }
+    else if (i == 2) { v = s.z; }
+    else if (i == 3) { v = s.w; }
+    return v;
+}
+
+fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
+    let m = i32(round(clamp(cparam(1u), 0.0, 3.0)));
+    if (m != 0 && lab_pick(s, cparam(1u)) < 0.5) {
+        // Zero coverage: the shared tonemap composites the configured
+        // background, exactly as for an empty region of a flame.
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    // The same PCG the rest of the engine uses, so a label maps to a
+    // stable colour across runs and grid sizes.
+    let h = sim_pcg(u32(max(lab_pick(s, cparam(0u)), 0.0)));
+    let t = f32(h >> 8u) * (1.0 / 16777216.0);
+    return vec4<f32>(sim_palette(t), 1.0);
+}
+"#,
+};

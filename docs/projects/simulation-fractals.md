@@ -391,9 +391,32 @@ helper and resolve sampler, the settle reduction. Colourings
 line, centre). Presets for every model — only pairs verified against
 their source (catalogue labels).
 
-**Gate:** every model × colouring naga-validates in the test suite;
-CPU mirrors for Gray–Scott, cyclic CA and the sandpile rule agree
-class-for-class with one GPU step; a visual baseline per model.
+**Gate: MET 2026-09-04.** All twelve Tier-1 models ship, with four
+colourings (`channel`, `two_channel`, `age`, `label`).
+
+- Every model × colouring × boundary × resolve combination
+  naga-validates: 13 × 4 × 4 × 8 in one test, which caught a WGSL
+  reserved keyword (`target`) before it could reach a device.
+- Correctness is checked against something falsifiable per model,
+  because a baseline image cannot catch a rule that is wrong in a
+  plausible-looking way:
+  - Gray–Scott against a CPU mirror of one step (< 1e-6).
+  - Ising against **Onsager's exact** nearest-neighbour correlation at
+    T_c, 1/√2: measured 0.952 / 0.691 / 0.332 across the transition.
+  - Wolfram rule 90 against binomials mod 2 — 2,079 of 2,079 cells.
+  - Percolation against a CPU flood fill, both directions, over 122
+    components.
+  - Ballistic deposition's lateral sticking against interface width
+    (2.71 correlated vs 7.30 uncorrelated).
+- 30 visual baselines under `tests/visual/configs/sim/`; the full suite
+  reads 268/268.
+
+Infrastructure this phase actually needed turned out to be small: a
+float-modulo helper for cyclic integer state, an offset-row hex
+neighbourhood, a preset that can carry an initial field, and per-model
+`dt` defaults. The settle reduction was **not** needed — percolation's
+labels only decrease, so over-running is safe and a settle is an
+optimisation rather than a correctness requirement.
 
 ### Phase 3 — pyramid and large kernels
 
