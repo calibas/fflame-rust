@@ -197,6 +197,17 @@ pub fn render_sim_content(
                         })
                         .collect();
                     changes.push((ConfigPath::SimSteps, pre.steps.into()));
+                    // A preset that names an initial field brings it:
+                    // FitzHugh-Nagumo's constants give spirals from a
+                    // cut wavefront and a flat field from noise, so
+                    // applying only the numbers would ship a picture of
+                    // nothing.
+                    if let Some(init) = pre.init {
+                        changes.push((
+                            ConfigPath::SimInitKind,
+                            init.kind_name().to_string().into(),
+                        ));
+                    }
                     let _ = config_manager
                         .update_batch(changes, "history.action.sim_preset".to_string());
                     *state.reseed = true;
@@ -367,7 +378,8 @@ pub fn render_sim_content(
                 *state.reseed = true;
             }
         }
-        SimInit::Line | SimInit::Center => {}
+        // No sizes to offer: these shapes are defined by the grid.
+        SimInit::Line | SimInit::Center | SimInit::BrokenWave => {}
     }
 
     ui.horizontal(|ui| {

@@ -81,6 +81,14 @@ pub struct SimPreset {
     /// Steps to a settled or developed picture, measured. Used as the
     /// config's `steps` when the preset is applied.
     pub steps: u32,
+    /// The initial field this preset needs, when it needs a particular
+    /// one.
+    ///
+    /// Not decoration: FitzHugh-Nagumo's excitable constants give
+    /// spirals from a cut wavefront and a FLAT FIELD from noise, so a
+    /// preset that carried only numbers would ship a picture of
+    /// nothing. `None` leaves whatever the user has.
+    pub init: Option<crate::config::sim::SimInit>,
 }
 
 /// Capability flags a model opts into. Absence means "doesn't have
@@ -154,6 +162,12 @@ pub struct ModelDef {
     pub wgsl_seed: &'static str,
     /// Measured default step count for a still (catalogue).
     pub default_steps: u32,
+    /// The `dt` this model is normally run at. Applied when the model
+    /// is selected, because the models differ by two orders of
+    /// magnitude here -- Gray-Scott runs at 1.0 and Schnakenberg
+    /// diverges above 0.02 -- so carrying one model's dt into another
+    /// is either unusably slow or unstable.
+    pub default_dt: f32,
 }
 
 impl ModelDef {
@@ -212,10 +226,16 @@ impl SimColoringDef {
 /// Every model, in registration order. **Append only** — the order is
 /// the UI order and, once presets and configs name them, the names are
 /// a compatibility surface.
-pub static MODELS: &[&ModelDef] = &[&models::GRAY_SCOTT];
+pub static MODELS: &[&ModelDef] = &[
+    &models::GRAY_SCOTT,
+    &models::FITZHUGH_NAGUMO,
+    &models::BRUSSELATOR,
+    &models::SCHNAKENBERG,
+];
 
 /// Every colouring, in registration order. Append only.
-pub static COLORINGS: &[&SimColoringDef] = &[&colorings::CHANNEL];
+pub static COLORINGS: &[&SimColoringDef] =
+    &[&colorings::CHANNEL, &colorings::TWO_CHANNEL];
 
 /// Look up a model by name, falling back to the first registered one.
 ///
@@ -341,6 +361,13 @@ mod tests {
                 m.max_dt > 0.0 && m.max_dt <= 10.0,
                 "{}: max_dt {} is not a plausible explicit-Euler bound",
                 m.name,
+                m.max_dt
+            );
+            assert!(
+                m.default_dt > 0.0 && m.default_dt <= m.max_dt,
+                "{}: default_dt {} must be positive and within max_dt {}",
+                m.name,
+                m.default_dt,
                 m.max_dt
             );
         }

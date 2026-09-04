@@ -367,6 +367,29 @@ fn sim_init_mask(p: vec2<i32>) -> f32 {
 }
 "#
         }
+        "broken_wave" => {
+            r#"
+fn sim_init_mask(p: vec2<i32>) -> f32 {
+    // A horizontal excited band across the LEFT HALF only, with a
+    // refractory tail behind it. The cut end is what curls: an
+    // unbroken front just annihilates on the periodic boundary.
+    // Returns 1.0 for excited and 0.5 for refractory, so a model can
+    // tell the two regions apart from one mask.
+    let g = sim_grid();
+    let cy = g.y / 2;
+    if (p.x >= g.x / 2) {
+        return 0.0;
+    }
+    if (p.y >= cy - 4 && p.y < cy + 4) {
+        return 1.0;
+    }
+    if (p.y >= cy - 12 && p.y < cy - 4) {
+        return 0.5;
+    }
+    return 0.0;
+}
+"#
+        }
         "line" => {
             r#"
 fn sim_init_mask(p: vec2<i32>) -> f32 {

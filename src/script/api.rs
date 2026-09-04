@@ -1473,8 +1473,12 @@ fn register_sim(engine: &mut Engine) {
             let mut cfg = e.cfg.borrow_mut();
             enter(&mut cfg);
             if cfg.sim.model != name {
-                // Parameters belong to the model that declared them.
+                // Parameters belong to the model that declared them,
+                // and dt/steps are per-model working values.
                 cfg.sim.model_params.clear();
+                let m = crate::sim::model_or_default(name);
+                cfg.sim.dt = m.default_dt;
+                cfg.sim.steps = m.default_steps;
             }
             cfg.sim.model = name.to_string();
             Ok(())
@@ -1603,6 +1607,9 @@ fn register_sim(engine: &mut Engine) {
                         cfg.sim.model_params.insert((*k).to_string(), *v);
                     }
                     cfg.sim.steps = p.steps;
+                    if let Some(init) = p.init {
+                        cfg.sim.init = init;
+                    }
                     Ok(())
                 }
                 None => Err(err(format!(

@@ -98,3 +98,83 @@ fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+
+/// Two channels at once: one through the palette, the other as
+/// brightness.
+///
+/// The reaction-diffusion set is the reason it exists. Those models
+/// carry two concentrations, and showing one throws away half of what
+/// the simulation computed -- a Brusselator's spots and the inhibitor
+/// field that spaces them are different pictures.
+pub static TWO_CHANNEL: SimColoringDef = SimColoringDef {
+    name: "two_channel",
+    display_name: "Two Channel",
+    description: "First channel picks the palette colour, second scales its brightness.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "hue_channel",
+            display_name: "Colour from",
+            default: 1.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Which channel drives the palette lookup.",
+            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
+        },
+        SimParamDef {
+            name: "hue_scale",
+            display_name: "Colour scale",
+            default: 3.0,
+            min: -20.0,
+            max: 20.0,
+            tooltip: "Multiplies that channel before the palette lookup.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "value_channel",
+            display_name: "Brightness from",
+            default: 0.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Which channel scales brightness.",
+            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
+        },
+        SimParamDef {
+            name: "value_scale",
+            display_name: "Brightness scale",
+            default: 1.0,
+            min: -8.0,
+            max: 8.0,
+            tooltip: "Multiplies the brightness channel. Negative inverts it, which is \
+                      usually what reads best when the two species are complementary.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "value_offset",
+            display_name: "Brightness offset",
+            default: 0.0,
+            min: -1.0,
+            max: 2.0,
+            tooltip: "Added after scaling. Raise it to keep the dark species visible.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn tc_pick(s: vec4<f32>, which: f32) -> f32 {
+    // No dynamic vector indexing in WGSL; unrolling is free.
+    let i = i32(round(clamp(which, 0.0, 3.0)));
+    var v = s.x;
+    if (i == 1) { v = s.y; }
+    else if (i == 2) { v = s.z; }
+    else if (i == 3) { v = s.w; }
+    return v;
+}
+
+fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
+    let t = clamp(tc_pick(s, cparam(0u)) * cparam(1u), 0.0, 1.0);
+    let b = clamp(tc_pick(s, cparam(2u)) * cparam(3u) + cparam(4u), 0.0, 1.0);
+    return vec4<f32>(sim_palette(t) * b, 1.0);
+}
+"#,
+};

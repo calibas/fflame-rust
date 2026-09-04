@@ -188,6 +188,10 @@ or D_w = D_v/… for Turing patterns. Clamp v to [−3, 3].
   relax to the rest state (sd 0.0014, a flat field). The excitable
   regime needs a cut wavefront, so `seed_kind` must default to
   `broken_wave` for this preset.
+- **Shipped 2026-09-04** as the `spiral` preset, which carries
+  `SimInit::BrokenWave` as well as its numbers — a preset of numbers
+  alone would render the flat field below. The GPU port reproduces the
+  prototype's counter-rotating pair.
 - **The Turing/labyrinth guess DOES NOT WORK and must not ship.**
   D_w = 4 with I = 0 from noise gives a spatial sd of **0.0000** — a
   perfectly flat field after 4000 steps. The catalogue's own
@@ -235,7 +239,9 @@ Clamp X, Y ≥ 0.
 **Measured 2026-09-03**, both presets VERIFIED as patterns:
 
 - **Turing spots** A = 1, B = 3, D_X = 1, D_Y = 8, dt = 0.01 — spots,
-  **settles at 1,180 steps**, spatial sd 1.43. (A first run reported
+  **settles at 1,180 steps**, spatial sd 1.43. Shipped 2026-09-04 as
+  the `turing_spots` preset; the GPU port reproduces the prototype's
+  fine 2–3 cell wavelength. (A first run reported
   4,960: its settle window was counted in 20-step samples but reported
   in steps, so it demanded 4,000 quiet steps and then dated the still
   ~3,800 late. Every settle figure from that run was inflated by about
@@ -308,7 +314,9 @@ with D_v/D_u ≈ 40 `[verify by prototype]`.
 `color`. **Colouring.** `channel` on u.
 
 **Measured 2026-09-03.** a = 0.1, b = 0.9, D_u = 1, D_v = 40,
-dt = 0.01 **VERIFIED**: Turing spots, **settles at 4,900 steps**,
+dt = 0.01 **VERIFIED**, shipped 2026-09-04 as the `turing_spots`
+preset; the GPU port reproduces the prototype's ~6-cell wavelength.
+Turing spots, **settles at 4,900 steps**,
 spatial sd 1.17 (an independent run of the same parameters in the
 wavelength sweep gave 5,100; a first run reported 8,680 through the
 settle-window bug described under the Brusselator). **dt cap 0.02**, with every rung run: 0.01 and 0.02
