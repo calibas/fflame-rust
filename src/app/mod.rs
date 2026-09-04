@@ -925,8 +925,27 @@ impl App {
             app.trigger_url_load(url_flame_id, url_animation_id);
         }
 
-        #[allow(deprecated)]
-        event_loop.run(move |event, elwt| {
+        // The handler is bound first so the two platforms can start it
+        // differently. On the web that is not a nicety:
+        //
+        // winit's web `run()` boxes a handler that BORROWS its own stack
+        // frame -- `self`, `target` and `event_handler` are locals of
+        // `run` -- transmutes it to 'static, and then throws a JS
+        // exception so the function never returns and the frame is
+        // never cleaned up ("SAFETY: Don't use `move` to make sure we
+        // leak", event_loop/mod.rs:41). `spawn()` is the same handler
+        // built with `move`, owning its captures on the heap, and it
+        // returns normally instead of throwing.
+        //
+        // The wasm load crash traps inside exactly that handler closure
+        // -- identified from the shipped module's own string literals,
+        // "handler woken up without user event" plus the `unreachable!`
+        // message, which are winit's and appear in no other function.
+        // Using the entry point that does not depend on an abandoned
+        // stack frame staying readable removes the hazard rather than
+        // reasoning about whether it fires. See
+        // docs/projects/wasm-load-crash.md.
+        let handler = move |event: Event<()>, elwt: &ActiveEventLoop| {
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
                     // Let egui handle events first
@@ -1227,7 +1246,18 @@ impl App {
                 }
                 _ => {}
             }
-        })?;
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::EventLoopExtWebSys;
+            event_loop.spawn(handler);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            #[allow(deprecated)]
+            event_loop.run(handler)?;
+        }
 
         Ok(())
     }
