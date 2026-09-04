@@ -41,36 +41,70 @@ PALETTE = np.array([(0, 0, 40), (0, 110, 160), (60, 200, 160), (255, 240, 120)],
                    dtype=np.uint8)
 
 
-def stabilise(grains, size, report_every=2000):
+def stabilise(grains, size, log=None):
     """Drop `grains` on the centre of a size*size grid and topple in bulk.
 
-    Returns (rounds, height field, seconds)."""
-    # np.roll was the first version and it is too slow to reach 2^20:
-    # every round rolled four full-grid temporaries and then masked the
-    # wrap back off, and 2^16 alone took two minutes. SLICE assignment
-    # shifts without ever creating the wrap the sink boundary has to
-    # undo, which is 34x faster here -- 2^16 in 3.5 s. (The dtype stays
-    # int64: the seed cell holds all N grains before the first round.)
-    h = np.zeros((size, size), dtype=np.int64)
-    h[size // 2, size // 2] = grains
+    Returns (rounds, height field, seconds).
+
+    Three things keep this tractable at 2^20, none of which changes the
+    round count -- that is a property of the parallel schedule, and the
+    schedule is identical:
+
+    - int32. After round one the seed cell holds N mod 4 and each
+      neighbour N/4, so 2^20 grains peak at 262,144 and never approach
+      the type's range.
+    - A PILE WINDOW. Sites with h >= 4 can only exist inside the bounding
+      box of h > 0, which grows by at most one cell per round. It is
+      recomputed every K rounds and padded by K + 1, so the full-grid
+      pass happens once per K rounds rather than once per round.
+    - An ACTIVE WINDOW inside that: the bounding box of this round's
+      topplings, padded by one. Late in a pile the rounds are small
+      avalanches, and this is what makes them cheap.
+
+    The first version rolled four full-grid int64 temporaries per round
+    on a grid six pile-radii wide -- nine times the cells the pile needs
+    -- and 2^18 took seventeen minutes."""
+    h = np.zeros((size, size), dtype=np.int32)
+    c = size // 2
+    h[c, c] = grains
+    t = np.zeros_like(h)
     rounds = 0
     t0 = time.time()
-    t = np.empty_like(h)
+    K = 256
+    y0 = x0 = c
+    y1 = x1 = c + 1
     while True:
-        np.right_shift(h, 2, out=t)     # floor(h / 4)
-        if not t.any():
+        if rounds % K == 0:
+            occ_r = np.flatnonzero(h.any(axis=1))
+            occ_c = np.flatnonzero(h.any(axis=0))
+            y0 = max(int(occ_r[0]) - K - 1, 0)
+            y1 = min(int(occ_r[-1]) + K + 2, size)
+            x0 = max(int(occ_c[0]) - K - 1, 0)
+            x1 = min(int(occ_c[-1]) + K + 2, size)
+            if log and rounds % (K * 40) == 0 and rounds:
+                log(f"      round {rounds:,}  pile window {y1 - y0}x{x1 - x0}  {time.time() - t0:.0f}s")
+        hw = h[y0:y1, x0:x1]
+        tw = t[y0:y1, x0:x1]
+        np.right_shift(hw, 2, out=tw)     # floor(h / 4) per site
+        rows = np.flatnonzero(tw.any(axis=1))
+        if rows.size == 0:
             break
-        h -= t << 2
-        # Grains leaving the grid are simply not added anywhere: that is
-        # the catalogue's `sink: edges`, and it needs no masking when the
-        # shift is a slice rather than a roll.
-        h[:-1, :] += t[1:, :]
-        h[1:, :] += t[:-1, :]
-        h[:, :-1] += t[:, 1:]
-        h[:, 1:] += t[:, :-1]
+        cols = np.flatnonzero(tw.any(axis=0))
+        a0 = max(int(rows[0]) - 1, 0)
+        a1 = min(int(rows[-1]) + 2, hw.shape[0])
+        b0 = max(int(cols[0]) - 1, 0)
+        b1 = min(int(cols[-1]) + 2, hw.shape[1])
+        ha = hw[a0:a1, b0:b1]
+        ta = tw[a0:a1, b0:b1]
+        ha -= ta << 2
+        # The ring of the active window holds no topplings, so slice
+        # shifts inside it are exact; grains that would leave the GRID
+        # are simply never added anywhere, which is the edge sink.
+        ha[:-1, :] += ta[1:, :]
+        ha[1:, :] += ta[:-1, :]
+        ha[:, :-1] += ta[:, 1:]
+        ha[:, 1:] += ta[:, :-1]
         rounds += 1
-        if report_every and rounds % report_every == 0:
-            print(f"      ... round {rounds:,}, {int(t.sum()):,} topplings", flush=True)
     return rounds, h, time.time() - t0
 
 
@@ -89,47 +123,51 @@ def save(name, h):
 
 
 def main():
+    logf = open(os.path.join(OUT, "sandpile_progress.log"), "w")
+
+    def log(msg):
+        print(msg, flush=True)
+        logf.write(msg + chr(10))
+        logf.flush()
+
     rows = []
-    # Grid sized from the known scaling: the pile's area is about
-    # N / (mean stable height ~2.1), so r ~ sqrt(N / 6.6). Take 3x that
-    # radius of margin and assert nothing reached the edge.
+    # Pile radius from the known scaling: area ~ N / (mean stable height
+    # ~2.1), so r ~ sqrt(N / 6.6). Measured at 2^18 that estimate is
+    # within 5%, so 1.3x it each side is margin enough, and the edge
+    # assertion is what actually guarantees nothing was lost.
     for p in (12, 14, 16, 18, 20):
         n = 1 << p
         r_est = (n / 6.6) ** 0.5
-        size = int(max(64, 6 * r_est))
-        size += size % 2 ^ 1 & 1        # keep it odd so there is a centre
-        if size % 2 == 0:
-            size += 1
-        print(f"  2^{p} = {n:,} grains on {size}x{size} ...", flush=True)
-        rounds, h, secs = stabilise(n, size)
+        size = int(max(64, 2.6 * r_est)) | 1
+        log(f"  2^{p} = {n:,} grains on {size}x{size} ...")
+        rounds, h, secs = stabilise(n, size, log)
         edge = int(h[0, :].sum() + h[-1, :].sum() + h[:, 0].sum() + h[:, -1].sum())
-        assert edge == 0, f"pile reached the edge (mass lost); grow the grid"
+        assert edge == 0, "pile reached the edge (mass lost); grow the grid"
+        assert int(h.sum()) == n, f"mass not conserved: {int(h.sum())} of {n}"
         r = radius_of(h)
         rows.append({"grains": n, "exp": p, "grid": size, "rounds": rounds,
                      "radius_cells": round(r, 1),
                      "rounds_per_radius": round(rounds / max(r, 1), 2),
                      "seconds": round(secs, 1)})
         save(f"sandpile_2e{p}.png", h)
-        print(f"      {rounds:,} rounds, radius {r:.0f}, {secs:.1f}s", flush=True)
+        log(f"      {rounds:,} rounds, radius {r:.0f}, {secs:.1f}s")
+        # Written after EVERY size so a killed run keeps what it measured.
+        with open(os.path.join(OUT, "sandpile_rounds.json"), "w") as f:
+            json.dump(rows, f, indent=1)
 
-    with open(os.path.join(OUT, "sandpile_rounds.json"), "w") as f:
-        json.dump(rows, f, indent=1)
-
-    print()
-    print(f"{'grains':>12}{'grid':>8}{'rounds':>10}{'radius':>9}"
-          f"{'rounds/r':>10}{'sec':>8}")
+    log("")
+    log(f"{'grains':>12}{'grid':>8}{'rounds':>10}{'radius':>9}{'rounds/r':>10}{'sec':>8}")
     for r in rows:
-        print(f"{r['grains']:>12,}{r['grid']:>8}{r['rounds']:>10,}"
-              f"{r['radius_cells']:>9}{r['rounds_per_radius']:>10}{r['seconds']:>8}")
-
-    # Scaling exponents: rounds ~ a * N^b, radius ~ c * N^d.
+        log(f"{r['grains']:>12,}{r['grid']:>8}{r['rounds']:>10,}"
+            f"{r['radius_cells']:>9}{r['rounds_per_radius']:>10}{r['seconds']:>8}")
     n = np.array([r["grains"] for r in rows], dtype=float)
     rd = np.array([r["rounds"] for r in rows], dtype=float)
     ra = np.array([r["radius_cells"] for r in rows], dtype=float)
     b = np.polyfit(np.log(n), np.log(rd), 1)[0]
     d = np.polyfit(np.log(n), np.log(ra), 1)[0]
-    print(f"\nrounds  ~ N^{b:.3f}   (N^0.5 would be 'one round per cell of radius')")
-    print(f"radius  ~ N^{d:.3f}   (theory: 0.5)")
+    log(f"rounds  ~ N^{b:.3f}   (N^0.5 would be one round per cell of radius)")
+    log(f"radius  ~ N^{d:.3f}   (theory: 0.5)")
+    logf.close()
 
 
 if __name__ == "__main__":

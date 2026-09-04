@@ -178,8 +178,12 @@ or D_w = D_v/… for Turing patterns. Clamp v to [−3, 3].
 
 - **`excitable_spiral` VERIFIED and shippable**: a = 0.7, b = 0.8,
   τ = 12.5, I = 0.5, D_v = 1, D_w = 0, dt = 0.1, **broken-wave seed**.
-  Produces textbook counter-rotating spiral pairs by step 1000. Never
-  stills (spatial sd 0.76 and rotating) — an animated subject.
+  Produces textbook counter-rotating spiral pairs: the cut wavefront's
+  tips have begun to curl by step 1,000 and the spirals are fully
+  formed by 4,000 (a first draft of this note said "by 1,000" without
+  looking at that frame). Never stills (spatial sd 0.76 and rotating)
+  — an animated subject; a still export wants `steps` ≈ 4,000 at
+  dt = 0.1.
 - The seed is not incidental: the same constants from a **noise** seed
   relax to the rest state (sd 0.0014, a flat field). The excitable
   regime needs a cut wavefront, so `seed_kind` must default to
@@ -189,10 +193,14 @@ or D_w = D_v/… for Turing patterns. Clamp v to [−3, 3].
   perfectly flat field after 4000 steps. The catalogue's own
   instruction ("do not ship a preset without running it") was right;
   the constant set for an FHN Turing regime is still unknown.
-- **dt cap ≈ 0.5.** The [−3, 3] clamp means instability never shows as
-  a NaN, it shows as the field pinning to the rails: dt = 0.5 is clean
-  (sd 0.0008), dt = 1.0 rails (sd 2.26). Cap the slider at 0.5 and do
-  not rely on divergence detection here.
+- **dt cap = 0.75, measured on the spiral.** A first probe ran from a
+  noise seed, which relaxes to rest — so it measured the stability of a
+  field doing nothing and reported 0.5. Re-run on the active spiral
+  for 200 units of model time: the [−3, 3] clamp means instability
+  never shows as a NaN, it shows as cells pinned to the rails, and
+  **0.0% of cells rail at every dt through 0.75** (spatial sd steady at
+  0.36–0.41), while **dt = 1.0 rails 14.6%** of them. Cap the slider at
+  0.75 and do not rely on divergence detection here.
 
 **Stages.** `update`, `color`. Periodic or Clamp.
 **Colouring.** `channel` on v, `two_channel`, `age` (time since last
@@ -227,12 +235,19 @@ Clamp X, Y ≥ 0.
 **Measured 2026-09-03**, both presets VERIFIED as patterns:
 
 - **Turing spots** A = 1, B = 3, D_X = 1, D_Y = 8, dt = 0.01 — spots,
-  **settles at ≈ 4,960 steps**, spatial sd 1.43.
+  **settles at 1,180 steps**, spatial sd 1.43. (A first run reported
+  4,960: its settle window was counted in 20-step samples but reported
+  in steps, so it demanded 4,000 quiet steps and then dated the still
+  ~3,800 late. Every settle figure from that run was inflated by about
+  that much.)
 - **Oscillating** A = 1, B = 2.5, D_X = D_Y = 1 — never stills, as
   claimed.
-- **dt cap is 0.02, not the 0.01–0.05 estimated above.** Measured:
-  dt = 0.01 clean; **dt = 0.05 diverges at step 90**, 0.1 at 35, 0.25
-  at 15. Correct the slider bound.
+- **dt cap is 0.04.** The full ladder: 0.01, 0.02, 0.03 and 0.04 all
+  stable with identical spatial sd (1.43); **0.05 diverges at step
+  90**, 0.1 at 35, 0.25 at 15. (A first draft of this note said 0.02
+  after testing only 0.01 and 0.05 — a cap written down without running
+  the rung it names. The rungs are now all run.) The upper end of the
+  "0.01–0.05" estimate was one rung too far.
 - Wavelength caveat below applies: at these constants the spots are
   ~2–3 cells across on a 256² grid — a real Turing pattern that reads
   as speckle.
@@ -293,37 +308,53 @@ with D_v/D_u ≈ 40 `[verify by prototype]`.
 `color`. **Colouring.** `channel` on u.
 
 **Measured 2026-09-03.** a = 0.1, b = 0.9, D_u = 1, D_v = 40,
-dt = 0.01 **VERIFIED**: Turing spots, **settles at ≈ 8,680 steps**,
-spatial sd 1.17. **dt cap 0.02** — 0.02 is clean, 0.05 diverges at
-step 17.
+dt = 0.01 **VERIFIED**: Turing spots, **settles at 4,900 steps**,
+spatial sd 1.17 (an independent run of the same parameters in the
+wavelength sweep gave 5,100; a first run reported 8,680 through the
+settle-window bug described under the Brusselator). **dt cap 0.02**, with every rung run: 0.01 and 0.02
+stable, **0.03 diverges at step 486**, 0.04 at 26, 0.05 at 17.
 
-### Turing feature size costs much less than it looks (measured)
+### Turing feature size costs steps quadratically in wavelength (measured, after a retraction)
 
 The catalogue's spot presets put the wavelength at a few cells, which
 is a genuine Turing pattern that reads as speckle. Wavelength scales as
 √D, so it is bought by scaling both diffusion constants — and explicit
-Euler then caps dt at ~const/D, which suggests the step count should
-scale linearly with the scale factor. **It does not.** Schnakenberg,
-256², scaling D_u and D_v by k and dt by 1/k:
+Euler then caps dt at ~const/D, so the step count should scale linearly
+with the scale factor. **It does.** Schnakenberg, 256², scaling D_u and
+D_v by k and dt by 1/k, settle criterion held fixed in *model* time
+(tolerance ∝ dt, window ∝ 1/dt) with an amplitude floor:
 
 | D scale k | dt | steps to still | λ (cells) | settle in model time |
 |---|---|---|---|---|
-| 1 | 0.0100 | 14,850 | 6.6 | 148 |
-| 4 | 0.0025 | 18,000 | 16.0 | 45 |
-| 16 | 0.00063 | 30,400 | 36.6 | 19 |
+| 1 | 0.0100 | 5,100 | 6.9 | 51 |
+| 4 | 0.0025 | 19,150 | 16.0 | 48 |
+| 16 | 0.00063 | 93,150 | 32.0 | 58 |
 
-**5.6× the feature size for 2× the steps**, because faster diffusion
-equilibrates in proportionally less model time and the two effects
-mostly cancel. Feature size is a cheap knob, and the shipped presets
-should use it rather than defaulting to speckle.
+Model time to settle is ~50 in every row, which is the tell: scaling D
+and dt together is a change of length unit and nothing else, so the
+dynamics are identical and the step count is simply ∝ k. **4.6× the
+wavelength costs 18× the steps.** Feature size is not a cheap knob; a
+preset that wants 32-cell spots at 256² pays ~10⁵ steps for a still,
+and the alternative — a smaller grid upscaled by the resolve stage — is
+the same picture for 1/16 of the work.
+
+**A retraction.** A first version of this section reported "5.6× the
+feature size for 2× the steps" and called feature size cheap. That
+came from a settle criterion whose tolerance was on the per-*step*
+change while dt shrank by k, so it loosened by k in rate terms and its
+window shrank by k in model time — the larger-D runs were being
+declared still 15× sooner than the small-D run by the same standard.
+The corrected criterion above gives the linear result the physics
+predicts. The wrong version stood for one commit.
 
 One measurement trap worth carrying into the driver: the **settle
 metric fires during the slow nucleation phase**, before the pattern
-exists. At k = 16 it reported convergence at 10,000 steps with a
-spatial sd of 0.017 — a blank field. The prototype now requires an
-amplitude floor before accepting stillness, and `settle` in the shader
-needs the same guard or it will stop growth models early. (Gray–Scott
-showed the same failure from the other direction.)
+exists. Unguarded, it reported convergence at step 20 on a Schnakenberg
+run that went on to form a full pattern, and at 10,000 steps on a
+blank field at k = 16. The prototype now requires an amplitude floor
+before accepting stillness, and `settle` in the shader needs the same
+guard or it will stop growth models early. (Gray–Scott showed the same
+failure from the other direction.)
 
 ---
 
@@ -603,8 +634,12 @@ Rgba32Float, pipeline §3.1) or a float channel holding an integer;
 **Measured 2026-09-03** (`proto_cellular_automata.py`, 256²): the
 secondary-source parameters **q = 200, k₁ = 2, k₂ = 3, g = 70 are
 CONFIRMED** — a dense field of BZ spirals and scrolls from a uniform
-random seed, 129 of 201 states occupied. Developed by ~50 steps; never
-stills (churn plateau 0.97, i.e. almost every cell changes every step).
+random seed, 129 of 201 states occupied. **Not** developed by step 50
+(one dominant state with scattered specks — checked, after a first
+draft of this note claimed otherwise without looking); fully spiralled
+by step 200. Never stills (churn plateau 0.97, i.e. almost every cell
+changes every step), and the churn metric cannot date its development
+because churn is ~1 from the first step — the images have to.
 The source attribution stays `[verify]` — running the rule confirms the
 rule, not the citation.
 **Stages.** `update`, `color`. Periodic.
@@ -713,6 +748,36 @@ picture). Terminates exactly: `settle` fires when no site has h ≥ 4
 also 8 with Moore neighbours for the variant), `sink` (choices:
 edges, none-periodic — the periodic torus never stabilises with a
 positive mean height above 3, so gate it).
+
+**Measured 2026-09-03** (`proto_sandpile.py`, parallel bulk toppling,
+edge sinks, mass conservation asserted at every size):
+
+| grains | rounds | radius (cells) | rounds / radius |
+|---|---|---|---|
+| 2¹² | 787 | 24 | 33 |
+| 2¹⁴ | 3,695 | 47 | 79 |
+| 2¹⁶ | 12,837 | 94 | 137 |
+| 2¹⁸ | 49,232 | 187 | 263 |
+| **2²⁰** | **190,006** | **373** | **509** |
+
+**rounds ∼ N^0.978, radius ∼ N^0.495** (theory ½). So rounds / radius
+grows as √N — **rounds ∝ radius²**: the mass diffuses outward rather
+than propagating at a fixed speed, and "rounds ≥ radius" above
+undersold it by a factor of 500 at the target size. The 2²⁰ picture is
+a 190k-round run.
+
+On the GPU that is fine: the phase-0 microbenchmark puts a 1024²
+stencil step at 0.28 ms, and this kernel is cheaper (integer, four
+taps, no clamp), so **the 2²⁰ pile is ≈ 55 s** of dispatches on a GTX
+1660 SUPER. The slider's upper end is not: 2²⁴ extrapolates to ~3M
+rounds, a quarter of an hour, and should be capped or warned about. In
+NumPy the 2²⁰ run is 23 minutes even after windowing the active region
+— the pile has to be simulated on the GPU, and the prototype exists to
+give the round count, not the picture.
+
+The windowed implementation reproduces the unwindowed one exactly
+(12,837 rounds at 2¹⁶ both ways), so the schedule — and therefore the
+count — is the one the shader will run.
 **Stages.** `update`, `settle`, `color`. Boundary Zero (edges are
 sinks).
 **Colouring.** `channel` categorical on h ∈ {0,1,2,3} (the classic
@@ -963,10 +1028,12 @@ cluster reaches the edge):
 | 0.05 | point | 1,158 |
 | 0.3 | line | 505 |
 
-So `steps ≈ radius / p` **overestimates by about 2× at small p** — at
-p = 0.05 it predicts 2,560 against 1,158 measured, because the front is
-long and many sites get their chance each step. Use radius / (2p) as
-the default.
+So `steps ≈ radius / p` is exact at p = 1 and **overestimates by about
+2× at small p** — at p = 0.05 it predicts 2,560 against 1,158 measured,
+because the front is long and many sites get their chance each step.
+The measured range is between radius/(2p) and radius/p; use radius / p
+as the default, since a `steps` that is too generous costs time and one
+that is too small truncates the cluster.
 
 Two implementation notes the prototype had to get right, and the shader
 will too. A step that grows **nothing** is not the end of the run: at
@@ -1006,12 +1073,22 @@ on/off — off gives random deposition, no correlations).
 is right to within a factor of 1.4–1.8, and lateral sticking fills
 faster because it builds overhangs.
 
-The interface width separates the two universality classes as it
-should: **w = 2.84 with sideways sticking against 10.59 without**. That
-is the KPZ β = 1/3 against random deposition's β = 1/2, and it is worth
-keeping as a regression check — the `sideways` toggle is the difference
+The interface width separates the two variants cleanly — **w = 2.84
+with sideways sticking against 10.59 without** at their fill times, and
+w(3000) = 5.9 against 28.1 on a 1024-wide interface — which is worth
+keeping as a regression check: the `sideways` toggle is the difference
 between a correlated interface and an uncorrelated one, and getting it
 backwards would still *look* like a rough surface.
+
+What this does **not** show is the KPZ exponent. Fitting w(t) ∼ t^β on
+one realisation: random deposition gives **β = 0.507** against the
+exact 1/2, steady in every time window (0.51, 0.49, 0.50, 0.48).
+Lateral sticking gives 0.205 over the whole run, with local values
+swinging 0.24 → 0.42 → 0.02 → 0.18 — a single sample's width
+fluctuates too much to read β = 1/3 off it, and ballistic deposition
+has notoriously large corrections to scaling. Direction and separation
+are established; the exponent is not measured here and the catalogue
+should not claim it is.
 
 ---
 
@@ -1193,8 +1270,8 @@ RNG; spins as a float channel ±1 (or bitcast u32). Periodic.
 **Presets.** T = T_c (critical), T = 1.5 (coarsening from noise).
 
 **Measured 2026-09-03**, checkerboard Metropolis at 256², |m| averaged
-over the last 50 sweeps — the phase transition is reproduced
-quantitatively:
+over the last 50 of 600 sweeps — the three regimes come out in the
+right order with plausible magnitudes:
 
 | T | ⟨\|m\|⟩ | churn | developed |
 |---|---|---|---|
@@ -1202,8 +1279,12 @@ quantitatively:
 | 2.269 (T_c) | **0.33** | 0.207 | 27 |
 | 3.5 (disordered) | **0.007** | 0.548 | 1 |
 
-Ordered below, critical at Onsager's T_c, noise above. The
-checkerboard split is therefore validated as implemented, and the
+Ordered below, disordered above, in between at T_c. That validates
+the checkerboard split as implemented (a broken one gives wrong
+statistics at every T). It is **not** an equilibrium measurement at
+T_c: 600 sweeps from a random start grows the correlation length to
+~t^(1/z) ≈ 19 cells against L = 256, so the 0.33 is a coarsening
+snapshot and should not be quoted as the critical magnetisation. The
 `steps` default should be **per-preset**: coarsening needs ~400 sweeps
 to look like anything, the critical and hot states need almost none.
 **Stages.** `update` ×2, `color`. **Colouring.** `channel` binary,

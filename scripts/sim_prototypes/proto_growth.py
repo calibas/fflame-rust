@@ -18,6 +18,7 @@ Writes PNGs and a JSON row set into output/sim_proto/.
 """
 import json
 import os
+import sys
 import time
 
 import numpy as np
@@ -206,7 +207,42 @@ def run_packard(rule_set, steps=200, seed_at=None):
             "seconds": round(time.time() - t0, 1)}
 
 
+def kpz_exponent(sideways, p=0.5, cols=1024, steps=3000, seed=7):
+    """Growth exponent beta from w(t) ~ t^beta, fitted on the log-log slope.
+
+    The first run reported one interface width per model at the moment
+    each filled its grid -- different times, so not comparable, and a
+    single number cannot show an exponent. This measures w(t) on a
+    wide interface (1024 columns, so saturation at t ~ L^1.5 is far
+    off) and fits the slope. KPZ predicts 1/3 with lateral sticking;
+    random deposition predicts 1/2."""
+    rg = np.random.default_rng(seed)
+    h = np.zeros(cols, dtype=np.int64)
+    ts, ws = [], []
+    for s in range(1, steps + 1):
+        hit = rg.random(cols) < p
+        if sideways:
+            cand = np.maximum(np.maximum(np.roll(h, 1), np.roll(h, -1)), h + 1)
+        else:
+            cand = h + 1
+        h = np.where(hit, cand, h)
+        if s >= 20 and s % 10 == 0:
+            ts.append(s)
+            ws.append(float(np.std(h)))
+    beta = float(np.polyfit(np.log(ts), np.log(ws), 1)[0])
+    return {"model": "ballistic_deposition", "params": f"sideways={sideways} L={cols}",
+            "beta_fit": round(beta, 3), "beta_theory": 1 / 3 if sideways else 0.5,
+            "w_final": round(ws[-1], 2)}
+
+
 def main():
+    if "--kpz" in sys.argv:
+        rows = [kpz_exponent(True), kpz_exponent(False)]
+        with open(os.path.join(OUT, "growth_kpz.json"), "w") as f:
+            json.dump(rows, f, indent=1)
+        for r in rows:
+            print(f"{r['params']:<28} beta = {r['beta_fit']:.3f}   (theory {r['beta_theory']:.3f})   w(3000) = {r['w_final']}")
+        return
     rows = []
     print("Eden")
     for p in (1.0, 0.3, 0.05):

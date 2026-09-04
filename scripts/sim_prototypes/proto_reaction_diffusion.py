@@ -60,22 +60,32 @@ def save(name, field, lo=None, hi=None):
 
 
 class Settle:
-    """Steps to a still, by the same metric the driver will use.
+    """Steps to a still, by the metric the driver will use: mean |delta|
+    below `tol` for `window` consecutive STEPS.
+
+    Reports the step at which the quiet run BEGAN. A first version
+    counted the window in feeds (one per 20 steps) and reported
+    `step - window`, which demanded 4,000 quiet steps and then dated
+    the still ~3,800 steps late; every settle figure in the first run
+    carried that error.
 
     Gray-Scott taught that this fires long before a GROWTH pattern is
-    finished, so it is reported as what it is -- the point where the
-    field stops changing -- and the images are what decide a preset."""
+    finished, and the wavelength sweep taught that it fires during slow
+    nucleation before a pattern exists at all, so callers guard it with
+    an amplitude floor and the images decide a preset."""
 
     def __init__(self, tol=1e-4, window=200):
-        self.tol, self.window, self.run, self.at = tol, window, 0, None
+        self.tol, self.window = tol, window
+        self.onset, self.at = None, None
 
     def feed(self, delta, step):
         if delta < self.tol:
-            self.run += 1
-            if self.run >= self.window and self.at is None:
-                self.at = step - self.window
+            if self.onset is None:
+                self.onset = step
+            if self.at is None and step - self.onset >= self.window:
+                self.at = self.onset
         else:
-            self.run = 0
+            self.onset = None
         return self.at
 
 
@@ -130,7 +140,10 @@ def run_brusselator(name, A, B, dx, dy, dt, steps, seed=2, snaps=()):
         if not np.isfinite(X).all() or X.max() > 1e6:
             return {"model": "brusselator", "preset": name, "dt": dt,
                     "diverged_at": s}
-        if s % 20 == 0:
+        # Amplitude guard: the run starts at the fixed point plus 0.05
+        # noise, quieter than the tolerance, so an unguarded 200-step
+        # window fires before the pattern exists.
+        if s % 20 == 0 and float(X.std()) > 0.2:
             st.feed(float(np.abs(X - prev).mean()), s)
         if s in snaps:
             save(f"brusselator_{name}_{s}.png", X)
@@ -159,7 +172,10 @@ def run_schnakenberg(name, a, b, du, dv, dt, steps, seed=3, snaps=()):
         if not np.isfinite(u).all() or u.max() > 1e6:
             return {"model": "schnakenberg", "preset": name, "dt": dt,
                     "diverged_at": s}
-        if s % 20 == 0:
+        # Same guard as the Brusselator: measured without it, this
+        # reported "settled at step 20" on a run that went on to form a
+        # full pattern.
+        if s % 20 == 0 and float(u.std()) > 0.2:
             st.feed(float(np.abs(u - prev).mean()), s)
         if s in snaps:
             save(f"schnakenberg_{name}_{s}.png", u)
@@ -206,7 +222,10 @@ def wavelength_sweep():
         u0, v0 = 1.0, 0.9 / 1.0
         u = u0 + g.normal(0, 0.02, (N, N))
         v = v0 + g.normal(0, 0.02, (N, N))
-        st = Settle()
+        # Same criterion in MODEL time at every k: a per-step change of
+        # 1e-4 at dt = 0.01 is a rate of 1e-2, so the tolerance scales
+        # with dt and the window with 1/dt.
+        st = Settle(tol=1e-4 / k, window=200 * k)
         t0 = time.time()
         for s2 in range(1, steps + 1):
             prev = u
@@ -241,7 +260,58 @@ def wavelength_sweep():
     return rows
 
 
+def dt_probe():
+    """Largest stable dt, measured on the configuration that matters.
+
+    FHN from a noise seed relaxes to rest, so a probe there measures
+    the stability of a field doing nothing -- the first version did
+    exactly that and reported a cap of 0.5. This runs the spiral. The
+    clamp hides divergence, so the signal is the fraction of cells
+    pinned to the rails (|v| >= 2.99): a stable spiral has none.
+
+    Brusselator and Schnakenberg diverge honestly, so the ladder just
+    needs the missing rungs -- the first run tested 0.01 and 0.05 and
+    wrote down 0.02 as the cap without ever running 0.02."""
+    rows = []
+    for dt in (0.1, 0.25, 0.4, 0.5, 0.75, 1.0):
+        steps = int(200 / dt)
+        g = rng(1)
+        v = np.full((N, N), -1.2)
+        w = np.full((N, N), -0.6)
+        v[N // 2 - 4:N // 2 + 4, :N // 2] = 2.0
+        w[N // 2 - 12:N // 2 - 4, :N // 2] = 1.0
+        for _ in range(steps):
+            prev = v
+            v = v + dt * (lap(v) + v - v ** 3 / 3.0 - w + 0.5)
+            w = w + dt / 12.5 * (prev + 0.7 - 0.8 * w)
+            np.clip(v, -3.0, 3.0, out=v)
+        railed = float((np.abs(v) >= 2.99).mean())
+        rows.append({"model": "fitzhugh_nagumo", "dt": dt, "steps": steps,
+                     "railed_fraction": railed, "spatial_sd": float(v.std())})
+    for dt in (0.01, 0.02, 0.03, 0.04, 0.05):
+        r = run_brusselator(f"dtp{dt}", 1.0, 3.0, 1.0, 8.0, dt, int(40 / dt))
+        rows.append({"model": "brusselator", "dt": dt,
+                     "diverged_at": r.get("diverged_at"), "spatial_sd": r.get("spatial_sd")})
+    for dt in (0.01, 0.02, 0.03, 0.04, 0.05):
+        r = run_schnakenberg(f"dtp{dt}", 0.1, 0.9, 1.0, 40.0, dt, int(40 / dt))
+        rows.append({"model": "schnakenberg", "dt": dt,
+                     "diverged_at": r.get("diverged_at"), "spatial_sd": r.get("spatial_sd")})
+    return rows
+
+
 def main():
+    if "--dt" in sys.argv:
+        rows = dt_probe()
+        with open(os.path.join(OUT, "rd_dt_probe.json"), "w") as f:
+            json.dump(rows, f, indent=1)
+        print(f"{'model':<18}{'dt':>6}  result")
+        for r in rows:
+            if r["model"] == "fitzhugh_nagumo":
+                res = f"railed {100 * r['railed_fraction']:.1f}% of cells, sd {r['spatial_sd']:.3f} ({r['steps']} steps = 200 model time)"
+            else:
+                res = f"DIVERGED at step {r['diverged_at']}" if r["diverged_at"] else f"stable, sd {r['spatial_sd']:.3f}"
+            print(f"{r['model']:<18}{r['dt']:>6}  {res}")
+        return
     if "--wavelength" in sys.argv:
         rows = wavelength_sweep()
         with open(os.path.join(OUT, "rd_wavelength.json"), "w") as f:
