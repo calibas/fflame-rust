@@ -27,6 +27,14 @@ pub enum AttachmentOp {
 /// Note: Config-related change tracking has been moved to ConfigManager.get_pending_actions()
 /// This struct now only contains non-config actions (file I/O, palette library, transforms, etc.)
 pub struct UiResponse {
+    /// Simulation transport, echoed back from the panel. `sim_running`
+    /// is the resulting state rather than a request, because the panel
+    /// owns the toggle; the other two are one-shot requests the App
+    /// consumes and clears.
+    pub sim_running: Option<bool>,
+    pub sim_step_once: bool,
+    pub sim_reseed: bool,
+
     // File I/O operations
     pub config_export_requested: Option<String>,
     pub config_import_requested: Option<String>,
@@ -206,6 +214,9 @@ pub enum ApiAnimationSaveAction {
 impl Default for UiResponse {
     fn default() -> Self {
         Self {
+            sim_running: None,
+            sim_step_once: false,
+            sim_reseed: false,
             config_export_requested: None,
             config_import_requested: None,
             config_save_file_requested: false,

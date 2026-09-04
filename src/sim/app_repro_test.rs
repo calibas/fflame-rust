@@ -267,10 +267,20 @@ fn steps_are_batch_invariant() {
     let fa = read_rgba32f(&device, &queue, a.field_texture(), 64, 64);
     let fb = read_rgba32f(&device, &queue, b.field_texture(), 64, 64);
     assert_eq!(a.step_index(), b.step_index());
+    // EVERY channel, not just the concentration. An earlier version of
+    // this compared channel 0 alone and passed while the age channel
+    // (.z, which reads the step index from the uniform) was wrong in
+    // every batched run -- queue.write_buffer is staged before the
+    // command buffer executes, so all the steps in one submission saw
+    // the same index. Comparing the whole texel is what catches that.
+    let differing = fa
+        .iter()
+        .zip(&fb)
+        .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+        .count();
     assert_eq!(
-        fa.iter().map(|p| p[0].to_bits()).collect::<Vec<_>>(),
-        fb.iter().map(|p| p[0].to_bits()).collect::<Vec<_>>(),
-        "one batch of {n} and {n} batches of one must give identical fields"
+        differing, 0,
+        "one batch of {n} and {n} batches of one must give identical fields;          {differing} texels differ"
     );
 }
 
@@ -387,4 +397,162 @@ fn an_impossible_grid_is_refused_before_allocation() {
         SimRenderer::allocation_error(&device, &cfg, 1920, 1080).is_none(),
         "an ordinary config must not be refused"
     );
+}
+
+/// PHASE-1 GATE: the interactive budget at 1080p.
+///
+/// The plan's gate is "1080p at >= 60 fps with >= 4 steps per frame".
+/// Phase 0 measured the bare stencil at 0.495 ms/step on this card;
+/// this measures the SHIPPED path instead -- a real SimRenderer, the
+/// real assembled shaders, and the colour+resolve pass that runs every
+/// frame whether or not the simulation advanced.
+///
+/// Reported rather than asserted tightly: the number depends on the
+/// machine, and a hard threshold here would fail on a laptop for
+/// reasons that are not a regression. The assertion is only that the
+/// gate's own bar is cleared.
+///
+/// **RUN WITH `--test-threads=1`.** cargo runs tests in parallel, and
+/// the 4K gate below is 13 seconds of solid GPU work. Sharing a device
+/// with it turned 1.38 ms/frame into 72.64 -- a 50x error that looks
+/// exactly like a real regression, and which cost a round of
+/// investigation before the cause was measured. Any GPU TIMING test
+/// has this hazard; correctness tests do not care.
+#[test]
+#[ignore = "manual: GPU timing, phase-1 gate"]
+fn phase1_gate_interactive_budget_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = crate::config::sim::SimGrid::Viewport { scale: 1.0 };
+    cfg.init = crate::config::sim::SimInit::Blobs { count: 6, radius: 24 };
+    let (w, h) = (1920u32, 1080u32);
+    let mut r = SimRenderer::new(&device, &cfg, w, h);
+    r.seed(&device, &queue, &cfg);
+    // Warm up: first frame pays pipeline creation and allocation.
+    for _ in 0..3 {
+        r.render_frame(&device, &queue, &cfg, &palette, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    const FRAMES: u32 = 60;
+    for spf in [1u32, 4, 8, 16] {
+        let t0 = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            r.render_frame(&device, &queue, &cfg, &palette, spf);
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+        println!(
+            "1920x1080, {spf:>2} steps/frame: {ms:6.2} ms/frame  ({:5.1} fps)",
+            1000.0 / ms
+        );
+        if spf == 4 {
+            assert!(
+                ms < 16.7,
+                "PHASE-1 GATE FAILED: 4 steps/frame at 1080p took {ms:.2} ms, over the 16.7 ms \
+                 budget for 60 fps"
+            );
+        }
+    }
+}
+
+/// PHASE-1 GATE: a 4K export of 10,000 steps completes.
+///
+/// The risk is the ~2 s GPU watchdog: an export that submits its whole
+/// run as one pass resets the device. `run_steps` batches internally,
+/// and this is the test that the batching is actually sized for it.
+#[test]
+#[ignore = "manual: GPU timing, phase-1 gate"]
+fn phase1_gate_4k_ten_thousand_steps() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: 3840, height: 2160 };
+    cfg.init = crate::config::sim::SimInit::Blobs { count: 6, radius: 24 };
+    cfg.steps = 10_000;
+    if let Some(why) = SimRenderer::allocation_error(&device, &cfg, 3840, 2160) {
+        eprintln!("device cannot hold a 4K grid, skipping: {why}");
+        return;
+    }
+    let t0 = std::time::Instant::now();
+    let mut r = SimRenderer::new(&device, &cfg, 3840, 2160);
+    r.render_still(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let secs = t0.elapsed().as_secs_f64();
+    println!("4K grid, 10,000 steps: {secs:.1} s ({:.2} ms/step)", secs * 1000.0 / 10_000.0);
+    assert_eq!(r.step_index(), 10_000, "every step must have run");
+
+    // The field must still be a field: a watchdog reset or a lost
+    // device shows up here as NaN or a uniform image, not as an error.
+    let out = read_rgba32f(&device, &queue, r.output_texture(), 3840, 2160);
+    assert!(
+        out.iter().all(|p| p.iter().all(|v| v.is_finite())),
+        "4K export produced non-finite pixels"
+    );
+    let lo = out.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+    let hi = out.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+    assert!(hi - lo > 0.05, "4K export is a flat image ({lo}..{hi})");
+}
+
+/// Where an interactive frame's time actually goes.
+#[test]
+#[ignore = "diagnostic"]
+fn frame_cost_breakdown_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = crate::config::sim::SimGrid::Viewport { scale: 1.0 };
+    let (w, h) = (1920u32, 1080u32);
+    let mut r = SimRenderer::new(&device, &cfg, w, h);
+    r.seed(&device, &queue, &cfg);
+    for _ in 0..3 {
+        r.render_frame(&device, &queue, &cfg, &palette, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let mut report = |label: &str, n: f64, secs: f64| {
+        println!("{label:<38} {:8.3} ms", secs * 1000.0 / n);
+    };
+
+    let t = std::time::Instant::now();
+    r.run_steps(&device, &queue, &cfg, 240);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("240 steps, one call, per step", 240.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.run_steps(&device, &queue, &cfg, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("4 steps x 60 calls, per step", 240.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.color(&device, &queue, &cfg, &palette);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("colour pass alone, per call", 60.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.render_frame(&device, &queue, &cfg, &palette, 0);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("render_frame with 0 steps, per frame", 60.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.render_frame(&device, &queue, &cfg, &palette, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("render_frame with 4 steps, per frame", 60.0, t.elapsed().as_secs_f64());
 }

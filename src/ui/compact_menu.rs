@@ -97,6 +97,7 @@ fn render_compact_menu_items(
             (PanelType::Subflames, "menu.window_subflames"),
             (PanelType::Scripts, "menu.window_scripts"),
             (PanelType::Escape, "menu.window_escape"),
+            (PanelType::Simulation, "menu.window_simulation"),
             (PanelType::History, "menu.window_history"),
             (PanelType::Effects, "menu.window_effects"),
             (PanelType::XaosEditor, "menu.window_xaos_editor"),

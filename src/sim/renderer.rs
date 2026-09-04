@@ -41,6 +41,10 @@ const STEPS_PER_SUBMIT: u32 = 256;
 /// checks; this keeps arithmetic sane before a device is in scope.
 const MAX_GRID_DIM: u32 = 8192;
 
+/// Ring slots for per-step uniforms. One per step in a submission, so
+/// each step reads its own step index.
+const RING_SLOTS: u32 = STEPS_PER_SUBMIT;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SimParamsGpu {
@@ -98,11 +102,27 @@ pub struct SimRenderer {
     output_texture: Texture,
     output_view: TextureView,
 
+    /// A RING of per-step uniforms, addressed by dynamic offset.
+    ///
+    /// Not one uniform rewritten per step: `Queue::write_buffer` is
+    /// staged and applied before the command buffer executes, so every
+    /// step in a submission would read the LAST step's values. Measured,
+    /// that silently corrupted the age channel in every batched run
+    /// (93 texels of 4,096 differed between one batch of 300 and 300
+    /// batches of one) while the concentration channels looked right --
+    /// and it cost a `write_buffer` per step, which is what made 4
+    /// steps at 1080p take 39.8 ms instead of ~2.
     params_buffer: Buffer,
+    /// Distance between ring slots, `min_uniform_buffer_offset_alignment`
+    /// rounded up from the struct size.
+    params_stride: u64,
     model_params_buffer: Buffer,
     coloring_params_buffer: Buffer,
 
     pipelines: Option<Pipelines>,
+    /// One bind group per ping-pong direction, built with the
+    /// pipelines and reused for every step in every batch.
+    step_bind_groups: Option<[BindGroup; 2]>,
 
     /// Steps applied since the last reseed. The state's identity.
     step_index: u32,
@@ -117,9 +137,11 @@ impl SimRenderer {
         let (field, field_view) = Self::create_field_pair(device, grid_w, grid_h);
         let (output_texture, output_view) = Self::create_output(device, out_w, out_h);
 
+        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let params_stride = (std::mem::size_of::<SimParamsGpu>() as u64).div_ceil(align) * align;
         let params_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Sim Params"),
-            size: std::mem::size_of::<SimParamsGpu>() as u64,
+            label: Some("Sim Params Ring"),
+            size: params_stride * RING_SLOTS as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -148,9 +170,11 @@ impl SimRenderer {
             output_texture,
             output_view,
             params_buffer,
+            params_stride,
             model_params_buffer,
             coloring_params_buffer,
             pipelines: None,
+            step_bind_groups: None,
             step_index: 0,
             needs_seed: true,
         }
@@ -332,8 +356,10 @@ impl SimRenderer {
             self.needs_seed = true;
         }
         // The resolve direction may have flipped even if only the
-        // output moved, and that is a different shader.
+        // output moved, and that is a different shader. The cached step
+        // bind groups reference the field views, so they go with it.
         self.pipelines = None;
+        self.step_bind_groups = None;
         true
     }
 
@@ -391,7 +417,9 @@ impl SimRenderer {
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::Buffer {
                 ty: BufferBindingType::Uniform,
-                has_dynamic_offset: false,
+                // Dynamic: the step loop selects its ring slot by
+                // offset rather than rewriting the buffer.
+                has_dynamic_offset: true,
                 min_binding_size: None,
             },
             count: None,
@@ -476,6 +504,9 @@ impl SimRenderer {
             })
         };
 
+        // New layouts and modules: any cached bind group refers to the
+        // old ones.
+        self.step_bind_groups = None;
         self.pipelines = Some(Pipelines {
             seed: pipeline("Sim Seed", &seed_layout, &seed_mod),
             step: pipeline("Sim Step", &step_layout, &step_mod),
@@ -487,7 +518,8 @@ impl SimRenderer {
         });
     }
 
-    fn write_params(&self, queue: &Queue, cfg: &SimConfig) {
+    /// The uniform for one step index.
+    fn params_for(&self, cfg: &SimConfig, step_index: u32) -> SimParamsGpu {
         let (p0, p1) = match cfg.init {
             crate::config::sim::SimInit::Noise { amplitude } => (amplitude, 0.0),
             crate::config::sim::SimInit::Blob { radius } => (radius as f32, 0.0),
@@ -497,10 +529,10 @@ impl SimRenderer {
             crate::config::sim::SimInit::Ring { radius } => (radius as f32, 0.0),
             crate::config::sim::SimInit::Line | crate::config::sim::SimInit::Center => (0.0, 0.0),
         };
-        let params = SimParamsGpu {
+        SimParamsGpu {
             grid: [self.grid_w, self.grid_h],
             out_size: [self.out_w, self.out_h],
-            step_index: self.step_index,
+            step_index,
             seed_lo: cfg.seed as u32,
             seed_hi: (cfg.seed >> 32) as u32,
             dt: if cfg.dt.is_finite() { cfg.dt.clamp(1e-4, 10.0) } else { 1.0 },
@@ -508,8 +540,76 @@ impl SimRenderer {
             init_p1: p1,
             _pad0: 0.0,
             _pad1: 0.0,
+        }
+    }
+
+    /// Write ring slot 0, for the passes that run once (seed, colour).
+    fn write_params_slot0(&self, queue: &Queue, cfg: &SimConfig) {
+        let p = self.params_for(cfg, self.step_index);
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&p));
+    }
+
+    /// Fill `count` ring slots for steps `start..start + count`, in ONE
+    /// write. Each step then reads its own slot by dynamic offset,
+    /// which is the only way a batched submission can see per-step
+    /// values at all -- `write_buffer` is staged before the command
+    /// buffer runs, so rewriting one uniform per step gives every step
+    /// in the batch the last step's index.
+    fn write_params_ring(&self, queue: &Queue, cfg: &SimConfig, start: u32, count: u32) {
+        let stride = self.params_stride as usize;
+        let mut bytes = vec![0u8; stride * count as usize];
+        for i in 0..count {
+            let p = self.params_for(cfg, start + i);
+            let at = i as usize * stride;
+            bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
+                .copy_from_slice(bytemuck::bytes_of(&p));
+        }
+        queue.write_buffer(&self.params_buffer, 0, &bytes);
+    }
+
+    /// Build the two step bind groups once. They depend only on the
+    /// pipeline layout and the field views, both of which are replaced
+    /// together, so a rebuild is driven by `pipelines` being cleared.
+    fn ensure_step_bind_groups(&mut self, device: &Device) {
+        if self.step_bind_groups.is_some() {
+            return;
+        }
+        let p = self.pipelines.as_ref().expect("pipelines built before bind groups");
+        let make = |src: usize| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Sim Step BG"),
+                layout: &p.step_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::Buffer(BufferBinding {
+                            buffer: &self.params_buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(
+                                std::mem::size_of::<SimParamsGpu>() as u64,
+                            ),
+                        }),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: self.model_params_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: self.coloring_params_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: BindingResource::TextureView(&self.field_view[1 - src]),
+                    },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: BindingResource::TextureView(&self.field_view[src]),
+                    },
+                ],
+            })
         };
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+        self.step_bind_groups = Some([make(0), make(1)]);
     }
 
     fn write_param_arrays(&self, queue: &Queue, model: &ModelDef, coloring: &SimColoringDef, cfg: &SimConfig) {
@@ -534,7 +634,7 @@ impl SimRenderer {
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
         self.ensure_pipelines(device, cfg);
         self.step_index = 0;
-        self.write_params(queue, cfg);
+        self.write_params_slot0(queue, cfg);
         let model = model_or_default(&cfg.model);
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
@@ -544,7 +644,16 @@ impl SimRenderer {
             label: Some("Sim Seed BG"),
             layout: &p.seed_layout,
             entries: &[
-                BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &self.params_buffer,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(
+                            std::mem::size_of::<SimParamsGpu>() as u64,
+                        ),
+                    }),
+                },
                 BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
                 BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
                 BindGroupEntry {
@@ -562,7 +671,7 @@ impl SimRenderer {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&p.seed);
-            pass.set_bind_group(0, &bg, &[]);
+            pass.set_bind_group(0, &bg, &[0]);
             let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
             pass.dispatch_workgroups(gx, gy, 1);
         }
@@ -586,50 +695,40 @@ impl SimRenderer {
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
 
+        self.ensure_step_bind_groups(device);
+        let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
+        let stride = self.params_stride as u32;
+
         let mut done = 0;
         while done < count {
             let batch = STEPS_PER_SUBMIT.min(count - done);
+            // One write for the whole batch, and one compute pass: the
+            // dispatches inside it are ordered against each other, and
+            // each reads its own ring slot by dynamic offset.
+            self.write_params_ring(queue, cfg, self.step_index, batch);
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Sim Steps"),
             });
-            for _ in 0..batch {
-                // The uniform carries `step_index`, which stochastic
-                // models key their RNG on, so it is rewritten per step
-                // rather than per batch. A queue write between passes
-                // in one encoder is ordered against them.
-                self.write_params(queue, cfg);
+            {
                 let p = self.pipelines.as_ref().expect("pipelines built above");
-                let src = self.current;
-                let dst = 1 - self.current;
-                let bg = device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("Sim Step BG"),
-                    layout: &p.step_layout,
-                    entries: &[
-                        BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
-                        BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
-                        BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
-                        BindGroupEntry {
-                            binding: 3,
-                            resource: BindingResource::TextureView(&self.field_view[dst]),
-                        },
-                        BindGroupEntry {
-                            binding: 4,
-                            resource: BindingResource::TextureView(&self.field_view[src]),
-                        },
-                    ],
+                let groups = self
+                    .step_bind_groups
+                    .as_ref()
+                    .expect("built by ensure_step_bind_groups");
+                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("Sim Steps"),
+                    timestamp_writes: None,
                 });
-                {
-                    let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
-                        label: Some("Sim Step"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&p.step);
-                    pass.set_bind_group(0, &bg, &[]);
-                    let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
+                pass.set_pipeline(&p.step);
+                for i in 0..batch {
+                    // groups[src] reads field[src] and writes
+                    // field[1 - src], so alternating the index IS the
+                    // ping-pong.
+                    pass.set_bind_group(0, &groups[self.current], &[i * stride]);
                     pass.dispatch_workgroups(gx, gy, 1);
+                    self.current = 1 - self.current;
+                    self.step_index += 1;
                 }
-                self.current = dst;
-                self.step_index += 1;
             }
             queue.submit(std::iter::once(enc.finish()));
             done += batch;
@@ -650,7 +749,7 @@ impl SimRenderer {
         palette_view: &TextureView,
     ) {
         self.ensure_pipelines(device, cfg);
-        self.write_params(queue, cfg);
+        self.write_params_slot0(queue, cfg);
         let model = model_or_default(&cfg.model);
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
@@ -660,7 +759,16 @@ impl SimRenderer {
             label: Some("Sim Color BG"),
             layout: &p.color_layout,
             entries: &[
-                BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &self.params_buffer,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(
+                            std::mem::size_of::<SimParamsGpu>() as u64,
+                        ),
+                    }),
+                },
                 BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
                 BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
                 BindGroupEntry {
@@ -683,7 +791,7 @@ impl SimRenderer {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&p.color);
-            pass.set_bind_group(0, &bg, &[]);
+            pass.set_bind_group(0, &bg, &[0]);
             let (gx, gy) = Self::dispatch_size(self.out_w, self.out_h);
             pass.dispatch_workgroups(gx, gy, 1);
         }

@@ -372,6 +372,16 @@ pub struct PanelContext<'a> {
     /// A panel asking for a different workspace layout (the Escape
     /// toggle brings its own layout with it).
     pub workspace_layout_requested: &'a mut Option<super::workspace::WorkspaceLayout>,
+    /// Simulation transport, owned by App. It is view state rather than
+    /// config -- like the playhead, not like a parameter -- so it is
+    /// passed through rather than stored in the FractalConfig, and a
+    /// saved file never starts moving on its own when opened.
+    pub sim_running: &'a mut bool,
+    pub sim_step_once: &'a mut bool,
+    pub sim_reseed: &'a mut bool,
+    /// Steps completed and the grid in use, for the panel's readout.
+    pub sim_step_index: u32,
+    pub sim_grid: (u32, u32),
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
@@ -755,8 +765,13 @@ impl<'a> PanelViewer<'a> {
         // panels (Colors, Palette, Effects, History, Animation,
         // Export, ...) keep working — they edit state escape mode
         // actually consumes.
-        if self.context.config_manager.active_config().render_mode
-            == crate::scene::transforms::RenderMode::Escape
+        let mode = self.context.config_manager.active_config().render_mode;
+        let non_flame = matches!(
+            mode,
+            crate::scene::transforms::RenderMode::Escape
+                | crate::scene::transforms::RenderMode::Simulation
+        );
+        if non_flame
             && matches!(
                 tab,
                 PanelType::Transforms
@@ -768,6 +783,19 @@ impl<'a> PanelViewer<'a> {
                     | PanelType::SolidLighting
                     | PanelType::PathEditor
             )
+        {
+            ui.label(t!("escape_panel.flame_only_hint"));
+            return;
+        }
+        // The two non-flame engines hide EACH OTHER's editor as well.
+        // Both panels lead with a mode toggle, so leaving them both
+        // visible would offer two ways to leave the current mode and
+        // read as though they compose. They do not: a config is one
+        // mode.
+        if (mode == crate::scene::transforms::RenderMode::Simulation
+            && matches!(tab, PanelType::Escape))
+            || (mode == crate::scene::transforms::RenderMode::Escape
+                && matches!(tab, PanelType::Simulation))
         {
             ui.label(t!("escape_panel.flame_only_hint"));
             return;
@@ -866,6 +894,20 @@ impl<'a> PanelViewer<'a> {
                     ui,
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
+                );
+            }
+            PanelType::Simulation => {
+                super::sim_panel::render_sim_content(
+                    ui,
+                    self.context.config_manager,
+                    self.context.workspace_layout_requested,
+                    super::sim_panel::SimUiState {
+                        running: self.context.sim_running,
+                        step_once: self.context.sim_step_once,
+                        reseed: self.context.sim_reseed,
+                        step_index: self.context.sim_step_index,
+                        grid: self.context.sim_grid,
+                    },
                 );
             }
             PanelType::Subflames => {
