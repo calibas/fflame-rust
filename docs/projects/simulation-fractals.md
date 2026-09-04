@@ -357,9 +357,27 @@ budget.
   exact-hash baselines, `run_tests.py` choices and metadata exemption.
 - Fix the six escape gaps D12 lists while the same files are open.
 
-**Gate:** 1080p viewport at ≥ 60 fps with ≥ 4 steps per frame on the
-development GPU; a 4K export of 10,000 steps completes without a
-watchdog reset; byte-identical repeat runs.
+**Gate: MET 2026-09-04** (GTX 1660 SUPER, Vulkan;
+`cargo test --release --lib sim::app_repro_test::phase1 -- --ignored
+--nocapture --test-threads=1`).
+
+| requirement | measured |
+|---|---|
+| 1080p, ≥ 4 steps/frame, ≥ 60 fps | **1.38 ms/frame at 4 steps — 723 fps** |
+| — at 8 / 16 steps per frame | 2.44 ms (409 fps) / 4.57 ms (219 fps) |
+| 4K export, 10,000 steps, no watchdog reset | **12.6 s, 1.26 ms/step**, field finite and patterned |
+| byte-identical repeat runs | asserted, plus its converse (a different seed must differ) |
+
+Twelve times the interactive headroom the gate asks for, and the 4K
+step is faster than phase 0's bare-stencil estimate (1.26 against 2.04
+ms) because the shipped kernel is one pass over a smaller working set
+than the microbenchmark's.
+
+**Measure GPU timings with `--test-threads=1`.** cargo runs tests in
+parallel; sharing the device with the 13-second 4K gate reported the
+interactive frame at 72.64 ms instead of 1.38 — a 50× error that reads
+exactly like a real regression, and one that cost a round of
+investigation before the contention was measured rather than assumed.
 
 ### Phase 2 — Tier-1 breadth
 

@@ -1480,8 +1480,16 @@ pub fn switch_render_mode(
     mode: RenderMode,
 ) -> Result<(), crate::config::manager::ConfigError> {
     let config = config_manager.active_config();
-    let entering_escape = mode == RenderMode::Escape && config.render_mode != RenderMode::Escape;
-    let default_tonemap = entering_escape
+    // Both non-flame engines write a unit-range image, and a flame's
+    // Log-calibrated exposure renders that black. Entering EITHER from
+    // a flame mode resets the tonemap once; switching between the two
+    // does not, because the values are already right.
+    let entering_non_flame = matches!(mode, RenderMode::Escape | RenderMode::Simulation)
+        && !matches!(
+            config.render_mode,
+            RenderMode::Escape | RenderMode::Simulation
+        );
+    let default_tonemap = entering_non_flame
         && config.tonemap_mode == crate::scene::tonemap::ToneMapMode::Logarithmic;
     if default_tonemap {
         config_manager.update_batch(

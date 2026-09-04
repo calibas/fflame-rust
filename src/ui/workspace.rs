@@ -66,6 +66,8 @@ pub enum PanelType {
     Subflames,
     /// Escape-time fractal editing surface (formula, view, coloring)
     Escape,
+    /// Simulation editing surface (model, grid, transport, coloring)
+    Simulation,
 }
 
 impl std::fmt::Display for PanelType {
@@ -99,6 +101,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Subflames => t!("panels.subflames"),
             PanelType::Scripts => t!("panels.scripts"),
             PanelType::Escape => t!("panels.escape"),
+            PanelType::Simulation => t!("panels.simulation"),
         };
         write!(f, "{}", title)
     }
@@ -120,6 +123,8 @@ pub enum WorkspaceLayout {
     /// the right, since coloring is most of the work once a formula
     /// and a view are chosen.
     EscapeTime,
+    /// Simulation: the sim panel left, viewport centre, colours right.
+    Simulation,
     /// Compact: Full-screen viewport only (mobile / small screens)
     Compact,
 }
@@ -231,6 +236,9 @@ impl Workspace {
             PanelType::Subflames => egui::vec2(320.0, 360.0),
             PanelType::Scripts => egui::vec2(420.0, 560.0),
             PanelType::Escape => egui::vec2(350.0, 520.0),
+            // Taller than escape's: the transport row and the init
+            // controls sit above the parameters.
+            PanelType::Simulation => egui::vec2(350.0, 560.0),
         }
     }
 
@@ -241,6 +249,7 @@ impl Workspace {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Animation => Self::create_animation_layout(help_was_open),
             WorkspaceLayout::EscapeTime => Self::create_escape_layout(help_was_open),
+            WorkspaceLayout::Simulation => Self::create_simulation_layout(help_was_open),
             WorkspaceLayout::Scripting => Self::create_scripting_layout(help_was_open),
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
@@ -501,6 +510,30 @@ impl Workspace {
         state
     }
 
+    /// Simulation layout: the same shape as the escape one, because
+    /// the job is the same -- one editing surface, the picture, and the
+    /// colour controls. Deliberately not a new arrangement to learn.
+    fn create_simulation_layout(preserve_help: bool) -> DockState<PanelType> {
+        let mut state = DockState::new(vec![PanelType::FractalViewport]);
+
+        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
+            egui_dock::NodeIndex::root(),
+            0.28,
+            vec![PanelType::Simulation],
+        );
+
+        let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.72,
+            vec![PanelType::Colors, PanelType::History],
+        );
+
+        if preserve_help {
+            state.add_window(vec![PanelType::Help]);
+        }
+        state
+    }
+
     /// Create Compact layout: Full-screen viewport only (mobile / small screens)
     fn create_compact_layout() -> DockState<PanelType> {
         DockState::new(vec![PanelType::FractalViewport])
@@ -610,6 +643,15 @@ mod layout_tests {
                     PanelType::History,
                 ],
             ),
+            (
+                WorkspaceLayout::Simulation,
+                &[
+                    PanelType::FractalViewport,
+                    PanelType::Simulation,
+                    PanelType::Colors,
+                    PanelType::History,
+                ],
+            ),
             (WorkspaceLayout::Compact, &[PanelType::FractalViewport]),
         ];
         for (layout, panels) in cases {
@@ -672,6 +714,27 @@ mod layout_tests {
         }
     }
 
+    /// The simulation layout drops the flame-only editors for the same
+    /// reason the escape one does: none of them edits anything a
+    /// simulation consumes, and a panel that silently does nothing is
+    /// worse than an absent one.
+    #[test]
+    fn simulation_layout_omits_the_flame_only_editors() {
+        let mut ws = Workspace::new();
+        ws.apply_layout(WorkspaceLayout::Simulation);
+        for p in [
+            PanelType::Transforms,
+            PanelType::TriangleEditor,
+            PanelType::View,
+            PanelType::Escape,
+        ] {
+            assert!(
+                !ws.panel_exists(p),
+                "{p:?} must not be in the Simulation layout"
+            );
+        }
+    }
+
     /// Help stays open across a layout switch — the layouts that
     /// preserve it re-add it as a floating window.
     #[test]
@@ -680,6 +743,7 @@ mod layout_tests {
             WorkspaceLayout::Animation,
             WorkspaceLayout::Scripting,
             WorkspaceLayout::EscapeTime,
+            WorkspaceLayout::Simulation,
         ] {
             let mut ws = Workspace::new();
             ws.dock_state.add_window(vec![PanelType::Help]);
