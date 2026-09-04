@@ -1046,3 +1046,221 @@ fn percolation_convergence_against_grid_size() {
         println!("{n}x{n}: converged in {rounds} rounds");
     }
 }
+
+/// Review probe: every model's step cost at 1080p, at its defaults,
+/// plus the two heavy kernels at their slider extremes. Diagnostic --
+/// run with `--test-threads=1` or the numbers are contaminated.
+///
+/// `SIM_PROBE_ONLY=<name prefix>` / `SIM_PROBE_SKIP=<prefix>` select
+/// cases and `SIM_PROBE_STEPS=<n>` overrides the step count. Those
+/// knobs are how the watchdog bug was bisected: the poll time is
+/// printed because a run that takes the SAME time at 256 and 512
+/// steps has been cut off by the 2 s GPU watchdog, and the ms/step it
+/// reports is then fiction (R = 5 read 4.7 that way; it is 9.7).
+#[test]
+#[ignore = "diagnostic"]
+fn phase2_review_step_cost_per_model() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    const W: u32 = 1920;
+    const H: u32 = 1080;
+    let steps: u32 = std::env::var("SIM_PROBE_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(512);
+    let mut cases: Vec<(String, SimConfig)> = Vec::new();
+    for m in crate::sim::MODELS {
+        let mut cfg = SimConfig::default();
+        cfg.model = m.name.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: W, height: H };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cases.push((m.name.to_string(), cfg));
+    }
+    {
+        let mut cfg = SimConfig::default();
+        cfg.model = "cyclic_ca".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: W, height: H };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.model_params.insert("range".into(), 5.0);
+        cfg.model_params.insert("neighbourhood".into(), 1.0);
+        cases.push(("cyclic_ca R=5 Moore".into(), cfg));
+    }
+    let only = std::env::var("SIM_PROBE_ONLY").ok();
+    let skip = std::env::var("SIM_PROBE_SKIP").ok();
+    for (name, cfg) in cases {
+        if let Some(o) = &only { if !name.starts_with(o.as_str()) { continue; } }
+        if let Some(k) = &skip { if name.starts_with(k.as_str()) { continue; } }
+        let mut r = SimRenderer::new(&device, &cfg, W, H);
+        r.seed(&device, &queue, &cfg);
+        // Warm: compile + first batch.
+        r.run_steps(&device, &queue, &cfg, steps.min(64));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let t0 = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, steps);
+        let polled = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        eprintln!("poll after {steps} steps: {polled:?} ({:.3} s)", t0.elapsed().as_secs_f64());
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / steps as f64;
+        println!("{name:<24} {ms:.4} ms/step at 1080p");
+    }
+}
+
+/// Every reaction-diffusion model must stay stable with its diffusion
+/// sliders at their MAXIMA and dt at the cap the engine enforces there.
+///
+/// The cap used to be `max_dt` alone, measured at the default diffusion
+/// rates. Explicit Euler's diffusion bound scales as 1/D, and the
+/// sliders reach 4-5x the defaults: at Brusselator D_Y = 40 under the
+/// 0.04 cap, dt·D·1.6 = 2.56 > 2. Measured before the fix, on 128²
+/// after 200 steps: Brusselator infinite in 8,172 of 16,384 cells,
+/// Schnakenberg in 8,137, and FitzHugh-Nagumo railed at ±3 by its
+/// clamp with a checkerboard of rms 5.1 -- a lattice of rails rather
+/// than a NaN, so nothing else catches it. Gray-Scott's slider maximum
+/// IS its default, and at exactly the bound (dt·D·1.6 = 2.00) it held
+/// a 0.445-rms checkerboard in its [0,1] clamp; that is why the cap
+/// carries a 0.96 margin.
+///
+/// A diffusion-only cap (`1.2 / D`) was tried first and FitzHugh-Nagumo
+/// still railed under it (rms 3.08 at dt = 0.3, D = 4): the reaction
+/// term's stiffness adds to the stencil's, which is what the cap now
+/// accounts for.
+///
+/// The observable is the checkerboard (Nyquist) mode's AMPLITUDE, the
+/// alternating-sign mean of the field, sampled at 200 and 400 steps.
+/// It is the eigenvector explicit Euler amplifies first, so a run past
+/// the bound grows it geometrically whatever the reaction terms; a
+/// stable run leaves it at rounding level. Neighbour-difference rms was
+/// tried first and rejected as the observable: a legitimate Turing
+/// pattern at high D has fine structure too, and the Brusselator at
+/// D_Y = 40 read 0.38 on that measure while being stable -- the
+/// alternating mean distinguishes the two, a pattern's cancels.
+#[test]
+fn rd_models_stay_stable_at_the_diffusion_slider_maxima() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let mut checked = 0;
+    for m in crate::sim::MODELS {
+        if m.diffusion.is_empty() {
+            continue;
+        }
+        let mut cfg = SimConfig::default();
+        cfg.model = m.name.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        for name in m.diffusion {
+            let def = m.parameters.iter().find(|p| p.name == *name).unwrap();
+            cfg.model_params.insert(def.name.into(), def.max);
+        }
+        // Ask for far more than the cap; the engine must clamp.
+        cfg.dt = m.max_dt;
+        let cap = m.max_dt_for(&cfg.model_params);
+        assert!(cap > 0.0 && cap <= m.max_dt, "{}: cap {cap} vs declared {}", m.name, m.max_dt);
+
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let n = N as usize;
+        // Nyquist amplitude of channel x, and the field's scale to
+        // judge it against.
+        let nyquist = |f: &[[f32; 4]]| -> (f64, f64, usize) {
+            let mut alt = 0.0f64;
+            let mut mag = 0.0f64;
+            let mut nonfinite = 0;
+            for y in 0..n {
+                for x in 0..n {
+                    let v = f[y * n + x][0] as f64;
+                    if !v.is_finite() || !f[y * n + x][1].is_finite() {
+                        nonfinite += 1;
+                        continue;
+                    }
+                    alt += if (x + y) % 2 == 0 { v } else { -v };
+                    mag += v.abs();
+                }
+            }
+            (alt / (n * n) as f64, mag / (n * n) as f64, nonfinite)
+        };
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let (a200, mag, nf200) = nyquist(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let (a400, _, nf400) = nyquist(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        // A third sample, because a Turing pattern forming from noise
+        // also raises the alternating mean a little (the Brusselator
+        // read 2e-6 -> 4e-4 between 200 and 400 while stable); an
+        // unstable mode at even 2% a step would be at the rails by 800.
+        r.run_steps(&device, &queue, &cfg, 400);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let (a800, mag800, nf800) =
+            nyquist(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        println!(
+            "{:<14} cap {:.4} (declared {})  nonfinite {}  |x| {:.3}  nyquist {:.2e} -> {:.2e} -> {:.2e}",
+            m.name,
+            cap,
+            m.max_dt,
+            nf200 + nf400 + nf800,
+            mag,
+            a200,
+            a400,
+            a800
+        );
+        assert_eq!(nf200 + nf400 + nf800, 0, "{}: non-finite cells at the slider maxima", m.name);
+        // Rounding level relative to the field, and not growing.
+        assert!(
+            a800.abs() < 1e-3 * mag800.max(1e-6),
+            "{}: Nyquist amplitude {a800:.2e} against a field of {mag800:.3} -- the cap is not a cap",
+            m.name
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 4, "expected the four reaction-diffusion models");
+}
+
+/// A slow kernel must never lose the device to the GPU watchdog.
+///
+/// Cyclic CA at range 5 is 121 reads a cell and 9.7 ms a step at
+/// 1080p. With a fixed 256-step submission that was 2.5 s in one
+/// command buffer, past Windows' 2 s watchdog: the device reset, the
+/// fence signalled anyway, and the shipped binary's `export` of this
+/// config failed with "Parent device is lost". The submission size is
+/// now measured; this runs the reproduction and asks the device
+/// whether it survived.
+///
+/// About 2.5 s of GPU time on the card this was measured on.
+#[test]
+fn a_slow_kernel_never_trips_the_gpu_watchdog() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let lost = Arc::new(AtomicBool::new(false));
+    {
+        let lost = lost.clone();
+        device.set_device_lost_callback(Box::new(move |reason, msg| {
+            eprintln!("device lost: {reason:?}: {msg}");
+            lost.store(true, Ordering::SeqCst);
+        }));
+    }
+    const W: u32 = 1920;
+    const H: u32 = 1080;
+    let mut cfg = SimConfig::default();
+    cfg.model = "cyclic_ca".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: W, height: H };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.model_params.insert("range".into(), 5.0);
+    cfg.model_params.insert("neighbourhood".into(), 1.0);
+
+    let mut r = SimRenderer::new(&device, &cfg, W, H);
+    r.seed(&device, &queue, &cfg);
+    let started = std::time::Instant::now();
+    // The count that lost the device: one fixed-size submission's worth.
+    r.run_steps(&device, &queue, &cfg, 256);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let secs = started.elapsed().as_secs_f64();
+    let f = read_rgba32f(&device, &queue, r.field_texture(), W, H);
+    let bad = f.iter().filter(|px| !(px[0] >= 0.0 && px[0] < 14.0)).count();
+    println!("256 steps of range-5 cyclic CA at 1080p: {secs:.2} s, {bad} invalid cells");
+    assert!(!lost.load(Ordering::SeqCst), "the device was lost: the submissions are too long");
+    assert_eq!(bad, 0, "invalid states after the run");
+}

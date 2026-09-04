@@ -418,6 +418,54 @@ neighbourhood, a preset that can carry an initial field, and per-model
 labels only decrease, so over-running is safe and a settle is an
 optimisation rather than a correctness requirement.
 
+**Review (2026-09-04), what it found and measured:**
+
+- **The dt cap was not a cap.** `max_dt` was measured at each model's
+  default diffusion rates, and phase 2's sliders reach 4–5× above
+  them; explicit Euler's bound scales as 1/D. Measured at the slider
+  maxima under the enforced cap, 128² after 200 steps: Brusselator and
+  Schnakenberg **infinite in half their cells**, FitzHugh–Nagumo
+  railed at ±3 by its clamp. The clamps in every kernel are what kept
+  this invisible — a lattice of rails, not a NaN. The cap is now
+  `ModelDef::max_dt_for(params)`: linear stability of the checkerboard
+  mode, `dt · (λ_reaction + 1.6·D) < 2`, with `λ_reaction` inferred
+  from the measured cap at the default D. A diffusion-only bound was
+  tried first and FitzHugh–Nagumo still railed under it (the reaction
+  term contributes at rest, `1 − v²`). Caps at the maxima: Gray–Scott
+  1.2, FHN 0.257, Brusselator 0.019, Schnakenberg 0.0117 — all clean
+  on the Nyquist-amplitude gate. The cap carries a 0.96 margin because
+  AT the bound the mode is neutral, not damped: Gray–Scott at exactly
+  2.00 held a 0.445-rms checkerboard in its [0,1] clamp. Enforced at
+  the manager (both the dt arm and the model-param arm, since raising
+  D pulls dt down), the panel slider and the renderer uniform.
+- **Per-model step cost at 1080p** (`phase2_review_step_cost_per_model`,
+  `--test-threads=1`): every model 0.24–0.38 ms/step except two.
+  Hodgepodge cost 0.77 with its 3×3 loop and if/else chain; selects
+  alone took it to 0.69, unrolling to **0.29** — the loop was the
+  cost. Cyclic CA at R = 1 cost 0.44 through the same kind of loop;
+  the default radius is now unrolled and reads **0.32**. At R = 5
+  Moore it is **9.7 ms/step** — 121 reads a cell, memory-bound — and
+  that is the shared-memory tile phase 3's large kernels need anyway,
+  not a review item.
+- **Which found a device-loss bug.** The probe first read R = 5 at
+  4.7 ms/step, and 512 steps took exactly as long as 256: both runs
+  were being cut off at ~2.3 s. That is Windows' GPU watchdog (TDR,
+  2 s): `STEPS_PER_SUBMIT` was a fixed 256, one submit of 256 R = 5
+  steps at 1080p is 2.5 s, the device is reset, the fence signals
+  anyway, and the process aborts at teardown with
+  `STATUS_STACK_BUFFER_OVERRUN`. Pinned between 192 steps (1.8 s,
+  clean) and 224 (2.3 s, abort), and reproduced with the shipped
+  binary: `export` of that config fails with "Parent device is lost".
+  `run_steps` now sizes each submit from the measured cost of the
+  previous one (a 250 ms budget, first submit small), which is what
+  its comment had promised all along. Phase 3's kernels are slower
+  still, so this would have surfaced there regardless.
+- Nothing else moved: the rules were re-read against their sources
+  (hodgepodge's `S/(A+B+1)+g`, Ising's checkerboard and Metropolis
+  ratio, RPS's cycle, Packard's parity offsets, percolation's
+  open-only propagation and root read), and all 30 sim baselines are
+  unchanged by the two unrollings, as integer counts must be.
+
 ### Phase 3 — pyramid and large kernels
 
 Mip pyramid stage with manual trilinear reads and symmetry in the

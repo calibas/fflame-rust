@@ -176,6 +176,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // D_A = 1 that is dt < 1.25. The [0, 1] clamp would hide anything
     // past it as garbage rather than NaN, which is worse -- so the cap
     // is enforced everywhere dt can be set, not left to the clamp.
+    diffusion: &["diffusion_a", "diffusion_b"],
     max_dt: 1.25,
     default_dt: 1.0,
 };
@@ -344,6 +345,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // as NaN, and 0.0% rail at every dt through 0.75 while 14.6% do at
     // 1.0. A first probe ran from noise and reported 0.5 -- it was
     // measuring the stability of a field doing nothing.
+    diffusion: &["diffusion_v", "diffusion_w"],
     max_dt: 0.75,
     default_dt: 0.1,
 };
@@ -490,6 +492,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // identical spatial sd; 0.05 diverges at step 90. An earlier note
     // said 0.02 after testing only 0.01 and 0.05 -- a cap written down
     // without running the rung it names.
+    diffusion: &["diffusion_x", "diffusion_y"],
     max_dt: 0.04,
     default_dt: 0.01,
 };
@@ -604,6 +607,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 4900,
     // Every rung run: 0.01 and 0.02 stable, 0.03 diverges at step 486,
     // 0.04 at 26, 0.05 at 17.
+    diffusion: &["diffusion_u", "diffusion_v"],
     max_dt: 0.02,
     default_dt: 0.01,
 };
@@ -696,29 +700,37 @@ pub static HODGEPODGE: ModelDef = ModelDef {
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
     }],
     wgsl: r#"
+fn hp_count(c: bool) -> f32 {
+    return select(0.0, 1.0, c);
+}
+
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let q = floor(mparam(0u));
     let k1 = max(floor(mparam(1u)), 1.0);
     let k2 = max(floor(mparam(2u)), 1.0);
     let g = floor(mparam(3u));
 
-    var infected = 0.0;
-    var ill = 0.0;
-    var total = s.x;
-    for (var dy = -1; dy <= 1; dy = dy + 1) {
-        for (var dx = -1; dx <= 1; dx = dx + 1) {
-            if (dx == 0 && dy == 0) {
-                continue;
-            }
-            let n = sim_read(p + vec2<i32>(dx, dy)).x;
-            total = total + n;
-            if (n >= q) {
-                ill = ill + 1.0;
-            } else if (n > 0.0) {
-                infected = infected + 1.0;
-            }
-        }
-    }
+    // Unrolled and branchless. Measured at 1080p: the 3x3 loop with an
+    // if/else chain per neighbour cost 0.77 ms/step, the same loop
+    // with selects 0.69, and this 0.29 -- so the loop was the cost,
+    // not the branches, and this 8-read kernel now costs what the
+    // 8-read reaction-diffusion kernels do.
+    let n0 = sim_read(p + vec2<i32>(-1, -1)).x;
+    let n1 = sim_read(p + vec2<i32>(0, -1)).x;
+    let n2 = sim_read(p + vec2<i32>(1, -1)).x;
+    let n3 = sim_read(p + vec2<i32>(-1, 0)).x;
+    let n4 = sim_read(p + vec2<i32>(1, 0)).x;
+    let n5 = sim_read(p + vec2<i32>(-1, 1)).x;
+    let n6 = sim_read(p + vec2<i32>(0, 1)).x;
+    let n7 = sim_read(p + vec2<i32>(1, 1)).x;
+    let total = s.x + n0 + n1 + n2 + n3 + n4 + n5 + n6 + n7;
+    let ill = hp_count(n0 >= q) + hp_count(n1 >= q) + hp_count(n2 >= q) + hp_count(n3 >= q)
+        + hp_count(n4 >= q) + hp_count(n5 >= q) + hp_count(n6 >= q) + hp_count(n7 >= q);
+    // Infected = nonzero and not ill.
+    let nonzero = hp_count(n0 > 0.0) + hp_count(n1 > 0.0) + hp_count(n2 > 0.0)
+        + hp_count(n3 > 0.0) + hp_count(n4 > 0.0) + hp_count(n5 > 0.0)
+        + hp_count(n6 > 0.0) + hp_count(n7 > 0.0);
+    let infected = nonzero - ill;
 
     let cur = s.x;
     var next = 0.0;
@@ -749,6 +761,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 200,
     // No time step: a generation is a generation. The value is unused,
     // and the panel hides the slider.
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -841,6 +854,10 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
         },
     ],
     wgsl: r#"
+fn cyc_hit(q: vec2<i32>, want: f32) -> f32 {
+    return select(0.0, 1.0, floor(sim_read(q).x) == want);
+}
+
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let n_states = max(floor(mparam(0u)), 2.0);
     let r = i32(clamp(floor(mparam(1u)), 1.0, 5.0));
@@ -851,16 +868,29 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let want = fract_state(cur + 1.0, n_states);
 
     var count = 0.0;
-    for (var dy = -r; dy <= r; dy = dy + 1) {
-        for (var dx = -r; dx <= r; dx = dx + 1) {
-            if (dx == 0 && dy == 0) {
-                continue;
-            }
-            if (!moore && abs(dx) + abs(dy) > r) {
-                continue;
-            }
-            if (floor(sim_read(p + vec2<i32>(dx, dy)).x) == want) {
-                count = count + 1.0;
+    if (r == 1) {
+        // The default, unrolled: a loop with a uniform bound cost
+        // 0.44 ms/step at 1080p against 0.25 for the same four reads
+        // written out (measured on Eden). Von Neumann first, the four
+        // corners only for Moore.
+        count = cyc_hit(p + vec2<i32>(0, -1), want) + cyc_hit(p + vec2<i32>(0, 1), want)
+            + cyc_hit(p + vec2<i32>(-1, 0), want) + cyc_hit(p + vec2<i32>(1, 0), want);
+        if (moore) {
+            count = count + cyc_hit(p + vec2<i32>(-1, -1), want)
+                + cyc_hit(p + vec2<i32>(1, -1), want)
+                + cyc_hit(p + vec2<i32>(-1, 1), want)
+                + cyc_hit(p + vec2<i32>(1, 1), want);
+        }
+    } else {
+        for (var dy = -r; dy <= r; dy = dy + 1) {
+            for (var dx = -r; dx <= r; dx = dx + 1) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                if (!moore && abs(dx) + abs(dy) > r) {
+                    continue;
+                }
+                count = count + cyc_hit(p + vec2<i32>(dx, dy), want);
             }
         }
     }
@@ -878,6 +908,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 300,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -995,6 +1026,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 400,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -1112,6 +1144,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 1200,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -1209,6 +1242,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 250,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -1319,6 +1353,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 360,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -1423,6 +1458,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 256,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -1545,6 +1581,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 125,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
@@ -1669,6 +1706,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 400,
+    diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
 };
