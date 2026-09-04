@@ -241,20 +241,30 @@ phase 1 onward.
 
 ### Phase 0 — measure (no product code)
 
-- NumPy prototypes for each Tier-1 catalogue model's step budget and
-  seeding (Gray–Scott and McCabe done; the rest are one script each).
+- ~~A scratch GPU microbenchmark (a Rust test, not shipped code): a
+  four-channel 3×3 stencil ping-pong at 1080p and 4K, ms per step.~~
+  **Done 2026-09-03**, `src/sim_microbench.rs`, results in
+  [pipeline §10](simulation-pipeline.md). 1080p **0.495 ms/step** (34
+  per 60 fps frame, against a gate asking for 4); 4K **2.04 ms/step**
+  (8 per frame); throughput flat at 3–4 cells/ns, so it is
+  bandwidth-bound and the numbers carry to the other Tier-1 models,
+  which differ only in arithmetic. A 256² Gray–Scott still — 10,000
+  steps — is **0.22 s**.
+  One design consequence: **submission batching is worth 0.8% across a
+  256× range**, so K in pipeline §5 is a pacing and watchdog device
+  only, and the driver may submit one step at a time and re-read the
+  clock between them.
+- ~~Move the prototypes to `scripts/sim_prototypes/` with a README.~~
+  **Done 2026-09-03.**
+- NumPy prototypes for each remaining Tier-1 catalogue model's step
+  budget and seeding (Gray–Scott and McCabe done; the rest are one
+  script each — the README lists them).
 - The Abelian sandpile's parallel bulk-toppling round count for 2²⁰
   grains — the one cost the catalogue could not estimate.
-- A scratch GPU microbenchmark (a Rust test, not shipped code): a
-  four-channel 3×3 stencil ping-pong at 1080p and 4K, ms per step, on
-  the development machine. This pins the `GPU_TARGET_MS` assumptions
-  in pipeline §5 and §10 before the driver is designed around them.
-- Move the prototypes to `scripts/sim_prototypes/` with a README
-  (they are in the gitignored `output/sim_proto/` today so they
-  survive the session).
 
 **Gate:** a step-cost table (model × grid → ms/step, steps to a
-still) with no entries marked "estimate".
+still) with no entries marked "estimate". The grid axis is measured;
+the per-model step counts are what remain.
 
 ### Phase 1 — skeleton (the whole vertical slice, one model)
 
