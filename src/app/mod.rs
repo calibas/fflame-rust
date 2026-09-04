@@ -99,7 +99,7 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
     // Set up change handler
     let input_clone = input.clone();
     let ctx_clone = ctx.clone();
-    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+    let on_change = move |_event: web_sys::Event| {
         let files = match input_clone.files() {
             Some(f) => f,
             None => return,
@@ -121,7 +121,7 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
 
         let reader_clone = reader.clone();
         let ctx_for_load = ctx_clone.clone();
-        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let on_load = move |_event: web_sys::Event| {
             let result = match reader_clone.result() {
                 Ok(r) => r,
                 Err(_) => return,
@@ -143,10 +143,18 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
                 data.insert_temp(egui::Id::new(result_id), text);
             });
             ctx_for_load.request_repaint();
-        }) as Box<dyn FnMut(_)>);
+        };
 
-        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+        // `once_into_js`, NOT `wrap(..).forget()`. The old comment here
+        // said the closure "will be cleaned up when reader is done";
+        // `forget` never cleans anything up -- it leaks the box and its
+        // function-table entry for the life of the page, once per file
+        // loaded. A FileReader onload fires exactly once, so a
+        // once-closure is both correct and self-freeing: JS owns it
+        // until it runs, then the Rust side is dropped.
+        reader.set_onload(Some(
+            Closure::once_into_js(move |e: web_sys::Event| on_load(e)).unchecked_ref(),
+        ));
 
         let _ = reader.read_as_array_buffer(&file);
 
@@ -154,10 +162,13 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
         if let Some(parent) = input_clone.parent_node() {
             let _ = parent.remove_child(&input_clone);
         }
-    }) as Box<dyn FnMut(_)>);
+    };
 
-    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
-    closure.forget(); // Leak closure - it will be called when file is selected
+    // Same again: one picker, one change event, one closure that frees
+    // itself afterwards instead of accumulating per load.
+    input.set_onchange(Some(
+        Closure::once_into_js(move |e: web_sys::Event| on_change(e)).unchecked_ref(),
+    ));
 
     // Trigger file picker
     input.click();
@@ -201,7 +212,7 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
     // Set up change handler
     let input_clone = input.clone();
     let ctx_clone = ctx.clone();
-    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+    let on_change = move |_event: web_sys::Event| {
         let files = match input_clone.files() {
             Some(f) => f,
             None => return,
@@ -223,7 +234,7 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
 
         let reader_clone = reader.clone();
         let ctx_for_load = ctx_clone.clone();
-        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let on_load = move |_event: web_sys::Event| {
             let result = match reader_clone.result() {
                 Ok(r) => r,
                 Err(_) => return,
@@ -243,10 +254,18 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
                 data.insert_temp(egui::Id::new(result_id), contents);
             });
             ctx_for_load.request_repaint();
-        }) as Box<dyn FnMut(_)>);
+        };
 
-        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+        // `once_into_js`, NOT `wrap(..).forget()`. The old comment here
+        // said the closure "will be cleaned up when reader is done";
+        // `forget` never cleans anything up -- it leaks the box and its
+        // function-table entry for the life of the page, once per file
+        // loaded. A FileReader onload fires exactly once, so a
+        // once-closure is both correct and self-freeing: JS owns it
+        // until it runs, then the Rust side is dropped.
+        reader.set_onload(Some(
+            Closure::once_into_js(move |e: web_sys::Event| on_load(e)).unchecked_ref(),
+        ));
 
         let _ = reader.read_as_array_buffer(&file);
 
@@ -254,10 +273,13 @@ pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, resu
         if let Some(parent) = input_clone.parent_node() {
             let _ = parent.remove_child(&input_clone);
         }
-    }) as Box<dyn FnMut(_)>);
+    };
 
-    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
-    closure.forget(); // Leak closure - it will be called when file is selected
+    // Same again: one picker, one change event, one closure that frees
+    // itself afterwards instead of accumulating per load.
+    input.set_onchange(Some(
+        Closure::once_into_js(move |e: web_sys::Event| on_change(e)).unchecked_ref(),
+    ));
 
     // Trigger file picker
     input.click();
@@ -383,6 +405,21 @@ pub struct App {
     pub(super) gpu: GpuContext,
     pub(super) egui_layer: EguiLayer,
     pub(super) flame_renderer: Option<FlameRenderer>,
+    /// Escape-time generator, created lazily the first frame the config
+    /// is in `RenderMode::Escape`. Lives beside (not inside) the flame
+    /// renderer: it consumes the flame renderer's palette texture and
+    /// tonemap tail but owns its own pipelines and output.
+    pub(super) escape_renderer: Option<crate::escape::EscapeRenderer>,
+    /// Set by `process_gpu_updates` when an edit requires re-running
+    /// the escape pass (escape params, palette, structural loads).
+    /// Starts true so the first escape frame always renders.
+    pub(super) escape_dirty: bool,
+    /// Wall time accumulated while an escape animation frame is still
+    /// rendering. Escape playback is SETTLE-THEN-JUMP: the controller
+    /// is sampled once per completed frame and advanced by everything
+    /// that elapsed meanwhile, rather than every display frame (see
+    /// `escape_playback_tick`).
+    pub(super) escape_anim_pending: f64,
     pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
 
     // UI state (not saved in config)
@@ -505,6 +542,13 @@ pub struct App {
 
     // Surface recovery: set on surface error, handled at top of next RedrawRequested
     pub(super) needs_surface_recreate: bool,
+    /// `ConfigManager::load_generation` as of the last frame, so a
+    /// newly LOADED fractal can be noticed exactly once. Loads are
+    /// the only thing that bumps it (preset, file import, the online
+    /// browser) -- animation playback and undo snapshots go through
+    /// `load_config_silent` / `load_config_with_explicit_before` and
+    /// deliberately do not.
+    last_load_generation: u64,
 
     // Audio system
     pub(super) audio_manager: crate::audio::AudioManager,
@@ -681,6 +725,9 @@ impl App {
 
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
+        // Read before the move below: a boot must not look like a
+        // load, or it would override the layout the user left.
+        let initial_load_generation = config_manager.load_generation();
 
         // Get initial size before moving gpu
         let initial_viewport_size = (gpu.size.width, gpu.size.height);
@@ -709,6 +756,9 @@ impl App {
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
+            escape_renderer: None,
+            escape_dirty: true,
+            escape_anim_pending: 0.0,
             flame,
             workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
@@ -753,6 +803,9 @@ impl App {
             histogram_in_flight: false,
             effect_chain,
             needs_surface_recreate: false,
+            // Whatever the config manager starts at, so a boot does
+            // not fight the layout the user left the app in.
+            last_load_generation: initial_load_generation,
             window_fullscreen: false,
             ui_hidden: false,
             fly_mode: false,
@@ -951,6 +1004,18 @@ impl App {
                         WindowEvent::RedrawRequested => {
                             // Handle deferred GPU reinitialization (from previous frame's error)
                             // Desktop only — WASM WebGPU doesn't have device loss from sleep/wake
+                            // A lost DEVICE reaches us through wgpu's
+                            // device-lost callback, not as a surface
+                            // error, so it has to be picked up here --
+                            // otherwise the app runs on against a dead
+                            // device with every call failing. The
+                            // rebuild below is the one surface loss
+                            // already used.
+                            #[cfg(not(target_arch = "wasm32"))]
+                            if crate::gpu::device::take_device_lost() {
+                                log::warn!("Device lost: scheduling a full GPU rebuild");
+                                app.needs_surface_recreate = true;
+                            }
                             #[cfg(not(target_arch = "wasm32"))]
                             if app.needs_surface_recreate {
                                 log::info!("Attempting full GPU reinitialization...");
@@ -958,6 +1023,23 @@ impl App {
                                 // Drop GPU-dependent resources BEFORE reinit
                                 // (they hold Arc refs to the dead device)
                                 app.flame_renderer = None;
+                                // The escape renderer too: it was forgotten
+                                // here once, survived a reinit holding
+                                // buffers from the DEAD device, and the next
+                                // escape frame's write_buffer tripped
+                                // wgpu-core's dead-buffer assert -- whose
+                                // unwind then hit the swapchain-semaphore
+                                // Drop assert, and the double panic aborted
+                                // the process as 0xc0000409 (from a user
+                                // crash.log backtrace). Plain drop, not
+                                // destroy(): the device is dead and this
+                                // path is desktop-only, where Drop frees.
+                                // The frame loop lazily recreates it against
+                                // the new device (get_or_insert_with), and
+                                // its orbit worker thread exits cleanly when
+                                // its channel drops; the reference reloads
+                                // from the disk orbit store.
+                                app.escape_renderer = None;
 
                                 match app.gpu.reinit(window.clone()) {
                                     Ok(()) => {
@@ -985,6 +1067,10 @@ impl App {
                                         app.config_manager.request_full_resync();
                                         // Force viewport resize on next frame to fix aspect ratio
                                         app.fractal_viewport_size = (0, 0);
+                                        // The recreated escape renderer must
+                                        // render before it has anything to
+                                        // show.
+                                        app.escape_dirty = true;
                                         app.needs_surface_recreate = false;
                                         log::info!("GPU reinitialized successfully");
                                     }
@@ -1054,9 +1140,11 @@ impl App {
                     // Check if actively rendering (not paused and under max_iterations)
                     let config = app.config_manager.active_config();
                     let max_iterations = Some(config.max_iterations);
-                    let is_rendering = !app.paused && app.flame_renderer.as_ref().map_or(false, |r| {
-                        max_iterations.map_or(true, |max| r.total_iterations() < max)
-                    });
+                    let is_rendering = !app.paused
+                        && config.render_mode != crate::scene::transforms::RenderMode::Escape
+                        && app.flame_renderer.as_ref().map_or(false, |r| {
+                            max_iterations.map_or(true, |max| r.total_iterations() < max)
+                        });
 
                     // Check if animation is playing (needs continuous redraws)
                     let animation_playing = app.animation_controller.is_playing();
@@ -1142,6 +1230,86 @@ impl App {
         })?;
 
         Ok(())
+    }
+
+    /// Report linear-memory growth per load, in the browser.
+    ///
+    /// A reported crash -- `RuntimeError: memory access out of bounds`
+    /// in the frame callback, after loading a couple of files, on
+    /// EITHER fractal type -- came with the reasonable suspicion that
+    /// something is not being freed between loads. This says whether
+    /// that is true, rather than leaving it a guess: wasm linear
+    /// memory only ever GROWS (there is no shrink), so a load-over-load
+    /// climb that never levels off is a leak, and a plateau means the
+    /// memory is being reused and the fault is elsewhere.
+    ///
+    /// The undo depth rides along because it is the one thing that
+    /// grows by design on every load -- a full config clone per entry,
+    /// 500 deep -- so it separates "expected growth" from "leak".
+    ///
+    /// Browser only: on the desktop this is neither interesting nor
+    /// available (`memory_size` is a wasm intrinsic).
+    fn log_wasm_memory_after_load(&self, load_gen: u64) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // One page is 64 KiB.
+            let pages = core::arch::wasm32::memory_size(0);
+            let mib = (pages as f64) * 65536.0 / (1024.0 * 1024.0);
+            // The shadow stack grows DOWN from its top (16 MiB, set by
+            // -zstack-size), so the address of a local IS the remaining
+            // headroom. Read at the same point in the frame loop every
+            // time, so it is comparable: if it falls load over load the
+            // call depth is growing and the eventual trap is a stack
+            // overflow; if it holds steady the stack is not the story.
+            let probe = 0u8;
+            let sp = core::ptr::addr_of!(probe) as usize;
+            log::info!(
+                "load #{load_gen}: wasm memory {mib:.1} MiB ({pages} pages),                  stack headroom {:.2} MiB, undo depth {}",
+                sp as f64 / (1024.0 * 1024.0),
+                self.config_manager.history_len()
+            );
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = load_gen;
+        }
+    }
+
+    /// Put the workspace in front of the fractal that was just
+    /// loaded.
+    ///
+    /// Both directions, because the Escape layout deliberately
+    /// carries NONE of the flame-only editors (there is a test that
+    /// holds it to that): a flame loaded while it is up is not
+    /// editable at all, which is the same trap in reverse. Compact
+    /// mode is single-panel, so it opens the panel rather than
+    /// rearranging a dock it does not have -- mirroring what an
+    /// animation opened from a URL already does.
+    ///
+    /// Only ever called when `load_generation` moved, so an explicit
+    /// layout choice survives everything except loading a fractal of
+    /// the other kind.
+    fn follow_loaded_render_mode(&mut self) {
+        use crate::ui::workspace::{PanelType, WorkspaceLayout};
+        let is_escape = self.config_manager.active_config().render_mode
+            == crate::scene::transforms::RenderMode::Escape;
+        let compact = self
+            .config_manager
+            .system_settings()
+            .compact_mode
+            .unwrap_or(false);
+        if is_escape {
+            if compact {
+                let ctx = self.egui_layer.ctx.clone();
+                self.workspace.open_compact_panel(PanelType::Escape, &ctx);
+            } else if self.workspace.current_layout != WorkspaceLayout::EscapeTime {
+                log::info!("Loaded an escape fractal: switching to the Escape workspace");
+                self.workspace.apply_layout(WorkspaceLayout::EscapeTime);
+            }
+        } else if !compact && self.workspace.current_layout == WorkspaceLayout::EscapeTime {
+            log::info!("Loaded a flame: leaving the Escape workspace");
+            self.workspace.apply_layout(WorkspaceLayout::Standard);
+        }
     }
 
     fn update(&mut self) {
@@ -1319,6 +1487,33 @@ impl App {
             signed_in,
         );
 
+        // A panel asked for a different workspace. Applied here rather
+        // than in the panel because the workspace is borrowed by the
+        // UI for the whole frame -- switching mid-draw would rebuild
+        // the dock tree the caller is still walking.
+        if let Some(layout) = ui_response.workspace_layout_requested {
+            if self.workspace.current_layout != layout {
+                self.workspace.apply_layout(layout);
+            }
+        }
+
+        // A newly loaded fractal may be a different KIND of fractal
+        // than the layout in front of the user. Escape-time controls
+        // live in a panel the Standard layout does not carry, so an
+        // escape fractal opened from a file or the online browser
+        // used to arrive with nothing on screen that could edit it.
+        //
+        // Placed here for the same reason the request above is: the
+        // workspace is borrowed by the UI for the whole frame, and
+        // switching mid-draw would rebuild the dock tree the caller
+        // is still walking.
+        let load_gen = self.config_manager.load_generation();
+        if self.last_load_generation != load_gen {
+            self.last_load_generation = load_gen;
+            self.follow_loaded_render_mode();
+            self.log_wasm_memory_after_load(load_gen);
+        }
+
         // Consume fly-mode responses produced by the UI this frame.
         if let Some((dx, dy)) = ui_response.fly_mouse_drag {
             self.apply_fly_mouse_look(dx, dy);
@@ -1439,7 +1634,13 @@ impl App {
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.white_level, resize_config.saturation, resize_config.hue_shift,
                         resize_config.alpha_blend_low, resize_config.alpha_blend_high,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false,
-                        resize_config.levels_enabled, resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
+                        // Same escape-mode Levels gate as the live path.
+                        if resize_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            false
+                        } else {
+                            resize_config.levels_enabled
+                        },
+                        resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
                     // Re-register texture with egui after resize (new texture view created)
@@ -1512,7 +1713,16 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            // Escape mode: the flame accumulator is empty; re-tonemap
+                            // from the escape output like the frame loop does.
+                            match self.escape_renderer.as_ref() {
+                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
+                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                            }
+                        } else {
+                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        }
 
                         // Re-run color effects if enabled (they need to process the new tonemapped output)
                         if has_color_effects {
@@ -1599,7 +1809,16 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Restore Normal Tonemap"),
                         });
-                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            // Escape mode: the flame accumulator is empty; re-tonemap
+                            // from the escape output like the frame loop does.
+                            match self.escape_renderer.as_ref() {
+                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
+                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                            }
+                        } else {
+                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        }
 
                         // Re-run color effects with normal tonemap output
                         if has_color_effects {
@@ -1671,7 +1890,9 @@ impl App {
 
                     let mut batch_frame_count = 0;
 
-                    while total_rendered < max_iterations {
+                    let is_escape_export = export_config.render_mode
+                        == crate::scene::transforms::RenderMode::Escape;
+                    while !is_escape_export && total_rendered < max_iterations {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("WASM Export Render Frame"),
                         });
@@ -1737,12 +1958,80 @@ impl App {
                         temp_renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
                     }
 
-                    // Final tonemap pass
+                    // Escape generator. This used to be ONE render() call
+                    // sharing the tonemap encoder -- i.e. a single chunk --
+                    // so a high-iteration export encoded whatever the first
+                    // dispatch had reached, and on wasm (where the reference
+                    // orbit is sliced per call rather than built on a worker)
+                    // a deep zoom got one slice of its reference too. It also
+                    // never applied `escape.supersample`, which every other
+                    // path honours so a saved file reproduces exactly.
+                    //
+                    // Settle properly instead: chunk until render() reports
+                    // final, each chunk its own submission. Browsers have no
+                    // blocking device poll, so the loop submits without
+                    // waiting -- which is exactly the case where the adaptive
+                    // chunk sizer's wall-clock proxy lies (it would measure
+                    // CPU encode time, read every chunk as free, and grow
+                    // into a watchdog-length dispatch). set_fixed_chunk pins
+                    // the size to the TDR-calibrated seed; the render is
+                    // chunk-invariant, so the image is unchanged.
+                    let escape_export = if is_escape_export {
+                        let mut esc = crate::escape::EscapeRenderer::new(
+                            &self.gpu.device,
+                            export_width,
+                            export_height,
+                        );
+                        esc.set_fixed_chunk(true);
+                        esc.resize(
+                            &self.gpu.device,
+                            export_width,
+                            export_height,
+                            export_config.escape.supersample,
+                        );
+                        let mut guard = 0u32;
+                        loop {
+                            let mut esc_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                                label: Some("WASM Export Escape Chunk"),
+                            });
+                            let settled = esc.render(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut esc_encoder,
+                                &export_config.escape,
+                                temp_renderer.palette_view(),
+                            );
+                            self.gpu.queue.submit(std::iter::once(esc_encoder.finish()));
+                            if settled {
+                                break;
+                            }
+                            guard += 1;
+                            if guard > 4_000_000 {
+                                log::error!("WASM escape export failed to settle; encoding what we have");
+                                break;
+                            }
+                        }
+                        Some(esc)
+                    } else {
+                        None
+                    };
+
+                    // Final tonemap pass; the temp renderer supplies the
+                    // palette + tonemap tail for both modes.
                     let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("WASM Export Final Tonemap"),
                     });
-                    temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
+                    if let Some(ref esc) = escape_export {
+                        temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, esc.output_view());
+                    } else {
+                        temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
+                    }
                     self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
+                    // WebGPU: explicit destroy after submit (drop frees
+                    // nothing on wasm); queued work keeps its references.
+                    if let Some(esc) = escape_export {
+                        esc.destroy();
+                    }
 
                     // Color effects (if any) allocate a full-res ping-pong
                     // (~512 MB at 8K). On WASM that won't fit alongside the
@@ -1863,7 +2152,16 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
+                            // Escape mode: the flame accumulator is empty; re-tonemap
+                            // from the escape output like the frame loop does.
+                            match self.escape_renderer.as_ref() {
+                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
+                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                            }
+                        } else {
+                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                        }
 
                         // Re-run color effects if enabled
                         if has_color_effects {
@@ -2098,6 +2396,57 @@ impl App {
         if let Some(ref mut renderer) = self.flame_renderer {
             renderer.set_overwrite_mode(use_overwrite);
 
+            // Escape-time mode: the generator is one compute dispatch,
+            // not a progressive chaos game — render it only when an
+            // edit marked it dirty (or the viewport size changed), and
+            // let the shared tonemap/effects tail below run every frame
+            // exactly as it does for flames. `should_iterate` is forced
+            // false so the whole chaos-game block (governor included)
+            // idles without re-indenting it.
+            let is_escape = final_config.render_mode
+                == crate::scene::transforms::RenderMode::Escape;
+            if is_escape {
+                let escape = self.escape_renderer.get_or_insert_with(|| {
+                    let mut esc = crate::escape::EscapeRenderer::new(
+                        &self.gpu.device,
+                        renderer.width,
+                        renderer.height,
+                    );
+                    // Interactive: reference orbits compute on the
+                    // worker thread and deep frames refine
+                    // progressively instead of stalling the UI.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        esc.progressive = true;
+                    }
+                    esc
+                });
+                if escape.resize(
+                    &self.gpu.device,
+                    renderer.width,
+                    renderer.height,
+                    final_config.escape.supersample,
+                ) {
+                    self.escape_dirty = true;
+                }
+                if self.escape_dirty {
+                    let settled = escape.render(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut render_encoder,
+                        &final_config.escape,
+                        renderer.palette_view(),
+                    );
+                    // Progressive deep zoom: an unsettled frame keeps
+                    // the dirty flag so the next frame re-renders with
+                    // the longer orbit prefix.
+                    self.escape_dirty = !settled;
+                    if !settled {
+                        self.window.request_redraw();
+                    }
+                }
+            }
+
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
             // Skip GPU work during any export to avoid GPU contention (the export
@@ -2106,7 +2455,7 @@ impl App {
                 .map(|s| s.active)
                 .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused && !is_exporting && (
+            let should_iterate = !is_escape && !self.paused && !is_exporting && (
                 is_controller_playing ||
                 // Overwrite mode bypasses the max_iterations gate. With
                 // it gated, a cheap flame that hits max during a long
@@ -2329,7 +2678,13 @@ impl App {
                 final_config.alpha_blend_low, final_config.alpha_blend_high,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview,
-                final_config.levels_enabled, final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
+                // Escape mode: Levels normalizes by the chaos game's
+                // measured sample density — stale flame data here, and
+                // the escape image's density is a constant 1/px, so the
+                // remap has no statistic to act on. Hard-off (the
+                // panel says so too).
+                if is_escape { false } else { final_config.levels_enabled },
+                final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
             // Reset effect slot counter for this frame (allows multiple effects with unique params)
             self.effect_chain.reset_slots();
@@ -2337,11 +2692,13 @@ impl App {
             // Solid brightness renormalization: measure the accepted
             // density every few frames while occlusion culls (async, EMA-
             // smoothed) so hard solids tone-map at full brightness.
-            renderer.update_density_stats(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+            if !is_escape {
+                renderer.update_density_stats(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+            }
 
             // Solid-rendering shade pass (lighting/SSAO on the depth buffer)
             // — runs before density effects; both consume HDR pre-tonemap data.
-            let shade_ran = renderer.run_shade_pass(
+            let shade_ran = !is_escape && renderer.run_shade_pass(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
@@ -2358,14 +2715,19 @@ impl App {
             );
             // Post-process DoF (solid mode) sits between shade and
             // density effects/tonemap.
-            let dof_ran = renderer.run_dof_pass(
+            let dof_ran = !is_escape && renderer.run_dof_pass(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
                 shade_ran,
                 final_config.zoom,
             );
-            let pre_tonemap_view = if dof_ran {
+            let pre_tonemap_view = if is_escape {
+                self.escape_renderer
+                    .as_ref()
+                    .expect("escape branch above created it")
+                    .output_view()
+            } else if dof_ran {
                 renderer.dof_output_view()
             } else if shade_ran {
                 renderer.shade_output_view()
@@ -2387,12 +2749,12 @@ impl App {
             if density_effects_ran {
                 if let Some(density_output) = self.effect_chain.get_density_output() {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
-                } else if dof_ran || shade_ran {
+                } else if is_escape || dof_ran || shade_ran {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
                 } else {
                     renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
                 }
-            } else if dof_ran || shade_ran {
+            } else if is_escape || dof_ran || shade_ran {
                 renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
             } else {
                 renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
@@ -2433,6 +2795,7 @@ impl App {
 
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
+
 
         // Update density histogram for Levels controls (every ~30 frames)
         // Skip during animation playback to avoid frame drops from GPU readback
@@ -2602,6 +2965,15 @@ impl App {
         let t5 = Instant::now();
 
         frame.present();
+
+        // Non-blocking maintain. wgpu delivers buffer-map callbacks
+        // only while the device is polled, and the escape renderer
+        // reads its GPU timestamps through one. Poll, never Wait: this
+        // must not stall the frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = self.gpu.device.poll(egui_wgpu::wgpu::PollType::Poll);
+        }
 
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 

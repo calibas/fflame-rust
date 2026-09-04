@@ -178,6 +178,7 @@ rendering:
 
 # Tone Mapping
 tonemap:
+  levels_escape_hint: "Density Levels applies to the flame renderer's density statistics — escape-time images have none, so it is off in this mode."
   mode: "模式"
   log: "对数"
   linear: "线性"

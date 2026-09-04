@@ -213,6 +213,65 @@ refused here — use `flame`.
 
 Camera angles are stored in **radians**.
 
+## The `escape` object
+
+Escape-time fractals (Mandelbrot and kin). **Touching `escape` at all
+switches the config to escape rendering** — and resets tone mapping to
+Linear with exposure and gamma at 1, because flame presets carry
+Log-calibrated values under which escape output renders black.
+
+| call | returns | what it does |
+|---|---|---|
+| `escape.formula(name)` | — | Picks the formula. An unknown name throws and lists where to look. Changing formula **clears the formula parameters**, which belong to the formula that declared them. |
+| `escape.coloring(name)` | — | Picks the coloring; likewise clears the coloring parameters. |
+| `escape.formulas()` | array | Every formula name, so a script can iterate the catalog instead of copying a list out of these docs. |
+| `escape.colorings()` | array | Every coloring name. |
+| `escape.shading(light_angle, height)` | — | Turns on **relief shading** and sets it up: light azimuth in degrees (counter-clockwise from east; 315 is the cartographic north-west) and vertical exaggeration of the slope. A layer over whatever coloring is active, so it composes with all of them — including the ones with no derivative. `height` is logarithmic in feel: 10 is the default, and the useful value depends on how many palette turns the coloring spends across the view. |
+| `escape.shading_off()` | — | Turns the layer back off. |
+| `escape.shading_shadow(r, g, b, strength, blend)` | — | The side facing away from the light. `blend` is `"multiply"` (default), `"screen"`, `"overlay"` or `"mix"`. Strength 0 leaves the image exactly untouched; the range runs to 4, and values above 1 are for dark images where a pixel has little room left below it. |
+| `escape.shading_highlight(r, g, b, strength, blend)` | — | The side facing into it; same blend names, `"screen"` by default. |
+| `escape.shading_softness(radius)` | — | Radius in pixels of the stencil the surface normal is estimated from. 0 (the default) is a single-pixel difference — the sharpest estimate, and the one that makes finely-detailed colorings look crunchy. Raising it low-passes the **normal**, so edges soften without blurring the colour underneath. |
+| `escape.shading_field(name)` | — | Which field the slope is taken from: `"smooth"` (the coloring's value before the palette wraps it — terrain relief) or `"banded"` (the wrapped coordinate, so every band edge is a step — an engraved look). |
+| `escape.center(re, im)` | — | The view centre, as **decimal STRINGS**. See the note below — this is the one place a float would quietly cost you the deep zoom. |
+| `escape.center_re` / `escape.center_im` | string | Read the centre back, still as text. |
+| `escape.zoom` | float | Read/write `zoom_log2`: the **exponent in BASE 2**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. Note the panel displays base 10 (log10) — the engine, the `.fflame` field and this API are all base 2, which is what the deep-zoom maths needs; multiply by 3.3219 to go from a displayed log10 to this. |
+| `escape.max_iter` | int | Read/write the iteration cap. Deep views need far more than shallow ones; too low reads as a flat wash. |
+| `escape.bailout` | float | Read/write the escape radius squared (4.0 is the usual). |
+| `escape.supersample` | int | Read/write 1–3. |
+| `escape.rotation` | float | Read/write the view rotation, in radians. |
+| `escape.julia(re, im)` | — | Switch to the Julia plane at that constant. |
+| `escape.no_julia()` | — | Back to the parameter plane. |
+| `escape.param(name, value)` | — | A formula parameter, checked against the registry: an unknown name throws and lists the ones the formula has. |
+| `escape.coloring_param(name, value)` | — | The same for the coloring. |
+| `escape.params()` | array | The current formula's parameter names. |
+| `escape.coloring_params()` | array | The current coloring's parameter names. |
+
+### Why the centre is a string
+
+It is the deep-zoom payload. Zoom 60 resolves detail around 10⁻¹⁸ of a
+unit, which needs about 20 significant digits; an `f64` carries 15. A
+float centre would cap every script at roughly zoom 50 **without
+saying so** — the picture would just stop sharpening. So the centre is
+text from the script, through the config file, to the fixed-point
+reference orbit that consumes it.
+
+```rhai
+script("Deep dive", "generator");
+escape.formula("phoenix");
+escape.coloring("smooth");
+escape.center("-1.1543534481639833789918460777111",
+              "0.6293282132782021964135047790493");
+escape.zoom = 22.4;
+escape.max_iter = 512;
+escape.param("p_re", -0.5);
+```
+
+Not every formula zooms equally deep: `mandelbrot`, `multibrot`, the
+`burning_ship` variants, `tricorn`, `phoenix` and `manowar` perturb and
+go essentially arbitrarily deep, while the rest stop around zoom 14
+where the direct path's f32 pixel mapping runs out. See
+[the escape-time project doc](../projects/escape-time-fractals.md).
+
 ## The `anim` object
 
 Touching `anim` at all makes the script emit a `.anim` alongside its

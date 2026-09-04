@@ -24,6 +24,10 @@ pub mod host;
 pub mod library;
 pub mod store;
 
+// The flame engine's own tests: they build flames, compile flame
+// shaders, or exercise the flame renderer's caches, all of which
+// need the variation catalog.
+#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests;
 

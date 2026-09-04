@@ -368,7 +368,8 @@ impl Default for StickyVariations {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+// The flame renderer's caches, which need the variation catalog.
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "engine-flame"))]
 mod sticky_tests {
     use super::*;
     use crate::config::FractalConfig;

@@ -9,6 +9,568 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/admin/actions": {
+      "get": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "The audit log. Readable by **any** admin, not just the one who acted —\nmoderation that only its author can review isn't accountable to anyone.",
+        "operationId": "list_actions",
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModerationActionResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/email-domains": {
+      "get": {
+        "tags": [
+          "routes::admin"
+        ],
+        "operationId": "list_blocked_domains",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/email-domains/block": {
+      "post": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Block an email domain from registering.",
+        "description": "Operator-managed rather than a compiled-in list: a static blocklist goes\nstale, and this gets used reactively — you add a domain when you see it.\n\nWorth weighing before adding one: there is no appeal path, so a false\npositive silently locks out every legitimate user of a small mail host with\nno way for them to tell you.",
+        "operationId": "block_domain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockDomainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/email-domains/unblock": {
+      "post": {
+        "tags": [
+          "routes::admin"
+        ],
+        "operationId": "unblock_domain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockDomainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/reports": {
+      "get": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "The triage queue.",
+        "description": "Reports from non-active accounts never appear here — they are stored as\nevidence, not surfaced as work. The `entity_report_count` on each row\napplies the same filter, so a brigade of shadowbanned accounts cannot make\nsomething look more reported than it is.",
+        "operationId": "list_reports",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Omit for every queued report regardless of state.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ReportState"
+                }
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReportResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/reports/{id}/resolve": {
+      "post": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Mark a report actioned or dismissed — or reopen it.",
+        "description": "Dismissing is a decision worth recording: a dismissed report and a\nnever-seen report are different facts, and only one of them means somebody\nlooked.",
+        "operationId": "resolve_report",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Report ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/rooms/{id}/featured": {
+      "put": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Feature/unfeature a room on the museum hub. Featuring requires a public,\nvisible room — the explore filter would hide a featured private room, and\na curation flag that silently does nothing is worse than a 400.",
+        "operationId": "set_room_featured",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomFeatureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/scripts/{id}/museum": {
+      "put": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Map an entity type to its table.",
+        "description": "A closed match rather than interpolating the caller's string: this value\nreaches a `format!`ed table name, and the only safe way to do that is for\nevery reachable value to be one we wrote.\nFeature/unfeature a hall or branch and manage its museum slug — the UI\nface of what used to be manual SQL. Featuring requires the script to be\npublished (an unfeatured-unpublished script fronts nothing anyway; a\nfeatured one would promise a walk that 404s).",
+        "operationId": "set_script_museum",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScriptMuseumRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/tags/{id}/block": {
+      "post": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Block or unblock a tag.",
+        "description": "Removes it from `/api/tags` and `/api/tags/popular` and refuses it on new\ntagging. Existing `flame_tags` rows are untouched: the flames keep the\nassociation and their authors see nothing change. Deleting associations\nwould fight the `usage_count` trigger and silently edit content that was\nnever itself the problem.",
+        "operationId": "block_tag",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tag ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockTagRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/users/{id}/rename": {
+      "post": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Force a display-name change.",
+        "description": "**This is the only way a display name can ever change.** It is set at\nregistration and `PUT /api/users/me/profile` deliberately does not touch it,\nso a user cannot fix an offensive one even if they want to.\n\nIt also cannot be hidden, because it rides on every public thing the account\nowns. Replacing it is the only available action, which is why this is a\nrename rather than another moderation state.\n\nThe generated name derives from the account id, so renaming the same account\ntwice is idempotent rather than producing a trail of neutral names.",
+        "operationId": "rename_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameUserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Name taken or invalid"
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/users/{id}/state": {
+      "post": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Shadowban, hard-disable, or restore an account.",
+        "description": "Restoring is deliberately unremarkable: because content is hidden by a\nfilter on read rather than by rewriting rows, setting the state back to\n`active` restores exactly what was there. Nothing has to remember what was\nhidden.",
+        "operationId": "set_user_state",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetUserStateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/{entity_type}/{id}/moderate": {
+      "post": {
+        "tags": [
+          "routes::admin"
+        ],
+        "summary": "Hide, unhide or remove one piece of content.",
+        "description": "`entity_type` is validated against the same closed set the audit table's\nCHECK enforces — an unknown type must not reach a `format!`ed table name.",
+        "operationId": "moderate_entity",
+        "parameters": [
+          {
+            "name": "entity_type",
+            "in": "path",
+            "description": "flame | animation | collection | script",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Entity ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/animations": {
       "get": {
         "tags": [
@@ -348,6 +910,31 @@
         ]
       }
     },
+    "/api/auth/forgot-password": {
+      "post": {
+        "tags": [
+          "routes::auth"
+        ],
+        "summary": "Request a reset link.",
+        "description": "Always `204`, whatever happens — unknown address, no mail provider\nconfigured, send failure. This endpoint is unauthenticated, so any response\nthat varied with the outcome would be a free account-enumeration oracle:\npost an address, learn whether it has an account here. That matters more\nthan the lost feedback, and honest UI copy (\"if that address has an account,\na link is on its way\") costs the user nothing.\n\nThe send is spawned rather than awaited for the same reason. Waiting on an\noutbound HTTPS request only when the account exists would leak through\nresponse time exactly what the status code refuses to say.",
+        "operationId": "forgot_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted — reveals nothing about whether the account exists"
+          }
+        }
+      }
+    },
     "/api/auth/login": {
       "post": {
         "tags": [
@@ -431,6 +1018,85 @@
           },
           "400": {
             "description": "Validation error"
+          }
+        }
+      }
+    },
+    "/api/auth/resend-verification": {
+      "post": {
+        "tags": [
+          "routes::auth"
+        ],
+        "summary": "Send a fresh verification link, superseding any earlier one.",
+        "description": "Returns `204` whether or not anything was sent — including when the account\nis already verified. A response that distinguished them would let a logged-in\naccount probe its own state in a way that is pointless to allow and awkward\nonce shadowbans exist.",
+        "operationId": "resend_verification",
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/auth/reset-password": {
+      "post": {
+        "tags": [
+          "routes::auth"
+        ],
+        "summary": "Consume a reset link and set a new password.",
+        "description": "No JWT is returned: the reset revokes every session for the account,\nincluding any this request could have been handed, so the caller signs in\nagain with the new password. Returning a token here would mean minting one\nin the same breath as invalidating them all — easy to get subtly wrong, and\nit buys a single skipped login.",
+        "operationId": "reset_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed; all existing sessions revoked"
+          },
+          "400": {
+            "description": "Password fails length rules"
+          },
+          "404": {
+            "description": "Unknown or expired token"
+          }
+        }
+      }
+    },
+    "/api/auth/verify": {
+      "post": {
+        "tags": [
+          "routes::auth"
+        ],
+        "summary": "Consume a verification link.",
+        "description": "Unknown, expired and already-used tokens are all `404`. Distinguishing them\nwould confirm that a guessed token had once been real, which tells an\nattacker they hit a live account.",
+        "operationId": "verify_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Verified"
+          },
+          "404": {
+            "description": "Unknown or expired token"
           }
         }
       }
@@ -1003,6 +1669,61 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/FlameListItem"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/explore/rooms": {
+      "get": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "explore_rooms",
+        "parameters": [
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`recent` (default) or `featured`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomResponse"
                   }
                 }
               }
@@ -1600,6 +2321,300 @@
         ]
       }
     },
+    "/api/gallery-items": {
+      "post": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "create_gallery_item",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGalleryItemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Spot already existed; bookmarked for the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateGalleryItemResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "New spot — this save created it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateGalleryItemResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/gallery-items/snapshots/{hash}": {
+      "get": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "get_snapshot",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Snapshot hash (64 hex chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/gallery-items/{hash}": {
+      "get": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "get_gallery_item",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash (64 hex chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalleryItemResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/gallery-items/{hash}/favorite": {
+      "get": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "check_item_favorite",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FavoriteStatus"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "add_item_favorite",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "remove_item_favorite",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/gallery-items/{hash}/thumbnail": {
+      "get": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "get_item_thumbnail",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thumbnail image",
+            "content": {
+              "image/jpeg": {}
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "upload_item_thumbnail",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Raw JPEG or PNG bytes",
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, or already present (first write wins)"
+          },
+          "400": {
+            "description": "Invalid or unsupported image"
+          },
+          "403": {
+            "description": "Caller has not saved this item"
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/palettes": {
       "post": {
         "tags": [
@@ -1680,6 +2695,516 @@
             "description": "Palette not found"
           }
         }
+      }
+    },
+    "/api/reports": {
+      "post": {
+        "tags": [
+          "routes::reports"
+        ],
+        "summary": "File a report.",
+        "description": "Returns `204` whether or not the report was new — see\n`repositories::reports::create` for why the caller must not be able to tell.",
+        "operationId": "create_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Filed"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "404": {
+            "description": "No such reportable entity"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/rooms": {
+      "get": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "list_my_rooms",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "create_room",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoomRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/rooms/{id}": {
+      "get": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "get_room",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "update_room",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoomRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "delete_room",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/rooms/{id}/favorite": {
+      "get": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "check_room_favorite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FavoriteStatus"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "add_room_favorite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "remove_room_favorite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/rooms/{id}/items": {
+      "get": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "list_room_items",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomItemResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "add_room_item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddRoomItemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/rooms/{id}/items/reorder": {
+      "put": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "reorder_room_items",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderRoomItemsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/rooms/{id}/items/{entry_id}": {
+      "delete": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "remove_room_item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entry_id",
+            "in": "path",
+            "description": "Entry ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
       }
     },
     "/api/scripts": {
@@ -1767,6 +3292,41 @@
             "bearer_auth": []
           }
         ]
+      }
+    },
+    "/api/scripts/resolve/{ref}": {
+      "get": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "summary": "Resolve a walk ref — an admin-assigned slug or a script UUID — to the\npublished pin. Slugs cap at 32 chars and UUIDs are 36, so the two forms\ncannot collide; a ref is tried as UUID first only because the parse is\ncheap and exact.",
+        "operationId": "resolve_published",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "Slug or script UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedScriptResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
       }
     },
     "/api/scripts/{id}": {
@@ -1889,6 +3449,189 @@
         "responses": {
           "204": {
             "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/scripts/{id}/fork": {
+      "post": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "summary": "Publish (or re-publish) this script to the museum: a generator becomes a\nHall, a modifier becomes a Branch. Publishing PINS the current source —\nthe museum serves exactly that snapshot until the author presses publish\nagain, so halls and branches stay static under everyone's feet.\nCopy a readable script into the caller's account.",
+        "description": "This is how a user starts from one of the built-in scripts: those are\nimported as admin-owned rows so the site can browse them and the museum\ncan serve them, which leaves them read-only to everybody else.\n\nThe fork is **private** and unpublished regardless of the source's\nvisibility — a copy is not an endorsement to republish, and the owner can\nflip it themselves once they have changed something.\n\nIts name is chosen by the server (`<source>_fork`, then `_fork2`, ...) and\nis guaranteed not to be a reserved stem, so a fork of a built-in is\nsomething the client will actually load. The caller does not get to pick,\nbecause the interesting failure — landing on a reserved name — is not one\nthey could be expected to anticipate.",
+        "operationId": "fork_script",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script to fork",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Fork created, private to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Script limit reached, or every candidate name is taken"
+          },
+          "404": {
+            "description": "No such script, or not readable"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/scripts/{id}/hall-config": {
+      "put": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "summary": "Replace the hall's presentation config and preview. Owner-only,\nfull-replace, no version gate — see `HallConfigRequest`.",
+        "operationId": "put_hall_config",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HallConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad config shape or unknown preview item"
+          },
+          "403": {
+            "description": "Not the owner"
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/scripts/{id}/publish": {
+      "post": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "publish_script",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Script not public, or email unverified"
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "routes::scripts"
+        ],
+        "operationId": "unpublish_script",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Script ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": ""
@@ -2031,6 +3774,39 @@
           {
             "name": "q",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "published",
+            "in": "query",
+            "description": "`true` narrows to the museum: published scripts only, with `kind` and\n`sort` applying. Halls are published generators, branches published\nmodifiers.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`generator` | `modifier`; museum browse only.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`recent` (default) | `featured`; museum browse only.",
             "required": false,
             "schema": {
               "type": [
@@ -2197,6 +3973,108 @@
         ]
       }
     },
+    "/api/users/me/favorite-gallery-items": {
+      "get": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "list_my_favorite_items",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FavoriteGalleryItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/users/me/favorite-rooms": {
+      "get": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "list_my_favorite_rooms",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/users/me/favorites": {
       "get": {
         "tags": [
@@ -2236,6 +4114,129 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/users/me/gallery-items": {
+      "get": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "list_my_saved",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedGalleryItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/users/me/gallery-items/{hash}": {
+      "put": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "rename_saved",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSavedItemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "routes::gallery_items"
+        ],
+        "operationId": "remove_saved",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Item hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
           }
         },
         "security": [
@@ -2587,6 +4588,59 @@
         }
       }
     },
+    "/api/users/{id}/rooms": {
+      "get": {
+        "tags": [
+          "routes::rooms"
+        ],
+        "operationId": "list_user_rooms",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/variations": {
       "get": {
         "tags": [
@@ -2669,6 +4723,25 @@
           "flame_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "AddRoomItemRequest": {
+        "type": "object",
+        "description": "Exactly one of the two — a wall position holds a gallery item or a flame.",
+        "properties": {
+          "flame_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "item_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -2878,6 +4951,40 @@
           }
         }
       },
+      "BlockDomainRequest": {
+        "type": "object",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "BlockTagRequest": {
+        "type": "object",
+        "required": [
+          "blocked"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CollectionResponse": {
         "type": "object",
         "required": [
@@ -3058,6 +5165,98 @@
             "items": {
               "$ref": "#/components/schemas/TransformV2Wire"
             }
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
+          }
+        }
+      },
+      "CreateGalleryItemRequest": {
+        "type": "object",
+        "required": [
+          "hall",
+          "seed"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GalleryScriptInput"
+            }
+          },
+          "engine_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hall": {
+            "$ref": "#/components/schemas/GalleryScriptInput"
+          },
+          "nickname": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nickname for the caller's bookmark of this item."
+          },
+          "seed": {
+            "type": "string",
+            "description": "The DEFAULT seed (u64 decimal string) — every stage without a seed\nof its own runs at this one. Seeds are positions on a ring of 2^64,\npast what a JSON number can carry exactly. Identity is computed from\nthe RESOLVED per-stage seeds, so the same spot saved with a different\ndefault converges on the same hash."
+          }
+        }
+      },
+      "CreateGalleryItemResponse": {
+        "type": "object",
+        "description": "`created` distinguishes \"you discovered this spot\" from \"someone was here\nfirst\" — the item exists identically either way, so re-POSTing is safe.",
+        "required": [
+          "hash",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateReportRequest": {
+        "type": "object",
+        "required": [
+          "entity_type",
+          "entity_id",
+          "reason"
+        ],
+        "properties": {
+          "entity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_type": {
+            "type": "string",
+            "description": "`flame` | `animation` | `collection` | `script` | `user`"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateRoomRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
           },
           "visibility": {
             "$ref": "#/components/schemas/Visibility"
@@ -3288,6 +5487,48 @@
           "density",
           "color"
         ]
+      },
+      "FavoriteGalleryItem": {
+        "type": "object",
+        "description": "A row of /api/users/me/favorite-gallery-items.",
+        "required": [
+          "item_hash",
+          "seed",
+          "branch_count",
+          "has_thumbnail",
+          "favorite_count",
+          "favorited_at"
+        ],
+        "properties": {
+          "branch_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "favorite_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "favorited_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hall_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_thumbnail": {
+            "type": "boolean"
+          },
+          "item_hash": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "string",
+            "description": "u64 as a decimal string."
+          }
+        }
       },
       "FavoriteStatus": {
         "type": "object",
@@ -3556,6 +5797,188 @@
           }
         }
       },
+      "ForgotPasswordRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "GalleryItemResponse": {
+        "type": "object",
+        "required": [
+          "hash",
+          "seed",
+          "hall",
+          "branches",
+          "created_at",
+          "favorite_count",
+          "has_thumbnail",
+          "saved"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GalleryScriptRef"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "engine_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "favorite_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "first_saved_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UserRef"
+              }
+            ]
+          },
+          "hall": {
+            "$ref": "#/components/schemas/GalleryScriptRef"
+          },
+          "has_thumbnail": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "Whether the CALLER has this item saved. Always false anonymous."
+          },
+          "seed": {
+            "type": "string",
+            "description": "The HALL's seed, u64 as a decimal string (kept for list rows and\ncompatibility; each stage's own seed rides on its ref)."
+          }
+        }
+      },
+      "GalleryScriptInput": {
+        "type": "object",
+        "description": "One script the item depends on, as submitted: full source plus the\nFULLY RESOLVED params (every declared param with the value actually passed\nto the interpreter, defaults included — the hash must not depend on\nwhether a value was explicit or defaulted).",
+        "required": [
+          "source",
+          "kind"
+        ],
+        "properties": {
+          "builtin_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Engine builtin id (`basic_random`, `mutate`, ...) when the source came\nfrom the embedded engine scripts. Labeling only, not hashed."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "params": {},
+          "script_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The script row the source came from, when it is a user script. Must be\nreadable by the caller — otherwise saving would attribute snapshots to\nscripts the caller cannot see."
+          },
+          "seed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This stage's OWN seed (u64 decimal string), when it differs from the\nrequest's default - a pinned stage of the walk. Absent = the default."
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "GalleryScriptRef": {
+        "type": "object",
+        "description": "A script reference in an item response: the snapshot inline (source and\nall), plus the params this item runs it with.",
+        "required": [
+          "hash",
+          "kind",
+          "source",
+          "params",
+          "seed"
+        ],
+        "properties": {
+          "builtin_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hash": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "params": {},
+          "script_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The script this snapshot came from, when known — what lets a client\nrebuild a walkable ref for \"Walk here\" on published-script items."
+          },
+          "seed": {
+            "type": "string",
+            "description": "This stage's resolved seed (u64 decimal string). Every stage of a\nstored item is fully explicit — museum doc §15."
+          },
+          "source": {
+            "type": "string",
+            "description": "The exact source that reproduces this item, verbatim from the\nsnapshot. Inline because re-running it is the entire point of the\nfetch; by-ref would cost one round trip per script before the first\npixel."
+          }
+        }
+      },
+      "HallConfigRequest": {
+        "type": "object",
+        "description": "Full-replace hall presentation update. Separate from the optimistic\nscript PUT on purpose: the editor app sends whole-script updates without\nknowing this field exists, and riding along there would silently wipe it.\nNo version check — presentation metadata, single owner, last write wins.",
+        "properties": {
+          "hall_config": {
+            "description": "Null clears. Shape: `{branches?: [ref], params?: [name], defaults?:\n{tile?: {width?, height?, iterations?}, preview?: {...}}}`."
+          },
+          "preview_item_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null clears. Must be a visible gallery item."
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "required": [
@@ -3577,6 +6000,75 @@
           "once",
           "loop",
           "ping_pong"
+        ]
+      },
+      "ModerateRequest": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator-facing note. Recorded in the audit log, never served to the\naffected user — there is no appeal path."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ModerationState"
+          }
+        }
+      },
+      "ModerationActionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "admin_id",
+          "entity_type",
+          "entity_id",
+          "action",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "admin_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "entity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "previous": {},
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ModerationState": {
+        "type": "string",
+        "description": "Operator's axis, orthogonal to `Visibility` (the owner's).\n\nBoth non-visible states keep the row and are reversible; the difference is\nintent, recorded for triage. Neither is served to anyone but the owner and\nadmins.",
+        "enum": [
+          "visible",
+          "hidden",
+          "removed"
         ]
       },
       "PaletteContent": {
@@ -3678,11 +6170,41 @@
           }
         }
       },
+      "RenameUserRequest": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omit to generate a neutral `user_<8 hex>` name derived from the account\nid. Supply one to restore a previous name: the audit log records what it\nwas, and without a way to set it back a mistaken rename is permanent."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RenameUserResponse": {
+        "type": "object",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          }
+        }
+      },
       "RenderMode": {
         "type": "string",
         "enum": [
           "2d",
-          "3d"
+          "3d",
+          "escape"
         ]
       },
       "ReorderFlamesRequest": {
@@ -3700,6 +6222,179 @@
           }
         }
       },
+      "ReorderRoomItemsRequest": {
+        "type": "object",
+        "required": [
+          "entry_ids"
+        ],
+        "properties": {
+          "entry_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "ReportResponse": {
+        "type": "object",
+        "description": "Triage payload.\n\nDeliberately does not embed the reported entity. An admin's ordinary `GET`\nalready bypasses visibility and moderation state (`authorize_read`\nreturns early for admins), so the browser app fetches the target through the\nsame endpoint anyone else would — one code path, and no second projection of\nfour different resource types to keep in step.",
+        "required": [
+          "id",
+          "entity_type",
+          "entity_id",
+          "reason",
+          "state",
+          "created_at",
+          "entity_report_count"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "entity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_report_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many reports this entity has, across all reporters.\n\nThe number that actually drives triage — one report is a signal, six is\na queue-jumper — and cheap to compute here rather than making the UI\nissue a second pass."
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reporter_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolved_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReportState"
+          }
+        }
+      },
+      "ReportState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "actioned",
+          "dismissed"
+        ]
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveReportRequest": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/ReportState",
+            "description": "`actioned` or `dismissed`. Setting it back to `open` is allowed —\nreopening a report someone closed too quickly is a real workflow."
+          }
+        }
+      },
+      "ResolvedScriptResponse": {
+        "type": "object",
+        "description": "What the walk runs: a published script resolved by slug or UUID. `source`\nis the PIN — the snapshot taken at publish time — not the script's current\nsource, so halls and branches stay static under everyone's feet.",
+        "required": [
+          "id",
+          "kind",
+          "display_name",
+          "source",
+          "owner_display_name",
+          "user_id",
+          "published_at"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "featured_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "hall_config": {
+            "description": "The hall's presentation config — branches/params/defaults. The walk\nneeds it alongside the pin (mutable, unlike the pin)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "owner_display_name": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "ResourceUsage": {
         "type": "object",
         "required": [
@@ -3714,6 +6409,252 @@
           "used": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "RoomFeatureRequest": {
+        "type": "object",
+        "required": [
+          "featured"
+        ],
+        "properties": {
+          "featured": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RoomFlameRef": {
+        "type": "object",
+        "description": "A flame hanging in a room.",
+        "required": [
+          "id",
+          "name",
+          "owner_display_name",
+          "has_thumbnail"
+        ],
+        "properties": {
+          "has_thumbnail": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_display_name": {
+            "type": "string"
+          }
+        }
+      },
+      "RoomGalleryItemRef": {
+        "type": "object",
+        "description": "A gallery item hanging in a room — enough to draw a tile from thumbnails.",
+        "required": [
+          "hash",
+          "seed",
+          "branch_count",
+          "has_thumbnail",
+          "favorite_count"
+        ],
+        "properties": {
+          "branch_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "favorite_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "hall_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_thumbnail": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "string",
+            "description": "u64 as a decimal string."
+          }
+        }
+      },
+      "RoomItemResponse": {
+        "type": "object",
+        "description": "One wall position. Exactly one of `gallery_item` / `flame` is set; a\nposition whose member the caller cannot see is omitted from the listing\nentirely (re-filtered at read time, the collections convention).",
+        "required": [
+          "id",
+          "sort_order",
+          "added_at"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "flame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RoomFlameRef"
+              }
+            ]
+          },
+          "gallery_item": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RoomGalleryItemRef"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sort_order": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "RoomResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "owner_display_name",
+          "name",
+          "visibility",
+          "item_count",
+          "favorite_count",
+          "preview_has_thumbnail",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "favorite_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "featured_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "item_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_display_name": {
+            "type": "string"
+          },
+          "preview_flame_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "preview_has_thumbnail": {
+            "type": "boolean",
+            "description": "Whether that member actually has an uploaded thumbnail to show."
+          },
+          "preview_item_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The room's preview: its FIRST item (wall order), re-filtered like the\nwall itself so a hidden member never fronts a public room. Exactly one\nof the two refs is set when a preview exists."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
+          }
+        }
+      },
+      "SavedGalleryItem": {
+        "type": "object",
+        "description": "A row of the caller's saved list. Carries enough to render a thumbnail\ngrid without loading the WASM engine.",
+        "required": [
+          "item_hash",
+          "added_at",
+          "seed",
+          "branch_count",
+          "has_thumbnail"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "branch_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hall_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_thumbnail": {
+            "type": "boolean"
+          },
+          "item_hash": {
+            "type": "string"
+          },
+          "nickname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seed": {
+            "type": "string",
+            "description": "u64 as a decimal string."
           }
         }
       },
@@ -3762,6 +6703,7 @@
           "authors",
           "version",
           "visibility",
+          "preview_has_thumbnail",
           "created_at",
           "updated_at"
         ],
@@ -3785,12 +6727,20 @@
           "display_name": {
             "type": "string"
           },
+          "featured_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "flags": {
             "type": "array",
             "items": {
               "type": "string"
             }
           },
+          "hall_config": {},
           "id": {
             "type": "string",
             "format": "uuid"
@@ -3804,6 +6754,29 @@
           "owner_display_name": {
             "type": "string",
             "description": "The owner's display name.\n\nCarried because `users.display_name` is case-insensitively unique\n(migration 37), which makes `display_name/name` a globally unique,\nstable, human-readable key — what a client needs to namespace two\nauthors' `grand_julian` on import without inventing a disambiguator or\nshowing a UUID fragment."
+          },
+          "preview_has_thumbnail": {
+            "type": "boolean",
+            "description": "Whether `preview_item_hash` has an uploaded thumbnail — what an\nentrance card actually needs to know before rendering an <img>."
+          },
+          "preview_item_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "updated_at": {
             "type": "string",
@@ -3822,6 +6795,30 @@
           }
         }
       },
+      "ScriptMuseumRequest": {
+        "type": "object",
+        "description": "Museum curation for a published script, both knobs together (they are\nassigned together): whether it fronts the EFG entrance / branch lists,\nand its short walk handle. `slug: null` clears — deliberate, audited.",
+        "required": [
+          "featured"
+        ],
+        "properties": {
+          "featured": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ScriptResponse": {
         "type": "object",
         "description": "Detail payload — carries the source.",
@@ -3837,6 +6834,7 @@
           "source",
           "version",
           "visibility",
+          "fork_count",
           "created_at",
           "updated_at"
         ],
@@ -3860,12 +6858,32 @@
           "display_name": {
             "type": "string"
           },
+          "featured_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "flags": {
             "type": "array",
             "items": {
               "type": "string"
             }
           },
+          "fork_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "forked_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The script this was forked from, or `NULL` for an original.\n\nAttribution, not a dependency — a fork carries a full copy of\n`source`, so `ON DELETE SET NULL` costs the lineage and nothing else."
+          },
+          "hall_config": {},
           "id": {
             "type": "string",
             "format": "uuid"
@@ -3878,6 +6896,25 @@
           },
           "owner_display_name": {
             "type": "string"
+          },
+          "preview_item_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "source": {
             "type": "string",
@@ -3912,6 +6949,70 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "SetUserStateRequest": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/UserState"
+          }
+        }
+      },
+      "SnapshotResponse": {
+        "type": "object",
+        "description": "Raw snapshot fetch, for clients that cache script sources by hash.",
+        "required": [
+          "hash",
+          "kind",
+          "source",
+          "created_at"
+        ],
+        "properties": {
+          "author": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UserRef"
+              }
+            ]
+          },
+          "builtin_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hash": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptKind"
+          },
+          "source": {
+            "type": "string"
           }
         }
       },
@@ -4058,6 +7159,17 @@
           }
         }
       },
+      "UpdateSavedItemRequest": {
+        "type": "object",
+        "properties": {
+          "nickname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdateScriptRequest": {
         "type": "object",
         "required": [
@@ -4147,6 +7259,14 @@
               "null"
             ]
           },
+          "email_verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the address was confirmed; `null` if it never was.\n\nSerialised, unlike every other operator-facing field below. Verification\nstatus is something the account legitimately needs to know about itself:\nit gates publishing, so without this the browser app can only discover\nit by attempting to publish and reading the `email_not_verified` error.\nThat is the difference between prompting someone to check their inbox\nand letting them find out when their upload fails.\n\nTimestamp rather than a bare boolean because it is what the column\nholds; `null` is falsy in the one client that consumes it."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -4163,7 +7283,9 @@
           "flames",
           "animations",
           "palettes",
-          "scripts"
+          "scripts",
+          "gallery_items",
+          "rooms"
         ],
         "properties": {
           "animations": {
@@ -4172,7 +7294,13 @@
           "flames": {
             "$ref": "#/components/schemas/ResourceUsage"
           },
+          "gallery_items": {
+            "$ref": "#/components/schemas/ResourceUsage"
+          },
           "palettes": {
+            "$ref": "#/components/schemas/ResourceUsage"
+          },
+          "rooms": {
             "$ref": "#/components/schemas/ResourceUsage"
           },
           "scripts": {
@@ -4293,6 +7421,31 @@
             ]
           }
         }
+      },
+      "UserRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "UserState": {
+        "type": "string",
+        "description": "Account state. `shadowbanned` accounts authenticate and behave normally\nfrom the inside; only other people stop seeing their content.",
+        "enum": [
+          "active",
+          "shadowbanned",
+          "disabled"
+        ]
       },
       "Variation": {
         "type": "object",
@@ -4521,6 +7674,17 @@
           "post",
           "any"
         ]
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
       },
       "Visibility": {
         "type": "string",

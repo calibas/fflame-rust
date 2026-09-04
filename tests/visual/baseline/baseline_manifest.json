@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "724fce44",
+  "git_hash": "a5b0bc0e",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -89,6 +89,354 @@
     "3d-zscale-smoke.png": {
       "bytes": 892,
       "sha256": "e8bc31ce5af5761fda5263d7aca2f10fb3f3e16974f93e7560b912f5afb9c893"
+    },
+    "escape-barnsley-m1-julia.png": {
+      "bytes": 31268,
+      "sha256": "a0d771a176724a0edab12adc8fc72d75caddbe08a04a6eb3abfdbf5dc578d47a"
+    },
+    "escape-barnsley-m3.png": {
+      "bytes": 3226,
+      "sha256": "a73cf1da80e038f960353a98f419012d0f8eadc478a0d7c42615add492a9dc8f"
+    },
+    "escape-burning-ship.png": {
+      "bytes": 4043,
+      "sha256": "968b7c80199549f8e8bea53de52c17b4ace06af89edd29039c07bea90a9260b8"
+    },
+    "escape-cactus.png": {
+      "bytes": 2491,
+      "sha256": "e2f91bf8bddcc41970b9e7c5cacdffd2fd78625fde4f4a903d69dd64261d1ce1"
+    },
+    "escape-collatz.png": {
+      "bytes": 38653,
+      "sha256": "838d103b70d74885745c315424146ceebb7ce69f897f6211a76bd9e8443a3663"
+    },
+    "escape-deep-threshold-direct.png": {
+      "bytes": 42510,
+      "sha256": "fe226e582f4605a0654ead23489487f071af47a4e3f80de8908a3d638166fc40"
+    },
+    "escape-deep-threshold-perturbed.png": {
+      "bytes": 38810,
+      "sha256": "0d38329acb8c9ba8a487c5d9e7cff5795d3007b5a2714fbd7e422a82a0c78319"
+    },
+    "escape-deep-zoom-30.png": {
+      "bytes": 36463,
+      "sha256": "5b0afab7a73e985093b387150d6db2df91bfdbf1bfe9c6de4da726bf147e41d8"
+    },
+    "escape-deep-zoom-42.png": {
+      "bytes": 32420,
+      "sha256": "d1f0ed6a5afb0e342aa7487d18d8bb0d7295729860d18f0b530f6bec19c0eb84"
+    },
+    "escape-ducks-deep-contrast.png": {
+      "bytes": 35917,
+      "sha256": "ccbaa21a9b9689b3b52a729e06a505d31ef1c7ea727e448d7eb1f739293e2150"
+    },
+    "escape-ducks-deep.png": {
+      "bytes": 5512,
+      "sha256": "307406015281df4f907ba0dbafd0fca5f2dec844cbbe5f5d07984dbd9921e57e"
+    },
+    "escape-ducks-julia.png": {
+      "bytes": 40025,
+      "sha256": "bd861c170421f9a233bbffa1a4b6236709dd5984742b811db3d255a0f8c13312"
+    },
+    "escape-ducks-param.png": {
+      "bytes": 23277,
+      "sha256": "90f326f06d9b05c726be5222a49da6c99e6eb6146fa9c4957816bfbc1ba8c154"
+    },
+    "escape-ducks-sec.png": {
+      "bytes": 41300,
+      "sha256": "b928ec08717bc50fe19319348b03471e54be7b1a7d777ed5cbbe0fcb30a4e5fa"
+    },
+    "escape-ducks-singularity.png": {
+      "bytes": 24304,
+      "sha256": "c370f085590b672984096af6cd0dd3fe0f91ad8176cff2e85d73c3830a5be769"
+    },
+    "escape-ducks-threshold-seam.png": {
+      "bytes": 29747,
+      "sha256": "4e0a7e3c86242f7d29a6f79aa8dcf75502de6e7c847b12ebb6eb6bbfa9789593"
+    },
+    "escape-exponential.png": {
+      "bytes": 7625,
+      "sha256": "4437da9a7ea49ae3a76af849a7f962306dafe7f255da522bb324d2bd27b3cf42"
+    },
+    "escape-fe-threshold-floatexp.png": {
+      "bytes": 49473,
+      "sha256": "cb81fb983c456e46b951e42b493f59d4fd0f051b9228908c6db20014ceda7227"
+    },
+    "escape-fe-threshold-scaled.png": {
+      "bytes": 49080,
+      "sha256": "9b8989db582d8614938dc10a21a64622dcbf4f357bc7b16cb924ff1ac3f5145d"
+    },
+    "escape-fe-zoom-60-edge.png": {
+      "bytes": 15944,
+      "sha256": "56b149e4277403e3cc4f0f4c53cbc77086c73073d50faf81f72f8b7c7e4b731e"
+    },
+    "escape-feather-deep.png": {
+      "bytes": 1164,
+      "sha256": "c27051b682f34e0ba6706f72e4dbf817f139c6ea07b9ea76579d1625567b0fa4"
+    },
+    "escape-feather.png": {
+      "bytes": 11665,
+      "sha256": "6fb96b097dcdadc224b0031d93ac98e8ba29b62a7898513815077dbf0aaa43d4"
+    },
+    "escape-julia-deep-perturbed.png": {
+      "bytes": 8056,
+      "sha256": "7884a689172148b78297dcd2fc46f83cc9c3be4137ae00ab925fa2f1cb78fc33"
+    },
+    "escape-julia-dragon.png": {
+      "bytes": 6467,
+      "sha256": "6b368d907fb83062dedb916fea1299b163b1dc303efd3fdb05e2bf55e174363a"
+    },
+    "escape-kaliset-deep.png": {
+      "bytes": 8986,
+      "sha256": "9a9b7f0f93103f5dc153f7addd7d3dc96b31dc6be663fb98e4a485c3b2f81c71"
+    },
+    "escape-kaliset-glow.png": {
+      "bytes": 19839,
+      "sha256": "075faf36f5770786d52aefc9da5fb781f0fb7f7b98a11cd6c77536ecfcf1341c"
+    },
+    "escape-lambda-de-julia.png": {
+      "bytes": 9356,
+      "sha256": "af4b90c2657fd9be1bb70d40b70949615e3dab9242db95a72cc7785e0e6df26d"
+    },
+    "escape-lambda-deep.png": {
+      "bytes": 26929,
+      "sha256": "3947478530aa6450afbee8b0df85000ab0e30baebd4fef13033a81dd3f3686b9"
+    },
+    "escape-lambda-plane.png": {
+      "bytes": 5411,
+      "sha256": "fe242efe64b9907010579cebd22cf69a8a7b6c086554e60aa01a02f9df987c65"
+    },
+    "escape-lambda-sine-bouquet.png": {
+      "bytes": 20486,
+      "sha256": "e0753d3243b66fe63d8c1a356065b01208fab7c53edaa160af5ace9035915ced"
+    },
+    "escape-lambda-sine-plane.png": {
+      "bytes": 23375,
+      "sha256": "f44349f9faf92667e8617e77664a31c46086cbd8439cee49b02ac74046f333ae"
+    },
+    "escape-lattes-v0.png": {
+      "bytes": 42632,
+      "sha256": "32380707280924bb7408676089740c5d575910213e391241bd4154dd7188c6b2"
+    },
+    "escape-lattes-v2.png": {
+      "bytes": 30802,
+      "sha256": "6ae83d6f086fa48eedbbc1d0aa874d02b0879c316490d8dbf8471c5705f5f151"
+    },
+    "escape-littlewood.png": {
+      "bytes": 14682,
+      "sha256": "9cd25b898aba2cd36a5f6c250d15d20a8f979a63c58626e8649ae67275064124"
+    },
+    "escape-magnet-1.png": {
+      "bytes": 4572,
+      "sha256": "4b55c42fa15c8014e6bdb4be482aa320841bfe788ac1ecee6089ac695391223c"
+    },
+    "escape-magnet-deep.png": {
+      "bytes": 21932,
+      "sha256": "f5c50b840ef41c83fe74b53edbad7ba61823fec6890b1b31c2c0088b31b4fb17"
+    },
+    "escape-mandelbrot-biomorph-re.png": {
+      "bytes": 4211,
+      "sha256": "2906d6118bfc4a575800968ef2ac4ec8ebc5fe6e0c0f5c7fdeefb0a1a4caa007"
+    },
+    "escape-mandelbrot-damped.png": {
+      "bytes": 4148,
+      "sha256": "a1343da3a4eb1cc4717bdcdfb92384eb5c0f1af0c2164d77992b86ab654d3b23"
+    },
+    "escape-mandelbrot-de.png": {
+      "bytes": 11140,
+      "sha256": "c2f24d04a83beb589bbe901548eab25a0eb47022883eafa3b31f633cf33d978e"
+    },
+    "escape-mandelbrot-escape-count.png": {
+      "bytes": 4393,
+      "sha256": "8c8d5d47ce6f555631806d140fff5970e74db6439fae24eacede45b0b17c3c2e"
+    },
+    "escape-mandelbrot-orbit-trap.png": {
+      "bytes": 20238,
+      "sha256": "1c5f8884b25bec68a4425af666742854972ea781ba7d5d4a7b99b81234f500f1"
+    },
+    "escape-mandelbrot-seahorse-zoom.png": {
+      "bytes": 11055,
+      "sha256": "8a2acb7f6d29ded735da3e1818a9ead5cd2849be685850cd0c41dba4a0dee6c6"
+    },
+    "escape-mandelbrot-smooth.png": {
+      "bytes": 3848,
+      "sha256": "52a76b8a0e00a3493074b3738c295778edfe0ea5347aebbfce7c895afe156700"
+    },
+    "escape-mandelbrot-stripe.png": {
+      "bytes": 24472,
+      "sha256": "25e3377789cf7e6019c354c3545f58e07f5bfe6ed715d46a33dbc6d42f790f5f"
+    },
+    "escape-mandelbrot-tia.png": {
+      "bytes": 14970,
+      "sha256": "97b0034afd92ab60d08378bb97d283ed7b1632cc1c81b3f96bf04df847e95aab"
+    },
+    "escape-manowar-deep.png": {
+      "bytes": 36492,
+      "sha256": "db34248534f93f4c548a4e87ce7cbac893699d91426e20e55f79a07efbdae681"
+    },
+    "escape-manowar.png": {
+      "bytes": 2321,
+      "sha256": "cbb1701ed623f87bb4708d0c89045ba7ac1d7b3012ea1f94d347ac58b62d43a6"
+    },
+    "escape-markus-lyapunov-ab.png": {
+      "bytes": 17695,
+      "sha256": "1ce0539be697ed826e1bc3f80711dc5b9d23a3e34a24498b0b3094554d05e6ad"
+    },
+    "escape-mcmullen-carpet.png": {
+      "bytes": 11711,
+      "sha256": "70a36ef778e917024c2d315e6496013cae940f9feb7fb7666063ceb9b1b82dd9"
+    },
+    "escape-mcmullen-deep.png": {
+      "bytes": 25102,
+      "sha256": "3782d9bc394c6b60486b37297290f589d95e1cab62b2b29c5a47805469249722"
+    },
+    "escape-multibrot-4.png": {
+      "bytes": 3536,
+      "sha256": "64590dd657725e31b972f142a39fc3136cd8cad53c07ed8471451c8fd2f9f610"
+    },
+    "escape-multibrot-dip-seam.png": {
+      "bytes": 46083,
+      "sha256": "3f58d551b0752f49b568f66916e15c46879cab93e86bb02393944f791fd3b5a4"
+    },
+    "escape-newton-3.png": {
+      "bytes": 9063,
+      "sha256": "9185a58f498fbcb85f0be3a30ef438ebcd77c4917de6668e1832e4140c0a0f50"
+    },
+    "escape-newton-cubic-trap.png": {
+      "bytes": 9753,
+      "sha256": "92773594a61d4b3515f87295c13c8524020a9fedc8b9a5f738e533c5816d3c34"
+    },
+    "escape-newton-deep.png": {
+      "bytes": 11546,
+      "sha256": "ed2e73fccee69bc74859d5744cbf3914ffc05141ae998e6819488dbc806a8192"
+    },
+    "escape-newton-halley-cubic.png": {
+      "bytes": 5613,
+      "sha256": "1813c03c0c1422d3980aeb5f85cbf54118419b451bc20896ce58778e82865b21"
+    },
+    "escape-newton-halley-deep.png": {
+      "bytes": 6018,
+      "sha256": "35d2faac9d675e11ef6e89a1017ac9aad78f7a49647b15ec3d968a8c7b3ea0e4"
+    },
+    "escape-newton-octic-star.png": {
+      "bytes": 22283,
+      "sha256": "fd725c56b1f254b56141dd9f28d023963bda154440c61fa5ea6adaa57866b6a1"
+    },
+    "escape-newton-relaxed.png": {
+      "bytes": 17071,
+      "sha256": "43a051c4cf5363644e9c22a2045352fe0e9c2a5ee667f32167b92456151fd99a"
+    },
+    "escape-newton-sine-roots.png": {
+      "bytes": 9882,
+      "sha256": "7cb68cf8799f82c6c3308ba87c77b3b42f057f5d6b1d8bf2b19d5381de9272fc"
+    },
+    "escape-normal-map-relief.png": {
+      "bytes": 14011,
+      "sha256": "c90a0047e11d2b86d9740f6979c7ce36a65739d13a2fae2fc1a55405a6e3bcb6"
+    },
+    "escape-nova-3.png": {
+      "bytes": 6089,
+      "sha256": "9ad6bd2ea2ee133d3a5010db42443b57642f6eb14ecf3fbcb9c7727cf8249e68"
+    },
+    "escape-nova-deep.png": {
+      "bytes": 21102,
+      "sha256": "c33f8fd60342c63683d62fd9d1dd50fef3dd1eb23fbddbf9f9d07f453175d68d"
+    },
+    "escape-nova4-sphere.png": {
+      "bytes": 24818,
+      "sha256": "4203c06703942c4a75384b47aed37e349a94549a4452a0d39949a59a4ef44ea9"
+    },
+    "escape-novaretti-julia.png": {
+      "bytes": 32594,
+      "sha256": "7ef88f98aae6d6b139682eb2d6390a78b8a831f8f494f801708c075433e6bd25"
+    },
+    "escape-novaretti-period.png": {
+      "bytes": 19348,
+      "sha256": "5530610c8e3ca4e2357281dc5cce3beafbcce15b5caeb859c9b48be2368c4dbe"
+    },
+    "escape-novaretti.png": {
+      "bytes": 24372,
+      "sha256": "142ad8963845c3490cdaa66549d63c2cd640e1397d3cd1be6b6c99a776e2854f"
+    },
+    "escape-origami-butterfly.png": {
+      "bytes": 46892,
+      "sha256": "9163c274dc035c311e03fe72d68efa96c7fde839073d3eb0a613c1ed200c9115"
+    },
+    "escape-origami-relief-paper.png": {
+      "bytes": 49653,
+      "sha256": "7420367ac397e62b9a964742e9ff56c7b12883ad93ce0151d07d4b23e0db0d4d"
+    },
+    "escape-origami-relief-soft.png": {
+      "bytes": 47324,
+      "sha256": "4467063157fef912a0e0f2f809397568ab4088d223636d5fe7b26a8240a3a146"
+    },
+    "escape-origami-relief.png": {
+      "bytes": 47953,
+      "sha256": "297d585224f7f1acff843ee3c6e87c8b7d5290f2fbe1c3144fd27c24fd18531b"
+    },
+    "escape-phoenix-classic.png": {
+      "bytes": 4187,
+      "sha256": "57879f51a9e4614c82f46d3d86c982980ba76cca752b673b59bee196f60e7629"
+    },
+    "escape-phoenix-deep.png": {
+      "bytes": 136,
+      "sha256": "c72274a22cba2dcef62e0f62834446ee39b0cd95ad0faa27a89b3b49f48aa390"
+    },
+    "escape-phoenix-past-floatexp.png": {
+      "bytes": 35631,
+      "sha256": "70fe71ce1d2d13c85d31a8fe341ae0a88d4ddbe1e461048aa22e4e311bd03208"
+    },
+    "escape-phoenix-short-orbit.png": {
+      "bytes": 43434,
+      "sha256": "8234f3cd4819c7f00e9e306645ffe2ca1cefaef5c3352badb97b1044e2df3eb2"
+    },
+    "escape-ship-celtic.png": {
+      "bytes": 5910,
+      "sha256": "d97ec26312b50362c154706e80fb523bdbda41e6df7f49887d74b2a437fe5e50"
+    },
+    "escape-ship-deep-floatexp.png": {
+      "bytes": 40199,
+      "sha256": "de04c243a47095f00cdf6210a84e552674e3d0d54c4654b2eeb022c54685e77a"
+    },
+    "escape-ship-deep-perturbed.png": {
+      "bytes": 14679,
+      "sha256": "6209497c050523c68965291e17323e427bf92b833fe73e8e30274988f88720e7"
+    },
+    "escape-spider.png": {
+      "bytes": 4433,
+      "sha256": "831e50156991cee4375185c58f1f31d285acd38347880a97b02003af6ab702a8"
+    },
+    "escape-spiral-trap-golden.png": {
+      "bytes": 9821,
+      "sha256": "c928023874b5a46dadbfa8f28b473688823ffc4f1a2726001d13675f3c3a9289"
+    },
+    "escape-standard-map-ftle.png": {
+      "bytes": 38330,
+      "sha256": "d906dc7cdd7505ba163b29c02d7b9084ee51fb58d1556e52d8d616f660c4a6ea"
+    },
+    "escape-tetration-period.png": {
+      "bytes": 11866,
+      "sha256": "0231417a33bc3657e06d818ee48626de7ef159117be8cc191e08aef1f70400af"
+    },
+    "escape-tetration.png": {
+      "bytes": 12783,
+      "sha256": "2c824a2a8ffcdbd854ea68f78bee2577314b66b12e903bf41083998ea900a27b"
+    },
+    "escape-tricorn-deep.png": {
+      "bytes": 46881,
+      "sha256": "e5b37f57fcfd8cb94439cdd35ca61b2f70622fca31deb309a81b1824bedeecb9"
+    },
+    "escape-tricorn.png": {
+      "bytes": 3765,
+      "sha256": "e9278cb53f7e5f38bb037ae304bd6b997077b9a74ca6fc67cf57fd697f682136"
+    },
+    "escape-trig-sin.png": {
+      "bytes": 24595,
+      "sha256": "84a2713f6fedb713bdefe34998a31e82a4850e130a0f03809c99c365a60fb350"
+    },
+    "escape-weierstrass-hillshade.png": {
+      "bytes": 38486,
+      "sha256": "ca74f7984395b2590d71983e8466010f716190e6b3ed3dade1060cb0bf902570"
     },
     "general-warmup.png": {
       "bytes": 35605,

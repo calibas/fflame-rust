@@ -191,3 +191,25 @@ async fn many_renders_in_a_row_reuse_the_device() {
         .expect("render after release() should rebuild the device");
     assert_eq!(after.pixels.len(), 48 * 48 * 4);
 }
+
+/// This module carries BOTH engines, so an escape config renders here
+/// rather than reporting a missing engine — the difference from
+/// ../flame, and the reason ../render is the one a general viewer
+/// should embed.
+#[pollster::test]
+async fn an_escape_config_also_renders() {
+    let config = include_str!("../../../tests/visual/configs/escape/mandelbrot-smooth.fflame");
+
+    let tile = match fflame_render::render_impl(config, 64, 64, Some(500_000), None).await {
+        Ok(t) => t,
+        Err(e) if e.contains("no GPU adapter") => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+        Err(e) => panic!("escape render failed: {e}"),
+    };
+    assert!(
+        tile.pixels.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0),
+        "all pixels black — the escape render produced nothing"
+    );
+}

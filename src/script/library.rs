@@ -54,6 +54,10 @@ pub const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/gnarls.rhai"),
     ),
     (
+        "escape_deep.rhai",
+        include_str!("../../assets/scripts/generators/escape_deep.rhai"),
+    ),
+    (
         "iq_palette.rhai",
         include_str!("../../assets/scripts/modifiers/iq_palette.rhai"),
     ),
@@ -393,6 +397,10 @@ fn collect_dir(dir: &std::path::Path, out: &mut Vec<FoundScript>) {
     }
 }
 
+// The flame engine's own tests: they build flames, compile flame
+// shaders, or exercise the flame renderer's caches, all of which
+// need the variation catalog.
+#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,6 +526,11 @@ mod tests {
         }
     }
 
+    // Asserts a property of the SHIPPED build: the committed contract
+    // and the built-in script set are generated with default features, so
+    // a module build with an engine gated off compares against a file that
+    // was never meant to describe it.
+    #[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
     #[test]
     fn every_shipped_script_runs() {
         // A starter that errors is worse than no starter: it is the first

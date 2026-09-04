@@ -64,6 +64,8 @@ pub enum PanelType {
     Variations,
     /// Subflames panel (switch which flame the editor operates on)
     Subflames,
+    /// Escape-time fractal editing surface (formula, view, coloring)
+    Escape,
 }
 
 impl std::fmt::Display for PanelType {
@@ -96,6 +98,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Variations => t!("panels.variations"),
             PanelType::Subflames => t!("panels.subflames"),
             PanelType::Scripts => t!("panels.scripts"),
+            PanelType::Escape => t!("panels.escape"),
         };
         write!(f, "{}", title)
     }
@@ -111,6 +114,12 @@ pub enum WorkspaceLayout {
     /// Scripting: Scripts panel left, Fractal Browser right — write a
     /// script, run it, browse what it generated.
     Scripting,
+    /// Escape Time: the Escape panel where Transforms sits in
+    /// Standard, because in escape mode the transform list is not
+    /// what is being edited — the formula is. Colors and History to
+    /// the right, since coloring is most of the work once a formula
+    /// and a view are chosen.
+    EscapeTime,
     /// Compact: Full-screen viewport only (mobile / small screens)
     Compact,
 }
@@ -221,6 +230,7 @@ impl Workspace {
             PanelType::Variations => egui::vec2(450.0, 500.0),
             PanelType::Subflames => egui::vec2(320.0, 360.0),
             PanelType::Scripts => egui::vec2(420.0, 560.0),
+            PanelType::Escape => egui::vec2(350.0, 520.0),
         }
     }
 
@@ -230,6 +240,7 @@ impl Workspace {
         self.dock_state = match layout {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Animation => Self::create_animation_layout(help_was_open),
+            WorkspaceLayout::EscapeTime => Self::create_escape_layout(help_was_open),
             WorkspaceLayout::Scripting => Self::create_scripting_layout(help_was_open),
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
@@ -460,6 +471,36 @@ impl Workspace {
         state
     }
 
+    /// Create Escape Time layout: the Escape panel in the left dock
+    /// where Standard puts Transforms, Colors and History on the
+    /// right.
+    ///
+    /// Deliberately NOT a copy of Standard with one panel swapped:
+    /// Transforms, the Triangle Editor and the View panel all edit a
+    /// flame, and in escape mode they are either inert or actively
+    /// misleading. What is left is the formula, the picture, and the
+    /// colouring of it.
+    fn create_escape_layout(preserve_help: bool) -> DockState<PanelType> {
+        let mut state = DockState::new(vec![PanelType::FractalViewport]);
+
+        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
+            egui_dock::NodeIndex::root(),
+            0.28,
+            vec![PanelType::Escape],
+        );
+
+        let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.72,
+            vec![PanelType::Colors, PanelType::History],
+        );
+
+        if preserve_help {
+            state.add_window(vec![PanelType::Help]);
+        }
+        state
+    }
+
     /// Create Compact layout: Full-screen viewport only (mobile / small screens)
     fn create_compact_layout() -> DockState<PanelType> {
         DockState::new(vec![PanelType::FractalViewport])
@@ -560,6 +601,15 @@ mod layout_tests {
                 WorkspaceLayout::Scripting,
                 &[PanelType::FractalViewport, PanelType::Scripts, PanelType::FractalBrowser],
             ),
+            (
+                WorkspaceLayout::EscapeTime,
+                &[
+                    PanelType::FractalViewport,
+                    PanelType::Escape,
+                    PanelType::Colors,
+                    PanelType::History,
+                ],
+            ),
             (WorkspaceLayout::Compact, &[PanelType::FractalViewport]),
         ];
         for (layout, panels) in cases {
@@ -571,11 +621,66 @@ mod layout_tests {
         }
     }
 
-    /// Help stays open across a layout switch — the two layouts that
+    /// Loading a fractal of the other KIND must move the workspace,
+    /// in both directions.
+    ///
+    /// The app watches `ConfigManager::load_generation` and calls
+    /// into `apply_layout`; what this holds is the property that
+    /// makes the switch worth making -- each layout carries the
+    /// panel that edits its own kind of fractal and not the other's.
+    /// If that ever stopped being true the switch would be pointless
+    /// churn, and nothing else would notice.
+    #[test]
+    fn each_layout_carries_the_editor_for_its_own_fractal() {
+        let mut ws = Workspace::default();
+
+        ws.apply_layout(WorkspaceLayout::EscapeTime);
+        assert!(
+            ws.panel_exists(PanelType::Escape),
+            "the Escape layout must carry the Escape panel"
+        );
+        assert!(
+            !ws.panel_exists(PanelType::Transforms),
+            "the Escape layout must not carry the flame transform editor"
+        );
+
+        ws.apply_layout(WorkspaceLayout::Standard);
+        assert!(
+            ws.panel_exists(PanelType::Transforms),
+            "the Standard layout must carry the flame transform editor"
+        );
+        assert!(
+            !ws.panel_exists(PanelType::Escape),
+            "the Standard layout has no Escape panel -- which is why an              escape fractal loaded into it had nothing to edit it with"
+        );
+    }
+
+    /// The Escape layout must not carry the flame-only editors.
+    ///
+    /// Their presence is exactly the confusion this layout exists to
+    /// remove: Transforms, the Triangle Editor and the View panel all
+    /// edit a flame, and none of them does anything in escape mode.
+    #[test]
+    fn escape_layout_omits_the_flame_only_editors() {
+        let mut ws = Workspace::new();
+        ws.apply_layout(WorkspaceLayout::EscapeTime);
+        for p in [PanelType::Transforms, PanelType::TriangleEditor, PanelType::View] {
+            assert!(
+                !ws.panel_exists(p),
+                "{p:?} is a flame-only editor and must not be in the Escape layout"
+            );
+        }
+    }
+
+    /// Help stays open across a layout switch — the layouts that
     /// preserve it re-add it as a floating window.
     #[test]
     fn help_survives_switching_to_animation_or_scripting() {
-        for layout in [WorkspaceLayout::Animation, WorkspaceLayout::Scripting] {
+        for layout in [
+            WorkspaceLayout::Animation,
+            WorkspaceLayout::Scripting,
+            WorkspaceLayout::EscapeTime,
+        ] {
             let mut ws = Workspace::new();
             ws.dock_state.add_window(vec![PanelType::Help]);
             ws.apply_layout(layout);

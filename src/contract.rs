@@ -253,6 +253,25 @@ pub fn generate() -> serde_json::Value {
             "float", "unlimited_float", "integer", "unlimited_integer",
             "boolean", "angle", "enum"
         ],
+        "render_modes": {
+            "$comment": "The `render_mode` vocabulary, published so the API \
+                         gets an AUTOMATIC signal when it grows. Adding a \
+                         value to an enum adds an array element, not a key \
+                         path, so the shape fingerprint cannot see it -- \
+                         which is why `escape` had to be communicated by \
+                         hand. Adding THIS KEY moved the fingerprint once, \
+                         deliberately, and from now on the API's \
+                         `render_mode_enum_covers_every_contract_mode` \
+                         checks the values. Read from the config blob's ROOT \
+                         `render_mode` (its home since config v3), never from \
+                         `flame.render_mode`, which current clients do not \
+                         write at all.",
+            "wire_path": "/render_mode",
+            "known": crate::scene::transforms::RenderMode::ALL
+                .iter()
+                .map(|m| serde_json::to_value(m).expect("render mode serialises"))
+                .collect::<Vec<_>>(),
+        },
         "limits": {
             "$comment": "Two different KINDS of number. Variation slots are \
                          packed dynamically, so the per-variation cap is a \
@@ -351,11 +370,56 @@ pub fn generate() -> serde_json::Value {
 mod tests {
     use super::*;
 
+    /// `RenderMode::ALL` must list every variant, because the engine
+    /// contract publishes it as the render-mode vocabulary and the API
+    /// checks its own Postgres enum against that list.
+    ///
+    /// The exhaustive match is the enforcement: Rust cannot iterate a
+    /// plain enum, so a fourth mode instead fails to compile HERE, and
+    /// the count assertion then makes whoever adds it put the value in
+    /// `ALL` rather than deleting a match arm to get green.
+    ///
+    /// Worth knowing before that day comes: `render_mode` now conflates
+    /// two ideas, dimensionality for flames and family for escape. A 3D
+    /// escape fractal would want a second axis rather than a fourth
+    /// value here (the API flagged the same thing from their side).
+    #[test]
+    fn every_render_mode_is_published_in_the_contract() {
+        use crate::scene::transforms::RenderMode;
+        for mode in RenderMode::ALL {
+            match mode {
+                RenderMode::TwoD | RenderMode::ThreeD | RenderMode::Escape => {}
+            }
+        }
+        assert_eq!(
+            RenderMode::ALL.len(),
+            3,
+            "a render mode was added: put it in RenderMode::ALL, and tell the API \
+             (their conformance test reads the contract's render_modes.known)"
+        );
+        let doc = super::generate();
+        let known = doc["render_modes"]["known"]
+            .as_array()
+            .expect("render_modes.known is an array");
+        assert_eq!(known.len(), RenderMode::ALL.len());
+        assert_eq!(
+            doc["render_modes"]["wire_path"].as_str(),
+            Some("/render_mode"),
+            "the server reads the blob's ROOT render_mode"
+        );
+    }
+
     /// The committed contract must match what the code generates.
     ///
     /// This is the whole point: the vocabulary cannot drift from the
     /// enums, because drift fails here. Follows the same arrangement as
     /// the canonical shader dumps.
+    ///
+    /// Asserts a property of the SHIPPED build: the committed file is
+    /// generated with default features, so a module build with an
+    /// engine gated off would compare against a document that was never
+    /// meant to describe it (the built-in script kinds differ, for one).
+    #[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
     #[test]
     fn contract_is_current() {
         let fresh = serde_json::to_string_pretty(&generate()).expect("serialize");
@@ -398,6 +462,11 @@ mod tests {
     /// API would reject a set that does not match what the client
     /// enforces, and the mismatch would show up as a script that
     /// uploads fine and then refuses to load.
+    // Asserts a property of the SHIPPED build: the committed contract
+    // and the built-in script set are generated with default features, so
+    // a module build with an engine gated off compares against a file that
+    // was never meant to describe it.
+    #[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
     #[test]
     fn the_contract_reserves_exactly_what_the_client_refuses() {
         let doc = generate();
@@ -457,6 +526,8 @@ mod tests {
     /// `register_from_def` drops an alias that collides with an existing
     /// name or another alias — correct, but it means adding one is not
     /// self-verifying: the warning goes to a log nobody reads.
+    // Resolves names from the catalog.
+    #[cfg(feature = "engine-flame")]
     #[test]
     fn lowercase_aliases_resolve_to_their_capital_d_variations() {
         let reg = crate::variations::global_registry();

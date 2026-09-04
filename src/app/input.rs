@@ -86,6 +86,45 @@ impl App {
         let config = self.config_manager.active_config();
         let pan_step = 0.1 / config.zoom;
 
+        // Escape mode speaks its own view vocabulary (center strings +
+        // zoom_log2): route arrows through the shared pan entry (which
+        // branches to escape panning internally, using drag semantics --
+        // one press scrolls 5% of the viewport) and +/- through the
+        // escape zoom helper. Escape re-renders come from the
+        // EscapeRerender update path, so `view_changed_by_keyboard`
+        // (a flame accumulation-reset signal) stays untouched.
+        if config.render_mode == crate::scene::transforms::RenderMode::Escape {
+            let (vw, vh) = self.fractal_viewport_size;
+            let panel_size = egui::Vec2::new(vw.max(1) as f32, vh.max(1) as f32);
+            let step = 0.05 * panel_size.x.min(panel_size.y);
+            // Drag semantics: content follows the drag, so the view
+            // moves OPPOSITE the delta -- matching the flame arrows'
+            // direction convention (Up scrolls the view up).
+            let drag = match event.physical_key {
+                PhysicalKey::Code(KeyCode::ArrowUp) => Some(egui::Vec2::new(0.0, step)),
+                PhysicalKey::Code(KeyCode::ArrowDown) => Some(egui::Vec2::new(0.0, -step)),
+                PhysicalKey::Code(KeyCode::ArrowLeft) => Some(egui::Vec2::new(step, 0.0)),
+                PhysicalKey::Code(KeyCode::ArrowRight) => Some(egui::Vec2::new(-step, 0.0)),
+                _ => None,
+            };
+            if let Some(drag) = drag {
+                crate::ui::pan_fractal_view(&mut self.config_manager, drag, panel_size);
+                return;
+            }
+            match event.physical_key {
+                PhysicalKey::Code(KeyCode::Equal) | PhysicalKey::Code(KeyCode::NumpadAdd) => {
+                    crate::ui::escape_zoom_by_factor(&mut self.config_manager, 1.5);
+                    return;
+                }
+                PhysicalKey::Code(KeyCode::Minus) | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
+                    crate::ui::escape_zoom_by_factor(&mut self.config_manager, 1.0 / 1.5);
+                    return;
+                }
+                _ => {}
+            }
+            // Space/F/Escape etc. fall through to the shared handling.
+        }
+
         match event.physical_key {
             PhysicalKey::Code(KeyCode::ArrowUp) => {
                 // Up in screen space: (0, -1), convert to pan frame

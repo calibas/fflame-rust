@@ -289,9 +289,78 @@ pub enum ConfigPath {
     /// Remove a density effect by index
     RemoveDensityEffect { index: usize },
 
+    // ===== Escape-time (fragment mode) — config.escape.* =====
+    // All of these route to UpdateType::EscapeRerender: the fragment
+    // renderer re-renders whole frames, so there is no flame-style
+    // reset/accumulate distinction to encode per path.
+    /// Formula registry name (`config.escape.formula`).
+    EscapeFormula,
+    /// Julia toggle (parameter plane vs dynamical plane).
+    EscapeJulia,
+    /// Julia seed, real part.
+    EscapeJuliaRe,
+    /// Julia seed, imaginary part.
+    EscapeJuliaIm,
+    /// View center, exact decimal string (deep-zoom payload — undoable,
+    /// deliberately NOT animatable; see the plan's open questions).
+    EscapeCenterRe,
+    EscapeCenterIm,
+    /// Zoom exponent (log2). Stored f64; travels as ConfigValue::Float,
+    /// whose f32 mantissa (~6e-5 granularity at exponent 1000) is far
+    /// below anything a slider or track produces. Phase 4 revisits if a
+    /// deep dive ever needs finer undo steps.
+    EscapeZoomLog2,
+    /// View rotation, radians.
+    EscapeRotation,
+    /// Per-pixel iteration ceiling.
+    EscapeMaxIter,
+    /// Supersampling factor (1 = off): N× per axis + box downsample.
+    EscapeSupersample,
+    EscapeDownsample,
+    /// Reference-orbit period hint (0 = none). Verified before use.
+    EscapeReferencePeriod,
+    /// Escape radius squared.
+    EscapeBailout,
+    /// Mann-iteration damping α (complex): `z ← (1−α)z + α·f(z)`.
+    /// `1 + 0i` = plain iteration.
+    EscapeDampingRe,
+    EscapeDampingIm,
+    /// Biomorph classification axis, as its wire string
+    /// (`"off"`/`"re"`/`"im"`).
+    EscapeBiomorph,
+    // Relief shading — a lit-surface layer over the coloring's output.
+    // Ten paths rather than one struct-valued path because the whole
+    // undo/redo and scripting surface is keyed on leaf parameters.
+    EscapeShadingEnabled,
+    EscapeShadingLightAngle,
+    EscapeShadingHeight,
+    EscapeShadingField,
+    EscapeContrastMode,
+    EscapeContrastClip,
+    EscapeContrastStrength,
+    EscapeContrastTurns,
+    EscapeShadingShadowColor,
+    EscapeShadingShadowStrength,
+    EscapeShadingShadowBlend,
+    EscapeShadingHighlightColor,
+    EscapeShadingHighlightStrength,
+    EscapeShadingHighlightBlend,
+    EscapeShadingSoftness,
+    EscapeShadingTextureKind,
+    EscapeShadingTextureStrength,
+    EscapeShadingTextureScale,
+    /// Coloring registry name.
+    EscapeColoring,
+    /// One parameter of the ACTIVE formula, by name — keyed like
+    /// `DensityEffectParam`, so formulas never need per-name variants.
+    EscapeFormulaParam { param: String },
+    /// One parameter of the active coloring, same shape.
+    EscapeColoringParam { param: String },
+
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
     SystemBurnIn,
+    SystemOrbitCacheMb,
     SystemVsyncEnabled,
     SystemTargetFps,
     SystemFlyMouseSensitivity,
@@ -766,6 +835,45 @@ impl Display for ConfigPath {
                 write!(f, "Final Transform {} → Post-Affine Scale", index + 1)
             }
 
+            // Escape-time
+            ConfigPath::EscapeFormula => write!(f, "Escape Formula"),
+            ConfigPath::EscapeJulia => write!(f, "Julia Mode"),
+            ConfigPath::EscapeJuliaRe => write!(f, "Julia Seed Re"),
+            ConfigPath::EscapeJuliaIm => write!(f, "Julia Seed Im"),
+            ConfigPath::EscapeCenterRe => write!(f, "Escape Center Re"),
+            ConfigPath::EscapeCenterIm => write!(f, "Escape Center Im"),
+            ConfigPath::EscapeZoomLog2 => write!(f, "Escape Zoom"),
+            ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
+            ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
+            ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
+            ConfigPath::EscapeDownsample => write!(f, "Escape Downsample"),
+            ConfigPath::EscapeReferencePeriod => write!(f, "Escape Reference Period"),
+            ConfigPath::EscapeBailout => write!(f, "Escape Bailout"),
+            ConfigPath::EscapeDampingRe => write!(f, "Damping (re)"),
+            ConfigPath::EscapeDampingIm => write!(f, "Damping (im)"),
+            ConfigPath::EscapeBiomorph => write!(f, "Biomorph Mode"),
+            ConfigPath::EscapeShadingEnabled => write!(f, "Relief Shading"),
+            ConfigPath::EscapeShadingLightAngle => write!(f, "Relief Light Angle"),
+            ConfigPath::EscapeShadingHeight => write!(f, "Relief Height"),
+            ConfigPath::EscapeShadingField => write!(f, "Relief Source Field"),
+            ConfigPath::EscapeContrastMode => write!(f, "Auto Contrast"),
+            ConfigPath::EscapeContrastClip => write!(f, "Contrast Clip"),
+            ConfigPath::EscapeContrastStrength => write!(f, "Contrast Strength"),
+            ConfigPath::EscapeContrastTurns => write!(f, "Contrast Turns"),
+            ConfigPath::EscapeShadingShadowColor => write!(f, "Relief Shadow Colour"),
+            ConfigPath::EscapeShadingShadowStrength => write!(f, "Relief Shadow Strength"),
+            ConfigPath::EscapeShadingShadowBlend => write!(f, "Relief Shadow Blend"),
+            ConfigPath::EscapeShadingHighlightColor => write!(f, "Relief Highlight Colour"),
+            ConfigPath::EscapeShadingHighlightStrength => write!(f, "Relief Highlight Strength"),
+            ConfigPath::EscapeShadingHighlightBlend => write!(f, "Relief Highlight Blend"),
+            ConfigPath::EscapeShadingSoftness => write!(f, "Relief Softness"),
+            ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
+            ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
+            ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
+            ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
+            ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
+            ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
+
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
@@ -829,6 +937,7 @@ impl Display for ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
             ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
+            ConfigPath::SystemOrbitCacheMb => write!(f, "System: Orbit Cache Size (MB)"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
             ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
             ConfigPath::SystemFlyMouseSensitivity => write!(f, "System: Fly Mouse Sensitivity"),
@@ -967,6 +1076,55 @@ impl ConfigPath {
             ConfigPath::UseDynamicBlend => I18nKey::simple("history.param.use_dynamic_blend"),
             ConfigPath::MaxIterations => I18nKey::simple("history.param.max_iterations"),
             ConfigPath::DeterministicRng => I18nKey::simple("history.param.deterministic_rng"),
+
+            // Escape-time
+            ConfigPath::EscapeFormula => I18nKey::simple("history.param.escape_formula"),
+            ConfigPath::EscapeJulia => I18nKey::simple("history.param.escape_julia"),
+            ConfigPath::EscapeJuliaRe => I18nKey::simple("history.param.escape_julia_re"),
+            ConfigPath::EscapeJuliaIm => I18nKey::simple("history.param.escape_julia_im"),
+            ConfigPath::EscapeCenterRe => I18nKey::simple("history.param.escape_center_re"),
+            ConfigPath::EscapeCenterIm => I18nKey::simple("history.param.escape_center_im"),
+            ConfigPath::EscapeZoomLog2 => I18nKey::simple("history.param.escape_zoom"),
+            ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
+            ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
+            ConfigPath::EscapeSupersample => I18nKey::simple("history.param.escape_supersample"),
+            ConfigPath::EscapeDownsample => I18nKey::simple("history.param.escape_downsample"),
+            ConfigPath::EscapeReferencePeriod => {
+                I18nKey::simple("history.param.escape_reference_period")
+            }
+            ConfigPath::EscapeBailout => I18nKey::simple("history.param.escape_bailout"),
+            ConfigPath::EscapeDampingRe => I18nKey::simple("history.param.escape_damping_re"),
+            ConfigPath::EscapeDampingIm => I18nKey::simple("history.param.escape_damping_im"),
+            ConfigPath::EscapeBiomorph => I18nKey::simple("history.param.escape_biomorph"),
+            ConfigPath::EscapeShadingEnabled => I18nKey::simple("history.param.escape_shading_enabled"),
+            ConfigPath::EscapeShadingLightAngle => I18nKey::simple("history.param.escape_shading_light_angle"),
+            ConfigPath::EscapeShadingHeight => I18nKey::simple("history.param.escape_shading_height"),
+            ConfigPath::EscapeShadingField => I18nKey::simple("history.param.escape_shading_field"),
+            ConfigPath::EscapeContrastMode => I18nKey::simple("history.param.escape_contrast_mode"),
+            ConfigPath::EscapeContrastClip => I18nKey::simple("history.param.escape_contrast_clip"),
+            ConfigPath::EscapeContrastStrength => {
+                I18nKey::simple("history.param.escape_contrast_strength")
+            }
+            ConfigPath::EscapeContrastTurns => I18nKey::simple("history.param.escape_contrast_turns"),
+            ConfigPath::EscapeShadingShadowColor => I18nKey::simple("history.param.escape_shading_shadow_color"),
+            ConfigPath::EscapeShadingShadowStrength => I18nKey::simple("history.param.escape_shading_shadow_strength"),
+            ConfigPath::EscapeShadingShadowBlend => I18nKey::simple("history.param.escape_shading_shadow_blend"),
+            ConfigPath::EscapeShadingHighlightColor => I18nKey::simple("history.param.escape_shading_highlight_color"),
+            ConfigPath::EscapeShadingHighlightStrength => I18nKey::simple("history.param.escape_shading_highlight_strength"),
+            ConfigPath::EscapeShadingHighlightBlend => I18nKey::simple("history.param.escape_shading_highlight_blend"),
+            ConfigPath::EscapeShadingSoftness => I18nKey::simple("history.param.escape_shading_softness"),
+            ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
+            ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
+            ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
+            ConfigPath::EscapeColoring => I18nKey::simple("history.param.escape_coloring"),
+            ConfigPath::EscapeFormulaParam { param } => I18nKey::with_params(
+                "history.param.escape_formula_param",
+                vec![("param", param.clone())],
+            ),
+            ConfigPath::EscapeColoringParam { param } => I18nKey::with_params(
+                "history.param.escape_coloring_param",
+                vec![("param", param.clone())],
+            ),
 
             // Transforms
             ConfigPath::TransformCount => I18nKey::simple("history.param.transform_count"),
@@ -1300,6 +1458,9 @@ impl ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread => I18nKey::simple("history.param.system_iterations_per_thread"),
             ConfigPath::SystemBurnIn => I18nKey::simple("history.param.system_burn_in"),
+            ConfigPath::SystemOrbitCacheMb => {
+                I18nKey::simple("history.param.system_orbit_cache_mb")
+            }
             ConfigPath::SystemVsyncEnabled => I18nKey::simple("history.param.system_vsync_enabled"),
             ConfigPath::SystemTargetFps => I18nKey::simple("history.param.system_target_fps"),
             ConfigPath::SystemFlyMouseSensitivity => I18nKey::simple("history.param.system_fly_mouse_sensitivity"),
@@ -2042,6 +2203,11 @@ pub enum UpdateType {
     ShadingOnly,     // Refresh the solid-rendering shade pass params (lighting) — no reset, no re-accumulation
     ColorOnly,       // Re-run color accumulation (palette, color mode)
     IterationReset,  // Full reset - clear accumulation, restart iterations
+    /// Re-render the escape-time (fragment mode) frame. Last, so
+    /// `merge` (which takes the Ord max) never downgrades it: a change
+    /// set mixing escape and flame paths must still re-render escape,
+    /// and the flame flags ride along in UpdateAction's union anyway.
+    EscapeRerender,
 }
 
 impl UpdateType {
@@ -2232,6 +2398,46 @@ impl ConfigPath {
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
+            // Escape-time: the fragment renderer re-renders the frame;
+            // no flame-style reset/accumulate distinction exists there.
+            ConfigPath::EscapeFormula
+            | ConfigPath::EscapeJulia
+            | ConfigPath::EscapeJuliaRe
+            | ConfigPath::EscapeJuliaIm
+            | ConfigPath::EscapeCenterRe
+            | ConfigPath::EscapeCenterIm
+            | ConfigPath::EscapeZoomLog2
+            | ConfigPath::EscapeRotation
+            | ConfigPath::EscapeMaxIter
+            | ConfigPath::EscapeSupersample
+            | ConfigPath::EscapeDownsample
+            | ConfigPath::EscapeReferencePeriod
+            | ConfigPath::EscapeBailout
+            | ConfigPath::EscapeDampingRe
+            | ConfigPath::EscapeDampingIm
+            | ConfigPath::EscapeBiomorph
+            | ConfigPath::EscapeShadingEnabled
+            | ConfigPath::EscapeShadingLightAngle
+            | ConfigPath::EscapeShadingHeight
+            | ConfigPath::EscapeContrastMode
+            | ConfigPath::EscapeContrastClip
+            | ConfigPath::EscapeContrastStrength
+            | ConfigPath::EscapeContrastTurns
+            | ConfigPath::EscapeShadingField
+            | ConfigPath::EscapeShadingShadowColor
+            | ConfigPath::EscapeShadingShadowStrength
+            | ConfigPath::EscapeShadingShadowBlend
+            | ConfigPath::EscapeShadingHighlightColor
+            | ConfigPath::EscapeShadingHighlightStrength
+            | ConfigPath::EscapeShadingHighlightBlend
+            | ConfigPath::EscapeShadingSoftness
+            | ConfigPath::EscapeShadingTextureKind
+            | ConfigPath::EscapeShadingTextureStrength
+            | ConfigPath::EscapeShadingTextureScale
+            | ConfigPath::EscapeColoring
+            | ConfigPath::EscapeFormulaParam { .. }
+            | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
+
             // Effects (post-processing, just need tonemap re-run)
             ConfigPath::DensityEffectEnabled { .. }
             | ConfigPath::DensityEffectParam { .. }
@@ -2244,6 +2450,8 @@ impl ConfigPath {
 
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
+            // Disk housekeeping only: nothing on the GPU changes.
+            ConfigPath::SystemOrbitCacheMb => UpdateType::None,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
             // Nothing to re-render: it only changes what a future
@@ -2465,6 +2673,45 @@ impl ConfigPath {
 
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
+
+            // Escape-time
+            ConfigPath::EscapeFormula => "Escape.Formula".to_string(),
+            ConfigPath::EscapeJulia => "Escape.Julia".to_string(),
+            ConfigPath::EscapeJuliaRe => "Escape.JuliaRe".to_string(),
+            ConfigPath::EscapeJuliaIm => "Escape.JuliaIm".to_string(),
+            ConfigPath::EscapeCenterRe => "Escape.CenterRe".to_string(),
+            ConfigPath::EscapeCenterIm => "Escape.CenterIm".to_string(),
+            ConfigPath::EscapeZoomLog2 => "Escape.ZoomLog2".to_string(),
+            ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
+            ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
+            ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
+            ConfigPath::EscapeDownsample => "Escape.Downsample".to_string(),
+            ConfigPath::EscapeReferencePeriod => "Escape.ReferencePeriod".to_string(),
+            ConfigPath::EscapeBailout => "Escape.Bailout".to_string(),
+            ConfigPath::EscapeDampingRe => "Escape.DampingRe".to_string(),
+            ConfigPath::EscapeDampingIm => "Escape.DampingIm".to_string(),
+            ConfigPath::EscapeBiomorph => "Escape.Biomorph".to_string(),
+            ConfigPath::EscapeShadingEnabled => "Escape.Shading.Enabled".to_string(),
+            ConfigPath::EscapeShadingLightAngle => "Escape.Shading.LightAngle".to_string(),
+            ConfigPath::EscapeShadingHeight => "Escape.Shading.Height".to_string(),
+            ConfigPath::EscapeShadingField => "Escape.Shading.Field".to_string(),
+            ConfigPath::EscapeContrastMode => "Escape.Contrast.Mode".to_string(),
+            ConfigPath::EscapeContrastClip => "Escape.Contrast.Clip".to_string(),
+            ConfigPath::EscapeContrastStrength => "Escape.Contrast.Strength".to_string(),
+            ConfigPath::EscapeContrastTurns => "Escape.Contrast.Turns".to_string(),
+            ConfigPath::EscapeShadingShadowColor => "Escape.Shading.ShadowColor".to_string(),
+            ConfigPath::EscapeShadingShadowStrength => "Escape.Shading.ShadowStrength".to_string(),
+            ConfigPath::EscapeShadingShadowBlend => "Escape.Shading.ShadowBlend".to_string(),
+            ConfigPath::EscapeShadingHighlightColor => "Escape.Shading.HighlightColor".to_string(),
+            ConfigPath::EscapeShadingHighlightStrength => "Escape.Shading.HighlightStrength".to_string(),
+            ConfigPath::EscapeShadingHighlightBlend => "Escape.Shading.HighlightBlend".to_string(),
+            ConfigPath::EscapeShadingSoftness => "Escape.Shading.Softness".to_string(),
+            ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
+            ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
+            ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
+            ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
+            ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
+            ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
@@ -2506,6 +2753,7 @@ impl ConfigPath {
             // System Settings (not typically animated, but included for completeness)
             ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
             ConfigPath::SystemBurnIn => "System.BurnIn".to_string(),
+            ConfigPath::SystemOrbitCacheMb => "System.OrbitCacheMb".to_string(),
             ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
             ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
             ConfigPath::SystemFlyMouseSensitivity => "System.FlyMouseSensitivity".to_string(),
@@ -2625,6 +2873,55 @@ impl ConfigPath {
         }
 
         // Parse compound paths with dots
+
+        // Escape-time paths: Escape.{field} and Escape.{kind}Param.{param}
+        if let Some(rest) = s.strip_prefix("Escape.") {
+            let parts: Vec<&str> = rest.split('.').collect();
+            match parts.as_slice() {
+                ["Formula"] => return Some(ConfigPath::EscapeFormula),
+                ["Julia"] => return Some(ConfigPath::EscapeJulia),
+                ["JuliaRe"] => return Some(ConfigPath::EscapeJuliaRe),
+                ["JuliaIm"] => return Some(ConfigPath::EscapeJuliaIm),
+                ["CenterRe"] => return Some(ConfigPath::EscapeCenterRe),
+                ["CenterIm"] => return Some(ConfigPath::EscapeCenterIm),
+                ["ZoomLog2"] => return Some(ConfigPath::EscapeZoomLog2),
+                ["Rotation"] => return Some(ConfigPath::EscapeRotation),
+                ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
+                ["Supersample"] => return Some(ConfigPath::EscapeSupersample),
+                ["Downsample"] => return Some(ConfigPath::EscapeDownsample),
+                ["ReferencePeriod"] => return Some(ConfigPath::EscapeReferencePeriod),
+                ["Bailout"] => return Some(ConfigPath::EscapeBailout),
+                ["DampingRe"] => return Some(ConfigPath::EscapeDampingRe),
+                ["DampingIm"] => return Some(ConfigPath::EscapeDampingIm),
+                ["Biomorph"] => return Some(ConfigPath::EscapeBiomorph),
+                ["Shading", "Enabled"] => return Some(ConfigPath::EscapeShadingEnabled),
+                ["Shading", "LightAngle"] => return Some(ConfigPath::EscapeShadingLightAngle),
+                ["Shading", "Height"] => return Some(ConfigPath::EscapeShadingHeight),
+                ["Contrast", "Mode"] => return Some(ConfigPath::EscapeContrastMode),
+                ["Contrast", "Clip"] => return Some(ConfigPath::EscapeContrastClip),
+                ["Contrast", "Strength"] => return Some(ConfigPath::EscapeContrastStrength),
+                ["Contrast", "Turns"] => return Some(ConfigPath::EscapeContrastTurns),
+                ["Shading", "Field"] => return Some(ConfigPath::EscapeShadingField),
+                ["Shading", "ShadowColor"] => return Some(ConfigPath::EscapeShadingShadowColor),
+                ["Shading", "ShadowStrength"] => return Some(ConfigPath::EscapeShadingShadowStrength),
+                ["Shading", "ShadowBlend"] => return Some(ConfigPath::EscapeShadingShadowBlend),
+                ["Shading", "HighlightColor"] => return Some(ConfigPath::EscapeShadingHighlightColor),
+                ["Shading", "HighlightStrength"] => return Some(ConfigPath::EscapeShadingHighlightStrength),
+                ["Shading", "HighlightBlend"] => return Some(ConfigPath::EscapeShadingHighlightBlend),
+                ["Shading", "Softness"] => return Some(ConfigPath::EscapeShadingSoftness),
+                ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
+                ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
+                ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
+                ["Coloring"] => return Some(ConfigPath::EscapeColoring),
+                ["FormulaParam", param] => {
+                    return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
+                }
+                ["ColoringParam", param] => {
+                    return Some(ConfigPath::EscapeColoringParam { param: param.to_string() })
+                }
+                _ => return None,
+            }
+        }
         let parts: Vec<&str> = s.split('.').collect();
 
         // Transform paths: Transform.{index}.{field}...
@@ -2809,6 +3106,7 @@ impl ConfigPath {
             match parts[1] {
                 "IterationsPerThread" => return Some(ConfigPath::SystemIterationsPerThread),
                 "BurnIn" => return Some(ConfigPath::SystemBurnIn),
+                "OrbitCacheMb" => return Some(ConfigPath::SystemOrbitCacheMb),
                 "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
                 "TargetFps" => return Some(ConfigPath::SystemTargetFps),
                 "FlyMouseSensitivity" => return Some(ConfigPath::SystemFlyMouseSensitivity),
@@ -3080,6 +3378,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformCount
         | ConfigPath::SystemIterationsPerThread
         | ConfigPath::SystemBurnIn
+        | ConfigPath::SystemOrbitCacheMb
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
         | ConfigPath::SystemPngStripMetadata => {
@@ -3175,6 +3474,64 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::ColorEffectParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
+
+        // Escape-time continuous parameters
+        ConfigPath::EscapeJuliaRe
+        | ConfigPath::EscapeJuliaIm
+        | ConfigPath::EscapeZoomLog2
+        | ConfigPath::EscapeRotation
+        | ConfigPath::EscapeBailout
+        | ConfigPath::EscapeDampingRe
+        | ConfigPath::EscapeDampingIm
+        | ConfigPath::EscapeFormulaParam { .. }
+        | ConfigPath::EscapeColoringParam { .. } => {
+            json.as_f64().map(|f| ConfigValue::Float(f as f32))
+        }
+        ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+        ConfigPath::EscapeSupersample => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+        ConfigPath::EscapeJulia => json.as_bool().map(ConfigValue::Bool),
+        // Relief shading: the continuous controls animate (sweeping the
+        // light around a still is the obvious use), the selectors and
+        // the on/off do not.
+        ConfigPath::EscapeShadingLightAngle
+        | ConfigPath::EscapeShadingHeight
+        | ConfigPath::EscapeContrastClip
+        | ConfigPath::EscapeContrastStrength
+        | ConfigPath::EscapeContrastTurns
+        | ConfigPath::EscapeShadingShadowStrength
+        | ConfigPath::EscapeShadingHighlightStrength
+        | ConfigPath::EscapeShadingSoftness
+        | ConfigPath::EscapeShadingTextureStrength
+        | ConfigPath::EscapeShadingTextureScale => {
+            json.as_f64().map(|v| ConfigValue::Float(v as f32))
+        }
+        ConfigPath::EscapeShadingShadowColor | ConfigPath::EscapeShadingHighlightColor => {
+            let a = json.as_array()?;
+            if a.len() != 3 {
+                return None;
+            }
+            let mut rgb = [0.0f32; 3];
+            for (slot, v) in rgb.iter_mut().zip(a) {
+                *slot = v.as_f64()? as f32;
+            }
+            Some(ConfigValue::ColorRgb(rgb))
+        }
+        ConfigPath::EscapeShadingEnabled
+        | ConfigPath::EscapeContrastMode
+        | ConfigPath::EscapeShadingField
+        | ConfigPath::EscapeShadingTextureKind
+        | ConfigPath::EscapeDownsample
+        | ConfigPath::EscapeShadingShadowBlend
+        | ConfigPath::EscapeShadingHighlightBlend => None,
+        // Selectors and the deep-zoom center strings are structural /
+        // exact — not animatable (centers deliberately: see the plan's
+        // open questions on center-path animation).
+        ConfigPath::EscapeFormula
+        | ConfigPath::EscapeColoring
+        | ConfigPath::EscapeReferencePeriod
+        | ConfigPath::EscapeBiomorph
+        | ConfigPath::EscapeCenterRe
+        | ConfigPath::EscapeCenterIm => None,
 
         // Complex types not supported for animation (yet)
         ConfigPath::TonemapCurve | ConfigPath::Palette => None,

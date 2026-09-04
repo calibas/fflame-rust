@@ -1,0 +1,5382 @@
+//! Reference orbits for perturbation rendering.
+//!
+//! One full-precision Mandelbrot orbit per (center, precision), stored
+//! as f32 pairs for the GPU — only `2Zₙ` enters the delta iteration's
+//! linear term, so *relative* precision is what matters and f32
+//! mantissas suffice (the standard Kalles-Fraktaler practice); with
+//! Zhuoran rebasing the near-zero passes are handled by construction
+//! rather than by wider storage.
+//!
+//! The fixed-point iteration state is kept alive so deepening
+//! (`max_iter` grows) is an **append**, not a recompute — the plan's
+//! "append-on-deepen" cache behavior. The cache key is
+//! (center strings, limb count); a max_iter increase extends the hit
+//! in place.
+
+use super::bigfloat::{BigComplex, BigFloat};
+use super::fixedpoint::{limbs_for_zoom, FixedComplex, FixedPoint};
+
+/// Cap on ball-method period detection when hunting a nucleus
+/// reference. Beyond this the search costs more than it saves.
+const NUCLEUS_MAX_PERIOD: u32 = 100_000;
+
+/// Try to relocate a parameter-plane reference to the minibrot
+/// nucleus governing the view. Returns (nucleus_re, nucleus_im,
+/// period, ref_offset) where ref_offset = (view − nucleus) in units
+/// of the PIXEL SPACING (f32-safe: the nucleus lies within ~a view
+/// radius). Mandelbrot (power 2), parameter plane only.
+fn nucleus_for_view(
+    center_re: &str,
+    center_im: &str,
+    zoom_log2: f64,
+    height_px: f64,
+    power: u32,
+) -> Option<(String, String, u32, [f32; 2])> {
+    let hit = super::nucleus::locate_minibrot(
+        center_re,
+        center_im,
+        zoom_log2,
+        NUCLEUS_MAX_PERIOD,
+        power,
+        20_000,
+    )?;
+    // ref_offset = (C_view − C_nucleus) / S, computed exactly in
+    // fixed-point, exported via floatexp.
+    let n = limbs_for_zoom(zoom_log2) + 1;
+    let vx = FixedPoint::from_decimal(center_re, n)?;
+    let vy = FixedPoint::from_decimal(center_im, n)?;
+    let nx = FixedPoint::from_decimal(&hit.re, n)?;
+    let ny = FixedPoint::from_decimal(&hit.im, n)?;
+    // S = 2^(2 − zoom) / height ⇒ 1/S = height · 2^(zoom − 2).
+    let to_px = |d: FixedPoint| -> f64 {
+        let fe = d.to_floatexp();
+        let e = fe.e as f64 + (zoom_log2 - 2.0) + height_px.log2();
+        if fe.m == 0.0 || e < -60.0 {
+            0.0
+        } else {
+            fe.m * 2f64.powf(e.min(40.0))
+        }
+    };
+    let off = [to_px(vx.sub(&nx)) as f32, to_px(vy.sub(&ny)) as f32];
+    // 2^15 px: beyond this the f32 sum (pixel_offset + ref_offset)
+    // in the shader's d0 quantizes pixel positions past ~2^-8 px —
+    // and by ~2^23 px merges pixels entirely (the zoom-700 uniform-
+    // collapse bug, ground-truthed against exact orbits). A nucleus
+    // that far out buys little; the plain reference is correct.
+    if !off[0].is_finite() || !off[1].is_finite() || off[0].abs() > 32768.0 || off[1].abs() > 32768.0
+    {
+        return None;
+    }
+    Some((hit.re, hit.im, hit.period, off))
+}
+
+/// Pan-reuse ceiling on a relocation offset, in pixel-spacing units.
+///
+/// The shader forms d0 = pixel_offset + ref_offset in f32 PIXEL
+/// units, so a large offset quantizes pixel positions: at 2^13 px the
+/// sum's ulp is ~2^-10 px (invisible); the nucleus path documents the
+/// hard wall at 2^15 (error ~2^-8) and total collapse at ~2^23 (the
+/// zoom-700 uniform-frame bug). 2^13 keeps a comfortable margin: a
+/// pan gesture reuses the reference for ~10 viewport-heights of
+/// travel before one recompute re-centers it.
+pub(crate) const MAX_RELOCATE_PX: f64 = 8192.0;
+
+/// Which map a reference orbit iterates -- everything that changes
+/// the ORBIT, and therefore everything its cache key must cover.
+///
+/// Collapses what used to be three loose arguments threaded through
+/// every orbit signature, and adds the piece Phoenix needs: a
+/// continuous formula parameter. That cannot ride a variant enum the
+/// way the Tricorn fold selector does, and a reference cached without
+/// it would be silently reused after the user changed it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MapId {
+    /// Exponent of the power map (2 for the Ship and Phoenix families).
+    pub power: u32,
+    /// Burning Ship family: the fold step, with `variant` selecting
+    /// the arrangement.
+    pub ship: bool,
+    /// Ship fold variant when `ship`; otherwise which NON-fold family
+    /// this is (`MAP_PLAIN`, `MAP_CONJ`, `MAP_PHOENIX`).
+    pub variant: u32,
+    /// Continuous parameter that changes the map. Phoenix's `p`
+    /// (re, im); zero for every other family.
+    pub params: [f32; 2],
+}
+
+impl MapId {
+    /// The plain power map `z^p + c`.
+    pub fn power(p: u32) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_PLAIN, params: [0.0, 0.0] }
+    }
+    /// A Burning Ship fold variant.
+    pub fn ship(variant: u32) -> Self {
+        Self { power: 2, ship: true, variant: variant.min(5), params: [0.0, 0.0] }
+    }
+    /// `conj(z)^p + c`.
+    pub fn conj(p: u32) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_CONJ, params: [0.0, 0.0] }
+    }
+    /// `z^2 + c + p*z_prev`.
+    pub fn phoenix(p: [f32; 2]) -> Self {
+        Self { power: 2, ship: false, variant: MAP_PHOENIX, params: p }
+    }
+
+    /// Lambda: `c*z*(1-z)`, seeded at the critical point 1/2.
+    pub fn lambda() -> Self {
+        Self { power: 2, ship: false, variant: MAP_LAMBDA, params: [0.0, 0.0] }
+    }
+
+    /// Feather: `z^p / (1 + x^2 - i*y^2) + c`.
+    pub fn feather(p: u32) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_FEATHER, params: [0.0, 0.0] }
+    }
+
+    /// McMullen: `z^n + c/z^m`, seeded at c.
+    pub fn mcmullen(n: u32, m: u32) -> Self {
+        Self {
+            power: n.max(2),
+            ship: false,
+            variant: MAP_MCMULLEN,
+            params: [m.max(1) as f32, 0.0],
+        }
+    }
+
+    /// Magnet I (variant 0) or II (variant 1).
+    pub fn magnet(variant: u32) -> Self {
+        Self {
+            power: 2,
+            ship: false,
+            variant: MAP_MAGNET,
+            params: [variant.min(1) as f32, 0.0],
+        }
+    }
+
+    /// Manowar: Phoenix's recurrence with p = 1 and a pixel seed.
+    pub fn manowar() -> Self {
+        Self { power: 2, ship: false, variant: MAP_MANOWAR, params: [1.0, 0.0] }
+    }
+
+    /// Newton root-finder: `z - R * step(z)` for a scheme and function.
+    pub fn newton(p: u32, scheme: u32, func: u32, relax: [f32; 2]) -> Self {
+        Self { power: p.max(2), ship: false, variant: newton_variant(scheme, func), params: relax }
+    }
+
+    /// Nova: the Newton step over `z^p - 1`, plus c.
+    pub fn nova(p: u32, relax: [f32; 2]) -> Self {
+        Self { power: p.max(2), ship: false, variant: MAP_NOVA, params: relax }
+    }
+
+    /// Kaliset: `|z|/<z,z> -+ c`.
+    pub fn kaliset(plus_c: bool) -> Self {
+        Self {
+            power: 2,
+            ship: false,
+            variant: MAP_KALISET,
+            params: [if plus_c { 1.0 } else { 0.0 }, 0.0],
+        }
+    }
+
+    /// Ducks: `log(fold(z) + c)`, the formula's variant.
+    pub fn ducks(variant: u32) -> Self {
+        Self { power: 2, ship: false, variant: MAP_DUCKS, params: [variant as f32, 0.0] }
+    }
+    /// Bytes for the on-disk key and the serialized identity.
+    pub fn key_bytes(&self) -> [u8; 17] {
+        let mut b = [0u8; 17];
+        b[0..4].copy_from_slice(&self.power.to_le_bytes());
+        b[4] = self.ship as u8;
+        b[5..9].copy_from_slice(&self.variant.to_le_bytes());
+        b[9..13].copy_from_slice(&self.params[0].to_le_bytes());
+        b[13..17].copy_from_slice(&self.params[1].to_le_bytes());
+        b
+    }
+}
+
+/// `ship_variant` when `ship` is FALSE: which non-fold map the
+/// reference iterates. 0 is the plain power `z^p`; 1 is `conj(z)^p`,
+/// the Tricorn/Multicorn family.
+///
+/// Encoded in the existing variant rather than as a parallel `conj`
+/// flag because that field already threads through every orbit
+/// signature, the on-disk key and `serves()` -- so a new flag would
+/// mean the same fact in two places, and a cache key that could
+/// disagree with itself. When a third non-fold family lands, the
+/// honest refactor is a small `MapId` struct carrying all of
+/// (power, ship, variant); this is deliberately the cheaper step.
+pub const MAP_PLAIN: u32 = 0;
+pub const MAP_CONJ: u32 = 1;
+/// `z^2 + c + p*z_prev` -- carries a second live state and a
+/// continuous parameter, so it is the family that forced [`MapId`].
+pub const MAP_PHOENIX: u32 = 2;
+/// `z^2 + z_prev + c` seeded at z_0 = z_-1 = c (Manowar). The same
+/// two-term recurrence as Phoenix with p = 1, so it shares the step,
+/// the second delta and the pair rebase -- it differs ONLY in the
+/// seed, which is why it is a variant here rather than its own tier
+/// everywhere downstream.
+pub const MAP_MANOWAR: u32 = 3;
+
+/// Lambda (logistic) — `z' = c*z*(1 - z)`, seeded at the CRITICAL
+/// POINT z_0 = 1/2 rather than at zero.
+///
+/// The seed is the whole reason this cannot ride `MAP_PLAIN`:
+/// `d/dz [z(1-z)]` vanishes at 1/2, so 1/2 is the critical point whose
+/// orbit decides the parameter plane. Zero is a FIXED POINT of the map
+/// for every c, so a zero-seeded lambda plane is one flat colour.
+///
+/// The value 4 collides with Burning Ship's Buffalo fold, exactly as
+/// MAP_MANOWAR collides with Celtic; `ship` disambiguates, and every
+/// read of `ship_variant` as a map family must be guarded by `!ship`.
+pub const MAP_LAMBDA: u32 = 4;
+
+/// Feather — `z' = z^p / (1 + x^2 - i*y^2) + c`.
+///
+/// The first RATIONAL reference map, and the reason
+/// [`FixedPoint::recip`] exists. Its denominator's real part is
+/// `1 + x^2`, so `|D| >= 1` for every z: the reciprocal is bounded by
+/// 1 and always fits fixed point's +-128 range. That is what makes
+/// Feather the rational family that could ship before the
+/// pole-bearing ones (Magnet, McMullen), whose denominators vanish.
+///
+/// The denominator is also NOT holomorphic — it reads the components
+/// of z separately — which costs BLA but not perturbation: the delta
+/// of each component is its own cancellation-free binomial.
+pub const MAP_FEATHER: u32 = 5;
+
+/// McMullen — `z' = z^n + c/z^m`, seeded at `z_0 = c`.
+///
+/// The first reference map with a genuine POLE: `z = 0` sends the
+/// iterate to infinity. [`FixedComplex::div`] refuses when the
+/// quotient leaves fixed point's ±128 range, and this branch treats
+/// that refusal as ESCAPE — which is what it physically is, and what
+/// the shader's own pole sentinel says by feeding a large value into
+/// the bailout.
+///
+/// `n` rides `power`; `m` rides `map_params[0]`, since a MapId has
+/// one integer exponent and this family needs two.
+pub const MAP_MCMULLEN: u32 = 6;
+
+/// Magnet — `((z^2 + c - 1)/(2z + c - 2))^2` (variant 0, Magnet I)
+/// and its cubic sibling (variant 1, Magnet II).
+///
+/// The parameter rides `map_params[0]` as the VARIANT, and the map
+/// CONVERGES: these are the renormalization fractals whose orbits
+/// settle at z = 1, so the perturbed loop needs the settle test that
+/// [`crate::escape::assembler::PerturbTier::is_convergent`] turns on.
+/// Without it a converging pixel would run to `max_iter` and the
+/// perturbed image would differ from the direct one.
+pub const MAP_MAGNET: u32 = 7;
+
+/// Newton root-finder plane: a FAMILY of variants,
+/// `MAP_NEWTON_BASE + scheme + 3*func`, for the three schemes
+/// (Newton, Halley, Chebyshev) over the three polynomial functions
+/// (`z^p - 1`, `z^3 - 2z + 2`, `z^8 + 15z^4 - 16`). The power rides
+/// `power`, the complex relaxation rides `map_params`. Seeded at the
+/// pixel and c-free (`DynamicalOnly`): the renderer requests it with
+/// `julia_c = Some((0, 0))`, which seeds the reference at the centre
+/// and gives the pixels a Julia-style delta (d0 seed, no dc term).
+///
+/// The first of the BIG-FLOAT families (see [`map_is_big`]): the
+/// Newton map sends a neighbourhood of every zero of f' to the far
+/// plane (|Z| reaches ~1/(3|Z|^2) past a pole approach -- 1e12 from
+/// a 1e-6 miss), which no fixed binary point holds, so the live
+/// state is a [`BigComplex`].
+pub const MAP_NEWTON_BASE: u32 = 8;
+/// The last Newton variant (scheme 2 over func 2), inclusive.
+pub const MAP_NEWTON_END: u32 = 16;
+/// Nova: the Newton step over `z^p - 1` plus c, seeded at the critical
+/// point z_0 = 1 on the parameter plane. Relaxation in `map_params`.
+pub const MAP_NOVA: u32 = 17;
+/// Kaliset: `|z|/<z,z> -+ c` (component abs), seeded at the pixel on
+/// the parameter plane. `map_params[0]` = 1 selects the `+ c` branch.
+/// Its inversion sends a near-zero iterate to 1/|z| -- 1.8e11 was
+/// measured on an ordinary orbit -- hence big-float.
+pub const MAP_KALISET: u32 = 18;
+/// Ducks: `log(fold(z) + c)`; `map_params[0]` is the formula's
+/// variant (0 and 4 perturb). The step is transcendental, so the
+/// reference runs on the big-float `ln`/`atan2` core.
+pub const MAP_DUCKS: u32 = 19;
+
+/// Whether a (ship, variant) pair names one of the families whose
+/// reference state lives in a [`BigComplex`] rather than fixed point.
+pub fn map_is_big(ship: bool, variant: u32) -> bool {
+    !ship && (MAP_NEWTON_BASE..=MAP_DUCKS).contains(&variant)
+}
+
+/// The Newton family's variant for a (scheme, func) pair.
+pub fn newton_variant(scheme: u32, func: u32) -> u32 {
+    MAP_NEWTON_BASE + scheme.min(2) + 3 * func.min(2)
+}
+
+/// Inverse of [`newton_variant`]: (scheme, func).
+pub fn newton_decode(variant: u32) -> (u32, u32) {
+    let k = variant.saturating_sub(MAP_NEWTON_BASE).min(8);
+    (k % 3, k / 3)
+}
+
+/// The period of the reference the renderer is CURRENTLY using, for
+/// the panel to display: 0 = aperiodic (or none yet). Progressive
+/// detection finds deeper periods as a dive continues and retires
+/// shallow ones, so this changes under the user mid-zoom - which is
+/// exactly what makes it worth showing rather than leaving implicit.
+static LIVE_PERIOD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Seconds a reference of `iters` iterations at `n_limbs` will take
+/// to compute, from the measured cost of the step.
+///
+/// A reference iteration is two truncated big multiplies and nothing
+/// else that matters (measured: 48.9 us at 197 limbs, 91% of it in
+/// those two calls), so the cost is iterations x limbs^2 x a
+/// constant. The constant is calibrated against the f3 reference:
+/// 10,100,100 iterations at 197 limbs took 495 s.
+pub fn predicted_orbit_seconds(iters: u32, n_limbs: usize) -> f64 {
+    const PER_LIMB2_ITER: f64 = 1.263e-9;
+    iters as f64 * (n_limbs as f64) * (n_limbs as f64) * PER_LIMB2_ITER
+}
+
+/// How far along the reference the renderer is waiting for is:
+/// (iterations computed, iterations wanted). Both zero when nothing
+/// is pending.
+static ORBIT_HAVE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static ORBIT_WANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Publish reference-build progress for the viewport overlay. `want`
+/// of zero clears it.
+pub fn set_orbit_progress(have: u32, want: u32) {
+    ORBIT_HAVE.store(have, std::sync::atomic::Ordering::Relaxed);
+    ORBIT_WANT.store(want, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// (computed, wanted) while a reference the render is WAITING on is
+/// still building, else None. A reference that renders progressively
+/// never reports here — there is nothing for the user to wait for.
+pub fn orbit_progress() -> Option<(u32, u32)> {
+    let want = ORBIT_WANT.load(std::sync::atomic::Ordering::Relaxed);
+    if want == 0 {
+        return None;
+    }
+    Some((ORBIT_HAVE.load(std::sync::atomic::Ordering::Relaxed), want))
+}
+
+/// Record the period of the reference now in use (None = aperiodic).
+pub fn set_live_reference_period(period: Option<u32>) {
+    LIVE_PERIOD.store(
+        period.unwrap_or(0),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The period of the reference now in use, if it is periodic.
+pub fn live_reference_period() -> Option<u32> {
+    match LIVE_PERIOD.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        p => Some(p),
+    }
+}
+
+/// The iterate's plain f32 value: `hi * 2^e`, flushing to zero below
+/// f32's normal range - which is exactly what the pre-exponent
+/// storage handed every consumer, so any reader that only needs a
+/// coarse value (BLA radii, the rebase test, `z_full`) keeps its old
+/// semantics.
+#[inline]
+pub fn entry_value(hi: [f32; 2], e: i32) -> [f32; 2] {
+    if e == 0 {
+        return hi;
+    }
+    if e < -126 {
+        return [0.0, 0.0];
+    }
+    let s = 2f32.powi(e);
+    [hi[0] * s, hi[1] * s]
+}
+
+/// Split an iterate into the (hi, lo, exponent) storage form.
+///
+/// Above 2^-90 the exponent is 0 and the pair is the plain DF value -
+/// byte-identical to the old format, and `lo` stays a normal f32.
+/// Below it the magnitude is taken from the LIVE fixed-point state,
+/// not from the f64 pair: deep references reach 2^-1379, far past
+/// f64's 2^-1074, so an f64 round-trip would lose the very iterates
+/// this exists to keep.
+fn split_entry(z: &FixedComplex, x: f64, y: f64) -> ([f32; 2], [f32; 2], i32) {
+    const DEEP: f64 = 8.077_935_669_463_16e-28; // 2^-90
+    if x.abs().max(y.abs()) >= DEEP {
+        let hix = x as f32;
+        let hiy = y as f32;
+        return (
+            [hix, hiy],
+            [(x - hix as f64) as f32, (y - hiy as f64) as f32],
+            0,
+        );
+    }
+    let fx = z.re.to_floatexp();
+    let fy = z.im.to_floatexp();
+    let e = match (fx.m == 0.0, fy.m == 0.0) {
+        (true, true) => return ([0.0, 0.0], [0.0, 0.0], 0),
+        (true, false) => fy.e,
+        (false, true) => fx.e,
+        (false, false) => fx.e.max(fy.e),
+    };
+    let comp = |f: super::fixedpoint::FloatExp| -> f64 {
+        if f.m == 0.0 {
+            return 0.0;
+        }
+        let shift = f.e - e;
+        if shift < -1070 {
+            return 0.0;
+        }
+        f.m * (shift as f64).exp2()
+    };
+    let mx = comp(fx);
+    let my = comp(fy);
+    let hix = mx as f32;
+    let hiy = my as f32;
+    (
+        [hix, hiy],
+        [(mx - hix as f64) as f32, (my - hiy as f64) as f32],
+        e.clamp(-2_000_000_000, 2_000_000_000) as i32,
+    )
+}
+
+/// The big-float twin of [`split_entry`]: the (hi, lo, exponent)
+/// storage triple plus the correction's DD value. Huge iterates
+/// (Newton's pole excursions) are clamped inside f32's range so the
+/// triple stays finite -- a NaN residual would poison every delta
+/// that rebases through it, while a clamped hi still trips the escape
+/// margin exactly as it should.
+fn split_entry_big(z: &BigComplex) -> ([f32; 2], [f32; 2], i32, [f64; 4]) {
+    const DEEP: f64 = 8.077_935_669_463_16e-28; // 2^-90
+    const HUGE: f64 = 3.0e38;
+    let x = z.re.to_f64().clamp(-HUGE, HUGE);
+    let y = z.im.to_f64().clamp(-HUGE, HUGE);
+    if x.abs().max(y.abs()) >= DEEP {
+        let hix = x as f32;
+        let hiy = y as f32;
+        return (
+            [hix, hiy],
+            [(x - hix as f64) as f32, (y - hiy as f64) as f32],
+            0,
+            [x, 0.0, y, 0.0],
+        );
+    }
+    let e = match (z.re.mag_exp(), z.im.mag_exp()) {
+        (None, None) => return ([0.0, 0.0], [0.0, 0.0], 0, [0.0; 4]),
+        (None, Some(e)) | (Some(e), None) => e,
+        (Some(a), Some(b)) => a.max(b),
+    };
+    let comp = |v: &BigFloat| -> f64 {
+        if v.is_zero() {
+            0.0
+        } else {
+            v.mul_pow2(-e).to_f64()
+        }
+    };
+    let mx = comp(&z.re);
+    let my = comp(&z.im);
+    let hix = mx as f32;
+    let hiy = my as f32;
+    (
+        [hix, hiy],
+        [(mx - hix as f64) as f32, (my - hiy as f64) as f32],
+        e.clamp(-2_000_000_000, 2_000_000_000) as i32,
+        [x, 0.0, y, 0.0],
+    )
+}
+
+/// (f, f', f'') of the Newton family's function `func` at z, in big
+/// float -- the CPU twin of the formula's `newton_jet` for the
+/// polynomial functions (0: z^p - 1, 1: z^3 - 2z + 2, 2: z^8 + 15z^4
+/// - 16).
+fn rootfinder_jet(
+    z: &BigComplex,
+    func: u32,
+    p: u32,
+    n: usize,
+) -> (BigComplex, BigComplex, BigComplex) {
+    let real = |v: f64| BigComplex::from_f64(v, 0.0, n);
+    let pow = |k: u32| -> BigComplex {
+        let mut acc = real(1.0);
+        for _ in 0..k {
+            acc = acc.mul(z);
+        }
+        acc
+    };
+    match func {
+        1 => (
+            pow(3).sub(&z.mul_pow2(1)).add(&real(2.0)),
+            pow(2).mul_f64(3.0).sub(&real(2.0)),
+            z.mul_f64(6.0),
+        ),
+        2 => (
+            pow(8).add(&pow(4).mul_f64(15.0)).sub(&real(16.0)),
+            pow(7).mul_f64(8.0).add(&pow(3).mul_f64(60.0)),
+            pow(6).mul_f64(56.0).add(&pow(2).mul_f64(180.0)),
+        ),
+        _ => {
+            let p = p.max(2);
+            (
+                pow(p).sub(&real(1.0)),
+                pow(p - 1).mul_f64(p as f64),
+                pow(p - 2).mul_f64((p * (p - 1)) as f64),
+            )
+        }
+    }
+}
+
+/// A computed reference orbit plus the live state to extend it.
+pub struct ReferenceOrbit {
+    /// Exact center, as the config's decimal strings.
+    pub center_re: String,
+    pub center_im: String,
+    /// Julia mode: the fixed c this orbit iterates under (the seed is
+    /// then the CENTER). None = parameter plane (seed 0, c = center).
+    pub julia_c: Option<(f32, f32)>,
+    /// The map's power (z^p + c). 2 = Mandelbrot (two-mul squaring
+    /// fast path); higher powers square-and-multiply.
+    pub power: u32,
+    /// Burning Ship family: use the ship-variant step (power 2).
+    pub ship: bool,
+    /// Which fold arrangement (0..=5, the formula's variant enum).
+    pub ship_variant: u32,
+    /// This orbit sits at a minibrot nucleus of the given period:
+    /// Z_period = 0 = Z_0 exactly, so the wrap-rebase is exact and
+    /// the orbit never needs extending past the period.
+    pub periodic: Option<u32>,
+    /// (view − reference) in pixel-spacing units, for the pipeline's
+    /// d0. Zero when the reference IS the view center.
+    pub ref_offset: [f32; 2],
+    /// The view the offset's PIXEL units were measured at. Pixel
+    /// units scale with S = 2^(2−zoom)/height, so consumers at any
+    /// other view must rescale by 2^(zoom−off_zoom)·(h/off_height)
+    /// (see [`Self::offset_for_view`]) — applying the raw numbers at
+    /// a different zoom silently pans the render toward the nucleus.
+    pub off_zoom_log2: f64,
+    pub off_height_px: f64,
+    /// Precision this orbit was computed at.
+    pub n_limbs: usize,
+    /// Zₙ as f32 pairs, orbit[0] = Z₀ = 0. Length = iterations
+    /// computed + 1.
+    pub orbit: Vec<[f32; 2]>,
+    /// The f64 residual of each entry below its f32 hi (DF storage:
+    /// Z ≈ hi + lo to ~2^-48 relative). Same length as `orbit`.
+    pub orbit_lo: Vec<[f32; 2]>,
+    /// Per-entry binary exponent: the stored iterate is
+    /// `(hi + lo) * 2^orbit_e[i]`. It is **zero for every iterate at
+    /// or above 2^-90**, so those entries hold the plain f32 value
+    /// and read exactly as they did before this field existed.
+    ///
+    /// Only a reference passing very close to a nucleus produces a
+    /// nonzero exponent - and those iterates are precisely the ones
+    /// f32 storage used to flush to zero, which deleted the 2*Z*delta
+    /// term from the delta recurrence for that step. Measured on the
+    /// z700 field location: a 2^-183 dip at i=8897 cost the delta 154
+    /// octaves it never recovered (growth ran at half the true rate
+    /// from there on), pushing a corner pixel's escape from its true
+    /// 23,649 out to 41,163 - the "deep zoom renders interior mush"
+    /// wall.
+    pub orbit_e: Vec<i32>,
+    /// Compression corrections (see [`Correction`]): the places the
+    /// DD shadow was reset to full precision. Everything BETWEEN
+    /// corrections is regenerated on load by replaying the shadow --
+    /// this is the entire content of a stored orbit's array section,
+    /// which is what turns a 202 MB f3 file into a couple of MB.
+    corrections: Vec<Correction>,
+    /// Live DD shadow (re_hi, re_lo, im_hi, im_lo), tracking the
+    /// fixed-point iterate. NaN = poisoned (a truncation or an
+    /// out-of-range dip): every subsequent entry then records a
+    /// correction, which is always safe.
+    shadow: [f64; 4],
+    /// DD of c, derived from the fixed-point c (recomputed on load).
+    c_dd: [f64; 4],
+    /// Iteration at which the REFERENCE escaped (|Z|² > 4), if it did.
+    /// Pixels needing more iterations rebase (wrap to index 0), so a
+    /// short orbit is fine — it just stops growing.
+    pub escaped_at: Option<u32>,
+    /// Whether this orbit holds content the disk store has not seen:
+    /// set by a fresh compute and by every extend that grows the
+    /// orbit, false on a store load, and — the reason it exists —
+    /// UNTOUCHED by [`Self::relocate_to`]. Without it, panning a deep
+    /// view would save the same orbit under a new center key on
+    /// every gesture event.
+    pub(crate) store_grown: bool,
+    /// Live fixed-point state (c and current Z) for append-on-deepen.
+    c: FixedComplex,
+    z: FixedComplex,
+    /// The PREVIOUS iterate, for two-term recurrences (Phoenix). Zero
+    /// and unread for every other family; carried in the live state
+    /// so a reloaded orbit deepens identically.
+    z_prev: FixedComplex,
+    /// Phoenix's `p`. Part of the orbit's IDENTITY:
+    /// a different p is a different orbit, so it is hashed into the
+    /// cache key and compared by `serves`.
+    pub map_params: [f32; 2],
+    p_fixed: FixedComplex,
+    /// Live BIG-FLOAT state for the families in [`map_is_big`]: the
+    /// iterate, the map's c and its complex parameter (Newton/Nova
+    /// relaxation). Fixed point can neither hold these orbits
+    /// (Newton's pole excursions, Kaliset's inversions) nor step them
+    /// (Ducks' log), so they iterate here and only their storage
+    /// triples reach the arrays. Zero-limb dummies elsewhere.
+    zb: BigComplex,
+    cb: BigComplex,
+    pb: BigComplex,
+    /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
+    /// f64 magnitudes underflow at 2^-537 and would falsely read as
+    /// closures) and its index — the ball-method candidate tracker.
+    min_octave: i64,
+    min_at: u32,
+    /// Closure acceptance limit in octaves: |Z_p| must sit BELOW the
+    /// view's pixel scale for the wrap to be exact there. Derived
+    /// from the zoom the orbit currently serves (tightens as the
+    /// view deepens — shallow closures retire and deeper periods get
+    /// discovered progressively).
+    closure_limit_octave: i64,
+    /// The |Z_period| octave at closure (periodic orbits only;
+    /// far-negative for Newton-exact nuclei). Persisted: validity at
+    /// a new zoom is closure_octave vs that zoom's limit.
+    pub closure_octave: i64,
+    /// A period hint that was TRIED on this center and turned out too
+    /// shallow to wrap at the view it was built for, with the |Z_p|
+    /// octave it actually closed at.
+    ///
+    /// Without this, a request carrying that hint cannot recognise
+    /// THIS orbit as its answer: the cache key hashes the center, not
+    /// the period, so a stored plain reference gets rejected and a
+    /// perfectly good multi-minute computation is repeated. Keeping
+    /// the octave rather than a bare "rejected" flag makes the
+    /// decision zoom-aware - the same hint may be too shallow here
+    /// and exactly right two hundred octaves out.
+    pub hint_period: Option<u32>,
+    pub hint_octave: i64,
+}
+
+/// Octave limit for accepting a closure at a zoom: 16 octaves below
+/// pixel scale (margin), and never looser than f32 visibility.
+pub fn closure_limit_for_zoom(zoom_log2: f64) -> i64 {
+    (-(zoom_log2 + 16.0) as i64).min(-24)
+}
+
+/// Double-double (DD) arithmetic for the compression shadow: ~106-bit
+/// working precision from f64 pairs, IEEE-exact building blocks
+/// (TwoSum / TwoProd-via-FMA), so the shadow replays IDENTICALLY on
+/// every platform -- `f64::mul_add` is a single correctly-rounded
+/// operation everywhere (hardware FMA or libm; wasm lowers to libm).
+/// That determinism is what lets a saved file store only the shadow's
+/// CORRECTIONS and regenerate the orbit arrays bit-for-bit on load.
+mod dd {
+    #[inline]
+    pub fn two_sum(a: f64, b: f64) -> (f64, f64) {
+        let s = a + b;
+        let bb = s - a;
+        (s, (a - (s - bb)) + (b - bb))
+    }
+
+    #[inline]
+    pub fn add(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let (sh, sl) = two_sum(a.0, b.0);
+        two_sum(sh, sl + a.1 + b.1)
+    }
+
+    #[inline]
+    pub fn mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let p = a.0 * b.0;
+        let e = f64::mul_add(a.0, b.0, -p);
+        two_sum(p, e + a.0 * b.1 + a.1 * b.0)
+    }
+
+    #[inline]
+    pub fn neg(a: (f64, f64)) -> (f64, f64) {
+        (-a.0, -a.1)
+    }
+
+    /// The DD value exported the way `FixedPoint::to_f64` exports:
+    /// TRUNCATED toward zero at 53 bits (to_floatexp collects the top
+    /// 53 bits without rounding). Round-to-nearest first, then step
+    /// one ulp toward zero when the discarded tail says nearest
+    /// rounded away from zero.
+    #[inline]
+    pub fn trunc_f64(a: (f64, f64)) -> f64 {
+        let (r, t) = two_sum(a.0, a.1);
+        if r == 0.0 || !r.is_finite() || t == 0.0 {
+            return r;
+        }
+        if (r > 0.0 && t < 0.0) || (r < 0.0 && t > 0.0) {
+            // Exact magnitude sits below |r|: truncation is the next
+            // representable toward zero (bit trick is sign-magnitude
+            // safe: subtracting one from the bits of a nonzero f64
+            // shrinks its magnitude for either sign).
+            return f64::from_bits(r.to_bits() - 1);
+        }
+        r
+    }
+
+    #[inline]
+    pub fn is_neg(a: (f64, f64)) -> bool {
+        a.0 < 0.0 || (a.0 == 0.0 && a.1 < 0.0)
+    }
+
+    #[inline]
+    pub fn abs(a: (f64, f64)) -> (f64, f64) {
+        if is_neg(a) { neg(a) } else { a }
+    }
+}
+
+/// One compression correction: at `idx` the shadow was reset to the
+/// full-precision orbit value (`dd`, natural scale, degenerate when
+/// the value is below f64 range -- the following entries then force
+/// their own corrections, which is exactly right through deep dips),
+/// and the entry's stored triple is carried verbatim (the replay
+/// cannot derive it from a value the shadow could not represent).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Correction {
+    pub idx: u32,
+    pub hi: [f32; 2],
+    pub lo: [f32; 2],
+    pub e: i32,
+    /// Shadow reset value: (re_hi, re_lo, im_hi, im_lo).
+    pub dd: [f64; 4],
+}
+
+/// MSB exponent of an f64 (floor(log2 |v|)), from the bits -- exact,
+/// matching `FixedPoint::to_floatexp`'s exponent convention.
+fn f64_msb_exp(v: f64) -> Option<i64> {
+    if v == 0.0 || !v.is_finite() {
+        return None;
+    }
+    let bits = v.abs().to_bits();
+    let be = (bits >> 52) & 0x7ff;
+    if be != 0 {
+        Some(be as i64 - 1023)
+    } else {
+        let m = bits & ((1u64 << 52) - 1);
+        Some(63 - m.leading_zeros() as i64 - 1074)
+    }
+}
+
+/// The shadow's version of [`split_entry`]: decompose a DD iterate
+/// into the (hi, lo, exponent) storage form using the SAME branch
+/// structure. Compute and replay both call exactly this; whenever it
+/// would disagree with the true fixed-point decomposition, compute
+/// emits a correction instead -- so the replayed arrays are
+/// byte-identical BY CONSTRUCTION, not by tolerance.
+fn shadow_split(sx: (f64, f64), sy: (f64, f64)) -> ([f32; 2], [f32; 2], i32) {
+    let x = dd::trunc_f64(sx);
+    let y = dd::trunc_f64(sy);
+    const DEEP: f64 = 8.077_935_669_463_16e-28; // 2^-90, as split_entry
+    if x.abs().max(y.abs()) >= DEEP {
+        let hix = x as f32;
+        let hiy = y as f32;
+        return (
+            [hix, hiy],
+            [(x - hix as f64) as f32, (y - hiy as f64) as f32],
+            0,
+        );
+    }
+    let e = match (f64_msb_exp(x), f64_msb_exp(y)) {
+        (None, None) => return ([0.0, 0.0], [0.0, 0.0], 0),
+        (None, Some(e)) => e,
+        (Some(e), None) => e,
+        (Some(a), Some(b)) => a.max(b),
+    };
+    let scale = (-(e as f64)).exp2();
+    let mx = if x == 0.0 { 0.0 } else { x * scale };
+    let my = if y == 0.0 { 0.0 } else { y * scale };
+    let hix = mx as f32;
+    let hiy = my as f32;
+    (
+        [hix, hiy],
+        [(mx - hix as f64) as f32, (my - hiy as f64) as f32],
+        e.clamp(-2_000_000_000, 2_000_000_000) as i32,
+    )
+}
+
+/// One shadow iteration step, mirroring the fixed-point step: z^p + c
+/// with square-and-multiply, or the Ship-family fold. Compute and
+/// replay share it (the determinism contract).
+fn shadow_step(
+    sx: (f64, f64),
+    sy: (f64, f64),
+    c: &[f64; 4],
+    power: u32,
+    ship: bool,
+    ship_variant: u32,
+) -> ((f64, f64), (f64, f64)) {
+    let cx = (c[0], c[1]);
+    let cy = (c[2], c[3]);
+    if ship {
+        let x_neg = dd::is_neg(sx);
+        let y_neg = dd::is_neg(sy);
+        // (x^2 - y^2, 2xy), then the variant's sign/abs rearrangement
+        // (mirrors the sign-magnitude folds in extend()).
+        let re = dd::add(dd::mul(sx, sx), dd::neg(dd::mul(sy, sy)));
+        let im = dd::mul(sx, sy); // xy; doubled below
+        let im = (2.0 * im.0, 2.0 * im.1);
+        let (re, im) = match ship_variant {
+            0 => (re, dd::abs(im)),
+            1 => (re, if y_neg { dd::abs(im) } else { dd::neg(dd::abs(im)) }),
+            2 => (re, if x_neg { dd::abs(im) } else { dd::neg(dd::abs(im)) }),
+            3 => (dd::abs(re), im),
+            4 => (dd::abs(re), dd::neg(dd::abs(im))),
+            _ => (dd::abs(re), if y_neg { dd::abs(im) } else { dd::neg(dd::abs(im)) }),
+        };
+        (dd::add(re, cx), dd::add(im, cy))
+    } else {
+        // z^2, then square-and-multiply for higher powers.
+        let mut zx = dd::add(dd::mul(sx, sx), dd::neg(dd::mul(sy, sy)));
+        let xy = dd::mul(sx, sy);
+        let mut zy = (2.0 * xy.0, 2.0 * xy.1);
+        for _ in 2..power {
+            let nx = dd::add(dd::mul(zx, sx), dd::neg(dd::mul(zy, sy)));
+            let ny = dd::add(dd::mul(zx, sy), dd::mul(zy, sx));
+            zx = nx;
+            zy = ny;
+        }
+        (dd::add(zx, cx), dd::add(zy, cy))
+    }
+}
+
+impl ReferenceOrbit {
+    /// Compute an orbit at the given precision. `zoom_log2` only picks
+    /// the default limb count via [`limbs_for_zoom`] when `n_limbs`
+    /// is None.
+    pub fn compute(
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        n_limbs: Option<usize>,
+        max_iter: u32,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+    ) -> Option<Self> {
+        let n = n_limbs.unwrap_or_else(|| limbs_for_zoom(zoom_log2));
+        let center = FixedComplex {
+            re: FixedPoint::from_decimal(center_re, n)?,
+            im: FixedPoint::from_decimal(center_im, n)?,
+        };
+        // Parameter plane: z0 = 0, c = center. Julia (dynamical)
+        // plane: z0 = center, c = the fixed Julia constant (f32
+        // config values — exact in fixed-point).
+        let (mut z0, c, mut first) = match julia_c {
+            None => {
+                (FixedComplex::zero(n), center, [0.0f32, 0.0f32])
+            }
+            Some((jre, jim)) => {
+                let first = [center.re.to_f64() as f32, center.im.to_f64() as f32];
+                let c = FixedComplex {
+                    re: FixedPoint::from_f64(jre as f64, n),
+                    im: FixedPoint::from_f64(jim as f64, n),
+                };
+                (center, c, first)
+            }
+        };
+        // Manowar seeds z_0 = z_-1 = c rather than zero. Everything
+        // downstream (the delta step, the pair rebase) is Phoenix's;
+        // this seed is the whole difference.
+        let mut z_prev0 = FixedComplex::zero(n);
+        // `ship_variant` only names a map family when `ship` is
+        // false; with `ship` true it is the FOLD variant, and fold
+        // variant 3 collides with MAP_MANOWAR. Missing this guard
+        // reseeded Burning Ship v3 at c and moved 160/768 blocks.
+        if !ship && ship_variant == MAP_MANOWAR {
+            z0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            z_prev0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
+        }
+        // McMullen also seeds at c: zero is its POLE, not a sensible
+        // critical point, so the pixel itself starts the orbit.
+        if !ship && ship_variant == MAP_MCMULLEN && julia_c.is_none() {
+            z0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
+        }
+        // Lambda's parameter plane seeds at the CRITICAL POINT 1/2,
+        // not at zero -- zero is a fixed point of c*z*(1-z) for every
+        // c, so a zero-seeded plane would be one flat colour. In Julia
+        // mode the seed is the pixel, as everywhere else.
+        if !ship && ship_variant == MAP_LAMBDA && julia_c.is_none() {
+            z0 = FixedComplex {
+                re: FixedPoint::from_f64(0.5, n),
+                im: FixedPoint::zero(n),
+            };
+            first = [0.5, 0.0];
+        }
+        // Nova seeds its parameter plane at the CRITICAL POINT z_0 = 1
+        // (the formula's `wgsl_param_seed`); in Julia mode the pixel.
+        if !ship && ship_variant == MAP_NOVA && julia_c.is_none() {
+            z0 = FixedComplex {
+                re: FixedPoint::from_f64(1.0, n),
+                im: FixedPoint::zero(n),
+            };
+            first = [1.0, 0.0];
+        }
+        // Kaliset seeds at the pixel: zero is its 0/0, as for McMullen.
+        if !ship && ship_variant == MAP_KALISET && julia_c.is_none() {
+            z0 = FixedComplex { re: c.re.clone(), im: c.im.clone() };
+            first = [c.re.to_f64() as f32, c.im.to_f64() as f32];
+        }
+        // The big-float families iterate a BigComplex; the fixed-point
+        // `z` is their seed and nothing more after this.
+        let (zb, cb, pb) = if map_is_big(ship, ship_variant) {
+            (
+                BigComplex::from_fixed(&z0),
+                BigComplex::from_fixed(&c),
+                BigComplex::from_f64(map_params[0] as f64, map_params[1] as f64, n),
+            )
+        } else {
+            (BigComplex::zero(0), BigComplex::zero(0), BigComplex::zero(0))
+        };
+        let mut orbit = Self {
+            center_re: center_re.to_string(),
+            center_im: center_im.to_string(),
+            julia_c,
+            power: power.max(2),
+            ship,
+            // Clamp only the FOLD variants. `ship_variant` doubles as
+            // the non-fold map family, and MAP_FEATHER = 5 was the
+            // last slot the old blanket `.min(5)` allowed; a sixth
+            // family would have been silently rewritten to Feather.
+            ship_variant: if ship { ship_variant.min(5) } else { ship_variant },
+            periodic: None,
+            ref_offset: [0.0, 0.0],
+            off_zoom_log2: zoom_log2,
+            off_height_px: 1.0,
+            n_limbs: n,
+            z_prev: z_prev0,
+            map_params,
+            p_fixed: FixedComplex {
+                re: FixedPoint::from_f64(map_params[0] as f64, n),
+                im: FixedPoint::from_f64(map_params[1] as f64, n),
+            },
+            zb,
+            cb,
+            pb,
+            store_grown: true,
+            orbit: vec![first],
+            orbit_lo: vec![[0.0, 0.0]],
+            orbit_e: vec![0],
+            escaped_at: None,
+            z: z0,
+            c,
+            min_octave: i64::MAX,
+            min_at: 0,
+            closure_limit_octave: closure_limit_for_zoom(zoom_log2),
+            closure_octave: i64::MAX,
+            hint_period: None,
+            hint_octave: i64::MAX,
+            corrections: Vec::new(),
+            shadow: [f64::NAN; 4],
+            c_dd: [0.0; 4],
+        };
+        orbit.init_shadow();
+        orbit.extend(max_iter);
+        Some(orbit)
+    }
+
+    /// Number of usable orbit entries (indices 0..len).
+    pub fn len(&self) -> u32 {
+        self.orbit.len() as u32
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.orbit.len() <= 1
+    }
+
+    /// DD extraction of a fixed-point value: hi = round-to-f64, lo =
+    /// round-to-f64 of the exact remainder. ~2^-105 total accuracy in
+    /// range; degenerate below f64 range (callers treat that as a
+    /// poisoned shadow).
+    fn fixed_dd(v: &super::fixedpoint::FixedPoint, n: usize) -> (f64, f64) {
+        let hi = v.to_f64();
+        if hi == 0.0 || !hi.is_finite() {
+            return (hi, 0.0);
+        }
+        let lo = v.sub(&super::fixedpoint::FixedPoint::from_f64(hi, n)).to_f64();
+        (hi, lo)
+    }
+
+    /// Seed the shadow + corrections from the CURRENT state (entry 0
+    /// is always a correction; c_dd derives from the fixed c).
+    fn init_shadow(&mut self) {
+        let n = self.n_limbs;
+        let (cx, cxl) = Self::fixed_dd(&self.c.re, n);
+        let (cy, cyl) = Self::fixed_dd(&self.c.im, n);
+        self.c_dd = [cx, cxl, cy, cyl];
+        let (zx, zxl) = Self::fixed_dd(&self.z.re, n);
+        let (zy, zyl) = Self::fixed_dd(&self.z.im, n);
+        self.shadow = [zx, zxl, zy, zyl];
+        self.corrections = vec![Correction {
+            idx: 0,
+            hi: self.orbit[0],
+            lo: self.orbit_lo[0],
+            e: self.orbit_e[0],
+            dd: self.shadow,
+        }];
+    }
+
+    /// Push the just-computed iterate's storage triple, advancing the
+    /// compression shadow: the triple always comes from the TRUE
+    /// fixed-point value (renders are untouched by compression); a
+    /// correction is recorded whenever the shadow's decomposition
+    /// would differ -- so replay-on-load reproduces the arrays
+    /// byte-for-byte, with no tolerance in the loop.
+    fn push_entry(&mut self, x: f64, y: f64) {
+        let (hi, lo, ee) = split_entry(&self.z, x, y);
+        let idx = self.orbit.len() as u32;
+        let (sx, sy) = shadow_step(
+            (self.shadow[0], self.shadow[1]),
+            (self.shadow[2], self.shadow[3]),
+            &self.c_dd,
+            self.power,
+            self.ship,
+            self.ship_variant,
+        );
+        let ok = sx.0.is_finite() && sy.0.is_finite() && {
+            let (shi, slo, se) = shadow_split(sx, sy);
+            shi == hi && slo == lo && se == ee
+        };
+        if ok {
+            self.shadow = [sx.0, sx.1, sy.0, sy.1];
+        } else {
+            let n = self.n_limbs;
+            let (zx, zxl) = Self::fixed_dd(&self.z.re, n);
+            let (zy, zyl) = Self::fixed_dd(&self.z.im, n);
+            self.shadow = [zx, zxl, zy, zyl];
+            self.corrections.push(Correction { idx, hi, lo, e: ee, dd: self.shadow });
+        }
+        self.orbit.push(hi);
+        self.orbit_lo.push(lo);
+        self.orbit_e.push(ee);
+    }
+
+    /// One step of a big-float family (see [`map_is_big`]), pushing
+    /// the new iterate. False when the step is impossible (a divisor
+    /// exactly zero), which the caller records as the orbit's end.
+    fn step_big(&mut self) -> bool {
+        match self.ship_variant {
+            MAP_NEWTON_BASE..=MAP_NEWTON_END => self.step_rootfinder(false),
+            MAP_NOVA => self.step_rootfinder(true),
+            MAP_KALISET => self.step_kaliset(),
+            MAP_DUCKS => self.step_ducks(),
+            _ => false,
+        }
+    }
+
+    /// Newton / Halley / Chebyshev over the polynomial functions, with
+    /// complex relaxation; Nova adds c. The big-float twin of the
+    /// formula's `newton_delta`.
+    fn step_rootfinder(&mut self, nova: bool) -> bool {
+        let n = self.n_limbs;
+        let (scheme, func) = if nova { (0, 0) } else { newton_decode(self.ship_variant) };
+        let (f, fp, fpp) = rootfinder_jet(&self.zb, func, self.power, n);
+        // Every division here takes the SHADER's pole guard rather
+        // than ending the orbit. It is not a corner case: `z^p - 1`
+        // has f'(0) = 0, and Newton's own shipped preset is centred
+        // at exactly z = 0 -- so an orbit that stopped at a critical
+        // point would hand the perturbed path a one-entry reference
+        // and render nothing like the direct image (measured: 603 of
+        // 768 blocks). Feeding `esc_cdiv`'s 1e20 instead keeps the
+        // reference and the formula in step, and the next iterate
+        // contracts straight back off the singularity.
+        let guard = |a: &BigComplex, b: &BigComplex| -> BigComplex {
+            if b.norm_sqr_f64() < 1e-30 {
+                BigComplex::from_f64(1e20, 0.0, n)
+            } else {
+                a.div(b)
+            }
+        };
+        let step = match scheme {
+            0 => guard(&f, &fp),
+            1 => {
+                // Halley: 2 f f' / (2 f'^2 - f f'')
+                let num = f.mul(&fp).mul_pow2(1);
+                let den = fp.mul(&fp).mul_pow2(1).sub(&f.mul(&fpp));
+                guard(&num, &den)
+            }
+            _ => {
+                // Chebyshev: (f/f') (1 + f f'' / (2 f'^2))
+                let q = guard(&f, &fp);
+                let corr = guard(&f.mul(&fpp), &fp.mul(&fp).mul_pow2(1));
+                q.mul(&BigComplex::from_f64(1.0, 0.0, n).add(&corr))
+            }
+        };
+        let mut next = self.zb.sub(&self.pb.mul(&step));
+        if nova {
+            next = next.add(&self.cb);
+        }
+        self.zb = next;
+        self.push_entry_big();
+        true
+    }
+
+    /// Kaliset: `|z| / <z,z> -+ c`, with the shader's 0/0 guard.
+    fn step_kaliset(&mut self) -> bool {
+        let n = self.n_limbs;
+        let r2 = self.zb.norm_sqr();
+        let folded = if r2.is_zero() || r2.to_f64() <= 1e-30 {
+            BigComplex::zero(n)
+        } else {
+            let inv = r2.recip();
+            BigComplex { re: self.zb.re.abs().mul(&inv), im: self.zb.im.abs().mul(&inv) }
+        };
+        self.zb = if self.map_params[0] > 0.5 {
+            folded.add(&self.cb)
+        } else {
+            folded.sub(&self.cb)
+        };
+        self.push_entry_big();
+        true
+    }
+
+    /// Ducks: `log(fold(z) + c)` with the upper fold (Im <- |Im|);
+    /// variant 4 logs the square. Only these two variants perturb.
+    fn step_ducks(&mut self) -> bool {
+        let folded = BigComplex { re: self.zb.re.clone(), im: self.zb.im.abs() };
+        let t = folded.add(&self.cb);
+        // `u32(clamp(v, 0, 4)) == 4` -- the formula's own truncation,
+        // not a rounding, so the reference and the WGSL pick the same
+        // variant for every value the slider can hold.
+        let variant = self.map_params[0].clamp(0.0, 4.0) as u32;
+        let arg = if variant == 4 { t.mul(&t) } else { t };
+        self.zb = arg.ln();
+        self.push_entry_big();
+        true
+    }
+
+    /// Push the big-float iterate's storage triple. These families do
+    /// not ride the DD shadow (its step is the power map's), so every
+    /// entry is recorded as a correction -- always correct, merely
+    /// uncompressed; their orbits are short and never stored anyway
+    /// (`orbit_store` refuses them).
+    fn push_entry_big(&mut self) {
+        let (hi, lo, ee, dd) = split_entry_big(&self.zb);
+        let idx = self.orbit.len() as u32;
+        self.shadow = [f64::NAN; 4];
+        self.corrections.push(Correction { idx, hi, lo, e: ee, dd });
+        self.orbit.push(hi);
+        self.orbit_lo.push(lo);
+        self.orbit_e.push(ee);
+    }
+
+    /// Extend the orbit so it covers `max_iter` iterations (no-op if
+    /// it already does, or if the reference escaped earlier).
+    pub fn extend(&mut self, max_iter: u32) {
+        if self.escaped_at.is_some() {
+            return;
+        }
+        let len_before = self.orbit.len();
+        self.extend_inner(max_iter);
+        if self.orbit.len() != len_before {
+            self.store_grown = true;
+        }
+    }
+
+    fn extend_inner(&mut self, max_iter: u32) {
+        if let Some(p) = self.periodic {
+            // A nucleus orbit is complete at its period.
+            let _ = p;
+            return;
+        }
+        while (self.orbit.len() as u32) <= max_iter {
+            if map_is_big(self.ship, self.ship_variant) {
+                // The big-float families: their own step, their own
+                // end (a divisor exactly zero ends the orbit the way an
+                // escape does -- pixels past it wrap), and no bailout,
+                // because none of them escapes at |Z| = 2.
+                if !self.step_big() {
+                    self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                    break;
+                }
+                continue;
+            }
+            if self.ship {
+                // Ship-family step from the plain square's parts:
+                // sqr gives (x^2 - y^2, 2xy); every variant is a
+                // sign/abs rearrangement of those, free in
+                // sign-magnitude (see the delta codegen's derivation).
+                let x_neg = self.z.re.neg;
+                let y_neg = self.z.im.neg;
+                let mut sq = self.z.sqr();
+                match self.ship_variant {
+                    0 => {
+                        // Burning Ship: (|x|+i|y|)^2: re unchanged,
+                        // im = 2|x||y| = |2xy|.
+                        sq.im.neg = false;
+                    }
+                    1 => {
+                        // Perpendicular Mandelbrot: im = -2|x|y.
+                        sq.im.neg = false;
+                        if !y_neg {
+                            sq.im.neg = true;
+                        }
+                    }
+                    2 => {
+                        // Perpendicular Ship: im = -2x|y|.
+                        sq.im.neg = false;
+                        if !x_neg {
+                            sq.im.neg = true;
+                        }
+                    }
+                    3 => {
+                        // Celtic: re = |x^2 - y^2|.
+                        sq.re.neg = false;
+                    }
+                    4 => {
+                        // Buffalo: re = |x^2-y^2|, im = -|2xy|.
+                        sq.re.neg = false;
+                        sq.im.neg = true;
+                    }
+                    _ => {
+                        // Perpendicular Celtic: celtic re + perp-M im.
+                        sq.re.neg = false;
+                        sq.im.neg = false;
+                        if !y_neg {
+                            sq.im.neg = true;
+                        }
+                    }
+                }
+                self.z = sq.add(&self.c);
+            } else {
+                // z^p, or conj(z)^p for the Tricorn family. See
+                // MAP_CONJ: with `ship` false, `ship_variant` selects
+                // which non-fold map this is.
+                if self.ship_variant == MAP_MAGNET {
+                    // Magnet I:  ((z^2 + c - 1) / (2z + c - 2))^2
+                    // Magnet II: ((z^3 + 3(c-1)z + (c-1)(c-2))
+                    //            /(3z^2 + 3(c-2)z + (c-1)(c-2) + 1))^2
+                    //
+                    // The quotient's denominator VANISHES somewhere in
+                    // the plane; `div` refuses when the result leaves
+                    // fixed point's range, and that refusal is the
+                    // orbit blowing up, recorded as an escape.
+                    let n = self.n_limbs;
+                    let one = FixedPoint::from_f64(1.0, n);
+                    let two = FixedPoint::from_f64(2.0, n);
+                    let z2 = self.z.sqr();
+                    let (num, den) = if self.map_params[0] < 0.5 {
+                        let num = FixedComplex {
+                            re: z2.re.add(&self.c.re).sub(&one),
+                            im: z2.im.add(&self.c.im),
+                        };
+                        let den = FixedComplex {
+                            re: self.z.re.double().add(&self.c.re).sub(&two),
+                            im: self.z.im.double().add(&self.c.im),
+                        };
+                        (num, den)
+                    } else {
+                        let cm1 = FixedComplex {
+                            re: self.c.re.sub(&one),
+                            im: self.c.im.clone(),
+                        };
+                        let cm2 = FixedComplex {
+                            re: self.c.re.sub(&two),
+                            im: self.c.im.clone(),
+                        };
+                        let c12 = cm1.mul(&cm2);
+                        let z3 = z2.mul(&self.z);
+                        let three_cm1_z = {
+                            let t = cm1.mul(&self.z);
+                            FixedComplex {
+                                re: t.re.double().add(&t.re),
+                                im: t.im.double().add(&t.im),
+                            }
+                        };
+                        let num = z3.add(&three_cm1_z).add(&c12);
+                        let three_z2 = FixedComplex {
+                            re: z2.re.double().add(&z2.re),
+                            im: z2.im.double().add(&z2.im),
+                        };
+                        let three_cm2_z = {
+                            let t = cm2.mul(&self.z);
+                            FixedComplex {
+                                re: t.re.double().add(&t.re),
+                                im: t.im.double().add(&t.im),
+                            }
+                        };
+                        let den = FixedComplex {
+                            re: three_z2.re.add(&three_cm2_z.re).add(&c12.re).add(&one),
+                            im: three_z2.im.add(&three_cm2_z.im).add(&c12.im),
+                        };
+                        (num, den)
+                    };
+                    let Some(q) = num.div(&den) else {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    };
+                    self.z = q.sqr();
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
+                if self.ship_variant == MAP_MCMULLEN {
+                    // z' = z^n + c/z^m. The division REFUSES when the
+                    // quotient will not fit, which for this map is the
+                    // pole -- so a refusal is an escape, recorded the
+                    // same way the bailout would.
+                    let m_pow = (self.map_params[0].max(1.0)) as u32;
+                    let mut zn = self.z.clone();
+                    for _ in 1..self.power {
+                        zn = zn.mul(&self.z);
+                    }
+                    let mut zm = self.z.clone();
+                    for _ in 1..m_pow {
+                        zm = zm.mul(&self.z);
+                    }
+                    let Some(pole_term) = self.c.div(&zm) else {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    };
+                    self.z = zn.add(&pole_term);
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
+                if self.ship_variant == MAP_FEATHER {
+                    // z' = z^p / (1 + x^2 - i*y^2) + c. The division
+                    // is real work in fixed point (Newton reciprocal),
+                    // but it can never fail here: Re(D) = 1 + x^2 >= 1
+                    // so |D|^2 >= 1, which is exactly the range
+                    // FixedComplex::div guarantees for.
+                    let mut zp = self.z.sqr();
+                    for _ in 2..self.power {
+                        zp = zp.mul(&self.z);
+                    }
+                    let one = FixedPoint::from_f64(1.0, self.n_limbs);
+                    let mut den_im = self.z.im.sqr();
+                    den_im.neg = !den_im.is_zero();
+                    let den = FixedComplex {
+                        re: one.add(&self.z.re.sqr()),
+                        im: den_im,
+                    };
+                    let Some(quot) = zp.div(&den) else {
+                        // Unreachable by the bound above; refuse
+                        // rather than continue with a wrong orbit.
+                        log::error!("feather reference: |D| < 1, which should be impossible");
+                        break;
+                    };
+                    self.z = quot.add(&self.c);
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
+                if self.ship_variant == MAP_LAMBDA {
+                    // z' = c*z*(1-z). No cancellation to worry about
+                    // here -- this is the full-precision reference, so
+                    // `1 - z` is an exact fixed-point subtraction; the
+                    // cancellation question belongs to the DELTA step
+                    // on the GPU, which never forms this difference.
+                    let one = FixedPoint::from_f64(1.0, self.n_limbs);
+                    let mut om = FixedComplex {
+                        re: one.sub(&self.z.re),
+                        im: self.z.im.clone(),
+                    };
+                    // Negate the imaginary part, keeping zero
+                    // canonical (a zero magnitude is non-negative by
+                    // contract -- the same guard MAP_CONJ needs).
+                    om.im.neg = !om.im.neg && !om.im.limbs.iter().all(|l| *l == 0);
+                    self.z = self.c.mul(&self.z.mul(&om));
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
+                if self.ship_variant == MAP_PHOENIX || self.ship_variant == MAP_MANOWAR {
+                    // z' = z^2 + c + p*z_prev, and z_prev advances to
+                    // the iterate we just left. Manowar is p = 1 (set
+                    // in its MapId), seeded at c by the constructor.
+                    let sq = self.z.sqr();
+                    let term = self.p_fixed.mul(&self.z_prev);
+                    let next = sq.add(&self.c).add(&term);
+                    self.z_prev = std::mem::replace(&mut self.z, next);
+                    let x = self.z.re.to_f64();
+                    let y = self.z.im.to_f64();
+                    self.push_entry(x, y);
+                    if x * x + y * y > 4.0 {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                    continue;
+                }
+                let mut base = FixedComplex {
+                    re: self.z.re.clone(),
+                    im: self.z.im.clone(),
+                };
+                if self.ship_variant == MAP_CONJ {
+                    // conj: flip the sign bit. Zero stays canonical
+                    // (a zero magnitude is non-negative by contract).
+                    base.im.neg = !base.im.neg && !base.im.limbs.iter().all(|l| *l == 0);
+                }
+                let mut zp = base.sqr();
+                for _ in 2..self.power {
+                    zp = zp.mul(&base);
+                }
+                self.z = zp.add(&self.c);
+            }
+            let x = self.z.re.to_f64();
+            let y = self.z.im.to_f64();
+            // Progressive period detection (parameter-plane power
+            // tiers): a new |Z| minimum is a ball-method period
+            // candidate; below f32 visibility the orbit has PROVEN
+            // its period — become the periodic reference on the spot.
+            if self.julia_c.is_none() && !self.ship && self.ship_variant == MAP_PLAIN {
+                // |Z| octave from the LIVE fixed-point state —
+                // extended range, because f64 magnitudes underflow at
+                // 2^-537 and intermediate cascade passes go far
+                // deeper without being closures for the current view.
+                let fx = self.z.re.to_floatexp();
+                let fy = self.z.im.to_floatexp();
+                let oct = match (fx.m == 0.0, fy.m == 0.0) {
+                    (true, true) => i64::MIN / 2,
+                    (true, false) => fy.e,
+                    (false, true) => fx.e,
+                    (false, false) => fx.e.max(fy.e),
+                };
+                // The value just computed is iterate index len()
+                // (it has not been pushed yet).
+                let idx = self.orbit.len() as u32;
+                if oct < self.min_octave {
+                    self.min_octave = oct;
+                    self.min_at = idx;
+                    if oct <= self.closure_limit_octave && idx > 0 {
+                        self.push_entry(x, y);
+                        self.periodic = Some(idx);
+                        self.closure_octave = oct;
+                        log::info!(
+                            "auto-detected periodic reference: period {idx} (|Z| ~ 2^{oct})"
+                        );
+                        return;
+                    }
+                }
+            }
+            self.push_entry(x, y);
+            if x * x + y * y > 4.0 {
+                self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                break;
+            }
+        }
+    }
+
+    /// The iterate's plain f32 value (deep entries read as zero,
+    /// exactly as pre-exponent f32 storage did).
+    pub fn z_f32(&self, i: usize) -> [f32; 2] {
+        entry_value(self.orbit[i], self.orbit_e.get(i).copied().unwrap_or(0))
+    }
+
+    /// Test-only view of the live fixed-point iterate.
+    #[cfg(test)]
+    pub(crate) fn z_state(&self) -> (&super::fixedpoint::FixedPoint, &super::fixedpoint::FixedPoint) {
+        (&self.z.re, &self.z.im)
+    }
+
+    /// Whether this orbit serves the given request (same center and
+    /// at-least precision; iterations are extendable, so they don't
+    /// invalidate).
+    pub fn serves(
+        &self,
+        center_re: &str,
+        center_im: &str,
+        n_limbs: usize,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+    ) -> bool {
+        self.center_re == center_re
+            && self.center_im == center_im
+            && self.serves_shape(n_limbs, julia_c, power, ship, ship_variant, map_params)
+    }
+
+    /// [`serves`](Self::serves) minus the center compare: the same
+    /// MAP at sufficient precision. An orbit passing this can serve a
+    /// request at a DIFFERENT center through
+    /// [`relocate_to`](Self::relocate_to).
+    pub fn serves_shape(
+        &self,
+        n_limbs: usize,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+    ) -> bool {
+        self.n_limbs >= n_limbs
+            && self.julia_c == julia_c
+            && self.power == power.max(2)
+            && self.ship == ship
+            && self.ship_variant == if ship { ship_variant.min(5) } else { ship_variant }
+            && self.map_params == map_params
+    }
+
+    /// Re-anchor this orbit under a MOVED view: same reference point,
+    /// new view center. This is what makes a pan or a zoom-to-cursor
+    /// wheel notch free — perturbation never needed the reference AT
+    /// the view center (rebasing serves any nearby point), only the
+    /// exact offset between them.
+    ///
+    /// The offset is recomputed from scratch each call — the new
+    /// center parsed at the orbit's own precision against the exact
+    /// fixed-point reference `c` — so a drag of hundreds of events
+    /// accumulates NO error. Parameter plane only: a Julia orbit's
+    /// reference is its SEED, which is not retained in fixed point,
+    /// so composing offsets would drift.
+    ///
+    /// True = the orbit now serves the new center (its identity
+    /// strings and offset provenance are updated; `store_grown` is
+    /// deliberately untouched). False = out of range (offset past
+    /// [`MAX_RELOCATE_PX`]) or not eligible — compute fresh.
+    pub fn relocate_to(
+        &mut self,
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        height_px: f64,
+    ) -> bool {
+        if self.julia_c.is_some() {
+            return false;
+        }
+        let n = self.n_limbs;
+        let (Some(vx), Some(vy)) = (
+            FixedPoint::from_decimal(center_re, n),
+            FixedPoint::from_decimal(center_im, n),
+        ) else {
+            return false;
+        };
+        // ref_offset = (C_view − C_reference) / S, exact in fixed
+        // point, exported via floatexp — the nucleus path's formula.
+        // S = 2^(2 − zoom) / height ⇒ 1/S = height · 2^(zoom − 2).
+        let h = height_px.max(1.0);
+        let off = [
+            fixed_to_px(&vx.sub(&self.c.re), zoom_log2, h),
+            fixed_to_px(&vy.sub(&self.c.im), zoom_log2, h),
+        ];
+        if !off[0].is_finite()
+            || !off[1].is_finite()
+            || off[0].abs() > MAX_RELOCATE_PX
+            || off[1].abs() > MAX_RELOCATE_PX
+        {
+            return false;
+        }
+        self.center_re = center_re.to_string();
+        self.center_im = center_im.to_string();
+        self.ref_offset = [off[0] as f32, off[1] as f32];
+        self.off_zoom_log2 = zoom_log2;
+        self.off_height_px = h;
+        true
+    }
+
+    /// The relocation offset in the PIXEL UNITS of a given view.
+    /// Pixel spacing S = 2^(2−zoom)/height, so
+    /// off_px(view) = off_px(measured) · 2^(zoom−off_zoom) · h/off_h.
+    /// None when the rescaled offset leaves f32's useful range
+    /// (zooming far OUT from where the nucleus was found) — the
+    /// caller must recompute the reference rather than render with
+    /// a garbage offset.
+    pub fn offset_for_view(&self, zoom_log2: f64, height_px: f64) -> Option<[f32; 2]> {
+        rescale_offset(
+            self.ref_offset,
+            self.off_zoom_log2,
+            self.off_height_px,
+            zoom_log2,
+            height_px,
+        )
+    }
+
+    /// Whether a reuse at the given view can still express this
+    /// orbit's relocation (always true for offset-free orbits).
+    pub fn relocation_serves(&self, zoom_log2: f64, height_px: f64) -> bool {
+        self.offset_for_view(zoom_log2, height_px).is_some()
+    }
+
+    /// Serialize for the disk store (`orbit_store`): identity, orbit,
+    /// AND the live fixed-point state, so a reloaded orbit deepens
+    /// with [`extend`](Self::extend) exactly like the original.
+    /// Layout: magic, orbit length at byte 8 (the store's cheap
+    /// staleness probe), then little-endian fields (including the
+    /// offset's provenance view).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        fn put_str(out: &mut Vec<u8>, s: &str) {
+            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            out.extend_from_slice(s.as_bytes());
+        }
+        fn put_fixed(out: &mut Vec<u8>, f: &super::fixedpoint::FixedPoint) {
+            out.push(f.neg as u8);
+            out.extend_from_slice(&(f.limbs.len() as u32).to_le_bytes());
+            for l in &f.limbs {
+                out.extend_from_slice(&l.to_le_bytes());
+            }
+        }
+        let mut out = Vec::with_capacity(64 + self.orbit.len() * 8 + self.n_limbs * 32);
+        out.extend_from_slice(super::orbit_store::MAGIC);
+        out.extend_from_slice(&(self.orbit.len() as u32).to_le_bytes());
+        // Fixed prefix: the store's staleness probe reads exactly this
+        // much (see orbit_store::saved_meta) to decide whether a
+        // rewrite would ADD anything, without parsing the whole file.
+        out.extend_from_slice(&self.hint_period.unwrap_or(0).to_le_bytes());
+        out.extend_from_slice(&self.hint_octave.to_le_bytes());
+        put_str(&mut out, &self.center_re);
+        put_str(&mut out, &self.center_im);
+        match self.julia_c {
+            None => out.push(0),
+            Some((re, im)) => {
+                out.push(1);
+                out.extend_from_slice(&re.to_le_bytes());
+                out.extend_from_slice(&im.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&self.power.to_le_bytes());
+        out.push(self.ship as u8);
+        out.extend_from_slice(&self.ship_variant.to_le_bytes());
+        out.extend_from_slice(&self.map_params[0].to_le_bytes());
+        out.extend_from_slice(&self.map_params[1].to_le_bytes());
+        match self.periodic {
+            None => out.push(0),
+            Some(p) => {
+                out.push(1);
+                out.extend_from_slice(&p.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&self.closure_octave.to_le_bytes());
+        out.extend_from_slice(&self.ref_offset[0].to_le_bytes());
+        out.extend_from_slice(&self.ref_offset[1].to_le_bytes());
+        out.extend_from_slice(&self.off_zoom_log2.to_le_bytes());
+        out.extend_from_slice(&self.off_height_px.to_le_bytes());
+        out.extend_from_slice(&(self.n_limbs as u32).to_le_bytes());
+        match self.escaped_at {
+            None => out.push(0),
+            Some(e) => {
+                out.push(1);
+                out.extend_from_slice(&e.to_le_bytes());
+            }
+        }
+        // FFORBIT6 array section, tagged by a mode byte:
+        //   1 = COMPRESSED -- shadow corrections + an RLE exponent
+        //       stream; the hi/lo arrays are NOT stored, load replays
+        //       the DD shadow between corrections and regenerates
+        //       them byte-for-byte (measured: a chaotic 20k orbit is
+        //       50x smaller; the f3 orbit ~2.5 MB from 202 MB).
+        //   0 = RAW -- the FFORBIT5-style arrays. Chosen when the
+        //       corrections would be LARGER than the arrays: an orbit
+        //       dipping near zero every few iterations (a periodic
+        //       nucleus at a cascade -- exactly the orbits the store
+        //       marks precious) records a 52 B correction per entry,
+        //       2.6x worse than 20 B/iteration raw. Whichever is
+        //       smaller wins; both are byte-exact.
+        let mut runs: Vec<(u32, i32)> = Vec::new();
+        for &e in &self.orbit_e {
+            match runs.last_mut() {
+                Some((n, v)) if *v == e => *n += 1,
+                _ => runs.push((1, e)),
+            }
+        }
+        let compressed_bytes = 4 + self.corrections.len() * 52 + 4 + runs.len() * 8;
+        let raw_bytes = self.orbit.len() * 20;
+        if compressed_bytes < raw_bytes {
+            out.push(1);
+            out.extend_from_slice(&(self.corrections.len() as u32).to_le_bytes());
+            for c in &self.corrections {
+                out.extend_from_slice(&c.idx.to_le_bytes());
+                out.extend_from_slice(&c.hi[0].to_le_bytes());
+                out.extend_from_slice(&c.hi[1].to_le_bytes());
+                out.extend_from_slice(&c.lo[0].to_le_bytes());
+                out.extend_from_slice(&c.lo[1].to_le_bytes());
+                out.extend_from_slice(&c.e.to_le_bytes());
+                for d in c.dd {
+                    out.extend_from_slice(&d.to_le_bytes());
+                }
+            }
+            // e-stream RLE: (count, value) runs -- e is zero away
+            // from deep dips, so this is a handful of runs.
+            out.extend_from_slice(&(runs.len() as u32).to_le_bytes());
+            for (n, v) in runs {
+                out.extend_from_slice(&n.to_le_bytes());
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        } else {
+            out.push(0);
+            for z in &self.orbit {
+                out.extend_from_slice(&z[0].to_le_bytes());
+                out.extend_from_slice(&z[1].to_le_bytes());
+            }
+            for z in &self.orbit_lo {
+                out.extend_from_slice(&z[0].to_le_bytes());
+                out.extend_from_slice(&z[1].to_le_bytes());
+            }
+            for e in &self.orbit_e {
+                out.extend_from_slice(&e.to_le_bytes());
+            }
+        }
+        for f in [
+            &self.z.re,
+            &self.z.im,
+            &self.c.re,
+            &self.c.im,
+            &self.z_prev.re,
+            &self.z_prev.im,
+        ] {
+            put_fixed(&mut out, f);
+        }
+        out
+    }
+
+    /// Inverse of [`to_bytes`](Self::to_bytes); None on any
+    /// truncation, magic, or shape mismatch (a miss, not an error).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut r = R(bytes);
+        let StoredHeader {
+            orbit_len,
+            hint_period,
+            hint_octave,
+            center_re,
+            center_im,
+            julia_c,
+            power,
+            ship,
+            ship_variant,
+            map_params,
+            periodic,
+            closure_octave,
+            ref_offset,
+            off_zoom_log2: off_zoom,
+            off_height_px: off_height,
+            n_limbs,
+            escaped_at,
+        } = read_header(&mut r)?;
+        // The big-float families are never written (see orbit_store)
+        // and could not deepen from a fixed-point live state anyway.
+        if map_is_big(ship, ship_variant) {
+            return None;
+        }
+        let mode = r.u8()?;
+        if mode == 0 {
+            // RAW mode: FFORBIT5-style arrays (the dip-dense case).
+            let mut orbit = Vec::with_capacity(orbit_len);
+            for _ in 0..orbit_len {
+                orbit.push([r.f32()?, r.f32()?]);
+            }
+            let mut orbit_lo = Vec::with_capacity(orbit_len);
+            for _ in 0..orbit_len {
+                orbit_lo.push([r.f32()?, r.f32()?]);
+            }
+            let mut orbit_e = Vec::with_capacity(orbit_len);
+            for _ in 0..orbit_len {
+                orbit_e.push(r.u32()? as i32);
+            }
+            let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+            let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+            let c_dd = {
+                let (cx, cxl) = Self::fixed_dd(&c.re, n_limbs);
+                let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
+                [cx, cxl, cy, cyl]
+            };
+            // A poisoned shadow makes any future extend record plain
+            // corrections -- always safe, and this orbit's shape is
+            // correction-dense anyway (that is why it is raw).
+            let seed = Correction {
+                idx: 0,
+                hi: orbit[0],
+                lo: orbit_lo[0],
+                e: orbit_e[0],
+                dd: [f64::NAN; 4],
+            };
+            return Some(
+                Self {
+                    center_re,
+                    center_im,
+                    julia_c,
+                    power,
+                    ship,
+                    ship_variant,
+                    periodic,
+                    store_grown: false,
+                    ref_offset,
+                    off_zoom_log2: off_zoom,
+                    off_height_px: off_height,
+                    n_limbs,
+                    orbit,
+                    orbit_lo,
+                    orbit_e,
+                    escaped_at,
+                    z,
+                    c,
+                    min_octave: i64::MAX,
+                    min_at: 0,
+                    closure_limit_octave: closure_limit_for_zoom(off_zoom),
+                    closure_octave,
+                    hint_period,
+                    hint_octave,
+                    z_prev: FixedComplex::zero(n_limbs),
+                    map_params,
+                    p_fixed: FixedComplex {
+                        re: FixedPoint::from_f64(map_params[0] as f64, n_limbs),
+                        im: FixedPoint::from_f64(map_params[1] as f64, n_limbs),
+                    },
+                    zb: BigComplex::zero(0),
+                    cb: BigComplex::zero(0),
+                    pb: BigComplex::zero(0),
+                    corrections: vec![seed],
+                    shadow: [f64::NAN; 4],
+                    c_dd,
+                }
+                .with_rescanned_min(),
+            );
+        }
+        if mode != 1 {
+            return None;
+        }
+        // COMPRESSED mode: corrections, then the RLE exponent stream,
+        // then REPLAY the DD shadow to regenerate the hi/lo arrays.
+        // `shadow_step` and `shadow_split` are the same functions
+        // compute() ran, and compute() emitted a correction at every
+        // index where they would disagree with the true decomposition
+        // -- so this reproduces the arrays byte-for-byte.
+        let n_corr = r.u32()? as usize;
+        if n_corr == 0 || n_corr > orbit_len {
+            return None;
+        }
+        let mut corrections = Vec::with_capacity(n_corr);
+        for _ in 0..n_corr {
+            corrections.push(Correction {
+                idx: r.u32()?,
+                hi: [r.f32()?, r.f32()?],
+                lo: [r.f32()?, r.f32()?],
+                e: r.u32()? as i32,
+                dd: [r.f64()?, r.f64()?, r.f64()?, r.f64()?],
+            });
+        }
+        if corrections[0].idx != 0 {
+            return None;
+        }
+        let n_runs = r.u32()? as usize;
+        if n_runs > orbit_len {
+            return None;
+        }
+        let mut orbit_e = Vec::with_capacity(orbit_len);
+        for _ in 0..n_runs {
+            let count = r.u32()? as usize;
+            let v = r.u32()? as i32;
+            if orbit_e.len() + count > orbit_len {
+                return None;
+            }
+            orbit_e.extend(std::iter::repeat(v).take(count));
+        }
+        if orbit_e.len() != orbit_len {
+            return None;
+        }
+        let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+        let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+        let z_prev = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+        let c_dd = {
+            let (cx, cxl) = Self::fixed_dd(&c.re, n_limbs);
+            let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
+            [cx, cxl, cy, cyl]
+        };
+        // Every correction record is a full restart state (its `dd`
+        // reseeds the shadow), so the stretch from one correction to
+        // the next depends on nothing outside itself — the replay
+        // parallelizes by SEGMENT, each thread running the identical
+        // shadow_step chain the serial loop ran. A real 10.1M deep
+        // orbit carries ~188k corrections (median segment 54), and
+        // its measured decode dropped from ~780 ms to ~130 ms.
+        //
+        // The serial loop consumed corrections strictly in index
+        // order and rejected any file where one failed to line up;
+        // monotonicity + bounds up front reproduce exactly that
+        // accept/reject behaviour.
+        if corrections.windows(2).any(|w| w[1].idx <= w[0].idx)
+            || corrections.last().is_some_and(|c| (c.idx as usize) >= orbit_len)
+        {
+            return None;
+        }
+        let mut orbit = vec![[0f32; 2]; orbit_len];
+        let mut orbit_lo = vec![[0f32; 2]; orbit_len];
+        let mut segments: Vec<(&Correction, &mut [[f32; 2]], &mut [[f32; 2]], usize)> =
+            Vec::with_capacity(corrections.len());
+        {
+            let mut hi_rest: &mut [[f32; 2]] = &mut orbit;
+            let mut lo_rest: &mut [[f32; 2]] = &mut orbit_lo;
+            let mut start = 0usize;
+            for (k, cc) in corrections.iter().enumerate() {
+                let end = corrections
+                    .get(k + 1)
+                    .map_or(orbit_len, |n| n.idx as usize);
+                let take = end - cc.idx as usize;
+                let (hi_seg, hr) = hi_rest.split_at_mut(take);
+                let (lo_seg, lr) = lo_rest.split_at_mut(take);
+                hi_rest = hr;
+                lo_rest = lr;
+                segments.push((cc, hi_seg, lo_seg, start));
+                start = end;
+            }
+        }
+        let replay_segment =
+            |(cc, hi_seg, lo_seg, start): &mut (&Correction, &mut [[f32; 2]], &mut [[f32; 2]], usize)|
+             -> Option<[f64; 4]> {
+                let start = *start;
+                if cc.e != orbit_e[start] {
+                    return None;
+                }
+                hi_seg[0] = cc.hi;
+                lo_seg[0] = cc.lo;
+                let mut shadow = cc.dd;
+                for j in 1..hi_seg.len() {
+                    let (sx, sy) = shadow_step(
+                        (shadow[0], shadow[1]),
+                        (shadow[2], shadow[3]),
+                        &c_dd,
+                        power,
+                        ship,
+                        ship_variant,
+                    );
+                    shadow = [sx.0, sx.1, sy.0, sy.1];
+                    let (hi, lo, ee) = shadow_split(sx, sy);
+                    if ee != orbit_e[start + j] {
+                        return None;
+                    }
+                    hi_seg[j] = hi;
+                    lo_seg[j] = lo;
+                }
+                Some(shadow)
+            };
+        let finals: Option<Vec<[f64; 4]>> = {
+            use rayon::prelude::*;
+            segments.par_iter_mut().map(replay_segment).collect()
+        };
+        // The live shadow is the state after the LAST iterate — the
+        // final segment's replay ends exactly there.
+        let shadow = *finals?.last()?;
+        Some(Self {
+            center_re,
+            center_im,
+            julia_c,
+            power,
+            ship,
+            ship_variant,
+            periodic,
+            store_grown: false,
+            ref_offset,
+            off_zoom_log2: off_zoom,
+            off_height_px: off_height,
+            n_limbs,
+            orbit,
+            orbit_lo,
+            orbit_e,
+            escaped_at,
+            z,
+            c,
+            min_octave: i64::MAX,
+            min_at: 0,
+            closure_limit_octave: closure_limit_for_zoom(off_zoom),
+            closure_octave,
+            hint_period,
+            hint_octave,
+            z_prev,
+            map_params,
+            p_fixed: FixedComplex {
+                re: FixedPoint::from_f64(map_params[0] as f64, n_limbs),
+                im: FixedPoint::from_f64(map_params[1] as f64, n_limbs),
+            },
+            zb: BigComplex::zero(0),
+            cb: BigComplex::zero(0),
+            pb: BigComplex::zero(0),
+            corrections,
+            shadow,
+            c_dd,
+        }
+        .with_rescanned_min())
+    }
+
+    /// Rebuild the minimum tracker from the stored f32 orbit (loads).
+    /// f32 floors at ~2^-149; deeper minima re-emerge from the live
+    /// fixed-point state as the orbit extends.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn with_rescanned_min(mut self) -> Self {
+        // Parallel min-reduce. The serial scan kept the FIRST index
+        // reaching each new minimum (strict <), so ties between
+        // chunks break toward the LOWER index — same winner exactly.
+        use rayon::prelude::*;
+        let best = (1..self.orbit.len())
+            .into_par_iter()
+            .fold(
+                || (i64::MAX, u32::MAX),
+                |acc, i| {
+                    let z = entry_value(self.orbit[i], self.orbit_e.get(i).copied().unwrap_or(0));
+                    let m = (z[0] as f64) * (z[0] as f64) + (z[1] as f64) * (z[1] as f64);
+                    let oct = if m == 0.0 { -149 } else { (m.log2() / 2.0) as i64 };
+                    if oct < acc.0 || (oct == acc.0 && (i as u32) < acc.1) {
+                        (oct, i as u32)
+                    } else {
+                        acc
+                    }
+                },
+            )
+            .reduce(
+                || (i64::MAX, u32::MAX),
+                |a, b| {
+                    if b.0 < a.0 || (b.0 == a.0 && b.1 < a.1) {
+                        b
+                    } else {
+                        a
+                    }
+                },
+            );
+        if best.0 < self.min_octave {
+            self.min_octave = best.0;
+            self.min_at = best.1;
+        }
+        self
+    }
+
+    /// Whether this orbit's periodic wrap is exact enough for a view:
+    /// non-periodic always serves; a closure serves while its |Z_p|
+    /// octave stays below the view's limit.
+    pub fn periodic_serves(&self, zoom_log2: f64) -> bool {
+        self.periodic.is_none() || self.closure_octave <= closure_limit_for_zoom(zoom_log2)
+    }
+
+    /// Whether this orbit answers a request carrying `hint`.
+    ///
+    /// A periodic orbit of that period obviously does. So does a
+    /// PLAIN orbit that already tried the hint and measured it too
+    /// shallow for this zoom — that is the right reference for the
+    /// request, and rebuilding it would only rediscover the same
+    /// fact at the same cost.
+    pub fn answers_hint(&self, hint: Option<u32>, zoom_log2: f64) -> bool {
+        match hint {
+            None => true,
+            Some(p) => {
+                self.periodic == Some(p)
+                    || (self.hint_period == Some(p)
+                        && self.hint_octave > closure_limit_for_zoom(zoom_log2))
+            }
+        }
+    }
+
+    /// Retighten the closure limit before extending for a (possibly
+    /// deeper) view.
+    pub fn set_closure_limit(&mut self, zoom_log2: f64) {
+        self.closure_limit_octave = closure_limit_for_zoom(zoom_log2);
+    }
+}
+
+/// Exact (b − a) in the pixel-spacing units of a view: both centers
+/// parsed at `n_limbs`, subtracted in fixed point, exported via
+/// floatexp — the same arithmetic [`ReferenceOrbit::relocate_to`]
+/// uses, exposed for the render thread's stale-serve composition
+/// (rendering against the worker's LAST published orbit before the
+/// worker has acknowledged the newest request). None when a center
+/// fails to parse.
+pub fn center_delta_px(
+    a_re: &str,
+    a_im: &str,
+    b_re: &str,
+    b_im: &str,
+    n_limbs: usize,
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<[f64; 2]> {
+    let ax = FixedPoint::from_decimal(a_re, n_limbs)?;
+    let ay = FixedPoint::from_decimal(a_im, n_limbs)?;
+    let bx = FixedPoint::from_decimal(b_re, n_limbs)?;
+    let by = FixedPoint::from_decimal(b_im, n_limbs)?;
+    let h = height_px.max(1.0);
+    let to_px = |d: FixedPoint| -> f64 {
+        let fe = d.to_floatexp();
+        let e = fe.e as f64 + (zoom_log2 - 2.0) + h.log2();
+        if fe.m == 0.0 || e < -60.0 {
+            0.0
+        } else {
+            fe.m * 2f64.powf(e.min(40.0))
+        }
+    };
+    Some([to_px(bx.sub(&ax)), to_px(by.sub(&ay))])
+}
+
+/// Rescale a pixel-unit relocation offset from the view it was
+/// measured at to another view. Pixel spacing S = 2^(2−zoom)/height,
+/// so off_px scales by 2^(Δzoom)·(h/off_h). None when the result
+/// leaves f32's useful range — render with a recomputed reference,
+/// never with a garbage offset.
+/// Byte reader for the store format. Module level because the header
+/// parse below is shared: the store reads identity WITHOUT decoding a
+/// ten-million-point body, and one parser for both is the only way the
+/// two cannot drift apart.
+#[cfg(not(target_arch = "wasm32"))]
+struct R<'a>(&'a [u8]);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<'a> R<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        if self.0.len() < n {
+            return None;
+        }
+        let (a, b) = self.0.split_at(n);
+        self.0 = b;
+        Some(a)
+    }
+    fn u8(&mut self) -> Option<u8> {
+        Some(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> Option<u32> {
+        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+    }
+    fn f32(&mut self) -> Option<f32> {
+        Some(f32::from_le_bytes(self.take(4)?.try_into().ok()?))
+    }
+    fn f64(&mut self) -> Option<f64> {
+        Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn string(&mut self) -> Option<String> {
+        let n = self.u32()? as usize;
+        if n > MAX_CENTER_CHARS {
+            return None;
+        }
+        String::from_utf8(self.take(n)?.to_vec()).ok()
+    }
+    fn fixed(&mut self, expect_limbs: usize) -> Option<FixedPoint> {
+        let neg = self.u8()? != 0;
+        let n = self.u32()? as usize;
+        if n != expect_limbs || n > 1024 {
+            return None;
+        }
+        let mut limbs = Vec::with_capacity(n);
+        for _ in 0..n {
+            limbs.push(u64::from_le_bytes(self.take(8)?.try_into().ok()?));
+        }
+        Some(FixedPoint { neg, limbs })
+    }
+}
+
+/// Longest center string the format accepts.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_CENTER_CHARS: usize = 4096;
+
+/// Everything a stored orbit records BEFORE its arrays: identity,
+/// period hints, and the relocation provenance.
+///
+/// Split out so the store can read a file's identity for the price of
+/// a few kilobytes — decoding the body of a ten-million-point orbit
+/// costs the better part of a second, which is far too much to spend
+/// on a candidate that turns out to be the wrong location.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct StoredHeader {
+    pub orbit_len: usize,
+    pub hint_period: Option<u32>,
+    pub hint_octave: i64,
+    pub center_re: String,
+    pub center_im: String,
+    pub julia_c: Option<(f32, f32)>,
+    pub power: u32,
+    pub ship: bool,
+    pub ship_variant: u32,
+    pub map_params: [f32; 2],
+    pub periodic: Option<u32>,
+    pub closure_octave: i64,
+    pub ref_offset: [f32; 2],
+    pub off_zoom_log2: f64,
+    pub off_height_px: f64,
+    pub n_limbs: usize,
+    pub escaped_at: Option<u32>,
+}
+
+/// Largest a [`StoredHeader`] can serialize to: the fixed fields plus
+/// two maximum-length center strings. Reading this many bytes off the
+/// front of a file is enough to parse any header the writer can
+/// produce, which `a_header_probe_reads_enough` pins down.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_HEADER_BYTES: usize = 128 + 2 * (4 + MAX_CENTER_CHARS);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_header(r: &mut R) -> Option<StoredHeader> {
+    if r.take(8)? != super::orbit_store::MAGIC {
+        return None;
+    }
+    let orbit_len = r.u32()? as usize;
+    if orbit_len == 0 || orbit_len > 64_000_000 {
+        return None;
+    }
+    let hint_period = match r.u32()? {
+        0 => None,
+        p => Some(p),
+    };
+    let hint_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
+    let center_re = r.string()?;
+    let center_im = r.string()?;
+    let julia_c = match r.u8()? {
+        0 => None,
+        _ => Some((r.f32()?, r.f32()?)),
+    };
+    let power = r.u32()?;
+    let ship = r.u8()? != 0;
+    let ship_variant = r.u32()?;
+    let map_params = [r.f32()?, r.f32()?];
+    let periodic = match r.u8()? {
+        0 => None,
+        _ => Some(r.u32()?),
+    };
+    let closure_octave = i64::from_le_bytes(r.take(8)?.try_into().ok()?);
+    let ref_offset = [r.f32()?, r.f32()?];
+    let off_zoom_log2 = r.f64()?;
+    let off_height_px = r.f64()?;
+    let n_limbs = r.u32()? as usize;
+    if n_limbs == 0 || n_limbs > 1024 {
+        return None;
+    }
+    let escaped_at = match r.u8()? {
+        0 => None,
+        _ => Some(r.u32()?),
+    };
+    Some(StoredHeader {
+        orbit_len,
+        hint_period,
+        hint_octave,
+        center_re,
+        center_im,
+        julia_c,
+        power,
+        ship,
+        ship_variant,
+        map_params,
+        periodic,
+        closure_octave,
+        ref_offset,
+        off_zoom_log2,
+        off_height_px,
+        n_limbs,
+        escaped_at,
+    })
+}
+
+/// Parse just the identity prefix of a stored orbit.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn header_from_bytes(bytes: &[u8]) -> Option<StoredHeader> {
+    read_header(&mut R(bytes))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StoredHeader {
+    /// The same shape test as [`ReferenceOrbit::serves_shape`], on
+    /// header data alone.
+    pub(crate) fn serves_shape(
+        &self,
+        n_limbs: usize,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+    ) -> bool {
+        self.n_limbs >= n_limbs
+            && self.julia_c == julia_c
+            && self.power == power.max(2)
+            && self.ship == ship
+            && self.ship_variant == if ship { ship_variant.min(5) } else { ship_variant }
+            && self.map_params == map_params
+    }
+
+    /// Estimated relocation offset, in pixels of the requested view,
+    /// if this stored orbit were relocated to the (already parsed)
+    /// center `to`.
+    ///
+    /// The stored file records its center and the offset from its
+    /// REFERENCE to that center, so the reference is reachable without
+    /// the body: offset(reference → new center) = offset(reference →
+    /// stored center), rescaled to the new view, plus the step from
+    /// the stored center to the new one. Only an estimate because
+    /// `ref_offset` is stored as f32 while
+    /// [`ReferenceOrbit::relocate_to`] works from the exact
+    /// fixed-point reference — which is why this ranks candidates and
+    /// `relocate_to` still makes the decision.
+    ///
+    /// `to` arrives parsed because the CALLER's center is the same
+    /// for every candidate in a directory scan, while a deep center
+    /// string is thousands of digits — re-parsing it per file was
+    /// most of the scan.
+    pub(crate) fn offset_estimate_px(
+        &self,
+        to: &(FixedPoint, FixedPoint),
+        zoom_log2: f64,
+        height_px: f64,
+    ) -> Option<[f64; 2]> {
+        let fr = FixedPoint::from_decimal(&self.center_re, self.n_limbs)?;
+        let fi = FixedPoint::from_decimal(&self.center_im, self.n_limbs)?;
+        let step = [
+            fixed_to_px(&to.0.sub(&fr), zoom_log2, height_px),
+            fixed_to_px(&to.1.sub(&fi), zoom_log2, height_px),
+        ];
+        let carried = rescale_offset(
+            self.ref_offset,
+            self.off_zoom_log2,
+            self.off_height_px,
+            zoom_log2,
+            height_px,
+        )?;
+        Some([carried[0] as f64 + step[0], carried[1] as f64 + step[1]])
+    }
+}
+
+/// A fixed-point magnitude in pixels of a view: pixel spacing is
+/// S = 2^(2−zoom)/height, so dividing by it is multiplying by
+/// height·2^(zoom−2).
+///
+/// Shared by [`ReferenceOrbit::relocate_to`] and the store's candidate
+/// ranking so the two measure relocation distance the same way.
+fn fixed_to_px(d: &FixedPoint, zoom_log2: f64, height_px: f64) -> f64 {
+    let fe = d.to_floatexp();
+    let e = fe.e as f64 + (zoom_log2 - 2.0) + height_px.max(1.0).log2();
+    if fe.m == 0.0 || e < -60.0 {
+        0.0
+    } else {
+        fe.m * 2f64.powf(e.min(40.0))
+    }
+}
+
+pub fn rescale_offset(
+    off: [f32; 2],
+    off_zoom: f64,
+    off_height: f64,
+    zoom_log2: f64,
+    height_px: f64,
+) -> Option<[f32; 2]> {
+    if off == [0.0, 0.0] {
+        return Some([0.0, 0.0]);
+    }
+    let factor = 2f64.powf((zoom_log2 - off_zoom).clamp(-2000.0, 60.0))
+        * (height_px.max(1.0) / off_height.max(1.0));
+    let x = off[0] as f64 * factor;
+    let y = off[1] as f64 * factor;
+    // Same 2^15 px ceiling as nucleus_for_view — a rescaled offset
+    // rides the identical f32 d0 sum.
+    if !x.is_finite() || !y.is_finite() || x.abs() > 32768.0 || y.abs() > 32768.0 {
+        return None;
+    }
+    Some([x as f32, y as f32])
+}
+
+/// A reference-orbit request, as the worker sees it.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, PartialEq)]
+pub struct OrbitRequest {
+    pub center_re: String,
+    pub center_im: String,
+    pub n_limbs: usize,
+    pub max_iter: u32,
+    pub julia_c: Option<(f32, f32)>,
+    pub power: u32,
+    pub ship: bool,
+    pub ship_variant: u32,
+    /// Verified-before-use period hint (parameter-plane power tiers).
+    pub reference_period: Option<u32>,
+    /// Continuous map parameter (Phoenix's p); zero elsewhere. Part
+    /// of the orbit identity, so it takes part in request dedup.
+    pub map_params: [f32; 2],
+    /// Zoom (for nucleus search precision) and viewport height (for
+    /// the relocation offset's pixel units).
+    pub zoom_log2: f64,
+    pub height_px: f64,
+}
+
+/// Progressive snapshot the render side reads each frame.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub struct OrbitProgress {
+    /// Relocation of this orbit's reference relative to the request's
+    /// view center, in pixel-spacing units (nucleus references), plus
+    /// the view those units were measured at — the consumer rescales
+    /// to ITS view (`rescale_offset`), because the worker may serve
+    /// one orbit across many zoom levels.
+    pub ref_offset: [f32; 2],
+    pub off_zoom_log2: f64,
+    pub off_height_px: f64,
+    /// The reference's period when periodic (hinted or auto-detected)
+    /// — the panel surfaces it.
+    pub detected_period: Option<u32>,
+    /// Which request this data belongs to (bumped on every new
+    /// request; stale chunks from an abandoned compute are ignored).
+    pub epoch: u64,
+    /// Which ORBIT this data is (bumped only when the orbit content
+    /// is replaced -- a fresh compute, a truncation republish --
+    /// never when a request merely reuses the same orbit). The
+    /// render side keys its GPU mirror on this, so a zoom tick that
+    /// reuses the orbit costs no re-upload; appends under an
+    /// unchanged generation extend the mirror in place.
+    pub generation: u64,
+    /// Z_n snapshots so far (orbit[0] = the seed).
+    pub orbit: Vec<[f32; 2]>,
+    /// DF residuals, parallel to `orbit`.
+    pub orbit_lo: Vec<[f32; 2]>,
+    /// Per-entry exponents, parallel to `orbit` (see
+    /// [`ReferenceOrbit::orbit_e`]).
+    pub orbit_e: Vec<i32>,
+    /// The orbit covers its request's max_iter (or escaped early).
+    pub done: bool,
+    /// The request this publication answered — the render thread's
+    /// stale-serve reads the shape and anchor from here to decide
+    /// whether a NEWER, not-yet-acknowledged request can render
+    /// against this same data (its center strings are the anchor the
+    /// published `ref_offset` is measured from). None until the
+    /// first publish, and for an unparseable-center publish.
+    pub served: Option<OrbitRequest>,
+    /// Precision of the published orbit (>= the request's need).
+    pub n_limbs: usize,
+    /// The orbit's closure octave, so `periodic_serves` can be
+    /// evaluated render-side at a DIFFERENT zoom than the request's.
+    pub closure_octave: i64,
+    /// Diagnostics: cumulative CPU milliseconds spent computing the
+    /// CURRENT orbit (fresh compute plus every extend chunk); zero
+    /// for an orbit served without computing.
+    pub compute_ms: f32,
+    /// Diagnostics: where the current orbit came from.
+    pub source: super::diag::OrbitSource,
+}
+
+/// Reference orbits on a worker thread with progressive upload (the
+/// plan's phase-4 item): the render side posts the latest request and
+/// reads whatever prefix exists each frame — rebasing treats a
+/// too-short orbit as an early wrap, so partial-orbit frames are
+/// merely noisier, never wrong, and refine as chunks land. Deepening
+/// reuses the live fixed-point state (append, not recompute) as long
+/// as the rest of the request matches.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct OrbitWorker {
+    tx: std::sync::mpsc::Sender<(u64, OrbitRequest)>,
+    pub progress: std::sync::Arc<std::sync::Mutex<OrbitProgress>>,
+    latest: Option<OrbitRequest>,
+    epoch: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl OrbitWorker {
+    /// Iterations per chunk between snapshot publications.
+    const CHUNK: u32 = 4096;
+
+    pub fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<(u64, OrbitRequest)>();
+        let progress = std::sync::Arc::new(std::sync::Mutex::new(OrbitProgress::default()));
+        let shared = progress.clone();
+        std::thread::Builder::new()
+            .name("escape-orbit".into())
+            .spawn(move || {
+                let mut current: Option<(OrbitRequest, ReferenceOrbit, u64)> = None;
+                loop {
+                    // Take the newest pending request (drain the queue).
+                    let mut next = match current {
+                        // Idle: block for work.
+                        None => match rx.recv() {
+                            Ok(r) => Some(r),
+                            Err(_) => return,
+                        },
+                        // Working: only preempt if something arrived.
+                        Some(_) => match rx.try_recv() {
+                            Ok(r) => Some(r),
+                            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                        },
+                    };
+                    while let Ok(r) = rx.try_recv() {
+                        next = Some(r);
+                    }
+
+                    if let Some((epoch, req)) = next {
+                        // Same MAP, deeper or merely MOVED? Keep the
+                        // live state. A pan or zoom-to-cursor changes
+                        // only the center; the reference point still
+                        // serves — relocate_to re-anchors the offset
+                        // exactly instead of recomputing the orbit.
+                        let reuse = current.take().and_then(|(old_req, mut orbit, _)| {
+                            // n_limbs: >= not == -- an orbit at higher
+                            // precision serves a shallower request (the
+                            // blocking cache's `serves` agrees), and
+                            // equality rebuilt a full-depth orbit at
+                            // every limb crossing of a zoom-out.
+                            let shape = orbit.n_limbs >= req.n_limbs
+                                && old_req.julia_c == req.julia_c
+                                && old_req.power == req.power
+                                && old_req.ship == req.ship
+                                && old_req.ship_variant == req.ship_variant
+                                && old_req.reference_period == req.reference_period
+                                && old_req.map_params == req.map_params
+                                && orbit.periodic_serves(req.zoom_log2);
+                            if !shape {
+                                return None;
+                            }
+                            let h = req.height_px.max(1.0);
+                            let same_center = old_req.center_re == req.center_re
+                                && old_req.center_im == req.center_im;
+                            if same_center {
+                                if orbit.relocation_serves(req.zoom_log2, h) {
+                                    return Some(orbit);
+                                }
+                                return None;
+                            }
+                            if orbit.relocate_to(
+                                &req.center_re,
+                                &req.center_im,
+                                req.zoom_log2,
+                                h,
+                            ) {
+                                super::diag::update(|d| d.orbit_relocations += 1);
+                                Some(orbit)
+                            } else {
+                                None
+                            }
+                        });
+                        let mut src = super::diag::OrbitSource::Reused;
+                        let t_compute = web_time::Instant::now();
+                        let (orbit, reused) = match reuse {
+                            Some(o) => (o, true),
+                            None => {
+                                match worker_compute_orbit(&req, &mut src) {
+                                    Some(o) => (o, false),
+                                    None => {
+                                        // Unparseable center: publish an
+                                        // empty done state (new -- empty
+                                        // -- content: bump generation).
+                                        let mut p = shared.lock().unwrap();
+                                        p.epoch = epoch;
+                                        p.generation = p.generation.wrapping_add(1);
+                                        p.orbit.clear();
+                                        p.orbit_lo.clear();
+                                        p.orbit_e.clear();
+                                        p.done = true;
+                                        p.served = None;
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        // Publish. A REUSED orbit already mirrors the
+                        // shared progress exactly (every mutation to it
+                        // is followed by a publish under the lock), so
+                        // only the request-scoped metadata changes --
+                        // cloning a 10M-entry orbit here on every zoom
+                        // tick was hundreds of MB of memcpy per wheel
+                        // notch, for content that had not changed. A
+                        // fresh orbit is new content: bump the
+                        // generation and clone.
+                        {
+                            let mut p = shared.lock().unwrap();
+                            p.epoch = epoch;
+                            if !reused {
+                                p.generation = p.generation.wrapping_add(1);
+                                p.orbit.clear();
+                                p.orbit.extend_from_slice(&orbit.orbit);
+                                p.orbit_lo.clear();
+                                p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+                                p.orbit_e.clear();
+                                p.orbit_e.extend_from_slice(&orbit.orbit_e);
+                            }
+                            p.ref_offset = orbit.ref_offset;
+                            p.off_zoom_log2 = orbit.off_zoom_log2;
+                            p.off_height_px = orbit.off_height_px;
+                            p.detected_period = orbit.periodic;
+                            p.done = orbit.periodic.is_some()
+                                || orbit.escaped_at.is_some()
+                                || orbit.len() > req.max_iter;
+                            p.source = src;
+                            p.served = Some(req.clone());
+                            p.n_limbs = orbit.n_limbs;
+                            p.closure_octave = orbit.closure_octave;
+                            if !reused {
+                                p.compute_ms =
+                                    t_compute.elapsed().as_secs_f32() * 1000.0;
+                            }
+                        }
+                        current = Some((req, orbit, epoch));
+                    }
+
+                    // Advance the current job by one chunk.
+                    if let Some((req, orbit, epoch)) = current.as_mut() {
+                        orbit.set_closure_limit(req.zoom_log2);
+                        let before = orbit.len();
+                        let t_extend = web_time::Instant::now();
+                        let target = (orbit.len().saturating_sub(1) + Self::CHUNK)
+                            .min(req.max_iter);
+                        orbit.extend(target);
+                        let extend_ms = if orbit.len() != before {
+                            t_extend.elapsed().as_secs_f32() * 1000.0
+                        } else {
+                            0.0
+                        };
+                        let done = orbit.periodic.is_some()
+                            || orbit.escaped_at.is_some()
+                            || orbit.len() > req.max_iter;
+                        {
+                            let mut p = shared.lock().unwrap();
+                            if p.epoch == *epoch {
+                                let have = p.orbit.len();
+                                if orbit.orbit.len() >= have {
+                                    p.orbit.extend_from_slice(&orbit.orbit[have..]);
+                                    p.orbit_lo.extend_from_slice(&orbit.orbit_lo[have..]);
+                                    p.orbit_e.extend_from_slice(&orbit.orbit_e[have..]);
+                                } else {
+                                    // Auto-closure truncated the orbit
+                                    // to one period: republish whole,
+                                    // as NEW content (the mirror must
+                                    // not append onto the longer old
+                                    // prefix).
+                                    p.generation = p.generation.wrapping_add(1);
+                                    p.orbit.clear();
+                                    p.orbit.extend_from_slice(&orbit.orbit);
+                                    p.orbit_lo.clear();
+                                    p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+                                    p.orbit_e.clear();
+                                    p.orbit_e.extend_from_slice(&orbit.orbit_e);
+                                }
+                                p.detected_period = orbit.periodic;
+                                p.done = done;
+                                p.closure_octave = orbit.closure_octave;
+                                p.compute_ms += extend_ms;
+                            }
+                        }
+                        if done {
+                            // Persist the finished orbit (cost-gated).
+                            super::orbit_store::maybe_save(orbit);
+                            // Keep state for future deepening but stop
+                            // spinning: park until the next request.
+                            let parked = current.take().unwrap();
+                            match rx.recv() {
+                                Ok(r) => {
+                                    current = Some((parked.0, parked.1, parked.2));
+                                    // Re-queue the received request into
+                                    // the normal path next loop.
+                                    let _ = tx_loopback_send(&shared, r, &mut current);
+                                }
+                                Err(_) => return,
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("spawn escape-orbit worker");
+        Self { tx, progress, latest: None, epoch: 0 }
+    }
+
+    /// Post a request (deduplicated). Returns the epoch that data for
+    /// it will carry.
+    pub fn request(&mut self, req: OrbitRequest) -> u64 {
+        if self.latest.as_ref() == Some(&req) {
+            return self.epoch;
+        }
+        self.epoch += 1;
+        self.latest = Some(req.clone());
+        let _ = self.tx.send((self.epoch, req));
+        self.epoch
+    }
+}
+
+/// Worker-side orbit construction: nucleus-aware for the eligible
+/// case (parameter-plane Mandelbrot), plain otherwise. Starts at zero
+/// iterations — the chunk loop grows it (a periodic nucleus orbit
+/// arrives complete).
+#[cfg(not(target_arch = "wasm32"))]
+fn worker_compute_orbit(
+    req: &OrbitRequest,
+    source: &mut super::diag::OrbitSource,
+) -> Option<ReferenceOrbit> {
+    if let Some(o) = super::orbit_store::load(
+        &req.center_re,
+        &req.center_im,
+        req.n_limbs,
+        req.julia_c,
+        req.power,
+        req.ship,
+        req.ship_variant,
+        req.map_params,
+        req.zoom_log2,
+        req.height_px.max(1.0),
+    ) {
+        // Same acceptance filter as the blocking cache
+        // (`OrbitCache::get`): the orbit must answer the request's
+        // hint AND its periodicity must serve this zoom. Accepting
+        // any stored orbit when no hint is set let a periodic orbit
+        // whose closure cannot serve the zoom through -- its wrap is
+        // inexact at that depth and renders a displaced structure.
+        if o.answers_hint(req.reference_period, req.zoom_log2)
+            && o.periodic_serves(req.zoom_log2)
+        {
+            *source = super::diag::OrbitSource::Store;
+            return Some(o);
+        }
+    }
+    *source = super::diag::OrbitSource::Computed;
+    // Nucleus relocation is derived for the plain power map (Newton on
+    // f_c^p(0), ball-method periods, the closure test): the
+    // anti-holomorphic family needs its own derivation, so it takes
+    // the plain reference path. It ALSO has to, mechanically -- a
+    // nucleus orbit is built with ship_variant 0, which a MAP_CONJ
+    // request can never be served by, so routing it here made the
+    // cache rebuild every frame and the render never settle.
+    if req.julia_c.is_none() && !req.ship && req.ship_variant == MAP_PLAIN {
+        ReferenceOrbit::compute_nucleus_aware(
+            &req.center_re,
+            &req.center_im,
+            req.zoom_log2,
+            0,
+            req.height_px.max(1.0),
+            req.power,
+            req.reference_period,
+        )
+    } else {
+        ReferenceOrbit::compute(
+            &req.center_re,
+            &req.center_im,
+            0.0,
+            Some(req.n_limbs),
+            0,
+            req.julia_c,
+            req.power,
+            req.ship,
+            req.ship_variant,
+            req.map_params,
+        )
+    }
+}
+
+/// Helper for the parked-worker wakeup: fold a received request into
+/// `current` exactly the way the main loop would.
+#[cfg(not(target_arch = "wasm32"))]
+fn tx_loopback_send(
+    shared: &std::sync::Arc<std::sync::Mutex<OrbitProgress>>,
+    (epoch, req): (u64, OrbitRequest),
+    current: &mut Option<(OrbitRequest, ReferenceOrbit, u64)>,
+) -> Option<()> {
+    let reuse = current.take().and_then(|(old_req, mut orbit, _)| {
+        let shape = orbit.n_limbs >= req.n_limbs
+            && old_req.julia_c == req.julia_c
+            && old_req.power == req.power
+            && old_req.ship == req.ship
+            && old_req.ship_variant == req.ship_variant
+            && old_req.reference_period == req.reference_period
+            && old_req.map_params == req.map_params
+            && orbit.periodic_serves(req.zoom_log2);
+        if !shape {
+            return None;
+        }
+        let h = req.height_px.max(1.0);
+        let same_center =
+            old_req.center_re == req.center_re && old_req.center_im == req.center_im;
+        if same_center {
+            if orbit.relocation_serves(req.zoom_log2, h) {
+                return Some(orbit);
+            }
+            return None;
+        }
+        if orbit.relocate_to(&req.center_re, &req.center_im, req.zoom_log2, h) {
+            super::diag::update(|d| d.orbit_relocations += 1);
+            Some(orbit)
+        } else {
+            None
+        }
+    });
+    let mut src = super::diag::OrbitSource::Reused;
+    let t_compute = web_time::Instant::now();
+    let (orbit, reused) = match reuse {
+        Some(o) => (o, true),
+        None => (worker_compute_orbit(&req, &mut src)?, false),
+    };
+    {
+        let mut p = shared.lock().unwrap();
+        p.epoch = epoch;
+        if !reused {
+            // See the main loop: a reused orbit already mirrors the
+            // shared progress; only fresh content is cloned.
+            p.generation = p.generation.wrapping_add(1);
+            p.orbit.clear();
+            p.orbit.extend_from_slice(&orbit.orbit);
+            p.orbit_lo.clear();
+            p.orbit_lo.extend_from_slice(&orbit.orbit_lo);
+            p.orbit_e.clear();
+            p.orbit_e.extend_from_slice(&orbit.orbit_e);
+        }
+        p.ref_offset = orbit.ref_offset;
+        p.off_zoom_log2 = orbit.off_zoom_log2;
+        p.off_height_px = orbit.off_height_px;
+        p.detected_period = orbit.periodic;
+        p.done = orbit.periodic.is_some()
+            || orbit.escaped_at.is_some()
+            || orbit.len() > req.max_iter;
+        p.source = src;
+        p.served = Some(req.clone());
+        p.n_limbs = orbit.n_limbs;
+        p.closure_octave = orbit.closure_octave;
+        if !reused {
+            p.compute_ms = t_compute.elapsed().as_secs_f32() * 1000.0;
+        }
+    }
+    *current = Some((req, orbit, epoch));
+    Some(())
+}
+
+impl ReferenceOrbit {
+    /// Build a PERIODIC reference from a period hint (fraktaler-3's
+    /// `reference.period`): the center is taken as the nucleus, its
+    /// orbit computed for exactly one period at the view's full
+    /// precision, and VERIFIED to close (|Z_period| below f32
+    /// visibility — the exact-wrap requirement). A wrong hint returns
+    /// None (the caller warns and falls back). This is the deep-dive
+    /// reference: one period long, never extends, and its
+    /// delta-crushes align with the true cascade dynamics.
+    pub fn try_periodic_from_hint(
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        period: u32,
+        power: u32,
+    ) -> Option<Self> {
+        if period == 0 {
+            return None;
+        }
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+        // Compute WITHOUT auto-closure: a shallower cascade closure
+        // would truncate the orbit mid-verification and preempt the
+        // hinted DEEP reference (observed: period 142,232 stealing a
+        // 1,137,764 hint). The hint asks for exactly this period; the
+        // closure check below is the arbiter.
+        let mut orbit = Self::compute(
+            center_re, center_im, zoom_log2, Some(n), 0, None, power, false, 0, [0.0, 0.0],
+        )?;
+        orbit.closure_limit_octave = i64::MIN / 4;
+        orbit.extend(period);
+        if orbit.escaped_at.is_some() || orbit.len() <= period {
+            log::warn!("reference period {period}: center orbit escapes before closing");
+            return None;
+        }
+        // Closure check on the LIVE fixed-point state (the stored f32
+        // value would round a near-miss to zero).
+        let zx = orbit.z.re.to_f64();
+        let zy = orbit.z.im.to_f64();
+        if zx * zx + zy * zy > 2f64.powi(-48) {
+            log::warn!(
+                "reference period {period} rejected: |Z_period| ~ {:.3e} (not a nucleus closure)",
+                (zx * zx + zy * zy).sqrt()
+            );
+            return None;
+        }
+        orbit.periodic = Some(period);
+        orbit.orbit.truncate(period as usize + 1);
+        orbit.orbit_lo.truncate(period as usize + 1);
+        orbit.orbit_e.truncate(period as usize + 1);
+        // Compression state past the truncation is void; a periodic
+        // orbit never extends, and a poisoned shadow would record
+        // corrections if it somehow did (always safe).
+        orbit.corrections.retain(|c| (c.idx as usize) < period as usize + 1);
+        orbit.shadow = [f64::NAN; 4];
+        {
+            let fx = orbit.z.re.to_floatexp();
+            let fy = orbit.z.im.to_floatexp();
+            orbit.closure_octave = match (fx.m == 0.0, fy.m == 0.0) {
+                (true, true) => i64::MIN / 2,
+                (true, false) => fy.e,
+                (false, true) => fx.e,
+                (false, false) => fx.e.max(fy.e),
+            };
+        }
+        log::info!("periodic reference from hint: period {period} at {n} limbs");
+        Some(orbit)
+    }
+
+    /// Parameter-plane Mandelbrot: try a nucleus-relocated periodic
+    /// reference first (exact wrap, period-length orbit, maximal
+    /// glitch resistance); fall back to the view-center reference.
+    /// `height_px` converts the relocation offset into pixel units.
+    pub fn compute_nucleus_aware(
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        max_iter: u32,
+        height_px: f64,
+        power: u32,
+        period_hint: Option<u32>,
+    ) -> Option<Self> {
+        // Diagnostic escape hatch: render with plain references to
+        // isolate relocation-dependent differences.
+        let skip_nucleus = std::env::var("ESCAPE_DISABLE_NUCLEUS").is_ok();
+        if !skip_nucleus {
+            if let Some(p) = period_hint {
+                if let Some(mut orbit) =
+                    Self::try_periodic_from_hint(center_re, center_im, zoom_log2, p, power)
+                {
+                    if orbit.periodic_serves(zoom_log2) {
+                        return Some(orbit);
+                    }
+                    // The hinted period CLOSES, but not below this
+                    // view's pixel scale — the center is not the
+                    // nucleus to enough digits for the wrap to be
+                    // exact here. Returning it anyway is what made
+                    // extreme zooms spin: the cache rejects a
+                    // non-serving orbit on the very next frame, so
+                    // every frame paid a full reference computation
+                    // and nothing ever rendered (measured at
+                    // zoom 9316: one rebuild every 54 s, forever).
+                    //
+                    // Keep the work instead. The orbit already IS the
+                    // plain prefix 0..=p and the live fixed-point
+                    // state continues it, so dropping the periodicity
+                    // and extending costs nothing extra — and
+                    // ordinary auto-detection can still close it at a
+                    // depth that does serve.
+                    log::warn!(
+                        "reference period {p} does not serve zoom {zoom_log2:.0}: \
+                         |Z_p| ~ 2^{} vs pixel-scale limit 2^{} — continuing as a plain \
+                         reference (refine the center toward the nucleus for an exact wrap)",
+                        orbit.closure_octave,
+                        closure_limit_for_zoom(zoom_log2),
+                    );
+                    orbit.hint_period = Some(p);
+                    orbit.hint_octave = orbit.closure_octave;
+                    orbit.periodic = None;
+                    orbit.closure_octave = i64::MAX;
+                    orbit.set_closure_limit(zoom_log2);
+                    orbit.extend(max_iter);
+                    return Some(orbit);
+                }
+            }
+        }
+        if let Some((nre, nim, period, off)) = (!skip_nucleus)
+            .then(|| nucleus_for_view(center_re, center_im, zoom_log2, height_px, power))
+            .flatten()
+        {
+            log::info!(
+                "nucleus relocation: period {period}, offset ({:.3}, {:.3}) px, zoom {zoom_log2:.2}",
+                off[0],
+                off[1]
+            );
+            if let Some(mut orbit) = Self::compute(
+                &nre,
+                &nim,
+                zoom_log2,
+                None,
+                period,
+                None,
+                power,
+                false,
+                0,
+                [0.0, 0.0],
+            ) {
+                if orbit.escaped_at.is_none() && orbit.len() > period {
+                    // Store under the VIEW key (the cache is keyed on
+                    // what was asked for), remember the relocation.
+                    orbit.center_re = center_re.to_string();
+                    orbit.center_im = center_im.to_string();
+                    orbit.periodic = Some(period);
+                    orbit.closure_octave = i64::MIN / 2;
+                    orbit.ref_offset = off;
+                    orbit.off_zoom_log2 = zoom_log2;
+                    orbit.off_height_px = height_px.max(1.0);
+                    return Some(orbit);
+                }
+            }
+        }
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+        Self::compute(
+            center_re, center_im, zoom_log2, Some(n), max_iter, None, power, false, 0,
+            [0.0, 0.0],
+        )
+    }
+}
+
+/// Single-slot orbit cache: during a continuous zoom the center is
+/// unchanged, so one orbit serves every frame; deepening appends. A
+/// pan or precision change replaces the slot.
+#[derive(Default)]
+pub struct OrbitCache {
+    slot: Option<ReferenceOrbit>,
+    /// Bumped whenever the SLOT CONTENT is replaced (never on a pure
+    /// extend). The renderer keys its GPU mirror and BLA table on
+    /// this: two different orbits can have the same length (pan at a
+    /// fixed max_iter -- both non-escaping orbits are max_iter+1
+    /// long), so a length compare alone would leave a stale
+    /// reference bound.
+    generation: u64,
+    height_px: f64,
+    /// Verified-before-use period hint for parameter-plane power
+    /// tiers (see [`ReferenceOrbit::try_periodic_from_hint`]).
+    reference_period: Option<u32>,
+    /// Per-cache counters mirroring the global diag ones — the diag
+    /// snapshot is process-global and tests run in parallel, so
+    /// assertions read these instead.
+    pub(crate) stat_relocations: u64,
+    pub(crate) stat_rebuilds: u64,
+}
+
+impl OrbitCache {
+    /// The currently cached orbit, if any (read-only — BLA table
+    /// construction reads the CPU copy the GPU mirror was built from).
+    pub fn peek(&self) -> Option<&ReferenceOrbit> {
+        self.slot.as_ref()
+    }
+
+    /// Identity of the current slot content (see the field doc).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Get (computing or extending as needed) the orbit for a view.
+    /// Returns None only when the center strings fail to parse.
+    pub fn get(
+        &mut self,
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        max_iter: u32,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+    ) -> Option<&ReferenceOrbit> {
+        // The center's own digits set a precision FLOOR: a truncated
+        // deep center is a different (shallow, early-escaping) point,
+        // and pixels that can't outgrow d0 before that escape collapse
+        // onto it (the zoom-685 uniform-frame bug).
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+        let hit = self.slot.as_ref().is_some_and(|o| {
+            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant, map_params)
+                && o.periodic_serves(zoom_log2)
+        });
+        // Moved view, same map: re-anchor instead of recomputing (the
+        // worker's reuse policy, for the blocking/WASM path). The
+        // hint-conformance the slot already has (set_reference_period
+        // clears it on any hint change) carries over unchanged.
+        let hit = hit
+            || self.slot.as_mut().is_some_and(|o| {
+                o.serves_shape(n, julia_c, power, ship, ship_variant, map_params)
+                    && o.periodic_serves(zoom_log2)
+                    && o.relocate_to(center_re, center_im, zoom_log2, self.height_px.max(1.0))
+                    && {
+                        self.stat_relocations += 1;
+                        super::diag::update(|d| d.orbit_relocations += 1);
+                        true
+                    }
+            });
+        if hit {
+            let orbit = self.slot.as_mut().unwrap();
+            orbit.set_closure_limit(zoom_log2);
+            orbit.extend(max_iter);
+        } else {
+            self.stat_rebuilds += 1;
+            // Disk store first (desktop): an exact-identity hit skips
+            // the fixed-point recompute entirely and still deepens.
+            #[cfg(not(target_arch = "wasm32"))]
+            let loaded = super::orbit_store::load(
+                center_re,
+                center_im,
+                n,
+                julia_c,
+                power,
+                ship,
+                ship_variant.min(5),
+                map_params,
+                zoom_log2,
+                self.height_px.max(1.0),
+            );
+            #[cfg(target_arch = "wasm32")]
+            let loaded: Option<ReferenceOrbit> = None;
+            // A stored orbit only serves a hint-set request if it IS
+            // the hinted periodic form.
+            let loaded = loaded.filter(|o| {
+                o.answers_hint(self.reference_period, zoom_log2) && o.periodic_serves(zoom_log2)
+            });
+            let orbit = if let Some(mut o) = loaded {
+                o.extend(max_iter);
+                o
+            } else if julia_c.is_none() && !ship && ship_variant == MAP_PLAIN {
+                ReferenceOrbit::compute_nucleus_aware(
+                    center_re,
+                    center_im,
+                    zoom_log2,
+                    max_iter,
+                    self.height_px.max(1.0),
+                    power,
+                    self.reference_period,
+                )?
+            } else {
+                ReferenceOrbit::compute(
+                    center_re, center_im, zoom_log2, Some(n), max_iter, julia_c, power, ship,
+                    ship_variant, map_params,
+                )?
+            };
+            self.generation = self.generation.wrapping_add(1);
+            self.slot = Some(orbit);
+        }
+        // Persist anything worth keeping (cost-gated; rewrites only
+        // when deeper than what the store already holds).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(o) = self.slot.as_mut() {
+            super::orbit_store::maybe_save(o);
+        }
+        self.slot.as_ref()
+    }
+
+    /// Budgeted variant of [`get`](Self::get): extend the orbit by at
+    /// most `budget` iterations this call, returning the (possibly
+    /// partial) orbit and whether it now covers the request. The
+    /// single-threaded WASM path calls this once per frame so the tab
+    /// stays responsive while a deep reference computes; rebasing
+    /// renders partial-orbit frames correctly (early wrap), so each
+    /// slice refines the image. Skips the nucleus search (a blocking
+    /// Newton run has no place on a UI thread) — plain references,
+    /// which rebasing serves fine.
+    pub fn get_budgeted(
+        &mut self,
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        max_iter: u32,
+        julia_c: Option<(f32, f32)>,
+        power: u32,
+        ship: bool,
+        ship_variant: u32,
+        map_params: [f32; 2],
+        budget: u32,
+    ) -> Option<(&ReferenceOrbit, bool)> {
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+        let hit = self.slot.as_ref().is_some_and(|o| {
+            o.serves(center_re, center_im, n, julia_c, power, ship, ship_variant, map_params)
+                && o.periodic_serves(zoom_log2)
+        });
+        // Moved view, same map: re-anchor (see get()).
+        let hit = hit
+            || self.slot.as_mut().is_some_and(|o| {
+                o.serves_shape(n, julia_c, power, ship, ship_variant, map_params)
+                    && o.periodic_serves(zoom_log2)
+                    && o.relocate_to(center_re, center_im, zoom_log2, self.height_px.max(1.0))
+                    && {
+                        self.stat_relocations += 1;
+                        super::diag::update(|d| d.orbit_relocations += 1);
+                        true
+                    }
+            });
+        let budget = budget.max(64);
+        if !hit {
+            self.stat_rebuilds += 1;
+        }
+        if hit {
+            let orbit = self.slot.as_mut().unwrap();
+            orbit.set_closure_limit(zoom_log2);
+            let target = orbit.len().saturating_sub(1).saturating_add(budget).min(max_iter);
+            orbit.extend(target);
+        } else {
+            self.generation = self.generation.wrapping_add(1);
+            self.slot = Some(ReferenceOrbit::compute(
+                center_re,
+                center_im,
+                zoom_log2,
+                Some(n),
+                budget.min(max_iter),
+                julia_c,
+                power,
+                ship,
+                ship_variant,
+                map_params,
+            )?);
+        }
+        let orbit = self.slot.as_ref().unwrap();
+        let done = orbit.periodic.is_some()
+            || orbit.escaped_at.is_some()
+            || orbit.len() > max_iter;
+        Some((orbit, done))
+    }
+
+    /// The reference-period hint; a change invalidates the slot so
+    /// the next get() rebuilds with (or without) the periodic form.
+    pub fn set_reference_period(&mut self, period: Option<u32>) {
+        if self.reference_period != period {
+            self.reference_period = period;
+            self.slot = None;
+        }
+    }
+
+    /// The viewport height the relocation offset is measured against.
+    pub fn set_height(&mut self, h: f64) {
+        if (self.height_px - h).abs() > 0.5 {
+            self.height_px = h;
+            // The offset unit changed: recompute on next get.
+            self.slot = None;
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.slot = None;
+    }
+}
+
+/// The big-float families' reference orbits against f64 twins of
+/// their steps, plus the range events that put them on big float in
+/// the first place.
+#[cfg(test)]
+mod big_family_tests {
+    use super::*;
+
+    type C = (f64, f64);
+
+    fn cmul(a: C, b: C) -> C {
+        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+    }
+
+    fn cdiv(a: C, b: C) -> C {
+        let d = b.0 * b.0 + b.1 * b.1;
+        ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
+    }
+
+    fn cpow(z: C, k: u32) -> C {
+        let mut acc = (1.0, 0.0);
+        for _ in 0..k {
+            acc = cmul(acc, z);
+        }
+        acc
+    }
+
+    fn jet(z: C, func: u32, p: u32) -> (C, C, C) {
+        match func {
+            1 => (
+                (cpow(z, 3).0 - 2.0 * z.0 + 2.0, cpow(z, 3).1 - 2.0 * z.1),
+                (3.0 * cpow(z, 2).0 - 2.0, 3.0 * cpow(z, 2).1),
+                (6.0 * z.0, 6.0 * z.1),
+            ),
+            2 => {
+                let (z8, z7, z6, z4, z3, z2) =
+                    (cpow(z, 8), cpow(z, 7), cpow(z, 6), cpow(z, 4), cpow(z, 3), cpow(z, 2));
+                (
+                    (z8.0 + 15.0 * z4.0 - 16.0, z8.1 + 15.0 * z4.1),
+                    (8.0 * z7.0 + 60.0 * z3.0, 8.0 * z7.1 + 60.0 * z3.1),
+                    (56.0 * z6.0 + 180.0 * z2.0, 56.0 * z6.1 + 180.0 * z2.1),
+                )
+            }
+            _ => {
+                let pf = p as f64;
+                let zp = cpow(z, p);
+                let zp1 = cpow(z, p - 1);
+                let zp2 = cpow(z, p - 2);
+                (
+                    (zp.0 - 1.0, zp.1),
+                    (pf * zp1.0, pf * zp1.1),
+                    (pf * (pf - 1.0) * zp2.0, pf * (pf - 1.0) * zp2.1),
+                )
+            }
+        }
+    }
+
+    /// The shader's `newton_delta`, in f64.
+    fn rootfinder_step(z: C, scheme: u32, func: u32, p: u32, relax: C) -> C {
+        let (f, fp, fpp) = jet(z, func, p);
+        let step = match scheme {
+            0 => cdiv(f, fp),
+            1 => {
+                let num = cmul((2.0, 0.0), cmul(f, fp));
+                let fp2 = cmul(fp, fp);
+                let ffpp = cmul(f, fpp);
+                cdiv(num, (2.0 * fp2.0 - ffpp.0, 2.0 * fp2.1 - ffpp.1))
+            }
+            _ => {
+                let q = cdiv(f, fp);
+                let fp2 = cmul(fp, fp);
+                let corr = cdiv(cmul(f, fpp), (2.0 * fp2.0, 2.0 * fp2.1));
+                cmul(q, (1.0 + corr.0, corr.1))
+            }
+        };
+        let rs = cmul(relax, step);
+        (z.0 - rs.0, z.1 - rs.1)
+    }
+
+    fn entry(o: &ReferenceOrbit, i: usize) -> C {
+        let v = o.z_f32(i);
+        (v[0] as f64 + o.orbit_lo[i][0] as f64, v[1] as f64 + o.orbit_lo[i][1] as f64)
+    }
+
+    /// The stored seed is the centre's f32 HI (that is the storage
+    /// format), so an exact-decimal compare cannot hold.
+    fn assert_seed(o: &ReferenceOrbit, want: C, what: &str) {
+        let got = entry(o, 0);
+        assert!(
+            (got.0 - want.0).abs() < 1e-6 && (got.1 - want.1).abs() < 1e-6,
+            "{what}: seed {got:?} is not {want:?}"
+        );
+    }
+
+    /// The stored orbit must track an f64 iteration of the same step
+    /// from the same seed for `n` steps, to `tol` relative -- f64's
+    /// own error growth bounds `n` for the expanding maps.
+    /// `z0` must be the orbit's TRUE seed, not `entry(o, 0)`: the
+    /// stored entry is an f32 hi, while the live state carries the
+    /// centre at full precision, and starting the twin from the
+    /// truncation puts the two orbits 4e-8 apart after one step.
+    fn assert_tracks(
+        o: &ReferenceOrbit,
+        z0: C,
+        mut step: impl FnMut(C) -> C,
+        n: usize,
+        tol: f64,
+    ) {
+        assert!(o.len() as usize > n, "orbit too short: {}", o.len());
+        let mut z = z0;
+        for i in 1..=n {
+            z = step(z);
+            let got = entry(o, i);
+            let scale = 1.0 + z.0.abs() + z.1.abs();
+            assert!(
+                (got.0 - z.0).abs() + (got.1 - z.1).abs() < tol * scale,
+                "step {i}: reference {got:?} vs f64 {z:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn newton_variants_round_trip_and_the_big_range_is_contiguous() {
+        for scheme in 0..3 {
+            for func in 0..3 {
+                let v = newton_variant(scheme, func);
+                assert!((MAP_NEWTON_BASE..=MAP_NEWTON_END).contains(&v));
+                assert_eq!(newton_decode(v), (scheme, func));
+                assert!(map_is_big(false, v));
+            }
+        }
+        for v in [MAP_NOVA, MAP_KALISET, MAP_DUCKS] {
+            assert!(map_is_big(false, v));
+        }
+        for v in [MAP_PLAIN, MAP_CONJ, MAP_PHOENIX, MAP_MANOWAR, MAP_LAMBDA, MAP_FEATHER, MAP_MCMULLEN, MAP_MAGNET] {
+            assert!(!map_is_big(false, v));
+        }
+        // A Ship fold variant never reads as a big family.
+        assert!(!map_is_big(true, MAP_NEWTON_BASE));
+    }
+
+    #[test]
+    fn newton_reference_tracks_f64_and_converges_to_a_root() {
+        let o = ReferenceOrbit::compute(
+            "0.3", "0.6", 20.0, None, 60, Some((0.0, 0.0)), 3, false, newton_variant(0, 0), [1.0, 0.0],
+        )
+        .unwrap();
+        assert_eq!(o.len(), 61);
+        assert_eq!(o.escaped_at, None);
+        assert_seed(&o, (0.3, 0.6), "newton");
+        assert_tracks(&o, (0.3, 0.6), |z| rootfinder_step(z, 0, 0, 3, (1.0, 0.0)), 25, 1e-10);
+        let last = entry(&o, 60);
+        let f = cpow(last, 3);
+        assert!((f.0 - 1.0).abs() + f.1.abs() < 1e-6, "not at a root: {last:?}");
+    }
+
+    #[test]
+    fn newton_reference_survives_a_pole_excursion() {
+        // f'(1e-5) ~ 3e-10: the first step lands near 3e9, which fixed
+        // point's +-128 range could never hold. The orbit must stay
+        // finite and come back to the root at 1.
+        let o = ReferenceOrbit::compute(
+            "0.00001", "0.000002", 20.0, None, 200, Some((0.0, 0.0)), 3, false, newton_variant(0, 0), [1.0, 0.0],
+        )
+        .unwrap();
+        assert_eq!(o.escaped_at, None);
+        let z1 = entry(&o, 1);
+        assert!(z1.0.abs() > 1e8, "no excursion: {z1:?}");
+        for i in 0..o.len() as usize {
+            let e = entry(&o, i);
+            assert!(e.0.is_finite() && e.1.is_finite(), "entry {i} not finite");
+            assert!(o.orbit_lo[i][0].is_finite() && o.orbit_lo[i][1].is_finite());
+        }
+        let last = entry(&o, 199);
+        assert!((last.0 - 1.0).abs() + last.1.abs() < 1e-6, "did not return to the root: {last:?}");
+    }
+
+    #[test]
+    fn every_scheme_and_function_tracks_f64() {
+        for scheme in 0..3 {
+            for func in 0..3 {
+                let relax = [1.05f32, -0.2];
+                let o = ReferenceOrbit::compute(
+                    "0.31", "0.57", 20.0, None, 40, Some((0.0, 0.0)), 3, false,
+                    newton_variant(scheme, func), relax,
+                )
+                .unwrap();
+                assert_tracks(
+                    &o,
+                    (0.31, 0.57),
+                    |z| rootfinder_step(z, scheme, func, 3, (relax[0] as f64, relax[1] as f64)),
+                    12,
+                    1e-9,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nova_reference_seeds_at_one_and_tracks_f64() {
+        let o = ReferenceOrbit::compute(
+            "-0.3", "0.05", 20.0, None, 60, None, 3, false, MAP_NOVA, [1.0, 0.0],
+        )
+        .unwrap();
+        assert_seed(&o, (1.0, 0.0), "nova critical point");
+        let c = (-0.3f64, 0.05f64);
+        assert_tracks(
+            &o,
+            (1.0, 0.0),
+            |z| {
+                let n = rootfinder_step(z, 0, 0, 3, (1.0, 0.0));
+                (n.0 + c.0, n.1 + c.1)
+            },
+            30,
+            1e-10,
+        );
+        // Julia mode seeds the pixel and keeps c fixed.
+        let j = ReferenceOrbit::compute(
+            "0.2", "0.1", 20.0, None, 30, Some((-0.3, 0.05)), 3, false, MAP_NOVA, [1.0, 0.0],
+        )
+        .unwrap();
+        assert_seed(&j, (0.2, 0.1), "nova julia");
+        // The Julia constant round-trips through f32, so the twin
+        // must use the same value the reference stored.
+        let jc = (-0.3f32 as f64, 0.05f32 as f64);
+        assert_tracks(
+            &j,
+            (0.2, 0.1),
+            |z| {
+                let n = rootfinder_step(z, 0, 0, 3, (1.0, 0.0));
+                (n.0 + jc.0, n.1 + jc.1)
+            },
+            20,
+            1e-10,
+        );
+    }
+
+    fn kaliset_step(z: C, c: C, plus: bool) -> C {
+        let r2 = z.0 * z.0 + z.1 * z.1;
+        let folded = if r2 > 1e-30 { (z.0.abs() / r2, z.1.abs() / r2) } else { (0.0, 0.0) };
+        if plus {
+            (folded.0 + c.0, folded.1 + c.1)
+        } else {
+            (folded.0 - c.0, folded.1 - c.1)
+        }
+    }
+
+    #[test]
+    fn kaliset_reference_seeds_at_the_pixel_and_tracks_f64() {
+        for plus in [false, true] {
+            let o = ReferenceOrbit::compute(
+                "0.35", "0.28", 20.0, None, 40, None, 2, false, MAP_KALISET,
+                [if plus { 1.0 } else { 0.0 }, 0.0],
+            )
+            .unwrap();
+            assert_seed(&o, (0.35, 0.28), "kaliset");
+            assert_eq!(o.escaped_at, None, "Kaliset never escapes");
+            assert_tracks(&o, (0.35, 0.28), |z| kaliset_step(z, (0.35, 0.28), plus), 10, 1e-8);
+        }
+    }
+
+    #[test]
+    fn kaliset_reference_holds_an_inversion_fixed_point_could_not() {
+        // c = 1 + 1e-7: z_1 = 1/c - c ~ -2e-7, so z_2 = 1/|z_1| - c ~ 5e6.
+        let o = ReferenceOrbit::compute(
+            "1.0000001", "0", 20.0, None, 10, None, 2, false, MAP_KALISET, [0.0, 0.0],
+        )
+        .unwrap();
+        let z2 = entry(&o, 2);
+        assert!(z2.0 > 1e6, "no inversion: {z2:?}");
+        assert_tracks(&o, (1.0000001, 0.0), |z| kaliset_step(z, (1.0000001, 0.0), false), 4, 1e-6);
+        assert_eq!(o.escaped_at, None);
+    }
+
+    fn ducks_step(z: C, c: C, square: bool) -> C {
+        let mut t = (z.0 + c.0, z.1.abs() + c.1);
+        if square {
+            t = cmul(t, t);
+        }
+        let r2 = t.0 * t.0 + t.1 * t.1;
+        if r2 < 1e-30 {
+            return (-34.5, 0.0);
+        }
+        (0.5 * r2.ln(), t.1.atan2(t.0))
+    }
+
+    #[test]
+    fn ducks_reference_tracks_f64_on_both_planes_and_variants() {
+        for (variant, square) in [(0.0f32, false), (4.0, true)] {
+            let o = ReferenceOrbit::compute(
+                "-0.4", "0.3", 20.0, None, 60, None, 2, false, MAP_DUCKS, [variant, 0.0],
+            )
+            .unwrap();
+            assert_seed(&o, (0.0, 0.0), "ducks parameter plane");
+            assert_tracks(&o, (0.0, 0.0), |z| ducks_step(z, (-0.4, 0.3), square), 40, 1e-9);
+            let j = ReferenceOrbit::compute(
+                "0.15", "-0.2", 20.0, None, 60, Some((0.1, -0.62)), 2, false, MAP_DUCKS, [variant, 0.0],
+            )
+            .unwrap();
+            assert_seed(&j, (0.15, -0.2), "ducks julia");
+            assert_tracks(
+                &j,
+                (0.15, -0.2),
+                |z| ducks_step(z, (0.1f32 as f64, -0.62f32 as f64), square),
+                // 25, not 40: past there the TWIN is the inaccurate
+                // one -- f64's 1e-16 amplified by this map reaches
+                // 4.5e-8 by step 40, while the reference is big float.
+                25,
+                1e-9,
+            );
+        }
+    }
+
+    #[test]
+    fn big_family_orbits_are_never_stored() {
+        let dir = std::env::temp_dir().join(format!("fflame-bigfam-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut o = ReferenceOrbit::compute(
+            "0.3", "0.6", 200.0, None, 4000, Some((0.0, 0.0)), 3, false, newton_variant(0, 0), [1.0, 0.0],
+        )
+        .unwrap();
+        assert!(!super::super::orbit_store::save_to(&dir, &o));
+        super::super::orbit_store::maybe_save_to(&dir, &mut o);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a big-family orbit reached the store");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shallow_orbit_matches_f64_iteration() {
+        // c = -0.5 + 0.1i is inside the main cardioid: never escapes,
+        // so the orbit length is exactly what we asked for.
+        let orbit = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 100, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        for i in 1..=100usize {
+            let t = zx * zx - zy * zy + -0.5;
+            zy = 2.0 * zx * zy + 0.1;
+            zx = t;
+            let [ox, oy] = orbit.orbit[i];
+            assert!(
+                (ox as f64 - zx).abs() < 1e-5 && (oy as f64 - zy).abs() < 1e-5,
+                "iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
+            );
+        }
+        assert_eq!(orbit.escaped_at, None);
+    }
+
+    /// relocate_to must re-anchor exactly: a view moved by a known
+    /// number of pixel-spacings yields exactly that offset, computed
+    /// against the fixed-point reference (not by composing floats).
+    #[test]
+    fn relocate_re_anchors_exactly_and_refuses_out_of_range() {
+        let mut orbit = ReferenceOrbit::compute(
+            "-0.75", "0.1", 20.0, None, 50, None, 2, false, 0, [0.0, 0.0],
+        )
+        .unwrap();
+        // S = 2^(2-20)/1024 = 2^-28; ten pixel-spacings exactly:
+        // 10 * 2^-28 = 0.000000037252902984619140625.
+        let moved = "-0.749999962747097015380859375";
+        assert!(orbit.relocate_to(moved, "0.1", 20.0, 1024.0));
+        assert!(
+            (orbit.ref_offset[0] - 10.0).abs() < 1e-4 && orbit.ref_offset[1].abs() < 1e-6,
+            "offset {:?}, wanted [10, 0]",
+            orbit.ref_offset
+        );
+        assert_eq!(orbit.center_re, moved, "identity must follow the view");
+        assert_eq!(orbit.off_zoom_log2, 20.0);
+
+        // Out of range (0.25 complex units = 2^26 px at this view):
+        // refuse, and leave the current anchoring untouched.
+        assert!(!orbit.relocate_to("-0.5", "0.1", 20.0, 1024.0));
+        assert_eq!(orbit.center_re, moved);
+        assert!((orbit.ref_offset[0] - 10.0).abs() < 1e-4);
+
+        // Julia orbits never relocate: the reference is the SEED,
+        // which is not retained in fixed point.
+        let mut julia = ReferenceOrbit::compute(
+            "0.1", "0.2", 20.0, None, 50, Some((-0.4, 0.6)), 2, false, 0, [0.0, 0.0],
+        )
+        .unwrap();
+        assert!(!julia.relocate_to(moved, "0.1", 20.0, 1024.0));
+    }
+
+    #[test]
+    fn escaping_reference_stops_early() {
+        let orbit = ReferenceOrbit::compute("1", "1", 5.0, None, 1000, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        let at = orbit.escaped_at.expect("c = 1+i escapes fast");
+        assert!(at < 10);
+        assert_eq!(orbit.len() - 1, at);
+    }
+
+    /// Phoenix's reference is a TWO-TERM recurrence, and its
+    /// parameter is part of the orbit's identity.
+    ///
+    /// Both halves matter: an orbit that ignored z_prev would be the
+    /// plain quadratic, and one cached without `p` would be silently
+    /// reused after the user changed it -- the second is the failure
+    /// that cannot be seen in a single render, only in the next one.
+    #[test]
+    fn phoenix_reference_carries_history_and_its_parameter() {
+        let p = [-0.5f32, 0.1];
+        let orbit = ReferenceOrbit::compute(
+            "-0.2", "0.35", 20.0, None, 150, None, 2, false, MAP_PHOENIX, p,
+        )
+        .expect("orbit");
+        // f64 shadow of z' = z^2 + c + p*z_prev.
+        let (cx, cy) = (-0.2f64, 0.35f64);
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        let (mut px, mut py) = (0.0f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for i in 1..(orbit.len() as usize).min(150) {
+            let (nx, ny) = (
+                zx * zx - zy * zy + cx + (p[0] as f64) * px - (p[1] as f64) * py,
+                2.0 * zx * zy + cy + (p[0] as f64) * py + (p[1] as f64) * px,
+            );
+            px = zx;
+            py = zy;
+            zx = nx;
+            zy = ny;
+            let got = orbit.z_f32(i);
+            worst = worst.max(
+                ((got[0] as f64 - zx).powi(2) + (got[1] as f64 - zy).powi(2)).sqrt(),
+            );
+        }
+        assert!(worst < 1e-4, "phoenix reference diverges from z^2 + c + p*z_prev: {worst:e}");
+
+        // A different p is a DIFFERENT orbit, and `serves` must say so
+        // -- otherwise the cache hands back the wrong reference.
+        let other = ReferenceOrbit::compute(
+            "-0.2", "0.35", 20.0, None, 150, None, 2, false, MAP_PHOENIX, [0.25, 0.1],
+        )
+        .expect("orbit");
+        let n = orbit.n_limbs;
+        assert!(
+            orbit.serves("-0.2", "0.35", n, None, 2, false, MAP_PHOENIX, p),
+            "an orbit must serve its own identity"
+        );
+        assert!(
+            !orbit.serves("-0.2", "0.35", n, None, 2, false, MAP_PHOENIX, [0.25, 0.1]),
+            "a different p must MISS, or the cache returns a stale reference"
+        );
+        let d = (1..(other.len() as usize).min(150))
+            .map(|i| {
+                let (a, b) = (orbit.z_f32(i), other.z_f32(i));
+                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+            })
+            .fold(0.0f32, f32::max);
+        assert!(d > 1e-3, "different p produced the same orbit: {d:e}");
+    }
+
+    /// The Magnet reference must iterate the squared quotient, for
+    /// BOTH variants, against an f64 oracle.
+    #[test]
+    fn magnet_reference_iterates_both_variants() {
+        for variant in [0u32, 1] {
+            let (cr, ci) = (2.4f64, 0.35f64);
+            let orbit = ReferenceOrbit::compute(
+                "2.4", "0.35", 8.0, None, 60, None, 2, false, MAP_MAGNET,
+                [variant as f32, 0.0],
+            )
+            .expect("reference");
+            let (mut zr, mut zi) = (0.0f64, 0.0f64);
+            let mut worst = 0.0f64;
+            for k in 1..25u32 {
+                let (nr, ni, dr, di) = if variant == 0 {
+                    (
+                        zr * zr - zi * zi + cr - 1.0,
+                        2.0 * zr * zi + ci,
+                        2.0 * zr + cr - 2.0,
+                        2.0 * zi + ci,
+                    )
+                } else {
+                    let (c1r, c1i) = (cr - 1.0, ci);
+                    let (c2r, c2i) = (cr - 2.0, ci);
+                    let (p12r, p12i) = (c1r * c2r - c1i * c2i, c1r * c2i + c1i * c2r);
+                    let (z2r, z2i) = (zr * zr - zi * zi, 2.0 * zr * zi);
+                    let (z3r, z3i) = (z2r * zr - z2i * zi, z2r * zi + z2i * zr);
+                    (
+                        z3r + 3.0 * (c1r * zr - c1i * zi) + p12r,
+                        z3i + 3.0 * (c1r * zi + c1i * zr) + p12i,
+                        3.0 * z2r + 3.0 * (c2r * zr - c2i * zi) + p12r + 1.0,
+                        3.0 * z2i + 3.0 * (c2r * zi + c2i * zr) + p12i,
+                    )
+                };
+                let d2 = dr * dr + di * di;
+                if d2 < 1e-300 { break; }
+                let (qr, qi) = ((nr * dr + ni * di) / d2, (ni * dr - nr * di) / d2);
+                zr = qr * qr - qi * qi;
+                zi = 2.0 * qr * qi;
+                if k >= orbit.len() { break; }
+                let got = orbit.z_f32(k as usize);
+                let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+                worst = worst.max(e);
+                if zr * zr + zi * zi > 4.0 { break; }
+            }
+            println!("magnet v{variant} reference: len {} worst {worst:.3e}", orbit.len());
+            assert!(worst < 1e-4, "magnet v{variant} reference drifts ({worst:.3e})");
+        }
+    }
+
+    /// The McMullen reference must iterate `z^n + c/z^m` from z_0 = c,
+    /// and must report the POLE as an escape rather than as a number.
+    #[test]
+    fn mcmullen_reference_iterates_and_reports_the_pole() {
+        let (cr, ci) = (0.35f64, 0.28f64);
+        let orbit = ReferenceOrbit::compute(
+            "0.35", "0.28", 8.0, None, 60, None, 2, false, MAP_MCMULLEN, [3.0, 0.0],
+        )
+        .expect("reference");
+        // Seeded at c, not at zero (zero is the pole).
+        let first = orbit.z_f32(0);
+        assert!(
+            (first[0] as f64 - cr).abs() < 1e-6 && (first[1] as f64 - ci).abs() < 1e-6,
+            "mcmullen seeded at {first:?}, not at c"
+        );
+        let (mut zr, mut zi) = (cr, ci);
+        let mut worst = 0.0f64;
+        for k in 1..25u32 {
+            // z^2
+            let (nr, ni) = (zr * zr - zi * zi, 2.0 * zr * zi);
+            // z^3
+            let (mr, mi) = (nr * zr - ni * zi, nr * zi + ni * zr);
+            let d = mr * mr + mi * mi;
+            if d < 1e-30 { break; }
+            zr = nr + (cr * mr + ci * mi) / d;
+            zi = ni + (ci * mr - cr * mi) / d;
+            if k >= orbit.len() { break; }
+            let got = orbit.z_f32(k as usize);
+            let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+            worst = worst.max(e);
+            if zr * zr + zi * zi > 4.0 { break; }
+        }
+        println!("mcmullen reference: len {} worst {worst:.3e}", orbit.len());
+        assert!(worst < 1e-4, "the fixed-point mcmullen reference drifts ({worst:.3e})");
+    }
+
+    /// The feather reference must iterate the rational map, which is
+    /// the first one that DIVIDES in fixed point.
+    #[test]
+    fn feather_reference_iterates_the_rational_map() {
+        let orbit = ReferenceOrbit::compute(
+            "-0.35", "0.62", 8.0, None, 60, None, 3, false, MAP_FEATHER, [0.0, 0.0],
+        )
+        .expect("reference");
+        println!("feather reference length {}", orbit.len());
+        assert!(orbit.len() > 10, "feather reference is {} long", orbit.len());
+        let (cr, ci) = (-0.35f64, 0.62f64);
+        let (mut zr, mut zi) = (0.0f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for k in 1..30u32 {
+            let (mut nr, mut ni) = (zr, zi);
+            for _ in 1..3 {
+                let t = nr * zr - ni * zi;
+                ni = nr * zi + ni * zr;
+                nr = t;
+            }
+            let (dr, di) = (1.0 + zr * zr, -(zi * zi));
+            let d2 = dr * dr + di * di;
+            zr = (nr * dr + ni * di) / d2 + cr;
+            zi = (ni * dr - nr * di) / d2 + ci;
+            if k >= orbit.len() { break; }
+            let got = orbit.z_f32(k as usize);
+            let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+            worst = worst.max(e);
+        }
+        println!("feather reference: worst |error| vs f64 = {worst:.3e}");
+        assert!(worst < 1e-5, "the fixed-point feather reference does not track the map ({worst:.3e})");
+    }
+
+    /// The feather reference must stay exact at DEEP-zoom limb counts
+    /// and over hundreds of iterations -- the regime the render uses.
+    #[test]
+    fn feather_reference_stays_exact_at_depth() {
+        for zoom in [10.0f64, 20.0, 30.0, 40.0] {
+            let orbit = ReferenceOrbit::compute(
+                "-0.77291940505873225", "-1.83786610577385723",
+                zoom, None, 600, None, 3, false, MAP_FEATHER, [0.0, 0.0],
+            )
+            .expect("reference");
+            let (cr, ci) = (-0.77291940505873225f64, -1.83786610577385723f64);
+            let (mut zr, mut zi) = (0.0f64, 0.0f64);
+            let mut worst = 0.0f64;
+            for k in 1..200u32 {
+                let (mut nr, mut ni) = (zr, zi);
+                for _ in 1..3 {
+                    let t = nr * zr - ni * zi;
+                    ni = nr * zi + ni * zr;
+                    nr = t;
+                }
+                let (dr, di) = (1.0 + zr * zr, -(zi * zi));
+                let d2 = dr * dr + di * di;
+                zr = (nr * dr + ni * di) / d2 + cr;
+                zi = (ni * dr - nr * di) / d2 + ci;
+                if k >= orbit.len() { break; }
+                let got = orbit.z_f32(k as usize);
+                let e = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+                worst = worst.max(e);
+            }
+            println!("feather ref at zoom {zoom}: len {} worst {worst:.3e}", orbit.len());
+            assert!(worst < 1e-4, "zoom {zoom}: reference drifts ({worst:.3e})");
+        }
+    }
+
+    /// The lambda reference must iterate `c*z*(1-z)` from the
+    /// CRITICAL POINT, in fixed point, matching an f64 oracle.
+    ///
+    /// Two things can go wrong independently and this separates them.
+    /// The map: `1 - z` is a subtraction the other families never do,
+    /// and the imaginary part must be NEGATED rather than subtracted
+    /// (sign-magnitude limbs, so a naive `sub` on a zero would leave a
+    /// non-canonical negative zero). The seed: zero is a fixed point
+    /// of this map for every c, so seeding there gives a constant
+    /// orbit -- which would look like a working reference right up
+    /// until every pixel rendered the same colour.
+    #[test]
+    fn lambda_reference_iterates_the_logistic_map_from_the_critical_point() {
+        let orbit = ReferenceOrbit::compute(
+            "0.6",
+            "0.55",
+            8.0,
+            None,
+            80,
+            None,
+            2,
+            false,
+            MAP_LAMBDA,
+            [0.0, 0.0],
+        )
+        .expect("reference");
+
+        // The seed must be 1/2, not 0.
+        let first = orbit.z_f32(0);
+        assert!(
+            (first[0] - 0.5).abs() < 1e-6 && first[1].abs() < 1e-6,
+            "lambda seeded at {first:?}, not the critical point 1/2"
+        );
+
+        // f64 oracle for the same map and parameter.
+        let (cr, ci) = (0.6f64, 0.55f64);
+        let (mut zr, mut zi) = (0.5f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for k in 1..40u32 {
+            // w = z * (1 - z)
+            let (ar, ai) = (1.0 - zr, -zi);
+            let (pr, pi) = (zr * ar - zi * ai, zr * ai + zi * ar);
+            // z' = c * w
+            let nr = cr * pr - ci * pi;
+            let ni = cr * pi + ci * pr;
+            zr = nr;
+            zi = ni;
+            if k >= orbit.len() {
+                break;
+            }
+            let got = orbit.z_f32(k as usize);
+            let err = ((got[0] as f64 - zr).powi(2) + (got[1] as f64 - zi).powi(2)).sqrt();
+            worst = worst.max(err);
+        }
+        println!("lambda reference: worst |error| vs f64 = {worst:.3e}");
+        assert!(
+            worst < 1e-5,
+            "the fixed-point lambda reference does not track the map ({worst:.3e})"
+        );
+
+        // And the orbit must actually MOVE -- a constant orbit would
+        // pass a sloppier comparison and is exactly what a zero seed
+        // produces.
+        let last = orbit.z_f32(orbit.len() as usize - 1);
+        assert!(
+            (last[0] - 0.5).abs() > 1e-3 || last[1].abs() > 1e-3,
+            "the lambda reference never left its seed"
+        );
+    }
+
+    /// The conjugate family's REFERENCE must actually conjugate.
+    ///
+    /// The delta step assumes the reference iterates conj(Z)^p + C. If
+    /// the orbit were the plain power instead, shallow views would
+    /// still look right -- deltas dominate there and rebasing hides it
+    /// -- while deep views, where the reference carries the signal,
+    /// would be wrong. So this checks the orbit against the map.
+    #[test]
+    fn conjugate_reference_iterates_the_conjugate_map() {
+        let orbit = ReferenceOrbit::compute(
+            "-0.90755797705302632", "0.10050898208800299",
+            30.0, None, 200, None, 2, false, MAP_CONJ, [0.0, 0.0]
+        )
+        .expect("orbit");
+        let (cx, cy) = (-0.90755797705302632f64, 0.10050898208800299f64);
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        let mut worst = 0.0f64;
+        for i in 1..(orbit.len() as usize).min(200) {
+            let (px, py) = (zx, -zy); // conjugate
+            let (nx, ny) = (px * px - py * py + cx, 2.0 * px * py + cy);
+            zx = nx;
+            zy = ny;
+            let got = orbit.z_f32(i);
+            worst = worst.max(
+                ((got[0] as f64 - zx).powi(2) + (got[1] as f64 - zy).powi(2)).sqrt(),
+            );
+        }
+        assert!(worst < 1e-4, "conjugate reference diverges from conj(z)^2 + c: {worst:e}");
+
+        // And it must NOT be the plain power.
+        let plain = ReferenceOrbit::compute(
+            "-0.90755797705302632", "0.10050898208800299",
+            30.0, None, 200, None, 2, false, MAP_PLAIN, [0.0, 0.0]
+        )
+        .expect("orbit");
+        let d = (0..(plain.len() as usize).min(200))
+            .map(|i| {
+                let (a, b) = (orbit.z_f32(i), plain.z_f32(i));
+                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+            })
+            .fold(0.0f32, f32::max);
+        assert!(d > 1e-3, "conjugate and plain references are identical: {d:e}");
+    }
+
+    #[test]
+    fn deepen_is_an_append_and_matches_fresh_compute() {
+        let mut a = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 50, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        a.extend(120);
+        let b = ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 120, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        assert_eq!(a.orbit.len(), b.orbit.len());
+        for (i, (x, y)) in a.orbit.iter().zip(b.orbit.iter()).enumerate() {
+            assert_eq!(x, y, "diverged at iteration {i}");
+        }
+    }
+
+    /// END TO END: a deep dive followed by a pan must leave ONE
+    /// cached orbit, not one per view center.
+    ///
+    /// The store-level test pins the same rule, but this one drives
+    /// the path the app actually uses — `OrbitCache::get`, which
+    /// relocates its in-memory orbit and then persists it — because
+    /// that is where the reported behaviour came from: a single dive
+    /// left 24 files of 2.8 MB, all the same 10.1M-iteration orbit at
+    /// centers a few pixels apart, having evicted every other
+    /// location the user had cached.
+    #[test]
+    fn a_pan_at_depth_leaves_one_cached_orbit() {
+        let dir = super::super::orbit_store::test_store_dir().expect("test store dir");
+        // This test owns the shared per-process test store.
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let _ = std::fs::remove_file(e.path());
+        }
+        let count = || {
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "orbit"))
+                .count()
+        };
+
+        let mut cache = OrbitCache::default();
+        cache.height_px = 512.0;
+        // Deep enough that the orbit is worth storing at all.
+        let got = cache
+            .get("-0.5", "0.1", 2000.0, 3000, None, 2, false, 0, [0.0, 0.0])
+            .expect("orbit");
+        let len = got.len();
+        assert_eq!(count(), 1, "the dive itself must store exactly one orbit");
+
+        // Now pan: a run of centers a fraction of a pixel apart, as a
+        // drag produces at this depth.
+        for d in 0..12 {
+            let c = format!("-0.5{}1", "0".repeat(600 + d));
+            let o = cache
+                .get(&c, "0.1", 2000.0, 3000, None, 2, false, 0, [0.0, 0.0])
+                .expect("orbit");
+            assert_eq!(
+                o.len(),
+                len,
+                "the pan rebuilt the orbit instead of relocating it"
+            );
+        }
+        assert_eq!(
+            count(),
+            1,
+            "a 12-step pan left {} cached orbits — every view center is \
+             rewriting the store",
+            count()
+        );
+    }
+
+    /// MANUAL: time every single-threaded cost between "cached orbit
+    /// file exists" and "GPU can start" on the profile orbit.
+    #[test]
+    #[ignore = "manual: needs output/orbit_profile/ from the generator"]
+    fn profile_cached_orbit_costs() {
+        let dir = std::path::PathBuf::from("output").join("orbit_profile");
+        let path = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "orbit"))
+            .expect("run generate_deep_profile_orbit first");
+
+        let t = std::time::Instant::now();
+        let bytes = std::fs::read(&path).unwrap();
+        println!("fs::read      {:7.1} ms  ({} bytes)", t.elapsed().as_secs_f64() * 1e3, bytes.len());
+
+        let t = std::time::Instant::now();
+        let orbit = ReferenceOrbit::from_bytes(&bytes).unwrap();
+        println!(
+            "from_bytes    {:7.1} ms  (len {}, {} corrections)",
+            t.elapsed().as_secs_f64() * 1e3,
+            orbit.len(),
+            orbit.corrections.len()
+        );
+
+        // Segment-length statistics decide whether a parallel replay
+        // has the granularity to win.
+        let mut segs: Vec<usize> = orbit
+            .corrections
+            .windows(2)
+            .map(|w| (w[1].idx - w[0].idx) as usize)
+            .collect();
+        segs.push(orbit.orbit.len() - orbit.corrections.last().unwrap().idx as usize);
+        segs.sort_unstable();
+        println!(
+            "segments: {} (median {}, p99 {}, max {})",
+            segs.len(),
+            segs[segs.len() / 2],
+            segs[segs.len() * 99 / 100],
+            segs.last().unwrap()
+        );
+
+        // The renderer's with_exp conversion (hi+lo -> f64, scaled).
+        let t = std::time::Instant::now();
+        let data: Vec<[f64; 2]> = orbit
+            .orbit
+            .iter()
+            .enumerate()
+            .map(|(i, z)| {
+                let l = orbit.orbit_lo[i];
+                let scale = match orbit.orbit_e[i] {
+                    0 => 1.0,
+                    k => (k as f64).exp2(),
+                };
+                [
+                    (z[0] as f64 + l[0] as f64) * scale,
+                    (z[1] as f64 + l[1] as f64) * scale,
+                ]
+            })
+            .collect();
+        println!("with_exp      {:7.1} ms", t.elapsed().as_secs_f64() * 1e3);
+
+        // BLA build at a realistic deep-view |dc|.
+        let dc_log2 = -9314.0f64;
+        let e = dc_log2.floor();
+        let dc = super::super::bla::MagFe { m: 2f64.powf(dc_log2 - e), e: e as i64 };
+        let t = std::time::Instant::now();
+        let table = super::super::bla::BlaTable::build_with_dc(&data, 2, dc, dc_log2);
+        let entries: usize = table.levels.iter().map(|l| l.len()).sum();
+        println!(
+            "bla build     {:7.1} ms  ({} levels, {} entries)",
+            t.elapsed().as_secs_f64() * 1e3,
+            table.levels.len(),
+            entries
+        );
+
+        // The renderer's GPU packing, same parallel shape as
+        // ensure_bla's (kept only for the timing readout).
+        let t = std::time::Instant::now();
+        let n_levels = table.levels.len().min(30);
+        let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
+        let mut gpu = vec![0u8; 144 + total * 32];
+        let clamp_e = |e: i64| -> i32 { e.clamp(-1_000_000_000, 1_000_000_000) as i32 };
+        let mut base = 144usize;
+        for lev in &table.levels[..n_levels] {
+            use rayon::prelude::*;
+            gpu[base..base + lev.len() * 32]
+                .par_chunks_exact_mut(32)
+                .zip(lev.par_iter())
+                .for_each(|(dst, ent)| {
+                    dst[0..4].copy_from_slice(&(ent.a.re as f32).to_le_bytes());
+                    dst[4..8].copy_from_slice(&(ent.a.im as f32).to_le_bytes());
+                    dst[8..12].copy_from_slice(&(ent.b.re as f32).to_le_bytes());
+                    dst[12..16].copy_from_slice(&(ent.b.im as f32).to_le_bytes());
+                    dst[16..20].copy_from_slice(&clamp_e(ent.a.e).to_le_bytes());
+                    dst[20..24].copy_from_slice(&clamp_e(ent.b.e).to_le_bytes());
+                    let (rm, re) = if ent.r.m > 0.0 {
+                        (ent.r.m as f32, clamp_e(ent.r.e))
+                    } else {
+                        (0.0f32, 0)
+                    };
+                    dst[24..28].copy_from_slice(&rm.to_le_bytes());
+                    dst[28..32].copy_from_slice(&re.to_le_bytes());
+                });
+            base += lev.len() * 32;
+        }
+        println!("gpu packing   {:7.1} ms  ({} bytes)", t.elapsed().as_secs_f64() * 1e3, gpu.len());
+
+        let t = std::time::Instant::now();
+        let out = orbit.to_bytes();
+        println!("to_bytes      {:7.1} ms  ({} bytes)", t.elapsed().as_secs_f64() * 1e3, out.len());
+    }
+
+    /// MANUAL: generate a realistic deep orbit for decode/render
+    /// profiling — chaotic real-axis c (in the set, aperiodic, so it
+    /// neither escapes nor closes, and the DD shadow needs dense
+    /// corrections like a real deep zoom), 197 limbs, 10.1M
+    /// iterations, matching the profiled user orbit.
+    #[test]
+    #[ignore = "manual: ~5 minutes, writes output/orbit_profile/"]
+    fn generate_deep_profile_orbit() {
+        let dir = std::path::PathBuf::from("output").join("orbit_profile");
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = std::time::Instant::now();
+        let mut o = ReferenceOrbit::compute(
+            "-1.9998877665544332211",
+            "0",
+            9316.0,
+            Some(197),
+            10_100_100,
+            None,
+            2,
+            false,
+            0,
+            [0.0, 0.0],
+        )
+        .unwrap();
+        println!(
+            "built: len={} limbs={} periodic={:?} escaped={:?} in {:.1}s ({:.1} us/iter)",
+            o.len(),
+            o.n_limbs,
+            o.periodic,
+            o.escaped_at,
+            t.elapsed().as_secs_f64(),
+            t.elapsed().as_secs_f64() * 1e6 / o.len() as f64
+        );
+        assert!(super::super::orbit_store::save_to(&dir, &o), "save must land");
+        println!("corrections: {}", o.corrections.len());
+        let _ = &mut o;
+    }
+
+    /// CPU mirror of the FE perturbed shader (f32 + CFe2, op for op)
+    /// on a power-4 view at depth 426 whose reference orbit dips to
+    /// |Z| ~ 2^-51 at iteration 1382, judged against exact
+    /// fixed-point orbits for every pixel.
+    ///
+    /// This is the laboratory that found the dip-underflow bug: with
+    /// UN-normalized reference powers the mantissa's cube leaves f32
+    /// range at the dip and the Z^(p-1)·w term flushes, splitting the
+    /// image along the straight half-plane boundary of "rebased
+    /// before the dip" (~17% of pixels ±30 iterations wrong; the
+    /// user-visible seam). The test asserts BOTH directions: the
+    /// shipped normalized step stays at the DF noise floor, and the
+    /// un-normalized step still reproduces the bug — so the test
+    /// provably bites. The component flags (exact rebase / gate /
+    /// step) are the bisection surface, kept for the next hunt.
+    #[test]
+    #[ignore = "heavy (~1 min CPU): run when touching the FE delta step"]
+    fn fe_step_survives_reference_dips() {
+        use rayon::prelude::*;
+
+        // ---------- CFe2 mirror ----------
+        const CFE_ZERO_E: i32 = -1_000_000_000;
+        #[derive(Clone, Copy)]
+        struct Cfe2 {
+            hi: [f32; 2],
+            lo: [f32; 2],
+            e: i32,
+        }
+        fn frexp(a: f32) -> (f32, i32) {
+            if a == 0.0 || !a.is_finite() {
+                return (a, 0);
+            }
+            let bits = a.to_bits();
+            let exp_bits = ((bits >> 23) & 0xFF) as i32;
+            if exp_bits == 0 {
+                let (m, e) = frexp(a * 2f32.powi(64));
+                return (m, e - 64);
+            }
+            (
+                f32::from_bits((bits & 0x807F_FFFF) | (126 << 23)),
+                exp_bits - 126,
+            )
+        }
+        fn two_sum(a: f32, b: f32) -> [f32; 2] {
+            let s = a + b;
+            let bb = s - a;
+            let err = (a - (s - bb)) + (b - bb);
+            [s, err]
+        }
+        fn quick_sum(a: f32, b: f32) -> [f32; 2] {
+            let s = a + b;
+            [s, b - (s - a)]
+        }
+        fn split(a: f32) -> [f32; 2] {
+            let hi = f32::from_bits(a.to_bits() & 0xFFFF_F000);
+            [hi, a - hi]
+        }
+        fn two_prod(a: f32, b: f32) -> [f32; 2] {
+            let p = a * b;
+            let aa = split(a);
+            let bb = split(b);
+            let err = ((aa[0] * bb[0] - p) + aa[0] * bb[1] + aa[1] * bb[0]) + aa[1] * bb[1];
+            [p, err]
+        }
+        fn df_add(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+            let t = two_sum(a[0], b[0]);
+            quick_sum(t[0], t[1] + a[1] + b[1])
+        }
+        fn df_mul(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+            let t = two_prod(a[0], b[0]);
+            quick_sum(t[0], t[1] + (a[0] * b[1] + a[1] * b[0]))
+        }
+        fn df_muls(a: [f32; 2], b: f32) -> [f32; 2] {
+            let t = two_prod(a[0], b);
+            quick_sum(t[0], t[1] + a[1] * b)
+        }
+        fn df_neg(a: [f32; 2]) -> [f32; 2] {
+            [-a[0], -a[1]]
+        }
+        fn cfe2_zero() -> Cfe2 {
+            Cfe2 { hi: [0.0; 2], lo: [0.0; 2], e: CFE_ZERO_E }
+        }
+        fn cfe2_norm(v: Cfe2) -> Cfe2 {
+            let a = v.hi[0].abs().max(v.hi[1].abs());
+            if a == 0.0 {
+                let b = v.lo[0].abs().max(v.lo[1].abs());
+                if b == 0.0 {
+                    return cfe2_zero();
+                }
+                let f = frexp(b);
+                let sc = 2f32.powi(-f.1);
+                return Cfe2 {
+                    hi: [v.lo[0] * sc, v.lo[1] * sc],
+                    lo: [0.0; 2],
+                    e: v.e + f.1,
+                };
+            }
+            let f = frexp(a);
+            let sc = 2f32.powi(-f.1);
+            Cfe2 {
+                hi: [v.hi[0] * sc, v.hi[1] * sc],
+                lo: [v.lo[0] * sc, v.lo[1] * sc],
+                e: v.e + f.1,
+            }
+        }
+        fn cfe2_to_f32(v: Cfe2) -> [f32; 2] {
+            if v.e < -126 || v.e == CFE_ZERO_E {
+                return [0.0; 2];
+            }
+            if v.e > 127 {
+                return [v.hi[0] * 3.0e38, v.hi[1] * 3.0e38];
+            }
+            let sc = 2f32.powi(v.e);
+            [v.hi[0] * sc, v.hi[1] * sc]
+        }
+        fn cfe2_mul(a: Cfe2, b: Cfe2) -> Cfe2 {
+            if a.e == CFE_ZERO_E || b.e == CFE_ZERO_E {
+                return cfe2_zero();
+            }
+            let ax = [a.hi[0], a.lo[0]];
+            let ay = [a.hi[1], a.lo[1]];
+            let bx = [b.hi[0], b.lo[0]];
+            let by = [b.hi[1], b.lo[1]];
+            let re = df_add(df_mul(ax, bx), df_neg(df_mul(ay, by)));
+            let im = df_add(df_mul(ax, by), df_mul(ay, bx));
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e + b.e })
+        }
+        fn cfe2_mul_c32(a: Cfe2, b: [f32; 2]) -> Cfe2 {
+            if a.e == CFE_ZERO_E {
+                return a;
+            }
+            let ax = [a.hi[0], a.lo[0]];
+            let ay = [a.hi[1], a.lo[1]];
+            let re = df_add(df_muls(ax, b[0]), df_neg(df_muls(ay, b[1])));
+            let im = df_add(df_muls(ax, b[1]), df_muls(ay, b[0]));
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e })
+        }
+        fn cfe2_mul_zdf(a: Cfe2, zh: [f32; 2], zl: [f32; 2]) -> Cfe2 {
+            if a.e == CFE_ZERO_E {
+                return a;
+            }
+            let ax = [a.hi[0], a.lo[0]];
+            let ay = [a.hi[1], a.lo[1]];
+            let bx = [zh[0], zl[0]];
+            let by = [zh[1], zl[1]];
+            let re = df_add(df_mul(ax, bx), df_neg(df_mul(ay, by)));
+            let im = df_add(df_mul(ax, by), df_mul(ay, bx));
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e })
+        }
+        fn cfe2_mul_zdfe(a: Cfe2, zh: [f32; 2], zl: [f32; 2], ze: i32) -> Cfe2 {
+            let mut r = cfe2_mul_zdf(a, zh, zl);
+            if r.e != CFE_ZERO_E {
+                r.e += ze;
+            }
+            r
+        }
+        fn cfe2_add(a: Cfe2, b: Cfe2) -> Cfe2 {
+            if a.e == CFE_ZERO_E {
+                return b;
+            }
+            if b.e == CFE_ZERO_E {
+                return a;
+            }
+            let d = a.e - b.e;
+            if d > 49 {
+                return a;
+            }
+            if d < -49 {
+                return b;
+            }
+            if d >= 0 {
+                let sc = 2f32.powi(-d);
+                let re = df_add([a.hi[0], a.lo[0]], [b.hi[0] * sc, b.lo[0] * sc]);
+                let im = df_add([a.hi[1], a.lo[1]], [b.hi[1] * sc, b.lo[1] * sc]);
+                return cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: a.e });
+            }
+            let sc = 2f32.powi(d);
+            let re = df_add([a.hi[0] * sc, a.lo[0] * sc], [b.hi[0], b.lo[0]]);
+            let im = df_add([a.hi[1] * sc, a.lo[1] * sc], [b.hi[1], b.lo[1]]);
+            cfe2_norm(Cfe2 { hi: [re[0], im[0]], lo: [re[1], im[1]], e: b.e })
+        }
+
+        // ---------- reference orbit + channels ----------
+        let re_s = "-0.96417873977697013026011288714743352326571975407038683546248307556701454144367857998579799044153007991031446482736663768012668752446996327705342813138475";
+        let im_s = "0.20113415795567669775171048165243266489819985719087999752585437953404063460519395316530711399750169766068721928290032028758102407532349929726277906601037";
+        let zoom = 426.5725f64;
+        let rot = 0.545846f32;
+        let (w_px, h_px) = (300u32, 200u32);
+        let max_iter = 2660u32;
+        let orbit = ReferenceOrbit::compute(
+            re_s, im_s, zoom, None, max_iter, None, 4, false, 0, [0.0, 0.0],
+        )
+        .unwrap();
+        let len = orbit.orbit.len() as u32;
+        let hi = &orbit.orbit;
+        let lo = &orbit.orbit_lo;
+        let ee = &orbit.orbit_e;
+        let r2: Vec<[f32; 2]> = hi
+            .iter()
+            .zip(lo)
+            .zip(ee)
+            .map(|((h, l), &ex)| {
+                let s = (ex as f64).exp2();
+                let x = (h[0] as f64 + l[0] as f64) * s;
+                let y = (h[1] as f64 + l[1] as f64) * s;
+                let v = x * x + y * y;
+                [v as f32, (v - (v as f32) as f64) as f32]
+            })
+            .collect();
+        let ref_z = |m: u32| -> [f32; 2] {
+            let m = m as usize;
+            let e = ee[m];
+            if e == 0 {
+                hi[m]
+            } else if e < -126 {
+                [0.0; 2]
+            } else {
+                let sc = 2f32.powi(e);
+                [hi[m][0] * sc, hi[m][1] * sc]
+            }
+        };
+        let ref_z_lo = |m: u32| -> [f32; 2] {
+            let m = m as usize;
+            let e = ee[m];
+            if e == 0 {
+                lo[m]
+            } else if e < -126 {
+                [0.0; 2]
+            } else {
+                let sc = 2f32.powi(e);
+                [lo[m][0] * sc, lo[m][1] * sc]
+            }
+        };
+        // Exact f64 view of an orbit entry (for the exact-rebase
+        // variant): (hi+lo)·2^e.
+        let ref_f64 = |m: u32| -> (f64, f64) {
+            let m = m as usize;
+            let s = (ee[m] as f64).exp2();
+            (
+                (hi[m][0] as f64 + lo[m][0] as f64) * s,
+                (hi[m][1] as f64 + lo[m][1] as f64) * s,
+            )
+        };
+        let cfe2_from_f64 = |re: f64, im: f64| -> Cfe2 {
+            let a = re.abs().max(im.abs());
+            if a == 0.0 {
+                return cfe2_zero();
+            }
+            let e = (a.log2().floor() as i32) + 1;
+            let sc = 2f64.powi(-e);
+            let rh = (re * sc) as f32;
+            let ih = (im * sc) as f32;
+            let rl = (re * sc - rh as f64) as f32;
+            let il = (im * sc - ih as f64) as f32;
+            cfe2_norm(Cfe2 { hi: [rh, ih], lo: [rl, il], e })
+        };
+
+        // fe_rebase_delta, faithful (Z_0 = 0 on the parameter plane,
+        // but mirror the general form).
+        let fe_rebase = |w: Cfe2, at: u32| -> Cfe2 {
+            let zi = ref_z(at);
+            let z0 = ref_z(0);
+            let zi_lo = ref_z_lo(at);
+            let z0_lo = ref_z_lo(0);
+            let mut dxr = [0.0f32; 2];
+            let mut dyr = [0.0f32; 2];
+            if w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127 {
+                let sc = 2f32.powi(w.e);
+                dxr = [w.hi[0] * sc, w.lo[0] * sc];
+                dyr = [w.hi[1] * sc, w.lo[1] * sc];
+            }
+            let rx = df_add(df_add([zi[0], zi_lo[0]], df_neg([z0[0], z0_lo[0]])), dxr);
+            let ry = df_add(df_add([zi[1], zi_lo[1]], df_neg([z0[1], z0_lo[1]])), dyr);
+            cfe2_norm(Cfe2 { hi: [rx[0], ry[0]], lo: [rx[1], ry[1]], e: 0 })
+        };
+        // Exact-rebase variant: Z_at + w in f64 (w itself exact to its
+        // own DF bits), renormalized to the best CFe2 can hold.
+        let fe_rebase_exact = |w: Cfe2, at: u32| -> Cfe2 {
+            let (zx, zy) = ref_f64(at);
+            let (wx, wy) = if w.e == CFE_ZERO_E {
+                (0.0, 0.0)
+            } else {
+                let sc = 2f64.powi(w.e);
+                (
+                    (w.hi[0] as f64 + w.lo[0] as f64) * sc,
+                    (w.hi[1] as f64 + w.lo[1] as f64) * sc,
+                )
+            };
+            cfe2_from_f64(zx + wx, zy + wy)
+        };
+
+        // ---------- per-pixel FE loop ----------
+        let sx = 2.0 - zoom - (h_px as f64).log2();
+        let s_e = sx.floor() as i32;
+        let s_m = 2f64.powf(sx - s_e as f64) as f32;
+        let bailout = 4.0f32;
+        let r2p = r2.clone();
+        let run = move |px: u32,
+                        py: u32,
+                        exact_rebase: bool,
+                        exact_gate: bool,
+                        exact_step: bool,
+                        norm_powers: bool|
+              -> u32 {
+            let cx = px as f32 + 0.5 - w_px as f32 * 0.5;
+            let cy = -(py as f32 + 0.5 - h_px as f32 * 0.5);
+            let d0px = [
+                cx * rot.cos() - cy * rot.sin(),
+                cx * rot.sin() + cy * rot.cos(),
+            ];
+            let d0xs = df_muls(two_sum(d0px[0], 0.0), s_m);
+            let d0ys = df_muls(two_sum(d0px[1], 0.0), s_m);
+            let d0 = cfe2_norm(Cfe2 {
+                hi: [d0xs[0], d0ys[0]],
+                lo: [d0xs[1], d0ys[1]],
+                e: s_e,
+            });
+            let mut w = cfe2_zero();
+            let mut m = 0u32;
+            let mut i = 0u32;
+            while i < max_iter {
+                if exact_step {
+                    // The identical step in f64, roundtripping w
+                    // through the CFe2 representation each iteration —
+                    // isolates step-internal precision from the rest.
+                    let (wxx, wyy) = if w.e == CFE_ZERO_E {
+                        (0.0f64, 0.0f64)
+                    } else {
+                        let sc = 2f64.powi(w.e);
+                        (
+                            (w.hi[0] as f64 + w.lo[0] as f64) * sc,
+                            (w.hi[1] as f64 + w.lo[1] as f64) * sc,
+                        )
+                    };
+                    let (zx, zy) = ref_f64(m);
+                    let mul =
+                        |ax: f64, ay: f64, bx: f64, by: f64| (ax * bx - ay * by, ax * by + ay * bx);
+                    let (z2x, z2y) = mul(zx, zy, zx, zy);
+                    let (z3x, z3y) = mul(z2x, z2y, zx, zy);
+                    let (w2x, w2y) = mul(wxx, wyy, wxx, wyy);
+                    let (w3x, w3y) = mul(w2x, w2y, wxx, wyy);
+                    let (w4x, w4y) = mul(w2x, w2y, w2x, w2y);
+                    let (t1x, t1y) = mul(z3x, z3y, wxx, wyy);
+                    let (t2x, t2y) = mul(z2x, z2y, w2x, w2y);
+                    let (t3x, t3y) = mul(zx, zy, w3x, w3y);
+                    // d0 exactly as the faithful path built it.
+                    let (d0xf, d0yf) = {
+                        let sc = 2f64.powi(d0.e);
+                        (
+                            (d0.hi[0] as f64 + d0.lo[0] as f64) * sc,
+                            (d0.hi[1] as f64 + d0.lo[1] as f64) * sc,
+                        )
+                    };
+                    let nx = 4.0 * t1x + 6.0 * t2x + 4.0 * t3x + w4x + d0xf;
+                    let ny = 4.0 * t1y + 6.0 * t2y + 4.0 * t3y + w4y + d0yf;
+                    w = cfe2_from_f64(nx, ny);
+                    m += 1;
+                    i += 1;
+                    let delta = cfe2_to_f32(w);
+                    let mi = m.min(len - 1);
+                    let zi = ref_z(mi);
+                    let z_full = [zi[0] + delta[0], zi[1] + delta[1]];
+                    let mr = r2[mi as usize];
+                    let margin = (mr[0] - bailout)
+                        + (mr[1]
+                            + 2.0 * (zi[0] * delta[0] + zi[1] * delta[1])
+                            + (delta[0] * delta[0] + delta[1] * delta[1]));
+                    if margin > 0.0 {
+                        return i;
+                    }
+                    let z0 = ref_z(0);
+                    let rd = [z_full[0] - z0[0], z_full[1] - z0[1]];
+                    if m >= len - 1
+                        || (rd[0] * rd[0] + rd[1] * rd[1])
+                            < (delta[0] * delta[0] + delta[1] * delta[1])
+                    {
+                        w = fe_rebase(w, m.min(len - 1));
+                        m = 0;
+                    }
+                    continue;
+                }
+                // Binomial step p=4, DF reference powers (current
+                // shader), optionally NORMALIZED before powering so a
+                // dip entry's mantissa (stored raw when it fits f32)
+                // cannot underflow out of its own cube.
+                let zm0 = hi[m as usize];
+                let zlo0 = lo[m as usize];
+                let ze0 = ee[m as usize];
+                let (zm, zlo, ze) = if norm_powers {
+                    let a = zm0[0].abs().max(zm0[1].abs());
+                    if a == 0.0 {
+                        (zm0, zlo0, ze0)
+                    } else {
+                        let f = frexp(a);
+                        let sc = 2f32.powi(-f.1);
+                        (
+                            [zm0[0] * sc, zm0[1] * sc],
+                            [zlo0[0] * sc, zlo0[1] * sc],
+                            ze0 + f.1,
+                        )
+                    }
+                } else {
+                    (zm0, zlo0, ze0)
+                };
+                let zdr1 = [zm[0], zlo[0]];
+                let zdi1 = [zm[1], zlo[1]];
+                let zdr2 = df_add(df_mul(zdr1, zdr1), df_neg(df_mul(zdi1, zdi1)));
+                let zdi2 = df_add(df_mul(zdr1, zdi1), df_mul(zdi1, zdr1));
+                let zdr3 = df_add(df_mul(zdr2, zdr1), df_neg(df_mul(zdi2, zdi1)));
+                let zdi3 = df_add(df_mul(zdr2, zdi1), df_mul(zdi2, zdr1));
+                let u1 = w;
+                let u2 = cfe2_mul(u1, w);
+                let u3 = cfe2_mul(u2, w);
+                let u4 = cfe2_mul(u3, w);
+                let mut w_new = d0;
+                let t1r = df_muls(zdr3, 4.0);
+                let t1i = df_muls(zdi3, 4.0);
+                w_new = cfe2_add(
+                    w_new,
+                    cfe2_mul_zdfe(u1, [t1r[0], t1i[0]], [t1r[1], t1i[1]], 3 * ze),
+                );
+                let t2r = df_muls(zdr2, 6.0);
+                let t2i = df_muls(zdi2, 6.0);
+                w_new = cfe2_add(
+                    w_new,
+                    cfe2_mul_zdfe(u2, [t2r[0], t2i[0]], [t2r[1], t2i[1]], 2 * ze),
+                );
+                let t3r = df_muls(zdr1, 4.0);
+                let t3i = df_muls(zdi1, 4.0);
+                w_new = cfe2_add(
+                    w_new,
+                    cfe2_mul_zdfe(u3, [t3r[0], t3i[0]], [t3r[1], t3i[1]], ze),
+                );
+                w_new = cfe2_add(w_new, cfe2_mul_c32(u4, [1.0, 0.0]));
+                w = w_new;
+                m += 1;
+                i += 1;
+
+                let delta = cfe2_to_f32(w);
+                let mi = m.min(len - 1);
+                let zi = ref_z(mi);
+                let z_full = [zi[0] + delta[0], zi[1] + delta[1]];
+                let mr = r2[mi as usize];
+                let margin = (mr[0] - bailout)
+                    + (mr[1]
+                        + 2.0 * (zi[0] * delta[0] + zi[1] * delta[1])
+                        + (delta[0] * delta[0] + delta[1] * delta[1]));
+                if margin > 0.0 {
+                    return i;
+                }
+                let z0 = ref_z(0);
+                let rd = [z_full[0] - z0[0], z_full[1] - z0[1]];
+                let fires = if exact_gate {
+                    // The gate on exact f64 values: no 2^-126 flush,
+                    // a delta far below f32 range can still trigger
+                    // the rebase the dynamics ask for.
+                    let (wxx, wyy) = if w.e == CFE_ZERO_E {
+                        (0.0f64, 0.0f64)
+                    } else {
+                        let sc = 2f64.powi(w.e);
+                        (
+                            (w.hi[0] as f64 + w.lo[0] as f64) * sc,
+                            (w.hi[1] as f64 + w.lo[1] as f64) * sc,
+                        )
+                    };
+                    let (zx1, zy1) = ref_f64(mi);
+                    let zfx = zx1 + wxx;
+                    let zfy = zy1 + wyy;
+                    zfx * zfx + zfy * zfy < wxx * wxx + wyy * wyy
+                } else {
+                    (rd[0] * rd[0] + rd[1] * rd[1])
+                        < (delta[0] * delta[0] + delta[1] * delta[1])
+                };
+                if m >= len - 1 || fires {
+                    w = if exact_rebase {
+                        fe_rebase_exact(w, m.min(len - 1))
+                    } else {
+                        fe_rebase(w, m.min(len - 1))
+                    };
+                    m = 0;
+                }
+            }
+            max_iter
+        };
+
+        // All-f64 variant: the same ALGORITHM (delta + rebase gate +
+        // margin against the 48-bit reference) with every number in
+        // f64 — at this depth nothing underflows f64, so this is the
+        // algorithm at effectively exact precision.
+        let run_f64 = move |px: u32, py: u32| -> u32 {
+            let cx = px as f64 + 0.5 - w_px as f64 * 0.5;
+            let cy = -(py as f64 + 0.5 - h_px as f64 * 0.5);
+            let rot64 = 0.545846f64;
+            let s = 2f64.powf(2.0 - zoom) / h_px as f64;
+            let d0x = (cx * rot64.cos() - cy * rot64.sin()) * s;
+            let d0y = (cx * rot64.sin() + cy * rot64.cos()) * s;
+            let (mut wx, mut wy) = (0.0f64, 0.0f64);
+            let mut m = 0u32;
+            let mut i = 0u32;
+            while i < max_iter {
+                let (zx, zy) = ref_f64(m);
+                // w' = 4Z^3 w + 6Z^2 w^2 + 4Z w^3 + w^4 + d0, exact
+                // complex arithmetic in f64.
+                let mul = |ax: f64, ay: f64, bx: f64, by: f64| (ax * bx - ay * by, ax * by + ay * bx);
+                let (z2x, z2y) = mul(zx, zy, zx, zy);
+                let (z3x, z3y) = mul(z2x, z2y, zx, zy);
+                let (w2x, w2y) = mul(wx, wy, wx, wy);
+                let (w3x, w3y) = mul(w2x, w2y, wx, wy);
+                let (w4x, w4y) = mul(w2x, w2y, w2x, w2y);
+                let (t1x, t1y) = mul(z3x, z3y, wx, wy);
+                let (t2x, t2y) = mul(z2x, z2y, w2x, w2y);
+                let (t3x, t3y) = mul(zx, zy, w3x, w3y);
+                wx = 4.0 * t1x + 6.0 * t2x + 4.0 * t3x + w4x + d0x;
+                wy = 4.0 * t1y + 6.0 * t2y + 4.0 * t3y + w4y + d0y;
+                m += 1;
+                i += 1;
+                let mi = m.min(len - 1);
+                let (zx1, zy1) = ref_f64(mi);
+                let zfx = zx1 + wx;
+                let zfy = zy1 + wy;
+                if zfx * zfx + zfy * zfy > bailout as f64 {
+                    return i;
+                }
+                if m >= len - 1 || zfx * zfx + zfy * zfy < wx * wx + wy * wy {
+                    wx = zfx;
+                    wy = zfy;
+                    m = 0;
+                }
+            }
+            max_iter
+        };
+
+        // ---------- truth ----------
+        let n_limbs = 9usize;
+        let fcx = FixedPoint::from_decimal(re_s, n_limbs).unwrap();
+        let fcy = FixedPoint::from_decimal(im_s, n_limbs).unwrap();
+        let s = 2f64.powf(2.0 - zoom) / h_px as f64;
+        let rot64 = 0.545846f64;
+        let truth: Vec<u32> = (0..(w_px * h_px) as usize)
+            .into_par_iter()
+            .map(|idx| {
+                let gx = (idx as u32 % w_px) as f64 + 0.5 - w_px as f64 / 2.0;
+                let gy = -((idx as u32 / w_px) as f64 + 0.5 - h_px as f64 / 2.0);
+                let dx = (gx * rot64.cos() - gy * rot64.sin()) * s;
+                let dy = (gx * rot64.sin() + gy * rot64.cos()) * s;
+                let c = FixedComplex {
+                    re: fcx.add(&FixedPoint::from_f64(dx, n_limbs)),
+                    im: fcy.add(&FixedPoint::from_f64(dy, n_limbs)),
+                };
+                let mut z = FixedComplex::zero(n_limbs);
+                for i in 0..max_iter {
+                    z = z.sqr();
+                    z = z.sqr();
+                    z = z.add(&c);
+                    let x = z.re.to_f64();
+                    let y = z.im.to_f64();
+                    if x * x + y * y > 4.0 {
+                        return i + 1;
+                    }
+                }
+                max_iter
+            })
+            .collect();
+
+        // ---------- run both variants, compare ----------
+        let wrong_of = |norm_powers: bool| -> usize {
+            (0..(w_px * h_px) as usize)
+                .into_par_iter()
+                .map(|idx| {
+                    run(idx as u32 % w_px, idx as u32 / w_px, false, false, false, norm_powers)
+                })
+                .collect::<Vec<u32>>()
+                .iter()
+                .zip(&truth)
+                .filter(|(a, b)| (**a as i64 - **b as i64).abs() > 20)
+                .count()
+        };
+        let floor: usize = {
+            (0..(w_px * h_px) as usize)
+                .into_par_iter()
+                .map(|idx| run_f64(idx as u32 % w_px, idx as u32 / w_px))
+                .collect::<Vec<u32>>()
+                .iter()
+                .zip(&truth)
+                .filter(|(a, b)| (**a as i64 - **b as i64).abs() > 20)
+                .count()
+        };
+        let broken = wrong_of(false);
+        let shipped = wrong_of(true);
+        let px = (w_px * h_px) as usize;
+        println!(
+            "un-normalized {broken} ({:.1}%), shipped {shipped} ({:.1}%), f64 floor {floor} of {px}",
+            broken as f64 * 100.0 / px as f64,
+            shipped as f64 * 100.0 / px as f64,
+        );
+        assert!(
+            broken > px / 20,
+            "the un-normalized step no longer reproduces the dip bug ({broken} wrong) — \
+             this test has lost its teeth; rebuild the scenario"
+        );
+        assert!(
+            shipped < px / 50,
+            "the shipped step is {shipped} pixels wrong (> 2%) against exact orbits — \
+             the dip-underflow class is back"
+        );
+    }
+
+    /// TEMP: exact fixed-point ground truth for the seam view — every
+    /// pixel iterated directly, no perturbation, no reference.
+    #[test]
+    #[ignore = "diagnostic: writes output/seam_truth.png"]
+    fn seam_ground_truth() {
+        use rayon::prelude::*;
+        let re_s = "-0.96417873977697013026011288714743352326571975407038683546248307556701454144367857998579799044153007991031446482736663768012668752446996327705342813138475";
+        let im_s = "0.20113415795567669775171048165243266489819985719087999752585437953404063460519395316530711399750169766068721928290032028758102407532349929726277906601037";
+        let zoom = 426.5725f64;
+        let rot = 0.545846f64;
+        let (w, h) = (300usize, 200usize);
+        let max_iter = 2660u32;
+        let n = 9usize;
+        let cx = FixedPoint::from_decimal(re_s, n).unwrap();
+        let cy = FixedPoint::from_decimal(im_s, n).unwrap();
+        // Pixel spacing S = 2^(2-zoom)/h: ~2^-432, comfortably an
+        // f64, so each rotated offset embeds into fixed point exactly
+        // (an f64 mantissa is 53 bits; the 9-limb grid has 568).
+        let s = 2f64.powf(2.0 - zoom) / h as f64;
+        let counts: Vec<u32> = (0..w * h)
+            .into_par_iter()
+            .map(|idx| {
+                let px = (idx % w) as f64 + 0.5 - w as f64 / 2.0;
+                let py = h as f64 / 2.0 - ((idx / w) as f64 + 0.5);
+                let dx = (px * rot.cos() - py * rot.sin()) * s;
+                let dy = (px * rot.sin() + py * rot.cos()) * s;
+                let c = FixedComplex {
+                    re: cx.add(&FixedPoint::from_f64(dx, n)),
+                    im: cy.add(&FixedPoint::from_f64(dy, n)),
+                };
+                let mut z = FixedComplex::zero(n);
+                for i in 0..max_iter {
+                    z = z.sqr();
+                    z = z.sqr();
+                    z = z.add(&c);
+                    let x = z.re.to_f64();
+                    let y = z.im.to_f64();
+                    if x * x + y * y > 4.0 {
+                        return i;
+                    }
+                }
+                max_iter
+            })
+            .collect();
+        let mut img = vec![0u8; w * h * 3];
+        for (i, &nn) in counts.iter().enumerate() {
+            let p = if nn >= max_iter {
+                [0u8, 0, 0]
+            } else {
+                // Band the counts so structure is comparable to the
+                // smooth coloring's bands.
+                let t = ((nn as f32) * 0.03).fract();
+                let v = (60.0 + 195.0 * t) as u8;
+                [v, v, 255 - v / 2]
+            };
+            img[i * 3..i * 3 + 3].copy_from_slice(&p);
+        }
+        image::save_buffer(
+            "output/seam_truth.png",
+            &img,
+            w as u32,
+            h as u32,
+            image::ColorType::Rgb8,
+        )
+        .unwrap();
+        println!("wrote output/seam_truth.png");
+    }
+
+    #[test]
+    fn cache_hits_extends_and_replaces() {
+        // Julia c = 0 (z -> z^2 from |z0| < 1: bounded, never escapes,
+        // and the Julia key skips nucleus relocation) keeps orbit
+        // lengths exactly deterministic for the cache mechanics.
+        let jc = Some((0.0f32, 0.0f32));
+        let mut cache = OrbitCache::default();
+        {
+            let o = cache.get("-0.5", "0.1", 10.0, 50, jc, 2, false, 0, [0.0, 0.0]).unwrap();
+            assert_eq!(o.len(), 51);
+        }
+        // Same view, deeper iterations: extend in place.
+        {
+            let o = cache.get("-0.5", "0.1", 10.0, 80, jc, 2, false, 0, [0.0, 0.0]).unwrap();
+            assert_eq!(o.len(), 81);
+        }
+        // Different center: replace.
+        {
+            let o = cache.get("-0.75", "0.1", 10.0, 10, jc, 2, false, 0, [0.0, 0.0]).unwrap();
+            assert_eq!(o.center_re, "-0.75");
+            assert_eq!(o.len(), 11);
+        }
+        // Parameter-plane Mandelbrot goes nucleus-aware: an interior
+        // view relocates to a periodic reference.
+        {
+            let o = cache.get("-1.0", "0.0", 10.0, 100, None, 2, false, 0, [0.0, 0.0]).unwrap();
+            assert_eq!(o.periodic, Some(2), "the period-2 nucleus governs c = -1");
+            assert_eq!(o.len(), 3);
+        }
+        // Unparseable center: None.
+        assert!(cache.get("not a number", "0", 10.0, 10, None, 2, false, 0, [0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn julia_orbit_seeds_from_the_center() {
+        // Julia: z0 = center, c fixed. First entry must be the center,
+        // then iterate z^2 + c.
+        let orbit = ReferenceOrbit::compute(
+            "0.25", "0.5", 10.0, None, 20, Some((-0.8, 0.156)), 2, false, 0, [0.0, 0.0]
+        )
+        .unwrap();
+        assert_eq!(orbit.orbit[0], [0.25, 0.5]);
+        let (mut zx, mut zy) = (0.25f64, 0.5f64);
+        for i in 1..=20usize {
+            let t = zx * zx - zy * zy + -0.8f32 as f64;
+            zy = 2.0 * zx * zy + 0.156f32 as f64;
+            zx = t;
+            if i < orbit.orbit.len() {
+                let [ox, oy] = orbit.orbit[i];
+                assert!(
+                    (ox as f64 - zx).abs() < 1e-5 && (oy as f64 - zy).abs() < 1e-5,
+                    "iteration {i}"
+                );
+            }
+        }
+        // And the cache distinguishes julia from param-plane orbits.
+        let mut cache = OrbitCache::default();
+        cache.get("0.25", "0.5", 10.0, 20, Some((-0.8, 0.156)), 2, false, 0, [0.0, 0.0]).unwrap();
+        let replaced = cache.get("0.25", "0.5", 10.0, 20, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        assert_eq!(replaced.julia_c, None);
+    }
+
+    #[test]
+    fn cubic_orbit_matches_f64_iteration() {
+        // power 3: z^3 + c against a plain f64 loop.
+        let orbit =
+            ReferenceOrbit::compute("-0.2", "0.4", 10.0, None, 60, None, 3, false, 0, [0.0, 0.0]).unwrap();
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        for i in 1..=60usize {
+            let (x2, y2) = (zx * zx - zy * zy, 2.0 * zx * zy);
+            let t = x2 * zx - y2 * zy + -0.2;
+            zy = x2 * zy + y2 * zx + 0.4;
+            zx = t;
+            if i >= orbit.orbit.len() {
+                break;
+            }
+            let [ox, oy] = orbit.orbit[i];
+            assert!(
+                (ox as f64 - zx).abs() < 1e-5 && (oy as f64 - zy).abs() < 1e-5,
+                "iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn worker_converges_to_the_synchronous_orbit() {
+        let mut worker = OrbitWorker::new();
+        let req = OrbitRequest {
+            center_re: "-0.5".into(),
+            center_im: "0.1".into(),
+            n_limbs: 3,
+            max_iter: 10_000,
+            julia_c: None,
+            power: 2,
+            ship: false,
+            ship_variant: 0,
+            reference_period: None,
+            map_params: [0.0, 0.0],
+            zoom_log2: 5.0,
+            height_px: 320.0,
+        };
+        let epoch = worker.request(req);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            {
+                let p = worker.progress.lock().unwrap();
+                if p.epoch == epoch && p.done {
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "worker never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // The worker goes nucleus-aware for this request; compare
+        // against the same nucleus-aware synchronous compute.
+        let sync = ReferenceOrbit::compute_nucleus_aware("-0.5", "0.1", 5.0, 10_000, 320.0, 2, None)
+            .unwrap();
+        let p = worker.progress.lock().unwrap();
+        assert_eq!(p.orbit.len(), sync.orbit.len());
+        assert_eq!(p.orbit, sync.orbit, "worker orbit differs from synchronous");
+        assert_eq!(p.ref_offset, sync.ref_offset);
+
+        // Preemption: a new request replaces the old epoch.
+        drop(p);
+        let e2 = worker.request(OrbitRequest {
+            center_re: "-0.75".into(),
+            center_im: "0.05".into(),
+            n_limbs: 3,
+            max_iter: 2_000,
+            julia_c: None,
+            power: 2,
+            ship: false,
+            ship_variant: 0,
+            reference_period: None,
+            map_params: [0.0, 0.0],
+            zoom_log2: 5.0,
+            height_px: 320.0,
+        });
+        assert!(e2 > epoch);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            {
+                let p = worker.progress.lock().unwrap();
+                if p.epoch == e2 && p.done {
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "second request never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn ship_orbit_matches_f64_iteration() {
+        let orbit =
+            ReferenceOrbit::compute("-0.6", "-0.4", 10.0, None, 60, None, 2, true, 0, [0.0, 0.0]).unwrap();
+        let (mut zx, mut zy) = (0.0f64, 0.0f64);
+        for i in 1..=60usize {
+            let (ax, ay) = (zx.abs(), zy.abs());
+            let t = ax * ax - ay * ay + -0.6;
+            zy = 2.0 * ax * ay + -0.4;
+            zx = t;
+            if i >= orbit.orbit.len() {
+                break;
+            }
+            let [ox, oy] = orbit.orbit[i];
+            assert!(
+                (ox as f64 - zx).abs() < 1e-5 && (oy as f64 - zy).abs() < 1e-5,
+                "iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
+            );
+        }
+    }
+
+
+    #[test]
+    fn the_orbit_cost_model_matches_what_we_measured() {
+        // The f3 reference: 10,100,100 iterations at 197 limbs took
+        // 495 s of single-threaded fixed-point arithmetic. The model
+        // exists to decide whether to WAIT for a reference or render
+        // against its growing prefix, so being within a factor of two
+        // is what matters, not precision.
+        let f3 = predicted_orbit_seconds(10_100_100, 197);
+        assert!(
+            (400.0..600.0).contains(&f3),
+            "f3 reference predicted at {f3:.0} s, measured 495 s"
+        );
+        // A shallow view's reference is not worth waiting for.
+        assert!(predicted_orbit_seconds(10_000, 13) < 0.01);
+        // Cost is quadratic in limbs: twice the precision is 4x.
+        let a = predicted_orbit_seconds(100_000, 50);
+        let b = predicted_orbit_seconds(100_000, 100);
+        assert!((b / a - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_too_shallow_hint_makes_the_plain_orbit_the_answer() {
+        // The cache key hashes the CENTER, not the period, so a
+        // request carrying a hint has to be able to recognise a
+        // stored plain reference as its answer — otherwise setting
+        // the period field silently discards a multi-minute orbit
+        // and recomputes it (measured: 8 minutes, observed by a user
+        // at zoom 9316 with period 71,100).
+        let mut orbit =
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        orbit.hint_period = Some(4242);
+        orbit.hint_octave = -100; // the hint closes only at 2^-100
+
+        // Deep view: 2^-100 cannot wrap below its pixel scale, so the
+        // plain orbit IS what that request should get.
+        assert!(orbit.answers_hint(Some(4242), 200.0));
+        // Shallow view: there the same hint WOULD serve, so the
+        // periodic form must be built rather than this one reused.
+        assert!(!orbit.answers_hint(Some(4242), 50.0));
+        // A different hint is a different question.
+        assert!(!orbit.answers_hint(Some(99), 200.0));
+        // No hint asks nothing of the orbit.
+        assert!(orbit.answers_hint(None, 200.0));
+
+        // A genuinely periodic orbit answers its own period.
+        let mut periodic =
+            ReferenceOrbit::compute("-0.5", "0.1", 60.0, None, 200, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        periodic.periodic = Some(4242);
+        assert!(periodic.answers_hint(Some(4242), 200.0));
+
+        // The fact survives serialization (it lives in the fixed
+        // prefix so the store can read it without parsing the file).
+        let back = ReferenceOrbit::from_bytes(&orbit.to_bytes()).expect("round trip");
+        assert_eq!(back.hint_period, Some(4242));
+        assert_eq!(back.hint_octave, -100);
+    }
+
+    #[test]
+    fn near_nucleus_iterates_survive_f32_storage() {
+        // The z700 escape-lag bug: a reference iterate that passes
+        // very close to a nucleus is far below f32's smallest normal
+        // (2^-126), so plain f32 storage read it as EXACTLY ZERO -
+        // which deletes 2*Z*delta from that step of the delta
+        // recurrence. Measured cost on the field location: a 2^-183
+        // dip at i=8897 dropped the delta 154 octaves it never
+        // recovered, and a corner pixel whose true escape is 23,649
+        // rendered as interior past 41,163.
+        //
+        // The exponent must therefore be carried, and the mantissa
+        // must stay normalized.
+        let orbit = ReferenceOrbit::compute_nucleus_aware(
+            "-1.7548776",
+            "0.0000001",
+            20.0,
+            5000,
+            320.0,
+            2,
+            None,
+        )
+        .expect("computes");
+        assert_eq!(orbit.periodic, Some(3));
+        assert_eq!(orbit.orbit_e.len(), orbit.orbit.len());
+        // Z_3 is the nucleus closure: deep enough that f32 alone
+        // cannot hold it.
+        let e = orbit.orbit_e[3];
+        assert!(
+            e < -126,
+            "a nucleus closure must carry its own exponent, got {e}"
+        );
+        let m = orbit.orbit[3];
+        let mag = m[0].abs().max(m[1].abs());
+        assert!(
+            (1.0..4.0).contains(&mag),
+            "stored mantissa must be normalized, got {mag}"
+        );
+        // The value view is unchanged from the pre-exponent format.
+        assert_eq!(entry_value(m, e), [0.0, 0.0]);
+        assert_eq!(orbit.z_f32(3), [0.0, 0.0]);
+        // ...and the magnitude the recurrence needs is recoverable:
+        // mantissa * 2^e agrees with the exact fixed-point iterate.
+        let (zre, _zim) = orbit.z_state();
+        let fe = zre.to_floatexp();
+        assert!(
+            (fe.e - e as i64).abs() <= 1,
+            "octave mismatch: stored 2^{e} vs exact 2^{}",
+            fe.e
+        );
+        // Every ordinary iterate keeps exponent 0 (the old format),
+        // so nothing else in the pipeline changes meaning.
+        assert_eq!(orbit.orbit_e[0], 0);
+        assert_eq!(orbit.orbit_e[1], 0);
+        assert_eq!(orbit.z_f32(1), orbit.orbit[1]);
+    }
+
+    #[test]
+    fn nucleus_reference_relocates_and_is_periodic() {
+        // A view near (not on) the period-3 antenna nucleus: the
+        // reference must relocate to the nucleus (Z_3 = 0), carry the
+        // relocation offset, and arrive complete at period length.
+        let orbit = ReferenceOrbit::compute_nucleus_aware(
+            "-1.7548776",
+            "0.0000001",
+            20.0,
+            5000,
+            320.0,
+            2,
+            None,
+        )
+        .expect("computes");
+        assert_eq!(orbit.periodic, Some(3));
+        assert_eq!(orbit.len(), 4); // Z_0..Z_3
+        // Through the accessor: a closure this deep is stored as a
+        // normalized mantissa plus an exponent (the raw array holds
+        // the mantissa, which is O(1) by construction).
+        let [zx, zy] = orbit.z_f32(3);
+        assert!(
+            (zx * zx + zy * zy) < 1e-10,
+            "Z_period must be ~0, got ({zx}, {zy})"
+        );
+        assert!(
+            orbit.ref_offset[0].abs() > 0.0 || orbit.ref_offset[1].abs() > 0.0,
+            "off-nucleus view must carry a relocation offset"
+        );
+        // Far from any small-period atom: falls back to the plain
+        // view-center reference.
+        let plain = ReferenceOrbit::compute_nucleus_aware("0.3", "0.5", 20.0, 100, 320.0, 2, None)
+            .expect("computes");
+        assert_eq!(plain.periodic, None);
+        assert_eq!(plain.ref_offset, [0.0, 0.0]);
+    }
+
+
+
+
+
+    #[test]
+    fn ship_variant_orbits_match_f64() {
+        // Each variant's fixed-point step against a plain f64 loop.
+        let f64_step = |v: u32, zx: f64, zy: f64, cr: f64, ci: f64| -> (f64, f64) {
+            let (x, y) = (zx, zy);
+            let (re, im) = match v {
+                0 => {
+                    let (a, b) = (x.abs(), y.abs());
+                    (a * a - b * b, 2.0 * a * b)
+                }
+                1 => (x * x - y * y, -2.0 * x.abs() * y),
+                2 => (x * x - y * y, -2.0 * x * y.abs()),
+                3 => ((x * x - y * y).abs(), 2.0 * x * y),
+                4 => ((x * x - y * y).abs(), -2.0 * (x * y).abs()),
+                _ => ((x * x - y * y).abs(), -2.0 * x.abs() * y),
+            };
+            (re + cr, im + ci)
+        };
+        for v in 0..=5u32 {
+            let orbit = ReferenceOrbit::compute(
+                "-0.55", "-0.4", 10.0, None, 40, None, 2, true, v, [0.0, 0.0]
+            )
+            .unwrap();
+            let (mut zx, mut zy) = (0.0f64, 0.0f64);
+            for i in 1..=40usize {
+                let (nx, ny) = f64_step(v, zx, zy, -0.55, -0.4);
+                zx = nx;
+                zy = ny;
+                if i >= orbit.orbit.len() {
+                    break;
+                }
+                let [ox, oy] = orbit.orbit[i];
+                assert!(
+                    (ox as f64 - zx).abs() < 1e-4 && (oy as f64 - zy).abs() < 1e-4,
+                    "variant {v} iteration {i}: orbit ({ox}, {oy}) vs f64 ({zx}, {zy})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn budgeted_get_converges_to_the_blocking_orbit() {
+        // Slices must end at the exact same orbit the blocking call
+        // produces (Julia key: skips nucleus relocation on both
+        // paths, so the comparison is byte-exact).
+        let jc = Some((-0.8f32, 0.156f32));
+        let mut blocking = OrbitCache::default();
+        let full = blocking
+            .get("0.1", "0.2", 12.0, 500, jc, 2, false, 0, [0.0, 0.0])
+            .unwrap()
+            .orbit
+            .clone();
+        let mut sliced = OrbitCache::default();
+        let mut steps = 0;
+        loop {
+            let (orbit, done) = sliced
+                .get_budgeted("0.1", "0.2", 12.0, 500, jc, 2, false, 0, [0.0, 0.0], 64)
+                .unwrap();
+            steps += 1;
+            assert!(steps < 100, "failed to converge");
+            assert!(
+                orbit.orbit.as_slice() == &full[..orbit.orbit.len().min(full.len())],
+                "slice {steps} diverged from the blocking orbit"
+            );
+            if done {
+                assert_eq!(orbit.orbit, full, "converged orbit differs");
+                break;
+            }
+        }
+        assert!(steps > 3, "budget was not actually slicing ({steps} steps)");
+    }
+
+
+
+
+
+
+
+    #[test]
+    fn extend_auto_detects_a_periodic_center() {
+        // The period-3 antenna nucleus (16-digit truncation): the
+        // center orbit closes at index 3 far below f32 visibility —
+        // extend() must become the periodic reference on its own,
+        // truncate to one period, and stop.
+        let orbit = ReferenceOrbit::compute(
+            "-1.7548776662466927",
+            "0",
+            10.0,
+            None,
+            1000,
+            None,
+            2,
+            false,
+            0, [0.0, 0.0]
+        )
+        .unwrap();
+        assert_eq!(orbit.periodic, Some(3), "auto-detection missed the closure");
+        assert_eq!(orbit.len(), 4, "orbit must truncate to one period");
+        // The SAME center at a deep view must NOT accept the shallow
+        // closure (|Z_3| ~ 2^-56 is far above a zoom-300 pixel): the
+        // wrap would inject a visible discontinuity there.
+        let deep_view = ReferenceOrbit::compute(
+            "-1.7548776662466927",
+            "0",
+            300.0,
+            None,
+            1000,
+            None,
+            2,
+            false,
+            0, [0.0, 0.0]
+        )
+        .unwrap();
+        assert_eq!(
+            deep_view.periodic, None,
+            "shallow closure must be rejected at a deep view"
+        );
+        assert!(
+            !orbit.periodic_serves(300.0),
+            "periodic_serves must retire the closure as the view deepens"
+        );
+        assert!(orbit.periodic_serves(12.0));
+
+        // A generic exterior center must NEVER auto-close.
+        let plain =
+            ReferenceOrbit::compute("-0.5", "0.1", 10.0, None, 500, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        assert_eq!(plain.periodic, None);
+        // Julia references are exempt (their wrap returns to Z_0, not 0).
+        let julia = ReferenceOrbit::compute(
+            "0.0",
+            "0.0",
+            10.0,
+            None,
+            100,
+            Some((-0.1, 0.05)),
+            2,
+            false,
+            0, [0.0, 0.0]
+        )
+        .unwrap();
+        assert_eq!(julia.periodic, None, "Julia must not auto-close");
+    }
+
+    #[test]
+    fn relocation_offset_rescales_with_the_view() {
+        let mut orbit =
+            ReferenceOrbit::compute("-0.5", "0.1", 30.0, None, 50, None, 2, false, 0, [0.0, 0.0]).unwrap();
+        orbit.ref_offset = [12.0, -3.0];
+        orbit.off_zoom_log2 = 30.0;
+        orbit.off_height_px = 480.0;
+        // Same view: identity.
+        assert_eq!(orbit.offset_for_view(30.0, 480.0), Some([12.0, -3.0]));
+        // +2 zoom doubles pixel density twice: offsets scale by 4.
+        assert_eq!(orbit.offset_for_view(32.0, 480.0), Some([48.0, -12.0]));
+        // Doubled height (e.g. 2x supersampling): offsets double —
+        // THE "pan changes with AA" bug when this was missing.
+        assert_eq!(orbit.offset_for_view(30.0, 960.0), Some([24.0, -6.0]));
+        // Zooming far OUT overflows the useful range: a miss, so the
+        // caller recomputes instead of rendering a garbage offset.
+        assert_eq!(orbit.offset_for_view(30.0 - 40.0, 480.0), Some([12.0 / 1.0995116e12, -3.0 / 1.0995116e12].map(|v: f32| v)));
+        assert!(orbit.offset_for_view(70.0, 480.0).is_none(), "overflow must miss");
+        assert!(!orbit.relocation_serves(70.0, 480.0));
+        // Offset-free orbits serve any view.
+        orbit.ref_offset = [0.0, 0.0];
+        assert!(orbit.relocation_serves(300.0, 480.0));
+    }
+
+    #[test]
+    fn deep_center_precision_is_carried() {
+        // Two centers differing at the 60th decimal digit: the
+        // fixed-point ITERATES must differ (f32 snapshots cannot show
+        // 1e-60, and chaos amplification is unreliable — interior
+        // orbits contract, boundary orbits escape — so compare the
+        // full-precision state directly).
+        let a = ReferenceOrbit::compute(
+            "-0.500000000000000000000000000000000000000000000000000000000001",
+            "0.1",
+            220.0,
+            None,
+            50,
+            None,
+            2,
+            false,
+            0, [0.0, 0.0]
+        )
+        .unwrap();
+        let b = ReferenceOrbit::compute(
+            "-0.500000000000000000000000000000000000000000000000000000000002",
+            "0.1",
+            220.0,
+            None,
+            50,
+            None,
+            2,
+            false,
+            0, [0.0, 0.0]
+        )
+        .unwrap();
+        let (are, _) = a.z_state();
+        let (bre, _) = b.z_state();
+        let diff = are.sub(bre);
+        assert!(
+            !diff.is_zero(),
+            "1e-60 center difference vanished from the fixed-point orbit"
+        );
+        // And it is far below anything f64 could have carried.
+        let fe = diff.to_floatexp();
+        assert!(fe.e < -120, "difference 2^{} is too large to prove deep precision", fe.e);
+    }
+}

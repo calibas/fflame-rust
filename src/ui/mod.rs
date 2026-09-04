@@ -19,6 +19,10 @@ mod palette_editor;
 mod rhai_highlight;
 mod palette_library;
 mod panel_viewer;
+/// Shared viewport pan entry (drag semantics; routes to escape-mode
+/// panning internally). Re-exported for the keyboard handler.
+pub(crate) use panel_viewer::pan_fractal_view;
+pub(crate) use escape_panel::escape_zoom_by_factor;
 mod path_editor;
 mod performance;
 mod random_generator;
@@ -37,6 +41,7 @@ mod triangle_editor;
 mod undo_history;
 mod variation_params;
 mod view;
+mod escape_panel;
 pub mod workspace;
 mod palette_generate;
 mod script_params;
@@ -1410,6 +1415,7 @@ impl EguiLayer {
         let mut open_save_online_dialog = false;
         let mut load_api_animation_id: Option<String> = None;
         let mut clear_variation_cache_requested = false;
+        let mut workspace_layout_requested: Option<workspace::WorkspaceLayout> = None;
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
@@ -1769,6 +1775,7 @@ impl EguiLayer {
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
+                        workspace_layout_requested: &mut workspace_layout_requested,
                         variation_update_requested: &mut variation_update_requested,
                         script_cloud,
                         effect_catalog,
@@ -2377,6 +2384,7 @@ impl EguiLayer {
             loaded_api_flame_animations,
             load_api_animation_id,
             clear_variation_cache_requested,
+            workspace_layout_requested,
             variation_update_requested,
             script_cloud_request,
         }

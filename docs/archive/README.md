@@ -31,6 +31,20 @@ Archive is organized by topic area in subdirectories:
 - Investigation reports and design decisions
 - See [histogram/README.md](histogram/README.md) for details
 
+**escape-time/** - The finished escape-time plans (4 documents)
+- The per-item completion tracker (7 items, all closed) with its
+  per-tier perturbation-accuracy table
+- New-families research: 6 of 7 shipped; §7 (temporal AA / spectral
+  rendering) is planned and unscheduled, and its costing is still the
+  reference for that feature
+- The seed document for the third fractal family, superseded by the
+  `simulation-*` documents in projects/
+- The device-loss (TDR) plan, all items shipped
+- Superseded by [projects/escape-time-fractals.md](../projects/escape-time-fractals.md),
+  which is still ACTIVE and deliberately not archived — it carries the
+  measurement log and the remaining work
+- See [escape-time/README.md](escape-time/README.md) for what each one is
+
 **api-v1-v2/** - The client's first API integration and the v2 wire-format
 redesign (4 documents)
 - Auth, flame/palette sync, desktop vs browser transports
