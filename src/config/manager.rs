@@ -2840,7 +2840,13 @@ impl ConfigManager {
             }
             ConfigPath::SimDt => {
                 let d: f32 = f32::try_from(value)?;
-                self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, 10.0) } else { 1.0 };
+                // The model's measured/derived stability bound, not a
+                // fixed 10: the explicit solver diverges past it.
+                #[cfg(feature = "engine-sim")]
+                let max_dt = crate::sim::model_or_default(&self.current.sim.model).max_dt;
+                #[cfg(not(feature = "engine-sim"))]
+                let max_dt = 10.0f32;
+                self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, max_dt) } else { 1.0 };
             }
             ConfigPath::SimBoundary => {
                 let n = String::try_from(value)?;

@@ -556,3 +556,41 @@ fn frame_cost_breakdown_at_1080p() {
     let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
     report("render_frame with 4 steps, per frame", 60.0, t.elapsed().as_secs_f64());
 }
+
+/// Does the boundary mode's address arithmetic cost anything?
+///
+/// Periodic does four integer modulos per neighbour read -- 32 per
+/// cell -- and an interior fast-path would remove them for every cell
+/// not on the border. Whether that is worth its complexity depends on
+/// whether the modulos are visible at all against a bandwidth-bound
+/// kernel, which is a measurement rather than an argument.
+#[test]
+#[ignore = "diagnostic"]
+fn boundary_mode_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    let (w, h) = (1920u32, 1080u32);
+    for boundary in [
+        SimBoundary::Clamp,
+        SimBoundary::Periodic,
+        SimBoundary::Zero,
+        SimBoundary::Mirror,
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.grid = crate::config::sim::SimGrid::Viewport { scale: 1.0 };
+        cfg.boundary = boundary;
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 64);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let t = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, 1000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        println!(
+            "{:<10} {:7.4} ms/step",
+            format!("{boundary:?}"),
+            t.elapsed().as_secs_f64() * 1000.0 / 1000.0
+        );
+    }
+}

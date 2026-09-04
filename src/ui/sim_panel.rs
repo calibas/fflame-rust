@@ -412,7 +412,10 @@ pub fn render_sim_content(
     }
     let mut dt = sim.dt;
     if ui
-        .add(egui::Slider::new(&mut dt, 0.001..=2.0).text(t!("sim_panel.dt").as_ref()))
+        .add(
+            egui::Slider::new(&mut dt, 0.001..=model.max_dt)
+                .text(t!("sim_panel.dt").as_ref()),
+        )
         .on_hover_text(t!("sim_panel.dt_tip"))
         .changed()
     {

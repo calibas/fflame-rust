@@ -97,6 +97,17 @@ pub enum ModelFeature {
     NeverStills,
 }
 
+/// Capability flags a colouring opts into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColoringFeature {
+    /// The colouring reads `grad`, the central-difference gradient of
+    /// channel `.x`. Costs four extra texture reads per output pixel,
+    /// so the template computes it ONLY for colourings that declare it
+    /// -- measured, the reads were 4 of the 5 the colour pass made, and
+    /// the bilinear resolve multiplied them by four again.
+    NeedsGradient,
+}
+
 /// One simulation model: the rule, its parameters, and how a cell's
 /// state is laid out in the four channels.
 ///
@@ -122,6 +133,12 @@ pub struct ModelDef {
     pub presets: &'static [SimPreset],
     /// The step rule. See the type docs for the signature.
     pub wgsl: &'static str,
+    /// Largest `dt` the explicit scheme is stable at, for the default
+    /// diffusion rates. Enforced by the config manager's write arm, the
+    /// panel slider's range and the renderer's uniform, so no path can
+    /// drive the solver past it. Derived per model from the stencil's
+    /// most negative eigenvalue, not guessed (see each model's note).
+    pub max_dt: f32,
     /// The initial state for a cell, given the init shape's mask.
     ///
     /// ```wgsl
@@ -174,11 +191,16 @@ pub struct SimColoringDef {
     pub name: &'static str,
     pub display_name: &'static str,
     pub description: &'static str,
+    pub features: &'static [ColoringFeature],
     pub parameters: &'static [SimParamDef],
     pub wgsl: &'static str,
 }
 
 impl SimColoringDef {
+    pub fn has(&self, f: ColoringFeature) -> bool {
+        self.features.contains(&f)
+    }
+
     pub fn pack_params(&self, cfg: &crate::config::sim::SimConfig) -> Vec<f32> {
         self.parameters
             .iter()
@@ -306,6 +328,21 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A stability cap that is zero, negative or absurd would either
+    /// freeze the dt slider or let the solver diverge; the value is a
+    /// derivation and this keeps a typo from shipping as one.
+    #[test]
+    fn every_model_declares_a_sane_stability_cap() {
+        for m in MODELS {
+            assert!(
+                m.max_dt > 0.0 && m.max_dt <= 10.0,
+                "{}: max_dt {} is not a plausible explicit-Euler bound",
+                m.name,
+                m.max_dt
+            );
         }
     }
 
