@@ -42,6 +42,7 @@ pub enum TargetCategory {
     LinkedTransform(usize),
     FinalTransform(usize),
     Escape,
+    Simulation,
 }
 
 impl TargetCategory {
@@ -57,6 +58,7 @@ impl TargetCategory {
             TargetCategory::LinkedTransform(i) => format!("Linked {}", i + 1),
             TargetCategory::FinalTransform(i) => format!("Final {}", i + 1),
             TargetCategory::Escape => "Escape".to_string(),
+            TargetCategory::Simulation => "Simulation".to_string(),
         }
     }
 
@@ -72,6 +74,7 @@ impl TargetCategory {
             TargetCategory::LinkedTransform(i) => format!("linked_transform_{}", i),
             TargetCategory::FinalTransform(i) => format!("final_transform_{}", i),
             TargetCategory::Escape => "escape".to_string(),
+            TargetCategory::Simulation => "simulation".to_string(),
         }
     }
 }
@@ -262,6 +265,14 @@ fn render_flame_group(
                 &escape_items, filter, has_filter, local_selection,
             ) { selected = Some(path); }
         }
+        #[cfg(feature = "engine-sim")]
+        if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+            let sim_items = get_sim_items(config);
+            if let Some(path) = render_category(
+                ui, state, flame_target, TargetCategory::Simulation,
+                &sim_items, filter, has_filter, local_selection,
+            ) { selected = Some(path); }
+        }
     }
 
     // Xaos
@@ -341,6 +352,43 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     for p in coloring_params {
         items.push(TargetItem::new(
             ConfigPath::EscapeColoringParam { param: p.name.to_string() },
+            &format!("Coloring: {}", p.display_name),
+        ));
+    }
+    items
+}
+
+/// Animation targets for simulation mode.
+///
+/// **Steps is first, and it is the one that animates the simulation
+/// itself.** The state at time *t* is `round(track(t))` steps from the
+/// seed, so a ramp on this track is the run progressing; easing it
+/// gives slow-in/slow-out on the simulation, and a hold gives a
+/// freeze-frame that keeps animating colour (master plan D5b).
+///
+/// Deliberately absent, because each keyframe would destroy the run
+/// rather than animate it: the seed and the init (they reseed), the
+/// grid mode and its sizes (they reseed), the grid scale (it
+/// resamples), and steps-per-frame, which is the interactive Run speed
+/// and would make the picture depend on the frame rate.
+#[cfg(feature = "engine-sim")]
+fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
+    let sim = &config.sim;
+    let mut items = vec![
+        TargetItem::new(ConfigPath::SimSteps, "Steps (animates the run)"),
+        TargetItem::new(ConfigPath::SimDt, "Time step (dt)"),
+    ];
+    let model = crate::sim::model_or_default(&sim.model);
+    for p in model.parameters {
+        items.push(TargetItem::new(
+            ConfigPath::SimModelParam { param: p.name.to_string() },
+            &format!("{}: {}", model.display_name, p.display_name),
+        ));
+    }
+    let coloring = crate::sim::coloring_or_default(&sim.coloring);
+    for p in coloring.parameters {
+        items.push(TargetItem::new(
+            ConfigPath::SimColoringParam { param: p.name.to_string() },
             &format!("Coloring: {}", p.display_name),
         ));
     }
