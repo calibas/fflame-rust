@@ -4392,7 +4392,13 @@ browser already reports what is needed: a byte offset into the module.
 Map it afterwards, against a names build of the same source, and the
 crash never has to survive anything.
 
-`scripts/wasm-symbolize.py` does that. The two profiles differ only by
+`scripts/wasm-symbolize.py` did that. **It has since been deleted and
+replaced by `scripts/wasm-locate.py`** -- it read the wrong file (the
+raw cargo module, not the wasm-bindgen-rewritten one the browser
+loads) and assumed index alignment across `strip`, which does not
+hold. The standing summary of this bug now lives in
+[wasm-load-crash.md](wasm-load-crash.md); the rest of this section is
+kept as the record of how it was narrowed. The two profiles differ only by
 `strip`, which leaves the code section within 738 bytes (0.007%) and
 shifts its start by 19 -- close enough that an offset lands in the
 right function body.
