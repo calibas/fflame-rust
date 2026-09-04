@@ -161,6 +161,92 @@ rebuild; do not read the name.
 
 ---
 
+## The Firefox trace, and what it identifies (2026-09-03)
+
+The first stack that names anything. **Firefox only — Chrome could not
+reproduce it at all**, which is itself a result: it moves a GC- or
+scheduling-sensitive mechanism to the front.
+
+```
+Uncaught RuntimeError: index out of bounds
+    __wasm_bindgen_func_elem_10607_13   fractal_flame_wgpu.js:2773
+    real                                fractal_flame_wgpu.js:3094
+fractal_flame_wgpu_bg.wasm:3534022
+```
+
+Both JS frames are wasm-bindgen's closure machinery. Line 3094 is
+inside `makeMutClosure`'s `real`:
+
+```js
+const a = state.a;
+state.a = 0;
+try { return f(a, state.b, ...args); }
+```
+
+`state.a` is the Rust closure environment pointer. So a **JS-held
+callback is being invoked, and the wasm side traps immediately** —
+there is exactly one wasm frame, meaning the fault is in the trampoline
+or its first callee, not deep in application code.
+
+**The closure is identified exactly.** wasm-bindgen leaves the Rust
+type in a comment at the cast site:
+
+```
+Closure { owned: true, function: Function {
+    arguments: [NamedExternref("PointerEvent")],
+    shim_idx: 4150, ret: Unit }, mutable: true }
+```
+
+`Closure<dyn FnMut(web_sys::PointerEvent)>`, and there is **exactly one
+such adapter in the entire module** — 18 closure cast intrinsics, one
+of which takes a `PointerEvent`. Every instance of that type shares it,
+so the adapter names the *type* and not the instance.
+
+**Instances of that type, and which can be freed:**
+
+| owner | site | lifetime |
+|---|---|---|
+| ours | `lib.rs` `touch_fix` (pointerdown) | `forget()` — never dropped |
+| ours | `lib.rs` `touch_up_fix` (pointerup/cancel) | `forget()` — never dropped |
+| winit | `web_sys/pointer.rs`, `canvas.rs`, `event_loop/runner.rs` | `EventListenerHandle<dyn FnMut(PointerEvent)>` — **dropped on teardown and re-registration** |
+
+That asymmetry is the lead. Ours cannot be freed; winit's are freed
+whenever a handle is dropped. A trap *immediately* inside the
+trampoline is what a freed environment looks like: a garbage vtable
+pointer read from reused memory, then `call_indirect` on it — which is
+precisely the fault Firefox words as "index out of bounds".
+
+Both of ours also return immediately unless `pointer_type() == "touch"`,
+so on a desktop mouse they do nothing at all, while winit's handle
+every mouse event.
+
+**The experiment that partitions this** is one build: remove the two
+`lib.rs` touch closures and reproduce. If it still crashes, the closure
+is winit's and the question becomes what drops a pointer listener
+during a config load (a canvas resize or surface reconfigure would).
+If it stops, ours are implicated despite `forget()`, and
+`touch_up_fix`'s synchronous `dispatch_event` re-entrancy is the
+suspect.
+
+### Two more parser bugs found while reading this
+
+Both had produced confident wrong readings, and both are now fixed:
+
+- `export_names` keyed a dict by function index, but **several exports
+  share one index** — `__wasm_bindgen_func_elem_10607_11/_12/_13/_14`
+  are all one trampoline. The dict kept the last, so the module looked
+  like it exported 9 of the 19 shims its own JS calls, i.e. like a
+  mismatched bundle. It was not mismatched.
+- The function-count pairing guard **rejects the correct pairing**.
+  `--keep-debug` changes wasm-bindgen's closure strategy — the shipped
+  module gets those trampoline exports and the names build gets none —
+  so a genuine same-commit pair is 10,815 bodies against 11,443, 5.8%
+  apart. The guard now compares DATA sections instead: the constant
+  pool is what the same source produces regardless of link. Measured on
+  this pair, **0.002%**.
+
+---
+
 ## Next moves, in order of cost
 
 1. **One paired run of the protocol above.** It has never actually been
