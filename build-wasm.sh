@@ -30,14 +30,6 @@ elif [ "$1" = "--debug" ]; then
     BINDGEN_FLAGS="--keep-debug"
     echo "  (debug profile: symbols + debug_assert + overflow checks)"
 fi
-# --symbols must NOT destroy the shipped module. wasm-bindgen writes a
-# fixed filename into --out-dir, so a names build would overwrite the
-# very bundle a crash has to be reproduced with -- and
-# scripts/wasm-locate.py needs BOTH, from the same commit. Park the
-# shipped one here and put it back afterwards.
-if [ "$SYMBOLS" = "1" ] && [ -f pkg/fractal_flame_wgpu_bg.wasm ]; then
-    mv -f pkg/fractal_flame_wgpu_bg.wasm pkg/_shipped_parked.wasm
-fi
 cargo build --lib --target wasm32-unknown-unknown --profile "$PROFILE"
 
 if [ $? -ne 0 ]; then
@@ -47,27 +39,33 @@ fi
 
 # Generate bindings with wasm-bindgen
 echo "Generating JavaScript bindings..."
-wasm-bindgen $BINDGEN_FLAGS --out-dir ./pkg --target web "./target/wasm32-unknown-unknown/$PROFILE/fractal_flame_wgpu.wasm"
+# --symbols writes to its OWN directory. wasm-bindgen emits the JS glue
+# alongside the module and the two are a matched pair -- the import
+# object is generated from the specific module it processed -- so a
+# names build landing in ./pkg replaces BOTH, and restoring only the
+# .wasm leaves glue that does not link:
+#   LinkError: import object field '__wbindgen_object_drop_ref' is not
+#   a Function
+# Keeping it out of ./pkg entirely means the served bundle is never
+# touched, in any order, and the locator gets its second module.
+OUTDIR=./pkg
+if [ "$SYMBOLS" = "1" ]; then OUTDIR=./pkg-names; mkdir -p pkg-names; fi
+wasm-bindgen $BINDGEN_FLAGS --out-dir "$OUTDIR" --target web "./target/wasm32-unknown-unknown/$PROFILE/fractal_flame_wgpu.wasm"
 
 if [ $? -ne 0 ]; then
     echo "❌ wasm-bindgen failed"
     exit 1
 fi
 
-# Name the symbols module for the locator, and give the shipped one
-# back so the served bundle is still the one that reproduces.
+# Hand the names module to scripts/wasm-locate.py under the filename it
+# looks for, and leave everything else in ./pkg alone.
 if [ "$SYMBOLS" = "1" ]; then
-    mv -f pkg/fractal_flame_wgpu_bg.wasm pkg/fractal_flame_wgpu_bg.names.wasm
+    cp -f pkg-names/fractal_flame_wgpu_bg.wasm pkg/fractal_flame_wgpu_bg.names.wasm
+    echo ""
     echo "  names module -> pkg/fractal_flame_wgpu_bg.names.wasm"
-    if [ -f pkg/_shipped_parked.wasm ]; then
-        mv -f pkg/_shipped_parked.wasm pkg/fractal_flame_wgpu_bg.wasm
-        echo "  shipped module restored -> the served bundle is unchanged"
-    else
-        cp -f pkg/fractal_flame_wgpu_bg.names.wasm pkg/fractal_flame_wgpu_bg.wasm
-        echo "  WARNING: no shipped module was present, so the SERVED bundle"
-        echo "           is the names build -- it will not reproduce the crash."
-        echo "           Run ./build-wasm.sh with no flags to restore it."
-    fi
+    echo "  ./pkg is untouched: the served bundle is still the shipped build."
+    echo "  Reproduce with it, then: python scripts/wasm-locate.py <offset>"
+    exit 0
 fi
 
 # Copy assets for runtime loading
