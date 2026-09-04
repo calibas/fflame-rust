@@ -187,7 +187,7 @@ base64 = "0.22"
 # what makes them count: they are most of the surface any
 # engine-level feature has to thread `#[cfg]` through. Off, a
 # rendering module compiles the engine and nothing else.
-default = ["web-app", "engine-flame", "engine-escape"]
+default = ["web-app", "engine-flame", "engine-escape", "engine-sim"]
 web-app = []
 # The flame engine's VARIATION CATALOG. On by default, so the app and
 # every existing build are unchanged.
@@ -208,6 +208,11 @@ engine-flame = []
 # the orbit store). Its shader source is under 1% of a module's
 # download; the deep-zoom code is the weight.
 engine-escape = []
+# The simulation engine: the model/colouring registries, the assembler
+# and SimRenderer. Like the escape engine its shader source is a small
+# fraction of a module's download; unlike it, there is no deep-zoom
+# machinery, so the whole thing is light.
+engine-sim = []
 
 [build-dependencies]
 chrono = "0.4"

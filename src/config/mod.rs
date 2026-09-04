@@ -13,6 +13,7 @@ pub mod precision;
 pub mod defaults;
 pub mod delta;
 pub mod escape;
+pub mod sim;
 pub mod fractal_config;
 pub mod manager;
 // An egui widget, so it belongs to the editor surface rather
