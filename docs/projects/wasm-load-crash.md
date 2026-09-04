@@ -247,6 +247,79 @@ Both had produced confident wrong readings, and both are now fixed:
 
 ---
 
+## The function is identified, and alignment is not how (2026-09-03)
+
+The `?no-touch-fix` build crashed **with and without the flag**, which
+retires our two `PointerEvent` closures, and it came with a much fuller
+Firefox stack. Read as Firefox's async causality chain it is:
+
+```
+run -> __wbg_init -> finalize_init -> queueMicrotask
+    -> addEventListener -> requestAnimationFrame -> [trap]
+```
+
+A **requestAnimationFrame callback**, which is what the very first
+report said before three rounds of tooling went past it.
+
+**Alignment was measured and it does not work.** Before reading any
+name out of it: exports named in BOTH modules are ground truth, so map
+each shipped index through the alignment and compare. Of 22 testable,
+**9 correct, 6 WRONG, 7 honestly unaligned** — and the wrong ones miss
+by thousands of indices (`wasmapi_get_config_json` mapped to 4,752
+against a truth of 8,971). A tool that is wrong 40% of the time it
+answers is worse than one that does not answer. The `pkg`-level
+alignment is dead; the guards stay, but the technique does not earn a
+name on its own.
+
+**What identified it instead: the module's own string literals.** Scan
+the trapping body for `i32.const <addr>, i32.const <len>` pairs landing
+in a data segment and read the bytes. Both offsets (3,534,022 and
+3,534,521) are inside shipped body #257, a 5,905-byte function, and it
+references exactly two strings:
+
+```
+'handler woken up without user event'
+'internal error: entered unreachable code'
+```
+
+The first is winit's, and appears in exactly two places in winit
+0.30.13 — `platform_impl/web/event_loop/mod.rs`, in `run()` and in
+`spawn()`. Together with the `unreachable!()` beside it, that is the
+web event-loop handler closure, with our own `event_handler` inlined
+into it by LTO. **No cross-build assumption at any step**: the shipped
+module names itself.
+
+### `run()` on the web borrows a stack frame it then abandons
+
+```rust
+// SAFETY: Don't use `move` to make sure we leak the `event_handler` and `target`.
+let handler: Box<dyn FnMut(Event<()>)> = Box::new(|event| { ... });
+let handler = unsafe { std::mem::transmute::<..., ... + 'static>(handler) };
+self.elw.p.run(handler, false);
+backend::throw("Using exceptions for control flow, ...");
+```
+
+`self`, `target` and `event_handler` are **locals of `run`**. The
+closure borrows them, is transmuted to `'static`, and the frame is kept
+alive only by never returning — `throw` leaves via a JS exception. Our
+`src/app/mod.rs` called this on every platform, `#[allow(deprecated)]`
+and all.
+
+`EventLoopExtWebSys::spawn()` is the same handler built with `move`,
+owning its captures on the heap, and it "returns immediately, and
+doesn't throw an exception". It is the documented web entry point.
+
+So the wasm build now uses `spawn` and the desktop keeps `run`. This is
+not proof of the mechanism — whether the abandoned frame is genuinely
+reused is not established, and the shadow-stack pointer is plausibly
+never rewound, which would make the trick sound. It removes the
+dependency instead of arguing about it, and it moves us onto the API
+winit documents for this platform. If the crash survives it, the
+handler closure is still the place to look and the next question is
+what inside it holds a stale reference.
+
+---
+
 ## Next moves, in order of cost
 
 1. **One paired run of the protocol above.** It has never actually been
