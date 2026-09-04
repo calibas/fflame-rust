@@ -19,6 +19,7 @@ impl From<RenderMode> for ApiRenderMode {
             RenderMode::TwoD => ApiRenderMode::TwoD,
             RenderMode::ThreeD => ApiRenderMode::ThreeD,
             RenderMode::Escape => ApiRenderMode::Escape,
+            RenderMode::Simulation => ApiRenderMode::Simulation,
         }
     }
 }
@@ -29,6 +30,7 @@ impl From<ApiRenderMode> for RenderMode {
             ApiRenderMode::TwoD => RenderMode::TwoD,
             ApiRenderMode::ThreeD => RenderMode::ThreeD,
             ApiRenderMode::Escape => RenderMode::Escape,
+            ApiRenderMode::Simulation => RenderMode::Simulation,
         }
     }
 }

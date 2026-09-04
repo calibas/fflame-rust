@@ -480,6 +480,9 @@ fn parse_flame_element(
         // .flame XML carries no escape-time state (no Apo/JWF
         // equivalent) — deliberate, see the plan's serialization notes.
         escape: Default::default(),
+        // Apophysis/JWildfire XML has no simulation concept, so an
+        // imported .flame always carries the defaults.
+        sim: Default::default(),
         flame,
         // Scene-level render state (config-level since v3).
         render_mode,

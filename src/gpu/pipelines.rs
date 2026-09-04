@@ -709,6 +709,9 @@ impl FlamePipelines {
             // renderer owns it, and the app branches before the chaos
             // game runs. Degrade to 2D rather than panic if mis-routed.
             crate::scene::transforms::RenderMode::Escape => self.shader_cache.pipeline_2d(),
+            // Same for simulation: the grid stepper owns its pipelines
+            // and the app branches before the chaos game runs.
+            crate::scene::transforms::RenderMode::Simulation => self.shader_cache.pipeline_2d(),
         }
     }
 

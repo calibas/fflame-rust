@@ -191,7 +191,8 @@
     "known": [
       "2d",
       "3d",
-      "escape"
+      "escape",
+      "simulation"
     ],
     "wire_path": "/render_mode"
   },
