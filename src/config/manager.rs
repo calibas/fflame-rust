@@ -2753,7 +2753,22 @@ impl ConfigManager {
             // model), and a steps_per_frame of zero would make Run do
             // nothing while looking like it worked.
             ConfigPath::SimModel => {
-                self.current.sim.model = String::try_from(value)?;
+                let name = String::try_from(value)?;
+                if name != self.current.sim.model {
+                    // Parameters belong to the model that declared them,
+                    // and dt/steps are per-model working values --
+                    // Gray-Scott runs at dt 1.0 where Schnakenberg
+                    // diverges above 0.02, so carrying one model's
+                    // settings into another is unusable either way.
+                    self.current.sim.model_params.clear();
+                    #[cfg(feature = "engine-sim")]
+                    {
+                        let m = crate::sim::model_or_default(&name);
+                        self.current.sim.dt = m.default_dt;
+                        self.current.sim.steps = m.default_steps;
+                    }
+                }
+                self.current.sim.model = name;
             }
             ConfigPath::SimColoring => {
                 self.current.sim.coloring = String::try_from(value)?;

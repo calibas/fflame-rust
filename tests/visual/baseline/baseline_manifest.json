@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "e674e508",
+  "git_hash": "5ffe7462",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -442,6 +442,18 @@
       "bytes": 35605,
       "sha256": "b7237c6474131dd9ef1651fb040bd10daf254fbc9578641c8fb906eeb11ac459"
     },
+    "sim-brusselator-oscillating.png": {
+      "bytes": 14565,
+      "sha256": "81f5e45e679788d5abeaf50fcfafe517e73cfd1b3eec32de620aa051f630f629"
+    },
+    "sim-brusselator-turing.png": {
+      "bytes": 30116,
+      "sha256": "2e3c6a4486b0c760023be8ab96589581e8a588aba579598cef50df33c56576c7"
+    },
+    "sim-fitzhugh-nagumo-spiral.png": {
+      "bytes": 4378,
+      "sha256": "f02e07f52307b87ef2b103899bf44849d4f82ad2a8e60c07ce66ef2cf828cf56"
+    },
     "sim-gray-scott-bilinear-upscale.png": {
       "bytes": 8300,
       "sha256": "cdd883acaea09a5691c48f7b2c9cdea02c009b370efa6918a992f360f5816b60"
@@ -465,6 +477,14 @@
     "sim-gray-scott-zero-boundary.png": {
       "bytes": 5947,
       "sha256": "1db2346aa2ef7e4ea04b05d3bbab83e585ee9823fe0c9e75686de909c8ece51e"
+    },
+    "sim-schnakenberg-turing.png": {
+      "bytes": 37168,
+      "sha256": "b623ea3be3b25c77209b030d5cc3f4309daea4158cc4d5f3841cb76a18835f03"
+    },
+    "sim-schnakenberg-two-channel.png": {
+      "bytes": 36744,
+      "sha256": "08ccfcb72f9f407f2957a3601f826ee40fc40cb18a2cc96013411caf762e0a95"
     },
     "solid-solid-depth-effects.png": {
       "bytes": 15892,

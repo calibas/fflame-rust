@@ -100,6 +100,14 @@ pub enum SimInit {
     Line,
     /// A single centred cell: the growth models' point seed.
     Center,
+    /// A wavefront cut in half, with a refractory tail behind it.
+    ///
+    /// The only way to nucleate a spiral in an excitable medium, and
+    /// not a cosmetic choice: measured, FitzHugh-Nagumo's published
+    /// constants relax to a flat rest state from a noise seed (spatial
+    /// sd 0.0014) and produce textbook counter-rotating spirals from
+    /// this one. Excitable models are the reason it exists.
+    BrokenWave,
 }
 
 impl Default for SimInit {
@@ -118,11 +126,12 @@ impl SimInit {
             SimInit::Ring { .. } => "ring",
             SimInit::Line => "line",
             SimInit::Center => "center",
+            SimInit::BrokenWave => "broken_wave",
         }
     }
 
     pub const KINDS: &'static [&'static str] =
-        &["noise", "blob", "blobs", "ring", "line", "center"];
+        &["noise", "blob", "blobs", "ring", "line", "center", "broken_wave"];
 
     /// Switch kind, keeping whatever the new kind shares with the old.
     pub fn with_kind(&self, kind: &str) -> SimInit {
@@ -142,6 +151,7 @@ impl SimInit {
             "blobs" => SimInit::Blobs { count, radius },
             "ring" => SimInit::Ring { radius },
             "line" => SimInit::Line,
+            "broken_wave" => SimInit::BrokenWave,
             _ => SimInit::Center,
         }
     }

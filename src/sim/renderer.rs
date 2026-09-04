@@ -536,7 +536,9 @@ impl SimRenderer {
                 (count.min(64) as f32, radius as f32)
             }
             crate::config::sim::SimInit::Ring { radius } => (radius as f32, 0.0),
-            crate::config::sim::SimInit::Line | crate::config::sim::SimInit::Center => (0.0, 0.0),
+            crate::config::sim::SimInit::Line
+            | crate::config::sim::SimInit::Center
+            | crate::config::sim::SimInit::BrokenWave => (0.0, 0.0),
         };
         SimParamsGpu {
             grid: [self.grid_w, self.grid_h],
