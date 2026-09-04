@@ -172,10 +172,27 @@ for D_v ≤ 1), D_v = 1, D_w = 0 (the classic excitable-medium choice)
 or D_w = D_v/… for Turing patterns. Clamp v to [−3, 3].
 
 **Parameters.** `a`, `b`, `tau`, `I` (drive), `D_v`, `D_w`, `dt`.
-Preset set is to be found in a prototype — the labyrinth/Turing
-regime of FHN is known to exist (it is the standard "reaction
-diffusion" demo pattern) but the constant set for it is `[verify]`;
-do not ship a preset without running it.
+
+**Measured 2026-09-03** (`scripts/sim_prototypes/proto_reaction_diffusion.py`,
+256², NumPy):
+
+- **`excitable_spiral` VERIFIED and shippable**: a = 0.7, b = 0.8,
+  τ = 12.5, I = 0.5, D_v = 1, D_w = 0, dt = 0.1, **broken-wave seed**.
+  Produces textbook counter-rotating spiral pairs by step 1000. Never
+  stills (spatial sd 0.76 and rotating) — an animated subject.
+- The seed is not incidental: the same constants from a **noise** seed
+  relax to the rest state (sd 0.0014, a flat field). The excitable
+  regime needs a cut wavefront, so `seed_kind` must default to
+  `broken_wave` for this preset.
+- **The Turing/labyrinth guess DOES NOT WORK and must not ship.**
+  D_w = 4 with I = 0 from noise gives a spatial sd of **0.0000** — a
+  perfectly flat field after 4000 steps. The catalogue's own
+  instruction ("do not ship a preset without running it") was right;
+  the constant set for an FHN Turing regime is still unknown.
+- **dt cap ≈ 0.5.** The [−3, 3] clamp means instability never shows as
+  a NaN, it shows as the field pinning to the rails: dt = 0.5 is clean
+  (sd 0.0008), dt = 1.0 rails (sd 2.26). Cap the slider at 0.5 and do
+  not rely on divergence detection here.
 
 **Stages.** `update`, `color`. Periodic or Clamp.
 **Colouring.** `channel` on v, `two_channel`, `age` (time since last
@@ -206,9 +223,19 @@ are O(B) ≈ 3–5, so dt ≤ 0.05), D_X = 1, D_Y = 4–8 for Turing spots.
 Clamp X, Y ≥ 0.
 
 **Parameters.** `A` (1–3), `B` (1–5), `D_X`, `D_Y`, `dt`.
-**Presets** `[verify by prototype]`: Turing spots A = 1, B = 3,
-D_X = 1, D_Y = 8; oscillating (spiral-capable) A = 1, B = 2.5,
-D_X = D_Y = 1.
+
+**Measured 2026-09-03**, both presets VERIFIED as patterns:
+
+- **Turing spots** A = 1, B = 3, D_X = 1, D_Y = 8, dt = 0.01 — spots,
+  **settles at ≈ 4,960 steps**, spatial sd 1.43.
+- **Oscillating** A = 1, B = 2.5, D_X = D_Y = 1 — never stills, as
+  claimed.
+- **dt cap is 0.02, not the 0.01–0.05 estimated above.** Measured:
+  dt = 0.01 clean; **dt = 0.05 diverges at step 90**, 0.1 at 35, 0.25
+  at 15. Correct the slider bound.
+- Wavelength caveat below applies: at these constants the spots are
+  ~2–3 cells across on a 256² grid — a real Turing pattern that reads
+  as speckle.
 
 **Stages.** `update`, `color`. **Colouring.** `two_channel`.
 
@@ -264,6 +291,39 @@ with D_v/D_u ≈ 40 `[verify by prototype]`.
 **Discretisation.** As the Brusselator; dt ≈ 0.01 with D_v large.
 **Parameters.** `a`, `b`, `D_u`, `D_v`, `dt`. **Stages.** `update`,
 `color`. **Colouring.** `channel` on u.
+
+**Measured 2026-09-03.** a = 0.1, b = 0.9, D_u = 1, D_v = 40,
+dt = 0.01 **VERIFIED**: Turing spots, **settles at ≈ 8,680 steps**,
+spatial sd 1.17. **dt cap 0.02** — 0.02 is clean, 0.05 diverges at
+step 17.
+
+### Turing feature size costs much less than it looks (measured)
+
+The catalogue's spot presets put the wavelength at a few cells, which
+is a genuine Turing pattern that reads as speckle. Wavelength scales as
+√D, so it is bought by scaling both diffusion constants — and explicit
+Euler then caps dt at ~const/D, which suggests the step count should
+scale linearly with the scale factor. **It does not.** Schnakenberg,
+256², scaling D_u and D_v by k and dt by 1/k:
+
+| D scale k | dt | steps to still | λ (cells) | settle in model time |
+|---|---|---|---|---|
+| 1 | 0.0100 | 14,850 | 6.6 | 148 |
+| 4 | 0.0025 | 18,000 | 16.0 | 45 |
+| 16 | 0.00063 | 30,400 | 36.6 | 19 |
+
+**5.6× the feature size for 2× the steps**, because faster diffusion
+equilibrates in proportionally less model time and the two effects
+mostly cancel. Feature size is a cheap knob, and the shipped presets
+should use it rather than defaulting to speckle.
+
+One measurement trap worth carrying into the driver: the **settle
+metric fires during the slow nucleation phase**, before the pattern
+exists. At k = 16 it reported convergence at 10,000 steps with a
+spatial sd of 0.017 — a blank field. The prototype now requires an
+amplitude floor before accepting stillness, and `settle` in the shader
+needs the same guard or it will stop growth models early. (Gray–Scott
+showed the same failure from the other direction.)
 
 ---
 
