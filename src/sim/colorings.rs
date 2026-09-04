@@ -10,9 +10,10 @@
 //! * `cparam(i)` — this colouring's `i`th parameter, declaration order.
 //! * `sim_palette(t)` — the shared palette LUT at `t` in [0, 1], bound
 //!   exactly as escape binds it.
-//! * `grad` — the central-difference gradient of channel `.x`,
-//!   computed once by the template so a hillshade does not re-read
-//!   neighbours.
+//! * `grad` — the central-difference gradient of channel `.x`. Only
+//!   computed for colourings that declare `ColoringFeature::NeedsGradient`;
+//!   everything else receives zero and the template skips the four
+//!   neighbour reads it would have cost.
 //!
 //! **The output convention is the flame accumulator's**, which is what
 //! lets the whole tonemap → effects → readback tail work unchanged:
@@ -33,6 +34,7 @@ pub static CHANNEL: SimColoringDef = SimColoringDef {
     name: "channel",
     display_name: "Channel",
     description: "One state channel through the palette, with scale and offset.",
+    features: &[],
     parameters: &[
         SimParamDef {
             name: "channel",

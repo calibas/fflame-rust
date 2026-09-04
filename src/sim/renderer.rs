@@ -27,6 +27,8 @@
 
 use crate::config::sim::{SimConfig, SimGrid};
 use crate::sim::{assembler, coloring_or_default, model_or_default, ModelDef, SimColoringDef};
+#[allow(unused_imports)]
+use crate::sim::ColoringFeature;
 use wgpu::util::DeviceExt;
 use wgpu::*;
 
@@ -82,7 +84,10 @@ struct PipelineKey {
     boundary: crate::config::sim::SimBoundary,
     upscale: crate::config::sim::SimUpscale,
     downscale: crate::config::sim::SimDownscale,
-    init_kind: String,
+    // `&'static`: `SimInit::kind_name` returns one, and this key is
+    // rebuilt three times per frame -- a String here was three
+    // allocations per frame for nothing.
+    init_kind: &'static str,
     magnifying: bool,
 }
 
@@ -355,11 +360,15 @@ impl SimRenderer {
             self.current = 0;
             self.needs_seed = true;
         }
-        // The resolve direction may have flipped even if only the
-        // output moved, and that is a different shader. The cached step
-        // bind groups reference the field views, so they go with it.
-        self.pipelines = None;
-        self.step_bind_groups = None;
+        // Do NOT clear `pipelines` here. The resolve direction is part
+        // of the pipeline key, so `ensure_pipelines` already rebuilds
+        // exactly when a resize flips it -- clearing unconditionally
+        // recompiled all three shaders on EVERY resize event, which is
+        // once per frame during a window drag. The step bind groups do
+        // reference the field views, so they go with the field.
+        if grid_changed {
+            self.step_bind_groups = None;
+        }
         true
     }
 
@@ -370,7 +379,7 @@ impl SimRenderer {
             boundary: cfg.boundary,
             upscale: cfg.upscale,
             downscale: cfg.downscale,
-            init_kind: cfg.init.kind_name().to_string(),
+            init_kind: cfg.init.kind_name(),
             magnifying: self.magnifying(),
         }
     }
@@ -535,7 +544,14 @@ impl SimRenderer {
             step_index,
             seed_lo: cfg.seed as u32,
             seed_hi: (cfg.seed >> 32) as u32,
-            dt: if cfg.dt.is_finite() { cfg.dt.clamp(1e-4, 10.0) } else { 1.0 },
+            // Capped at the model's stability bound here as well as at
+            // the config manager: a hand-edited file can carry any value,
+            // and past the bound the [0,1] clamp turns divergence into
+            // plausible-looking garbage rather than NaN.
+            dt: {
+                let max_dt = model_or_default(&cfg.model).max_dt;
+                if cfg.dt.is_finite() { cfg.dt.clamp(1e-4, max_dt) } else { 1.0 }
+            },
             init_p0: p0,
             init_p1: p1,
             _pad0: 0.0,

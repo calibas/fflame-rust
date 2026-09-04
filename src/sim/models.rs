@@ -166,4 +166,11 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 10000,
+    // Explicit Euler on the Sims stencil is stable while
+    // dt * D * |lambda_max| < 2, and the stencil's most negative
+    // eigenvalue is the Nyquist mode: -1 - 4*0.2 + 4*0.05 = -1.6. With
+    // D_A = 1 that is dt < 1.25. The [0, 1] clamp would hide anything
+    // past it as garbage rather than NaN, which is worse -- so the cap
+    // is enforced everywhere dt can be set, not left to the clamp.
+    max_dt: 1.25,
 };
