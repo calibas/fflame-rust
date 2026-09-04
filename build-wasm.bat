@@ -19,12 +19,23 @@ if /I "%~1"=="--symbols" (
     REM only appears when optimized.
     set PROFILE=dist-symbols
     set BINDGEN_FLAGS=--keep-debug
+    set SYMBOLS=1
     echo   ^(dist codegen + symbols^)
 )
 if /I "%~1"=="--debug" (
     set PROFILE=dist-debug
     set BINDGEN_FLAGS=--keep-debug
     echo   ^(debug profile: symbols + debug_assert + overflow checks^)
+)
+REM --symbols must NOT destroy the shipped module. wasm-bindgen writes
+REM a fixed filename into --out-dir, so a names build would overwrite
+REM the very bundle a crash has to be reproduced with -- and
+REM scripts/wasm-locate.py needs BOTH, from the same commit. Park the
+REM shipped one here and put it back afterwards.
+if "%SYMBOLS%"=="1" (
+    if exist "pkg\fractal_flame_wgpu_bg.wasm" (
+        move /Y "pkg\fractal_flame_wgpu_bg.wasm" "pkg\_shipped_parked.wasm" >nul
+    )
 )
 cargo build --lib --target wasm32-unknown-unknown --profile %PROFILE%
 if %errorlevel% neq 0 exit /b %errorlevel%
@@ -33,6 +44,23 @@ REM Generate bindings with wasm-bindgen
 echo Generating JavaScript bindings...
 wasm-bindgen %BINDGEN_FLAGS% --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/%PROFILE%/fractal_flame_wgpu.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
+
+REM Name the symbols module for the locator, and give the shipped one
+REM back so the served bundle is still the one that reproduces.
+if "%SYMBOLS%"=="1" (
+    move /Y "pkg\fractal_flame_wgpu_bg.wasm" "pkg\fractal_flame_wgpu_bg.names.wasm" >nul
+    if exist "pkg\_shipped_parked.wasm" (
+        move /Y "pkg\_shipped_parked.wasm" "pkg\fractal_flame_wgpu_bg.wasm" >nul
+        echo   names module -^> pkg\fractal_flame_wgpu_bg.names.wasm
+        echo   shipped module restored -^> the served bundle is unchanged
+    ) else (
+        copy /Y "pkg\fractal_flame_wgpu_bg.names.wasm" "pkg\fractal_flame_wgpu_bg.wasm" >nul
+        echo   names module -^> pkg\fractal_flame_wgpu_bg.names.wasm
+        echo   WARNING: no shipped module was present, so the SERVED bundle
+        echo            is the names build -- it will not reproduce the crash.
+        echo            Run build-wasm.bat with no flags to restore it.
+    )
+)
 
 REM Copy assets for runtime loading
 echo Copying assets...

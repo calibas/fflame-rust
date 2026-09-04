@@ -128,12 +128,25 @@ export section survives `strip`.
 ### Protocol
 
 1. `./build-wasm.sh` and `./build-wasm.sh --symbols` from the **same
-   commit**, no `src/` change between. Keep both `pkg/` modules.
+   commit**, no `src/` change between. Order does not matter.
 2. Reproduce with the **shipped** bundle; copy the offset.
 3. `python scripts/wasm-locate.py <offset>`
 
-The script prints both modules' geometry first. A code-size drift over
-1% means the pairing is wrong: rebuild, do not read the name.
+**`--symbols` used to destroy step 2's artifact.** wasm-bindgen writes
+a fixed filename into `--out-dir`, so the names build overwrote
+`pkg/fractal_flame_wgpu_bg.wasm` — the only module that reproduces the
+crash — and left a pairing of one build against itself. Both build
+scripts now park the shipped module and restore it, writing the names
+build to `…_bg.names.wasm`, so the served bundle is unchanged and the
+two are always available together.
+
+**Read the pairing line before the name.** The script prints both
+modules' geometry first. **Function-count drift is the check that
+works**; code-size drift is not enough on its own. Measured on a stale
+pair: 0.129% code-size drift — inside any sane threshold — while
+differing by **628 function bodies**, and reporting a reassuring 92%
+alignment, *better* than a true pair's 82%. Over 1% count drift means
+rebuild; do not read the name.
 
 ---
 
