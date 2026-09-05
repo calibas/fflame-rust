@@ -753,6 +753,47 @@ infected rule `[verify]`. Spirals reported for q = 200, k₁ = 2,
 k₂ = 3, g = 70 `[verify — secondary source]`. Seed: uniform random
 states.
 
+**Verified 2026-09-05 against the paper** (supplied as
+`output/pdf/gerhardt1989.pdf`). **The rule above is NOT the paper's**,
+and the `[verify]` flag it carried since 2026-09-03 was right to be
+there. Gerhardt & Schuster's eqs. (3)–(9) define, with K the count of
+ILL neighbours (eq. 3), I the count of INFECTED ones (eq. 4) and S the
+sum of the states of the infected cells only (eq. 6):
+
+```
+healthy:   s' = ⌊K/k₁⌋ + ⌊I/k₂⌋          (eq. 5)  — ill over k₁
+infected:  s' = min(⌊S/I⌋ + g, V)        (eq. 7)  — infected only
+ill:       s' = 0                        (eq. 8)
+```
+
+So the circulated version differs in **three** places: k₁ and k₂ are
+swapped, S runs over every cell rather than the infected ones, and the
+divisor is A + B + 1 rather than I. Figure 2's caption — "the center
+cell is always considered as a neighbour of itself" — is what keeps
+I ≥ 1 for an infected cell and the division defined; it is easy to
+miss and it is the reason the paper needs no guard there.
+
+Every one of those three still renders a plausible field of BZ
+scrolls, which is why a baseline image could not catch it. **Both
+rules now ship**, selected by a `variant` parameter with the paper's
+as the default, and both are pinned by a GPU test against a CPU mirror
+of their published forms — 0 mismatches in 4,096 cells after 12 steps,
+with the two rules differing in 3,563 of those cells, so a mis-wired
+selector cannot pass.
+
+The paper's own constants are V = 100, k₁ = 2, k₂ = 3 and g between 1
+and 20, but its subject is the *coverage time series* on a 20 × 20
+lattice — four behaviour types against g — not a parameter set for a
+dense spiral field, so the preset values remain ours to measure. They
+differ between the rules: the paper's averages over the infected cells
+alone, so its waves run faster and want **g = 25** where the
+circulated rule wants 70. At 70 the paper's rule gives a fine busy
+texture and at 10 it gives mush; at 25 the scrolls open out with
+visible spiral cores. Both presets run 200 steps.
+
+The "bz2" variant, ⌊S/(A+1)⌋ + g, is still unverified and not
+implemented.
+
 **Discretisation.** Integer state in a u32 channel (bitcast into the
 Rgba32Float, pipeline §3.1) or a float channel holding an integer;
 3×3 gather; the sum S and counts A, B in one pass.

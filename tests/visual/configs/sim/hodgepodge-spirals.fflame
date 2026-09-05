@@ -116,6 +116,10 @@
     "coloring_params": {
       "channel": 0.0,
       "scale": 0.005
+    },
+    "model_params": {
+      "variant": 0.0,
+      "g": 25.0
     }
   }
 }
