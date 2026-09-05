@@ -703,6 +703,43 @@ Agent buffer, deposit buffer, resolve-into-field; Physarum and DLA;
 10⁶ agents); DLA cluster dimension ≈ 1.7 measured by box counting in a
 test at 512².
 
+#### Wave 1 — the agent stage, Physarum and DLA
+
+**Done 2026-09-05.** Both of phase 4's gates are met, and phase 4's
+models ship.
+
+- **The agent stage.** `ModelDef::agents` declares a population: a
+  storage buffer of 16-byte records that move themselves and deposit
+  into a per-cell integer buffer, which the step pass folds into the
+  field and clears. Two model-supplied shaders, `sim_agent_seed` and
+  `sim_agent`, with `agent_deposit`, `agent_rand` and the claim
+  helpers provided. The population is allocated to the count the
+  parameters ask for — a function of the GRID, so a percentage means
+  the same density at any size — and a change of count reseeds,
+  because half a new population is not a state.
+- **GATE MET: reproducible with a million agents.** 1,048,576 agents
+  on a 2048² grid, 40 steps, two independent renderers: **0 of
+  4,194,304 cells differ**. This is what the integer deposit is for —
+  agents land in one cell in an order the hardware chooses, and
+  `atomicAdd` on a u32 does not care about that order. The exclusion
+  is resolved the same way, by an atomic MINIMUM over agent indices.
+- **Jones' exclusion turned out to be load-bearing.** The catalogue's
+  GPU sketch dropped it; measured both ways on the same seed, without
+  it the population collapses onto a few thick arcs and with it the
+  same parameters give the paper's polygonal network. So Physarum
+  declares two agent passes. Every one of the paper's Table 1 values
+  is confirmed.
+- **GATE MET: DLA's box-counting dimension is 1.753** at 512² (DLA is
+  ≈1.71), with 39,000 particles clear of the walls. Getting there
+  needed a fix the plan did not anticipate: any sensible walker count
+  saturates a small cluster's launch circle and freezes a solid disc,
+  so the ACTIVE population now tracks the circle's circumference and
+  `crowding` is exposed as the speed-against-fidelity knob. A second
+  bug fell out of the sweep — a kill radius smaller than the launch
+  radius killed every walker at birth.
+- `occupancy` colouring; 5 new visual baselines; 22 models, 6
+  colourings.
+
 ### Phase 5 — growth and Laplacian models
 
 DBM (parallel selection, then exact via scan), Saffman–Taylor as DBM +

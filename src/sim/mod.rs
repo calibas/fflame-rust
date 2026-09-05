@@ -116,6 +116,11 @@ pub enum ModelFeature {
     /// many levels it has, and McCabe's texture came out visibly
     /// axis-aligned on it. See `scripts/sim_prototypes/proto_mccabe_pyramid.py`.
     NeedsPyramid,
+    /// The model carries a population of AGENTS: a storage buffer of
+    /// 16-byte records that move themselves and deposit into an
+    /// integer accumulation buffer, which the step pass then folds
+    /// into the field. See [`AgentDef`].
+    NeedsAgents,
     /// The step needs the field's global minimum and maximum. After
     /// every step the renderer reduces the new field into a ring slot
     /// and the NEXT step reads it -- one step of lag, which is the
@@ -123,6 +128,64 @@ pub enum ModelFeature {
     /// only normalise by a range that has already been measured.
     NeedsMinMax,
 }
+
+/// A model's agent stage.
+///
+/// The agents are the state: they persist across steps, they move
+/// themselves, and what they leave behind is an integer deposit the
+/// step pass reads. Two shaders, both supplied by the model:
+///
+/// ```wgsl
+/// fn sim_agent_seed(i: u32) -> SimAgent
+/// fn sim_agent(a: SimAgent, i: u32) -> SimAgent
+/// ```
+///
+/// `SimAgent` is `{ pos: vec2<f32>, heading: f32, state: f32 }`.
+/// `sim_agent` senses through the ordinary `sim_read`, deposits with
+/// `agent_deposit(cell, amount)`, and draws randomness from
+/// `agent_rand(i, salt)`.
+///
+/// **The deposit is INTEGER, and that is what makes an agent model
+/// reproducible.** Thousands of agents land in one cell in an order
+/// the hardware chooses; `atomicAdd` on a u32 is associative and
+/// commutative, so the total does not depend on that order, while an
+/// f32 accumulation would give a different sum every run. The value
+/// is fixed-point, scaled by [`AGENT_DEPOSIT_SCALE`].
+#[derive(Clone, Copy, Debug)]
+pub struct AgentDef {
+    /// How many agents these parameters ask for on a grid of this
+    /// size. Clamped to [`MAX_AGENTS`] by the renderer, which
+    /// allocates for exactly this many. The grid is an argument
+    /// because a population is normally a FRACTION of the area --
+    /// Jones' %p -- so the same setting means the same density at
+    /// every grid size.
+    pub count: fn(&Params, u32, u32) -> u32,
+    /// Dispatches per step. 1 for a population that just moves; 2
+    /// when the agents have to AGREE about something first.
+    ///
+    /// Physarum needs 2. Jones' agents exclude one another -- a cell
+    /// holds one agent, and an agent that cannot move stays put and
+    /// takes a random heading -- and that is not a detail: measured on
+    /// the CPU prototype, dropping it collapses the population into a
+    /// few heavy arcs instead of a network. Resolving it needs the
+    /// agents to see each other's intentions, so pass 1 turns and
+    /// CLAIMS a target cell (`agent_claim`) and pass 2 moves only if
+    /// it won (`agent_claim_check`). The claim is an atomic MINIMUM
+    /// over agent indices, so the winner is the lowest index rather
+    /// than whoever the hardware ran first, and the run reproduces.
+    pub passes: u32,
+    /// `fn sim_agent_seed(i)`, `fn sim_agent(a, i)`, and for a
+    /// two-pass population `fn sim_agent2(a, i)`.
+    pub wgsl: &'static str,
+}
+
+/// Fixed-point scale for the deposit buffer. A u32 then holds a
+/// deposit up to 4.2e6, far above anything a trail reaches.
+pub const AGENT_DEPOSIT_SCALE: f32 = 1024.0;
+
+/// Most agents the engine will allocate: 4 million at 16 bytes is
+/// 64 MB, and the catalogue's upper end for Physarum.
+pub const MAX_AGENTS: u32 = 4_000_000;
 
 /// Levels in the pyramid for a grid, INCLUDING level 0 (the field
 /// itself). One rule, computed identically on the CPU and in WGSL:
@@ -293,6 +356,9 @@ pub struct ModelDef {
     /// Names of the parameters that are diffusion rates on the Sims
     /// stencil. Empty for a rule with no time step.
     pub diffusion: &'static [&'static str],
+    /// The agent stage, for the models whose state is a population
+    /// rather than a field.
+    pub agents: Option<AgentDef>,
     /// Builds this model's convolution kernel, for the models whose
     /// rule is a large-kernel gather rather than a stencil.
     ///
@@ -336,6 +402,14 @@ pub struct ModelDef {
 }
 
 impl ModelDef {
+    /// This model's parameters, resolved against its defaults.
+    pub fn params_view<'a>(
+        &'a self,
+        map: &'a std::collections::BTreeMap<String, f32>,
+    ) -> Params<'a> {
+        Params { model: self, map }
+    }
+
     /// Build this model's convolution kernel for the parameters in
     /// force, clamped to the buffer the renderer allocated.
     pub fn kernel_for(
@@ -479,6 +553,8 @@ pub static MODELS: &[&ModelDef] = &[
     &models::LENIA,
     &models::SMOOTHLIFE,
     &models::MCCABE,
+    &models::PHYSARUM,
+    &models::DLA,
 ];
 
 /// Every colouring, in registration order. Append only.
@@ -489,6 +565,7 @@ pub static COLORINGS: &[&SimColoringDef] =
     &colorings::AGE,
     &colorings::LABEL,
     &colorings::SCALE_MIX,
+    &colorings::OCCUPANCY,
 ];
 
 /// Look up a model by name, falling back to the first registered one.
@@ -854,6 +931,54 @@ mod tests {
                     c.name,
                     c.parameters.len()
                 );
+            }
+        }
+    }
+
+    /// An agent model must declare the feature and the definition
+    /// together, define both of its functions, and ask for a
+    /// population the engine can allocate at every slider setting.
+    #[test]
+    fn an_agent_model_is_declared_consistently() {
+        for m in MODELS {
+            assert_eq!(
+                m.has(ModelFeature::NeedsAgents),
+                m.agents.is_some(),
+                "{}: the NeedsAgents feature and the AgentDef must agree",
+                m.name
+            );
+            let Some(a) = m.agents else { continue };
+            assert!(
+                a.wgsl.contains("fn sim_agent_seed(") && a.wgsl.contains("fn sim_agent("),
+                "{}: an agent model defines sim_agent_seed and sim_agent",
+                m.name
+            );
+            assert!(a.passes == 1 || a.passes == 2, "{}: agent passes must be 1 or 2", m.name);
+            assert_eq!(
+                a.wgsl.contains("fn sim_agent2("),
+                a.passes == 2,
+                "{}: agent passes = {} but sim_agent2 {} defined",
+                m.name,
+                a.passes,
+                if a.passes == 2 { "is not" } else { "is" }
+            );
+            let mut cases = vec![std::collections::BTreeMap::new()];
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max] {
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(pd.name.to_string(), v);
+                    cases.push(map);
+                }
+            }
+            for map in cases {
+                for (gw, gh) in [(64u32, 64u32), (256, 256), (1920, 1080), (4096, 4096)] {
+                    let n = (a.count)(&Params { model: m, map: &map }, gw, gh);
+                    assert!(
+                        n >= 1 && n <= MAX_AGENTS,
+                        "{}: asks for {n} agents at {gw}x{gh}, outside 1..={MAX_AGENTS}",
+                        m.name
+                    );
+                }
             }
         }
     }

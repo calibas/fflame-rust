@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "dabaff4f",
+  "git_hash": "6015628f",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -478,6 +478,14 @@
       "bytes": 34210,
       "sha256": "b15424ab0b7861a3b6816c346af2fb42045dfdc5894891cf63aef07b310fd875"
     },
+    "sim-dla-age.png": {
+      "bytes": 16267,
+      "sha256": "10d337ce0fb49073f350657246026506773942bc8bd743dcfd7f671624a48271"
+    },
+    "sim-dla-cluster.png": {
+      "bytes": 16865,
+      "sha256": "0b1158246c7a3c0e7fcb86f9bb944110022097be250e602bbf5cdc70757b8d24"
+    },
     "sim-eden-cluster.png": {
       "bytes": 11681,
       "sha256": "1edd7718021b6a47d9ab01e9233e043e8ba0de96f12196306363253b8d11a7e1"
@@ -585,6 +593,18 @@
     "sim-percolation-supercritical.png": {
       "bytes": 17274,
       "sha256": "79ff53f3a5a93baab919ccb21becaa7b210d7a6591dbc3bab50230ad6e08b998"
+    },
+    "sim-physarum-coarse.png": {
+      "bytes": 14813,
+      "sha256": "a4dc18e963642f9844cf7fafdb215d0815ce3f7eb7ef4e3c74684179b5ccf03b"
+    },
+    "sim-physarum-network.png": {
+      "bytes": 18267,
+      "sha256": "d66b2f50f5ea933802a7e077b54a4f16e5a34bdce3f69d8784c63692cd8f0464"
+    },
+    "sim-physarum-occupancy.png": {
+      "bytes": 12923,
+      "sha256": "9677d0807443837ade1d162b42c6072152e0e33f014567c50b51e9691bb63e2f"
     },
     "sim-random-deposition.png": {
       "bytes": 10337,
