@@ -2207,6 +2207,25 @@ fn the_reduce_matches_the_cpu_min_and_max_exactly() {
     println!("reduce after step 2: gpu [{lo}, {hi}]  cpu [{cpu_lo}, {cpu_hi}]");
     assert_eq!(lo.to_bits(), cpu_lo.to_bits(), "step-2 min");
     assert_eq!(hi.to_bits(), cpu_hi.to_bits(), "step-2 max");
+
+    // And across the ring's wrap. The ring has 257 slots and the
+    // clearing write splits into two when a batch straddles the end;
+    // nothing else exercises that branch, and if it cleared the wrong
+    // slots the range would silently fall back to [-1, 1] and the
+    // picture would drift rather than fail. 600 steps cross the wrap
+    // twice, in batches whose size the renderer chooses itself.
+    r.run_steps(&device, &queue, &cfg, 600);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let last = 3 + 600 - 1;
+    let slot = (last as u64) % (crate::sim::MINMAX_RING as u64);
+    let enc = read_u32s(&device, &queue, r.minmax_buffer(), slot * 8, 2);
+    let (lo, hi) = (minmax_unord(enc[0]), minmax_unord(enc[1]));
+    let cpu_lo = field.iter().map(|px| px[0]).fold(f32::INFINITY, f32::min);
+    let cpu_hi = field.iter().map(|px| px[0]).fold(f32::NEG_INFINITY, f32::max);
+    println!("reduce after step {last} (slot {slot}): gpu [{lo}, {hi}]  cpu [{cpu_lo}, {cpu_hi}]");
+    assert_eq!(lo.to_bits(), cpu_lo.to_bits(), "post-wrap min");
+    assert_eq!(hi.to_bits(), cpu_hi.to_bits(), "post-wrap max");
 }
 
 /// McCabe's whole step -- pyramid, trilinear reads, scale selection,
@@ -2349,4 +2368,24 @@ fn mccabe_meets_the_interactive_budget_at_1080p() {
     let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
     println!("McCabe 5 scales at 1080p: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
     assert!(ms < 8.0, "McCabe at 1080p is {ms:.2} ms/step, past the 8 ms fallback threshold");
+}
+
+/// Review probe: what the per-frame kernel rebuild costs on the CPU.
+/// `write_param_arrays` runs `kernel_for` on every `run_steps` and
+/// every `color`, so twice a frame.
+#[test]
+#[ignore = "diagnostic"]
+fn kernel_rebuild_cost() {
+    for (model, param, v) in [("lenia", "radius", 13.0f32), ("lenia", "radius", 32.0),
+                              ("smoothlife", "inner_radius", 7.0), ("smoothlife", "inner_radius", 10.0)] {
+        let m = crate::sim::model_or_default(model);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(param.to_string(), v);
+        let t0 = std::time::Instant::now();
+        let mut n = 0usize;
+        for _ in 0..200 { n += m.kernel_for(&map).unwrap().weights.len(); }
+        let us = t0.elapsed().as_secs_f64() * 1e6 / 200.0;
+        let floats = n / 200;
+        println!("{model:<11} {param}={v:<5} {floats:>5} floats  {us:>8.1} us per build");
+    }
 }

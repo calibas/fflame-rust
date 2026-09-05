@@ -2387,9 +2387,12 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// The paper's constants, used here and NOT exposed: eps_bar = 0.01,
 /// tau = 0.0003, alpha = 0.9, gamma = 10, T_e = 1, noise amplitude
 /// 0.01, and dx = 0.03 (its 9.0-wide domain on a 300 mesh). The grid
-/// therefore sets the vessel's size, which is why the presets pin a
-/// 300 x 300 grid as the paper does. What the paper varies, and what
-/// is exposed, is K, delta, j and theta0.
+/// therefore sets the VESSEL's size, not the crystal's: a 1080p
+/// viewport grid is a wider melt around a dendrite of the same size
+/// in cells. The visual configs use the paper's 300 x 300; a preset
+/// carries no grid, so the panel's grid setting is what to change to
+/// match. What the paper varies, and what is exposed, is K, delta, j
+/// and theta0.
 ///
 /// **The discretisation is staggered, and that is not a detail.** The
 /// obvious reading of "one pass takes a gradient, the next takes its
@@ -3218,6 +3221,7 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let amount_min = mparam(4u);
     let sym = i32(round(mparam(5u)));
     let pos = vec2<f32>(p) + vec2<f32>(0.5, 0.5);
+    pyr_prepare();
 
     var best_var = 1.0e30;
     var best_dir = 0.0;

@@ -169,8 +169,10 @@ pub struct SimRenderer {
     /// kernel the engine allows, so it never resizes.
     kernel_buffer: Buffer,
     /// Pyramid levels 1.., each half the previous (rounded up). Level 0
-    /// is the field itself. Allocated with the field and rebuilt every
-    /// step for a model that declares `NeedsPyramid`; empty otherwise.
+    /// is the field itself. Allocated by `ensure_pyramid` for a model
+    /// that declares `NeedsPyramid` and rebuilt every step; empty
+    /// otherwise, and freed again when the model changes to one that
+    /// does not read it.
     pyramid: Vec<(Texture, TextureView)>,
     /// A 1x1 texture bound to every pyramid slot a model does not use:
     /// the layout carries seven, and a bind group must fill them.
@@ -228,7 +230,10 @@ impl SimRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
-        let pyramid = Self::create_pyramid(device, grid_w, grid_h);
+        // Allocated lazily by `ensure_pyramid`: it is a third of a
+        // field texture again (44 MB at 4K), and only one model reads
+        // it.
+        let pyramid = Vec::new();
         let pyramid_dummy = Self::create_level(device, 1, 1, "Sim Pyramid Dummy");
         let level_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Level Params"),
@@ -390,6 +395,25 @@ impl SimRenderer {
         &self.minmax_buffer
     }
 
+    /// Allocate the pyramid when the model reads one, free it when the
+    /// model does not. Called wherever `ensure_pipelines` is, so a
+    /// model or grid change is caught before the next dispatch.
+    fn ensure_pyramid(&mut self, device: &Device, cfg: &SimConfig) {
+        let wants = model_or_default(&cfg.model).has(ModelFeature::NeedsPyramid);
+        let expected = if wants { pyramid_levels(self.grid_w, self.grid_h) as usize - 1 } else { 0 };
+        if self.pyramid.len() == expected {
+            return;
+        }
+        self.pyramid = if wants {
+            Self::create_pyramid(device, self.grid_w, self.grid_h)
+        } else {
+            Vec::new()
+        };
+        // The step groups bind the levels at 6..12, so they go too.
+        self.step_bind_groups = None;
+        self.pyramid_bind_groups = None;
+    }
+
     /// Level `l` of the pyramid (1..), for a test to read back.
     pub fn pyramid_texture(&self, level: usize) -> Option<&Texture> {
         self.pyramid.get(level.checked_sub(1)?).map(|(t, _)| t)
@@ -500,7 +524,8 @@ impl SimRenderer {
             let (f, fv) = Self::create_field_pair(device, gw, gh);
             self.field = f;
             self.field_view = fv;
-            self.pyramid = Self::create_pyramid(device, gw, gh);
+            // Re-created lazily at the new size, if the model reads it.
+            self.pyramid.clear();
             self.grid_w = gw;
             self.grid_h = gh;
             self.current = 0;
@@ -990,11 +1015,18 @@ impl SimRenderer {
     /// starts a new run.
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
         self.ensure_pipelines(device, cfg);
+        self.ensure_pyramid(device, cfg);
         self.step_index = 0;
-        self.write_params_slot0(queue, cfg);
         let model = model_or_default(&cfg.model);
         let coloring = coloring_or_default(&cfg.coloring);
+        // Parameter arrays FIRST: building the kernel is what sets
+        // `kernel_radius`, and the uniform written next carries it.
+        // The other order shipped for a wave, and Lenia's seed -- which
+        // sizes its noise patches by that radius -- read whatever the
+        // previous model had left there (1 on a fresh renderer). The
+        // phase-3 review found it; the soup baseline was regenerated.
         self.write_param_arrays(queue, model, coloring, cfg);
+        self.write_params_slot0(queue, cfg);
 
         let p = self.pipelines.as_ref().expect("pipelines built above");
         let bg = device.create_bind_group(&BindGroupDescriptor {
@@ -1086,6 +1118,7 @@ impl SimRenderer {
             return;
         }
         self.ensure_pipelines(device, cfg);
+        self.ensure_pyramid(device, cfg);
         let model = model_or_default(&cfg.model);
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
