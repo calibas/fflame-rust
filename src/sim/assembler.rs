@@ -62,6 +62,24 @@ fn sim_grid() -> vec2<i32> {
     return vec2<i32>(params.grid);
 }
 
+// Metal runs shaders with fast math on, and its `atan2` is wrong at
+// zero pairs in BOTH directions: same-sign zeros give pi/4 -- a
+// plausible finite value that silently relocates a point -- and
+// mixed-sign zeros give NaN. This is the flame path's `ff_atan2`,
+// which is IEEE-exact for all four sign pairs; the sign is read
+// through `bitcast` because `x < 0.0` is false for -0.0 and integer
+// ops are immune to fast math. Any model taking the angle of a
+// gradient reaches (0, 0) wherever its field is flat, which is most
+// of the grid.
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
 // Integer state lives in an f32 channel (exact to 2^24), so cycling a
 // state is a float modulo. `%` on floats in WGSL is a remainder like
 // its integer form, so the same bias-before-wrap applies as in the

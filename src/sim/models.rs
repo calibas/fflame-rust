@@ -2090,3 +2090,432 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 0.2,
     default_dt: 0.04,
 };
+
+
+/// The Oregonator, in Tyson and Fife's two-variable reduction.
+///
+/// ```text
+/// eps du/dt = D_u lap(u) + u(1-u) - f v (u-q)/(u+q)
+///     dv/dt = D_v lap(v) + u - v
+/// ```
+///
+/// u is HBrO2 (the activator), v the oxidised catalyst. Verified
+/// against J. J. Tyson and P. C. Fife, *J. Chem. Phys.* 73 (1980)
+/// 2224, eq. (17) -- the paper writes the parameters (a, b) where the
+/// later literature writes (q, f), and its Table I gives the
+/// correspondence. The paper states eps << 1, q << 1 and f ~ 1
+/// (eq. 16) but is analytic throughout and gives no numeric set for a
+/// two-dimensional simulation, so the values here are measured rather
+/// than quoted.
+///
+/// **What it does, measured.** Each seed fires ONE excitation wave
+/// which propagates outward at constant speed and annihilates against
+/// its neighbours, leaving the medium reduced behind it -- the
+/// travelling-wave behaviour the BZ reaction is known for. It does not
+/// re-fire on its own: at f = 1.4 the medium is excitable rather than
+/// oscillatory, and 6 time units of running produced no second wave.
+/// Lower f broadens the fronts until they merge; higher f narrows them
+/// until a seed barely fires at all.
+///
+/// **Spirals were NOT obtained**, and the catalogue's remembered
+/// "spiral waves for f ~ 1.4" is not reproduced. A broken front (the
+/// engine's `BrokenWave` init, which nucleates FitzHugh-Nagumo's
+/// spirals) was run at eps in {0.01, 0.02, 0.04} and f in
+/// {1.4 ... 3.5}: in every case the free end RETRACTED and the front
+/// healed into an expanding closed loop rather than curling. A
+/// pacemaker -- an oscillatory disc inside an excitable bulk, which
+/// is the mechanism the paper's own title and abstract are about --
+/// fires and emits one ring, but a sustained target pattern did not
+/// appear within the 1.5 time units tested. Both are recorded in the
+/// catalogue as open rather than papered over.
+///
+/// Channels: `.x` = u, `.y` = v, `.z` = age, `.w` spare.
+pub static OREGONATOR: ModelDef = ModelDef {
+    name: "oregonator",
+    display_name: "Oregonator",
+    description: "The Belousov–Zhabotinskii reaction as chemistry rather than as an \
+                  automaton: an oscillating medium that carries travelling wave trains.",
+    features: &[ModelFeature::NeverStills],
+    parameters: &[
+        SimParamDef {
+            name: "epsilon",
+            display_name: "ε (timescale)",
+            default: 0.04,
+            min: 0.005,
+            max: 0.3,
+            tooltip: "How much faster the activator moves than the catalyst. Small values \
+                      give sharp wave fronts and a stiffer solve — the stable time step is \
+                      proportional to this.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "q",
+            display_name: "q",
+            default: 0.002,
+            min: 0.0002,
+            max: 0.05,
+            tooltip: "The reaction's small parameter. It sets the activator's threshold, \
+                      and the stable time step is proportional to it.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "f",
+            display_name: "f (stoichiometry)",
+            default: 1.4,
+            min: 0.4,
+            max: 3.5,
+            tooltip: "Selects the regime. Around 1 the medium oscillates on its own and \
+                      fills with travelling wave trains; above about 2.5 it is merely \
+                      excitable, so a seed fires one wave and the field goes quiet.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "diffusion_u",
+            display_name: "Diffusion u",
+            default: 1.0,
+            min: 0.1,
+            max: 2.0,
+            tooltip: "Activator diffusion, which sets the wave speed.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "diffusion_v",
+            display_name: "Diffusion v",
+            default: 0.6,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Catalyst diffusion. The real catalyst is a large ion and barely \
+                      diffuses; zero is a defensible setting.",
+            choices: &[],
+        },
+    ],
+    presets: &[SimPreset {
+        name: "waves",
+        display_name: "Excitation waves",
+        params: &[
+            ("epsilon", 0.04),
+            ("q", 0.002),
+            ("f", 1.4),
+            ("diffusion_u", 1.0),
+            ("diffusion_v", 0.6),
+        ],
+        // Measured: each seed's front is well formed and the seeds
+        // have begun to collide by 15,000 steps at dt = 1e-4.
+        steps: 15000,
+        init: Some(crate::config::sim::SimInit::Blobs { count: 5, radius: 5 }),
+    }],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let eps = max(mparam(0u), 1.0e-4);
+    let q = max(mparam(1u), 1.0e-6);
+    let f = mparam(2u);
+    let du = mparam(3u);
+    let dv = mparam(4u);
+    let dt = sim_dt();
+
+    // The same Sims kernel every other reaction-diffusion model here
+    // uses: this is a second-order system, so the kernel's 0.3 scale
+    // is absorbed into the free diffusion constants.
+    let up = sim_read(p + vec2<i32>(0, -1));
+    let dn = sim_read(p + vec2<i32>(0, 1));
+    let lf = sim_read(p + vec2<i32>(-1, 0));
+    let rt = sim_read(p + vec2<i32>(1, 0));
+    let ul = sim_read(p + vec2<i32>(-1, -1));
+    let ur = sim_read(p + vec2<i32>(1, -1));
+    let dl = sim_read(p + vec2<i32>(-1, 1));
+    let dr = sim_read(p + vec2<i32>(1, 1));
+    let lap = -s.xy
+        + 0.2 * (up.xy + dn.xy + lf.xy + rt.xy)
+        + 0.05 * (ul.xy + ur.xy + dl.xy + dr.xy);
+
+    let u = s.x;
+    let v = s.y;
+    // u + q > 0 for u >= 0, and u is clamped non-negative below, so
+    // the denominator is bounded away from zero by q.
+    let react = u * (1.0 - u) - f * v * (u - q) / (u + q);
+    let nu = max(u + dt * (du * lap.x + react) / eps, 0.0);
+    let nv = max(v + dt * (dv * lap.y + u - v), 0.0);
+
+    // The step a cell last crossed into excitation, which is what the
+    // `age` colouring draws as the wave's history.
+    let fired = u <= 0.3 && nu > 0.3;
+    let age = select(s.z, f32(sim_step_index()), fired);
+    return vec4<f32>(nu, nv, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // The init shape is excited; the rest sits at the reduced state.
+    // NOT at exactly zero for both: u = v = 0 is an exact fixed point
+    // of the reaction, so a field seeded there never moves at all --
+    // measured, a pacemaker in a zero field produced nothing.
+    return vec4<f32>(select(0.0, 1.0, inside >= 0.5), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 15000,
+    passes: 1,
+    // The stiff term is the activator's threshold. Differentiating the
+    // reaction, d/du[-f v (u-q)/(u+q)] = -2 f v q/(u+q)^2, which is
+    // largest near u = q at -f v/(2q); with v of order 1 and the
+    // diffusion term 1.6 D_u on the Sims stencil, both divided by eps:
+    //   dt <= 2 eps / (f/(2q) + 1.6 D_u)
+    // At the defaults that is 2.3e-4. Measured: stable at 5e-4, and at
+    // 1e-3 the field collapses to zero rather than diverging -- the
+    // max(.., 0) clamp turns the instability into death, which is why
+    // the ladder judges by the field's amplitude and not by isfinite.
+    dt_bound: Some(|p| {
+        let eps = p.get("epsilon").max(1.0e-4);
+        let q = p.get("q").max(1.0e-6);
+        2.0 * eps / (p.get("f") / (2.0 * q) + 1.6 * p.get("diffusion_u"))
+    }),
+    diffusion: &[],
+    max_dt: 0.01,
+    default_dt: 0.0001,
+};
+
+/// Kobayashi's phase-field dendrite.
+///
+/// ```text
+/// tau dp/dt = div(J) + p(1-p)(p - 1/2 + m) + a p(1-p) chi
+///     dT/dt = lap(T) + K dp/dt
+/// J        = (eps^2 p_x - eps eps' p_y,  eps^2 p_y + eps eps' p_x)
+/// m(T)     = (alpha/pi) atan(gamma (T_e - T))
+/// eps(th)  = eps_bar (1 + delta cos(j(th - th0))),  th = angle of grad p
+/// ```
+///
+/// Verified against R. Kobayashi, "Modeling and numerical simulations
+/// of dendritic crystal growth", *Physica D* 63 (1993) 410-423,
+/// section 2. The anisotropic operator is written above as one
+/// divergence, which is algebraically the paper's
+/// `-d/dx(eps eps' p_y) + d/dy(eps eps' p_x) + div(eps^2 grad p)`;
+/// collecting it that way is what lets the two scratch channels be
+/// exactly two.
+///
+/// The paper's constants, used here and NOT exposed: eps_bar = 0.01,
+/// tau = 0.0003, alpha = 0.9, gamma = 10, T_e = 1, noise amplitude
+/// 0.01, and dx = 0.03 (its 9.0-wide domain on a 300 mesh). The grid
+/// therefore sets the vessel's size, which is why the presets pin a
+/// 300 x 300 grid as the paper does. What the paper varies, and what
+/// is exposed, is K, delta, j and theta0.
+///
+/// **The discretisation is staggered, and that is not a detail.** The
+/// obvious reading of "one pass takes a gradient, the next takes its
+/// divergence" uses central differences twice, which composes to
+/// `(f[i+2] - 2f[i] + f[i-2])/4dx^2` -- a stencil that skips the
+/// immediate neighbour, so the odd and even sublattices decouple and
+/// nothing damps the Nyquist mode. Measured on the CPU mirror, that
+/// version filled the field with a diagonal checkerboard while
+/// staying inside [0, 1] and finite, so an `isfinite` ladder called it
+/// stable. Here the flux lives on cell FACES -- cell (i,j) holds the
+/// flux through its +x and +y faces, from a forward difference across
+/// that face -- and pass 2's backward difference composes to the
+/// compact Laplacian.
+///
+/// Channels: `.x` = phase p (0 liquid, 1 solid), `.y` = temperature T,
+/// `.z` = the +x face flux, `.w` = the +y face flux. There is no age
+/// channel; the crystal's history is in T.
+pub static KOBAYASHI: ModelDef = ModelDef {
+    name: "kobayashi",
+    display_name: "Kobayashi Dendrite",
+    description: "Phase-field solidification: a crystal grown into an undercooled melt, \
+                  with the anisotropy that turns a blob into a snowflake.",
+    features: &[ModelFeature::NeedsRng],
+    parameters: &[
+        SimParamDef {
+            name: "latent_heat",
+            display_name: "Latent heat (K)",
+            default: 1.6,
+            min: 0.5,
+            max: 2.5,
+            tooltip: "How much heat solidification releases, which is what stops the \
+                      crystal. Below 1 the whole vessel freezes; above it roughly 1/K of \
+                      the region solidifies and the arms stay slender.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "delta",
+            display_name: "Anisotropy (δ)",
+            default: 0.04,
+            min: 0.0,
+            max: 0.08,
+            tooltip: "Strength of the directional preference. At 0 the growth is isotropic \
+                      and splits like viscous fingering; the paper's ice dendrites use \
+                      0.040 and its four-fold ones 0.020.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "mode",
+            display_name: "Symmetry (j)",
+            default: 2.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "How many directions the crystal prefers. Six-fold is the snowflake; \
+                      four-fold is the metallic dendrite of the paper's figure 7.",
+            choices: &["2-fold", "4-fold", "6-fold", "8-fold"],
+        },
+        SimParamDef {
+            name: "theta0",
+            display_name: "Orientation (θ₀)",
+            default: 1.5708,
+            min: 0.0,
+            max: 6.2832,
+            tooltip: "Rotates the preferred directions. The paper's ice dendrites use π/2 \
+                      and its four-fold ones 0.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "ice",
+            display_name: "Ice dendrite (six-fold)",
+            // The paper's figure 8: delta = 0.040, j = 6, theta0 = pi/2.
+            params: &[
+                ("latent_heat", 1.6),
+                ("delta", 0.04),
+                ("mode", 2.0),
+                ("theta0", 1.5708),
+            ],
+            // Measured: reaches the edge of a 300 grid by ~6,000 steps
+            // at dt = 1e-4, so 4,000 leaves the arms clear of the wall.
+            steps: 4000,
+            init: Some(crate::config::sim::SimInit::Blob { radius: 4 }),
+        },
+        SimPreset {
+            name: "metallic",
+            display_name: "Metallic dendrite (four-fold)",
+            // The paper's figure 7: j = 4, theta0 = 0, K = 2.0.
+            params: &[
+                ("latent_heat", 2.0),
+                ("delta", 0.02),
+                ("mode", 1.0),
+                ("theta0", 0.0),
+            ],
+            steps: 4000,
+            init: Some(crate::config::sim::SimInit::Blob { radius: 4 }),
+        },
+    ],
+    wgsl: r#"
+const KOB_DX: f32 = 0.03;      // the paper's mesh: 9.0 across 300 cells
+const KOB_EPS_BAR: f32 = 0.01;
+const KOB_TAU: f32 = 0.0003;
+const KOB_ALPHA: f32 = 0.9;
+const KOB_GAMMA: f32 = 10.0;
+const KOB_TE: f32 = 1.0;
+const KOB_NOISE: f32 = 0.01;
+const KOB_PI: f32 = 3.14159265359;
+
+fn kob_mode() -> f32 {
+    // 2, 4, 6 or 8 from the enum index.
+    return 2.0 + 2.0 * round(clamp(mparam(2u), 0.0, 3.0));
+}
+
+// eps and eps' for a gradient direction. THE GUARD: in the bulk grad p
+// is exactly zero and the angle is undefined. Metal's fast math makes
+// atan2(0,0) a plausible pi/4 and other targets make it NaN, and
+// either would poison the flux -- NaN * 0 is NaN, so even multiplying
+// by a zero gradient does not save it. Where there is no gradient
+// there is no flux, so say that directly rather than relying on the
+// arithmetic.
+fn kob_eps(gx: f32, gy: f32) -> vec2<f32> {
+    if (gx * gx + gy * gy < 1.0e-16) {
+        return vec2<f32>(KOB_EPS_BAR, 0.0);
+    }
+    let j = kob_mode();
+    let a = j * (ff_atan2(gy, gx) - mparam(3u));
+    let d = mparam(1u);
+    return vec2<f32>(
+        KOB_EPS_BAR * (1.0 + d * cos(a)),
+        -KOB_EPS_BAR * d * j * sin(a),
+    );
+}
+
+// Pass 1: the anisotropic flux, on the cell's +x and +y FACES.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let inv = 1.0 / KOB_DX;
+    let c = s.x;
+    let px1 = sim_read(p + vec2<i32>(1, 0)).x;
+    let py1 = sim_read(p + vec2<i32>(0, 1)).x;
+    let pxm = sim_read(p + vec2<i32>(-1, 0)).x;
+    let pym = sim_read(p + vec2<i32>(0, -1)).x;
+
+    // Forward differences ACROSS each face -- this is what makes the
+    // two passes compose to the compact Laplacian.
+    let dpdx_xf = (px1 - c) * inv;
+    let dpdy_yf = (py1 - c) * inv;
+
+    // Transverse derivatives at the faces: the average of the central
+    // differences at the two cells the face separates.
+    let dy_c = (py1 - pym) * 0.5 * inv;
+    let dy_c1 = (sim_read(p + vec2<i32>(1, 1)).x - sim_read(p + vec2<i32>(1, -1)).x)
+        * 0.5 * inv;
+    let dpdy_xf = 0.5 * (dy_c + dy_c1);
+    let dx_c = (px1 - pxm) * 0.5 * inv;
+    let dx_c1 = (sim_read(p + vec2<i32>(1, 1)).x - sim_read(p + vec2<i32>(-1, 1)).x)
+        * 0.5 * inv;
+    let dpdx_yf = 0.5 * (dx_c + dx_c1);
+
+    let ex = kob_eps(dpdx_xf, dpdy_xf);
+    let ey = kob_eps(dpdx_yf, dpdy_yf);
+    let jx = ex.x * ex.x * dpdx_xf - ex.x * ex.y * dpdy_xf;
+    let jy = ey.x * ey.x * dpdy_yf + ey.x * ey.y * dpdx_yf;
+    return vec4<f32>(s.x, s.y, jx, jy);
+}
+
+// Pass 2: the divergence of those fluxes, then p and T.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let inv = 1.0 / KOB_DX;
+    let dt = sim_dt();
+    // Backward difference of the face fluxes.
+    let jxm = sim_read(p + vec2<i32>(-1, 0)).z;
+    let jym = sim_read(p + vec2<i32>(0, -1)).w;
+    let div = ((s.z - jxm) + (s.w - jym)) * inv;
+
+    let m = (KOB_ALPHA / KOB_PI) * atan(KOB_GAMMA * (KOB_TE - s.y));
+    // The paper adds noise to the dynamical term as a p(1-p) chi with
+    // chi uniform on [-1/2, 1/2]; it vanishes in both bulks, so it
+    // perturbs only the interface. Section 1 calls its influence on
+    // side branching crucial.
+    let noise = KOB_NOISE * s.x * (1.0 - s.x) * (sim_rand(p, 0x4bu) - 0.5);
+    let dpdt = (div + s.x * (1.0 - s.x) * (s.x - 0.5 + m) + noise) / KOB_TAU;
+    let np = s.x + dt * dpdt;
+
+    let lap_t = (sim_read(p + vec2<i32>(1, 0)).y + sim_read(p + vec2<i32>(-1, 0)).y
+        + sim_read(p + vec2<i32>(0, 1)).y + sim_read(p + vec2<i32>(0, -1)).y
+        - 4.0 * s.y) * inv * inv;
+    let nt = s.y + dt * (lap_t + mparam(0u) * dpdt);
+    return vec4<f32>(np, nt, s.z, s.w);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // A nucleus in a uniformly undercooled melt: the paper takes the
+    // initial temperature as zero everywhere and the equilibrium
+    // temperature as 1, so the whole vessel is supercooled by one unit
+    // and the seed is the only solid.
+    //
+    // The nucleus has to clear the CRITICAL RADIUS or surface tension
+    // dissolves it: measured, `Center` (a single cell) melts and the
+    // render is empty, which is why both presets seed a `Blob` of
+    // radius 4.
+    return vec4<f32>(select(0.0, 1.0, inside >= 0.5), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 4000,
+    passes: 2,
+    // The temperature equation is plain diffusion with D = 1 on a mesh
+    // of 0.03, so explicit Euler needs dt <= dx^2/4 = 2.25e-4. That is
+    // the binding constraint: the phase equation's eps^2/tau = 0.333
+    // is three times weaker. The paper used dt = 2e-4 with an IMPLICIT
+    // scheme for T for exactly this reason; measured here fully
+    // explicit, 1e-4 is clean (Nyquist amplitude 8e-5), 2e-4 carries a
+    // trace (2.8e-3) and 3e-4 diverges outright at step 1,389.
+    dt_bound: Some(|_| KOB_DX_SQ_OVER_4),
+    diffusion: &[],
+    max_dt: 0.001,
+    default_dt: 0.0001,
+};
+
+/// `dx^2 / 4` for Kobayashi's fixed mesh -- the explicit diffusion
+/// limit for its temperature field. A `const` because `dt_bound` is a
+/// plain `fn` pointer and cannot capture.
+const KOB_DX_SQ_OVER_4: f32 = 0.03 * 0.03 / 4.0;

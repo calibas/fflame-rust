@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "0fc4ce30",
+  "git_hash": "89a360cf",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -525,6 +525,22 @@
     "sim-ising-critical.png": {
       "bytes": 28206,
       "sha256": "96288821e6f52bc43b639de96829cfbc5c08814bb8e15f809a98273a98e0c5e9"
+    },
+    "sim-kobayashi-ice.png": {
+      "bytes": 17195,
+      "sha256": "024547f19bf153dc9b0eb33a6695900b19a7600d83f84f70a26dee87bfb7a186"
+    },
+    "sim-kobayashi-metallic.png": {
+      "bytes": 5529,
+      "sha256": "de29f036d9c16c8ecee09c0f70b9217beae43384f84e0702522db549fc1b189b"
+    },
+    "sim-kobayashi-thermal.png": {
+      "bytes": 17390,
+      "sha256": "584a997a76657cbcf4b5fec6bff575a6d45f1c12d516d1235641dab08c640f0d"
+    },
+    "sim-oregonator-wave-trains.png": {
+      "bytes": 8515,
+      "sha256": "e01650362a01fc43e34e927f443bbf599c2366b4b19ee13b1f1043c650930188"
     },
     "sim-packard-rule-1.png": {
       "bytes": 16318,

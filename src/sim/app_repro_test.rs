@@ -1492,3 +1492,229 @@ fn swift_hohenberg_selects_the_wavelength_it_advertises() {
         "the selected wavelength does not track the parameter: 16/10 came out {tracked:.3}"
     );
 }
+
+/// Kobayashi's anisotropy must set the crystal's SYMMETRY, and the
+/// six-fold preset must actually be six-fold.
+///
+/// That is the model's whole visual claim and the thing a wrong `j`, a
+/// wrong `theta0` or a broken `eps'` term would silently change --
+/// every one of those still grows a confident-looking crystal.
+///
+/// The observable is the crystal's REACH as a function of angle,
+/// reduced to its angular harmonics. Counting solid arcs around a
+/// circle was tried first and rejected: by 4,000 steps the arms have
+/// side branches, and a circle at any radius large enough to reach the
+/// arms cuts through those too -- it read 16 "arms" on a crystal that
+/// is plainly four-fold. The harmonics do not care, because side
+/// branches are high-frequency detail riding on a low-frequency shape,
+/// and the dominant low harmonic IS the symmetry.
+#[test]
+fn kobayashi_grows_the_symmetry_its_parameter_asks_for() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 300;
+    // (mode index, theta0, expected symmetry)
+    for (mode, theta0, want) in [(1.0f32, 0.0f32, 4usize), (2.0, std::f32::consts::FRAC_PI_2, 6)] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "kobayashi".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Blob { radius: 4 };
+        cfg.boundary = SimBoundary::Clamp;
+        cfg.seed = 7;
+        cfg.dt = 1.0e-4;
+        cfg.model_params.insert("latent_heat".into(), 1.6);
+        cfg.model_params.insert("delta".into(), 0.04);
+        cfg.model_params.insert("mode".into(), mode);
+        cfg.model_params.insert("theta0".into(), theta0);
+
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 4000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+        let n = N as usize;
+        let c = (n / 2) as f64;
+        // How far the solid reaches in each angular bin.
+        const BINS: usize = 360;
+        let mut reach = [0.0f64; BINS];
+        for y in 0..n {
+            for x in 0..n {
+                if f[y * n + x][0] <= 0.5 {
+                    continue;
+                }
+                let (dx, dy) = (x as f64 - c, y as f64 - c);
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < 1.0 {
+                    continue;
+                }
+                let a = dy.atan2(dx).rem_euclid(std::f64::consts::TAU);
+                let b = ((a / std::f64::consts::TAU) * BINS as f64) as usize % BINS;
+                if d > reach[b] {
+                    reach[b] = d;
+                }
+            }
+        }
+        // NOT "solid in every direction": a four-fold crystal's
+        // diagonals are liquid all the way to the centre, and a zero
+        // there is the shape rather than a failure. What must hold is
+        // that a crystal grew at all.
+        let lit = reach.iter().filter(|r| **r > 2.0).count();
+        let far = reach.iter().cloned().fold(0.0f64, f64::max);
+        assert!(
+            lit > BINS / 3 && far > 20.0,
+            "mode {mode}: no crystal to measure ({lit} of {BINS} directions occupied,              furthest reach {far:.1})"
+        );
+
+        // Angular harmonics of the reach. Harmonic k is a k-fold shape.
+        let mut best = (0usize, 0.0f64);
+        let mut amps = Vec::new();
+        for k in 1..=12usize {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (b, rad) in reach.iter().enumerate() {
+                let a = b as f64 / BINS as f64 * std::f64::consts::TAU * k as f64;
+                re += rad * a.cos();
+                im += rad * a.sin();
+            }
+            let amp = (re * re + im * im).sqrt() / BINS as f64;
+            amps.push(amp);
+            if amp > best.1 {
+                best = (k, amp);
+            }
+        }
+        println!(
+            "Kobayashi mode index {mode}: dominant angular harmonic {} (amplitude {:.2}); \
+             k=4 {:.2}, k=6 {:.2}",
+            best.0, best.1, amps[3], amps[5]
+        );
+        assert_eq!(
+            best.0, want,
+            "expected {want}-fold symmetry, the dominant harmonic is {}-fold -- the \
+             anisotropy is not doing what its symmetry parameter says",
+            best.0
+        );
+    }
+}
+
+/// Kobayashi must not checkerboard, which pins the staggered
+/// discretisation.
+///
+/// The obvious two-pass reading -- a central-difference gradient, then
+/// a central-difference divergence -- composes to a stencil that skips
+/// the immediate neighbour, so the odd and even sublattices decouple
+/// and nothing damps the Nyquist mode. Measured on the CPU mirror,
+/// that version filled the field with a diagonal checkerboard while
+/// staying inside [0, 1] and finite: an `isfinite` check called it
+/// stable and it produced a confident-looking picture. The staggered
+/// forward/backward pair composes to the compact Laplacian instead.
+#[test]
+fn kobayashi_stays_free_of_the_checkerboard_mode() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let mut cfg = SimConfig::default();
+    cfg.model = "kobayashi".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Blob { radius: 4 };
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 7;
+    cfg.dt = 1.0e-4;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 3000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let n = N as usize;
+    let mut alt = 0.0f64;
+    let mut solid = 0usize;
+    for y in 0..n {
+        for x in 0..n {
+            let v = f[y * n + x][0] as f64;
+            assert!(v.is_finite(), "non-finite phase at ({x}, {y})");
+            alt += if (x + y) % 2 == 0 { v } else { -v };
+            if v > 0.5 {
+                solid += 1;
+            }
+        }
+    }
+    let nyquist = (alt / (n * n) as f64).abs();
+    println!(
+        "Kobayashi Nyquist amplitude {nyquist:.2e}, {:.1}% solid",
+        solid as f64 / (n * n) as f64 * 100.0
+    );
+    assert!(solid > 100, "nothing grew, so there is nothing to check");
+    assert!(
+        nyquist < 1.0e-3,
+        "Nyquist amplitude {nyquist:.2e}: the odd and even sublattices have decoupled"
+    );
+}
+
+/// The Oregonator must carry a travelling WAVE, not a diffusing blob.
+///
+/// This is the discriminating measurement, because both look like an
+/// expanding bright ring in a still image. A reaction-diffusion wave
+/// front moves at constant speed, so its radius grows linearly in
+/// time; pure diffusion spreads as sqrt(t). Measuring the radius at
+/// three times separates them with no ambiguity, and it would catch a
+/// reaction term that had been dropped or mis-signed -- which is
+/// exactly the failure that still renders a plausible picture.
+#[test]
+fn the_oregonator_front_travels_at_constant_speed() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+    let mut cfg = SimConfig::default();
+    cfg.model = "oregonator".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Blob { radius: 5 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 7;
+    cfg.dt = 1.0e-4;
+
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    let n = N as usize;
+    let c = (n / 2) as f64;
+
+    // Radius of the outermost excited cell, sampled as the wave runs.
+    let mut radii = Vec::new();
+    for _ in 0..3 {
+        r.run_steps(&device, &queue, &cfg, 6000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let mut far = 0.0f64;
+        for y in 0..n {
+            for x in 0..n {
+                if f[y * n + x][0] > 0.3 {
+                    let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2)).sqrt();
+                    far = far.max(d);
+                }
+            }
+        }
+        radii.push(far);
+    }
+    println!(
+        "Oregonator front radius at 6k/12k/18k steps: {:.1}, {:.1}, {:.1} cells",
+        radii[0], radii[1], radii[2]
+    );
+    assert!(radii[0] > 6.0, "the seed never fired (radius {:.1})", radii[0]);
+    // Linear growth: equal increments. Diffusion would give sqrt(t),
+    // whose second increment is 0.41 of the first.
+    let first = radii[1] - radii[0];
+    let second = radii[2] - radii[1];
+    assert!(first > 5.0, "the front is not advancing ({first:.1} cells in 6,000 steps)");
+    let ratio = second / first;
+    println!("   increment ratio {ratio:.3} (a wave gives 1.0; diffusion gives 0.41)");
+    assert!(
+        (0.75..1.25).contains(&ratio),
+        "the front's increments are {first:.1} then {second:.1} (ratio {ratio:.2}): \
+         that is not a wave travelling at constant speed"
+    );
+}

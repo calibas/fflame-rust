@@ -523,6 +523,47 @@ for McCabe against the NumPy images.
   isotropic 2-D pattern.
 - Six new visual baselines; the sim suite reads 36/36.
 
+#### Wave 2 — the two models whose papers had to be read first
+
+**Done 2026-09-05.** Oregonator and Kobayashi ship. Both catalogue
+entries were written from memory and marked `[verify]`, Kobayashi's
+saying outright that "the paper must be read before any of this
+ships"; both papers were supplied and read before a line was written.
+Full findings in the catalogue (§4 and §16).
+
+- **Kobayashi verified almost entirely.** Every equation and every
+  remembered constant holds — ε̄ = 0.01, τ = 0.0003, α = 0.9, γ = 10,
+  dx = 0.03 on a 300² mesh. The paper added two things memory had
+  lost: a noise term a·p(1−p)·χ that section 1 calls crucial to side
+  branching, and θ₀ = π/2 for the ice dendrite. Since the paper fixes
+  everything except K, δ, j and θ₀, those four are what the model
+  exposes.
+- **The plan's discretisation for it was wrong, and wrong in the way
+  that hides.** §4.3's "one pass takes a gradient, the next its
+  divergence" with central differences composes to a stencil that
+  skips the immediate neighbour; the sublattices decouple and the
+  field fills with a checkerboard while staying finite and inside
+  [0, 1]. The prototype caught it — an `isfinite` ladder had called it
+  stable at every dt. The shipped scheme stages the flux on cell
+  faces, forward across the face and backward for the divergence,
+  which composes to the compact Laplacian.
+- **Oregonator's equations verified; its spirals refuted.** Tyson &
+  Fife eq. (17) is confirmed verbatim, but the paper is analytic and
+  carries no numeric set for a 2-D run, so ε, q and f were measured.
+  The remembered spirals did not appear at any (ε, f) tried — a broken
+  front retracts and heals into a closed loop — and the paper's own
+  subject, target patterns, needs a pacemaker heterogeneity that the
+  model has no channel for. What ships is what was measured: one
+  excitation wave per seed, travelling at constant speed.
+- **Falsifiable per model.** Kobayashi's symmetry is pinned by the
+  angular harmonics of the crystal's reach (dominant harmonic 4 at
+  11.46 vs 0.04 for k = 6; 6 at 9.66 vs 4.21 for k = 4) and by a
+  Nyquist-amplitude check that would fail on the discretisation above.
+  The Oregonator's front radius is measured at three times — 20.8,
+  38.3, 56.1 cells, increment ratio 1.018 — which separates a
+  travelling wave from diffusion (0.41).
+- Four new visual baselines; 17 models.
+
 ### Phase 4 — agents
 
 Agent buffer, deposit buffer, resolve-into-field; Physarum and DLA;

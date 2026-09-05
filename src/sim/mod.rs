@@ -384,6 +384,8 @@ pub static MODELS: &[&ModelDef] = &[
     &models::PERCOLATION,
     &models::SWIFT_HOHENBERG,
     &models::CAHN_HILLIARD,
+    &models::OREGONATOR,
+    &models::KOBAYASHI,
 ];
 
 /// Every colouring, in registration order. Append only.
