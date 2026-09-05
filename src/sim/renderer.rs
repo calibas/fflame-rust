@@ -26,7 +26,7 @@
 //!   256x range, so batching is purely a watchdog and pacing device.
 
 use crate::config::sim::{SimConfig, SimGrid};
-use crate::sim::{assembler, coloring_or_default, model_or_default, pyramid_levels, ModelDef, ModelFeature, SimColoringDef, MAX_KERNEL_RADIUS, MAX_PYRAMID_LEVELS, MINMAX_RING};
+use crate::sim::{assembler, coloring_or_default, model_or_default, pyramid_levels, ModelDef, ModelFeature, SimColoringDef, MAX_KERNEL_RADIUS, MAX_PYRAMID_LEVELS, MINMAX_RING, MAX_AGENTS};
 #[allow(unused_imports)]
 use crate::sim::ColoringFeature;
 use wgpu::util::DeviceExt;
@@ -101,6 +101,10 @@ struct Pipelines {
     pyramid: Option<ComputePipeline>,
     /// The global min/max reduce; built only for `NeedsMinMax`.
     reduce: Option<ComputePipeline>,
+    /// The agent passes and their seeding, for `NeedsAgents`.
+    agents: Vec<ComputePipeline>,
+    agent_seed: Option<ComputePipeline>,
+    agent_layout: BindGroupLayout,
     seed_layout: BindGroupLayout,
     step_layout: BindGroupLayout,
     reduce_layout: BindGroupLayout,
@@ -183,6 +187,18 @@ pub struct SimRenderer {
     level_params_buffer: Buffer,
     /// The min/max ring: `MINMAX_RING` slots of two ordered u32s.
     minmax_buffer: Buffer,
+    /// The agent population, 16 bytes each. Allocated to the count the
+    /// model asks for and reallocated when that changes.
+    agent_buffer: Option<Buffer>,
+    agent_capacity: u32,
+    /// One u32 per cell: what the agents deposited since the last
+    /// step, fixed-point, folded and cleared by the step pass.
+    deposit_buffer: Buffer,
+    /// One u32 per cell: the lowest index of an agent claiming it this
+    /// step, or `u32::MAX`. Only a two-pass population uses it.
+    claim_buffer: Buffer,
+    /// One per ping-pong side: agents SENSE the live field.
+    agent_bind_groups: Option<[BindGroup; 2]>,
     /// Pyramid bind groups: `[level][src]` for level 0 (which reads the
     /// field, so it depends on the ping-pong side), a single group for
     /// every level above. Rebuilt with the step bind groups.
@@ -241,6 +257,7 @@ impl SimRenderer {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let (deposit_buffer, claim_buffer) = Self::create_cell_buffers(device, grid_w, grid_h);
         let minmax_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim MinMax Ring"),
             size: (MINMAX_RING as u64) * 2 * 4,
@@ -282,6 +299,11 @@ impl SimRenderer {
             pyramid_dummy,
             level_params_buffer,
             minmax_buffer,
+            agent_buffer: None,
+            agent_capacity: 0,
+            deposit_buffer,
+            claim_buffer,
+            agent_bind_groups: None,
             pyramid_bind_groups: None,
             reduce_bind_groups: None,
             kernel_radius: 1,
@@ -393,6 +415,56 @@ impl SimRenderer {
     /// reduce wrote.
     pub fn minmax_buffer(&self) -> &Buffer {
         &self.minmax_buffer
+    }
+
+    /// The two per-cell integer buffers the agent stage uses.
+    fn create_cell_buffers(device: &Device, w: u32, h: u32) -> (Buffer, Buffer) {
+        let cells = (w as u64) * (h as u64) * 4;
+        let mk = |label: &str| {
+            device.create_buffer(&BufferDescriptor {
+                label: Some(label),
+                size: cells.max(4),
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        };
+        (mk("Sim Deposit"), mk("Sim Claim"))
+    }
+
+    /// Allocate the agent population when the model has one, at the
+    /// count its parameters ask for. A change of count reallocates and
+    /// forces a reseed, because a population is state and half of a
+    /// new one is not a state.
+    fn ensure_agents(&mut self, device: &Device, cfg: &SimConfig) {
+        let model = model_or_default(&cfg.model);
+        let want = match model.agents {
+            Some(a) => (a.count)(
+                &model.params_view(&cfg.model_params),
+                self.grid_w,
+                self.grid_h,
+            )
+            .clamp(1, MAX_AGENTS),
+            None => 0,
+        };
+        if want == self.agent_capacity {
+            return;
+        }
+        self.agent_buffer = (want > 0).then(|| {
+            device.create_buffer(&BufferDescriptor {
+                label: Some("Sim Agents"),
+                size: (want as u64) * 16,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        });
+        self.agent_capacity = want;
+        self.agent_bind_groups = None;
+        self.needs_seed = true;
+    }
+
+    /// The agent population, for a test to read back.
+    pub fn agent_buffer(&self) -> Option<&Buffer> {
+        self.agent_buffer.as_ref()
     }
 
     /// Allocate the pyramid when the model reads one, free it when the
@@ -526,6 +598,10 @@ impl SimRenderer {
             self.field_view = fv;
             // Re-created lazily at the new size, if the model reads it.
             self.pyramid.clear();
+            let (d, c) = Self::create_cell_buffers(device, gw, gh);
+            self.deposit_buffer = d;
+            self.claim_buffer = c;
+            self.agent_bind_groups = None;
             self.grid_w = gw;
             self.grid_h = gh;
             self.current = 0;
@@ -588,6 +664,15 @@ impl SimRenderer {
         let reduce_src = model
             .has(ModelFeature::NeedsMinMax)
             .then(assembler::assemble_reduce);
+        let agent_srcs: Vec<String> = match model.agents {
+            Some(a) => (0..a.passes)
+                .map(|p| assembler::assemble_agents(model, cfg.boundary, p))
+                .collect(),
+            None => Vec::new(),
+        };
+        let agent_seed_src = model
+            .agents
+            .map(|_| assembler::assemble_agent_seed(model, cfg.boundary));
 
         let make = |label: &str, src: &str| {
             device.create_shader_module(ShaderModuleDescriptor {
@@ -601,6 +686,9 @@ impl SimRenderer {
         let color_mod = make("Sim Color", &color_src);
         let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
         let reduce_mod = reduce_src.as_ref().map(|src| make("Sim Reduce", src));
+        let agent_mods: Vec<ShaderModule> =
+            agent_srcs.iter().map(|src| make("Sim Agents", src)).collect();
+        let agent_seed_mod = agent_seed_src.as_ref().map(|src| make("Sim Agent Seed", src));
 
         // Bind group layouts, written out rather than derived from the
         // shader: `layout: None` would infer a fresh layout per module
@@ -622,6 +710,16 @@ impl SimRenderer {
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::Buffer {
                 ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let storage_rw = |binding: u32| BindGroupLayoutEntry {
+            binding,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: false },
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
@@ -682,6 +780,23 @@ impl SimRenderer {
                 sampled_tex(11, true),
                 sampled_tex(12, true),
                 storage_ro(14),
+                // The agents' deposit: read and cleared by the step.
+                storage_rw(13),
+            ],
+        });
+        let agent_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Sim Agent Layout"),
+            entries: &[
+                uniform_entry(0),
+                storage_ro(1),
+                storage_ro(2),
+                sampled_tex(4, true),
+                storage_rw(13),
+                storage_rw(15),
+                storage_rw(16),
+                // The min/max ring, for an agent that needs the
+                // field's global range (DLA's launch radius).
+                storage_ro(14),
             ],
         });
         let reduce_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -734,6 +849,7 @@ impl SimRenderer {
         self.step_bind_groups = None;
         self.pyramid_bind_groups = None;
         self.reduce_bind_groups = None;
+        self.agent_bind_groups = None;
         self.steps_per_submit = FIRST_SUBMIT;
         self.pipelines = Some(Pipelines {
             seed: pipeline("Sim Seed", &seed_layout, &seed_mod),
@@ -748,6 +864,14 @@ impl SimRenderer {
             reduce: reduce_mod
                 .as_ref()
                 .map(|m| pipeline("Sim Reduce", &reduce_layout, m)),
+            agents: agent_mods
+                .iter()
+                .map(|m| pipeline("Sim Agents", &agent_layout, m))
+                .collect(),
+            agent_seed: agent_seed_mod
+                .as_ref()
+                .map(|m| pipeline("Sim Agent Seed", &agent_layout, m)),
+            agent_layout,
             seed_layout,
             step_layout,
             reduce_layout,
@@ -930,6 +1054,39 @@ impl SimRenderer {
             }
             self.pyramid_bind_groups = Some(groups);
         }
+        if !p.agents.is_empty() && self.agent_bind_groups.is_none() {
+            if let Some(buf) = self.agent_buffer.as_ref() {
+                let make = |src: usize| device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("Sim Agent BG"),
+                    layout: &p.agent_layout,
+                    entries: &[
+                        BindGroupEntry {
+                            binding: 0,
+                            resource: BindingResource::Buffer(BufferBinding {
+                                buffer: &self.params_buffer,
+                                offset: 0,
+                                size: std::num::NonZeroU64::new(
+                                    std::mem::size_of::<SimParamsGpu>() as u64,
+                                ),
+                            }),
+                        },
+                        BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
+                        BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
+                        // Agents SENSE the live field, which is why
+                        // there is one group per ping-pong side.
+                        BindGroupEntry {
+                            binding: 4,
+                            resource: BindingResource::TextureView(&self.field_view[src]),
+                        },
+                        BindGroupEntry { binding: 13, resource: self.deposit_buffer.as_entire_binding() },
+                        BindGroupEntry { binding: 15, resource: buf.as_entire_binding() },
+                        BindGroupEntry { binding: 16, resource: self.claim_buffer.as_entire_binding() },
+                        BindGroupEntry { binding: 14, resource: self.minmax_buffer.as_entire_binding() },
+                    ],
+                });
+                self.agent_bind_groups = Some([make(0), make(1)]);
+            }
+        }
         if p.reduce.is_some() && self.reduce_bind_groups.is_none() {
             let make = |src: usize| {
                 device.create_bind_group(&BindGroupDescriptor {
@@ -1003,6 +1160,7 @@ impl SimRenderer {
             });
         }
         entries.push(BindGroupEntry { binding: 14, resource: self.minmax_buffer.as_entire_binding() });
+        entries.push(BindGroupEntry { binding: 13, resource: self.deposit_buffer.as_entire_binding() });
         entries
     }
 
@@ -1016,6 +1174,9 @@ impl SimRenderer {
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
+        // `ensure_agents` may set `needs_seed`; this IS the seed, so
+        // the flag is cleared at the end regardless.
+        self.ensure_agents(device, cfg);
         self.step_index = 0;
         let model = model_or_default(&cfg.model);
         let coloring = coloring_or_default(&cfg.coloring);
@@ -1066,6 +1227,35 @@ impl SimRenderer {
         }
         queue.submit(std::iter::once(enc.finish()));
         self.needs_seed = false;
+
+        // The agent population and the two per-cell integer buffers.
+        // Deposit starts empty; claim starts at "unclaimed", which is
+        // u32::MAX because the claim is an atomic MINIMUM.
+        if model.agents.is_some() {
+            let cells = (self.grid_w as usize) * (self.grid_h as usize);
+            queue.write_buffer(&self.deposit_buffer, 0, bytemuck::cast_slice(&vec![0u32; cells]));
+            queue.write_buffer(
+                &self.claim_buffer,
+                0,
+                bytemuck::cast_slice(&vec![u32::MAX; cells]),
+            );
+            self.ensure_stage_bind_groups(device);
+            let pipes = self.pipelines.as_ref().expect("built above");
+            let groups = self.agent_bind_groups.as_ref().expect("built above");
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Sim Agent Seed"),
+            });
+            {
+                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("Sim Agent Seed"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipes.agent_seed.as_ref().expect("an agent model builds it"));
+                pass.set_bind_group(0, &groups[self.current], &[0]);
+                pass.dispatch_workgroups(self.agent_capacity.div_ceil(64), 1, 1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+        }
 
         // A model that renormalises needs the seed's range before its
         // first step. Step 0 reads slot (0 - 1) mod RING, so the seed's
@@ -1123,8 +1313,10 @@ impl SimRenderer {
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
 
+        self.ensure_agents(device, cfg);
         self.ensure_step_bind_groups(device);
         self.ensure_stage_bind_groups(device);
+        let agent_groups = self.agent_capacity.div_ceil(64);
         let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
         let stride = self.params_stride as u32;
         let wants_pyramid = model.has(ModelFeature::NeedsPyramid);
@@ -1165,6 +1357,18 @@ impl SimRenderer {
                     timestamp_writes: None,
                 });
                 for i in 0..batch {
+                    // The agents move, sense and deposit FIRST, from
+                    // the field as the last step left it -- Jones'
+                    // order, where the population acts and the trail
+                    // map is diffused after. The step pass then folds
+                    // what they deposited and clears it.
+                    if let Some(agroups) = self.agent_bind_groups.as_ref() {
+                        for ap in p.agents.iter() {
+                            pass.set_pipeline(ap);
+                            pass.set_bind_group(0, &agroups[self.current], &[i * stride]);
+                            pass.dispatch_workgroups(agent_groups, 1, 1);
+                        }
+                    }
                     // The pyramid of the CURRENT field, level by level:
                     // each dispatch reads the level below through its
                     // own uniform (source size) and writes the next.

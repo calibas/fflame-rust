@@ -1344,6 +1344,40 @@ Boundary Clamp.
 **Colouring.** `age` (arrival order — the classic DLA rainbow),
 `occupancy` (walker density, a live "vapour" halo), `channel`.
 
+**Measured 2026-09-05**, shipped the same day.
+
+- **A frozen cell stores its DISTANCE from the centre, not a flag**,
+  which is what makes the launch radius free: the maximum of channel
+  `.x` is the cluster's radius plus one, from the min/max reduction
+  phase 3 already had. No separate bounds stage was needed.
+- **The parallel variant's density is the whole problem, and the
+  catalogue's caveat had it backwards.** It says the dimension is
+  preserved "as long as the walker density near the cluster stays
+  low", and the failure it did not anticipate is at the START: a
+  launch circle of radius 5 has 31 cells, so ANY sensible walker
+  count saturates it and freezes a solid disc. Measured: a 4%
+  population grew a 40-cell solid core, and even 0.5% grew a 15-cell
+  one. Reducing the population does not fix it and makes the cluster
+  too small to measure.
+  **The fix is to make the ACTIVE population track the launch
+  circle's circumference** — a walker is dormant, parked on the
+  circle, until the cluster is big enough for it, at `crowding`
+  walkers per cell of circumference. The core is then gone at any
+  setting, and `crowding` is exposed as what it is: the
+  speed-against-fidelity knob, because DLA is what it is only when
+  particles arrive one at a time.
+- **A bug the sweep exposed**: the kill radius was `max(3r, 16)`,
+  which is SMALLER than the launch radius whenever the launch gap
+  exceeds 16 — every walker then died on the step it was born and the
+  run ended with one particle, the seed. The kill radius is now
+  always at least the launch radius plus 16.
+- **GATE MET: box-counting dimension 1.753** at 512² with 39,000
+  particles at a radius of 216 (DLA is ≈1.71). The measurement is
+  sensitive to the cluster's size, and the test says so: a cluster
+  that reaches the wall densifies at the rim and reads 1.79, and the
+  test asserts the cluster stayed clear of the walls before believing
+  the number.
+
 ---
 
 ## 20. Eden model
@@ -1723,6 +1757,39 @@ ring, centre, edges), `wrap` (boolean).
 **Colouring.** `channel` on the trail (the standard), `occupancy`
 (agent density — a different, grainier image of the same network),
 `age`.
+
+**Verified 2026-09-05** against the paper (supplied as
+`output/pdf/Physarum.2010.16.2.pdf`), shipped the same day. The
+`[verify]` above is discharged.
+
+- **Every remembered value is CONFIRMED by Table 1**: SA 22.5 or 45°,
+  RA 45°, SO 9 px, SS 1 px/step, depT 5, decayT 0.1, a 3×3 diffusion
+  kernel, periodic boundaries, and a population of 3–15% of the image
+  area. The table adds two the entry did not have: SW 1 px (sensor
+  width) and pCD 0 (probability of a random direction change), both of
+  which the shipped model takes as given. The paper also names which
+  parameters matter — SA, RA and SO among the agent parameters, %p and
+  decayT among the framework ones — and those are the ones exposed.
+- **THE EXCLUSION IS NOT OPTIONAL**, and the discretisation above
+  dropped it. Section 2.1: a cell holds one agent, and an agent whose
+  target is occupied stays put, deposits nothing, and takes a random
+  new heading. Measured on the CPU prototype, both ways, same seed and
+  parameters: **without exclusion the population collapses onto a
+  handful of thick arcs; with it, the same parameters give the
+  polygonal network of the paper's figures.** So the model declares
+  two agent passes — turn and CLAIM, then move if it won — and the
+  claim is an atomic MINIMUM over agent indices, so the winner is the
+  lowest index rather than whoever the hardware ran first and the run
+  still reproduces exactly.
+- **A metric that was backwards.** The prototype scored "how
+  network-like" as the fraction of trail in the brightest 5% of cells.
+  Without exclusion that reads 0.752 and with it 0.358 — the opposite
+  of the truth, because concentration is what a COLLAPSE looks like.
+  The images decided it. Recorded in the prototype so the number is
+  not read the wrong way again.
+- **Reproducibility measured at the gate's scale**: 1,048,576 agents
+  on a 2048² grid, 40 steps, two independent renderers — **0 of
+  4,194,304 cells differ**.
 
 ---
 

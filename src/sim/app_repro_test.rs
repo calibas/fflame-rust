@@ -2389,3 +2389,147 @@ fn kernel_rebuild_cost() {
         println!("{model:<11} {param}={v:<5} {floats:>5} floats  {us:>8.1} us per build");
     }
 }
+
+/// Phase 4's first gate: an agent model must be REPRODUCIBLE, with a
+/// million agents piling into the same cells.
+///
+/// This is the property the whole deposit design exists for. Thousands
+/// of agents land in one cell in an order the hardware chooses; the
+/// deposit is an integer atomicAdd, which is associative and
+/// commutative, so the total does not depend on that order. An f32
+/// accumulation would give a different field every run. The exclusion
+/// is resolved the same way -- an atomic MINIMUM over agent indices,
+/// so the winner is the lowest index rather than whoever ran first.
+///
+/// Two independent renderers, same config, compared BIT for BIT.
+#[test]
+fn an_agent_run_reproduces_bit_for_bit_with_a_million_agents() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    // 2048^2 at the population slider's maximum of 25% is 1,048,576
+    // agents -- the gate's million, on a grid big enough that the
+    // model's own clamp does not cap it first.
+    const N: u32 = 2048;
+    let mut cfg = SimConfig::default();
+    cfg.model = "physarum".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 0.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 5;
+    cfg.model_params.insert("population".into(), 25.0);
+
+    let model = crate::sim::model_or_default("physarum");
+    let agents = (model.agents.unwrap().count)(&model.params_view(&cfg.model_params), N, N);
+    assert!(agents >= 1_000_000, "wanted a million agents, got {agents}");
+
+    let run = || -> Vec<[f32; 4]> {
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 40);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.field_texture(), N, N)
+    };
+    let a = run();
+    let b = run();
+    let differing = (0..a.len()).filter(|&i| a[i][0].to_bits() != b[i][0].to_bits()).count();
+    let lit = a.iter().filter(|px| px[0] > 0.0).count();
+    println!(
+        "Physarum, {agents} agents, 40 steps at {N}²: {differing} of {} cells differ between \
+         runs, {lit} carry trail",
+        a.len()
+    );
+    assert!(lit > a.len() / 100, "the run deposited almost nothing ({lit} cells)");
+    assert_eq!(differing, 0, "two runs of the same config disagree: the deposit is not \
+                              order-independent");
+}
+
+/// Phase 4's second gate: DLA's cluster must have the fractal
+/// dimension DLA has, about 1.71.
+///
+/// The parallel variant here advances many walkers at once, which is
+/// not Witten and Sander's sequential process, so the dimension is
+/// something to MEASURE rather than assume -- crowding near the
+/// cluster thickens branches and drives it toward 2, and relaunching
+/// walkers inside the fjords would do the same.
+///
+/// Box counting on the frozen cells: the count of occupied boxes of
+/// side s scales as s^-D, so the slope of log N against log(1/s) is
+/// the dimension. Measured over the box sizes that sit inside the
+/// cluster, away from the single-cell and whole-cluster ends where
+/// box counting always bends.
+#[test]
+fn dla_grows_a_cluster_of_the_right_fractal_dimension() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 512;
+    let mut cfg = SimConfig::default();
+    cfg.model = "dla".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 3;
+    cfg.model_params.insert("walkers".into(), 4.0);
+    cfg.model_params.insert("p_stick".into(), 1.0);
+    cfg.model_params.insert("crowding".into(), 2.0);
+    cfg.model_params.insert("launch_gap".into(), 5.0);
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    // The cluster's size is what decides whether this reads a
+    // dimension at all: a cluster that reaches the wall densifies at
+    // the rim and reads the wall's shape rather than its own.
+    r.run_steps(&device, &queue, &cfg, 1200);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    let frozen: Vec<bool> = f.iter().map(|px| px[0] > 0.0).collect();
+    let stuck = frozen.iter().filter(|b| **b).count();
+    // The cluster's extent, for choosing the box range.
+    let mut radius = 0.0f64;
+    for y in 0..N {
+        for x in 0..N {
+            if frozen[y * N + x] {
+                let d = (((x as f64) - 256.0).powi(2) + ((y as f64) - 256.0).powi(2)).sqrt();
+                radius = radius.max(d);
+            }
+        }
+    }
+    println!("DLA at {N}²: {stuck} particles stuck, cluster radius {radius:.0} cells");
+    assert!(stuck > 3000, "only {stuck} particles stuck; nothing to measure");
+    assert!(
+        radius < 240.0,
+        "the cluster reached the wall at {radius:.0} cells; the dimension would be the wall's"
+    );
+    assert!(radius > 60.0, "the cluster is only {radius:.0} cells across");
+
+    // Box counting.
+    let mut pts = Vec::new();
+    for s in [2usize, 4, 8, 16, 32] {
+        let mut seen = std::collections::HashSet::new();
+        for y in 0..N {
+            for x in 0..N {
+                if frozen[y * N + x] {
+                    seen.insert((x / s, y / s));
+                }
+            }
+        }
+        pts.push(((1.0 / s as f64).ln(), (seen.len() as f64).ln()));
+        println!("   box {s:>3}: {} occupied", seen.len());
+    }
+    // Least squares slope.
+    let n = pts.len() as f64;
+    let sx: f64 = pts.iter().map(|p| p.0).sum();
+    let sy: f64 = pts.iter().map(|p| p.1).sum();
+    let sxx: f64 = pts.iter().map(|p| p.0 * p.0).sum();
+    let sxy: f64 = pts.iter().map(|p| p.0 * p.1).sum();
+    let d = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    println!("   box-counting dimension {d:.3} (DLA is about 1.71)");
+    assert!(
+        (1.55..1.90).contains(&d),
+        "box-counting dimension {d:.3}, which is not DLA's ~1.71 -- a cluster that is too \
+         dense reads toward 2 and one that is too sparse toward 1"
+    );
+}

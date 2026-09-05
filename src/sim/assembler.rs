@@ -261,6 +261,8 @@ const STEP_TEMPLATE: &str = r#"
 
 //__MINMAX__
 
+//__DEPOSIT__
+
 //__MODEL__
 
 @compute @workgroup_size(8, 8, 1)
@@ -271,6 +273,125 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 //__STEP_CALL__
+}
+"#;
+
+/// Shared by both agent passes: the record, the population size, and
+/// the PCG stream keyed by (seed, AGENT index, step) rather than by
+/// cell, since an agent is not at a cell.
+const AGENT_COMMON: &str = r#"
+struct SimAgent {
+    pos: vec2<f32>,
+    heading: f32,
+    state: f32,
+};
+
+@group(0) @binding(15) var<storage, read_write> agents: array<SimAgent>;
+
+fn agent_count() -> u32 {
+    return arrayLength(&agents);
+}
+
+fn agent_rand(i: u32, salt: u32) -> f32 {
+    var h = sim_pcg(i ^ params.seed_lo);
+    h = sim_pcg(h ^ params.seed_hi ^ salt);
+    h = sim_pcg(h ^ params.step_index);
+    return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
+// Add to a cell's deposit. Fixed-point and INTEGER: thousands of
+// agents land in one cell in an order the hardware chooses, and
+// atomicAdd on a u32 is associative and commutative, so the total is
+// the same however they are ordered. An f32 accumulation would not
+// be, and the run would not reproduce.
+fn agent_deposit(p: vec2<i32>, amount: f32) {
+    let g = sim_grid();
+    if (sim_outside(p, g)) {
+        return;
+    }
+    let q = sim_wrap_sized(p, g);
+    let idx = u32(q.y * g.x + q.x);
+    atomicAdd(&deposit[idx], u32(max(amount, 0.0) * 1024.0));
+}
+
+@group(0) @binding(16) var<storage, read_write> claim: array<atomic<u32>>;
+
+// Stake a claim on a cell. The winner is the LOWEST agent index, not
+// whoever the hardware happened to run first -- atomicMin is
+// associative and commutative, so the outcome is the same however the
+// dispatch is ordered, and the run reproduces.
+fn agent_claim(p: vec2<i32>, i: u32) {
+    let g = sim_grid();
+    if (sim_outside(p, g)) {
+        return;
+    }
+    let q = sim_wrap_sized(p, g);
+    atomicMin(&claim[u32(q.y * g.x + q.x)], i);
+}
+
+// Did this agent win that cell? Clears the claim if so, which is
+// what returns the buffer to its empty state for the next step: a
+// claimed cell has exactly one winner, and only the winner clears.
+fn agent_claim_check(p: vec2<i32>, i: u32) -> bool {
+    let g = sim_grid();
+    if (sim_outside(p, g)) {
+        return false;
+    }
+    let q = sim_wrap_sized(p, g);
+    let idx = u32(q.y * g.x + q.x);
+    if (atomicLoad(&claim[idx]) == i) {
+        atomicStore(&claim[idx], 0xFFFFFFFFu);
+        return true;
+    }
+    return false;
+}
+"#;
+
+/// The move-and-deposit pass. One thread per agent.
+const AGENT_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(13) var<storage, read_write> deposit: array<atomic<u32>>;
+
+//__BOUNDARY__
+
+//__AGENT_COMMON__
+
+//__MINMAX__
+
+//__MODEL_AGENT__
+
+@compute @workgroup_size(64, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= agent_count()) {
+        return;
+    }
+//__AGENT_CALL__
+}
+"#;
+
+/// The population's initial state. One thread per agent.
+const AGENT_SEED_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(13) var<storage, read_write> deposit: array<atomic<u32>>;
+
+//__BOUNDARY__
+
+//__AGENT_COMMON__
+
+//__MINMAX__
+
+//__MODEL_AGENT__
+
+@compute @workgroup_size(64, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= agent_count()) {
+        return;
+    }
+    agents[i] = sim_agent_seed(i);
 }
 "#;
 
@@ -689,6 +810,12 @@ fn sim_kernel_taps() -> u32 {
     } else {
         ""
     };
+    // What the agents left in this cell, and the means to clear it.
+    let deposit = if model.has(ModelFeature::NeedsAgents) {
+        DEPOSIT_ACCESSORS
+    } else {
+        ""
+    };
     let entry = if pass == 0 { "sim_step" } else { "sim_step2" };
     let call = format!("    textureStore(field_out, p, {entry}(textureLoad(field_in, p, 0), p));");
     splice(
@@ -700,9 +827,28 @@ fn sim_kernel_taps() -> u32 {
             ("//__KERNEL__", kernel),
             ("//__PYRAMID__", pyramid),
             ("//__MINMAX__", minmax),
+            ("//__DEPOSIT__", deposit),
         ],
     )
 }
+
+/// Spliced into the step shader of a model that declares
+/// [`ModelFeature::NeedsAgents`]: the step pass is what folds the
+/// agents' deposit into the field, and what clears it for the next
+/// step. One thread per cell, so the clear needs no separate pass and
+/// no barrier -- each cell owns its own entry.
+const DEPOSIT_ACCESSORS: &str = r#"
+@group(0) @binding(13) var<storage, read_write> deposit: array<atomic<u32>>;
+
+// This cell's deposit since the last step, and zero it. Called ONCE
+// per cell per step, by the step pass.
+fn sim_take_deposit(p: vec2<i32>) -> f32 {
+    let g = sim_grid();
+    let idx = u32(p.y * g.x + p.x);
+    let v = atomicExchange(&deposit[idx], 0u);
+    return f32(v) * (1.0 / 1024.0);
+}
+"#;
 
 /// Spliced into the step shader of a model that declares
 /// [`ModelFeature::NeedsPyramid`].
@@ -847,6 +993,45 @@ fn sim_minmax() -> vec2<f32> {
 }
 "#;
 
+/// The agent move-and-deposit pass.
+pub fn assemble_agents(model: &ModelDef, boundary: SimBoundary, pass: u32) -> String {
+    let a = model.agents.expect("only called for an agent model");
+    // An agent that needs the field's global range -- DLA reads its
+    // launch radius from it -- gets the same accessors the step pass
+    // does.
+    let minmax = if model.has(ModelFeature::NeedsMinMax) { MINMAX_ACCESSORS } else { "" };
+    let call = if pass == 0 {
+        "    agents[i] = sim_agent(agents[i], i);"
+    } else {
+        "    agents[i] = sim_agent2(agents[i], i);"
+    };
+    splice(
+        AGENT_TEMPLATE,
+        boundary,
+        &[
+            ("//__AGENT_COMMON__", AGENT_COMMON),
+            ("//__MODEL_AGENT__", a.wgsl),
+            ("//__AGENT_CALL__", call),
+            ("//__MINMAX__", minmax),
+        ],
+    )
+}
+
+/// The agent seeding pass.
+pub fn assemble_agent_seed(model: &ModelDef, boundary: SimBoundary) -> String {
+    let a = model.agents.expect("only called for an agent model");
+    let minmax = if model.has(ModelFeature::NeedsMinMax) { MINMAX_ACCESSORS } else { "" };
+    splice(
+        AGENT_SEED_TEMPLATE,
+        boundary,
+        &[
+            ("//__AGENT_COMMON__", AGENT_COMMON),
+            ("//__MODEL_AGENT__", a.wgsl),
+            ("//__MINMAX__", minmax),
+        ],
+    )
+}
+
 /// One pyramid level from the one below it.
 pub fn assemble_pyramid(boundary: SimBoundary) -> String {
     splice(PYRAMID_TEMPLATE, boundary, &[])
@@ -954,6 +1139,20 @@ mod tests {
         }
         for b in boundaries {
             validate(&assemble_pyramid(b), &format!("pyramid {b:?}"));
+            for m in MODELS {
+                if let Some(a) = m.agents {
+                    for pass in 0..a.passes {
+                        validate(
+                            &assemble_agents(m, b, pass),
+                            &format!("agents {}/{b:?}/pass {pass}", m.name),
+                        );
+                    }
+                    validate(
+                        &assemble_agent_seed(m, b),
+                        &format!("agent seed {}/{b:?}", m.name),
+                    );
+                }
+            }
         }
         validate(&assemble_reduce(), "reduce");
         for c in COLORINGS {

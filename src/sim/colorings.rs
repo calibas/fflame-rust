@@ -354,3 +354,50 @@ fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+
+/// Where the agents ARE, rather than where they have been.
+///
+/// An agent model's step writes the deposit it just collected into
+/// `.w`; this draws that. It is a grainier, more immediate picture
+/// than the trail -- individual filaments of moving agents rather
+/// than the smoothed network they maintain.
+pub static OCCUPANCY: SimColoringDef = SimColoringDef {
+    name: "occupancy",
+    display_name: "Occupancy",
+    description: "Agent density this step: the moving population itself, grainier and more \
+                  immediate than the trail it leaves behind.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 0.2,
+            min: 0.001,
+            max: 2.0,
+            tooltip: "Multiplies the density before the palette lookup.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "soften",
+            display_name: "Soften",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Compresses the bright end, so a cell that happened to take several \
+                      agents does not wash out the ones that took one. At 0 the mapping is \
+                      linear.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
+    let v = max(s.w, 0.0) * cparam(0u);
+    // A soft knee rather than a clamp: agent counts are spiky, and
+    // 1 - exp(-v) keeps a cell with one agent visible next to a cell
+    // with ten.
+    let t = mix(clamp(v, 0.0, 1.0), 1.0 - exp(-v), cparam(1u));
+    return vec4<f32>(sim_palette(t), 1.0);
+}
+"#,
+};

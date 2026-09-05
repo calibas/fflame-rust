@@ -27,6 +27,7 @@ render artifacts do not belong in the repo). Requires `numpy` and
 | `proto_cellular_automata.py` | hodgepodge, cyclic CA, spatial RPS, Ising | — |
 | `proto_growth.py` | Eden, ballistic deposition, percolation labelling, Packard snowflake | default · `--kpz`: growth-exponent fit |
 | `proto_wolfram.py` | elementary CA | — (verifies the bit convention against binomials mod 2) |
+| `proto_physarum.py` | Physarum (Jones 2010), with and without occupancy exclusion | — |
 | `proto_large_kernel.py` | Lenia, SmoothLife (large-kernel convolutions) | default · `lenia` / `sl`: one model |
 | `proto_oregonator_kobayashi.py` | Oregonator (Tyson–Fife), Kobayashi phase-field dendrite | default · `oreg` / `kob`: one model |
 | `proto_pde.py` | Swift–Hohenberg, Cahn–Hilliard (fourth-order, two-pass) | default: presets + stability ladders · `sweep`: SH drive relative to q₀⁴ · `gsweep`: where hexagons would live · `sh` / `ch`: one model |
@@ -53,6 +54,10 @@ that would have shipped wrong without running them:
   checkerboard while staying finite and inside [0, 1]. It reached the
   prototype and not the shader, which is the entire point; the shipped
   scheme stores fluxes on cell faces instead.
+- A Physarum without Jones' occupancy exclusion, which the
+  catalogue's GPU sketch had dropped as an optimisation. Without it
+  the population collapses onto a few thick arcs instead of forming a
+  network, so the shipped model pays for a second agent pass.
 - The plan's pyramid for McCabe. A box downsample gives a square
   kernel at every level and the texture came out axis-aligned; the
   shipped pyramid is Gaussian, calibrated to the exact-disc reference.

@@ -177,6 +177,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // past it as garbage rather than NaN, which is worse -- so the cap
     // is enforced everywhere dt can be set, not left to the clamp.
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_a", "diffusion_b"],
@@ -349,6 +350,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // 1.0. A first probe ran from noise and reported 0.5 -- it was
     // measuring the stability of a field doing nothing.
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_v", "diffusion_w"],
@@ -499,6 +501,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // said 0.02 after testing only 0.01 and 0.05 -- a cap written down
     // without running the rung it names.
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_x", "diffusion_y"],
@@ -617,6 +620,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // Every rung run: 0.01 and 0.02 stable, 0.03 diverges at step 486,
     // 0.04 at 26, 0.05 at 17.
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_u", "diffusion_v"],
@@ -851,6 +855,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // No time step: a generation is a generation. The value is unused,
     // and the panel hides the slider.
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1001,6 +1006,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 300,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1122,6 +1128,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1243,6 +1250,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 1200,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1344,6 +1352,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 250,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1458,6 +1467,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 360,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1566,6 +1576,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 256,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1692,6 +1703,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 125,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -1820,6 +1832,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    agents: None,
     kernel: None,
     dt_bound: None,
     diffusion: &[],
@@ -2012,6 +2025,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // (8 - q0^2)^2, and the drive r offsets it. Measured at
     // lambda = 16: stable at 0.03249, diverges at 0.03574, and this
     // formula gives 0.0325.
+    agents: None,
     kernel: None,
     dt_bound: Some(|p| {
         let q0 = 6.283_185_3 / p.get("wavelength").max(1.0);
@@ -2172,6 +2186,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // which is why the first ladder called it stable. With the cubic
     // kept, this formula gives 0.04167, and the measurement is stable
     // at 0.041667 and diverges at 0.045833.
+    agents: None,
     kernel: None,
     dt_bound: Some(|p| {
         let d = p.get("mobility").max(1.0e-3);
@@ -2355,6 +2370,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // 1e-3 the field collapses to zero rather than diverging -- the
     // max(.., 0) clamp turns the instability into death, which is why
     // the ladder judges by the field's amplitude and not by isfinite.
+    agents: None,
     kernel: None,
     dt_bound: Some(|p| {
         let eps = p.get("epsilon").max(1.0e-4);
@@ -2605,6 +2621,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // scheme for T for exactly this reason; measured here fully
     // explicit, 1e-4 is clean (Nyquist amplitude 8e-5), 2e-4 carries a
     // trace (2.8e-3) and 3e-4 diverges outright at step 1,389.
+    agents: None,
     kernel: None,
     dt_bound: Some(|_| KOB_DX_SQ_OVER_4),
     diffusion: &[],
@@ -2755,6 +2772,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 600,
     passes: 1,
+    agents: None,
     kernel: Some(|p| {
         // The exponential core, scaled to R and normalised to sum 1.
         let r = p.get("radius").round().clamp(2.0, MAX_KERNEL_RADIUS as f32) as u32;
@@ -2968,6 +2986,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    agents: None,
     kernel: Some(|p| {
         // Two blocks: the inner disc, then the annulus out to 3 r_i.
         // Both anti-aliased over a one-cell band, which is what keeps
@@ -3262,6 +3281,516 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 200,
     passes: 1,
+    agents: None,
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+
+// ---------------------------------------------------------------------
+// Agent models.
+//
+// The state is a POPULATION, not a field: agents persist across steps,
+// move themselves, and what they leave behind is an integer deposit
+// the step pass folds into the field and clears. Integer, because
+// thousands of agents land in one cell in an order the hardware
+// chooses and `atomicAdd` on a u32 does not care about that order --
+// an f32 accumulation would give a different picture every run.
+// ---------------------------------------------------------------------
+
+/// Jones' Physarum transport networks.
+///
+/// Each agent senses the trail map at three forward sensors -- ahead
+/// and at +-SA -- turns by RA toward the strongest, steps SS forward,
+/// and deposits depT. The trail is then averaged over a 3x3 kernel and
+/// multiplied by (1 - decay). What emerges is the polygonal transport
+/// network the slime mould builds.
+///
+/// J. Jones, "Characteristics of pattern formation and evolution in
+/// approximations of Physarum transport networks", *Artificial Life*
+/// 16(2) (2010) 127-153. **Every parameter here is the paper's Table
+/// 1**, which was read: SA 22.5 or 45 deg, RA 45 deg, SO 9 pixels,
+/// SS 1 pixel/step, depT 5, decayT 0.1, 3x3 diffusion, periodic, and
+/// a population of 3-15% of the image area. The catalogue had recorded
+/// those from a secondary source and every one of them is confirmed.
+///
+/// **The exclusion is not optional, and that is measured.** Jones'
+/// section 2.1: a cell holds one agent, and an agent whose target is
+/// occupied stays put, deposits nothing, and takes a random new
+/// heading. The catalogue's GPU sketch left it out. Run without it on
+/// the CPU prototype, the population collapses into a handful of thick
+/// arcs; with it, the same parameters give the network. So the model
+/// declares two agent passes: the first turns and CLAIMS a target
+/// cell, the second moves only if it won. The claim is an atomic
+/// minimum over agent indices, so the winner is the lowest index
+/// rather than whoever ran first, and the run reproduces exactly.
+///
+/// Channels: `.x` = trail, `.w` = this step's deposit (where the
+/// agents actually are, for the `occupancy` colouring).
+pub static PHYSARUM: ModelDef = ModelDef {
+    name: "physarum",
+    display_name: "Physarum",
+    description: "Slime mould: thousands of agents lay a chemical trail and follow it, and \
+                  the feedback builds a transport network of filaments and junctions.",
+    features: &[
+        ModelFeature::NeedsRng,
+        ModelFeature::NeedsAgents,
+        ModelFeature::NeverStills,
+        ModelFeature::NoTimeStep,
+    ],
+    parameters: &[
+        SimParamDef {
+            name: "population",
+            display_name: "Population (% of grid)",
+            default: 5.0,
+            min: 0.5,
+            max: 25.0,
+            tooltip: "Agents as a percentage of the grid's cells — the paper's %p, whose \
+                      useful range is 3 to 15. Too few and the trails never meet; too many \
+                      and the network fills in.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "sensor_angle",
+            display_name: "Sensor angle (SA)",
+            default: 22.5,
+            min: 5.0,
+            max: 90.0,
+            tooltip: "How far to each side an agent looks, in degrees. One of the three \
+                      parameters the paper says actually change the pattern; it uses 22.5 \
+                      or 45.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "rotation_angle",
+            display_name: "Rotation angle (RA)",
+            default: 45.0,
+            min: 5.0,
+            max: 90.0,
+            tooltip: "How far an agent turns when it turns, in degrees. The paper uses 45.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "sensor_offset",
+            display_name: "Sensor distance (SO)",
+            default: 9.0,
+            min: 1.0,
+            max: 32.0,
+            tooltip: "How far ahead the sensors sit, in cells. The paper uses 9, and notes \
+                      that a distance of at least 3 is what makes the population couple \
+                      strongly enough for networks to form at all.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "step_size",
+            display_name: "Step size (SS)",
+            default: 1.0,
+            min: 0.25,
+            max: 4.0,
+            tooltip: "How far an agent moves per step, in cells.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "deposit",
+            display_name: "Deposit (depT)",
+            default: 5.0,
+            min: 0.5,
+            max: 40.0,
+            tooltip: "How much trail an agent lays each step. Scales against the decay: \
+                      what matters is the ratio.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "decay",
+            display_name: "Decay (decayT)",
+            default: 0.1,
+            min: 0.005,
+            max: 0.5,
+            tooltip: "How fast the trail fades. The other parameter the paper says matters: \
+                      low values let old trails persist into thick networks, high values \
+                      keep only what is currently travelled.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "network",
+            display_name: "Transport network",
+            params: &[
+                ("population", 5.0),
+                ("sensor_angle", 22.5),
+                ("rotation_angle", 45.0),
+                ("sensor_offset", 9.0),
+                ("step_size", 1.0),
+                ("deposit", 5.0),
+                ("decay", 0.1),
+            ],
+            // Measured on the prototype: filaments by 100 steps, the
+            // polygonal network by 600, and it keeps rearranging.
+            steps: 600,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.0 }),
+        },
+        SimPreset {
+            name: "coarse",
+            display_name: "Coarse mesh",
+            // SA 45 gives a wider, blockier mesh -- the paper's other
+            // sensor angle.
+            params: &[
+                ("population", 5.0),
+                ("sensor_angle", 45.0),
+                ("rotation_angle", 45.0),
+                ("sensor_offset", 9.0),
+                ("step_size", 1.0),
+                ("deposit", 5.0),
+                ("decay", 0.1),
+            ],
+            steps: 600,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.0 }),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // Jones' trail map update: a 3x3 MEAN, then the decay factor.
+    var acc = 0.0;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            acc = acc + sim_read(p + vec2<i32>(dx, dy)).x;
+        }
+    }
+    // What the agents left here since the last step, and clear it.
+    let dep = sim_take_deposit(p);
+    let trail = (acc * (1.0 / 9.0) + dep) * (1.0 - mparam(6u));
+    // The deposit rides in .w: it is where the agents ARE, which is a
+    // different and grainier picture than where they have been.
+    return vec4<f32>(trail, 0.0, s.z, dep);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // An empty trail map. The agents are the initial condition, and
+    // they are seeded by their own pass.
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 600,
+    passes: 1,
+    agents: Some(crate::sim::AgentDef {
+        count: |p, w, h| {
+            // The paper's %p: a percentage of the image AREA, so the
+            // same setting is the same density at any grid size.
+            let pct = p.get("population").clamp(0.1, 50.0);
+            // Clamped here rather than only in the renderer, so the
+            // declared count is the count: 25% of a 4096 grid is
+            // 4.19M, past the engine's ceiling.
+            (((w as f64) * (h as f64) * pct as f64 / 100.0) as u32)
+                .clamp(1, crate::sim::MAX_AGENTS)
+        },
+        passes: 2,
+        wgsl: r#"
+const PHYS_TAU: f32 = 6.28318530718;
+
+fn phys_dir(h: f32) -> vec2<f32> {
+    return vec2<f32>(cos(h), sin(h));
+}
+
+// One sensor: the trail at SO ahead, offset by `off` from the heading.
+fn phys_sense(a: SimAgent, off: f32) -> f32 {
+    let q = a.pos + phys_dir(a.heading + off) * mparam(3u);
+    return sim_read(vec2<i32>(floor(q + vec2<f32>(0.5, 0.5)))).x;
+}
+
+fn sim_agent_seed(i: u32) -> SimAgent {
+    // Jones: a random unoccupied location and a random orientation
+    // over the full circle, which frees the agent from the lattice.
+    let g = vec2<f32>(sim_grid());
+    var a: SimAgent;
+    a.pos = vec2<f32>(agent_rand(i, 0x11u), agent_rand(i, 0x12u)) * g;
+    a.heading = agent_rand(i, 0x13u) * PHYS_TAU;
+    a.state = 0.0;
+    return a;
+}
+
+// Pass 1: sense, turn, and claim the cell this agent wants.
+fn sim_agent(a: SimAgent, i: u32) -> SimAgent {
+    let sa = radians(mparam(1u));
+    let ra = radians(mparam(2u));
+    let f = phys_sense(a, 0.0);
+    let l = phys_sense(a, sa);
+    let r = phys_sense(a, -sa);
+
+    var turn = 0.0;
+    if (f >= l && f >= r) {
+        // Forward is strongest: keep going. This is the "forward
+        // biased" behaviour the paper says keeps the dynamic
+        // continuous.
+        turn = 0.0;
+    } else if (l > r) {
+        turn = ra;
+    } else if (r > l) {
+        turn = -ra;
+    } else {
+        // Both sides beat the front and are equal: turn at random,
+        // which is what stops a tie becoming a bias.
+        turn = select(-ra, ra, agent_rand(i, 0x14u) < 0.5);
+    }
+
+    var out = a;
+    out.heading = a.heading + turn;
+    // `dest`, not `target`: that is a WGSL reserved keyword, and naga
+    // rejects it -- the same trap the escape assembler hit with `root`.
+    let dest = out.pos + phys_dir(out.heading) * mparam(4u);
+    agent_claim(vec2<i32>(floor(dest + vec2<f32>(0.5, 0.5))), i);
+    return out;
+}
+
+// Pass 2: move if this agent won the cell; otherwise stay put, deposit
+// nothing, and take a new random heading.
+fn sim_agent2(a: SimAgent, i: u32) -> SimAgent {
+    let g = vec2<f32>(sim_grid());
+    let dest = a.pos + phys_dir(a.heading) * mparam(4u);
+    let cell = vec2<i32>(floor(dest + vec2<f32>(0.5, 0.5)));
+    var out = a;
+    if (agent_claim_check(cell, i)) {
+        // Float position wrapped to the grid: the agent is
+        // semi-continuous, and only its DEPOSIT is on the lattice.
+        out.pos = dest - g * floor(dest / g);
+        agent_deposit(vec2<i32>(floor(out.pos + vec2<f32>(0.5, 0.5))), mparam(5u));
+    } else {
+        out.heading = agent_rand(i, 0x15u) * PHYS_TAU;
+    }
+    return out;
+}
+"#,
+    }),
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+
+/// Diffusion-limited aggregation.
+///
+/// A seed particle is fixed at the centre. Walkers random-walk on the
+/// lattice; a walker that finds itself next to the cluster sticks, and
+/// one that wanders past the kill radius is relaunched. The result is
+/// the classic branching aggregate, whose fractal dimension in two
+/// dimensions is about 1.71.
+///
+/// T. A. Witten and L. M. Sander, *Phys. Rev. Lett.* 47 (1981) 1400.
+///
+/// **A frozen cell stores its DISTANCE from the centre, not a flag.**
+/// That is what lets the launch radius be measured: the model declares
+/// `NeedsMinMax`, and the maximum of channel `.x` is then the cluster's
+/// radius plus one, for free, from a reduction the engine already had.
+/// Walkers launch just outside it and die well beyond it, which is what
+/// keeps the dimension right -- a walker relaunched at a uniformly
+/// random cell would spawn inside the cluster's fjords and fill them,
+/// driving the dimension toward 2.
+///
+/// **Many walkers advance at once**, which is not Witten and Sander's
+/// sequential process. It is the standard parallel variant, and it
+/// preserves the dimension as long as the walker density near the
+/// cluster stays low; the test measures the dimension rather than
+/// assuming it.
+///
+/// Channels: `.x` = 0 in the melt, or the frozen cell's distance from
+/// the centre plus one, `.z` = the step it froze (the `age` colouring
+/// draws the growth order -- the classic DLA rainbow).
+pub static DLA: ModelDef = ModelDef {
+    name: "dla",
+    display_name: "Diffusion-Limited Aggregation",
+    description: "Random walkers that stick where they first touch a growing cluster, \
+                  building the branching aggregate of soot, frost and mineral dendrites.",
+    features: &[
+        ModelFeature::NeedsRng,
+        ModelFeature::NeedsAgents,
+        ModelFeature::NeedsMinMax,
+        ModelFeature::NeverStills,
+        ModelFeature::NoTimeStep,
+    ],
+    parameters: &[
+        SimParamDef {
+            name: "walkers",
+            display_name: "Walkers (% of grid)",
+            default: 4.0,
+            min: 0.1,
+            max: 20.0,
+            tooltip: "How many walkers are in flight at once, as a percentage of the grid's \
+                      cells. More is faster but crowds the cluster, which thickens the \
+                      branches — the aggregate's dimension depends on walkers arriving one \
+                      at a time.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "p_stick",
+            display_name: "Sticking probability",
+            default: 1.0,
+            min: 0.02,
+            max: 1.0,
+            tooltip: "Chance a walker that touches the cluster actually sticks. Below 1 a \
+                      walker explores further before attaching, which fills the fjords and \
+                      makes a denser, less branched cluster.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "crowding",
+            display_name: "Crowding",
+            default: 2.0,
+            min: 0.5,
+            max: 16.0,
+            tooltip: "How many walkers may work the cluster at once, per cell of its                       circumference. This is the speed-against-fidelity knob: DLA is what                       it is because particles arrive ONE AT A TIME, so low values grow a                       truer aggregate slowly and high values grow a denser, blunter one                       fast.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "launch_gap",
+            display_name: "Launch gap",
+            default: 5.0,
+            min: 2.0,
+            max: 40.0,
+            tooltip: "How far outside the cluster's current radius walkers are launched.",
+            choices: &[],
+        },
+    ],
+    presets: &[SimPreset {
+        name: "cluster",
+        display_name: "Cluster",
+        params: &[("walkers", 4.0), ("p_stick", 1.0), ("crowding", 2.0), ("launch_gap", 5.0)],
+        // Measured at 512^2: 1,200 steps grows ~43,000 particles to a
+        // radius of 230, which is a full aggregate still clear of the
+        // walls.
+        steps: 1200,
+        init: Some(crate::config::sim::SimInit::Center),
+    }],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let dep = sim_take_deposit(p);
+    // Frozen is permanent.
+    if (s.x > 0.0) {
+        return s;
+    }
+    if (dep <= 0.0) {
+        return s;
+    }
+    // Freeze, storing the distance from the centre so the min/max
+    // reduction can report the cluster's radius.
+    let c = vec2<f32>(sim_grid()) * 0.5;
+    let d = length(vec2<f32>(p) - c);
+    return vec4<f32>(d + 1.0, 0.0, f32(sim_step_index()), 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // The nucleus: the init shape, frozen. Distance plus one, as the
+    // step pass stores it.
+    if (inside < 0.5) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let c = vec2<f32>(sim_grid()) * 0.5;
+    return vec4<f32>(length(vec2<f32>(p) - c) + 1.0, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 1200,
+    passes: 1,
+    agents: Some(crate::sim::AgentDef {
+        count: |p, w, h| {
+            let pct = p.get("walkers").clamp(0.05, 40.0);
+            (((w as f64) * (h as f64) * pct as f64 / 100.0) as u32)
+                .clamp(1, crate::sim::MAX_AGENTS)
+        },
+        passes: 1,
+        wgsl: r#"
+const DLA_TAU: f32 = 6.28318530718;
+
+// The cluster's radius, from the maximum of channel .x -- which is a
+// frozen cell's distance from the centre plus one.
+fn dla_radius() -> f32 {
+    return max(sim_minmax().y - 1.0, 0.0);
+}
+
+// A fresh walker on the launch circle, just outside the cluster.
+fn dla_launch(i: u32, salt: u32) -> SimAgent {
+    let g = vec2<f32>(sim_grid());
+    let c = g * 0.5;
+    let limit = min(g.x, g.y) * 0.5 - 2.0;
+    let r = min(dla_radius() + mparam(2u), limit);
+    let a = agent_rand(i, salt) * DLA_TAU;
+    var out: SimAgent;
+    out.pos = c + vec2<f32>(cos(a), sin(a)) * r;
+    out.heading = 0.0;
+    out.state = 0.0;
+    return out;
+}
+
+fn sim_agent_seed(i: u32) -> SimAgent {
+    return dla_launch(i, 0x21u);
+}
+
+fn sim_agent(a: SimAgent, i: u32) -> SimAgent {
+    let g = vec2<f32>(sim_grid());
+    let c = g * 0.5;
+
+    // ONLY AS MANY WALKERS AS THE LAUNCH CIRCLE HAS ROOM FOR. The
+    // parallel variant is DLA only while walkers arrive at the cluster
+    // one at a time; launch a thousand of them onto a circle of radius
+    // 5 and every cell around the seed freezes at once, which is a
+    // solid disc, not an aggregate. Measured: a 4% population grew a
+    // 40-cell solid core, and even 0.5% grew a 15-cell one -- the
+    // circle simply has 31 cells at radius 5.
+    //
+    // So a walker is dormant until the cluster is big enough for it,
+    // one walker per cell of circumference, and parks on the launch
+    // circle meanwhile. The active population then grows with the
+    // cluster on its own, whatever the parameter says.
+    let launch_r = min(dla_radius() + mparam(2u), min(g.x, g.y) * 0.5 - 2.0);
+    if (f32(i) > mparam(3u) * 6.28318530718 * launch_r) {
+        return dla_launch(i, 0x26u);
+    }
+
+    let cell = vec2<i32>(floor(a.pos + vec2<f32>(0.5, 0.5)));
+
+    // Touching the cluster? Four-neighbour contact, which is the
+    // lattice DLA convention.
+    let touch = sim_read(cell + vec2<i32>(1, 0)).x > 0.0
+        || sim_read(cell + vec2<i32>(-1, 0)).x > 0.0
+        || sim_read(cell + vec2<i32>(0, 1)).x > 0.0
+        || sim_read(cell + vec2<i32>(0, -1)).x > 0.0;
+    if (touch && sim_read(cell).x <= 0.0) {
+        if (agent_rand(i, 0x22u) < mparam(1u)) {
+            // Stick here, and start again. The deposit is what the
+            // step pass turns into a frozen cell.
+            agent_deposit(cell, 1.0);
+            return dla_launch(i, 0x23u);
+        }
+    }
+
+    // One lattice step.
+    let r = agent_rand(i, 0x24u);
+    var d = vec2<f32>(1.0, 0.0);
+    if (r < 0.25) { d = vec2<f32>(-1.0, 0.0); }
+    else if (r < 0.5) { d = vec2<f32>(0.0, 1.0); }
+    else if (r < 0.75) { d = vec2<f32>(0.0, -1.0); }
+    var out = a;
+    out.pos = a.pos + d;
+
+    // Gone too far to be worth following: relaunch. The classic kill
+    // radius is three times the cluster's -- but it must ALWAYS exceed
+    // the launch radius, or every walker dies on the step it is born
+    // and the cluster never grows past its seed. Measured: with a
+    // launch gap of 20 and a bare `max(3r, 16)` the run ended with one
+    // particle, the seed.
+    let kill = min(max(3.0 * dla_radius(), launch_r + 16.0), min(g.x, g.y) * 0.5 - 1.0);
+    if (length(out.pos - c) > kill) {
+        return dla_launch(i, 0x25u);
+    }
+    return out;
+}
+"#,
+    }),
     kernel: None,
     dt_bound: None,
     diffusion: &[],
