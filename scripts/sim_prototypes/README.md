@@ -26,6 +26,7 @@ render artifacts do not belong in the repo). Requires `numpy` and
 | `proto_cellular_automata.py` | hodgepodge, cyclic CA, spatial RPS, Ising | — |
 | `proto_growth.py` | Eden, ballistic deposition, percolation labelling, Packard snowflake | default · `--kpz`: growth-exponent fit |
 | `proto_wolfram.py` | elementary CA | — (verifies the bit convention against binomials mod 2) |
+| `proto_large_kernel.py` | Lenia, SmoothLife (large-kernel convolutions) | default · `lenia` / `sl`: one model |
 | `proto_oregonator_kobayashi.py` | Oregonator (Tyson–Fife), Kobayashi phase-field dendrite | default · `oreg` / `kob`: one model |
 | `proto_pde.py` | Swift–Hohenberg, Cahn–Hilliard (fourth-order, two-pass) | default: presets + stability ladders · `sweep`: SH drive relative to q₀⁴ · `gsweep`: where hexagons would live · `sh` / `ch`: one model |
 | `proto_sandpile.py` | Abelian sandpile | — (bulk-toppling round count, 2¹² – 2²⁰ grains) |

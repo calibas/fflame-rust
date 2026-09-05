@@ -26,7 +26,7 @@
 //!   256x range, so batching is purely a watchdog and pacing device.
 
 use crate::config::sim::{SimConfig, SimGrid};
-use crate::sim::{assembler, coloring_or_default, model_or_default, ModelDef, SimColoringDef};
+use crate::sim::{assembler, coloring_or_default, model_or_default, ModelDef, SimColoringDef, MAX_KERNEL_RADIUS};
 #[allow(unused_imports)]
 use crate::sim::ColoringFeature;
 use wgpu::util::DeviceExt;
@@ -79,7 +79,9 @@ struct SimParamsGpu {
     dt: f32,
     init_p0: f32,
     init_p1: f32,
-    _pad0: f32,
+    /// Half-width of the convolution kernel in the LUT, so the step
+    /// shader can bound its gather. 0 for a model with no kernel.
+    kernel_radius: u32,
     _pad1: f32,
 }
 
@@ -154,6 +156,13 @@ pub struct SimRenderer {
 
     /// Steps applied since the last reseed. The state's identity.
     step_index: u32,
+    /// The convolution table for the large-kernel models, rebuilt and
+    /// uploaded with the parameters. Sized once for the largest
+    /// kernel the engine allows, so it never resizes.
+    kernel_buffer: Buffer,
+    /// Half-width of the kernel currently in that buffer, which the
+    /// step shader reads from the uniform to bound its loops.
+    kernel_radius: u32,
     /// Steps in the next submission: adapted from the measured cost
     /// of the previous one, reset to [`FIRST_SUBMIT`] whenever the
     /// pipeline or the grid changes and the old measurement no longer
@@ -192,6 +201,16 @@ impl SimRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
+        // Two blocks of (2R+1)^2 at the maximum radius: a model may
+        // carry a pair of kernels (SmoothLife's disc and annulus).
+        let kernel_floats = 2 * (2 * MAX_KERNEL_RADIUS as usize + 1).pow(2);
+        let kernel_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Sim Kernel LUT"),
+            size: (kernel_floats * std::mem::size_of::<f32>()) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             grid_w,
             grid_h,
@@ -209,6 +228,8 @@ impl SimRenderer {
             pipelines: None,
             step_bind_groups: None,
             step_index: 0,
+            kernel_buffer,
+            kernel_radius: 1,
             steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
         }
@@ -515,6 +536,10 @@ impl SimRenderer {
                 storage_ro(2),
                 storage_tex(3),
                 sampled_tex(4, true),
+                // The convolution table. Always bound, declared in the
+                // WGSL only by the models that gather against it -- a
+                // layout may carry an entry the shader does not use.
+                storage_ro(5),
             ],
         });
         let color_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -594,7 +619,7 @@ impl SimRenderer {
             },
             init_p0: p0,
             init_p1: p1,
-            _pad0: 0.0,
+            kernel_radius: self.kernel_radius,
             _pad1: 0.0,
         }
     }
@@ -662,13 +687,17 @@ impl SimRenderer {
                         binding: 4,
                         resource: BindingResource::TextureView(&self.field_view[src]),
                     },
+                    BindGroupEntry {
+                        binding: 5,
+                        resource: self.kernel_buffer.as_entire_binding(),
+                    },
                 ],
             })
         };
         self.step_bind_groups = Some([make(0), make(1)]);
     }
 
-    fn write_param_arrays(&self, queue: &Queue, model: &ModelDef, coloring: &SimColoringDef, cfg: &SimConfig) {
+    fn write_param_arrays(&mut self, queue: &Queue, model: &ModelDef, coloring: &SimColoringDef, cfg: &SimConfig) {
         // Padded to a fixed length so the buffer never needs resizing;
         // the shader only ever indexes as far as the definition
         // declares.
@@ -678,6 +707,19 @@ impl SimRenderer {
         cp.resize(16, 0.0);
         queue.write_buffer(&self.model_params_buffer, 0, bytemuck::cast_slice(&mp));
         queue.write_buffer(&self.coloring_params_buffer, 0, bytemuck::cast_slice(&cp));
+
+        // The convolution table, for the models whose rule is a
+        // gather. Rebuilt unconditionally: it is a few thousand floats
+        // and this runs once per batch, not per step, so tracking
+        // staleness would cost more than it saves and could get it
+        // wrong.
+        match model.kernel_for(&cfg.model_params) {
+            Some(k) => {
+                self.kernel_radius = k.radius;
+                queue.write_buffer(&self.kernel_buffer, 0, bytemuck::cast_slice(&k.weights));
+            }
+            None => self.kernel_radius = 0,
+        }
     }
 
     fn dispatch_size(w: u32, h: u32) -> (u32, u32) {

@@ -17,7 +17,7 @@
 //! * `sim_dt()` — the config's `dt`.
 //! * `sim_rng()` / `sim_step_index()` — for `NeedsRng` models only.
 
-use super::{ModelDef, ModelFeature, SimParamDef, SimPreset};
+use super::{ModelDef, ModelFeature, SimParamDef, SimPreset, MAX_KERNEL_RADIUS};
 
 /// Gray–Scott reaction–diffusion, in Karl Sims' discretisation.
 ///
@@ -177,6 +177,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // past it as garbage rather than NaN, which is worse -- so the cap
     // is enforced everywhere dt can be set, not left to the clamp.
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_a", "diffusion_b"],
     max_dt: 1.25,
@@ -348,6 +349,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // 1.0. A first probe ran from noise and reported 0.5 -- it was
     // measuring the stability of a field doing nothing.
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_v", "diffusion_w"],
     max_dt: 0.75,
@@ -497,6 +499,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // said 0.02 after testing only 0.01 and 0.05 -- a cap written down
     // without running the rung it names.
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_x", "diffusion_y"],
     max_dt: 0.04,
@@ -614,6 +617,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // Every rung run: 0.01 and 0.02 stable, 0.03 diverges at step 486,
     // 0.04 at 26, 0.05 at 17.
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &["diffusion_u", "diffusion_v"],
     max_dt: 0.02,
@@ -847,6 +851,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // No time step: a generation is a generation. The value is unused,
     // and the panel hides the slider.
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -996,6 +1001,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 300,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1116,6 +1122,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1236,6 +1243,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 1200,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1336,6 +1344,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 250,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1449,6 +1458,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 360,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1556,6 +1566,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 256,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1681,6 +1692,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 125,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1808,6 +1820,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    kernel: None,
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
@@ -1999,6 +2012,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // (8 - q0^2)^2, and the drive r offsets it. Measured at
     // lambda = 16: stable at 0.03249, diverges at 0.03574, and this
     // formula gives 0.0325.
+    kernel: None,
     dt_bound: Some(|p| {
         let q0 = 6.283_185_3 / p.get("wavelength").max(1.0);
         let q2 = q0 * q0;
@@ -2158,6 +2172,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // which is why the first ladder called it stable. With the cubic
     // kept, this formula gives 0.04167, and the measurement is stable
     // at 0.041667 and diverges at 0.045833.
+    kernel: None,
     dt_bound: Some(|p| {
         let d = p.get("mobility").max(1.0e-3);
         let gamma = p.get("gamma").max(0.0);
@@ -2340,6 +2355,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // 1e-3 the field collapses to zero rather than diverging -- the
     // max(.., 0) clamp turns the instability into death, which is why
     // the ladder judges by the field's amplitude and not by isfinite.
+    kernel: None,
     dt_bound: Some(|p| {
         let eps = p.get("epsilon").max(1.0e-4);
         let q = p.get("q").max(1.0e-6);
@@ -2586,6 +2602,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // scheme for T for exactly this reason; measured here fully
     // explicit, 1e-4 is clean (Nyquist amplitude 8e-5), 2e-4 carries a
     // trace (2.8e-3) and 3e-4 diverges outright at step 1,389.
+    kernel: None,
     dt_bound: Some(|_| KOB_DX_SQ_OVER_4),
     diffusion: &[],
     max_dt: 0.001,
@@ -2596,3 +2613,397 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// limit for its temperature field. A `const` because `dt_bound` is a
 /// plain `fn` pointer and cannot capture.
 const KOB_DX_SQ_OVER_4: f32 = 0.03 * 0.03 / 4.0;
+
+
+// ---------------------------------------------------------------------
+// Large-kernel models.
+//
+// These are not stencils. Their rule is a convolution against a table
+// of weights that varies continuously with radius -- Lenia's ring,
+// SmoothLife's pair of anti-aliased discs -- so they declare a
+// `kernel` builder, and the step shader gathers against the table the
+// renderer uploads. Cost is (2R+1)^2 taps a cell: 729 at R = 13 and
+// 4,225 at R = 32.
+//
+// The catalogue's formulas for both were read from secondary
+// statements rather than from the papers -- unlike Kobayashi and
+// Tyson-Fife, neither paper was available -- so what the prototype
+// checked is that the formulas AS RECORDED produce the behaviour
+// claimed for them. Both do.
+// ---------------------------------------------------------------------
+
+/// Lenia: Conway's Life taken continuous in space, state and time.
+///
+/// ```text
+/// A' = clip( A + dt * G(K * A), 0, 1 )
+/// K_C(r) = exp(alpha - alpha / (4 r (1 - r))),  alpha = 4
+/// K      = K_C(|x| / R) / sum K_C
+/// G(u)   = 2 exp(-(u - mu)^2 / (2 sigma^2)) - 1
+/// ```
+///
+/// The kernel is a normalised RING, so the gather is a weighted
+/// neighbourhood average; the growth mapping then rewards a cell whose
+/// average sits near `mu` and punishes everything else. That is the
+/// whole rule.
+///
+/// Measured (256^2, 600 steps): R = 13, mu = 0.15, sigma = 0.015 --
+/// the constants the catalogue records for Chan's Orbium -- give a
+/// living filamentary field, still moving at 600 steps, 3.6% of cells
+/// on a soft edge. Widening sigma saturates it: 0.03 gives 1.5% edge
+/// and 0.05 or 0.07 less still, all of them frozen. So sigma is the
+/// parameter that decides whether there is anything to look at.
+///
+/// **Orbium itself is not shipped.** The creature needs its specific
+/// 20x20 initial array, which is a `Pattern` init this engine does not
+/// have; what ships is the soup those constants make from noise.
+/// Multi-ring kernels and Chan's polynomial and rectangular cores are
+/// likewise not implemented -- the catalogue marks their formulas
+/// `[verify]`, and nothing here has verified them.
+///
+/// Channels: `.x` = A, `.y` = the last potential K*A, `.z` = age.
+pub static LENIA: ModelDef = ModelDef {
+    name: "lenia",
+    display_name: "Lenia",
+    description: "Life made continuous: a ring-shaped kernel and a smooth growth rule, \
+                  giving soft filaments and cells that crawl.",
+    features: &[ModelFeature::NeverStills],
+    parameters: &[
+        SimParamDef {
+            name: "radius",
+            display_name: "Kernel radius (R)",
+            default: 13.0,
+            min: 4.0,
+            max: 32.0,
+            tooltip: "Half-width of the ring, in cells — it sets the size of everything the \
+                      rule builds. Cost grows as R²: 729 taps a cell at 13, 4,225 at 32.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "mu",
+            display_name: "μ (growth centre)",
+            default: 0.15,
+            min: 0.0,
+            max: 0.5,
+            tooltip: "The neighbourhood average a cell is rewarded for having. Higher values \
+                      need a denser neighbourhood to survive.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "sigma",
+            display_name: "σ (growth width)",
+            default: 0.015,
+            min: 0.001,
+            max: 0.1,
+            tooltip: "How forgiving that reward is, and the parameter that decides whether \
+                      there is anything to look at — measured, 0.015 gives a living field \
+                      and 0.03 upward freezes into saturated blobs.",
+            choices: &[],
+        },
+    ],
+    presets: &[SimPreset {
+        name: "soup",
+        display_name: "Soup",
+        params: &[("radius", 13.0), ("mu", 0.15), ("sigma", 0.015)],
+        // Measured: filaments by 200, still moving at 600.
+        steps: 600,
+        init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+    }],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let r = sim_kernel_radius();
+    let w = 2 * r + 1;
+    var u = 0.0;
+    for (var dy = -r; dy <= r; dy = dy + 1) {
+        for (var dx = -r; dx <= r; dx = dx + 1) {
+            let k = klut(u32((dy + r) * w + (dx + r)));
+            // The square's corners lie outside the ring and weigh
+            // nothing, so skipping them skips the TEXTURE READ, which
+            // is the cost. The test is uniform across the workgroup --
+            // every thread is at the same (dx, dy) on the same
+            // iteration -- so it costs no divergence.
+            if (k > 0.0) {
+                u = u + k * sim_read(p + vec2<i32>(dx, dy)).x;
+            }
+        }
+    }
+
+    let mu = mparam(1u);
+    let sg = max(mparam(2u), 1.0e-5);
+    let d = u - mu;
+    let g = 2.0 * exp(-(d * d) / (2.0 * sg * sg)) - 1.0;
+    let na = clamp(s.x + sim_dt() * g, 0.0, 1.0);
+    let age = select(s.z, f32(sim_step_index()), abs(na - s.x) > 1.0e-4);
+    // The potential rides in .y so `two_channel` can show what the
+    // rule was actually looking at.
+    return vec4<f32>(na, u, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Patches the size of the kernel, not per-cell noise: a radius-13
+    // ring averages a per-cell random field flat before anything can
+    // grow, so the seed has to carry structure at the scale the rule
+    // works on. Measured on the prototype, which seeds the same way.
+    let g = sim_grid();
+    let r = max(i32(params.kernel_radius), 1);
+    let cell = vec2<i32>(p.x / r, p.y / r);
+    return vec4<f32>(sim_rand(cell, 0x1eu), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 600,
+    passes: 1,
+    kernel: Some(|p| {
+        // The exponential core, scaled to R and normalised to sum 1.
+        let r = p.get("radius").round().clamp(2.0, MAX_KERNEL_RADIUS as f32) as u32;
+        let w = 2 * r as usize + 1;
+        let mut weights = vec![0.0f32; w * w];
+        let mut sum = 0.0f64;
+        for iy in 0..w {
+            for ix in 0..w {
+                let dx = ix as f32 - r as f32;
+                let dy = iy as f32 - r as f32;
+                let d = (dx * dx + dy * dy).sqrt() / r as f32;
+                if d < 1.0 {
+                    // Guarded away from 0 and 1, where the core's
+                    // exponent is -inf; the weight there is zero
+                    // anyway, and this reaches it by a route that
+                    // cannot produce a NaN.
+                    let t = d.clamp(1.0e-6, 1.0 - 1.0e-6);
+                    let v = (4.0 - 4.0 / (4.0 * t * (1.0 - t))).exp();
+                    weights[iy * w + ix] = v;
+                    sum += v as f64;
+                }
+            }
+        }
+        if sum > 0.0 {
+            for x in weights.iter_mut() {
+                *x = (*x as f64 / sum) as f32;
+            }
+        }
+        crate::sim::SimKernel { radius: r, weights }
+    }),
+    dt_bound: None,
+    diffusion: &[],
+    // Not a stability bound: the growth term is bounded in [-1, 1] and
+    // the state is clipped, so no dt diverges. Past about 0.5 a step
+    // simply jumps over the dynamics.
+    max_dt: 0.5,
+    default_dt: 0.1,
+};
+
+/// SmoothLife: Conway's Life on a continuous domain.
+///
+/// ```text
+/// m = disc average over |x| < r_i          ("cell filling")
+/// n = annulus average over r_i < |x| < r_a  ("neighbourhood")
+/// sig(x, a, al) = 1 / (1 + exp(-(x - a) 4/al))
+/// s(n, m) = sig(n, lo, al_n) * (1 - sig(n, hi, al_n))
+///   with lo = b1 + (d1 - b1) sig(m, 1/2, al_m)
+///        hi = b2 + (d2 - b2) sig(m, 1/2, al_m)
+/// f' = f + dt (s(n, m) - f)
+/// ```
+///
+/// Life's rule read as thresholds: a cell's own filling `m` chooses
+/// which birth/survival window applies, and the neighbourhood `n` is
+/// tested against it. Rafler gives two time forms; this is the one
+/// that stays in [0, 1].
+///
+/// Both averages come from ONE gather with two accumulators, which is
+/// why the kernel table carries two blocks -- the disc first, then the
+/// annulus -- rather than two tables.
+///
+/// Measured (256^2, 400 steps): Rafler's glider set gives the
+/// characteristic smooth labyrinth, ~10% of cells on a soft edge, at
+/// dt 0.1 and 0.3 alike and at both r_i = 7 and r_i = 4. The discrete
+/// time form is not shipped: it is the one that does not stay in
+/// [0, 1].
+///
+/// Channels: `.x` = f, `.y` = the last neighbourhood n, `.z` = age.
+pub static SMOOTHLIFE: ModelDef = ModelDef {
+    name: "smoothlife",
+    display_name: "SmoothLife",
+    description: "Conway's Life on a continuous domain: the same birth and survival rules \
+                  read as smooth thresholds, giving gliders and rolling labyrinths.",
+    features: &[ModelFeature::NeverStills],
+    parameters: &[
+        SimParamDef {
+            name: "inner_radius",
+            display_name: "Inner radius (rᵢ)",
+            default: 7.0,
+            min: 2.0,
+            max: 10.0,
+            tooltip: "Radius of the disc a cell measures itself over. The outer radius is \
+                      three times it, as in the paper, so this sets the whole scale — and \
+                      the cost, which grows as rᵢ².",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "b1",
+            display_name: "Birth low (b₁)",
+            default: 0.278,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Lower edge of the window in which an empty cell is born.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "b2",
+            display_name: "Birth high (b₂)",
+            default: 0.365,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Upper edge of that window.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "d1",
+            display_name: "Survive low (d₁)",
+            default: 0.267,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Lower edge of the window in which a filled cell survives.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "d2",
+            display_name: "Survive high (d₂)",
+            default: 0.445,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Upper edge of that window. The gap between it and b₂ is what lets \
+                      structures persist without filling the plane.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "alpha_n",
+            display_name: "Neighbourhood softness (αₙ)",
+            default: 0.028,
+            min: 0.001,
+            max: 0.3,
+            tooltip: "How sharply the neighbourhood threshold switches. Small values are \
+                      nearly a hard rule.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "alpha_m",
+            display_name: "Filling softness (αₘ)",
+            default: 0.147,
+            min: 0.001,
+            max: 0.3,
+            tooltip: "How sharply a cell's own filling picks between the birth and survival \
+                      windows.",
+            choices: &[],
+        },
+    ],
+    presets: &[SimPreset {
+        name: "glider",
+        display_name: "Rafler's glider set",
+        params: &[
+            ("inner_radius", 7.0),
+            ("b1", 0.278),
+            ("b2", 0.365),
+            ("d1", 0.267),
+            ("d2", 0.445),
+            ("alpha_n", 0.028),
+            ("alpha_m", 0.147),
+        ],
+        // Measured: the soup organises by ~100 steps and is a settled
+        // labyrinth by 400.
+        steps: 400,
+        init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+    }],
+    wgsl: r#"
+fn sl_sigma(x: f32, a: f32, al: f32) -> f32 {
+    return 1.0 / (1.0 + exp(-(x - a) * 4.0 / max(al, 1.0e-4)));
+}
+
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let r = sim_kernel_radius();
+    let w = 2 * r + 1;
+    let taps = sim_kernel_taps();
+
+    // ONE gather, two accumulators: the disc and the annulus differ
+    // only in their weights, so reading the field twice would double
+    // the only expensive part.
+    var m = 0.0;
+    var n = 0.0;
+    for (var dy = -r; dy <= r; dy = dy + 1) {
+        for (var dx = -r; dx <= r; dx = dx + 1) {
+            let i = u32((dy + r) * w + (dx + r));
+            let ki = klut(i);
+            let ko = klut(taps + i);
+            if (ki > 0.0 || ko > 0.0) {
+                let v = sim_read(p + vec2<i32>(dx, dy)).x;
+                m = m + ki * v;
+                n = n + ko * v;
+            }
+        }
+    }
+
+    let al_m = mparam(6u);
+    let al_n = mparam(5u);
+    // A cell's own filling chooses which window applies.
+    let pick = sl_sigma(m, 0.5, al_m);
+    let lo = mparam(1u) + (mparam(3u) - mparam(1u)) * pick;
+    let hi = mparam(2u) + (mparam(4u) - mparam(2u)) * pick;
+    let alive = sl_sigma(n, lo, al_n) * (1.0 - sl_sigma(n, hi, al_n));
+
+    let nf = clamp(s.x + sim_dt() * (alive - s.x), 0.0, 1.0);
+    let age = select(s.z, f32(sim_step_index()), abs(nf - s.x) > 1.0e-4);
+    return vec4<f32>(nf, n, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Patches the size of the inner disc, for the same reason Lenia
+    // seeds in patches: a radius-21 gather averages per-cell noise
+    // flat before the rule can act on it.
+    let blk = max(i32(round(mparam(0u))), 1);
+    let cell = vec2<i32>(p.x / blk, p.y / blk);
+    return vec4<f32>(select(0.0, 1.0, sim_rand(cell, 0x5fu) < 0.5), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 400,
+    passes: 1,
+    kernel: Some(|p| {
+        // Two blocks: the inner disc, then the annulus out to 3 r_i.
+        // Both anti-aliased over a one-cell band, which is what keeps
+        // a smooth rule from inheriting the lattice's square symmetry.
+        let ri = p.get("inner_radius").clamp(1.0, 10.0);
+        let ra = ri * 3.0;
+        let r = ((ra.ceil() as u32) + 1).clamp(1, MAX_KERNEL_RADIUS);
+        let w = 2 * r as usize + 1;
+        let taps = w * w;
+        let mut inner = vec![0.0f32; taps];
+        let mut outer = vec![0.0f32; taps];
+        let (mut si, mut so) = (0.0f64, 0.0f64);
+        for iy in 0..w {
+            for ix in 0..w {
+                let dx = ix as f32 - r as f32;
+                let dy = iy as f32 - r as f32;
+                let d = (dx * dx + dy * dy).sqrt();
+                let i = (ri + 0.5 - d).clamp(0.0, 1.0);
+                let o = (ra + 0.5 - d).clamp(0.0, 1.0) * (1.0 - i);
+                inner[iy * w + ix] = i;
+                outer[iy * w + ix] = o;
+                si += i as f64;
+                so += o as f64;
+            }
+        }
+        for x in inner.iter_mut() {
+            *x = (*x as f64 / si.max(1.0e-12)) as f32;
+        }
+        for x in outer.iter_mut() {
+            *x = (*x as f64 / so.max(1.0e-12)) as f32;
+        }
+        inner.extend_from_slice(&outer);
+        crate::sim::SimKernel { radius: r, weights: inner }
+    }),
+    dt_bound: None,
+    diffusion: &[],
+    // As Lenia: `s` is bounded in [0, 1] and the update is a
+    // relaxation toward it, so no dt diverges. At 1.0 the rule becomes
+    // Rafler's discrete form.
+    max_dt: 1.0,
+    default_dt: 0.15,
+};

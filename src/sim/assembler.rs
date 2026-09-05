@@ -38,7 +38,7 @@ struct SimParams {
     dt: f32,
     init_p0: f32,
     init_p1: f32,
-    _pad0: f32,
+    kernel_radius: u32,
     _pad1: f32,
 };
 
@@ -119,14 +119,45 @@ fn boundary_body(boundary: SimBoundary) -> &'static str {
 fn sim_wrap(p: vec2<i32>) -> vec2<i32> {
     let g = sim_grid();
     // `%` is remainder, not modulo: it is negative for negative
-    // operands, so a naive p % g reads out of bounds on the left and
-    // top edges. Adding g before the second remainder is the fix.
+    // operands, so a bare p % g reads out of bounds on the left and
+    // top edges.
+    //
+    // THE OBVIOUS FORM DOES NOT WORK AT LARGE OFFSETS, and what
+    // follows is measured rather than derived.
+    //
+    // This used to read `((p % g) + g) % g`, which is correct
+    // arithmetic. Measured against a CPU mirror of a radius-7 gather
+    // at 96x96, that expression is wrong at the edges by 0.228 while
+    // the interior is bit-exact -- and it produces BYTE-IDENTICAL
+    // output to a bare `p % g` with no bias at all, down to the same
+    // 0.793078 average over the taps that leave the grid. So the bias
+    // is not reaching the device. The form below, subtracting the
+    // truncated quotient and correcting the sign, differs from both
+    // and agrees with the mirror EXACTLY (0.0 worst, at every
+    // boundary mode).
+    //
+    // WHAT IS NOT ESTABLISHED is why. The natural guess -- that the
+    // optimiser folds the bias away on the assumption that a
+    // remainder is non-negative -- does not fit the whole picture:
+    // offsets of +-1 are demonstrably unaffected, since all 33
+    // periodic visual baselines are byte-identical across this
+    // change, and Gray-Scott's CPU mirror passed before it. Something
+    // about the failure needs an offset of more than a cell or two,
+    // and that has not been pinned down.
+    //
+    // It went unnoticed for two phases because until the large-kernel
+    // models every rule read +-1. SmoothLife is what caught it: its
+    // annulus carries its weight at the OUTER radius, so a wrong
+    // wrap is 23% of the gather. Lenia hid it even at radius 6 --
+    // its ring has almost no weight at the outermost taps, and its
+    // growth term saturates exactly where the gather is wrong.
     //
     // Do NOT add an interior fast-path to skip these. Measured at
-    // 1080p: Clamp 0.2618 ms/step, Periodic 0.2619. The 32 integer
-    // modulos per cell are invisible under a bandwidth-bound kernel,
-    // and a branch per read would cost more than they do.
-    return vec2<i32>(((p.x % g.x) + g.x) % g.x, ((p.y % g.y) + g.y) % g.y);
+    // 1080p: Clamp 0.2618 ms/step, Periodic 0.2619. The integer
+    // arithmetic is invisible under a bandwidth-bound kernel, and a
+    // branch per read would cost more than it does.
+    let q = p - g * (p / g);
+    return select(q, q + g, q < vec2<i32>(0));
 }
 fn sim_read(p: vec2<i32>) -> vec4<f32> {
     return textureLoad(field_in, sim_wrap(p), 0);
@@ -191,6 +222,8 @@ const STEP_TEMPLATE: &str = r#"
 //__COMMON__
 @group(0) @binding(3) var field_out: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(4) var field_in: texture_2d<f32>;
+
+//__KERNEL__
 
 //__BOUNDARY__
 
@@ -484,6 +517,34 @@ pub fn assemble_step(model: &ModelDef, boundary: SimBoundary, pass: u32) -> Stri
     };
     // A whole-line marker: `splice` matches markers by line, so the
     // call is spliced as a statement rather than as a name inside one.
+    // The convolution table, declared only for the models that gather
+    // against it. Every step pipeline shares one bind group layout, so
+    // the binding is always THERE; a shader that never names it simply
+    // does not read it, and the models that are stencils keep the
+    // WGSL they had.
+    let kernel = if model.kernel.is_some() {
+        r#"@group(0) @binding(5) var<storage, read> kernel_lut: array<f32>;
+
+// Half-width of the table, so a gather knows its bounds.
+fn sim_kernel_radius() -> i32 {
+    return i32(params.kernel_radius);
+}
+
+// One weight. The table is row-major from -radius to +radius in both
+// axes; a model carrying two kernels stores the second block straight
+// after the first and offsets into it.
+fn klut(i: u32) -> f32 {
+    return kernel_lut[i];
+}
+
+// Taps in one block, which is also the offset of a second one.
+fn sim_kernel_taps() -> u32 {
+    let w = 2u * params.kernel_radius + 1u;
+    return w * w;
+}"#
+    } else {
+        ""
+    };
     let entry = if pass == 0 { "sim_step" } else { "sim_step2" };
     let call = format!("    textureStore(field_out, p, {entry}(textureLoad(field_in, p, 0), p));");
     splice(
@@ -492,6 +553,7 @@ pub fn assemble_step(model: &ModelDef, boundary: SimBoundary, pass: u32) -> Stri
         &[
             ("//__MODEL__", &format!("{rng_note}{}", model.wgsl)),
             ("//__STEP_CALL__", &call),
+            ("//__KERNEL__", kernel),
         ],
     )
 }
@@ -612,11 +674,34 @@ mod tests {
     /// edges and reads out of bounds -- the bug is invisible except at
     /// two edges of the grid.
     #[test]
-    fn the_periodic_boundary_biases_before_the_second_remainder() {
+    fn the_periodic_wrap_avoids_the_idiom_the_optimiser_deletes() {
         let src = boundary_body(SimBoundary::Periodic);
+        // This test used to assert the OPPOSITE -- that the source
+        // contained `((p.x % g.x) + g.x) % g.x`. It passed for two
+        // phases while that expression was measurably behaving like a
+        // bare `p % g` on the device, because asserting on source text
+        // cannot see what happens to it afterwards.
+        //
+        // What actually guards the behaviour is
+        // `the_large_kernel_gathers_match_a_cpu_mirror`, which
+        // compares a radius-7 gather against a CPU mirror at the
+        // EDGES, where a wrap that does not wrap is 23% of the field.
+        // This one only keeps the deleted idiom from coming back.
+        // Comments are stripped first: the note above the wrap QUOTES
+        // the deleted idiom in order to explain it.
+        let code: String = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            src.contains("((p.x % g.x) + g.x) % g.x"),
-            "periodic wrap must add the grid size before the second remainder"
+            !code.contains("+ g.x) % g.x") && !code.contains("+ g) % g"),
+            "the periodic wrap is using the bias-then-remainder idiom, which the \
+             optimiser folds away -- see the note in `boundary_body`"
+        );
+        assert!(
+            code.contains("p - g * (p / g)"),
+            "the periodic wrap should subtract the truncated quotient"
         );
     }
 

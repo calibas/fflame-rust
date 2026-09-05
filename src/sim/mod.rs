@@ -165,6 +165,31 @@ impl Params<'_> {
     }
 }
 
+/// A precomputed convolution kernel, built on the CPU and uploaded
+/// for the step shader to gather against.
+///
+/// The large-kernel models are not stencils: Lenia's rule is a ring
+/// whose weights vary continuously with radius, and SmoothLife's is a
+/// pair of anti-aliased discs. Neither is expressible as arithmetic on
+/// a fixed neighbourhood, and both are far cheaper to tabulate once
+/// than to evaluate per tap.
+pub struct SimKernel {
+    /// Half-width in cells. The table is `(2 * radius + 1)^2` taps.
+    pub radius: u32,
+    /// Weights, row-major from `-radius` to `+radius` in both axes.
+    /// A model that needs two kernels (SmoothLife's disc and annulus)
+    /// appends the second table after the first and indexes past it;
+    /// keeping them as separate blocks rather than interleaving them
+    /// keeps each gather's reads contiguous.
+    pub weights: Vec<f32>,
+}
+
+/// Largest kernel half-width the engine will build. At 32 a table is
+/// 65 x 65 taps, and a model may store two of them, so the buffer is
+/// sized for `2 * 65^2` floats -- 34 KB, which is nothing. The cost
+/// that matters is the GATHER: 4,225 taps a cell.
+pub const MAX_KERNEL_RADIUS: u32 = 32;
+
 /// One simulation model: the rule, its parameters, and how a cell's
 /// state is laid out in the four channels.
 ///
@@ -226,6 +251,14 @@ pub struct ModelDef {
     /// Names of the parameters that are diffusion rates on the Sims
     /// stencil. Empty for a rule with no time step.
     pub diffusion: &'static [&'static str],
+    /// Builds this model's convolution kernel, for the models whose
+    /// rule is a large-kernel gather rather than a stencil.
+    ///
+    /// Called whenever the parameters are uploaded, which is once per
+    /// batch rather than per step -- a 65 x 65 table is a few
+    /// thousand floats and rebuilding it is far cheaper than tracking
+    /// whether it went stale.
+    pub kernel: Option<fn(&Params) -> SimKernel>,
     /// A stability bound this model derives itself, overriding the
     /// Sims-stencil one.
     ///
@@ -261,6 +294,21 @@ pub struct ModelDef {
 }
 
 impl ModelDef {
+    /// Build this model's convolution kernel for the parameters in
+    /// force, clamped to the buffer the renderer allocated.
+    pub fn kernel_for(
+        &self,
+        params: &std::collections::BTreeMap<String, f32>,
+    ) -> Option<SimKernel> {
+        let build = self.kernel?;
+        let mut k = build(&Params { model: self, map: params });
+        k.radius = k.radius.clamp(1, MAX_KERNEL_RADIUS);
+        let taps = (2 * k.radius as usize + 1).pow(2);
+        // A hand-edited config can carry anything; the buffer cannot.
+        k.weights.truncate(2 * taps);
+        Some(k)
+    }
+
     /// The stability cap for THESE parameters.
     ///
     /// Linear stability of explicit Euler on the checkerboard mode:
@@ -386,6 +434,8 @@ pub static MODELS: &[&ModelDef] = &[
     &models::CAHN_HILLIARD,
     &models::OREGONATOR,
     &models::KOBAYASHI,
+    &models::LENIA,
+    &models::SMOOTHLIFE,
 ];
 
 /// Every colouring, in registration order. Append only.
@@ -571,13 +621,19 @@ mod tests {
                 m.default_dt,
                 at_defaults
             );
-            assert!(
-                m.has(ModelFeature::NoTimeStep)
-                    == (m.diffusion.is_empty() && m.dt_bound.is_none()),
-                "{}: a model has a time step exactly when it has a stability bound \
-                 (Sims diffusion rates, or a derived one)",
-                m.name
-            );
+            // A rule with no time step must declare no bound either.
+            // The converse does NOT hold: Lenia advances by dt and has
+            // no stability bound at all, because its growth term is
+            // bounded in [-1, 1] and the state is clipped to [0, 1],
+            // so no dt can make it diverge -- only blur the dynamics,
+            // which `max_dt` handles.
+            if m.has(ModelFeature::NoTimeStep) {
+                assert!(
+                    m.diffusion.is_empty() && m.dt_bound.is_none(),
+                    "{}: a rule with no time step declares a stability bound",
+                    m.name
+                );
+            }
         }
     }
 
@@ -642,6 +698,57 @@ mod tests {
                         "{}: dt bound {r} at {} = {v}",
                         m.name,
                         pd.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// A kernel must be buildable, normalised and within the buffer at
+    /// every setting the sliders allow -- a radius past the cap would
+    /// read off the end of the table, and weights that do not sum to
+    /// one would silently rescale the rule.
+    #[test]
+    fn a_declared_kernel_is_sane_across_its_parameter_range() {
+        for m in MODELS {
+            let Some(build) = m.kernel else { continue };
+            let mut cases = vec![std::collections::BTreeMap::new()];
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max] {
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(pd.name.to_string(), v);
+                    cases.push(map);
+                }
+            }
+            for map in cases {
+                let k = build(&Params { model: m, map: &map });
+                let taps = (2 * k.radius as usize + 1).pow(2);
+                assert!(
+                    k.radius >= 1 && k.radius <= MAX_KERNEL_RADIUS,
+                    "{}: kernel radius {} outside 1..={MAX_KERNEL_RADIUS}",
+                    m.name,
+                    k.radius
+                );
+                assert!(
+                    k.weights.len() == taps || k.weights.len() == 2 * taps,
+                    "{}: {} weights for a radius-{} kernel ({taps} taps)",
+                    m.name,
+                    k.weights.len(),
+                    k.radius
+                );
+                assert!(
+                    k.weights.iter().all(|w| w.is_finite() && *w >= 0.0),
+                    "{}: kernel has a negative or non-finite weight",
+                    m.name
+                );
+                // Each block must be normalised: the rule reads the
+                // gather as an average.
+                for (i, block) in k.weights.chunks(taps).enumerate() {
+                    let sum: f64 = block.iter().map(|w| *w as f64).sum();
+                    assert!(
+                        (sum - 1.0).abs() < 1e-4,
+                        "{}: kernel block {i} sums to {sum}, not 1",
+                        m.name
                     );
                 }
             }

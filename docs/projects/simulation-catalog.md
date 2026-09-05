@@ -619,6 +619,36 @@ ship it as a `Pattern` init variant later, not in phase 1.
 **Stages.** `update` (LUT gather), `color`. **Colouring.** `channel`
 with the Lenia-style palette, `age`.
 
+**Measured 2026-09-05** (`proto_large_kernel.py`, 256², 600 steps),
+shipped the same day. No paper was available for this one, so what was
+checked is that the formulas AS RECORDED above produce the behaviour
+claimed for them.
+
+- **σ is the parameter that decides whether there is anything to look
+  at.** R = 13, μ = 0.15, σ = 0.015 — the constants recorded for
+  Orbium — give a living filamentary field, still moving at 600 steps,
+  with 3.6% of cells on a soft edge. Widening σ freezes it: 0.03 gives
+  1.5% edge, and 0.05 and 0.07 less still, all saturated. The exact σ
+  is still `[verify]` against Chan's table; what is now established is
+  that 0.015 works and that the neighbourhood of 0.03+ does not.
+- **Orbium itself is NOT shipped**, as the entry anticipated: the
+  creature needs its specific 20×20 array, which is a `Pattern` init
+  the engine does not have. What ships is the soup those constants
+  make from noise, under the preset name `soup`.
+- **Multi-ring kernels and the polynomial and rectangular cores are
+  not implemented.** Their formulas are marked `[verify]` here and
+  nothing has verified them; shipping a `rings` slider that had never
+  been run would break the catalogue's own rule.
+- **The seed must carry structure at the kernel's scale.** A per-cell
+  random field is averaged flat by a radius-13 ring before anything
+  can grow, so both the prototype and the shader seed in patches of
+  R cells.
+- **Cost, measured on the GPU**: R = 13 at 512² is 729 taps a cell,
+  1.91e8 taps a step, at **3.36 ms/step — 298 steps/s**, against
+  phase 3's gate of 60. The direct gather is enough; the shared-memory
+  tile held in reserve is not needed. See the gate note in
+  `simulation-fractals.md`.
+
 ---
 
 ## 9. SmoothLife
@@ -657,6 +687,26 @@ accumulators. Periodic.
 **Presets.** Rafler's glider set (above). **Seeds.** `Noise` at 0.5
 density with blobs; the soup organises itself within ~100 steps.
 **Stages.** `update`, `color`. **Colouring.** `channel`, `age`.
+
+**Measured 2026-09-05** (`proto_large_kernel.py`, 256², 400 steps),
+shipped the same day.
+
+- **Rafler's glider set produces the characteristic smooth
+  labyrinth**, with ~10% of cells on a soft edge, at dt 0.1 and 0.3
+  alike and at both rᵢ = 7 and rᵢ = 4. The soup organises by ~100
+  steps as the entry says.
+- **Only the smooth time form ships** (`f' = f + dt(s − f)`), which is
+  the one that stays in [0, 1]; the discrete form is a `mode` the
+  model does not expose. Setting dt = 1 recovers it.
+- **Both averages come from ONE gather** with two accumulators, so the
+  kernel table carries two blocks — the disc, then the annulus —
+  rather than two tables. Reading the field twice would double the
+  only expensive part.
+- **This model is what caught the periodic-wrap bug.** Its annulus
+  carries its weight at the OUTER radius, so a wrap that does not wrap
+  is 23% of the gather; its CPU mirror disagreed by 0.228 at the edges
+  while the interior was bit-exact. Lenia hid the same bug even at
+  radius 6. See `simulation-fractals.md`.
 
 ---
 
