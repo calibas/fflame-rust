@@ -1264,3 +1264,231 @@ fn a_slow_kernel_never_trips_the_gpu_watchdog() {
     assert!(!lost.load(Ordering::SeqCst), "the device was lost: the submissions are too long");
     assert_eq!(bad, 0, "invalid states after the run");
 }
+
+/// The two-pass machinery itself, against a CPU mirror of one step.
+///
+/// A fourth-order model is two dispatches, and the thing that can go
+/// wrong is the ORDERING: if pass 2 read the field pass 1 was written
+/// from rather than the one it wrote, the result is still a smooth
+/// evolving field that looks like a PDE. This mirrors both passes on
+/// the CPU -- including the intermediate stored in `.y` -- so a
+/// ping-pong that lost a swap cannot pass.
+#[test]
+fn cahn_hilliard_matches_a_cpu_mirror_through_both_passes() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "cahn_hilliard".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 5;
+    cfg.dt = 0.04;
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let start = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // Three steps: enough that a one-step-late read would drift well
+    // past tolerance, few enough that f32 rounding has not compounded.
+    const STEPS: u32 = 3;
+    r.run_steps(&device, &queue, &cfg, STEPS);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let (d, gamma) = (1.0f32, 0.5f32);
+    let dt = 0.04f32;
+    let mut c: Vec<f32> = start.iter().map(|px| px[0]).collect();
+    let lap = |f: &[f32], x: usize, y: usize| -> f32 {
+        let l = f[y * N + (x + N - 1) % N];
+        let rr = f[y * N + (x + 1) % N];
+        let u = f[((y + N - 1) % N) * N + x];
+        let dn = f[((y + 1) % N) * N + x];
+        l + rr + u + dn - 4.0 * f[y * N + x]
+    };
+    for _ in 0..STEPS {
+        // Pass 1: the chemical potential, into its own array -- which
+        // is exactly what the .y channel is on the GPU.
+        let mut mu = vec![0.0f32; N * N];
+        for y in 0..N {
+            for x in 0..N {
+                let v = c[y * N + x];
+                mu[y * N + x] = v * v * v - v - gamma * lap(&c, x, y);
+            }
+        }
+        // Pass 2: reads the potential every cell just wrote.
+        let mut next = vec![0.0f32; N * N];
+        for y in 0..N {
+            for x in 0..N {
+                next[y * N + x] = (c[y * N + x] + dt * d * lap(&mu, x, y)).clamp(-4.0, 4.0);
+            }
+        }
+        c = next;
+    }
+
+    let mut worst = 0.0f32;
+    for i in 0..N * N {
+        worst = worst.max((c[i] - got[i][0]).abs());
+    }
+    println!("Cahn-Hilliard {STEPS} steps vs CPU mirror: worst |delta| = {worst:.3e}");
+    assert!(
+        worst < 1e-5,
+        "GPU and CPU disagree by {worst:.3e} after {STEPS} two-pass steps"
+    );
+}
+
+/// Cahn-Hilliard must conserve the mean composition EXACTLY.
+///
+/// The update is a discrete divergence: a Laplacian sums to zero over
+/// a periodic lattice, so the mean cannot move except by rounding.
+/// That is the equation's physical content -- material is transported,
+/// not created -- and it is invisible in a picture, because a field
+/// that slowly gains material still separates into plausible domains.
+/// The CPU prototype holds it to 1.2e-16 in f64 over 40,000 steps;
+/// f32 on the GPU is looser, and the tolerance below is against the
+/// per-step rounding rather than against zero.
+#[test]
+fn cahn_hilliard_conserves_the_mean_composition() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    for mean in [0.0f32, 0.4] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "cahn_hilliard".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 5;
+        cfg.model_params.insert("mean".into(), mean);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let m0 = {
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+            f.iter().map(|px| px[0] as f64).sum::<f64>() / f.len() as f64
+        };
+        r.run_steps(&device, &queue, &cfg, 4000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let m1 = f.iter().map(|px| px[0] as f64).sum::<f64>() / f.len() as f64;
+        let sd = {
+            let mu = m1;
+            (f.iter().map(|px| (px[0] as f64 - mu).powi(2)).sum::<f64>() / f.len() as f64).sqrt()
+        };
+        println!(
+            "Cahn-Hilliard mean {mean}: {m0:.6} -> {m1:.6}, drift {:.2e}, sd {sd:.4}",
+            (m1 - m0).abs()
+        );
+        // It must have actually separated, or conservation is trivial.
+        assert!(sd > 0.5, "mean {mean}: the field did not separate (sd {sd:.4})");
+        assert!(
+            (m1 - m0).abs() < 2e-4,
+            "mean {mean}: composition drifted by {:.2e} over 4,000 steps -- the update \
+             is not in divergence form",
+            (m1 - m0).abs()
+        );
+    }
+}
+
+/// Swift-Hohenberg must select the wavelength it advertises.
+///
+/// `lambda = 2*pi/q0` is the model's whole claim and the thing the
+/// discretisation is most likely to break: the Sims kernel the other
+/// models use is a Laplacian scaled by 0.3, which would move the
+/// selected wavelength by 1/sqrt(0.3) -- 83% wrong, and still a
+/// perfectly attractive picture. So this measures the wavelength and
+/// checks it TRACKS the parameter.
+///
+/// The observable is zero crossings along rows: a band-limited field
+/// crosses its mean twice per wavelength, so a line scan gives
+/// `2 * length / crossings` with no FFT and no sensitivity to
+/// amplitude. A line scan of an ISOTROPIC 2-D pattern reads long,
+/// because a row cuts most of the pattern's wavefronts obliquely and
+/// sees `k cos(theta)` rather than `k` -- sqrt(2) for a Gaussian
+/// random field, and measured at 1.58-1.72 here across the wavelengths
+/// where the field has converged. The test pins that band, which is
+/// what makes it discriminating: the Sims kernel would multiply every
+/// wavelength by 1/sqrt(0.3) = 1.83 and put the ratio near 2.9.
+///
+/// Only short wavelengths are checked, and that is not arbitrary. The
+/// pattern grows on a 1/r timescale and r is `drive * q0^4`, so
+/// doubling the wavelength costs SIXTEEN times the steps: measured at
+/// 12,000 steps, lambda = 10 reaches sd 0.45 and lambda = 32 only
+/// 0.012 -- still seed noise, and its apparent wavelength is the
+/// noise's, not the model's.
+#[test]
+fn swift_hohenberg_selects_the_wavelength_it_advertises() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+    let mut measured = Vec::new();
+    for target in [10.0f32, 12.0, 16.0] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "swift_hohenberg".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 7;
+        cfg.model_params.insert("wavelength".into(), target);
+        cfg.model_params.insert("drive".into(), 2.0);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        // Long wavelengths grow on a 1/r timescale and r falls as the
+        // fourth power of 1/lambda, so the slower one sets the count.
+        r.run_steps(&device, &queue, &cfg, 12000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+        let n = N as usize;
+        let mean = f.iter().map(|px| px[0] as f64).sum::<f64>() / f.len() as f64;
+        let sd = (f.iter().map(|px| (px[0] as f64 - mean).powi(2)).sum::<f64>()
+            / f.len() as f64)
+            .sqrt();
+        let mut crossings = 0usize;
+        for y in 0..n {
+            for x in 0..n {
+                let a = f[y * n + x][0] as f64 - mean;
+                let b = f[y * n + (x + 1) % n][0] as f64 - mean;
+                if (a < 0.0) != (b < 0.0) {
+                    crossings += 1;
+                }
+            }
+        }
+        let lambda = 2.0 * (n * n) as f64 / crossings.max(1) as f64;
+        println!(
+            "Swift-Hohenberg wavelength {target}: line-scan {lambda:.2} cells, \
+             ratio {:.3}, sd {sd:.4}",
+            lambda / target as f64
+        );
+        assert!(
+            sd > 0.15,
+            "wavelength {target}: the field has not converged (sd {sd:.4}) -- the \
+             measurement below would be reading seed noise"
+        );
+        let ratio = lambda / target as f64;
+        assert!(
+            (1.35..1.95).contains(&ratio),
+            "wavelength {target}: line-scan/advertised is {ratio:.3}, outside the \
+             measured 1.6 line-scan bias -- the Laplacian or its scale is wrong \
+             (the Sims kernel would put this near 2.9)"
+        );
+        measured.push(lambda);
+    }
+    // And it must TRACK the parameter, not merely sit in the band:
+    // a model that ignored the slider entirely would pass every check
+    // above at one wavelength and fail this one.
+    let tracked = measured[2] / measured[0];
+    println!("Swift-Hohenberg tracking: 16/10 measured as {tracked:.3} (advertised 1.6)");
+    assert!(
+        (tracked - 1.6).abs() < 0.32,
+        "the selected wavelength does not track the parameter: 16/10 came out {tracked:.3}"
+    );
+}

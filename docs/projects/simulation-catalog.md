@@ -403,6 +403,51 @@ the FFT (pipeline §3). Tier 2, and honest about it in the tooltip.
 **Stages.** `update` ×2, `color`. **Colouring.** `channel` (diverging
 palette about 0), `hillshade`.
 
+**Measured 2026-09-04** (`proto_pde.py`, 256², 5-point Laplacian),
+shipped 2026-09-05. Three of the four things above were wrong.
+
+- **The dt bound is CONFIRMED**: 2/(8 − q₀²)² = 0.0325 at λ = 16, and
+  the ladder is stable at 0.03249 and diverges at 0.03574.
+- **λ = 2π/q₀ is CONFIRMED** — the claim most at risk from the
+  discretisation, since the Sims kernel the other models use is a
+  Laplacian scaled by 0.3 and would have put the wavelength 83% out.
+  Measured 16.5 cells against 16.0, with a spectral peak 21× the mean.
+  This is why the model uses the **5-point** Laplacian; there is a
+  note about it in the source and the prototype.
+- **r = 0.2 is REFUTED and the parameterisation with it.** The
+  band-pass is only as selective as q₀⁴: growth at the band is r,
+  growth at the uniform mode is r − q₀⁴, and q₀⁴ = 0.024 at λ = 16. At
+  r = 0.2 the ratio is 8.4, the uniform mode grows nearly as fast as
+  the pattern, and the cubic quenches the field into ~100-cell blobs
+  with no pattern at all — an attractive picture, and not this model.
+  Every ratio from 0.1 to 4 gives a clean 16.5-cell pattern. The
+  textbook q₀ = 1 hides the problem because q₀⁴ = 1 swamps any
+  sensible r. **So the shipped model exposes `wavelength` (cells) and
+  a RELATIVE `drive` = r/q₀⁴**, which is the same equation with the
+  drive measured in units of the band's own selectivity — one slider
+  position then means the same thing at every wavelength, which a
+  literal r cannot (at λ = 64, q₀⁴ = 9.3e-5).
+- **The hexagon preset is REFUTED and not shipped.** g = 1.0 does not
+  give hexagons; it gives a uniform field. The quadratic g·u² competes
+  with the cubic at the pattern's own amplitude ~√r, so against
+  r = 0.05 a g of 1 is not a symmetry-breaking nudge but the dominant
+  term, and it drives the field to the uniform fixed point near u = g.
+  Sweeping g at two drives: skew (the discriminator — a hexagonal
+  lattice's three modes at 120° give a skewed one-point distribution,
+  stripes give 0) runs 0.00 → −0.04 → −0.11 → −0.23 → −0.43 → −1.85
+  for g = 0 … 0.3, and past ~0.35 the field goes uniform (sd 0.0000).
+  A focused hunt near onset — eight (drive, g) pairs at 16,000 steps —
+  produced spots-and-worms mixtures, never an ordered hexagonal
+  lattice. SH's hexagons are subcritical: they coexist with the flat
+  state and need nucleation or a far longer anneal, not a noise seed.
+  **Shipped as `spots` (g = 0.25, skew −1.02), named for what it
+  actually produces**, alongside `labyrinth` (g = 0). The slider stops
+  at 0.35.
+- Settles at 4,600 steps (labyrinth) and 5,900 (spots) at 256².
+  Wavelength costs steps steeply: r ∝ q₀⁴, so doubling the wavelength
+  is 16× the steps — at 12,000 steps λ = 10 reaches sd 0.45 and
+  λ = 32 only 0.012, still seed noise.
+
 ---
 
 ## 7. Cahn–Hilliard
@@ -433,6 +478,35 @@ guard; the dynamics should never need it.
 `Noise` about `mean`.
 **Stages.** `update` ×2, `color`. **Colouring.** `channel` (two-tone),
 `hillshade` (the interfaces read as relief).
+
+**Measured 2026-09-04** (`proto_pde.py`, 256²), shipped 2026-09-05.
+
+- **The dt bound above is REFUTED, and it fails slowly enough to look
+  right.** dt ≤ 1/(32 D γ) = 0.0625 keeps only the γ∇⁴ term; the
+  cubic's contribution is the same order. Linearising about |c| = 1
+  gives the symbol `D L (3c² − 1 − γL)` over L ∈ [−8, 0], most
+  negative at the checkerboard: **dt ≤ 2/(D(16 + 64γ))** = 0.0417 at
+  the defaults. Measured: stable at 0.041667, diverges at 0.045833 —
+  the formula is exact. The old bound's failure is what makes this
+  worth writing down: at dt = 0.05625 the run is **finite for 400
+  steps and infinite by 1,000**, so a short ladder calls it stable.
+  The first version of this prototype used a 400-step ladder and did
+  exactly that; the ladder now runs 4,000.
+- **Mean composition conserved**: 1.2e-16 over 40,000 steps in f64,
+  and 3e-9 on the GPU in f32 over 4,000. The update is a discrete
+  divergence, so this is a property no picture can fake — a field that
+  slowly gains material still separates into plausible domains. It is
+  the model's GPU test.
+- **Coarsening measured**, domain size (first moment of the structure
+  factor) at mean 0: 6.2 cells at step 200, 8.5 at 1,000, 13.2 at
+  5,000, 18.6 at 20,000, 22.4 at 40,000 — an exponent of **0.25**
+  against the Lifshitz–Slyozov 1/3. The shortfall is expected at this
+  size (22 cells in a 256 box is into finite-size effects) and is
+  recorded rather than explained away. Droplets coarsen more slowly
+  still, 0.14 over the same range.
+- Never stills: it coarsens forever, so `steps` is a choice of how
+  coarse. Shipped presets use 20,000. c stays inside [−1.03, 1.02], so
+  the ±4 clamp in the kernel is a NaN guard that never binds.
 
 ---
 

@@ -478,6 +478,51 @@ for McCabe against the NumPy images.
 **Gate:** McCabe 1080p at the interactive budget; Lenia R = 13 at
 512² ≥ 60 steps/s; baselines.
 
+#### Wave 1 — the two-pass stage, and the two fourth-order PDEs
+
+**Done 2026-09-05.** Swift–Hohenberg and Cahn–Hilliard ship;
+`ModelDef::passes` is the infrastructure they needed.
+
+- **Two passes, one WGSL.** A fourth-order operator cannot be one
+  dispatch: the derivative of a derivative needs the *neighbours'*
+  first-pass values, which do not exist until every cell is written.
+  So `passes: 2` compiles the model's WGSL into two modules whose
+  entry points call `sim_step` and `sim_step2`; the whole string goes
+  into both, so a helper is written once. Both passes of step *i*
+  carry the same `sim_step_index()` and share one uniform ring slot —
+  a step is a step whatever it costs — and the double ping-pong lands
+  the field back where it started, so nothing downstream knows how
+  many passes a model has.
+- **A per-model `dt_bound`.** The Sims-diffusion cap from the phase-2
+  review does not describe a fourth-order operator, so `ModelDef` now
+  carries an optional `fn(&Params) -> f32`. It composes with the same
+  0.96 margin and the same three enforcement points.
+- **They do NOT use the Sims Laplacian.** Its Fourier symbol is
+  −0.3k², a Laplacian scaled by 0.3 — invisible in a second-order
+  model, where the scale is absorbed into a free diffusion constant.
+  Swift–Hohenberg *selects* the wavelength at which ∇² = −q₀², so the
+  scale would move it by 1/√0.3 and make the documented λ = 2π/q₀
+  wrong by 83%. Both use the standard 5-point kernel.
+- **What the prototype refuted**, which is the point of running one
+  (details and numbers in the catalogue, §6 and §7):
+  - Swift–Hohenberg's `r = 0.2` makes no pattern at all — the drive
+    has to be read relative to q₀⁴, and the shipped model exposes
+    `wavelength` and a relative `drive` because of it.
+  - Its `hexagons` preset makes a *uniform field*. Hexagons are
+    subcritical and did not order from a noise seed in any of eight
+    focused runs; `spots` ships instead, named for what was measured.
+  - Cahn–Hilliard's dt bound was too loose by 50% **and failed
+    slowly** — finite at 400 steps, infinite by 1,000 — so the first
+    ladder called it stable. Ladders now run 4,000 steps.
+- **Falsifiable per model**, as phase 2 established: a CPU mirror of
+  both passes (3.7e-9 — it catches a ping-pong that lost a swap, which
+  still looks like a PDE); Cahn–Hilliard's exact conservation of mean
+  composition (3e-9 over 4,000 GPU steps while the field separates to
+  sd 0.83); and Swift–Hohenberg's wavelength tracking its parameter,
+  measured by zero crossings against the line-scan bias of an
+  isotropic 2-D pattern.
+- Six new visual baselines; the sim suite reads 36/36.
+
 ### Phase 4 — agents
 
 Agent buffer, deposit buffer, resolve-into-field; Physarum and DLA;

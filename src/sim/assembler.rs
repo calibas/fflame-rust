@@ -185,7 +185,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (p.x >= g.x || p.y >= g.y) {
         return;
     }
-    textureStore(field_out, p, sim_step(textureLoad(field_in, p, 0), p));
+//__STEP_CALL__
 }
 "#;
 
@@ -452,16 +452,29 @@ pub fn assemble_seed(model: &ModelDef, init_kind: &str) -> String {
 }
 
 /// The step pass: one application of the model's rule to every cell.
-pub fn assemble_step(model: &ModelDef, boundary: SimBoundary) -> String {
+///
+/// `pass` is 0 for the first dispatch of a step and 1 for the second,
+/// which only a fourth-order PDE has ([`ModelDef::passes`]). Both
+/// modules carry the model's WHOLE `wgsl` -- so a helper written once
+/// is visible to both -- and differ only in which function the entry
+/// point calls.
+pub fn assemble_step(model: &ModelDef, boundary: SimBoundary, pass: u32) -> String {
     let rng_note = if model.has(ModelFeature::NeedsRng) {
         "// model draws random numbers: keyed by (seed, cell, step)\n"
     } else {
         ""
     };
+    // A whole-line marker: `splice` matches markers by line, so the
+    // call is spliced as a statement rather than as a name inside one.
+    let entry = if pass == 0 { "sim_step" } else { "sim_step2" };
+    let call = format!("    textureStore(field_out, p, {entry}(textureLoad(field_in, p, 0), p));");
     splice(
         STEP_TEMPLATE,
         boundary,
-        &[("//__MODEL__", &format!("{rng_note}{}", model.wgsl))],
+        &[
+            ("//__MODEL__", &format!("{rng_note}{}", model.wgsl)),
+            ("//__STEP_CALL__", &call),
+        ],
     )
 }
 
@@ -549,7 +562,12 @@ mod tests {
         ];
         for m in MODELS {
             for b in boundaries {
-                validate(&assemble_step(m, b), &format!("step {}/{:?}", m.name, b));
+                for pass in 0..m.passes {
+                    validate(
+                        &assemble_step(m, b, pass),
+                        &format!("step {}/{:?}/pass {pass}", m.name, b),
+                    );
+                }
             }
             for kind in crate::config::sim::SimInit::KINDS {
                 validate(&assemble_seed(m, kind), &format!("seed {}/{kind}", m.name));
