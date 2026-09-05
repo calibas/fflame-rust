@@ -2855,15 +2855,17 @@ impl ConfigManager {
             }
             ConfigPath::SimDt => {
                 let d: f32 = f32::try_from(value)?;
-                // The model's measured/derived stability bound at the
-                // diffusion rates in force, not a fixed 10: the explicit
-                // solver diverges past it.
+                // Stored as REQUESTED, bounded only by the model's own
+                // static ceiling. The stability cap depends on the
+                // other parameters, and applying it here made dt move
+                // when an unrelated slider did -- see the note on
+                // `SimModelParam` below. The cap is applied to the
+                // value the solver runs at, in `SimRenderer`.
                 #[cfg(feature = "engine-sim")]
-                let max_dt = crate::sim::model_or_default(&self.current.sim.model)
-                    .max_dt_for(&self.current.sim.model_params);
+                let ceiling = crate::sim::model_or_default(&self.current.sim.model).max_dt;
                 #[cfg(not(feature = "engine-sim"))]
-                let max_dt = 10.0f32;
-                self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, max_dt) } else { 1.0 };
+                let ceiling = 10.0f32;
+                self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, ceiling) } else { 1.0 };
             }
             ConfigPath::SimBoundary => {
                 let n = String::try_from(value)?;
@@ -2884,21 +2886,24 @@ impl ConfigManager {
                 }
             }
             ConfigPath::SimModelParam { param } => {
+                // ONE FIELD. Raising a diffusion rate does lower the
+                // stability cap, and an earlier version pulled `dt`
+                // down to meet it here -- which made the Time step
+                // slider move when the user dragged Mobility, and
+                // never move back, because the pull was one-way. A
+                // parameter these models default to sitting exactly at
+                // the cap (Cahn-Hilliard) turned every nudge into a
+                // ratchet.
+                //
+                // The solver is protected where it is actually run:
+                // `SimRenderer` clamps the uniform to
+                // `max_dt_for(params)` on every path, so no
+                // combination of stored values can diverge, and the
+                // effective step stays a pure function of the config
+                // -- which is what reproducibility needs. The panel
+                // says so when the cap binds.
                 let v: f32 = f32::try_from(value)?;
                 self.current.sim.model_params.insert(param.clone(), v);
-                // Raising a diffusion rate lowers the stability cap, so
-                // the dt already set may now be past it. Pull it down
-                // rather than leave the solver to diverge on the next
-                // step; the renderer clamps too, but a config that reads
-                // one dt and runs at another is a lie in the export.
-                #[cfg(feature = "engine-sim")]
-                {
-                    let max_dt = crate::sim::model_or_default(&self.current.sim.model)
-                        .max_dt_for(&self.current.sim.model_params);
-                    if self.current.sim.dt > max_dt {
-                        self.current.sim.dt = max_dt;
-                    }
-                }
             }
             ConfigPath::SimColoringParam { param } => {
                 let v: f32 = f32::try_from(value)?;
@@ -4692,6 +4697,90 @@ mod tests {
     }
 
     /// In the un-swap world add/delete subflame work regardless of
+
+    /// Editing a simulation model parameter must not move `dt`.
+    ///
+    /// It used to. The stability cap depends on the other parameters,
+    /// and the write arm pulled `dt` down to meet it -- one way, never
+    /// back up. Cahn-Hilliard defaults to a `dt` sitting exactly AT
+    /// its cap, so a single nudge of Mobility moved the Time step
+    /// slider, and wiggling Mobility ratcheted it toward zero. The
+    /// same went for the interface width, and for Swift-Hohenberg's
+    /// wavelength.
+    ///
+    /// Every parameter of every model is swept to its extremes here,
+    /// because the bug was not visible at the default of the one
+    /// parameter it was written for.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_sim_model_parameter_never_moves_the_time_step() {
+        for m in crate::sim::MODELS {
+            let mut config = FractalConfig::default();
+            config.sim.model = m.name.to_string();
+            config.sim.dt = m.default_dt;
+            let mut mgr = ConfigManager::new(config);
+            let dt0 = mgr.current.sim.dt;
+
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max, pd.min, pd.max] {
+                    mgr.update_param(
+                        ConfigPath::SimModelParam { param: pd.name.to_string() },
+                        ConfigValue::Float(v),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        mgr.current.sim.dt, dt0,
+                        "{}: setting {} = {v} moved dt from {dt0} to {}",
+                        m.name,
+                        pd.name,
+                        mgr.current.sim.dt
+                    );
+                }
+            }
+        }
+    }
+
+    /// A `dt` the user sets is stored as they set it.
+    ///
+    /// The companion to the test above: the cap belongs to the solver,
+    /// not to the stored value, so the panel and the config keep the
+    /// request. `SimRenderer` applies `max_dt_for` to the uniform on
+    /// every path -- that is what keeps the run stable, and
+    /// `rd_models_stay_stable_at_the_diffusion_slider_maxima` is the
+    /// test which pins it.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_requested_time_step_is_stored_as_requested() {
+        let mut config = FractalConfig::default();
+        config.sim.model = "cahn_hilliard".to_string();
+        let mut mgr = ConfigManager::new(config);
+
+        // Well above the stability cap at these parameters (0.04), and
+        // within the model's static ceiling (0.2).
+        mgr.update_param(ConfigPath::SimDt, ConfigValue::Float(0.15)).unwrap();
+        assert_eq!(mgr.current.sim.dt, 0.15, "the requested dt was not kept");
+
+        // Raising mobility drops the cap a long way; the request still
+        // stands, and the SOLVER is what gets capped.
+        mgr.update_param(
+            ConfigPath::SimModelParam { param: "mobility".to_string() },
+            ConfigValue::Float(4.0),
+        )
+        .unwrap();
+        assert_eq!(mgr.current.sim.dt, 0.15, "a parameter edit rewrote the request");
+        let effective = crate::sim::model_or_default("cahn_hilliard")
+            .max_dt_for(&mgr.current.sim.model_params);
+        assert!(
+            effective < 0.15,
+            "the cap should bind here, or this test proves nothing (got {effective})"
+        );
+
+        // Past the static ceiling is still refused: a hand-edited file
+        // should not carry an absurd step.
+        mgr.update_param(ConfigPath::SimDt, ConfigValue::Float(99.0)).unwrap();
+        assert_eq!(mgr.current.sim.dt, 0.2, "the static ceiling was not applied");
+    }
+
     /// the current editing target. Deleting a subflame either *is*
     /// the active one (target falls back to Main) or has a lower
     /// index than the active one (target index shifts down).
