@@ -737,6 +737,23 @@ fn pyr_size(l: i32) -> vec2<i32> {
     return s;
 }
 
+// The level count and every level's size, computed ONCE per
+// invocation. A five-scale McCabe step makes twenty bilinear reads
+// and each needed the size of its level; recomputing that by loop
+// per read was measurable, and this table is what the reads use.
+// A model calls `pyr_prepare()` at the top of its step.
+var<private> pyr_top_cached: i32 = 0;
+var<private> pyr_sizes: array<vec2<i32>, 8>;
+
+fn pyr_prepare() {
+    pyr_top_cached = pyr_levels() - 1;
+    var s = sim_grid();
+    for (var i = 0; i < 8; i = i + 1) {
+        pyr_sizes[i] = s;
+        s = (s + vec2<i32>(1, 1)) / 2;
+    }
+}
+
 // One texel of level l, channel .x, with the configured boundary
 // applied at THAT level's size. A switch rather than an array: WGSL
 // has no dynamic indexing of texture bindings without an extension.
@@ -774,7 +791,7 @@ fn pyr_level_avg(l: i32, pos: vec2<f32>) -> f32 {
     let f0 = floor(f);
     let t = f - f0;
     let i0 = vec2<i32>(f0);
-    let g = pyr_size(l);
+    let g = pyr_sizes[l];
     let a = pyr_load_sized(l, i0, g);
     let b = pyr_load_sized(l, i0 + vec2<i32>(1, 0), g);
     let c = pyr_load_sized(l, i0 + vec2<i32>(0, 1), g);
@@ -785,7 +802,7 @@ fn pyr_level_avg(l: i32, pos: vec2<f32>) -> f32 {
 // Trilinear: the two levels bracketing a fractional level, blended.
 // Eight loads for an average over any radius.
 fn pyr_sample(level: f32, pos: vec2<f32>) -> f32 {
-    let top = f32(pyr_levels() - 1);
+    let top = f32(pyr_top_cached);
     let lf = clamp(level, 0.0, top);
     let l0 = i32(floor(lf));
     let l1 = min(l0 + 1, i32(top));

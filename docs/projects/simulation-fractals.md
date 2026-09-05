@@ -642,6 +642,45 @@ alternative cores, SmoothLife's discrete time form, Oregonator
 spirals and target patterns, McCabe's `variation_blur`, and the
 `hillshade` colouring the plan listed for three models.
 
+**Review (2026-09-05) of the six phase-3 commits, what it found and
+measured:**
+
+- **The seed pass read a stale kernel radius.** `seed()` wrote its
+  uniform BEFORE the parameter arrays, and building the kernel is
+  what sets `kernel_radius` — so Lenia's seed, which sizes its noise
+  patches by that radius, used whatever the previous model had left
+  (1 on a fresh renderer, i.e. per-cell noise, the very thing its own
+  docs say the ring averages flat). Every export is a fresh renderer,
+  so the shipped soup baseline was the wrong seed. Order swapped; the
+  baseline regenerated; exactly one baseline moved.
+- **The pyramid was allocated for every model.** A third of a field
+  texture again — 11 MB at 1080p, 44 MB at 4K — for the nineteen
+  models that never read it. Now allocated by `ensure_pyramid` only
+  for a `NeedsPyramid` model and freed when the model changes away.
+- **McCabe 5.25 → 4.41 ms/step at 1080p** (227 steps/s) by computing
+  the level count and every level's size once per invocation instead
+  of by loop in each of the twenty bilinear reads. The CPU mirror is
+  unchanged at 1.2e-7.
+- **The per-frame kernel rebuild is not worth caching**: measured at
+  8 µs (Lenia R = 13) to 49 µs (R = 32) per build, twice a frame.
+- **Nothing exercised the min/max ring's wrap.** The clearing write
+  splits in two when a batch straddles slot 257, and a wrong split
+  would not fail — the range would fall back to [−1, 1] and the
+  picture would drift. The reduce test now runs 600 steps across two
+  wraps and checks the last slot bit-exact.
+- **A new registry invariant**: every `mparam(N)` and `cparam(N)` in
+  a definition's WGSL must index a declared parameter. The buffer is
+  padded, so an index past the end reads 0.0 silently. All 25
+  definitions pass; the check was run by hand in this review and
+  belongs in the suite.
+- **A false claim in Kobayashi's docs**: "the presets pin a 300 × 300
+  grid". A preset carries no grid. The grid sets the vessel's size,
+  not the crystal's; corrected to say so.
+- Re-read against their sources with nothing else moving: the
+  Oregonator kernel against the prototype's step, the Swift–Hohenberg
+  and Cahn–Hilliard bounds, SmoothLife's anti-alias band, and the
+  Lenia core; and every CPU mirror still holds.
+
 **Hodgepodge corrected (2026-09-05), a phase-2 model.** The same batch
 of papers settled a `[verify]` flag that had been open since the model
 shipped: the rule everybody quotes is not the one Gerhardt & Schuster

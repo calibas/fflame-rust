@@ -813,6 +813,51 @@ mod tests {
         assert_eq!(pyramid_levels(1920, 8), 2);
     }
 
+    /// Every `mparam(N)` in a model's WGSL, and every `cparam(N)` in a
+    /// colouring's, must index a parameter the definition declares.
+    ///
+    /// The parameter buffer is padded to 16 floats, so an index past
+    /// the declared count reads 0.0 without any error -- a model that
+    /// listed its parameters in one order and its `mparam` calls in
+    /// another would run with a zero where it expected a rate, and
+    /// still render something. This is the check the phase-3 review
+    /// ran by hand once; it belongs in the suite.
+    #[test]
+    fn every_parameter_index_names_a_declared_parameter() {
+        fn indices(wgsl: &str, accessor: &str) -> Vec<usize> {
+            let mut out = Vec::new();
+            let mut rest = wgsl;
+            while let Some(pos) = rest.find(accessor) {
+                rest = &rest[pos + accessor.len()..];
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(n) = digits.parse::<usize>() {
+                    out.push(n);
+                }
+            }
+            out
+        }
+        for m in MODELS {
+            for i in indices(m.wgsl, "mparam(").into_iter().chain(indices(m.wgsl_seed, "mparam(")) {
+                assert!(
+                    i < m.parameters.len(),
+                    "{}: mparam({i}) but only {} parameters are declared",
+                    m.name,
+                    m.parameters.len()
+                );
+            }
+        }
+        for c in COLORINGS {
+            for i in indices(c.wgsl, "cparam(") {
+                assert!(
+                    i < c.parameters.len(),
+                    "{}: cparam({i}) but only {} parameters are declared",
+                    c.name,
+                    c.parameters.len()
+                );
+            }
+        }
+    }
+
     #[test]
     fn an_unknown_name_falls_back_rather_than_panicking() {
         assert_eq!(model_or_default("no_such_model").name, MODELS[0].name);
