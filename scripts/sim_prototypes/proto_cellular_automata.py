@@ -88,6 +88,56 @@ class Churn:
         return float(np.mean(self.hist[-max(3, len(self.hist) // 10):])) if self.hist else 0.0
 
 
+def run_hodgepodge_gs(q=100, k1=2, k2=3, g=10, steps=600, seed=1, snaps=(), tag=""):
+    """Gerhardt and Schuster's OWN rule, from the paper (Physica D 36
+    (1989) 209-221, eqs. 3-9), which differs from the widely-circulated
+    version in three places:
+
+        K = # ill neighbours          (eq. 3, x = V)
+        I = # infected neighbours     (eq. 4, 0 < x < V)
+        S = sum of x over the INFECTED cells only   (eq. 6)
+
+        healthy   x' = floor(K/k1) + floor(I/k2)    <- ill over k1
+        infected  x' = min(floor(S/I) + g, V)       <- infected only
+        ill       x' = 0
+
+    Figure 2's caption states that "the center cell is always
+    considered as a neighbour of itself", which is what keeps I >= 1
+    for an infected cell and the division defined.
+
+    The circulated version has k1 and k2 the other way round, sums S
+    over ALL cells, and divides by (A + B + 1). The paper's own
+    constants are V = 100, k1 = 2, k2 = 3 and g between 1 and 20."""
+    rg = np.random.default_rng(seed)
+    s = rg.integers(0, q + 1, (N, N)).astype(np.int64)
+    ch, t0 = Churn(), time.time()
+    for step in range(1, steps + 1):
+        nb = moore(s)
+        inf_mask = [((n > 0) & (n < q)) for n in nb]
+        I = sum(m.astype(np.int64) for m in inf_mask)
+        K = sum((n == q).astype(np.int64) for n in nb)
+        S = sum(np.where(m, n, 0) for m, n in zip(inf_mask, nb))
+        # The cell counts itself when it is infected.
+        self_inf = (s > 0) & (s < q)
+        I_self = I + self_inf.astype(np.int64)
+        S_self = S + np.where(self_inf, s, 0)
+        healthy = K // k1 + I // k2
+        infected = S_self // np.maximum(I_self, 1) + g
+        nxt = np.where(s == 0, healthy, np.where(s == q, 0, infected))
+        nxt = np.minimum(nxt, q)
+        ch.feed((nxt != s).mean())
+        s = nxt
+        if step in snaps:
+            save_states(f"hodgepodge_gs{tag}_{step}.png", s, q + 1)
+    save_states(f"hodgepodge_gs{tag}.png", s, q + 1)
+    return {"model": "hodgepodge_gerhardt_schuster",
+            "params": f"q={q} k1={k1} k2={k2} g={g}",
+            "steps_run": steps, "developed_at": ch.developed(),
+            "churn_plateau": round(ch.plateau(), 4),
+            "distinct_states": int(len(np.unique(s))),
+            "seconds": round(time.time() - t0, 1)}
+
+
 def run_hodgepodge(q=200, k1=2, k2=3, g=70, steps=600, seed=1, snaps=()):
     """healthy: A/k1 + B/k2 ; infected: S/(A+B+1) + g ; ill: 0 ; capped at q."""
     rg = np.random.default_rng(seed)

@@ -1,6 +1,6 @@
 {
   "flame": {
-    "name": "hodgepodge-spirals",
+    "name": "hodgepodge-dewdney",
     "transforms": [
       {
         "a": 0.5,
@@ -118,8 +118,8 @@
       "scale": 0.005
     },
     "model_params": {
-      "variant": 0.0,
-      "g": 25.0
+      "variant": 1.0,
+      "g": 70.0
     }
   }
 }

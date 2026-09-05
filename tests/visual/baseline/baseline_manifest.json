@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "89a360cf",
+  "git_hash": "784a980c",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -514,9 +514,13 @@
       "bytes": 5947,
       "sha256": "1db2346aa2ef7e4ea04b05d3bbab83e585ee9823fe0c9e75686de909c8ece51e"
     },
-    "sim-hodgepodge-spirals.png": {
+    "sim-hodgepodge-dewdney.png": {
       "bytes": 35172,
       "sha256": "f83ff9b2dbe8efa14287a865f3d0b8dafdffc0281279127d4e4274d9845dcf98"
+    },
+    "sim-hodgepodge-spirals.png": {
+      "bytes": 32840,
+      "sha256": "c1ece631c7eb7e35f9e7156623c0662d61c521cdf0284ce0b6a1b12a38e585da"
     },
     "sim-ising-coarsening.png": {
       "bytes": 7320,

@@ -631,23 +631,42 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 // they declare NoTimeStep and the panel hides the dt slider.
 // ---------------------------------------------------------------------
 
-/// The hodgepodge machine (Gerhardt-Schuster), a Belousov-Zhabotinsky
-/// cellular automaton.
+/// The hodgepodge machine, a Belousov-Zhabotinsky cellular automaton.
 ///
-/// States 0..q: 0 healthy, q ill, everything between infected. With A
-/// the count of infected neighbours, B the count of ill ones and S the
-/// sum of the cell and its neighbours,
+/// States 0..q: 0 healthy, q ill, everything between infected. **Two
+/// rules ship, because the one everybody quotes is not the one the
+/// paper states**, and both make BZ scrolls.
+///
+/// Gerhardt and Schuster, *Physica D* 36 (1989) 209-221, eqs. (3)-(9),
+/// with K the count of ILL neighbours, I the count of INFECTED ones
+/// and S the sum of the states of the infected cells only:
 ///
 /// ```text
-/// healthy:   s' = floor(A/k1) + floor(B/k2)
-/// infected:  s' = floor(S/(A+B+1)) + g
+/// healthy:   s' = floor(K/k1) + floor(I/k2)
+/// infected:  s' = min(floor(S/I) + g, q)
 /// ill:       s' = 0
 /// ```
 ///
-/// capped at q. Measured on the CPU prototype: the secondary-source
-/// parameters q=200, k1=2, k2=3, g=70 give the BZ spiral field, but
-/// NOT by step 50 -- at 50 it is one state with scattered specks, and
-/// it is fully spiralled by 200.
+/// Figure 2's caption -- "the center cell is always considered as a
+/// neighbour of itself" -- is what keeps I >= 1 for an infected cell,
+/// so that division is always defined.
+///
+/// The widely circulated version (Dewdney's *Scientific American*
+/// column and the implementations descended from it) differs in three
+/// places: k1 and k2 are swapped, S runs over ALL cells rather than
+/// the infected ones, and the divisor is A + B + 1. That is what this
+/// engine shipped in phase 2, from a secondary source and flagged
+/// `[verify]` in the catalogue; reading the paper is what turned the
+/// flag into this parameter. It is kept because it is a real variant
+/// with its own look -- coarser, rounder scrolls -- and because a
+/// preset shipped under it.
+///
+/// Measured: with q=200, k1=2, k2=3 both rules give a developed scroll
+/// field by step 200 and NOT by step 50 -- at 50 it is one state with
+/// scattered specks. They want different g, because the paper's rule
+/// averages over the infected cells alone and its waves therefore run
+/// faster: g = 70 for the circulated rule, g = 25 for the paper's,
+/// where 70 gives a fine busy texture and 10 gives mush.
 ///
 /// Channels: `.x` = state, `.z` = age, `.w` spare.
 pub static HODGEPODGE: ModelDef = ModelDef {
@@ -669,47 +688,86 @@ pub static HODGEPODGE: ModelDef = ModelDef {
         },
         SimParamDef {
             name: "k1",
-            display_name: "k₁ (infection)",
+            display_name: "k₁",
             default: 2.0,
             min: 1.0,
             max: 16.0,
-            tooltip: "Divides the infected-neighbour count when a healthy cell is infected. \
-                      Larger values make infection harder to catch.",
+            tooltip: "Divides a neighbour count when a healthy cell catches the infection —                       the ill count under Gerhardt–Schuster's rule, the infected count under                       Dewdney's, which is one of the three places the two differ. Larger                       values make infection harder to catch.",
             choices: &[],
         },
         SimParamDef {
             name: "k2",
-            display_name: "k₂ (illness)",
+            display_name: "k₂",
             default: 3.0,
             min: 1.0,
             max: 16.0,
-            tooltip: "Divides the ill-neighbour count. With k₁ it sets how readily waves \
-                      nucleate.",
+            tooltip: "Divides the other neighbour count — infected under Gerhardt–Schuster,                       ill under Dewdney. With k₁ it sets how readily waves nucleate.",
             choices: &[],
         },
         SimParamDef {
             name: "g",
             display_name: "g (rate)",
-            default: 70.0,
+            default: 25.0,
             min: 1.0,
             max: 200.0,
-            tooltip: "How fast an infected cell progresses toward ill. Sets the wave speed \
-                      and therefore the spiral pitch.",
+            tooltip: "How fast an infected cell progresses toward ill. Sets the wave speed                       and therefore the spiral pitch.",
             choices: &[],
         },
+        SimParamDef {
+            name: "variant",
+            display_name: "Rule",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Which published rule to run. Gerhardt–Schuster is the 1989 paper's                       own: k₁ divides the ill count, and an infected cell averages the                       states of the infected cells around it. Dewdney's is the version that                       circulated afterwards — the counts swapped, and the average taken over                       every neighbour — and gives coarser, rounder scrolls.",
+            choices: &["Gerhardt–Schuster", "Dewdney"],
+        },
     ],
-    presets: &[SimPreset {
-        name: "spirals",
-        display_name: "BZ spirals",
-        params: &[("states", 200.0), ("k1", 2.0), ("k2", 3.0), ("g", 70.0)],
-        // Fully spiralled by 200; at 50 it is still one state with
-        // specks, which an earlier note claimed was "developed".
-        steps: 200,
-        init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
-    }],
+    presets: &[
+        SimPreset {
+            name: "spirals",
+            display_name: "BZ spirals",
+            params: &[
+                ("states", 200.0),
+                ("k1", 2.0),
+                ("k2", 3.0),
+                ("g", 25.0),
+                ("variant", 0.0),
+            ],
+            // Developed by 200; at 50 it is still one state with
+            // specks, which an earlier note claimed was "developed".
+            //
+            // g = 25 rather than the 70 the circulated rule uses: the
+            // paper's rule averages over the infected cells alone, so
+            // its waves run faster, and at 70 the scrolls are a fine
+            // busy texture. At 25 they open out into scrolls with
+            // visible spiral cores; at 10 the field is mush.
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "dewdney",
+            display_name: "BZ spirals (Dewdney rule)",
+            params: &[
+                ("states", 200.0),
+                ("k1", 2.0),
+                ("k2", 3.0),
+                ("g", 70.0),
+                ("variant", 1.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+    ],
     wgsl: r#"
 fn hp_count(c: bool) -> f32 {
     return select(0.0, 1.0, c);
+}
+
+// A neighbour's state if it is INFECTED, and zero otherwise: the sum
+// in Gerhardt-Schuster eq. (6) runs over the infected cells only.
+fn hp_inf(n: f32, q: f32) -> f32 {
+    return select(0.0, n, n > 0.0 && n < q);
 }
 
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -739,16 +797,35 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
         + hp_count(n3 > 0.0) + hp_count(n4 > 0.0) + hp_count(n5 > 0.0)
         + hp_count(n6 > 0.0) + hp_count(n7 > 0.0);
     let infected = nonzero - ill;
+    // Gerhardt-Schuster eq. (6): the sum over the INFECTED cells only.
+    let inf_sum = hp_inf(n0, q) + hp_inf(n1, q) + hp_inf(n2, q) + hp_inf(n3, q)
+        + hp_inf(n4, q) + hp_inf(n5, q) + hp_inf(n6, q) + hp_inf(n7, q);
 
+    let paper = mparam(4u) < 0.5;
     let cur = s.x;
     var next = 0.0;
     if (cur >= q) {
-        // Ill cells recover completely.
+        // Ill cells recover completely (eq. 8).
         next = 0.0;
     } else if (cur <= 0.0) {
-        next = floor(infected / k1) + floor(ill / k2);
+        // Healthy. The paper divides the ILL count by k1; the
+        // circulated rule has the two the other way round.
+        next = select(
+            floor(infected / k1) + floor(ill / k2),
+            floor(ill / k1) + floor(infected / k2),
+            paper,
+        );
     } else {
-        next = floor(total / (infected + ill + 1.0)) + g;
+        // Infected. The paper averages the states of the infected
+        // cells INCLUDING this one -- figure 2's caption makes the
+        // cell its own neighbour, which is what keeps the divisor at
+        // or above 1 and the division defined. The circulated rule
+        // averages every cell and divides by A + B + 1.
+        next = select(
+            floor(total / (infected + ill + 1.0)) + g,
+            floor((inf_sum + cur) / (infected + 1.0)) + g,
+            paper,
+        );
     }
     next = clamp(next, 0.0, q);
 

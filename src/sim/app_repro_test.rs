@@ -1718,3 +1718,139 @@ fn the_oregonator_front_travels_at_constant_speed() {
          that is not a wave travelling at constant speed"
     );
 }
+
+/// Both hodgepodge rules, against a CPU mirror of the equations as
+/// published.
+///
+/// The shipped rule was taken from a secondary source and carried a
+/// `[verify]` flag for a year; reading Gerhardt and Schuster's own
+/// paper showed it differs from theirs in THREE places -- k1 and k2
+/// swapped, the sum taken over every cell rather than the infected
+/// ones, and the divisor A + B + 1 rather than the infected count.
+/// Every one of those still produces a field of plausible BZ scrolls,
+/// which is exactly why a baseline image could not catch it and this
+/// can.
+///
+/// The states are integers held in f32 and exact to 2^24, so the
+/// comparison is for EQUALITY, not a tolerance.
+#[test]
+fn both_hodgepodge_rules_match_a_cpu_mirror_of_their_papers() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    const STEPS: u32 = 12;
+    const Q: i64 = 200;
+    const K1: i64 = 2;
+    const K2: i64 = 3;
+    const G: i64 = 70;
+
+    let run = |variant: f32| -> (Vec<i64>, Vec<i64>) {
+        let mut cfg = SimConfig::default();
+        cfg.model = "hodgepodge".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 4;
+        cfg.model_params.insert("states".into(), Q as f32);
+        cfg.model_params.insert("k1".into(), K1 as f32);
+        cfg.model_params.insert("k2".into(), K2 as f32);
+        cfg.model_params.insert("g".into(), G as f32);
+        cfg.model_params.insert("variant".into(), variant);
+
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let start: Vec<i64> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+            .iter()
+            .map(|px| px[0] as i64)
+            .collect();
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let end: Vec<i64> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+            .iter()
+            .map(|px| px[0] as i64)
+            .collect();
+        (start, end)
+    };
+
+    // `paper` selects Gerhardt-Schuster eqs. (3)-(9); otherwise the
+    // circulated variant.
+    let mirror = |start: &[i64], paper: bool| -> Vec<i64> {
+        let mut s = start.to_vec();
+        for _ in 0..STEPS {
+            let mut next = vec![0i64; N * N];
+            for y in 0..N {
+                for x in 0..N {
+                    let cur = s[y * N + x];
+                    let (mut ill, mut infected, mut all_sum, mut inf_sum) = (0i64, 0i64, cur, 0i64);
+                    for dy in -1i64..=1 {
+                        for dx in -1i64..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let nx = (x as i64 + dx).rem_euclid(N as i64) as usize;
+                            let ny = (y as i64 + dy).rem_euclid(N as i64) as usize;
+                            let n = s[ny * N + nx];
+                            all_sum += n;
+                            if n >= Q {
+                                ill += 1;
+                            } else if n > 0 {
+                                infected += 1;
+                                inf_sum += n;
+                            }
+                        }
+                    }
+                    next[y * N + x] = if cur >= Q {
+                        0
+                    } else if cur <= 0 {
+                        if paper {
+                            ill / K1 + infected / K2
+                        } else {
+                            infected / K1 + ill / K2
+                        }
+                    } else if paper {
+                        // The cell is its own neighbour (fig. 2), and
+                        // it is infected in this branch, so the
+                        // divisor is at least one.
+                        (inf_sum + cur) / (infected + 1) + G
+                    } else {
+                        all_sum / (infected + ill + 1) + G
+                    }
+                    .clamp(0, Q);
+                }
+            }
+            s = next;
+        }
+        s
+    };
+
+    let (start_gs, gpu_gs) = run(0.0);
+    let (start_dw, gpu_dw) = run(1.0);
+    assert_eq!(start_gs, start_dw, "the two runs must start from the same field");
+
+    let cpu_gs = mirror(&start_gs, true);
+    let cpu_dw = mirror(&start_dw, false);
+    let bad_gs = (0..N * N).filter(|&i| cpu_gs[i] != gpu_gs[i]).count();
+    let bad_dw = (0..N * N).filter(|&i| cpu_dw[i] != gpu_dw[i]).count();
+    println!(
+        "hodgepodge after {STEPS} steps: Gerhardt-Schuster {bad_gs} mismatches, \
+         Dewdney {bad_dw}, of {} cells",
+        N * N
+    );
+    assert_eq!(bad_gs, 0, "the Gerhardt-Schuster rule does not match the paper");
+    assert_eq!(bad_dw, 0, "the Dewdney rule does not match its published form");
+
+    // And the two must actually be different rules: a mis-wired enum
+    // that ran one of them twice would pass both mirrors above only if
+    // the mirror were wired the same wrong way, but it would sail
+    // through a baseline image either way.
+    let differing = (0..N * N).filter(|&i| gpu_gs[i] != gpu_dw[i]).count();
+    println!("   the two rules differ in {differing} of {} cells", N * N);
+    assert!(
+        differing > N * N / 10,
+        "the two variants produced nearly the same field ({differing} cells differ): \
+         the selector is not selecting"
+    );
+}

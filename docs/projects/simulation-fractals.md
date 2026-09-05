@@ -564,6 +564,19 @@ Full findings in the catalogue (§4 and §16).
   travelling wave from diffusion (0.41).
 - Four new visual baselines; 17 models.
 
+**Hodgepodge corrected (2026-09-05), a phase-2 model.** The same batch
+of papers settled a `[verify]` flag that had been open since the model
+shipped: the rule everybody quotes is not the one Gerhardt & Schuster
+state. Theirs divides the ILL count by k₁ (not the infected), averages
+over the INFECTED cells alone (not every cell), and divides by that
+count (not A + B + 1) — three differences, each of which still renders
+plausible BZ scrolls, which is exactly why the baseline could not
+catch it. Both rules now ship behind a `variant` parameter with the
+paper's as the default, pinned by a CPU mirror of each published form
+(0 mismatches in 4,096 cells; the two differ in 3,563 of them). The
+paper's rule runs faster and wants g = 25 where the circulated one
+wants 70.
+
 ### Phase 4 — agents
 
 Agent buffer, deposit buffer, resolve-into-field; Physarum and DLA;
