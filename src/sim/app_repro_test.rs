@@ -2054,3 +2054,299 @@ fn large_kernel_cost_against_radius() {
         }
     }
 }
+
+/// Read `count` u32s from a storage buffer, starting at `offset`
+/// bytes. The buffer must carry COPY_SRC.
+fn read_u32s(device: &Device, queue: &Queue, src: &Buffer, offset: u64, count: usize) -> Vec<u32> {
+    let bytes = (count * 4) as u64;
+    let buf = device.create_buffer(&BufferDescriptor {
+        label: Some("sim u32 readback"),
+        size: bytes,
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+    enc.copy_buffer_to_buffer(src, offset, &buf, 0, bytes);
+    queue.submit(std::iter::once(enc.finish()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    buf.slice(..).map_async(MapMode::Read, move |r| {
+        let _ = tx.send(r.is_ok());
+    });
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    assert!(rx.recv().unwrap_or(false), "buffer readback map failed");
+    let view = buf.slice(..).get_mapped_range();
+    view.chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect()
+}
+
+/// The reduce pass's ordering map, inverted -- a mirror of
+/// `minmax_unord` in the WGSL.
+fn minmax_unord(e: u32) -> f32 {
+    if e >> 31 != 0 {
+        f32::from_bits(e ^ 0x8000_0000)
+    } else {
+        f32::from_bits(!e)
+    }
+}
+
+/// CPU mirror of one pyramid level from the one below it: the 5x5
+/// [1 4 6 4 1]/16 blur at stride 2, periodic at the SOURCE size.
+fn cpu_pyramid_level(src: &[f32], sw: usize, sh: usize) -> (Vec<f32>, usize, usize) {
+    const G: [f32; 5] = [0.0625, 0.25, 0.375, 0.25, 0.0625];
+    let (dw, dh) = (sw.div_ceil(2), sh.div_ceil(2));
+    let mut out = vec![0.0f32; dw * dh];
+    for y in 0..dh {
+        for x in 0..dw {
+            let mut acc = 0.0f32;
+            for dy in -2i64..=2 {
+                for dx in -2i64..=2 {
+                    let sx = (2 * x as i64 + dx).rem_euclid(sw as i64) as usize;
+                    let sy = (2 * y as i64 + dy).rem_euclid(sh as i64) as usize;
+                    acc += G[(dy + 2) as usize] * G[(dx + 2) as usize] * src[sy * sw + sx];
+                }
+            }
+            out[y * dw + x] = acc;
+        }
+    }
+    (out, dw, dh)
+}
+
+fn mccabe_config(n: u32) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "mccabe".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: n, height: n };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 7;
+    cfg
+}
+
+/// The pyramid stage, level by level, against a CPU mirror.
+///
+/// Level 1 is compared against the decimation of the field the GPU
+/// built it from, and level 2 against the decimation of the GPU's
+/// OWN level 1 -- so each dispatch is checked on its own inputs and a
+/// wrong level uniform (the source size the wrap uses) would fail at
+/// the edges.
+#[test]
+fn the_pyramid_levels_match_a_cpu_gaussian_decimation() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 96;
+    let cfg = mccabe_config(N);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f0: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N, N)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    // One step builds the pyramid of f0 before it moves the field.
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let (l1_cpu, w1, h1) = cpu_pyramid_level(&f0, N as usize, N as usize);
+    let l1_gpu: Vec<f32> = read_rgba32f(&device, &queue, r.pyramid_texture(1).unwrap(), w1 as u32, h1 as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    let worst1 = l1_cpu.iter().zip(&l1_gpu).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+
+    let (l2_cpu, w2, h2) = cpu_pyramid_level(&l1_gpu, w1, h1);
+    let l2_gpu: Vec<f32> = read_rgba32f(&device, &queue, r.pyramid_texture(2).unwrap(), w2 as u32, h2 as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    let worst2 = l2_cpu.iter().zip(&l2_gpu).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    println!("pyramid: level 1 ({w1}x{h1}) worst {worst1:.3e}, level 2 ({w2}x{h2}) worst {worst2:.3e}");
+    assert!(worst1 < 1e-5, "level 1 differs from the CPU decimation by {worst1:.3e}");
+    assert!(worst2 < 1e-5, "level 2 differs from the CPU decimation by {worst2:.3e}");
+}
+
+/// The reduce pass, against the CPU's min and max of the same field.
+///
+/// Exact, not a tolerance: the ordering map is a bijection on the
+/// bits, so the decoded slot must equal the CPU's f32 min and max to
+/// the bit. It would catch a workgroup reduction that dropped a lane,
+/// an atomic on the wrong slot, or a ring that was cleared after being
+/// written.
+#[test]
+fn the_reduce_matches_the_cpu_min_and_max_exactly() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 100; // deliberately not a multiple of 8
+    let cfg = mccabe_config(N);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    // The seed's reduce writes the slot before step 0.
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let seed_field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let seed_slot = (crate::sim::MINMAX_RING - 1) as u64;
+    let enc = read_u32s(&device, &queue, r.minmax_buffer(), seed_slot * 8, 2);
+    let (lo, hi) = (minmax_unord(enc[0]), minmax_unord(enc[1]));
+    let cpu_lo = seed_field.iter().map(|px| px[0]).fold(f32::INFINITY, f32::min);
+    let cpu_hi = seed_field.iter().map(|px| px[0]).fold(f32::NEG_INFINITY, f32::max);
+    println!("reduce after seed: gpu [{lo}, {hi}]  cpu [{cpu_lo}, {cpu_hi}]");
+    assert_eq!(lo.to_bits(), cpu_lo.to_bits(), "seed min");
+    assert_eq!(hi.to_bits(), cpu_hi.to_bits(), "seed max");
+
+    // And after three steps, the slot of the last step holds the range
+    // of the field as it now stands.
+    r.run_steps(&device, &queue, &cfg, 3);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let enc = read_u32s(&device, &queue, r.minmax_buffer(), 2 * 8, 2);
+    let (lo, hi) = (minmax_unord(enc[0]), minmax_unord(enc[1]));
+    let cpu_lo = field.iter().map(|px| px[0]).fold(f32::INFINITY, f32::min);
+    let cpu_hi = field.iter().map(|px| px[0]).fold(f32::NEG_INFINITY, f32::max);
+    println!("reduce after step 2: gpu [{lo}, {hi}]  cpu [{cpu_lo}, {cpu_hi}]");
+    assert_eq!(lo.to_bits(), cpu_lo.to_bits(), "step-2 min");
+    assert_eq!(hi.to_bits(), cpu_hi.to_bits(), "step-2 max");
+}
+
+/// McCabe's whole step -- pyramid, trilinear reads, scale selection,
+/// renormalisation -- against a CPU mirror from the GPU's own seed.
+///
+/// The one place a mirror can legitimately disagree is a TIE: when
+/// two scales' variations are within rounding of each other, the
+/// trilinear arithmetic can pick either, and the cell moves by one
+/// amount rather than another. Those cells differ by a known quantum;
+/// everything else must match to float precision. So the test counts
+/// both, and demands the tie fraction be small.
+#[test]
+fn mccabe_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let cfg = mccabe_config(N as u32);
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f0: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // The CPU pyramid, same rule as the renderer's.
+    let levels = crate::sim::pyramid_levels(N as u32, N as u32) as usize;
+    let mut pyr: Vec<(Vec<f32>, usize, usize)> = vec![(f0.clone(), N, N)];
+    for _ in 1..levels {
+        let (src, w, h) = pyr.last().unwrap();
+        let next = cpu_pyramid_level(src, *w, *h);
+        pyr.push(next);
+    }
+    let load = |l: usize, qx: i64, qy: i64| -> f32 {
+        let (ref d, w, h) = pyr[l];
+        d[(qy.rem_euclid(h as i64) as usize) * w + qx.rem_euclid(w as i64) as usize]
+    };
+    let level_avg = |l: usize, px: f32, py: f32| -> f32 {
+        let s = (1u32 << l) as f32;
+        let (fx, fy) = (px / s - 0.5, py / s - 0.5);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let (ix, iy) = (x0 as i64, y0 as i64);
+        let a = load(l, ix, iy);
+        let b = load(l, ix + 1, iy);
+        let c = load(l, ix, iy + 1);
+        let d = load(l, ix + 1, iy + 1);
+        (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty
+    };
+    let sample = |level: f32, px: f32, py: f32| -> f32 {
+        let top = (levels - 1) as f32;
+        let lf = level.clamp(0.0, top);
+        let l0 = lf.floor() as usize;
+        let l1 = (l0 + 1).min(levels - 1);
+        let t = lf - lf.floor();
+        let a = level_avg(l0, px, py);
+        let b = level_avg(l1, px, py);
+        a + (b - a) * t
+    };
+    let level_for = |r: f32| (0.55f32 * r).max(1.0).log2();
+
+    let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
+    let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let (n_scales, base, ratio, amount, amount_min) = (5usize, 1.0f32, 2.0f32, 0.05f32, 0.01f32);
+    let (mut exact, mut ties, mut other) = (0usize, 0usize, 0usize);
+    let mut worst_exact = 0.0f32;
+    for y in 0..N {
+        for x in 0..N {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let mut best_var = f32::MAX;
+            let mut best_dir = 0.0f32;
+            for i in 0..n_scales {
+                let ra = base * (1u32 << i) as f32;
+                let rb = ra * ratio;
+                let act = sample(level_for(ra), px, py);
+                let inh = sample(level_for(rb), px, py);
+                let v = (act - inh).abs();
+                let t = i as f32 / (n_scales - 1) as f32;
+                let amt = amount + (amount_min - amount) * t;
+                if v < best_var {
+                    best_var = v;
+                    best_dir = if act > inh { amt } else { -amt };
+                }
+            }
+            let f = (f0[y * N + x] - lo) / (hi - lo).max(1e-6) * 2.0 - 1.0;
+            let want = f + best_dir;
+            let d = (want - got[y * N + x][0]).abs();
+            if d < 1e-4 {
+                exact += 1;
+                worst_exact = worst_exact.max(d);
+            } else if d < 0.2 {
+                // A different scale fired: the difference is the gap
+                // between two amounts.
+                ties += 1;
+            } else {
+                other += 1;
+            }
+        }
+    }
+    println!(
+        "McCabe vs CPU mirror: {exact} cells match (worst {worst_exact:.2e}), {ties} chose a \
+         different scale at a tie, {other} disagree outright"
+    );
+    assert_eq!(other, 0, "{other} cells disagree by more than any amount difference");
+    assert!(
+        ties * 200 < N * N,
+        "{ties} of {} cells picked a different scale -- far more than rounding ties",
+        N * N
+    );
+}
+
+/// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
+///
+/// The pipeline doc expected "well under 2 ms" for a box pyramid and
+/// named 8 ms as the point past which the fallbacks kick in. The
+/// shipped pyramid is Gaussian (25 taps a level rather than 4), and
+/// the step reads five scales at 16 loads each.
+#[test]
+fn mccabe_meets_the_interactive_budget_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let (w, h) = (1920u32, 1080u32);
+    let mut cfg = mccabe_config(256);
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
+    let mut r = SimRenderer::new(&device, &cfg, w, h);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 16);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    const STEPS: u32 = 60;
+    let t0 = std::time::Instant::now();
+    r.run_steps(&device, &queue, &cfg, STEPS);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+    println!("McCabe 5 scales at 1080p: {ms:.3} ms/step ({:.1} steps/s)", 1e3 / ms);
+    assert!(ms < 8.0, "McCabe at 1080p is {ms:.2} ms/step, past the 8 ms fallback threshold");
+}

@@ -3007,3 +3007,260 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 1.0,
     default_dt: 0.15,
 };
+
+
+// ---------------------------------------------------------------------
+// Multi-scale.
+// ---------------------------------------------------------------------
+
+/// McCabe's cyclic symmetric multi-scale Turing patterns.
+///
+/// One field f in [-1, 1]. For each scale i, with activator radius
+/// r_a,i < inhibitor radius r_b,i and step amount s_i:
+///
+/// ```text
+/// a_i = average of f over radius r_a,i
+/// b_i = average of f over radius r_b,i
+/// v_i = |a_i - b_i|                    ("variation")
+/// ```
+///
+/// The scale with the SMALLEST variation fires: f moves by +s_i if
+/// a_i > b_i and by -s_i otherwise. Then f is renormalised to [-1, 1]
+/// over the whole field. Cyclic symmetry, the paper's contribution,
+/// replaces each a_i and b_i by its average with copies rotated about
+/// the image centre by 2πk/n.
+///
+/// J. McCabe, "Cyclic Symmetric Multi-Scale Turing Patterns", Bridges
+/// 2010. The paper gives NO radius table and does not describe
+/// colouring; the ladder here (radii doubling from `base_radius`, the
+/// inhibitor `ratio` times the activator, amounts falling linearly)
+/// is the phase-0 prototype's, and `scale_mix` is the look later
+/// implementations gave it.
+///
+/// **How the averages are taken, and why it is not a box.** Each
+/// average is a trilinear read of a GAUSSIAN pyramid the renderer
+/// builds every step -- eight loads per radius, whatever the radius.
+/// The plan's pyramid was a box downsample, and that is refuted by
+/// measurement: a box converges to a SQUARE kernel however many
+/// levels it has, and the texture came out visibly axis-aligned with
+/// a spectrum half as peaked as the exact-disc reference's. The
+/// Gaussian pyramid is isotropic, and with the level mapping
+/// calibrated (`log2(0.55 r)`) it reproduces the reference's feature
+/// size to 0.1% and amplitude to 1%. See
+/// `scripts/sim_prototypes/proto_mccabe_pyramid.py`.
+///
+/// **Renormalisation is one step behind, and that is the reference's
+/// own dependency.** A step can only normalise by a range that has
+/// been measured; the reduce pass measures each step's output and the
+/// next step normalises its input by it, which is exactly the order
+/// the prototype does it in. The field therefore holds values in
+/// roughly [-1 - s, 1 + s] rather than exactly [-1, 1].
+///
+/// Channels: `.x` = f, `.y` = the scale that fired (an integer),
+/// `.z` = the step at which the firing scale last changed, `.w` spare.
+pub static MCCABE: ModelDef = ModelDef {
+    name: "mccabe",
+    display_name: "McCabe Multi-Scale",
+    description: "Turing patterns at several scales at once, the finest structure nested \
+                  inside the coarsest — the electron-microscope look — with optional \
+                  rotational symmetry.",
+    features: &[
+        ModelFeature::NeverStills,
+        ModelFeature::NoTimeStep,
+        ModelFeature::NeedsPyramid,
+        ModelFeature::NeedsMinMax,
+    ],
+    parameters: &[
+        SimParamDef {
+            name: "scales",
+            display_name: "Scales",
+            default: 5.0,
+            min: 1.0,
+            max: 6.0,
+            tooltip: "How many scales compete. Each is twice the radius of the last, so five \
+                      scales span a factor of sixteen.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "base_radius",
+            display_name: "Finest radius",
+            default: 1.0,
+            min: 0.5,
+            max: 8.0,
+            tooltip: "Activator radius of the finest scale, in cells. Everything else is \
+                      built from it.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "ratio",
+            display_name: "Inhibitor ratio",
+            default: 2.0,
+            min: 1.25,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius, at every scale. The paper's \
+                      figures use 2.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "amount",
+            display_name: "Step (finest)",
+            default: 0.05,
+            min: 0.001,
+            max: 0.2,
+            tooltip: "How far the finest scale moves a cell per step. Larger is faster and \
+                      grainier.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "amount_min",
+            display_name: "Step (coarsest)",
+            default: 0.01,
+            min: 0.001,
+            max: 0.2,
+            tooltip: "The coarsest scale's step; scales in between interpolate. Coarse \
+                      scales moving slowly is what lets fine detail live inside them.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "symmetry",
+            display_name: "Symmetry",
+            default: 0.0,
+            min: 0.0,
+            max: 8.0,
+            tooltip: "n-fold rotational symmetry about the centre — the paper's own \
+                      contribution. 0 or 1 is none. Costs n times the reads, and a \
+                      periodic field that is rotated about its centre no longer tiles, \
+                      so the corners stay asymmetric.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "multiscale",
+            display_name: "Multi-scale",
+            params: &[
+                ("scales", 5.0),
+                ("base_radius", 1.0),
+                ("ratio", 2.0),
+                ("amount", 0.05),
+                ("amount_min", 0.01),
+                ("symmetry", 0.0),
+            ],
+            // Measured on the prototype: the nested texture is present
+            // by step 20 and fully developed by 100; the field never
+            // stills.
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "coarse",
+            display_name: "Coarse (nested contours)",
+            // Measured on the GPU: at base radius 3 the nested contour
+            // texture is unmistakable, where the paper-faithful base
+            // radius 1 is fine and subtle at 256^2. Same ladder, three
+            // times the scale.
+            params: &[
+                ("scales", 5.0),
+                ("base_radius", 3.0),
+                ("ratio", 2.0),
+                ("amount", 0.05),
+                ("amount_min", 0.01),
+                ("symmetry", 0.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "rosette",
+            display_name: "Five-fold rosette",
+            params: &[
+                ("scales", 5.0),
+                ("base_radius", 3.0),
+                ("ratio", 2.0),
+                ("amount", 0.05),
+                ("amount_min", 0.01),
+                ("symmetry", 5.0),
+            ],
+            steps: 200,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+    ],
+    wgsl: r#"
+const MC_TAU: f32 = 6.28318530718;
+
+// An average of f over radius r at a base-cell position, with the
+// cyclic symmetry folded in: the mean over the n rotations of the
+// position about the grid centre.
+fn mc_avg(r: f32, pos: vec2<f32>, sym: i32) -> f32 {
+    let level = pyr_level_for_radius(r);
+    if (sym < 2) {
+        return pyr_sample(level, pos);
+    }
+    let g = vec2<f32>(sim_grid());
+    let c = g * 0.5;
+    var acc = 0.0;
+    for (var k = 0; k < sym; k = k + 1) {
+        let a = MC_TAU * f32(k) / f32(sym);
+        let d = pos - c;
+        var q = vec2<f32>(cos(a) * d.x - sin(a) * d.y, sin(a) * d.x + cos(a) * d.y) + c;
+        // Float periodic wrap, so a rotated corner reads the tile.
+        q = q - g * floor(q / g);
+        acc = acc + pyr_sample(level, q);
+    }
+    return acc / f32(sym);
+}
+
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let n = i32(clamp(round(mparam(0u)), 1.0, 6.0));
+    let base = mparam(1u);
+    let ratio = mparam(2u);
+    let amount = mparam(3u);
+    let amount_min = mparam(4u);
+    let sym = i32(round(mparam(5u)));
+    let pos = vec2<f32>(p) + vec2<f32>(0.5, 0.5);
+
+    var best_var = 1.0e30;
+    var best_dir = 0.0;
+    var best_scale = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        let ra = base * f32(1 << u32(i));
+        let rb = ra * ratio;
+        let act = mc_avg(ra, pos, sym);
+        let inh = mc_avg(rb, pos, sym);
+        let v = abs(act - inh);
+        // The amounts fall linearly from the finest scale to the
+        // coarsest; one scale gets the finest amount.
+        let t = select(0.0, f32(i) / f32(n - 1), n > 1);
+        let amt = mix(amount, amount_min, t);
+        if (v < best_var) {
+            best_var = v;
+            best_dir = select(-amt, amt, act > inh);
+            best_scale = f32(i);
+        }
+    }
+
+    // Normalise by the previous step's measured range, then step.
+    let mm = sim_minmax();
+    let span = max(mm.y - mm.x, 1.0e-6);
+    let f = (s.x - mm.x) / span * 2.0 - 1.0;
+    let age = select(s.z, f32(sim_step_index()), best_scale != s.y);
+    return vec4<f32>(f + best_dir, best_scale, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Uniform noise in [-1, 1]. The init shape is ignored: the rule
+    // needs a disordered start everywhere, and a shape inside a flat
+    // field is a single scale's worth of structure that the others
+    // average away.
+    return vec4<f32>(noise * 2.0 - 1.0, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 200,
+    passes: 1,
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};

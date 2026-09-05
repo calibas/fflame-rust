@@ -775,6 +775,55 @@ falloff), `symmetry` (0–8, integer), `variation_blur` (0–2).
 **Colouring.** `scale_mix` (hue = winning scale, value = f — the
 Softology look), `channel`, `hillshade`.
 
+**Measured 2026-09-05** (`proto_mccabe_pyramid.py`, 256², 200 steps),
+shipped the same day. The open item above is settled, and not the way
+the plan assumed.
+
+- **The box pyramid is REFUTED.** The same rule on the same seed, with
+  the averages taken three ways: exact FFT discs (the reference),
+  a 2×2 box pyramid read trilinearly (the plan), and a Gaussian
+  pyramid read the same way. The box pyramid's render shows plainly
+  axis-aligned, rectangular structure — the kernel's square symmetry
+  showing through — and its spectral peak is half as sharp as the
+  disc's (5.3 against 11.3). A box downsample converges to a square of
+  side 2ˡ however many levels it has; it never becomes round.
+- **The Gaussian pyramid is adopted.** A separable [1 4 6 4 1]/16 blur
+  then decimate, per level — one 25-tap dispatch per level, ~8 taps a
+  cell in total. Its reads are isotropic and give the nested texture.
+  The remaining difference from the disc is SCALE: a Gaussian of
+  pyramid scale 2ˡ is broader than a disc of radius r, and the plain
+  `log2(r)` mapping came out 1.8× too coarse. Calibrated as
+  **`level = log2(0.55 r)`**, the Gaussian pyramid reproduces the
+  disc reference's feature size (56.9 against 56.9 cells) and
+  amplitude (sd 0.2695 against 0.2665). That constant is in the
+  shader, so the shipped radius ladder means what the paper's does.
+- **The stage is pinned by three mirrors.** Each pyramid level against
+  a CPU decimation of the level below it (6e-8, so a wrong per-level
+  size in the wrap would fail at the edges); the min/max reduce
+  against the CPU's min and max of the same field, **bit-exact**; and
+  the whole McCabe step — pyramid, trilinear reads, scale selection,
+  renormalisation — against a CPU mirror from the GPU's own seed:
+  **all 4,096 cells to 1.2e-7, with zero tie disagreements**. The
+  mirror allows for ties (two scales' variations within rounding) and
+  found none.
+- **Renormalisation runs one step behind, and that is the reference's
+  own dependency**: a step can only normalise by a range that has been
+  measured, so the reduce measures each step's output and the next
+  step normalises its input by it — the same order the prototype does
+  it in. The field holds values in roughly [−1 − s, 1 + s].
+- **GATE MET: 1080p at 5 scales is 5.25 ms/step (191 steps/s)**,
+  against the 8 ms fallback threshold. It was 7.78 before hoisting the
+  per-level size computation out of the four loads of each bilinear
+  read. The pipeline doc's "well under 2 ms" was for a 4-tap box
+  pyramid; the Gaussian one costs six times that per level and the
+  step reads five scales at sixteen loads each.
+- **Contrast is the reference's.** With the ladder calibrated to the
+  disc, the field's sd is ~0.27 and the texture is fine and subtle;
+  the striking high-contrast look of an uncalibrated pyramid was a
+  coarser ladder in disguise. So a coarser ladder ships too: measured
+  at `base_radius` 3, the nested contour texture is unmistakable, and
+  the `coarse` and `rosette` presets use it.
+
 ---
 
 ## 11. Hodgepodge machine (Belousov–Zhabotinsky CA)

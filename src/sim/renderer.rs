@@ -26,7 +26,7 @@
 //!   256x range, so batching is purely a watchdog and pacing device.
 
 use crate::config::sim::{SimConfig, SimGrid};
-use crate::sim::{assembler, coloring_or_default, model_or_default, ModelDef, SimColoringDef, MAX_KERNEL_RADIUS};
+use crate::sim::{assembler, coloring_or_default, model_or_default, pyramid_levels, ModelDef, ModelFeature, SimColoringDef, MAX_KERNEL_RADIUS, MAX_PYRAMID_LEVELS, MINMAX_RING};
 #[allow(unused_imports)]
 use crate::sim::ColoringFeature;
 use wgpu::util::DeviceExt;
@@ -82,7 +82,9 @@ struct SimParamsGpu {
     /// Half-width of the convolution kernel in the LUT, so the step
     /// shader can bound its gather. 0 for a model with no kernel.
     kernel_radius: u32,
-    _pad1: f32,
+    /// Min/max ring slot for this dispatch: the reduce pass writes it,
+    /// the step pass reads the slot before it.
+    minmax_slot: u32,
 }
 
 /// The shader set for one (model, colouring, boundary, resolve)
@@ -94,8 +96,14 @@ struct Pipelines {
     /// The second dispatch of a step, for fourth-order PDEs only.
     step2: Option<ComputePipeline>,
     color: ComputePipeline,
+    /// One pyramid level from the one below it; built only for a
+    /// model that declares `NeedsPyramid`.
+    pyramid: Option<ComputePipeline>,
+    /// The global min/max reduce; built only for `NeedsMinMax`.
+    reduce: Option<ComputePipeline>,
     seed_layout: BindGroupLayout,
     step_layout: BindGroupLayout,
+    reduce_layout: BindGroupLayout,
     color_layout: BindGroupLayout,
     /// What the pipelines were built for, so the renderer knows when
     /// they are stale.
@@ -160,6 +168,25 @@ pub struct SimRenderer {
     /// uploaded with the parameters. Sized once for the largest
     /// kernel the engine allows, so it never resizes.
     kernel_buffer: Buffer,
+    /// Pyramid levels 1.., each half the previous (rounded up). Level 0
+    /// is the field itself. Allocated with the field and rebuilt every
+    /// step for a model that declares `NeedsPyramid`; empty otherwise.
+    pyramid: Vec<(Texture, TextureView)>,
+    /// A 1x1 texture bound to every pyramid slot a model does not use:
+    /// the layout carries seven, and a bind group must fill them.
+    pyramid_dummy: (Texture, TextureView),
+    /// One uniform per pyramid level, holding that level's SOURCE size
+    /// in `grid` so the shared boundary wrap applies at the right
+    /// scale. Same layout as the step ring; selected by dynamic offset.
+    level_params_buffer: Buffer,
+    /// The min/max ring: `MINMAX_RING` slots of two ordered u32s.
+    minmax_buffer: Buffer,
+    /// Pyramid bind groups: `[level][src]` for level 0 (which reads the
+    /// field, so it depends on the ping-pong side), a single group for
+    /// every level above. Rebuilt with the step bind groups.
+    pyramid_bind_groups: Option<Vec<Vec<BindGroup>>>,
+    /// Reduce bind groups per ping-pong side.
+    reduce_bind_groups: Option<[BindGroup; 2]>,
     /// Half-width of the kernel currently in that buffer, which the
     /// step shader reads from the uniform to bound its loops.
     kernel_radius: u32,
@@ -201,6 +228,23 @@ impl SimRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
+        let pyramid = Self::create_pyramid(device, grid_w, grid_h);
+        let pyramid_dummy = Self::create_level(device, 1, 1, "Sim Pyramid Dummy");
+        let level_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Sim Level Params"),
+            size: params_stride * MAX_PYRAMID_LEVELS as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let minmax_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Sim MinMax Ring"),
+            size: (MINMAX_RING as u64) * 2 * 4,
+            // COPY_SRC so a test can read a slot back against a CPU
+            // min/max of the same field.
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
         // Two blocks of (2R+1)^2 at the maximum radius: a model may
         // carry a pair of kernels (SmoothLife's disc and annulus).
         let kernel_floats = 2 * (2 * MAX_KERNEL_RADIUS as usize + 1).pow(2);
@@ -229,6 +273,12 @@ impl SimRenderer {
             step_bind_groups: None,
             step_index: 0,
             kernel_buffer,
+            pyramid,
+            pyramid_dummy,
+            level_params_buffer,
+            minmax_buffer,
+            pyramid_bind_groups: None,
+            reduce_bind_groups: None,
             kernel_radius: 1,
             steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
@@ -298,6 +348,51 @@ impl SimRenderer {
             ));
         }
         None
+    }
+
+    fn create_level(device: &Device, w: u32, h: u32, label: &str) -> (Texture, TextureView) {
+        let t = device.create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba32Float,
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let v = t.create_view(&TextureViewDescriptor::default());
+        (t, v)
+    }
+
+    /// Levels 1.. of the pyramid for a grid: separate textures rather
+    /// than mip levels of one, because a level is written as a storage
+    /// texture and read as a sampled one, and the two views of one
+    /// texture's mips do not mix cleanly.
+    fn create_pyramid(device: &Device, w: u32, h: u32) -> Vec<(Texture, TextureView)> {
+        let levels = pyramid_levels(w, h);
+        let (mut lw, mut lh) = (w, h);
+        (1..levels)
+            .map(|l| {
+                lw = lw.div_ceil(2);
+                lh = lh.div_ceil(2);
+                Self::create_level(device, lw, lh, &format!("Sim Pyramid L{l}"))
+            })
+            .collect()
+    }
+
+    /// The min/max ring, for a test to read a slot back. Two ordered
+    /// u32s per slot; `step_index % MINMAX_RING` is the slot a step's
+    /// reduce wrote.
+    pub fn minmax_buffer(&self) -> &Buffer {
+        &self.minmax_buffer
+    }
+
+    /// Level `l` of the pyramid (1..), for a test to read back.
+    pub fn pyramid_texture(&self, level: usize) -> Option<&Texture> {
+        self.pyramid.get(level.checked_sub(1)?).map(|(t, _)| t)
     }
 
     fn create_field_pair(device: &Device, w: u32, h: u32) -> ([Texture; 2], [TextureView; 2]) {
@@ -405,6 +500,7 @@ impl SimRenderer {
             let (f, fv) = Self::create_field_pair(device, gw, gh);
             self.field = f;
             self.field_view = fv;
+            self.pyramid = Self::create_pyramid(device, gw, gh);
             self.grid_w = gw;
             self.grid_h = gh;
             self.current = 0;
@@ -418,6 +514,8 @@ impl SimRenderer {
         // reference the field views, so they go with the field.
         if grid_changed {
             self.step_bind_groups = None;
+            self.pyramid_bind_groups = None;
+            self.reduce_bind_groups = None;
             self.steps_per_submit = FIRST_SUBMIT;
         }
         true
@@ -459,6 +557,12 @@ impl SimRenderer {
             cfg.downscale,
             key.magnifying,
         );
+        let pyramid_src = model
+            .has(ModelFeature::NeedsPyramid)
+            .then(|| assembler::assemble_pyramid(cfg.boundary));
+        let reduce_src = model
+            .has(ModelFeature::NeedsMinMax)
+            .then(assembler::assemble_reduce);
 
         let make = |label: &str, src: &str| {
             device.create_shader_module(ShaderModuleDescriptor {
@@ -470,6 +574,8 @@ impl SimRenderer {
         let step_mod = make("Sim Step", &step_src);
         let step2_mod = step2_src.as_ref().map(|src| make("Sim Step 2", src));
         let color_mod = make("Sim Color", &color_src);
+        let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
+        let reduce_mod = reduce_src.as_ref().map(|src| make("Sim Reduce", src));
 
         // Bind group layouts, written out rather than derived from the
         // shader: `layout: None` would infer a fresh layout per module
@@ -540,6 +646,34 @@ impl SimRenderer {
                 // WGSL only by the models that gather against it -- a
                 // layout may carry an entry the shader does not use.
                 storage_ro(5),
+                // Pyramid levels 1..7, and the min/max ring. Likewise
+                // always bound (a 1x1 dummy where unused) and declared
+                // only by the models that read them.
+                sampled_tex(6, true),
+                sampled_tex(7, true),
+                sampled_tex(8, true),
+                sampled_tex(9, true),
+                sampled_tex(10, true),
+                sampled_tex(11, true),
+                sampled_tex(12, true),
+                storage_ro(14),
+            ],
+        });
+        let reduce_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Sim Reduce Layout"),
+            entries: &[
+                uniform_entry(0),
+                sampled_tex(4, true),
+                BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let color_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -573,6 +707,8 @@ impl SimRenderer {
         // New layouts and modules: any cached bind group refers to the
         // old ones.
         self.step_bind_groups = None;
+        self.pyramid_bind_groups = None;
+        self.reduce_bind_groups = None;
         self.steps_per_submit = FIRST_SUBMIT;
         self.pipelines = Some(Pipelines {
             seed: pipeline("Sim Seed", &seed_layout, &seed_mod),
@@ -581,8 +717,15 @@ impl SimRenderer {
                 .as_ref()
                 .map(|m| pipeline("Sim Step 2", &step_layout, m)),
             color: pipeline("Sim Color", &color_layout, &color_mod),
+            pyramid: pyramid_mod
+                .as_ref()
+                .map(|m| pipeline("Sim Pyramid", &step_layout, m)),
+            reduce: reduce_mod
+                .as_ref()
+                .map(|m| pipeline("Sim Reduce", &reduce_layout, m)),
             seed_layout,
             step_layout,
+            reduce_layout,
             color_layout,
             key,
         });
@@ -620,7 +763,7 @@ impl SimRenderer {
             init_p0: p0,
             init_p1: p1,
             kernel_radius: self.kernel_radius,
-            _pad1: 0.0,
+            minmax_slot: step_index % MINMAX_RING,
         }
     }
 
@@ -660,38 +803,13 @@ impl SimRenderer {
             device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Sim Step BG"),
                 layout: &p.step_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::Buffer(BufferBinding {
-                            buffer: &self.params_buffer,
-                            offset: 0,
-                            size: std::num::NonZeroU64::new(
-                                std::mem::size_of::<SimParamsGpu>() as u64,
-                            ),
-                        }),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: self.model_params_buffer.as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 2,
-                        resource: self.coloring_params_buffer.as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 3,
-                        resource: BindingResource::TextureView(&self.field_view[1 - src]),
-                    },
-                    BindGroupEntry {
-                        binding: 4,
-                        resource: BindingResource::TextureView(&self.field_view[src]),
-                    },
-                    BindGroupEntry {
-                        binding: 5,
-                        resource: self.kernel_buffer.as_entire_binding(),
-                    },
-                ],
+                // groups[src] reads field[src] and writes field[1 - src].
+                entries: &self.step_entries(
+                    &self.params_buffer,
+                    &self.field_view[1 - src],
+                    &self.field_view[src],
+                    true,
+                ),
             })
         };
         self.step_bind_groups = Some([make(0), make(1)]);
@@ -720,6 +838,147 @@ impl SimRenderer {
             }
             None => self.kernel_radius = 0,
         }
+
+        // One uniform per pyramid level, carrying the SOURCE level's
+        // size: the pyramid pass reads its input through the shared
+        // boundary wrap, which sizes itself from `grid`.
+        if model.has(ModelFeature::NeedsPyramid) {
+            let stride = self.params_stride as usize;
+            let levels = pyramid_levels(self.grid_w, self.grid_h) as usize;
+            let mut bytes = vec![0u8; stride * levels];
+            let (mut w, mut h) = (self.grid_w, self.grid_h);
+            for l in 0..levels {
+                let mut p = self.params_for(cfg, self.step_index);
+                p.grid = [w, h];
+                bytes[l * stride..l * stride + std::mem::size_of::<SimParamsGpu>()]
+                    .copy_from_slice(bytemuck::bytes_of(&p));
+                w = w.div_ceil(2);
+                h = h.div_ceil(2);
+            }
+            queue.write_buffer(&self.level_params_buffer, 0, &bytes);
+        }
+    }
+
+    /// Reset min/max ring slots `start..start + count` (mod the ring)
+    /// to the ordering's identities, so the reduce passes that write
+    /// them start from nothing. ONE write per batch; the slot a step
+    /// reads is the one before the batch, which is never among these
+    /// because the ring has one more slot than the largest batch.
+    fn clear_minmax_slots(&self, queue: &Queue, start: u32, count: u32) {
+        let identity = [u32::MAX, 0u32];
+        let first = start % MINMAX_RING;
+        let end = first + count;
+        if end <= MINMAX_RING {
+            let bytes: Vec<u32> = identity.repeat(count as usize);
+            queue.write_buffer(&self.minmax_buffer, (first as u64) * 8, bytemuck::cast_slice(&bytes));
+        } else {
+            let head = MINMAX_RING - first;
+            let a: Vec<u32> = identity.repeat(head as usize);
+            let b: Vec<u32> = identity.repeat((count - head) as usize);
+            queue.write_buffer(&self.minmax_buffer, (first as u64) * 8, bytemuck::cast_slice(&a));
+            queue.write_buffer(&self.minmax_buffer, 0, bytemuck::cast_slice(&b));
+        }
+    }
+
+    /// Build the per-level pyramid bind groups and the reduce groups
+    /// once, alongside the step groups.
+    fn ensure_stage_bind_groups(&mut self, device: &Device) {
+        let p = self.pipelines.as_ref().expect("pipelines built before bind groups");
+        if p.pyramid.is_some() && self.pyramid_bind_groups.is_none() {
+            let mut groups: Vec<Vec<BindGroup>> = Vec::new();
+            let levels = self.pyramid.len();
+            for l in 0..levels {
+                // Level l+1 is written from level l. Level 0 is the
+                // field, so it has one group per ping-pong side.
+                let sides: Vec<usize> = if l == 0 { vec![0, 1] } else { vec![0] };
+                let mut per_side = Vec::new();
+                for src in sides {
+                    let input = if l == 0 { &self.field_view[src] } else { &self.pyramid[l - 1].1 };
+                    let output = &self.pyramid[l].1;
+                    per_side.push(device.create_bind_group(&BindGroupDescriptor {
+                        label: Some("Sim Pyramid BG"),
+                        layout: &p.step_layout,
+                        entries: &self.step_entries(&self.level_params_buffer, output, input, false),
+                    }));
+                }
+                groups.push(per_side);
+            }
+            self.pyramid_bind_groups = Some(groups);
+        }
+        if p.reduce.is_some() && self.reduce_bind_groups.is_none() {
+            let make = |src: usize| {
+                device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("Sim Reduce BG"),
+                    layout: &p.reduce_layout,
+                    entries: &[
+                        BindGroupEntry {
+                            binding: 0,
+                            resource: BindingResource::Buffer(BufferBinding {
+                                buffer: &self.params_buffer,
+                                offset: 0,
+                                size: std::num::NonZeroU64::new(
+                                    std::mem::size_of::<SimParamsGpu>() as u64,
+                                ),
+                            }),
+                        },
+                        BindGroupEntry {
+                            binding: 4,
+                            resource: BindingResource::TextureView(&self.field_view[src]),
+                        },
+                        BindGroupEntry { binding: 14, resource: self.minmax_buffer.as_entire_binding() },
+                    ],
+                })
+            };
+            self.reduce_bind_groups = Some([make(0), make(1)]);
+        }
+    }
+
+    /// The full entry list of the step layout, for a given uniform
+    /// buffer, output texture and input texture. Shared by the step
+    /// groups and the pyramid groups, which use the same layout.
+    ///
+    /// `with_pyramid` binds the real pyramid levels at 6..12; the
+    /// pyramid pass itself passes `false`, because a dispatch that
+    /// WRITES level l cannot also have level l bound as a sampled
+    /// texture -- wgpu rejects the two usages in one scope -- and it
+    /// reads its input through binding 4 anyway.
+    fn step_entries<'a>(
+        &'a self,
+        uniform: &'a Buffer,
+        output: &'a TextureView,
+        input: &'a TextureView,
+        with_pyramid: bool,
+    ) -> Vec<BindGroupEntry<'a>> {
+        let mut entries = vec![
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(BufferBinding {
+                    buffer: uniform,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(std::mem::size_of::<SimParamsGpu>() as u64),
+                }),
+            },
+            BindGroupEntry { binding: 1, resource: self.model_params_buffer.as_entire_binding() },
+            BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
+            BindGroupEntry { binding: 3, resource: BindingResource::TextureView(output) },
+            BindGroupEntry { binding: 4, resource: BindingResource::TextureView(input) },
+            BindGroupEntry { binding: 5, resource: self.kernel_buffer.as_entire_binding() },
+        ];
+        // Pyramid levels 1..7 at bindings 6..12; the dummy where the
+        // pyramid is shorter (or absent).
+        for i in 0..(MAX_PYRAMID_LEVELS as usize - 1) {
+            let view = if with_pyramid {
+                self.pyramid.get(i).map(|(_, v)| v).unwrap_or(&self.pyramid_dummy.1)
+            } else {
+                &self.pyramid_dummy.1
+            };
+            entries.push(BindGroupEntry {
+                binding: 6 + i as u32,
+                resource: BindingResource::TextureView(view),
+            });
+        }
+        entries.push(BindGroupEntry { binding: 14, resource: self.minmax_buffer.as_entire_binding() });
+        entries
     }
 
     fn dispatch_size(w: u32, h: u32) -> (u32, u32) {
@@ -775,6 +1034,35 @@ impl SimRenderer {
         }
         queue.submit(std::iter::once(enc.finish()));
         self.needs_seed = false;
+
+        // A model that renormalises needs the seed's range before its
+        // first step. Step 0 reads slot (0 - 1) mod RING, so the seed's
+        // reduce writes THAT slot; the uniform is rewritten for it,
+        // after the seed's own submission has consumed slot 0.
+        if model.has(ModelFeature::NeedsMinMax) {
+            self.ensure_step_bind_groups(device);
+            self.ensure_stage_bind_groups(device);
+            let mut p = self.params_for(cfg, 0);
+            p.minmax_slot = MINMAX_RING - 1;
+            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&p));
+            self.clear_minmax_slots(queue, MINMAX_RING - 1, 1);
+            let pipes = self.pipelines.as_ref().expect("built above");
+            let groups = self.reduce_bind_groups.as_ref().expect("built above");
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Sim Seed Reduce"),
+            });
+            {
+                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("Sim Seed Reduce"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipes.reduce.as_ref().expect("NeedsMinMax builds it"));
+                pass.set_bind_group(0, &groups[self.current], &[0]);
+                let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
+                pass.dispatch_workgroups(gx, gy, 1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+        }
     }
 
     /// Advance exactly `count` steps, in watchdog-sized submissions.
@@ -803,8 +1091,22 @@ impl SimRenderer {
         self.write_param_arrays(queue, model, coloring, cfg);
 
         self.ensure_step_bind_groups(device);
+        self.ensure_stage_bind_groups(device);
         let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
         let stride = self.params_stride as u32;
+        let wants_pyramid = model.has(ModelFeature::NeedsPyramid);
+        let wants_minmax = model.has(ModelFeature::NeedsMinMax);
+        // Per-level dispatch sizes, level 1 upward.
+        let level_dispatch: Vec<(u32, u32)> = {
+            let (mut w, mut h) = (self.grid_w, self.grid_h);
+            (0..self.pyramid.len())
+                .map(|_| {
+                    w = w.div_ceil(2);
+                    h = h.div_ceil(2);
+                    Self::dispatch_size(w, h)
+                })
+                .collect()
+        };
 
         let mut done = 0;
         while done < count {
@@ -813,6 +1115,9 @@ impl SimRenderer {
             // dispatches inside it are ordered against each other, and
             // each reads its own ring slot by dynamic offset.
             self.write_params_ring(queue, cfg, self.step_index, batch);
+            if wants_minmax {
+                self.clear_minmax_slots(queue, self.step_index, batch);
+            }
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Sim Steps"),
             });
@@ -827,6 +1132,23 @@ impl SimRenderer {
                     timestamp_writes: None,
                 });
                 for i in 0..batch {
+                    // The pyramid of the CURRENT field, level by level:
+                    // each dispatch reads the level below through its
+                    // own uniform (source size) and writes the next.
+                    if wants_pyramid {
+                        let pyr = p.pyramid.as_ref().expect("NeedsPyramid builds it");
+                        let pgroups = self
+                            .pyramid_bind_groups
+                            .as_ref()
+                            .expect("built by ensure_stage_bind_groups");
+                        pass.set_pipeline(pyr);
+                        for (l, per_side) in pgroups.iter().enumerate() {
+                            let bg = if l == 0 { &per_side[self.current] } else { &per_side[0] };
+                            pass.set_bind_group(0, bg, &[l as u32 * stride]);
+                            let (lx, ly) = level_dispatch[l];
+                            pass.dispatch_workgroups(lx, ly, 1);
+                        }
+                    }
                     // groups[src] reads field[src] and writes
                     // field[1 - src], so alternating the index IS the
                     // ping-pong.
@@ -846,6 +1168,18 @@ impl SimRenderer {
                         pass.set_bind_group(0, &groups[self.current], &[i * stride]);
                         pass.dispatch_workgroups(gx, gy, 1);
                         self.current = 1 - self.current;
+                    }
+                    // The new field's range, into this step's slot, for
+                    // the next step to normalise by.
+                    if wants_minmax {
+                        let red = p.reduce.as_ref().expect("NeedsMinMax builds it");
+                        let rgroups = self
+                            .reduce_bind_groups
+                            .as_ref()
+                            .expect("built by ensure_stage_bind_groups");
+                        pass.set_pipeline(red);
+                        pass.set_bind_group(0, &rgroups[self.current], &[i * stride]);
+                        pass.dispatch_workgroups(gx, gy, 1);
                     }
                     self.step_index += 1;
                 }

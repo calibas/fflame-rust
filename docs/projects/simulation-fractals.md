@@ -605,6 +605,43 @@ with room to spare.
   (formulas still `[verify]`), and SmoothLife's discrete time form.
 - Two new visual baselines; 19 models.
 
+#### Wave 4 — the pyramid, the reduction, and McCabe
+
+**Done 2026-09-05.** McCabe ships with `scale_mix`, and both phase 3
+gates are met. Every Tier-1 and Tier-2 model the phase named now
+ships except none — 20 models.
+
+- **The box-vs-disc question is answered, against the plan.** A box
+  pyramid's McCabe texture is visibly axis-aligned (its spectrum half
+  as peaked as the disc reference's); the shipped pyramid is
+  **Gaussian**, one 25-tap blur-and-decimate dispatch per level, and
+  with its level mapping calibrated to `log2(0.55 r)` it reproduces
+  the exact-disc reference's feature size to 0.1% and amplitude to
+  1%. Recorded in `proto_mccabe_pyramid.py` and the catalogue (§10).
+- **Two new stages behind two features.** `NeedsPyramid` builds the
+  pyramid before every step (separate textures per level, seven above
+  the field, each with its own size uniform so the shared boundary
+  wrap applies at every scale); `NeedsMinMax` reduces the new field's
+  range after every step into a 257-slot ring — 64 cells per
+  workgroup in shared memory, then one atomic min and max on an
+  integer-ordered encoding, so 1080p is ~32,000 atomics. The next step
+  normalises by the previous slot, which is the reference's own
+  dependency. The ring has one more slot than the largest batch so the
+  slot a step reads is never among the ones its batch clears.
+- **All of it is pinned by CPU mirrors**: each pyramid level (6e-8),
+  the reduce (bit-exact), and the whole McCabe step from the GPU's own
+  seed — 4,096 of 4,096 cells to 1.2e-7 with zero tie disagreements.
+- **GATE MET: McCabe at 1080p is 5.25 ms/step (191 steps/s)** against
+  the 8 ms fallback threshold, after hoisting a per-level size loop
+  out of the bilinear reads (7.78 before).
+- Three new visual baselines; 20 models, 5 colourings.
+
+**Phase 3 is complete.** What it deliberately did not ship, all
+recorded in the catalogue: Orbium and Lenia's multi-ring kernels and
+alternative cores, SmoothLife's discrete time form, Oregonator
+spirals and target patterns, McCabe's `variation_blur`, and the
+`hillshade` colouring the plan listed for three models.
+
 **Hodgepodge corrected (2026-09-05), a phase-2 model.** The same batch
 of papers settled a `[verify]` flag that had been open since the model
 shipped: the rule everybody quotes is not the one Gerhardt & Schuster

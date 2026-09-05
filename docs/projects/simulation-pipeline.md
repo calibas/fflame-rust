@@ -127,15 +127,18 @@ SmoothLife, and the reduction used for settle detection):
   transform ×2 per field per step, and it needs its own precision
   work. Parked, as the seed doc says; the pyramid dissolves the cost
   question first.
-- The pyramid's box average is not a disc. McCabe's paper averages
-  over a **disc**; the pyramid gives a square-ish, level-blended
-  kernel. The prototype in §9 used exact discs; the plan's first
-  McCabe implementation should A/B the pyramid look against an
-  exact-disc reference at one radius set before committing, because
-  the "electron microscope" look may depend on the isotropy. Fallback
-  if it does: 5-tap Gaussian separable blur per scale (k scales ×
-  2 passes), still O(1) in radius when run on the pyramid level
-  nearest the radius.
+- ~~The pyramid's box average is not a disc.~~ **Measured
+  (2026-09-05): it does depend on the isotropy, and the box is out.**
+  The A/B was run (`proto_mccabe_pyramid.py`): the box pyramid's
+  McCabe texture is visibly axis-aligned with a spectrum half as
+  peaked as the disc reference's. The shipped pyramid is **Gaussian**
+  — each level is a separable [1 4 6 4 1]/16 blur then decimate, one
+  25-tap dispatch per level — which is isotropic, and with the level
+  mapping calibrated to `log2(0.55 r)` it reproduces the disc
+  reference's feature size and amplitude. The fallback sketched here
+  (a blur per scale) was not needed: blurring once per LEVEL is the
+  same cost paid once rather than per scale. Cost: ~8 taps a cell for
+  the whole pyramid, and McCabe at 1080p runs 5.25 ms/step.
 
 ### 3.3 Agents and deposit
 

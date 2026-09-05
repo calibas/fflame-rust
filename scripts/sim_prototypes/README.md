@@ -22,6 +22,7 @@ render artifacts do not belong in the repo). Requires `numpy` and
 |---|---|---|
 | `proto_gray_scott.py` | Gray–Scott | — |
 | `proto_mccabe.py` | McCabe multi-scale Turing (exact FFT reference) | — |
+| `proto_mccabe_pyramid.py` | McCabe: box pyramid vs Gaussian pyramid vs exact disc | `MC_CAL=<k>` re-measures the level calibration; args select modes |
 | `proto_reaction_diffusion.py` | FitzHugh–Nagumo, Brusselator, Schnakenberg | default: presets + settle · `--dt`: stability ladder on the active configuration · `--wavelength`: Turing wavelength vs diffusion scale |
 | `proto_cellular_automata.py` | hodgepodge, cyclic CA, spatial RPS, Ising | — |
 | `proto_growth.py` | Eden, ballistic deposition, percolation labelling, Packard snowflake | default · `--kpz`: growth-exponent fit |
@@ -52,6 +53,9 @@ that would have shipped wrong without running them:
   checkerboard while staying finite and inside [0, 1]. It reached the
   prototype and not the shader, which is the entire point; the shipped
   scheme stores fluxes on cell faces instead.
+- The plan's pyramid for McCabe. A box downsample gives a square
+  kernel at every level and the texture came out axis-aligned; the
+  shipped pyramid is Gaussian, calibrated to the exact-disc reference.
 - An Oregonator spiral preset. The catalogue remembered "spiral waves
   for f ≈ 1.4"; a broken front retracts and heals at every (ε, f)
   tried, so what ships is the travelling wave that was measured.
