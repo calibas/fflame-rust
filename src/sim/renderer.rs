@@ -89,6 +89,8 @@ struct SimParamsGpu {
 struct Pipelines {
     seed: ComputePipeline,
     step: ComputePipeline,
+    /// The second dispatch of a step, for fourth-order PDEs only.
+    step2: Option<ComputePipeline>,
     color: ComputePipeline,
     seed_layout: BindGroupLayout,
     step_layout: BindGroupLayout,
@@ -427,7 +429,8 @@ impl SimRenderer {
         let coloring = coloring_or_default(&cfg.coloring);
 
         let seed_src = assembler::assemble_seed(model, cfg.init.kind_name());
-        let step_src = assembler::assemble_step(model, cfg.boundary);
+        let step_src = assembler::assemble_step(model, cfg.boundary, 0);
+        let step2_src = (model.passes > 1).then(|| assembler::assemble_step(model, cfg.boundary, 1));
         let color_src = assembler::assemble_color(
             coloring,
             cfg.boundary,
@@ -444,6 +447,7 @@ impl SimRenderer {
         };
         let seed_mod = make("Sim Seed", &seed_src);
         let step_mod = make("Sim Step", &step_src);
+        let step2_mod = step2_src.as_ref().map(|src| make("Sim Step 2", src));
         let color_mod = make("Sim Color", &color_src);
 
         // Bind group layouts, written out rather than derived from the
@@ -548,6 +552,9 @@ impl SimRenderer {
         self.pipelines = Some(Pipelines {
             seed: pipeline("Sim Seed", &seed_layout, &seed_mod),
             step: pipeline("Sim Step", &step_layout, &step_mod),
+            step2: step2_mod
+                .as_ref()
+                .map(|m| pipeline("Sim Step 2", &step_layout, m)),
             color: pipeline("Sim Color", &color_layout, &color_mod),
             seed_layout,
             step_layout,
@@ -777,14 +784,27 @@ impl SimRenderer {
                     label: Some("Sim Steps"),
                     timestamp_writes: None,
                 });
-                pass.set_pipeline(&p.step);
                 for i in 0..batch {
                     // groups[src] reads field[src] and writes
                     // field[1 - src], so alternating the index IS the
                     // ping-pong.
+                    //
+                    // A two-pass model ping-pongs TWICE per step and so
+                    // lands back where it started, which is why nothing
+                    // downstream has to know how many passes a model
+                    // has. Both passes read the same ring slot: the
+                    // only per-step value in it is the step index, and
+                    // both passes of step i are step i.
+                    pass.set_pipeline(&p.step);
                     pass.set_bind_group(0, &groups[self.current], &[i * stride]);
                     pass.dispatch_workgroups(gx, gy, 1);
                     self.current = 1 - self.current;
+                    if let Some(step2) = &p.step2 {
+                        pass.set_pipeline(step2);
+                        pass.set_bind_group(0, &groups[self.current], &[i * stride]);
+                        pass.dispatch_workgroups(gx, gy, 1);
+                        self.current = 1 - self.current;
+                    }
                     self.step_index += 1;
                 }
             }

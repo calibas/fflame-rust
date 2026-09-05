@@ -176,6 +176,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // D_A = 1 that is dt < 1.25. The [0, 1] clamp would hide anything
     // past it as garbage rather than NaN, which is worse -- so the cap
     // is enforced everywhere dt can be set, not left to the clamp.
+    passes: 1,
+    dt_bound: None,
     diffusion: &["diffusion_a", "diffusion_b"],
     max_dt: 1.25,
     default_dt: 1.0,
@@ -345,6 +347,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // as NaN, and 0.0% rail at every dt through 0.75 while 14.6% do at
     // 1.0. A first probe ran from noise and reported 0.5 -- it was
     // measuring the stability of a field doing nothing.
+    passes: 1,
+    dt_bound: None,
     diffusion: &["diffusion_v", "diffusion_w"],
     max_dt: 0.75,
     default_dt: 0.1,
@@ -492,6 +496,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // identical spatial sd; 0.05 diverges at step 90. An earlier note
     // said 0.02 after testing only 0.01 and 0.05 -- a cap written down
     // without running the rung it names.
+    passes: 1,
+    dt_bound: None,
     diffusion: &["diffusion_x", "diffusion_y"],
     max_dt: 0.04,
     default_dt: 0.01,
@@ -607,6 +613,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 4900,
     // Every rung run: 0.01 and 0.02 stable, 0.03 diverges at step 486,
     // 0.04 at 26, 0.05 at 17.
+    passes: 1,
+    dt_bound: None,
     diffusion: &["diffusion_u", "diffusion_v"],
     max_dt: 0.02,
     default_dt: 0.01,
@@ -761,6 +769,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     default_steps: 200,
     // No time step: a generation is a generation. The value is unused,
     // and the panel hides the slider.
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -908,6 +918,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 300,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -1026,6 +1038,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 400,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -1144,6 +1158,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 1200,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -1242,6 +1258,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 250,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -1353,6 +1371,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 360,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -1458,6 +1478,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 256,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -1581,6 +1603,8 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 125,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
@@ -1706,7 +1730,363 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
     default_steps: 400,
+    passes: 1,
+    dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,
     default_dt: 1.0,
+};
+
+
+// ---------------------------------------------------------------------
+// Fourth-order PDEs.
+//
+// These declare `passes: 2`. A fourth-order operator cannot be applied
+// in one dispatch: the second derivative of a derivative needs the
+// NEIGHBOURS' first-pass values, which do not exist until every cell
+// has been written. So pass 1 stores its derivative into `.y` and pass
+// 2 takes the derivative of that.
+//
+// THEY DO NOT USE THE SIMS LAPLACIAN. Phase 1 and 2's reaction-
+// diffusion models take Karl Sims' 3x3 kernel (centre -1, edge 0.2,
+// corner 0.05), whose Fourier symbol is -0.3*k^2 at small k -- a
+// Laplacian scaled by 0.3. For a second-order model that scale is
+// absorbed into the free diffusion constant and nothing observable
+// changes. Here it would: Swift-Hohenberg's operator SELECTS the
+// wavelength at which lap = -q0^2, so a 0.3 scale would move the
+// selected wavelength by 1/sqrt(0.3) and the documented
+// lambda = 2*pi/q0 would be wrong by 83%. Both models below use the
+// standard 5-point Laplacian (centre -4, edge 1), which is what their
+// stability bounds are stated against and what the prototype measured.
+// ---------------------------------------------------------------------
+
+/// Swift-Hohenberg: the canonical pattern-forming equation.
+///
+/// ```text
+/// du/dt = r u - (q0^2 + lap)^2 u + g u^2 - u^3
+/// ```
+///
+/// The quartic operator is a band-pass filter peaked at |k| = q0: it
+/// amplifies one wavelength and damps the rest, which is why this is
+/// the equation to reach for when the spacing itself is the subject.
+///
+/// **The drive is exposed RELATIVE to the band's selectivity, not as
+/// the literal r**, and that is a measured decision rather than a
+/// convenience. Growth at the band is r; growth at the uniform mode is
+/// r - q0^4. So the equation only selects a wavelength when r is small
+/// compared with q0^4 -- and q0^4 is tiny for any wavelength worth
+/// looking at (2.4e-2 at 16 cells, 9.3e-5 at 64). The textbook q0 = 1
+/// hides this, because q0^4 = 1 swamps any sensible r. Measured at
+/// lambda = 16: r = 0.2 (the value the catalogue carried) gives
+/// r/q0^4 = 8.4 and the field phase-separates into ~100-cell blobs
+/// with no pattern at all, while every ratio from 0.1 to 4 gives a
+/// clean 16.5-cell pattern. One slider position therefore has to mean
+/// the same thing at every wavelength, so `drive` IS that ratio and
+/// `r = drive * q0^4`.
+///
+/// Measured (256^2, dt = 0.0292, 12,000 steps): at drive 2 the
+/// wavelength is 16.5 cells against the 16.0 the theory predicts, with
+/// a spectral peak 21x the mean -- so `lambda = 2*pi/q0` is confirmed,
+/// which is the claim most at risk from the discretisation.
+///
+/// Channels: `.x` = u, `.y` = the pass-1 scratch `w = q0^2 u + lap u`,
+/// `.z` = age, `.w` spare.
+pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
+    name: "swift_hohenberg",
+    display_name: "Swift–Hohenberg",
+    description: "The canonical pattern-forming equation: one wavelength is amplified and \
+                  every other damped, giving a labyrinth with a definite spacing.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "wavelength",
+            display_name: "Wavelength (cells)",
+            default: 16.0,
+            min: 6.0,
+            max: 64.0,
+            tooltip: "The spacing the equation selects, in cells — it is 2π/q₀, and the \
+                      measurement agrees with it to 3%. Larger wavelengths need \
+                      proportionally more steps, because the pattern grows on a 1/r \
+                      timescale and r falls as the fourth power of 1/wavelength.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "drive",
+            display_name: "Drive (r / q₀⁴)",
+            default: 2.0,
+            min: 0.05,
+            max: 4.0,
+            tooltip: "How hard the pattern is driven, in units of the band's own \
+                      selectivity — the literal r is this times q₀⁴. Low values grow \
+                      slowly and give a faint, very regular pattern; above about 4 the \
+                      uniform mode grows nearly as fast as the pattern and the field \
+                      phase-separates into blobs instead.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "asymmetry",
+            display_name: "Asymmetry (g)",
+            default: 0.0,
+            min: 0.0,
+            max: 0.35,
+            tooltip: "Breaks the symmetry between peaks and troughs. At 0 there is no \
+                      reason to prefer either and the field makes a labyrinth of equal \
+                      stripes; raising it pinches the stripes into spots. Past about \
+                      0.35 the quadratic term overwhelms the cubic and the field goes \
+                      uniform — measured, so the slider stops below it.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "labyrinth",
+            display_name: "Labyrinth",
+            params: &[("wavelength", 16.0), ("drive", 2.0), ("asymmetry", 0.0)],
+            // Measured: settles at 4,600 steps at 256^2.
+            steps: 5000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "spots",
+            display_name: "Spots",
+            params: &[("wavelength", 16.0), ("drive", 2.0), ("asymmetry", 0.25)],
+            // Measured: settles at 5,900; skew -1.02 against the
+            // labyrinth's +0.00, which is the asymmetry showing up.
+            steps: 6000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+    ],
+    wgsl: r#"
+// The standard 5-point Laplacian, not the Sims kernel the
+// reaction-diffusion models use. See the note above the model.
+fn sh_lap_x(p: vec2<i32>, c: f32) -> f32 {
+    return sim_read(p + vec2<i32>(0, -1)).x + sim_read(p + vec2<i32>(0, 1)).x
+        + sim_read(p + vec2<i32>(-1, 0)).x + sim_read(p + vec2<i32>(1, 0)).x
+        - 4.0 * c;
+}
+
+fn sh_lap_y(p: vec2<i32>, c: f32) -> f32 {
+    return sim_read(p + vec2<i32>(0, -1)).y + sim_read(p + vec2<i32>(0, 1)).y
+        + sim_read(p + vec2<i32>(-1, 0)).y + sim_read(p + vec2<i32>(1, 0)).y
+        - 4.0 * c;
+}
+
+fn sh_q0() -> f32 {
+    // Wavelength in cells to wavenumber. Guarded: a wavelength of zero
+    // is not reachable through the slider, but a hand-edited config
+    // carries whatever it likes.
+    return 6.28318530718 / max(mparam(0u), 1.0);
+}
+
+// Pass 1: w = q0^2 u + lap u, into the scratch channel.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let q0 = sh_q0();
+    let w = q0 * q0 * s.x + sh_lap_x(p, s.x);
+    return vec4<f32>(s.x, w, s.z, 0.0);
+}
+
+// Pass 2: (q0^2 + lap)^2 u is (q0^2 + lap) applied to w.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let q0 = sh_q0();
+    let q4 = q0 * q0 * q0 * q0;
+    // The drive is a RATIO to the band selectivity; see the model docs.
+    let r = mparam(1u) * q4;
+    let g = mparam(2u);
+    let dt = sim_dt();
+    let u = s.x;
+    let bi = q0 * q0 * s.y + sh_lap_y(p, s.y);
+    let nu = u + dt * (r * u - bi + g * u * u - u * u * u);
+    // A guard, not a mechanism: the cubic saturates the growth near
+    // |u| = 1 and the dt cap keeps the linear operator stable.
+    // Measured, the field settles inside [-1, 1]; if this ever binds,
+    // the bound is wrong.
+    let cl = clamp(nu, -10.0, 10.0);
+    let age = select(s.z, f32(sim_step_index()), abs(cl - u) > 1.0e-5);
+    return vec4<f32>(cl, s.y, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Small noise everywhere. The init shape is deliberately ignored:
+    // u = 0 is a fixed point of the whole equation, so outside a shape
+    // every cell would sit at exactly zero forever and the pattern
+    // would grow only within it. The medium has to be perturbed
+    // everywhere, which is why hodgepodge ignores its mask too.
+    return vec4<f32>((noise - 0.5) * 0.2, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 5000,
+    passes: 2,
+    // Explicit Euler on the 5-point Laplacian, whose symbol runs over
+    // [-8, 0]: the quartic operator is largest at the checkerboard,
+    // (8 - q0^2)^2, and the drive r offsets it. Measured at
+    // lambda = 16: stable at 0.03249, diverges at 0.03574, and this
+    // formula gives 0.0325.
+    dt_bound: Some(|p| {
+        let q0 = 6.283_185_3 / p.get("wavelength").max(1.0);
+        let q2 = q0 * q0;
+        let stiff = (8.0 - q2) * (8.0 - q2) - p.get("drive") * q2 * q2;
+        2.0 / stiff.max(1.0e-3)
+    }),
+    diffusion: &[],
+    // The ceiling; `dt_bound` is what binds everywhere in the slider's
+    // range (0.031 to 0.042 across it).
+    max_dt: 0.05,
+    default_dt: 0.03,
+};
+
+/// Cahn-Hilliard: phase separation, and the coarsening that follows.
+///
+/// ```text
+/// dc/dt = D lap( c^3 - c - gamma lap c )
+/// ```
+///
+/// A mixture that is unstable at its mean composition separates into
+/// domains of c = +1 and c = -1 with interfaces of width ~sqrt(gamma),
+/// and those domains then coarsen forever. At mean 0 the phases are
+/// even and interleave as a labyrinth; away from 0 the minority phase
+/// pinches off into droplets.
+///
+/// **The mean composition is conserved exactly.** The update is a
+/// discrete divergence -- a Laplacian sums to zero over a periodic
+/// lattice -- so the mean cannot drift except by rounding. Measured on
+/// the CPU mirror over 40,000 steps: 1.2e-16. That is a property no
+/// picture can fake, and it is what the GPU test pins.
+///
+/// Measured coarsening (256^2, 40,000 steps): the domain size grows
+/// 6.2 -> 22.4 cells at mean 0, an exponent of 0.25 against the
+/// Lifshitz-Slyozov 1/3. The shortfall is expected at this size -- 22
+/// cells in a 256 box is already into finite-size effects -- and the
+/// growth itself is the point.
+///
+/// Channels: `.x` = c, `.y` = the pass-1 chemical potential mu,
+/// `.z` = age, `.w` spare.
+pub static CAHN_HILLIARD: ModelDef = ModelDef {
+    name: "cahn_hilliard",
+    display_name: "Cahn–Hilliard",
+    description: "A mixture separating into two phases and then coarsening: labyrinths at \
+                  an even mix, droplets of the minority phase away from it.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "mobility",
+            display_name: "Mobility (D)",
+            default: 1.0,
+            min: 0.1,
+            max: 4.0,
+            tooltip: "How fast material moves down the chemical-potential gradient. It \
+                      scales time — but it scales the stable dt down by exactly as much, \
+                      so raising it buys no speed.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "gamma",
+            display_name: "γ (interface width)",
+            default: 0.5,
+            min: 0.1,
+            max: 4.0,
+            tooltip: "Sets the width of the boundary between the phases, which goes as √γ. \
+                      Larger values give thicker, softer interfaces and a coarser pattern.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "mean",
+            display_name: "Mean composition",
+            default: 0.0,
+            min: -0.6,
+            max: 0.6,
+            tooltip: "The mixture's overall balance, which the equation conserves exactly. \
+                      At 0 the phases are even and interleave as a labyrinth; past about \
+                      ±0.3 the minority phase pinches off into droplets.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "labyrinth",
+            display_name: "Labyrinth",
+            params: &[("mobility", 1.0), ("gamma", 0.5), ("mean", 0.0)],
+            // Never stills -- it coarsens forever -- so `steps` is a
+            // choice of how coarse. Measured at 256^2: domain size 8.5
+            // cells at 1,000 steps, 13.2 at 5,000, 18.6 at 20,000.
+            steps: 20000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+        SimPreset {
+            name: "droplets",
+            display_name: "Droplets",
+            params: &[("mobility", 1.0), ("gamma", 0.5), ("mean", 0.4)],
+            steps: 20000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        },
+    ],
+    wgsl: r#"
+fn ch_lap_x(p: vec2<i32>, c: f32) -> f32 {
+    return sim_read(p + vec2<i32>(0, -1)).x + sim_read(p + vec2<i32>(0, 1)).x
+        + sim_read(p + vec2<i32>(-1, 0)).x + sim_read(p + vec2<i32>(1, 0)).x
+        - 4.0 * c;
+}
+
+fn ch_lap_y(p: vec2<i32>, c: f32) -> f32 {
+    return sim_read(p + vec2<i32>(0, -1)).y + sim_read(p + vec2<i32>(0, 1)).y
+        + sim_read(p + vec2<i32>(-1, 0)).y + sim_read(p + vec2<i32>(1, 0)).y
+        - 4.0 * c;
+}
+
+// Pass 1: the chemical potential mu = c^3 - c - gamma lap c.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let gamma = mparam(1u);
+    let c = s.x;
+    let mu = c * c * c - c - gamma * ch_lap_x(p, c);
+    return vec4<f32>(c, mu, s.z, 0.0);
+}
+
+// Pass 2: dc/dt = D lap mu. A Laplacian sums to zero over the lattice,
+// so this form conserves the mean of c exactly -- which is the
+// physical content of the equation, and what the test pins.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let d = mparam(0u);
+    let dt = sim_dt();
+    let c = s.x;
+    let nc = c + dt * d * ch_lap_y(p, s.y);
+    // A NaN guard only, and deliberately far outside the dynamics:
+    // measured, c settles inside [-1.03, 1.02]. Clamping near the
+    // physical range would clip the overshoot at a sharp interface and
+    // break conservation, which is worth more here than tidy bounds.
+    let cl = clamp(nc, -4.0, 4.0);
+    let age = select(s.z, f32(sim_step_index()), abs(cl - c) > 1.0e-5);
+    return vec4<f32>(cl, s.y, age, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // A nearly uniform mixture at the configured mean, with just
+    // enough noise to be unstable. The init shape is ignored for the
+    // same reason Swift-Hohenberg ignores it, and for one more: the
+    // mean is a quantity this model conserves, so a shape seed would
+    // silently set a different one than the slider says.
+    return vec4<f32>(mparam(2u) + (noise - 0.5) * 0.1, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 20000,
+    passes: 2,
+    // Linearised about |c| = 1, the symbol is
+    //   D L (3c^2 - 1 - gamma L),  L in [-8, 0]
+    // whose most negative value is at the checkerboard L = -8:
+    //   -8 D (3c^2 - 1) - 64 D gamma  =  -D (16 + 64 gamma).
+    //
+    // The catalogue derived 1/(32 D gamma) from the gamma term alone,
+    // which is 0.0625 at the defaults -- and that is NOT a bound: the
+    // prototype was finite for 400 steps there and infinite by 1,000,
+    // which is why the first ladder called it stable. With the cubic
+    // kept, this formula gives 0.04167, and the measurement is stable
+    // at 0.041667 and diverges at 0.045833.
+    dt_bound: Some(|p| {
+        let d = p.get("mobility").max(1.0e-3);
+        let gamma = p.get("gamma").max(0.0);
+        2.0 / (d * (16.0 + 64.0 * gamma))
+    }),
+    diffusion: &[],
+    max_dt: 0.2,
+    default_dt: 0.04,
 };

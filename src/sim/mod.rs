@@ -133,6 +133,38 @@ pub const SIMS_LAPLACIAN_EIGENVALUE: f32 = 1.6;
 /// a step and the rms is 0.0003.
 pub const STABILITY_MARGIN: f32 = 0.96;
 
+/// A model's parameters, resolved: the value in force, or the
+/// declared default when the config has not set one.
+///
+/// Exists for [`ModelDef::dt_bound`], which is a plain `fn` pointer in
+/// a `static` and so cannot close over anything -- it needs the
+/// defaults handed to it rather than looking them up.
+pub struct Params<'a> {
+    model: &'a ModelDef,
+    map: &'a std::collections::BTreeMap<String, f32>,
+}
+
+impl Params<'_> {
+    /// The value in force for `name`. A parameter the model does not
+    /// declare reads 0.0, which is a programming error rather than a
+    /// state a config can reach -- the registry's invariant tests
+    /// check every name a `dt_bound` uses.
+    pub fn get(&self, name: &str) -> f32 {
+        self.map
+            .get(name)
+            .copied()
+            .filter(|v| v.is_finite())
+            .or_else(|| {
+                self.model
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == name)
+                    .map(|p| p.default)
+            })
+            .unwrap_or(0.0)
+    }
+}
+
 /// One simulation model: the rule, its parameters, and how a cell's
 /// state is laid out in the four channels.
 ///
@@ -157,7 +189,29 @@ pub struct ModelDef {
     pub parameters: &'static [SimParamDef],
     pub presets: &'static [SimPreset],
     /// The step rule. See the type docs for the signature.
+    ///
+    /// When [`ModelDef::passes`] is 2 this must ALSO define
+    /// `fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32>`. The
+    /// whole string is spliced into both pass modules and each entry
+    /// point calls its own function, so helpers are written once and
+    /// shared rather than duplicated across two fields.
     pub wgsl: &'static str,
+    /// Dispatches per step. 1 for a rule that is one stencil
+    /// application; 2 for a fourth-order PDE, where the first pass
+    /// stores a derivative into a spare channel and the second takes
+    /// the derivative of THAT.
+    ///
+    /// A fourth-order operator cannot be done in one pass: a cell
+    /// would need its neighbours' neighbours, and the neighbours'
+    /// first-pass values do not exist until every cell has been
+    /// written. Two dispatches are how the ordering is bought -- the
+    /// same "one pass per derivative order" the escape relief blur
+    /// uses.
+    ///
+    /// Both passes of one step carry the SAME `sim_step_index()`: a
+    /// step is a step whatever it costs to compute, and the age
+    /// channel and the animation track both count steps.
+    pub passes: u32,
     /// Largest `dt` the explicit scheme is stable at, for the DEFAULT
     /// diffusion rates. Measured per model (see each model's note); the
     /// reaction terms usually bind before diffusion does.
@@ -172,6 +226,17 @@ pub struct ModelDef {
     /// Names of the parameters that are diffusion rates on the Sims
     /// stencil. Empty for a rule with no time step.
     pub diffusion: &'static [&'static str],
+    /// A stability bound this model derives itself, overriding the
+    /// Sims-stencil one.
+    ///
+    /// For the fourth-order PDEs, whose bound has nothing to do with a
+    /// diffusion rate on a 3×3 kernel: Swift–Hohenberg is limited by
+    /// `(q0² + ∇²)²` and Cahn–Hilliard by `D γ ∇⁴`. Both are stated
+    /// against the 5-POINT Laplacian, which is the one they use --
+    /// see the note on each model. The returned value is the raw
+    /// bound; [`ModelDef::max_dt_for`] applies [`STABILITY_MARGIN`]
+    /// and the declared ceiling to it.
+    pub dt_bound: Option<fn(&Params) -> f32>,
     /// The initial state for a cell, given the init shape's mask.
     ///
     /// ```wgsl
@@ -218,6 +283,13 @@ impl ModelDef {
     /// their cells, FitzHugh–Nagumo railed with a checkerboard of
     /// rms 5.1.
     pub fn max_dt_for(&self, params: &std::collections::BTreeMap<String, f32>) -> f32 {
+        if let Some(bound) = self.dt_bound {
+            let raw = bound(&Params { model: self, map: params });
+            if raw.is_finite() && raw > 0.0 {
+                return (STABILITY_MARGIN * raw).min(self.max_dt).max(1e-4);
+            }
+            return self.max_dt;
+        }
         if self.diffusion.is_empty() {
             return self.max_dt;
         }
@@ -310,6 +382,8 @@ pub static MODELS: &[&ModelDef] = &[
     &models::WOLFRAM_ECA,
     &models::PACKARD_SNOWFLAKE,
     &models::PERCOLATION,
+    &models::SWIFT_HOHENBERG,
+    &models::CAHN_HILLIARD,
 ];
 
 /// Every colouring, in registration order. Append only.
@@ -496,10 +570,79 @@ mod tests {
                 at_defaults
             );
             assert!(
-                m.has(ModelFeature::NoTimeStep) == m.diffusion.is_empty(),
-                "{}: a model has a time step exactly when it has diffusion rates",
+                m.has(ModelFeature::NoTimeStep)
+                    == (m.diffusion.is_empty() && m.dt_bound.is_none()),
+                "{}: a model has a time step exactly when it has a stability bound \
+                 (Sims diffusion rates, or a derived one)",
                 m.name
             );
+        }
+    }
+
+    /// A two-pass model must actually define its second pass, and a
+    /// one-pass model must not carry a stray one -- the assembler
+    /// splices by name, so a missing `sim_step2` is a shader that
+    /// fails to compile on the device rather than here.
+    #[test]
+    fn the_pass_count_matches_the_functions_the_model_defines() {
+        for m in MODELS {
+            assert!(
+                m.passes == 1 || m.passes == 2,
+                "{}: passes {} is neither 1 nor 2",
+                m.name,
+                m.passes
+            );
+            assert!(
+                m.wgsl.contains("fn sim_step("),
+                "{}: no sim_step",
+                m.name
+            );
+            assert_eq!(
+                m.wgsl.contains("fn sim_step2("),
+                m.passes == 2,
+                "{}: passes = {} but sim_step2 {} defined",
+                m.name,
+                m.passes,
+                if m.passes == 2 { "is not" } else { "is" }
+            );
+        }
+    }
+
+    /// A model that derives its own dt bound must produce a positive,
+    /// finite one at its defaults, and its declared `max_dt` must not
+    /// contradict it.
+    #[test]
+    fn a_derived_dt_bound_is_consistent_with_the_declared_one() {
+        for m in MODELS {
+            let Some(bound) = m.dt_bound else { continue };
+            assert!(
+                m.diffusion.is_empty(),
+                "{}: a model derives its bound OR declares Sims diffusion rates, not both",
+                m.name
+            );
+            let empty = std::collections::BTreeMap::new();
+            let raw = bound(&Params { model: m, map: &empty });
+            assert!(
+                raw.is_finite() && raw > 0.0,
+                "{}: derived dt bound {raw} at the defaults",
+                m.name
+            );
+            // Every parameter combination the sliders allow must also
+            // give a usable bound: a bound that goes to zero or NaN
+            // somewhere in range would freeze the dt slider there.
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max] {
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(pd.name.to_string(), v);
+                    let r = bound(&Params { model: m, map: &map });
+                    assert!(
+                        r.is_finite() && r > 0.0,
+                        "{}: dt bound {r} at {} = {v}",
+                        m.name,
+                        pd.name
+                    );
+                }
+            }
         }
     }
 

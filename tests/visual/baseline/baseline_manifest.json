@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "ed8e4725",
+  "git_hash": "0fc4ce30",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -454,6 +454,18 @@
       "bytes": 30116,
       "sha256": "2e3c6a4486b0c760023be8ab96589581e8a588aba579598cef50df33c56576c7"
     },
+    "sim-cahn-hilliard-age.png": {
+      "bytes": 33709,
+      "sha256": "8856864590acbd5ee4f5c6261b29cba81fcf633fb37796f287f2c6baa4a64e13"
+    },
+    "sim-cahn-hilliard-droplets.png": {
+      "bytes": 27034,
+      "sha256": "c4b9dc9caa314f0f1e7bb13db1f81c47a959bff153c950cc6260558c9ef2c63e"
+    },
+    "sim-cahn-hilliard-labyrinth.png": {
+      "bytes": 28949,
+      "sha256": "c11baaa3334217b974ca576b663fa83929207561e91b85f5fd12f52f775b8ec5"
+    },
     "sim-cyclic-ca-1-1-14.png": {
       "bytes": 30600,
       "sha256": "9bce899af1324682d83259bcb1c0993df4af3db94b2f723692146cc4dcd35514"
@@ -549,6 +561,18 @@
     "sim-spatial-rps.png": {
       "bytes": 24550,
       "sha256": "eeadf4be8612f0a95f9cbc27759c86bde3378323e13e01e724982684d1ab6c8a"
+    },
+    "sim-swift-hohenberg-fine.png": {
+      "bytes": 27794,
+      "sha256": "00b52e119ce2de968521dfa57887c62b6a3127c29af47e031bb2abc3548f2d6d"
+    },
+    "sim-swift-hohenberg-labyrinth.png": {
+      "bytes": 17210,
+      "sha256": "2976a0e7bdad6141a003b952e6720f7d837fba8569701d54b09fabaebe49fe2f"
+    },
+    "sim-swift-hohenberg-spots.png": {
+      "bytes": 17495,
+      "sha256": "c851b0c185bc0971e03f202b192dbb99bdb708101d23ec28715a8b5ae91d5985"
     },
     "sim-wolfram-rule-110.png": {
       "bytes": 37241,
