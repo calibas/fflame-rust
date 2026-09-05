@@ -39,7 +39,9 @@ struct SimParams {
     init_p0: f32,
     init_p1: f32,
     kernel_radius: u32,
-    _pad1: f32,
+    // The min/max ring slot this dispatch belongs to: the reduce pass
+    // writes it, the step pass reads the slot BEFORE it.
+    minmax_slot: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -113,11 +115,22 @@ fn sim_rand(p: vec2<i32>, salt: u32) -> f32 {
 
 /// The `sim_read` body for each boundary mode.
 fn boundary_body(boundary: SimBoundary) -> &'static str {
+    // Each mode defines the same two functions:
+    //
+    //   sim_wrap_sized(p, g)  -- the in-range coordinate to read for a
+    //                            possibly out-of-range p on a grid of
+    //                            size g
+    //   sim_outside(p, g)     -- true when the read should be ZERO
+    //                            instead (only the Zero mode)
+    //
+    // `sim_read` applies them at the field's own size; the pyramid
+    // accessors apply the same rule at each level's size, so a Clamp
+    // field is clamped at every scale rather than clamped at the base
+    // and wrapped above it.
     match boundary {
         SimBoundary::Periodic => {
             r#"
-fn sim_wrap(p: vec2<i32>) -> vec2<i32> {
-    let g = sim_grid();
+fn sim_wrap_sized(p: vec2<i32>, g: vec2<i32>) -> vec2<i32> {
     // `%` is remainder, not modulo: it is negative for negative
     // operands, so a bare p % g reads out of bounds on the left and
     // top edges.
@@ -159,27 +172,28 @@ fn sim_wrap(p: vec2<i32>) -> vec2<i32> {
     let q = p - g * (p / g);
     return select(q, q + g, q < vec2<i32>(0));
 }
-fn sim_read(p: vec2<i32>) -> vec4<f32> {
-    return textureLoad(field_in, sim_wrap(p), 0);
+fn sim_outside(p: vec2<i32>, g: vec2<i32>) -> bool {
+    return false;
 }
 "#
         }
         SimBoundary::Clamp => {
             r#"
-fn sim_read(p: vec2<i32>) -> vec4<f32> {
-    let g = sim_grid();
-    return textureLoad(field_in, clamp(p, vec2<i32>(0, 0), g - vec2<i32>(1, 1)), 0);
+fn sim_wrap_sized(p: vec2<i32>, g: vec2<i32>) -> vec2<i32> {
+    return clamp(p, vec2<i32>(0), g - vec2<i32>(1));
+}
+fn sim_outside(p: vec2<i32>, g: vec2<i32>) -> bool {
+    return false;
 }
 "#
         }
         SimBoundary::Zero => {
             r#"
-fn sim_read(p: vec2<i32>) -> vec4<f32> {
-    let g = sim_grid();
-    if (p.x < 0 || p.y < 0 || p.x >= g.x || p.y >= g.y) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-    return textureLoad(field_in, p, 0);
+fn sim_wrap_sized(p: vec2<i32>, g: vec2<i32>) -> vec2<i32> {
+    return clamp(p, vec2<i32>(0), g - vec2<i32>(1));
+}
+fn sim_outside(p: vec2<i32>, g: vec2<i32>) -> bool {
+    return p.x < 0 || p.y < 0 || p.x >= g.x || p.y >= g.y;
 }
 "#
         }
@@ -190,14 +204,30 @@ fn sim_mirror1(v: i32, n: i32) -> i32 {
     if (v >= n) { return 2 * n - v - 1; }
     return v;
 }
-fn sim_read(p: vec2<i32>) -> vec4<f32> {
-    let g = sim_grid();
-    return textureLoad(field_in, vec2<i32>(sim_mirror1(p.x, g.x), sim_mirror1(p.y, g.y)), 0);
+fn sim_wrap_sized(p: vec2<i32>, g: vec2<i32>) -> vec2<i32> {
+    return vec2<i32>(sim_mirror1(p.x, g.x), sim_mirror1(p.y, g.y));
+}
+fn sim_outside(p: vec2<i32>, g: vec2<i32>) -> bool {
+    return false;
 }
 "#
         }
     }
 }
+
+/// The field read every template shares, on top of the boundary body.
+const READ_BODY: &str = r#"
+fn sim_wrap(p: vec2<i32>) -> vec2<i32> {
+    return sim_wrap_sized(p, sim_grid());
+}
+fn sim_read(p: vec2<i32>) -> vec4<f32> {
+    let g = sim_grid();
+    if (sim_outside(p, g)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return textureLoad(field_in, sim_wrap_sized(p, g), 0);
+}
+"#;
 
 const SEED_TEMPLATE: &str = r#"
 //__COMMON__
@@ -227,6 +257,10 @@ const STEP_TEMPLATE: &str = r#"
 
 //__BOUNDARY__
 
+//__PYRAMID__
+
+//__MINMAX__
+
 //__MODEL__
 
 @compute @workgroup_size(8, 8, 1)
@@ -237,6 +271,101 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 //__STEP_CALL__
+}
+"#;
+
+/// One pyramid level from the one below it: a separable
+/// [1 4 6 4 1]/16 blur, then decimate. `params.grid` is the SOURCE
+/// level's size (the renderer writes one uniform per level), and the
+/// destination is half of it rounded up, which is what the dispatch
+/// covers.
+///
+/// Gaussian, not box, and that is measured: a 2x2 box downsample
+/// converges to a SQUARE kernel however many times it is applied, and
+/// McCabe's texture on it showed plainly axis-aligned structure with a
+/// spectrum half as peaked as the disc reference's. This converges to
+/// a Gaussian, which is round.
+const PYRAMID_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var field_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d<f32>;
+
+//__BOUNDARY__
+
+const PYR_G: array<f32, 5> = array<f32, 5>(0.0625, 0.25, 0.375, 0.25, 0.0625);
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let src = sim_grid();
+    let dst = (src + vec2<i32>(1, 1)) / 2;
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= dst.x || p.y >= dst.y) {
+        return;
+    }
+    let c = 2 * p;
+    var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var dy = -2; dy <= 2; dy = dy + 1) {
+        for (var dx = -2; dx <= 2; dx = dx + 1) {
+            let w = PYR_G[dy + 2] * PYR_G[dx + 2];
+            acc = acc + w * sim_read(c + vec2<i32>(dx, dy));
+        }
+    }
+    textureStore(field_out, p, acc);
+}
+"#;
+
+/// The global min and max of channel `.x`, into one ring slot.
+///
+/// Each workgroup reduces its 64 cells in shared memory and then does
+/// ONE atomic min and one atomic max, so a 1080p field is ~32,000
+/// atomics rather than two million. Floats are ordered through an
+/// integer encoding (below) because there is no atomic min/max on
+/// f32; the slot is pre-cleared to the encoding's identities by the
+/// renderer before the batch that will write it.
+const REDUCE_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(14) var<storage, read_write> minmax: array<atomic<u32>>;
+
+var<workgroup> wg_min: array<u32, 64>;
+var<workgroup> wg_max: array<u32, 64>;
+
+// A monotone map from f32 to u32: negative floats have their bits
+// inverted, non-negative ones get the sign bit set. Then integer order
+// IS float order, and atomicMin/atomicMax do the job. Integer ops, so
+// fast-math cannot touch it.
+fn minmax_ord(f: f32) -> u32 {
+    let u = bitcast<u32>(f);
+    return select(u ^ 0x80000000u, ~u, (u >> 31u) != 0u);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>,
+        @builtin(local_invocation_index) lid: u32) {
+    let g = sim_grid();
+    let p = vec2<i32>(gid.xy);
+    var lo = 0xFFFFFFFFu;
+    var hi = 0u;
+    if (p.x < g.x && p.y < g.y) {
+        let v = minmax_ord(textureLoad(field_in, p, 0).x);
+        lo = v;
+        hi = v;
+    }
+    wg_min[lid] = lo;
+    wg_max[lid] = hi;
+    workgroupBarrier();
+    for (var s = 32u; s > 0u; s = s >> 1u) {
+        if (lid < s) {
+            wg_min[lid] = min(wg_min[lid], wg_min[lid + s]);
+            wg_max[lid] = max(wg_max[lid], wg_max[lid + s]);
+        }
+        workgroupBarrier();
+    }
+    if (lid == 0u) {
+        let slot = 2u * params.minmax_slot;
+        atomicMin(&minmax[slot], wg_min[0]);
+        atomicMax(&minmax[slot + 1u], wg_max[0]);
+    }
 }
 "#;
 
@@ -479,6 +608,7 @@ fn splice(template: &str, boundary: SimBoundary, replacements: &[(&str, &str)]) 
             out.push(COMMON.to_string());
         } else if trimmed == "//__BOUNDARY__" {
             out.push(boundary_body(boundary).to_string());
+            out.push(READ_BODY.to_string());
         } else if let Some((_, body)) = replacements.iter().find(|(m, _)| *m == trimmed) {
             out.push((*body).to_string());
         } else {
@@ -545,6 +675,20 @@ fn sim_kernel_taps() -> u32 {
     } else {
         ""
     };
+    // Pyramid accessors: seven sampled levels above the field, and
+    // the trilinear read the wide-radius models use.
+    let pyramid = if model.has(ModelFeature::NeedsPyramid) {
+        PYRAMID_ACCESSORS
+    } else {
+        ""
+    };
+    // The previous step's global range, for the models that
+    // renormalise.
+    let minmax = if model.has(ModelFeature::NeedsMinMax) {
+        MINMAX_ACCESSORS
+    } else {
+        ""
+    };
     let entry = if pass == 0 { "sim_step" } else { "sim_step2" };
     let call = format!("    textureStore(field_out, p, {entry}(textureLoad(field_in, p, 0), p));");
     splice(
@@ -554,8 +698,146 @@ fn sim_kernel_taps() -> u32 {
             ("//__MODEL__", &format!("{rng_note}{}", model.wgsl)),
             ("//__STEP_CALL__", &call),
             ("//__KERNEL__", kernel),
+            ("//__PYRAMID__", pyramid),
+            ("//__MINMAX__", minmax),
         ],
     )
+}
+
+/// Spliced into the step shader of a model that declares
+/// [`ModelFeature::NeedsPyramid`].
+const PYRAMID_ACCESSORS: &str = r#"
+@group(0) @binding(6) var pyr1: texture_2d<f32>;
+@group(0) @binding(7) var pyr2: texture_2d<f32>;
+@group(0) @binding(8) var pyr3: texture_2d<f32>;
+@group(0) @binding(9) var pyr4: texture_2d<f32>;
+@group(0) @binding(10) var pyr5: texture_2d<f32>;
+@group(0) @binding(11) var pyr6: texture_2d<f32>;
+@group(0) @binding(12) var pyr7: texture_2d<f32>;
+
+// Levels in the pyramid, level 0 included. The same rule as the
+// renderer's `pyramid_levels`, and it must stay the same: this is what
+// the sample level is clamped to.
+fn pyr_levels() -> i32 {
+    var levels = 1;
+    var s = min(params.grid.x, params.grid.y);
+    while (s >= 8u && levels < 8) {
+        s = (s + 1u) / 2u;
+        levels = levels + 1;
+    }
+    return levels;
+}
+
+// Size of level l: halved and rounded up, l times.
+fn pyr_size(l: i32) -> vec2<i32> {
+    var s = sim_grid();
+    for (var i = 0; i < l; i = i + 1) {
+        s = (s + vec2<i32>(1, 1)) / 2;
+    }
+    return s;
+}
+
+// One texel of level l, channel .x, with the configured boundary
+// applied at THAT level's size. A switch rather than an array: WGSL
+// has no dynamic indexing of texture bindings without an extension.
+fn pyr_load(l: i32, q: vec2<i32>) -> f32 {
+    return pyr_load_sized(l, q, pyr_size(l));
+}
+
+// The same, with the level's size already in hand. A bilinear read
+// makes four loads at one level, and recomputing the size -- a loop
+// -- for each of them was measurable: hoisting it took McCabe at
+// 1080p from 7.78 to the figure recorded in the model's docs.
+fn pyr_load_sized(l: i32, q: vec2<i32>, g: vec2<i32>) -> f32 {
+    if (sim_outside(q, g)) {
+        return 0.0;
+    }
+    let w = sim_wrap_sized(q, g);
+    switch l {
+        case 0: { return textureLoad(field_in, w, 0).x; }
+        case 1: { return textureLoad(pyr1, w, 0).x; }
+        case 2: { return textureLoad(pyr2, w, 0).x; }
+        case 3: { return textureLoad(pyr3, w, 0).x; }
+        case 4: { return textureLoad(pyr4, w, 0).x; }
+        case 5: { return textureLoad(pyr5, w, 0).x; }
+        case 6: { return textureLoad(pyr6, w, 0).x; }
+        default: { return textureLoad(pyr7, w, 0).x; }
+    }
+}
+
+// Bilinear within level l at a position given in BASE cells (a cell
+// centre is p + 0.5). Four loads. `FLOAT32_FILTERABLE` is optional
+// and never requested, so the filtering is written out.
+fn pyr_level_avg(l: i32, pos: vec2<f32>) -> f32 {
+    let s = f32(1 << u32(l));
+    let f = pos / s - vec2<f32>(0.5, 0.5);
+    let f0 = floor(f);
+    let t = f - f0;
+    let i0 = vec2<i32>(f0);
+    let g = pyr_size(l);
+    let a = pyr_load_sized(l, i0, g);
+    let b = pyr_load_sized(l, i0 + vec2<i32>(1, 0), g);
+    let c = pyr_load_sized(l, i0 + vec2<i32>(0, 1), g);
+    let d = pyr_load_sized(l, i0 + vec2<i32>(1, 1), g);
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+
+// Trilinear: the two levels bracketing a fractional level, blended.
+// Eight loads for an average over any radius.
+fn pyr_sample(level: f32, pos: vec2<f32>) -> f32 {
+    let top = f32(pyr_levels() - 1);
+    let lf = clamp(level, 0.0, top);
+    let l0 = i32(floor(lf));
+    let l1 = min(l0 + 1, i32(top));
+    let t = lf - floor(lf);
+    return mix(pyr_level_avg(l0, pos), pyr_level_avg(l1, pos), t);
+}
+
+// The pyramid level whose Gaussian matches a DISC average of radius
+// r. Calibrated, not derived: measured on McCabe's five-scale ladder,
+// log2(0.55 r) reproduces the exact-disc reference's feature size
+// (56.9 against 56.9 cells) and amplitude (sd 0.2695 against 0.2665);
+// a plain log2(r) came out 1.8x too coarse.
+fn pyr_level_for_radius(r: f32) -> f32 {
+    return log2(max(0.55 * r, 1.0));
+}
+"#;
+
+/// Spliced into the step shader of a model that declares
+/// [`ModelFeature::NeedsMinMax`].
+const MINMAX_ACCESSORS: &str = r#"
+@group(0) @binding(14) var<storage, read> minmax_in: array<u32>;
+
+// Inverse of the reduce pass's ordering map.
+fn minmax_unord(e: u32) -> f32 {
+    if ((e >> 31u) != 0u) {
+        return bitcast<f32>(e ^ 0x80000000u);
+    }
+    return bitcast<f32>(~e);
+}
+
+// The PREVIOUS step's global range of channel .x. Before any reduce
+// has run (the slot still holds its cleared identities) it reports
+// [-1, 1], which is the range a freshly seeded McCabe field has.
+fn sim_minmax() -> vec2<f32> {
+    let prev = (params.minmax_slot + 256u) % 257u;
+    let lo = minmax_in[2u * prev];
+    let hi = minmax_in[2u * prev + 1u];
+    if (lo == 0xFFFFFFFFu || hi == 0u) {
+        return vec2<f32>(-1.0, 1.0);
+    }
+    return vec2<f32>(minmax_unord(lo), minmax_unord(hi));
+}
+"#;
+
+/// One pyramid level from the one below it.
+pub fn assemble_pyramid(boundary: SimBoundary) -> String {
+    splice(PYRAMID_TEMPLATE, boundary, &[])
+}
+
+/// The global min/max of the field into a ring slot.
+pub fn assemble_reduce() -> String {
+    splice(REDUCE_TEMPLATE, SimBoundary::Clamp, &[])
 }
 
 /// The colour + resolve pass: field → `Rgba32Float` at the output size.
@@ -653,6 +935,10 @@ mod tests {
                 validate(&assemble_seed(m, kind), &format!("seed {}/{kind}", m.name));
             }
         }
+        for b in boundaries {
+            validate(&assemble_pyramid(b), &format!("pyramid {b:?}"));
+        }
+        validate(&assemble_reduce(), "reduce");
         for c in COLORINGS {
             for b in boundaries {
                 for mag in [true, false] {

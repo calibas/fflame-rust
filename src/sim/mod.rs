@@ -107,7 +107,49 @@ pub enum ModelFeature {
     /// generation, not by `dt` of model time. The panel hides the dt
     /// slider rather than showing a control that does nothing.
     NoTimeStep,
+    /// The step reads wide-radius averages. The renderer builds a
+    /// GAUSSIAN pyramid of the field before every step -- one dispatch
+    /// per level, a 5x5 blur then decimate -- and the step shader
+    /// samples it with a manual trilinear read, so an average over any
+    /// radius costs eight loads. Gaussian rather than box, and that is
+    /// measured: a box pyramid converges to a square kernel however
+    /// many levels it has, and McCabe's texture came out visibly
+    /// axis-aligned on it. See `scripts/sim_prototypes/proto_mccabe_pyramid.py`.
+    NeedsPyramid,
+    /// The step needs the field's global minimum and maximum. After
+    /// every step the renderer reduces the new field into a ring slot
+    /// and the NEXT step reads it -- one step of lag, which is the
+    /// same dependency the reference algorithm has, since a step can
+    /// only normalise by a range that has already been measured.
+    NeedsMinMax,
 }
+
+/// Levels in the pyramid for a grid, INCLUDING level 0 (the field
+/// itself). One rule, computed identically on the CPU and in WGSL:
+/// halve until the smaller side would drop below 4 cells, capped at
+/// [`MAX_PYRAMID_LEVELS`]. Both sides must agree, because the shader
+/// clamps its sample level to this and the renderer allocates exactly
+/// this many textures.
+pub fn pyramid_levels(grid_w: u32, grid_h: u32) -> u32 {
+    let mut levels = 1u32;
+    let mut s = grid_w.min(grid_h);
+    while s >= 8 && levels < MAX_PYRAMID_LEVELS {
+        s = (s + 1) / 2;
+        levels += 1;
+    }
+    levels
+}
+
+/// Pyramid levels the engine binds, counting level 0. Seven extra
+/// levels reach a 1/128 reduction, which at the calibrated mapping
+/// (`level = log2(0.55 r)`) covers an averaging radius of ~230 cells.
+pub const MAX_PYRAMID_LEVELS: u32 = 8;
+
+/// Slots in the min/max ring: one per step of the largest batch, plus
+/// one so the slot a step READS (the previous step's) is never among
+/// the slots the batch clears before running.
+pub const MINMAX_RING: u32 = 257;
+
 
 /// Capability flags a colouring opts into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -436,6 +478,7 @@ pub static MODELS: &[&ModelDef] = &[
     &models::KOBAYASHI,
     &models::LENIA,
     &models::SMOOTHLIFE,
+    &models::MCCABE,
 ];
 
 /// Every colouring, in registration order. Append only.
@@ -445,6 +488,7 @@ pub static COLORINGS: &[&SimColoringDef] =
     &colorings::TWO_CHANNEL,
     &colorings::AGE,
     &colorings::LABEL,
+    &colorings::SCALE_MIX,
 ];
 
 /// Look up a model by name, falling back to the first registered one.
@@ -753,6 +797,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The pyramid level count is computed on both sides of the GPU
+    /// boundary; this pins the CPU side's shape so the WGSL copy has
+    /// something exact to match.
+    #[test]
+    fn pyramid_levels_halve_to_a_floor_and_cap() {
+        assert_eq!(pyramid_levels(4, 4), 1);
+        assert_eq!(pyramid_levels(8, 8), 2);
+        assert_eq!(pyramid_levels(64, 64), 5);
+        assert_eq!(pyramid_levels(256, 256), 7);
+        assert_eq!(pyramid_levels(1920, 1080), MAX_PYRAMID_LEVELS);
+        // The smaller side rules.
+        assert_eq!(pyramid_levels(1920, 8), 2);
     }
 
     #[test]

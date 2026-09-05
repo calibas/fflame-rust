@@ -307,3 +307,50 @@ fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+
+/// Which scale fired, as hue, with the field as brightness: the look
+/// later McCabe implementations gave the rule.
+///
+/// The step writes the firing scale's index into `.y`; this spreads
+/// the indices across the palette and darkens by `.x`, so the nested
+/// scales read as nested colours.
+pub static SCALE_MIX: SimColoringDef = SimColoringDef {
+    name: "scale_mix",
+    display_name: "Scale Mix",
+    description: "Hue from which scale is driving each cell, brightness from the field: \
+                  the multi-scale look, where each nesting level has its own colour.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "scales",
+            display_name: "Scales across palette",
+            default: 6.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "How many scale indices the palette spans. Match the model's scale \
+                      count to use the whole palette once.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "value_scale",
+            display_name: "Brightness range",
+            default: 0.5,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How much the field darkens the colour. 0 shows the scale alone.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
+    let n = max(cparam(0u), 1.0);
+    // Scale index to palette position, centred in its band.
+    let t = clamp((s.y + 0.5) / n, 0.0, 1.0);
+    // The field runs roughly [-1, 1]; darken toward the low end.
+    let v = clamp(s.x * 0.5 + 0.5, 0.0, 1.0);
+    let b = mix(1.0, v, cparam(1u));
+    return vec4<f32>(sim_palette(t) * b, 1.0);
+}
+"#,
+};

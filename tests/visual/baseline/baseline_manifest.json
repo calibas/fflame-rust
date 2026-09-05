@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "5a358cec",
+  "git_hash": "565c7c95",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -545,6 +545,22 @@
     "sim-lenia-soup.png": {
       "bytes": 27421,
       "sha256": "8cbe59316b222abfb0c059df36680857f8ca4b97eaa506e0fa51f3c2ac1264d5"
+    },
+    "sim-mccabe-coarse.png": {
+      "bytes": 22601,
+      "sha256": "b51628e8a00750914bef94b3908a046b8f9027e13b977a5fcf01791007b349cd"
+    },
+    "sim-mccabe-field.png": {
+      "bytes": 20013,
+      "sha256": "ce655dd4a5b9db6a1de3e8ed5044154a8ffcd2159f3641b0ccd81d3850aa9f04"
+    },
+    "sim-mccabe-multiscale.png": {
+      "bytes": 25535,
+      "sha256": "d245de4c4ad641ebee4ea235a0ae75cba5853190ce7db47c6b9dc7c87d94f724"
+    },
+    "sim-mccabe-rosette.png": {
+      "bytes": 22881,
+      "sha256": "4c6310b6e27925036f8080098105249987b4dd96e77b4962515cdcef412fd5e4"
     },
     "sim-oregonator-wave-trains.png": {
       "bytes": 8515,
