@@ -1979,6 +1979,8 @@ sim_panel:
   steps_per_frame_tip: "Free-running speed while Run is engaged. Animation uses the Sim.Steps track instead."
   dt: "Time step (dt)"
   dt_tip: "Model time per step. Too large and the explicit solver diverges; each model has a measured stability bound."
+  dt_capped: "Running at %{dt} — capped for stability at these parameters."
+  dt_capped_tip: "The stability bound depends on the other parameters, so a step you set earlier can end up above it. Your setting is kept; the solver runs at the capped value."
 
 escape_panel:
   contrast: "Auto Contrast"

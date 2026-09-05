@@ -425,16 +425,36 @@ pub fn render_sim_content(
     // An automaton advances by a generation, not by dt: showing the
     // slider would be a control that does nothing.
     let mut dt = sim.dt;
-    if !model.has(crate::sim::ModelFeature::NoTimeStep)
-        && ui
-        .add(
-            egui::Slider::new(&mut dt, 0.001..=model.max_dt_for(&sim.model_params))
-                .text(t!("sim_panel.dt").as_ref()),
-        )
-        .on_hover_text(t!("sim_panel.dt_tip"))
-        .changed()
-    {
-        let _ = config_manager.update_param(ConfigPath::SimDt, dt.into());
+    if !model.has(crate::sim::ModelFeature::NoTimeStep) {
+        // The range is the model's STATIC ceiling, never the
+        // parameter-dependent stability cap. A range that moved with
+        // the other sliders moved this slider's handle -- and, once
+        // egui clamped the value into it, the stored dt too -- so
+        // dragging Mobility appeared to edit the time step.
+        if ui
+            .add(
+                egui::Slider::new(&mut dt, 0.001..=model.max_dt)
+                    .text(t!("sim_panel.dt").as_ref()),
+            )
+            .on_hover_text(t!("sim_panel.dt_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::SimDt, dt.into());
+        }
+        // What the solver will actually use. Capping silently would
+        // leave the panel claiming a step the run does not take.
+        let effective = model.max_dt_for(&sim.model_params);
+        if sim.dt > effective * 1.001 {
+            ui.label(
+                egui::RichText::new(t!(
+                    "sim_panel.dt_capped",
+                    dt = format!("{effective:.4}")
+                ))
+                .small()
+                .weak(),
+            )
+            .on_hover_text(t!("sim_panel.dt_capped_tip"));
+        }
     }
 
     ui.separator();
