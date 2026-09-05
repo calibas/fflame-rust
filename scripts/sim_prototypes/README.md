@@ -26,6 +26,7 @@ render artifacts do not belong in the repo). Requires `numpy` and
 | `proto_cellular_automata.py` | hodgepodge, cyclic CA, spatial RPS, Ising | — |
 | `proto_growth.py` | Eden, ballistic deposition, percolation labelling, Packard snowflake | default · `--kpz`: growth-exponent fit |
 | `proto_wolfram.py` | elementary CA | — (verifies the bit convention against binomials mod 2) |
+| `proto_oregonator_kobayashi.py` | Oregonator (Tyson–Fife), Kobayashi phase-field dendrite | default · `oreg` / `kob`: one model |
 | `proto_pde.py` | Swift–Hohenberg, Cahn–Hilliard (fourth-order, two-pass) | default: presets + stability ladders · `sweep`: SH drive relative to q₀⁴ · `gsweep`: where hexagons would live · `sh` / `ch`: one model |
 | `proto_sandpile.py` | Abelian sandpile | — (bulk-toppling round count, 2¹² – 2²⁰ grains) |
 
@@ -45,6 +46,14 @@ that would have shipped wrong without running them:
 - A Cahn–Hilliard dt bound that was too loose by 50% and failed
   slowly: finite at 400 steps, infinite by 1,000. The ladder was
   lengthened to 4,000 steps because of it.
+- The two-pass discretisation the plan specified for Kobayashi, which
+  decouples the odd and even sublattices and fills the field with a
+  checkerboard while staying finite and inside [0, 1]. It reached the
+  prototype and not the shader, which is the entire point; the shipped
+  scheme stores fluxes on cell faces instead.
+- An Oregonator spiral preset. The catalogue remembered "spiral waves
+  for f ≈ 1.4"; a broken front retracts and heals at every (ε, f)
+  tried, so what ships is the travelling wave that was measured.
 - Two dt caps that were estimates (Brusselator 0.04, Schnakenberg 0.02)
   and one measured on the wrong configuration (FHN from a resting
   field said 0.5; the spiral says 0.75).

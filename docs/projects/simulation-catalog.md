@@ -292,6 +292,53 @@ reason. Guard u ≥ 0 and the denominator (u + q > 0 always if u ≥ 0).
 **Parameters.** `epsilon`, `q`, `f`, `D_u`, `D_v`, `dt`.
 **Stages.** `update` ×K, `color`. **Colouring.** `two_channel`, `age`.
 
+**Verified 2026-09-05** against the paper (supplied as
+`output/pdf/tyson1980.pdf`), shipped the same day.
+
+- **The equations above are CONFIRMED verbatim** — Tyson & Fife
+  eq. (17), including the `f v (u − q)/(u + q)` term. The paper writes
+  the parameters `(a, b)` where the later literature writes `(q, f)`;
+  its Table I gives the correspondence. It states ε ≪ 1, q ≪ 1, f ~ 1
+  (eq. 16).
+- **No numeric set for a 2-D run exists in the paper** — it is
+  analytic throughout — so ε, q and f had to be measured rather than
+  quoted. The remembered "ε ≈ 0.04, q = 0.002, f ≈ 1–3" is a usable
+  starting point and is what ships.
+- **Sub-stepping is NOT needed.** The catalogue proposed K dispatches
+  per displayed step; a small `dt` and more steps is the same thing,
+  and the engine's step batching already covers it. Shipped as
+  `passes: 1`.
+- **dt bound derived and measured.** The stiff term is the activator
+  threshold: d/du[−f v (u−q)/(u+q)] = −2 f v q/(u+q)², largest near
+  u = q at −f v/(2q). With the Sims diffusion term, both over ε:
+  **dt ≤ 2ε/(f/(2q) + 1.6 D_u)** = 2.3e-4 at the defaults. Measured
+  stable at 5e-4; at 1e-3 the field **collapses to zero rather than
+  diverging**, because the `max(·, 0)` clamp turns the instability
+  into death — the same class of failure the phase-2 review found, and
+  the reason the ladder judges by amplitude and not by `isfinite`.
+- **Spirals are REFUTED at every setting tried.** The remembered
+  "spiral waves for f ≈ 1.4" did not appear. A broken front (the
+  engine's `BrokenWave`, which nucleates FitzHugh–Nagumo's spirals)
+  was run at ε ∈ {0.01, 0.02, 0.04} × f ∈ {1.4 … 3.5}: in every case
+  the free end **retracted** and the front healed into an expanding
+  closed loop. Whether a free end curls or retracts is set by
+  excitability, and no point in the range tried was on the curling
+  side.
+- **Target patterns are OPEN.** The paper's own mechanism — a
+  heterogeneity that is locally oscillatory inside an excitable bulk —
+  was implemented as a disc at a lower `f`. It fires and emits one
+  ring, but no sustained train appeared within the 1.5 time units
+  tested, and a first attempt produced nothing at all because
+  u = v = 0 is an **exact fixed point** of the reaction, so a field
+  seeded there never moves. Not shipped; a spatially varying `f` needs
+  a mask channel the model does not currently carry.
+- **What ships** is what was measured: each seed fires one excitation
+  wave that travels at **constant speed** and annihilates on
+  collision. The GPU test measures the front radius at 6k/12k/18k
+  steps — 20.8, 38.3, 56.1 cells, increment ratio **1.018** — which
+  separates a travelling wave from diffusion (0.41) unambiguously.
+  Preset `waves`, 15,000 steps at dt = 1e-4.
+
 ---
 
 ## 5. Schnakenberg
@@ -955,6 +1002,60 @@ dendrite at 300² — Tier 2, batched heavily.
 **Stages.** `update` ×2, `color`. Boundary Clamp (Neumann).
 **Colouring.** `channel` on p (the crystal), `two_channel` (T as the
 thermal halo), `hillshade` on p.
+
+**Verified 2026-09-05** against the paper (supplied as
+`output/pdf/Kobayashi_PhysicaD1993.pdf`), shipped the same day. The
+entry said outright that "the paper must be read before any of this
+ships"; it was, and it holds up better than expected.
+
+- **Every equation above is CONFIRMED** — the phase equation, the
+  temperature equation ∂T/∂t = ∇²T + K ∂p/∂t, the anisotropy
+  ε(θ) = ε̄(1 + δ cos(j(θ − θ₀))), and the driving term
+  m(T) = (α/π)·arctan(γ(T_e − T)), which is the paper's own choice
+  precisely because it keeps |m| < ½.
+- **Every remembered constant is CONFIRMED**: ε̄ = 0.01, τ = 0.0003,
+  α = 0.9, γ = 10.0, T_e = 1, dt = 0.0002, and the 300² mesh on a
+  9.0-wide domain, i.e. dx = 0.03. The paper fixes all of these in
+  *every* simulation and varies only K, δ, j and θ₀ — so those four
+  are what the model exposes and the rest are constants in the shader.
+  Two details the entry did not have: a **noise term** a·p(1−p)·χ with
+  a = 0.01 and χ uniform on [−½, ½], which section 1 calls crucial to
+  side branching, and the ice-dendrite figure's **θ₀ = π/2**.
+- **K = 1.6 is in range but not special**: the paper's fig. 8 sweeps
+  K over 0.8 … 2.0 with δ = 0.040, j = 6. Below 1 the whole vessel
+  freezes; above it roughly 1/K solidifies.
+- **THE DISCRETISATION IS THE HARD PART, and the plan's was wrong.**
+  §4.3 proposed "one pass storing ε²∇p and εε'∇p, a second taking
+  their divergence". Done with central differences twice — the obvious
+  reading — that composes to (f[i+2] − 2f[i] + f[i−2])/4dx², a stencil
+  that **skips the immediate neighbour**, so the odd and even
+  sublattices decouple and nothing damps the Nyquist mode. Measured on
+  the CPU mirror it filled the field with a diagonal checkerboard
+  while staying inside [0, 1] and finite, so an `isfinite` ladder
+  called it stable at every dt. The shipped scheme is **staggered**:
+  cell (i,j) stores the flux through its +x and +y faces from a
+  forward difference across that face, and pass 2's backward
+  difference composes to the compact Laplacian. Collecting the whole
+  anisotropic operator into one divergence
+  `J = (ε²p_x − εε'p_y, ε²p_y + εε'p_x)` is also what lets the two
+  scratch channels be exactly two.
+- **dt: the T equation binds, not the phase equation.** Plain
+  diffusion with D = 1 on dx = 0.03 needs dt ≤ dx²/4 = 2.25e-4, three
+  times tighter than the phase equation's ε²/τ = 0.333. The paper used
+  an *implicit* scheme for T for exactly this reason. Measured fully
+  explicit: 1e-4 clean (Nyquist 8e-5), 2e-4 carries a trace (2.8e-3),
+  3e-4 diverges at step 1,389. Ships with a 1e-4 default.
+- **The nucleus must clear the critical radius.** A single-cell seed
+  (`SimInit::Center`) dissolves under surface tension and the render
+  is empty — measured on the GPU, black frame. Both presets seed a
+  `Blob` of radius 4.
+- **The symmetry is pinned by a test, not by eyes.** The crystal's
+  reach as a function of angle is reduced to angular harmonics, and
+  the dominant one must equal j: measured 4-fold at amplitude 11.46
+  against 0.04 for k = 6, and 6-fold at 9.66 against 4.21 for k = 4.
+  Counting solid arcs around a circle was tried first and read "16
+  arms" on a plainly four-fold crystal, because by 4,000 steps the
+  side branches cross any ring that reaches the arms.
 
 ---
 
