@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "784a980c",
+  "git_hash": "5a358cec",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -542,6 +542,10 @@
       "bytes": 17390,
       "sha256": "584a997a76657cbcf4b5fec6bff575a6d45f1c12d516d1235641dab08c640f0d"
     },
+    "sim-lenia-soup.png": {
+      "bytes": 27421,
+      "sha256": "8cbe59316b222abfb0c059df36680857f8ca4b97eaa506e0fa51f3c2ac1264d5"
+    },
     "sim-oregonator-wave-trains.png": {
       "bytes": 8515,
       "sha256": "e01650362a01fc43e34e927f443bbf599c2366b4b19ee13b1f1043c650930188"
@@ -577,6 +581,10 @@
     "sim-schnakenberg-two-channel.png": {
       "bytes": 36744,
       "sha256": "08ccfcb72f9f407f2957a3601f826ee40fc40cb18a2cc96013411caf762e0a95"
+    },
+    "sim-smoothlife-glider.png": {
+      "bytes": 17688,
+      "sha256": "095fa92cc2129f539cfbc08ba8d56c43a2fec83b25ceda2cb10783f75e2411b5"
     },
     "sim-spatial-rps.png": {
       "bytes": 24550,

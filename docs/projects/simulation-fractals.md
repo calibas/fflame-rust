@@ -564,6 +564,47 @@ Full findings in the catalogue (§4 and §16).
   travelling wave from diffusion (0.41).
 - Four new visual baselines; 17 models.
 
+#### Wave 3 — the large-kernel gathers, and the phase's gate
+
+**Done 2026-09-05.** Lenia and SmoothLife ship, and the gate is met
+with room to spare.
+
+- **The kernel LUT.** `ModelDef::kernel` builds a `(2R+1)²` weight
+  table on the CPU; the renderer uploads it beside the parameters and
+  the step shader gathers against it. A model that needs two kernels
+  (SmoothLife's disc and annulus) appends the second block after the
+  first and offsets into it, which keeps each gather's reads
+  contiguous. The buffer is sized once for the largest kernel allowed
+  (R = 32, two blocks, 34 KB) so it never resizes, and the binding is
+  always present — only the models that gather declare it in WGSL.
+- **GATE MET.** Lenia R = 13 at 512² is 729 taps a cell, 1.91e8 taps a
+  step, measured at **3.36 ms/step = 298 steps/s** against the
+  required 60. The direct gather is enough and the **shared-memory
+  tile held in reserve is not needed** — which also settles the
+  question the phase-2 review left open about range-5 cyclic CA.
+- **A four-year-old bug in the periodic boundary.** SmoothLife's CPU
+  mirror disagreed by 0.228 at the edges while the interior was
+  bit-exact. The wrap read `((p % g) + g) % g` — correct arithmetic
+  that measurably behaved like a bare `p % g` on the device, byte for
+  byte. Subtracting the truncated quotient instead agrees with the
+  mirror exactly. Offsets of ±1 are demonstrably unaffected (all 33
+  periodic visual baselines are byte-identical across the change), so
+  it needed a large kernel to become visible: SmoothLife's annulus
+  carries its weight at the outer radius, while Lenia's ring has
+  almost none there and its growth term saturates exactly where the
+  gather is wrong. **Why the original form failed is not
+  established**, and the code says so rather than guessing. The old
+  guard was a test asserting the SOURCE TEXT contained that idiom —
+  which is why it passed throughout.
+- **Falsifiable per model**: both gathers are compared against a CPU
+  mirror using the exact table the GPU was handed, so a transposed
+  index, a wrong radius, a mis-offset second block or a broken wrap
+  all fail — 6.0e-8 for Lenia and 6.6e-7 for SmoothLife.
+- What is deliberately not shipped: Orbium (needs a `Pattern` init),
+  Lenia's multi-ring kernels and its polynomial and rectangular cores
+  (formulas still `[verify]`), and SmoothLife's discrete time form.
+- Two new visual baselines; 19 models.
+
 **Hodgepodge corrected (2026-09-05), a phase-2 model.** The same batch
 of papers settled a `[verify]` flag that had been open since the model
 shipped: the rule everybody quotes is not the one Gerhardt & Schuster

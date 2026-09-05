@@ -1854,3 +1854,203 @@ fn both_hodgepodge_rules_match_a_cpu_mirror_of_their_papers() {
          the selector is not selecting"
     );
 }
+
+/// Both large-kernel gathers, against a CPU mirror using the SAME
+/// table the GPU was handed.
+///
+/// The kernel path has more places to be silently wrong than a stencil
+/// does: the table's row-major order, the sign of the offset, the
+/// radius the uniform carries, the second block's offset, the
+/// normalisation. Every one of those still produces a smooth evolving
+/// field that looks like the model -- Lenia with a transposed kernel
+/// is still Lenia-shaped -- so the mirror compares numbers.
+///
+/// The kernel comes from `ModelDef::kernel_for`, which is the exact
+/// `Vec<f32>` uploaded, so this checks the SHADER's use of it rather
+/// than re-deriving the weights and testing two implementations of the
+/// same formula against each other.
+#[test]
+fn the_large_kernel_gathers_match_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 96;
+    const STEPS: u32 = 3;
+
+    for model_name in ["lenia", "smoothlife"] {
+        let mut cfg = SimConfig::default();
+        cfg.model = model_name.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 11;
+        let model = crate::sim::model_or_default(model_name);
+        cfg.dt = model.default_dt;
+        // A small radius keeps the mirror quick; the machinery is the
+        // same at any size.
+        if model_name == "lenia" {
+            cfg.model_params.insert("radius".into(), 6.0);
+        } else {
+            cfg.model_params.insert("inner_radius".into(), 2.0);
+        }
+
+        let k = model.kernel_for(&cfg.model_params).expect("declares a kernel");
+        let r = k.radius as i64;
+        let w = (2 * r + 1) as usize;
+        let taps = w * w;
+
+        let mut sim = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        sim.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let start = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+        sim.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let got = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+
+        let mut f: Vec<f32> = start.iter().map(|px| px[0]).collect();
+        let dt = cfg.dt;
+        for _ in 0..STEPS {
+            let mut next = vec![0.0f32; N * N];
+            for y in 0..N {
+                for x in 0..N {
+                    let (mut a, mut b) = (0.0f32, 0.0f32);
+                    for dy in -r..=r {
+                        for dx in -r..=r {
+                            let i = ((dy + r) as usize) * w + (dx + r) as usize;
+                            let nx = (x as i64 + dx).rem_euclid(N as i64) as usize;
+                            let ny = (y as i64 + dy).rem_euclid(N as i64) as usize;
+                            let v = f[ny * N + nx];
+                            a += k.weights[i] * v;
+                            if k.weights.len() > taps {
+                                b += k.weights[taps + i] * v;
+                            }
+                        }
+                    }
+                    let cur = f[y * N + x];
+                    next[y * N + x] = if model_name == "lenia" {
+                        let (mu, sg) = (0.15f32, 0.015f32);
+                        let d = a - mu;
+                        let g = 2.0 * (-(d * d) / (2.0 * sg * sg)).exp() - 1.0;
+                        (cur + dt * g).clamp(0.0, 1.0)
+                    } else {
+                        // a is the inner disc, b the annulus.
+                        let sig = |x: f32, c: f32, al: f32| 1.0 / (1.0 + (-(x - c) * 4.0 / al).exp());
+                        let pick = sig(a, 0.5, 0.147);
+                        let lo = 0.278 + (0.267 - 0.278) * pick;
+                        let hi = 0.365 + (0.445 - 0.365) * pick;
+                        let alive = sig(b, lo, 0.028) * (1.0 - sig(b, hi, 0.028));
+                        (cur + dt * (alive - cur)).clamp(0.0, 1.0)
+                    };
+                }
+            }
+            f = next;
+        }
+
+        let mut worst = 0.0f32;
+        for i in 0..N * N {
+            worst = worst.max((f[i] - got[i][0]).abs());
+        }
+        println!(
+            "{model_name}: radius {r}, {taps} taps, {STEPS} steps vs CPU mirror: \
+             worst |delta| = {worst:.3e}"
+        );
+        assert!(
+            worst < 2e-4,
+            "{model_name}: GPU and CPU disagree by {worst:.3e} -- the gather does not \
+             match the table it was given"
+        );
+    }
+}
+
+/// Phase 3's gate: Lenia at R = 13 must run 512² at 60 steps a second.
+///
+/// 729 taps a cell over 262,144 cells is 1.9e8 texture reads a step,
+/// and the budget is 16.7 ms. This is the measurement the phase's
+/// plan named, and it decides whether the large-kernel models need the
+/// shared-memory tile that was held back as a fallback.
+///
+/// Run with `--test-threads=1`: a GPU timing test sharing the device
+/// with another one measures the other one too.
+#[test]
+fn lenia_meets_the_phase_3_interactive_budget() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 512;
+    const STEPS: u32 = 120;
+    let mut cfg = SimConfig::default();
+    cfg.model = "lenia".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.model_params.insert("radius".into(), 13.0);
+
+    let mut sim = SimRenderer::new(&device, &cfg, N, N);
+    sim.seed(&device, &queue, &cfg);
+    // Warm: shader compile and the first submission's sizing.
+    sim.run_steps(&device, &queue, &cfg, 20);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let t0 = std::time::Instant::now();
+    sim.run_steps(&device, &queue, &cfg, STEPS);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+    let taps = 27.0 * 27.0 * (N as f64) * (N as f64);
+    println!(
+        "Lenia R=13 at {N}²: {ms:.3} ms/step ({:.1} steps/s), {:.2e} taps/step, \
+         {:.2e} taps/s",
+        1e3 / ms,
+        taps,
+        taps / (ms / 1e3)
+    );
+    assert!(
+        ms < 16.67,
+        "phase 3's gate is 60 steps/s at 512² and this is {:.1} ({ms:.2} ms/step)",
+        1e3 / ms
+    );
+}
+
+/// Diagnostic: what the gather costs as the radius grows, for both
+/// models, at the size the gate uses.
+#[test]
+#[ignore = "diagnostic"]
+fn large_kernel_cost_against_radius() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    const N: u32 = 512;
+    const STEPS: u32 = 60;
+    for (model, param, values) in [
+        ("lenia", "radius", vec![6.0f32, 13.0, 21.0, 32.0]),
+        ("smoothlife", "inner_radius", vec![2.0, 4.0, 7.0, 10.0]),
+    ] {
+        for v in values {
+            let mut cfg = SimConfig::default();
+            cfg.model = model.into();
+            cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+            cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+            cfg.model_params.insert(param.into(), v);
+            let k = crate::sim::model_or_default(model)
+                .kernel_for(&cfg.model_params)
+                .unwrap();
+            let mut sim = SimRenderer::new(&device, &cfg, N, N);
+            sim.seed(&device, &queue, &cfg);
+            sim.run_steps(&device, &queue, &cfg, 20);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let t0 = std::time::Instant::now();
+            sim.run_steps(&device, &queue, &cfg, STEPS);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+            let w = 2.0 * k.radius as f64 + 1.0;
+            println!(
+                "{model:<11} {param}={v:<5} kernel radius {:<3} {:>5.0} taps  \
+                 {ms:>7.3} ms/step  {:.2e} taps/s",
+                k.radius,
+                w * w,
+                w * w * (N as f64) * (N as f64) / (ms / 1e3)
+            );
+        }
+    }
+}
