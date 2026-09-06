@@ -820,10 +820,11 @@ matches the DLA of phase 4.
 **What the phase needs that does not exist yet**, found by reading the
 code against these five models before starting:
 
-1. `ModelDef::passes` is capped at 1 or 2 — the invariant test, the
-   `sim_step2` naming and the renderer's pipeline struct all assume
-   it. The snowfake has FOUR substeps that must each complete before
-   the next reads the field.
+1. ~~`ModelDef::passes` is capped at 1 or 2 — the snowfake has FOUR
+   substeps.~~ **Not needed, found by reading Part II.** Two of the
+   four substeps read no neighbour, so they fold into the two that do,
+   and a CPU mirror keeping all four separate agrees with the two-pass
+   shader exactly. The cap stays until something actually needs it.
 2. There is no per-step repeat count. DBM relaxes K = 5–50 sweeps per
    growth step and K is a slider, not a compile-time count.
 3. There is no scan. The reduce does min/max only; exact selection
@@ -862,6 +863,41 @@ picture.
   last-avalanche age field (nearly black). The odometer and the
   wrapped invasion contours took their places.
 - 24 models, 5 new visual baselines, no existing baseline moved.
+
+#### Wave 2 — Part II, and the snowfake
+
+**Done 2026-09-05.** The Gravner–Griffeath snowfake ships, from the
+paper rather than from the plan's memory of it, and the passes
+generalisation the wave was scheduled around turned out to be
+unnecessary.
+
+- **Part II's rule is not Part III's**, and the catalogue had been
+  carrying Part III's. Four fields rather than three, a one-cell seed
+  rather than a hexagon, freezing that spends all the vapour rather
+  than keeping κ of it, single constants where the entry had
+  neighbour-count functions, and two parameters (α, θ — the knife-edge
+  instability) with no Part III analogue at all. Reading the paper
+  changed the model's shape, not just its numbers.
+- **The four substeps fit two dispatches**, because freezing and
+  melting read no neighbour. A CPU mirror that keeps all four separate
+  agrees with the shader on every attachment over 400 steps, so the
+  merge is exact rather than close.
+- **The paper contradicts itself on α and θ**, and the fix came from
+  measurement: under equation (3b) with the APPENDIX's values all
+  three case studies reproduce the morphology their text describes,
+  and under the same equation with section 6's values the first grows
+  a featureless plate at every size tried, 40,000 steps on 1024²
+  included. Two of the three case studies have text and table
+  agreeing, so the table is the systematic source and it is what
+  ships.
+- **The paper's own conservation check is now a test.** Its drift is
+  f32 and not the rule — about 1e-4 over 4,000 steps, in either
+  direction — and the CPU mirror in the same precision drifts
+  identically, which is what says so rather than assuming it.
+- Four presets, each an unmodified row of the appendix; 4 new visual
+  baselines at 512²; 25 models. A day spent on a stale binary: the
+  first nine renders were Gray–Scott, which the CLI had been warning
+  about in a log line nobody was reading.
 
 ### Phase 6 — polish and reach
 

@@ -4152,3 +4152,413 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 1.0,
     default_dt: 1.0,
 };
+
+
+/// The Gravner-Griffeath snowfake: a mesoscopic lattice map that grows
+/// a planar snow crystal from diffusion-limited aggregation,
+/// anisotropic attachment kinetics and an idealised quasi-liquid layer.
+///
+/// J. Gravner, D. Griffeath, "Modeling snow crystal growth II: A
+/// mesoscopic lattice map with plausible dynamics", *Physica D* 237
+/// (2008) 385-404. Read in full (revised version, September 2007) --
+/// **not Part III**, which is the three-dimensional sequel and whose
+/// rule this catalogue previously stood in for. They differ where it
+/// matters, see below.
+///
+/// **State**, four fields per site of the triangular lattice, which is
+/// exactly the four channels: `.x` = a, attached (0 or 1); `.y` = b,
+/// boundary mass (the quasi-liquid layer); `.z` = c, crystal mass
+/// (ice); `.w` = d, diffusive mass (vapour). Initially one attached
+/// cell with a = c = 1 at the origin and d = rho everywhere else.
+///
+/// **The rule**, its four deterministic substeps in the paper's order.
+/// N_x is the site and its six neighbours; the boundary is an
+/// unattached site with at least one attached neighbour.
+///
+/// (i) DIFFUSION, on the unattached sites: d' = (1/7) sum over N_x,
+/// with reflecting conditions at the crystal -- a term for an attached
+/// neighbour is replaced by the site's own d.
+/// (ii) FREEZING, at boundary sites: a proportion kappa of the vapour
+/// becomes ice directly and the rest quasi-liquid, and the vapour is
+/// spent: b += (1-kappa) d, c += kappa d, d = 0.
+/// (iii) ATTACHMENT, at boundary sites, by the number n of attached
+/// neighbours: n of 1 or 2 needs b >= beta; n = 3 needs b >= 1, or
+/// the knife-edge instability -- vapour in the neighbourhood below
+/// theta and b >= alpha; n >= 4 attaches unconditionally. On
+/// attaching, c += b and b = 0.
+/// (iv) MELTING, at boundary sites: b and c give proportions mu and
+/// gamma back to the vapour.
+/// (v) NOISE, optional: d is perturbed by +/- sigma with equal
+/// probability. The paper's own parameter studies are deterministic.
+///
+/// **TWO PASSES, not the four the plan expected.** Substeps (ii) and
+/// (iv) read no neighbour: freezing needs only the vapour the
+/// diffusion just left at the site itself, and melting only the site's
+/// own masses. So (i)+(ii) are one dispatch and (iii)+(iv) another,
+/// and the pass boundary sits exactly where it must -- attachment
+/// reads its neighbours' vapour AFTER freezing has zeroed it at every
+/// boundary site, which is a neighbour read of a field the previous
+/// substep wrote.
+///
+/// **Where Part III's rule, which this model was planned from,
+/// differs.** Part III's freezing keeps kappa of the vapour AS vapour
+/// (d' = kappa d); Part II spends it all, kappa going to ICE. Part
+/// III's kappa, beta and mu are functions of the neighbour count;
+/// Part II's are single constants, and the neighbour count enters only
+/// through the three attachment cases. Part II also has alpha and
+/// theta -- the knife-edge instability, which has no Part III
+/// analogue here -- and gamma, crystal mass melting back to vapour.
+/// The plan's guessed `kappa1..3 / beta1..3 / mu1..3` parameter set was
+/// wrong in shape as well as in value.
+///
+/// **The paper contradicts itself about alpha and theta, and the
+/// appendix decides it.** Equation (3b) has theta bounding the vapour
+/// sum and alpha the boundary mass; section 5's prose says the
+/// reverse. The appendix tabulates every figure's parameters in the
+/// order rho beta alpha theta kappa mu gamma sigma, and for two of
+/// the three case studies of section 6 the table and the running text
+/// agree -- but for figure 13 left the text says alpha = .026,
+/// theta = .2 where the table says alpha = .2, theta = .026.
+///
+/// **Measured, the table is right.** Under the equation with the
+/// TABLE's values every one of the three reproduces the morphology
+/// the text describes. Under the equation with the TEXT's values,
+/// figure 13 left grows a featureless hexagonal plate at any size or
+/// duration tried -- 40,000 steps on a 1024 grid included -- because
+/// a vapour cutoff of 0.2 fires the knife-edge everywhere around a
+/// large crystal and an attachment threshold of 0.026 then fills
+/// every concavity as fast as it appears. The equation is
+/// implemented, and the presets take their numbers from the appendix.
+/// (The appendix also gives figure 13 right gamma = .0006 where the
+/// text says .00006.)
+///
+/// **One ambiguity, decided on mechanism.** Steps (ii) and (iv) are
+/// written "for x in dA_t", the boundary at the START of the cycle,
+/// which would include a site that attached in step (iii); but the
+/// paper also says attachment is permanent and there are "no further
+/// dynamics at attached sites". Melting a freshly attached site would
+/// move gamma*c into vapour AT AN ATTACHED SITE, where nothing
+/// diffuses it and it is stranded. Melting therefore skips sites that
+/// just attached.
+pub static SNOWFAKE: ModelDef = ModelDef {
+    name: "snowfake",
+    display_name: "Gravner–Griffeath Snowfake",
+    description: "A planar snow crystal grown from vapour on a hexagonal lattice: diffusion, \
+                  a quasi-liquid boundary layer, and attachment that is harder on a flat face \
+                  than in a valley. Plates, stars, dendrites and sectored plates.",
+    features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "rho",
+            display_name: "Vapour density ρ",
+            default: 0.65,
+            min: 0.10,
+            max: 1.00,
+            tooltip: "How much vapour the cloud starts with, at every cell that is not the \
+                      seed. The paper's crystals use 0.35 to 0.8, and it is the easiest \
+                      parameter to read: more vapour grows faster and pushes the form from \
+                      plate to sectored plate to dendrite. Changing it reseeds.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "beta",
+            display_name: "Anisotropy β",
+            default: 1.75,
+            min: 1.0,
+            max: 4.0,
+            tooltip: "How much boundary mass a site with one or two attached neighbours needs \
+                      before it joins — a tip or a flat face, where attachment is hard. A \
+                      valley's threshold is 1, so it is the EXCESS OVER 1 that makes the \
+                      crystal faceted. Raising it delays the first instability, grows the \
+                      central plate larger, and moves the form from fern to dendrite to \
+                      sectored plate. The paper uses 1.05 to 3.2.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "alpha",
+            display_name: "Knife-edge mass α",
+            default: 0.2,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The reduced boundary-mass threshold a concave site may attach at once \
+                      the vapour around it has run out — the knife-edge instability, by which \
+                      a very thin plate spreads on almost no vapour. It is what fills the \
+                      regions between the six main branches long after they have passed. \
+                      Below the valley threshold of 1, and the paper's figures use 0 to 0.6.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "theta",
+            display_name: "Knife-edge vapour θ",
+            default: 0.026,
+            min: 0.0,
+            max: 0.5,
+            tooltip: "How depleted the vapour in a site's neighbourhood must be before that \
+                      reduced threshold applies. It is compared against the SUM over the site \
+                      and its six neighbours, which far from the crystal is about 7ρ, so the \
+                      paper's values of 0.003 to 0.11 mean 'almost nothing left'. Set it too \
+                      high and the crystal fills into a featureless plate, because every \
+                      concavity qualifies as soon as it forms.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kappa",
+            display_name: "Freezing κ",
+            default: 0.15,
+            min: 0.0,
+            max: 0.5,
+            tooltip: "The proportion of vapour arriving at the boundary that freezes straight \
+                      to ice; the rest becomes quasi-liquid and is what attachment weighs. \
+                      Ice deposited this way waits rather than attaching, so raising κ starves \
+                      the fastest tips of boundary mass and — up to a point — encourages side \
+                      branching. The paper's figures span 0 to 0.15.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "mu",
+            display_name: "Melting μ",
+            default: 0.015,
+            min: 0.0,
+            max: 0.3,
+            tooltip: "The proportion of boundary mass that returns to vapour each step. It \
+                      opposes freezing, and raising it promotes faceting: the paper's sequence \
+                      from 0.04 to 0.09 turns a stellar dendrite with parabolic tips into a \
+                      stellar plate with hexagonal ones.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "gamma",
+            display_name: "Sublimation γ",
+            default: 0.0001,
+            min: 0.0,
+            max: 0.01,
+            tooltip: "The proportion of unattached ICE at the boundary that returns to vapour \
+                      each step. It acts like melting but is typically far smaller — the \
+                      paper's figures use 0.000001 to 0.01 — and it is included for \
+                      completeness rather than for its effect.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "sigma",
+            display_name: "Vapour noise σ",
+            default: 0.0,
+            min: 0.0,
+            max: 0.1,
+            tooltip: "Multiplies the vapour at every site by 1 ± σ each step, each sign \
+                      equally likely. The paper's own parameter studies are deterministic \
+                      (σ = 0) and complex without it; a little noise is how it studies how \
+                      much of a real snowflake's asymmetry chance accounts for.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        // Every row here is the appendix's, in its own column order:
+        // rho, beta, alpha, theta, kappa, mu, gamma, sigma.
+        SimPreset {
+            name: "primitive",
+            display_name: "Primitive (ridges)",
+            // Figure 4, "the first instability: in the lab and
+            // simulated" -- the primitive case, in which every
+            // parameter but rho and beta is zero. No quasi-liquid
+            // layer, no knife-edge, no melting: the anisotropy of
+            // attachment alone, and it is enough for ridges.
+            params: &[
+                ("rho", 0.58), ("beta", 3.2), ("alpha", 0.0), ("theta", 0.0),
+                ("kappa", 0.0), ("mu", 0.0), ("gamma", 0.0), ("sigma", 0.0),
+            ],
+            // Measured at 512^2: 24,000 steps is 14% of the grid and has
+            // grown the side branches the paper says the primitive
+            // case tends to -- "should resemble a fern once it grows
+            // large enough".
+            steps: 24_000,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "simple_star",
+            display_name: "Simple star",
+            // Figure 13 left: "rather high vapour density compared to
+            // the anisotropy index promotes early onset of the first
+            // instability and rapid advance of the six main tips. Very
+            // strong direct freezing inhibits further branching."
+            params: &[
+                ("rho", 0.65), ("beta", 1.75), ("alpha", 0.2), ("theta", 0.026),
+                ("kappa", 0.15), ("mu", 0.015), ("gamma", 0.0001), ("sigma", 0.0),
+            ],
+            // Measured at 512^2: 22% of the grid, six faceted arms with
+            // the internal markings the figure is described by.
+            steps: 12_000,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "plate_ends",
+            display_name: "Stellar plate ends",
+            // Figure 13 middle: low vapour and low anisotropy, with a
+            // very high melting rate "repeatedly repairing tip
+            // instabilities" into large hexagonal plate ends.
+            params: &[
+                ("rho", 0.36), ("beta", 1.09), ("alpha", 0.01), ("theta", 0.0745),
+                ("kappa", 0.0001), ("mu", 0.14), ("gamma", 0.00001), ("sigma", 0.0),
+            ],
+            // Measured at 512^2: this one is the paper's slow grower --
+            // "more than 100,000 updates" at its own scale -- and
+            // 40,000 is where the plate ends are unmistakable here.
+            steps: 40_000,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "dendrite_ends",
+            display_name: "Plate with dendrite ends",
+            // Figure 13 right: the same melting with quite different
+            // aftergrowth, so the central plate keeps spreading as the
+            // knife-edge fills between the six main tips.
+            params: &[
+                ("rho", 0.38), ("beta", 1.06), ("alpha", 0.35), ("theta", 0.112),
+                ("kappa", 0.001), ("mu", 0.14), ("gamma", 0.0006), ("sigma", 0.0),
+            ],
+            // Measured at 512^2: 31% of the grid, with side branching.
+            steps: 20_000,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+    ],
+    wgsl: r#"
+// One of the six neighbours on an offset-row hex lattice: odd rows sit
+// half a cell to the right, so the four diagonal neighbours move with
+// the row parity and the two horizontal ones do not. Same addressing
+// as PACKARD_SNOWFLAKE, and the same consequence — the array's rows
+// are one apart where a triangular lattice's are √3/2, so the picture
+// is stretched vertically by 2/√3.
+fn gg_nb(p: vec2<i32>, i: i32) -> vec2<i32> {
+    // 0 on odd rows, -1 on even: which side the diagonals lean.
+    let k = select(-1, 0, (p.y & 1) == 1);
+    if (i == 0) { return p + vec2<i32>(-1, 0); }
+    if (i == 1) { return p + vec2<i32>(1, 0); }
+    if (i == 2) { return p + vec2<i32>(k, -1); }
+    if (i == 3) { return p + vec2<i32>(k + 1, -1); }
+    if (i == 4) { return p + vec2<i32>(k, 1); }
+    return p + vec2<i32>(k + 1, 1);
+}
+
+// Pass 1 — (i) diffusion and (ii) freezing.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // Attachment is permanent and attached sites hold no vapour.
+    if (s.x > 0.5) {
+        return s;
+    }
+
+    // Uniform weight 1/7 on the site and its six neighbours, with
+    // REFLECTING conditions at the crystal: a term for an attached
+    // neighbour is replaced by this site's own vapour, so nothing
+    // diffuses into the ice. Away from the crystal no neighbour is
+    // attached and this is the plain average.
+    var attached = 0.0;
+    var sum = s.w;
+    for (var i = 0; i < 6; i = i + 1) {
+        let n = sim_read(gg_nb(p, i));
+        if (n.x > 0.5) {
+            attached = attached + 1.0;
+            sum = sum + s.w;
+        } else {
+            sum = sum + n.w;
+        }
+    }
+    // DIVIDED, not multiplied by a reciprocal. The nearest f32 to 1/7
+    // is larger than 1/7, so `sum * (1.0/7.0)` creates mass at a
+    // steady 4.4e-8 a step -- measured, 1.2e-4 of the total after
+    // 4,000 steps, in a model whose own paper offers conservation as
+    // the way to check an implementation. A division rounds to
+    // nearest and the drift becomes a random walk instead.
+    var d = sum / 7.0;
+
+    var b = s.y;
+    var c = s.z;
+    if (attached > 0.5) {
+        // A boundary site. The vapour that reached it is spent: a
+        // proportion kappa freezes straight to ice, the rest joins the
+        // quasi-liquid layer.
+        let kappa = mparam(4u);
+        b = b + (1.0 - kappa) * d;
+        c = c + kappa * d;
+        d = 0.0;
+    }
+    return vec4<f32>(0.0, b, c, d);
+}
+
+// Pass 2 — (iii) attachment, (iv) melting, (v) noise.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    if (s.x > 0.5) {
+        return s;
+    }
+    var n = 0.0;
+    // The vapour sum over N_x, which freezing has just zeroed at every
+    // boundary site -- so this reads "how much vapour is left anywhere
+    // near here", which is what the knife-edge condition wants.
+    var dsum = s.w;
+    for (var i = 0; i < 6; i = i + 1) {
+        let q = sim_read(gg_nb(p, i));
+        n = n + select(0.0, 1.0, q.x > 0.5);
+        dsum = dsum + q.w;
+    }
+
+    var out = s;
+    if (n > 0.5) {
+        var attach = false;
+        if (n > 3.5) {
+            // (3c) Four or more attached neighbours: enough ice nearby
+            // that the threshold is 0. Stops single-cell holes.
+            attach = true;
+        } else if (n > 2.5) {
+            // (3b) A concavity: the threshold is normalised to 1, or
+            // the knife-edge lets it through on alpha once the vapour
+            // around it is below theta.
+            // Equation (3b): theta bounds the VAPOUR, alpha the
+            // boundary mass. See the swap note in the module docs.
+            attach = s.y >= 1.0 || (dsum < mparam(3u) && s.y >= mparam(2u));
+        } else {
+            // (3a) One or two: a tip or a flat face, the hard case,
+            // and beta over 1 is the whole anisotropy of the model.
+            attach = s.y >= mparam(1u);
+        }
+        if (attach) {
+            // (3d) The quasi-liquid becomes ice with the rest.
+            out = vec4<f32>(1.0, 0.0, s.y + s.z, 0.0);
+        } else {
+            // (iv) Melting, at boundary sites that did NOT just
+            // attach: an attached site has no further dynamics, and
+            // vapour released there would be stranded where nothing
+            // diffuses it.
+            let mu = mparam(5u);
+            let gamma = mparam(6u);
+            out = vec4<f32>(0.0, (1.0 - mu) * s.y, (1.0 - gamma) * s.z,
+                            s.w + mu * s.y + gamma * s.z);
+        }
+    }
+
+    // (v) Noise: the vapour at every unattached site, up or down by
+    // sigma with equal probability.
+    let sigma = mparam(7u);
+    if (sigma > 0.0 && out.x < 0.5) {
+        out.w = out.w * (1.0 + select(-sigma, sigma, sim_rand(p, 0x5fu) < 0.5));
+    }
+    return out;
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // A mesoscopic prism at the origin -- attached, carrying one unit
+    // of crystal mass -- in homogeneous vapour of density rho. Center
+    // is the paper's single cell; a Blob starts from a wider nucleus.
+    if (inside >= 0.5) {
+        return vec4<f32>(1.0, 0.0, 1.0, 0.0);
+    }
+    return vec4<f32>(0.0, 0.0, 0.0, mparam(0u));
+}
+"#,
+    default_steps: 6_000,
+    passes: 2,
+    agents: None,
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};

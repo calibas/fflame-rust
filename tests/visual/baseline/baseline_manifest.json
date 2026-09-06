@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "ab8f317a",
+  "git_hash": "ea6fb618",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -641,6 +641,22 @@
     "sim-smoothlife-glider.png": {
       "bytes": 17688,
       "sha256": "095fa92cc2129f539cfbc08ba8d56c43a2fec83b25ceda2cb10783f75e2411b5"
+    },
+    "sim-snowfake-dendrite-ends.png": {
+      "bytes": 15041,
+      "sha256": "ba9ae477235ab7d2efe98dfc4a8583deff23abe2e5ddce39b7c1400146b28949"
+    },
+    "sim-snowfake-plate-ends.png": {
+      "bytes": 4599,
+      "sha256": "3ff36e8587fee779d04c5554bfbe569ca714f1ae97ed81b70560bb59f749de4e"
+    },
+    "sim-snowfake-primitive.png": {
+      "bytes": 3698,
+      "sha256": "fc62620dba922b700951a3eaff2eee7d90b4f73b5c6ccd2d1455d558143b7edf"
+    },
+    "sim-snowfake-simple-star.png": {
+      "bytes": 9435,
+      "sha256": "be61e429d8165f6f8efb1e60ff192f40390ab1c48e5556351642ec783d961527"
     },
     "sim-spatial-rps.png": {
       "bytes": 24550,
