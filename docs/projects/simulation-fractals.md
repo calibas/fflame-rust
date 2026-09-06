@@ -973,7 +973,53 @@ unnecessary.
 
 ### Phase 6 — polish and reach
 
-Warp stage (zoom/rotate/flow — the "living texture" look); animation
+**Warp stage done 2026-09-05**, on its own, ahead of the rest of the
+phase. `SimWarp { zoom, rotation, pan_x, pan_y, flow, filter }` on the
+config, identity by default and absent from the file then; six
+`ConfigPath::SimWarp*` through all five delta tables, the manager, the
+animation exporter and the target selector (the five rates animate, the
+filter does not); a Warp section on the panel; `history.param` and
+panel keys in `en.yml`. The renderer dispatches one resample first in
+the step when the warp is not the identity and none otherwise, so
+every existing run is bit-identical (`an_identity_warp_changes_nothing`).
+The shader is pipeline §4.1 as written — the inverse affine about the
+grid centre, four `sim_read` taps so the boundary rule decides what
+comes in from beyond the edge — plus the swirl as an analytic flow
+(rotation growing linearly with radius, zero at the centre, `flow` at
+the rim) and a `filter` the spec did not have: nearest for integer
+state, which bilinear would smear into values a sandpile or an
+automaton has no meaning for. Checked against a CPU resample of the
+same field through the same affine with every term on at once —
+nearest exact, bilinear to 2e-5 — on invasion percolation's threshold
+channel, which the seed draws and the step never writes, so there is
+no assumption about the model in it.
+
+**What the stage measurably does to a pattern, which the spec did not
+anticipate:** a fractional-pixel bilinear resample is a small blur —
+weights (1−f, f) per axis, variance f(1−f) — and a step applies one.
+Over a run they add: a 0.4 %/step zoom on the coral preset for its
+4,000 steps is σ ≈ 14–27 cells of accumulated smoothing on a pattern
+5 cells wide, and it came out a single dot; FitzHugh–Nagumo under a
+0.003 rad/step bilinear rotation came out uniform white, Gray–Scott
+under a 0.1 %/step outward zoom uniform black. Nearest has the
+opposite failure: at a rate that moves a cell by less than half a
+cell it is the identity, so a slow nearest warp does nothing except
+near the rim. So the regimes that work are the ones the two baselines
+show — nearest at a rate that actually moves cells (the FHN spiral
+under 0.01 rad/step is wound into a vortex, 4,000 steps, pattern
+intact; the hodgepodge under a 0.03 rad/step swirl), and integer
+pans, which are exact under either filter. Bilinear is for short runs
+or for a look in which the smoothing IS the texture; over thousands of
+steps it erases reaction–diffusion. The tooltips say so.
+
+Two things it does not do, both deliberate: it moves the field and
+not an agent population's positions, and it is not yet the bound-grid
+resize resampler of §7, which the same kernel could be. The uniform
+grew by 32 bytes for it (a `vec4` and a `vec2`, 16-aligned). The
+engine contract did not move — it fingerprints vocabularies, not
+config fields — so there is nothing to tell the API.
+
+The rest of the phase, still to do: animation
 targets, video-export semantics, a shipped `sim_sweep.rhai`; the
 script `sim` handle with SCRIPTING.md rows; the API enum (server
 first, then drop the refusal), contract note to the API repository,

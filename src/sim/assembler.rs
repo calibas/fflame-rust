@@ -42,6 +42,11 @@ struct SimParams {
     // The min/max ring slot this dispatch belongs to: the reduce pass
     // writes it, the step pass reads the slot BEFORE it.
     minmax_slot: u32,
+    // The warp stage's affine: zoom, rotation, pan x, pan y; then the
+    // swirl rate and the filter (0 bilinear, 1 nearest). vec4 then
+    // vec2, so the struct is 80 bytes -- `SimParamsGpu` pads to match.
+    warp_a: vec4<f32>,
+    warp_b: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -230,6 +235,65 @@ fn sim_read(p: vec2<i32>) -> vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
     return textureLoad(field_in, sim_wrap_sized(p, g), 0);
+}
+"#;
+
+/// The warp stage (pipeline section 4.1): the field resampled through
+/// the per-step affine about the grid centre, with a swirl on top.
+/// Reads through `sim_read`, so the boundary rule decides what comes
+/// in from beyond the edge when the field shrinks or pans -- zeros
+/// under Zero, the wrapped field under Periodic.
+///
+/// The INVERSE map, as a resampler must: for each destination cell,
+/// where in the source did it come from. Content moves forward by
+/// zoom, rotation and pan; a destination cell undoes the pan, the
+/// zoom, and then the rotation the swirl adds to at its own radius.
+const WARP_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var field_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d<f32>;
+
+//__BOUNDARY__
+
+// Four taps, weighted -- through sim_read, so every tap honours the
+// boundary.
+fn warp_bilinear(src: vec2<f32>) -> vec4<f32> {
+    let i0 = vec2<i32>(floor(src));
+    let f = src - vec2<f32>(i0);
+    let a = sim_read(i0);
+    let b = sim_read(i0 + vec2<i32>(1, 0));
+    let c = sim_read(i0 + vec2<i32>(0, 1));
+    let d = sim_read(i0 + vec2<i32>(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = sim_grid();
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    let centre = (vec2<f32>(g) - vec2<f32>(1.0, 1.0)) * 0.5;
+    let d = vec2<f32>(p) - centre;
+    let zoom = max(params.warp_a.x, 1.0e-4);
+    let pan = params.warp_a.zw;
+    // Rotation at this radius: the uniform rate plus the swirl, which
+    // is zero at the centre and `flow` at the rim.
+    let rim = max(min(f32(g.x), f32(g.y)) * 0.5, 1.0);
+    let theta = params.warp_a.y + params.warp_b.x * (length(d) / rim);
+    // Undo the pan and the zoom, then rotate back.
+    let q = (d - pan) / zoom;
+    let cs = cos(theta);
+    let sn = sin(theta);
+    let src = centre + vec2<f32>(cs * q.x + sn * q.y, -sn * q.x + cs * q.y);
+    var v: vec4<f32>;
+    if (params.warp_b.y >= 0.5) {
+        v = sim_read(vec2<i32>(floor(src + vec2<f32>(0.5, 0.5))));
+    } else {
+        v = warp_bilinear(src);
+    }
+    textureStore(field_out, p, v);
 }
 "#;
 
@@ -753,6 +817,11 @@ fn splice(template: &str, boundary: SimBoundary, replacements: &[(&str, &str)]) 
     out.join("\n")
 }
 
+/// The warp stage. Depends on the boundary alone.
+pub fn assemble_warp(boundary: SimBoundary) -> String {
+    splice(WARP_TEMPLATE, boundary, &[])
+}
+
 /// The seeding pass: config init shape → initial field.
 pub fn assemble_seed(model: &ModelDef, init_kind: &str) -> String {
     splice(
@@ -1137,6 +1206,13 @@ mod tests {
     /// compile. This is the assembler's whole safety net: a model is
     /// text until something parses it, and a typo in an unused
     /// combination would otherwise surface as a black viewport.
+    #[test]
+    fn the_warp_validates_under_every_boundary() {
+        for b in [SimBoundary::Periodic, SimBoundary::Clamp, SimBoundary::Zero, SimBoundary::Mirror] {
+            validate(&assemble_warp(b), &format!("warp {b:?}"));
+        }
+    }
+
     #[test]
     fn every_combination_validates() {
         let boundaries = [

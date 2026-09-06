@@ -196,6 +196,109 @@ impl SimBoundary {
     }
 }
 
+/// How the warp stage samples the field it moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimWarpFilter {
+    /// Four taps, weighted. Right for a continuous field; it smears an
+    /// integer one (a sandpile's heights, a cyclic automaton's phase)
+    /// into values the rule has no meaning for.
+    #[default]
+    Bilinear,
+    /// One tap. Keeps integer state integer, at the cost of aliasing.
+    Nearest,
+}
+
+impl SimWarpFilter {
+    pub const NAMES: &'static [&'static str] = &["bilinear", "nearest"];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimWarpFilter::Bilinear => "bilinear",
+            SimWarpFilter::Nearest => "nearest",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "bilinear" => SimWarpFilter::Bilinear,
+            "nearest" => SimWarpFilter::Nearest,
+            _ => return None,
+        })
+    }
+}
+
+/// The warp stage: an affine applied to the whole field EVERY STEP,
+/// before the model's rule reads it (pipeline section 4.1). Content
+/// moves; the lattice stays. A zoom under 1 each step is the
+/// "expanding space" look -- the pattern keeps forming at the centre
+/// and is carried outward -- and a rotation with it is the feedback
+/// spiral.
+///
+/// All rates are PER STEP, about the grid centre, in cells and
+/// radians. The identity is the default and costs no dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SimWarp {
+    /// Scale factor per step: 1 leaves the field where it is, 1.01
+    /// grows it by a percent a step, 0.99 shrinks it.
+    #[serde(default = "warp_one", skip_serializing_if = "is_warp_one")]
+    pub zoom: f32,
+    /// Radians per step about the centre.
+    #[serde(default, skip_serializing_if = "is_warp_zero")]
+    pub rotation: f32,
+    /// Cells per step.
+    #[serde(default, skip_serializing_if = "is_warp_zero")]
+    pub pan_x: f32,
+    #[serde(default, skip_serializing_if = "is_warp_zero")]
+    pub pan_y: f32,
+    /// Differential rotation -- a swirl. Extra radians per step at the
+    /// rim (half the shorter side from the centre), scaling linearly
+    /// with distance, so the centre does not turn and the edge turns
+    /// by `rotation + flow`.
+    #[serde(default, skip_serializing_if = "is_warp_zero")]
+    pub flow: f32,
+    #[serde(default, skip_serializing_if = "is_default_warp_filter")]
+    pub filter: SimWarpFilter,
+}
+
+fn warp_one() -> f32 {
+    1.0
+}
+fn is_warp_one(v: &f32) -> bool {
+    *v == 1.0
+}
+fn is_warp_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+fn is_default_warp_filter(v: &SimWarpFilter) -> bool {
+    *v == SimWarpFilter::default()
+}
+
+impl Default for SimWarp {
+    fn default() -> Self {
+        SimWarp {
+            zoom: 1.0,
+            rotation: 0.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            flow: 0.0,
+            filter: SimWarpFilter::Bilinear,
+        }
+    }
+}
+
+impl SimWarp {
+    /// Whether the stage would move nothing -- the filter is
+    /// irrelevant then, and the renderer skips the dispatch.
+    pub fn is_identity(&self) -> bool {
+        self.zoom == 1.0
+            && self.rotation == 0.0
+            && self.pan_x == 0.0
+            && self.pan_y == 0.0
+            && self.flow == 0.0
+    }
+}
+
 /// Resolve filter when the grid is smaller than the output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -304,6 +407,9 @@ fn is_default_init(v: &SimInit) -> bool {
 fn is_default_boundary(v: &SimBoundary) -> bool {
     *v == SimBoundary::default()
 }
+fn is_identity_warp(v: &SimWarp) -> bool {
+    v.is_identity() && v.filter == SimWarpFilter::default()
+}
 fn is_default_upscale(v: &SimUpscale) -> bool {
     *v == SimUpscale::default()
 }
@@ -367,6 +473,11 @@ pub struct SimConfig {
     #[serde(default, skip_serializing_if = "is_default_boundary")]
     pub boundary: SimBoundary,
 
+    /// The per-step affine applied before the rule. Identity by
+    /// default, and absent from the file then.
+    #[serde(default, skip_serializing_if = "is_identity_warp")]
+    pub warp: SimWarp,
+
     /// Per-model parameters, keyed `"name"` (see module docs).
     #[serde(default, skip_serializing_if = "is_empty_map")]
     pub model_params: BTreeMap<String, f32>,
@@ -396,6 +507,7 @@ impl Default for SimConfig {
             steps_per_frame: default_steps_per_frame(),
             dt: default_dt(),
             boundary: SimBoundary::default(),
+            warp: SimWarp::default(),
             model_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
             upscale: SimUpscale::default(),
@@ -530,6 +642,12 @@ mod tests {
             ConfigPath::SimStepsPerFrame,
             ConfigPath::SimDt,
             ConfigPath::SimBoundary,
+            ConfigPath::SimWarpZoom,
+            ConfigPath::SimWarpRotation,
+            ConfigPath::SimWarpPanX,
+            ConfigPath::SimWarpPanY,
+            ConfigPath::SimWarpFlow,
+            ConfigPath::SimWarpFilter,
             ConfigPath::SimUpscale,
             ConfigPath::SimDownscale,
             ConfigPath::SimModelParam { param: "feed".into() },
@@ -555,6 +673,9 @@ mod tests {
             ConfigPath::SimSteps,
             ConfigPath::SimDt,
             ConfigPath::SimUpscale,
+            ConfigPath::SimWarpZoom,
+            ConfigPath::SimWarpFlow,
+            ConfigPath::SimWarpFilter,
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
         ] {
@@ -600,6 +721,43 @@ mod tests {
         assert!(json_to_config_value(&n, &ConfigPath::SimModel).is_none());
         assert!(json_to_config_value(&n, &ConfigPath::SimBoundary).is_none());
         assert!(json_to_config_value(&n, &ConfigPath::SimSeed).is_none());
+        // The warp's rates animate -- a zoom ramping from 1 to 0.99 is
+        // the space starting to expand -- and its filter does not.
+        let f = serde_json::json!(0.995);
+        assert_eq!(
+            json_to_config_value(&f, &ConfigPath::SimWarpZoom),
+            Some(ConfigValue::Float(0.995))
+        );
+        assert!(json_to_config_value(&f, &ConfigPath::SimWarpFilter).is_none());
+    }
+
+    /// The identity warp is the default and must leave the file alone;
+    /// a set one must come back exactly, filter included.
+    #[test]
+    fn the_warp_is_absent_when_identity_and_round_trips_otherwise() {
+        let cfg = SimConfig::default();
+        assert!(cfg.warp.is_identity());
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(!json.contains("warp"), "{json}");
+
+        let mut cfg = SimConfig::default();
+        cfg.warp = SimWarp {
+            zoom: 0.995,
+            rotation: 0.01,
+            pan_x: 0.25,
+            pan_y: -0.5,
+            flow: 0.02,
+            filter: SimWarpFilter::Nearest,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: SimConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.warp, cfg.warp);
+        // A file that sets only the zoom leaves the rest at identity.
+        let partial: SimConfig = serde_json::from_str(r#"{"warp":{"zoom":0.99}}"#).unwrap();
+        assert_eq!(partial.warp.zoom, 0.99);
+        assert_eq!(partial.warp.rotation, 0.0);
+        assert_eq!(partial.warp.filter, SimWarpFilter::Bilinear);
+        assert!(!partial.warp.is_identity());
     }
 
     #[test]
@@ -612,6 +770,9 @@ mod tests {
         }
         for n in SimDownscale::NAMES {
             assert_eq!(SimDownscale::from_name(n).unwrap().name(), *n);
+        }
+        for n in SimWarpFilter::NAMES {
+            assert_eq!(SimWarpFilter::from_name(n).unwrap().name(), *n);
         }
         for k in SimInit::KINDS {
             assert_eq!(SimInit::default().with_kind(k).kind_name(), *k);

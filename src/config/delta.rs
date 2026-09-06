@@ -365,6 +365,17 @@ pub enum ConfigPath {
     SimDt,
     /// What a step reads outside the grid.
     SimBoundary,
+    /// The warp stage's per-step rates (pipeline section 4.1): scale
+    /// about the centre, radians, cells, cells, and the swirl's rim
+    /// rate. All animatable -- a ramp on the zoom is space beginning
+    /// to expand.
+    SimWarpZoom,
+    SimWarpRotation,
+    SimWarpPanX,
+    SimWarpPanY,
+    SimWarpFlow,
+    /// How the warp samples: bilinear or nearest. Not animatable.
+    SimWarpFilter,
     /// Resolve filter when the grid is smaller than the output.
     SimUpscale,
     /// Resolve filter when the grid is larger than the output.
@@ -914,6 +925,12 @@ impl Display for ConfigPath {
             ConfigPath::SimStepsPerFrame => write!(f, "Simulation Steps Per Frame"),
             ConfigPath::SimDt => write!(f, "Simulation dt"),
             ConfigPath::SimBoundary => write!(f, "Simulation Boundary"),
+            ConfigPath::SimWarpZoom => write!(f, "Simulation Warp Zoom"),
+            ConfigPath::SimWarpRotation => write!(f, "Simulation Warp Rotation"),
+            ConfigPath::SimWarpPanX => write!(f, "Simulation Warp Pan X"),
+            ConfigPath::SimWarpPanY => write!(f, "Simulation Warp Pan Y"),
+            ConfigPath::SimWarpFlow => write!(f, "Simulation Warp Flow"),
+            ConfigPath::SimWarpFilter => write!(f, "Simulation Warp Filter"),
             ConfigPath::SimUpscale => write!(f, "Simulation Upscale"),
             ConfigPath::SimDownscale => write!(f, "Simulation Downscale"),
             ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
@@ -1175,6 +1192,12 @@ impl ConfigPath {
             ConfigPath::SimStepsPerFrame => I18nKey::simple("history.param.sim_steps_per_frame"),
             ConfigPath::SimDt => I18nKey::simple("history.param.sim_dt"),
             ConfigPath::SimBoundary => I18nKey::simple("history.param.sim_boundary"),
+            ConfigPath::SimWarpZoom => I18nKey::simple("history.param.sim_warp_zoom"),
+            ConfigPath::SimWarpRotation => I18nKey::simple("history.param.sim_warp_rotation"),
+            ConfigPath::SimWarpPanX => I18nKey::simple("history.param.sim_warp_pan_x"),
+            ConfigPath::SimWarpPanY => I18nKey::simple("history.param.sim_warp_pan_y"),
+            ConfigPath::SimWarpFlow => I18nKey::simple("history.param.sim_warp_flow"),
+            ConfigPath::SimWarpFilter => I18nKey::simple("history.param.sim_warp_filter"),
             ConfigPath::SimUpscale => I18nKey::simple("history.param.sim_upscale"),
             ConfigPath::SimDownscale => I18nKey::simple("history.param.sim_downscale"),
             ConfigPath::SimModelParam { param } => I18nKey::with_params(
@@ -2559,6 +2582,14 @@ impl ConfigPath {
             | ConfigPath::SimSteps
             | ConfigPath::SimStepsPerFrame
             | ConfigPath::SimDt
+            // The warp changes what the NEXT steps do to the field,
+            // not the field: the run continues.
+            | ConfigPath::SimWarpZoom
+            | ConfigPath::SimWarpRotation
+            | ConfigPath::SimWarpPanX
+            | ConfigPath::SimWarpPanY
+            | ConfigPath::SimWarpFlow
+            | ConfigPath::SimWarpFilter
             | ConfigPath::SimModelParam { .. }
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
@@ -2842,6 +2873,12 @@ impl ConfigPath {
             ConfigPath::SimStepsPerFrame => "Sim.StepsPerFrame".to_string(),
             ConfigPath::SimDt => "Sim.Dt".to_string(),
             ConfigPath::SimBoundary => "Sim.Boundary".to_string(),
+            ConfigPath::SimWarpZoom => "Sim.WarpZoom".to_string(),
+            ConfigPath::SimWarpRotation => "Sim.WarpRotation".to_string(),
+            ConfigPath::SimWarpPanX => "Sim.WarpPanX".to_string(),
+            ConfigPath::SimWarpPanY => "Sim.WarpPanY".to_string(),
+            ConfigPath::SimWarpFlow => "Sim.WarpFlow".to_string(),
+            ConfigPath::SimWarpFilter => "Sim.WarpFilter".to_string(),
             ConfigPath::SimUpscale => "Sim.Upscale".to_string(),
             ConfigPath::SimDownscale => "Sim.Downscale".to_string(),
             ConfigPath::SimModelParam { param } => format!("Sim.ModelParam.{param}"),
@@ -3104,6 +3141,12 @@ impl ConfigPath {
                 ["StepsPerFrame"] => return Some(ConfigPath::SimStepsPerFrame),
                 ["Dt"] => return Some(ConfigPath::SimDt),
                 ["Boundary"] => return Some(ConfigPath::SimBoundary),
+                ["WarpZoom"] => return Some(ConfigPath::SimWarpZoom),
+                ["WarpRotation"] => return Some(ConfigPath::SimWarpRotation),
+                ["WarpPanX"] => return Some(ConfigPath::SimWarpPanX),
+                ["WarpPanY"] => return Some(ConfigPath::SimWarpPanY),
+                ["WarpFlow"] => return Some(ConfigPath::SimWarpFlow),
+                ["WarpFilter"] => return Some(ConfigPath::SimWarpFilter),
                 ["Upscale"] => return Some(ConfigPath::SimUpscale),
                 ["Downscale"] => return Some(ConfigPath::SimDownscale),
                 ["ModelParam", param] => {
@@ -3537,6 +3580,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimSeed
         | ConfigPath::SimInitKind
         | ConfigPath::SimBoundary
+        | ConfigPath::SimWarpFilter
         | ConfigPath::SimUpscale
         | ConfigPath::SimDownscale => None,
 
@@ -3712,6 +3756,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::SimDt
         | ConfigPath::SimGridScale
         | ConfigPath::SimInitAmplitude
+        | ConfigPath::SimWarpZoom
+        | ConfigPath::SimWarpRotation
+        | ConfigPath::SimWarpPanX
+        | ConfigPath::SimWarpPanY
+        | ConfigPath::SimWarpFlow
         | ConfigPath::SimModelParam { .. }
         | ConfigPath::SimColoringParam { .. } => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))

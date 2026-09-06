@@ -12,7 +12,9 @@
 
 use crate::config::delta::ConfigPath;
 use crate::config::manager::ConfigManager;
-use crate::config::sim::{SimBoundary, SimDownscale, SimGrid, SimInit, SimUpscale};
+use crate::config::sim::{
+    SimBoundary, SimDownscale, SimGrid, SimInit, SimUpscale, SimWarp, SimWarpFilter,
+};
 use crate::scene::transforms::RenderMode;
 use crate::sim::{SimParamDef, COLORINGS, MODELS};
 use rust_i18n::t;
@@ -456,6 +458,95 @@ pub fn render_sim_content(
             .on_hover_text(t!("sim_panel.dt_capped_tip"));
         }
     }
+
+    ui.separator();
+
+    // ---- Warp ----
+    // Per-step rates about the centre. The ranges are narrow on
+    // purpose: a step is a fraction of a frame, and a percent of zoom
+    // a step is already a fast pull.
+    ui.collapsing(t!("sim_panel.warp").as_ref(), |ui| {
+        ui.label(egui::RichText::new(t!("sim_panel.warp_tip")).small().weak());
+        let w = sim.warp;
+        let mut zoom = w.zoom;
+        if ui
+            .add(
+                egui::Slider::new(&mut zoom, 0.98..=1.02)
+                    .text(t!("sim_panel.warp_zoom").as_ref())
+                    .fixed_decimals(4),
+            )
+            .on_hover_text(t!("sim_panel.warp_zoom_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::SimWarpZoom, zoom.into());
+        }
+        let mut rot = w.rotation;
+        if ui
+            .add(
+                egui::Slider::new(&mut rot, -0.05..=0.05)
+                    .text(t!("sim_panel.warp_rotation").as_ref())
+                    .fixed_decimals(4),
+            )
+            .on_hover_text(t!("sim_panel.warp_rotation_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::SimWarpRotation, rot.into());
+        }
+        let mut px = w.pan_x;
+        if ui
+            .add(egui::Slider::new(&mut px, -2.0..=2.0).text(t!("sim_panel.warp_pan_x").as_ref()))
+            .on_hover_text(t!("sim_panel.warp_pan_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::SimWarpPanX, px.into());
+        }
+        let mut py = w.pan_y;
+        if ui
+            .add(egui::Slider::new(&mut py, -2.0..=2.0).text(t!("sim_panel.warp_pan_y").as_ref()))
+            .on_hover_text(t!("sim_panel.warp_pan_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::SimWarpPanY, py.into());
+        }
+        let mut flow = w.flow;
+        if ui
+            .add(
+                egui::Slider::new(&mut flow, -0.05..=0.05)
+                    .text(t!("sim_panel.warp_flow").as_ref())
+                    .fixed_decimals(4),
+            )
+            .on_hover_text(t!("sim_panel.warp_flow_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::SimWarpFlow, flow.into());
+        }
+        ui.horizontal(|ui| {
+            ui.label(t!("sim_panel.warp_filter").as_ref());
+            egui::ComboBox::from_id_salt("sim_warp_filter")
+                .selected_text(w.filter.name())
+                .show_ui(ui, |ui| {
+                    for n in SimWarpFilter::NAMES {
+                        if ui.selectable_label(w.filter.name() == *n, *n).clicked() {
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimWarpFilter, (*n).to_string().into());
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("sim_panel.warp_filter_tip"));
+            if !w.is_identity() && ui.small_button(t!("sim_panel.warp_reset").as_ref()).clicked() {
+                let id = SimWarp::default();
+                let changes = vec![
+                    (ConfigPath::SimWarpZoom, id.zoom.into()),
+                    (ConfigPath::SimWarpRotation, id.rotation.into()),
+                    (ConfigPath::SimWarpPanX, id.pan_x.into()),
+                    (ConfigPath::SimWarpPanY, id.pan_y.into()),
+                    (ConfigPath::SimWarpFlow, id.flow.into()),
+                ];
+                let _ = config_manager.update_batch(changes, "Reset simulation warp".to_string());
+            }
+        });
+    });
 
     ui.separator();
 

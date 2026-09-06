@@ -167,7 +167,9 @@ Each stage is one compute pass, `@workgroup_size(8, 8, 1)`, one uniform slot (dy
 
 Resamples `field[read]` into `field[write]` through a per-step affine about the grid centre — zoom `s`, rotation `θ`, translation `(tx, ty)` — or through a flow field (a second texture, or an analytic swirl). Bilinear via four `textureLoad`s; boundary mode wrap / clamp / mirror / zero. The same kernel, run once at a fixed grid-to-grid affine, is the resampler §7 uses when a viewport-bound grid changes size (nearest for integer channels).
 
-This is the seed doc's "expanding space" resample promoted to a stage. It buys the zooming-BZ look (`s < 1` each step), McCabe's rotate-and-average symmetry when combined with the pyramid stage (§4.2 handles symmetry directly, cheaper), and the demoscene feedback-zoom family. It reuses nothing from the flame affine machinery in code — the maths is a 2×3 matrix — but it reuses the *vocabulary* the View panel already has (zoom, rotation, pan), which is what the panel exposes.
+This is the seed doc's "expanding space" resample promoted to a stage. It buys the zooming-BZ look (`s < 1` each step), McCabe's rotate-and-average symmetry when combined with the pyramid stage (§4.2 handles symmetry directly, cheaper), and the demoscene feedback-zoom family.
+
+**Built 2026-09-05, and measured (master plan, phase 6):** a fractional-pixel bilinear resample is a blur of variance f(1−f) per axis, and a step applies one, so over thousands of steps the stage erases a reaction–diffusion pattern rather than moving it — the "zooming BZ" at 0.4 %/step for 4,000 steps is a dot. Nearest at a rate under half a cell is the identity. The stage therefore ships with a `filter` the spec did not have, and the regimes that work are nearest at rates that move whole cells, integer pans, and bilinear over short runs. It reuses nothing from the flame affine machinery in code — the maths is a 2×3 matrix — but it reuses the *vocabulary* the View panel already has (zoom, rotation, pan), which is what the panel exposes.
 
 ### 4.2 Pyramid build (optional)
 
