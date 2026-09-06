@@ -740,6 +740,65 @@ models ship.
 - `occupancy` colouring; 5 new visual baselines; 22 models, 6
   colourings.
 
+**Review (2026-09-05) of the phase-4 commit, what it found and
+measured:**
+
+- **The turn rule was not Jones'.** When both sensors beat the front,
+  figure 3 turns at RANDOM whichever side is stronger; the shader
+  turned toward the stronger side. The prototype that validated every
+  parameter had it right, so the two disagreed, and a network still
+  formed either way — which is why neither gate caught it. Fixed, the
+  three Physarum baselines regenerated, and a full CPU mirror of a
+  Physarum step (sense, turn, claim-by-minimum, move, deposit,
+  diffuse, decay, with the shader's PCG mirrored so the random draws
+  match) now compares agents and field to float precision. It would
+  have failed on the old shader.
+- **Walls were not walls.** The position wrapped periodically under
+  every boundary while the deposit clamped, so under Clamp an agent
+  that walked off one edge reappeared on the other. Jones: an
+  unsuccessful move leaves the agent where it is with a new random
+  heading, and a wall is an unsuccessful move. Each boundary body now
+  declares `SIM_PERIODIC`, and a test checks no agent moves further
+  than its step size in one step — an in-range check could not catch
+  a wrap, since a wrapped position is in range.
+  **That test failed on its first run, and the fix had two bugs of
+  its own.** The one the test caught: a destination of x = −0.4 is
+  inside cell 0 and passes the wall check, and the float wrap that
+  followed put it at 63.6 — agents crossed the low edge and reappeared
+  on the high one. The wrap is now periodic-only. The one found
+  reading the code while chasing that: refusing the move in pass 2
+  while still claiming the clamped edge cell in pass 1 leaks the
+  claim, because only the owner's check releases one. Measured with
+  the guard removed: **129 stale claims** on a 64² grid after 140
+  steps, most of the edge, each cell closed for ever to any agent of
+  higher index. Now a move that cannot happen is not claimed, the
+  contract is written where `agent_claim` lives, and the test reads
+  the claim buffer back and asserts it is empty (it does fire on the
+  unguarded claim).
+- **The agent seed ran before the reduce it reads.** DLA's launch
+  radius comes from the seed field's range; the seed pass ran first
+  and read the previous run's slot. Reordered. No baseline moved,
+  because a fresh renderer's slot happens to give the same answer as
+  a centred seed.
+- **The deposit is diffused one step late, and that is now measured
+  rather than assumed.** Jones deposits, then applies the 3×3 mean,
+  then decays; the step pass takes the mean of the old trail and adds
+  the raw deposit, so a fresh deposit is spread on the following step.
+  Run both ways on the prototype from the same seed: sd 3.58 against
+  3.67, lit fraction 28.4% against 28.7%, and the same polygonal
+  network with slightly grainier filaments. Matching Jones exactly
+  would need a second deposit buffer (a cell cannot read its
+  neighbours' deposits while they are being cleared, without a race),
+  and the difference does not justify it. Recorded in the model.
+- **Cost, at 1080p**: Physarum 1.39 ms/step at the paper's 5%
+  population (103,680 agents) and 2.72 at 15% (311,040); DLA
+  0.42 ms/step at 4% (82,944 walkers, most of them dormant by
+  design). All well inside the interactive budget.
+- Noted, not changed: `occupancy` draws `.w`, which Physarum's step
+  fills with the step's deposit and DLA's does not, so the catalogue's
+  "vapour halo" for DLA is not there yet — it would need walkers to
+  mark their presence each step, a second deposit channel.
+
 ### Phase 5 — growth and Laplacian models
 
 DBM (parallel selection, then exact via scan), Saffman–Taylor as DBM +
