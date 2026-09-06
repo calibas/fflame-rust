@@ -47,6 +47,10 @@ struct SimParams {
     // vec2, so the struct is 80 bytes -- `SimParamsGpu` pads to match.
     warp_a: vec4<f32>,
     warp_b: vec2<f32>,
+    pad0: vec2<f32>,
+    // The matte: channel index, mode (0 off, 1 normal, 2 inverted),
+    // cutoff, softness. Read by the colour pass alone.
+    matte: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -592,14 +596,53 @@ fn sim_palette(t: f32) -> vec3<f32> {
 
 //__COLORING__
 
+// Figure or background: 1 for a cell that is part of the picture, 0
+// for one the tonemap should composite the background colour into,
+// and the feather in between. Multiplied into whatever coverage the
+// colouring returned, so a colouring that already reports empty
+// cells (label's unlabelled ones) keeps saying so.
+//
+// The channel select is unrolled because WGSL cannot index a vec4 by
+// a runtime value -- the same shape the `channel` colouring uses.
+fn sim_matte(s: vec4<f32>) -> f32 {
+    let mode = params.matte.y;
+    if (mode < 0.5) {
+        return 1.0;
+    }
+    let which = i32(round(clamp(params.matte.x, 0.0, 3.0)));
+    var v = s.x;
+    if (which == 1) { v = s.y; }
+    else if (which == 2) { v = s.z; }
+    else if (which == 3) { v = s.w; }
+
+    let cutoff = params.matte.z;
+    let soft = params.matte.w;
+    var a: f32;
+    if (soft <= 0.0) {
+        a = select(0.0, 1.0, v >= cutoff);
+    } else {
+        // Centred on the cutoff, so widening the feather does not
+        // move the edge.
+        a = clamp((v - cutoff) / soft + 0.5, 0.0, 1.0);
+    }
+    return select(a, 1.0 - a, mode >= 1.5);
+}
+
 // Resolve: the coloured GRID mapped to the OUTPUT size. Separate from
 // the colouring because the grid is its own quantity -- a 256-cell
 // Gray-Scott shown at 1080p is 256 cells of information, and which
 // filter presents them is a user choice, not a consequence.
+//
+// The matte is applied HERE, per grid cell, before the resolve
+// filter: a magnified edge is then antialiased by the same filter
+// that magnifies it, rather than being a staircase the filter never
+// sees.
 fn sim_shade(p: vec2<i32>) -> vec4<f32> {
     let s = sim_read(p);
 //__GRADIENT__
-    return sim_color(s, grad, p);
+    var col = sim_color(s, grad, p);
+    col.a = col.a * sim_matte(s);
+    return col;
 }
 
 @compute @workgroup_size(8, 8, 1)

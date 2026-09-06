@@ -3896,3 +3896,97 @@ fn an_identity_warp_changes_nothing() {
     let with = read_rgba32f(&device, &queue, r2.field_texture(), N as u32, N as u32);
     assert_eq!(plain, with, "an identity warp altered the run");
 }
+
+/// The matte turns cells below its cutoff into background: the colour
+/// pass reports zero coverage for them, which is the channel the
+/// shared tonemap composites the configured background into (and the
+/// channel a transparent PNG takes its alpha from).
+///
+/// Run at 1:1 with Nearest upscale, so one output pixel is one grid
+/// cell and the resolve filter cannot blur the answer. DLA's `.x` is
+/// the occupancy channel -- 0 in the melt, distance-plus-one in the
+/// cluster -- so a cutoff of 0.5 is exactly "is this cell part of the
+/// dendrite". Both directions are checked, and the soft case in
+/// between.
+#[test]
+fn the_matte_makes_background_of_the_cells_it_cuts() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.model = "dla".into();
+    cfg.coloring = "age".into();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.init = SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 2;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 400);
+    let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let frozen = field.iter().filter(|c| c[0] >= 0.5).count();
+    assert!(frozen > 50 && frozen < (N * N) as usize / 2, "{frozen} frozen cells is not a cluster");
+
+    // Off: every cell in the grid is drawn, which is what colourings
+    // did before the matte existed.
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let plain = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    assert!(plain.iter().all(|p| p[3] == 1.0), "with no matte every cell should be figure");
+
+    // On: the cluster is figure, the melt is background.
+    cfg.matte = crate::config::sim::SimMatte {
+        channel: crate::config::sim::SimMatteChannel::X,
+        cutoff: 0.5,
+        softness: 0.0,
+        invert: false,
+    };
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let matted = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    let wrong = (0..(N * N) as usize)
+        .filter(|&k| {
+            let want = if field[k][0] >= 0.5 { 1.0 } else { 0.0 };
+            matted[k][3] != want
+        })
+        .count();
+    assert_eq!(wrong, 0, "{wrong} cells took the wrong side of the matte");
+    // And the colour of a drawn cell is untouched -- the matte decides
+    // WHETHER a cell is drawn, not what colour it is.
+    let lit = (0..(N * N) as usize).find(|&k| field[k][0] >= 0.5).unwrap();
+    assert_eq!(matted[lit][..3], plain[lit][..3], "the matte changed a figure cell's colour");
+
+    // Inverted: exactly the other cells.
+    cfg.matte.invert = true;
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let inverted = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    let disagree = (0..(N * N) as usize)
+        .filter(|&k| inverted[k][3] != 1.0 - matted[k][3])
+        .count();
+    assert_eq!(disagree, 0, "inverting the matte did not swap exactly the two sides");
+
+    // Soft: the feather is centred on the cutoff, so a cell at the
+    // cutoff is half covered and the edge does not move.
+    cfg.matte.invert = false;
+    cfg.matte.cutoff = 4.0;
+    cfg.matte.softness = 8.0;
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let soft = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    let partial = soft.iter().filter(|p| p[3] > 0.01 && p[3] < 0.99).count();
+    assert!(partial > 20, "a soft matte should feather many cells, not {partial}");
+    let mut worst = 0.0f32;
+    for k in 0..(N * N) as usize {
+        let want = ((field[k][0] - 4.0) / 8.0 + 0.5).clamp(0.0, 1.0);
+        worst = worst.max((soft[k][3] - want).abs());
+    }
+    println!(
+        "matte: {frozen} frozen of {}, {partial} feathered, worst coverage error {worst:.2e}",
+        N * N
+    );
+    assert!(worst < 1e-6, "the feather does not match its own formula: {worst:.2e}");
+}

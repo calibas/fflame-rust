@@ -382,6 +382,8 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SimWarpPanX, "Warp: pan X per step"),
         TargetItem::new(ConfigPath::SimWarpPanY, "Warp: pan Y per step"),
         TargetItem::new(ConfigPath::SimWarpFlow, "Warp: swirl per step"),
+        TargetItem::new(ConfigPath::SimMatteCutoff, "Matte: cutoff"),
+        TargetItem::new(ConfigPath::SimMatteSoftness, "Matte: softness"),
     ];
     let model = crate::sim::model_or_default(&sim.model);
     for p in model.parameters {

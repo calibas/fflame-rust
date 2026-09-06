@@ -1019,6 +1019,38 @@ grew by 32 bytes for it (a `vec4` and a `vec2`, 16-aligned). The
 engine contract did not move — it fingerprints vocabularies, not
 config fields — so there is nothing to tell the API.
 
+**Matte done 2026-09-05**, asked for as "separate the fractal from the
+background": colour the dendrites by the palette and leave the space
+behind them the background colour. The mechanism was already there and
+unreachable — a sim colouring returns `(rgb, coverage)` and the shared
+tonemap composites the background wherever coverage is 0, which is how
+a region outside the grid and `label`'s unlabelled cells already
+worked — but the general colourings return coverage 1 for every cell,
+so nothing inside the grid could ever be empty.
+
+`SimMatte { channel, cutoff, softness, invert }` on the config, off by
+default and absent from the file then; four `ConfigPath::SimMatte*`
+through the same five tables, the manager, the exporter and the target
+selector (cutoff and softness animate — a cutoff sweeping down is the
+figure growing into the background — the channel and the direction do
+not); a Matte section under Colouring. The uniform grew one `vec4`.
+
+It is applied in `sim_shade`, **per grid cell, before the resolve
+filter**, so a magnified edge is antialiased by the same filter that
+magnifies it rather than being a staircase the filter never sees; and
+it MULTIPLIES the colouring's coverage, so a colouring that already
+reports empty cells keeps saying so. For a growth model the occupancy
+channel is the matte — DLA's `.x`, the snowfake's `.x`, the breakdown
+model's `.w` — at a cutoff of 0.5. For a continuous field a soft matte
+floats the pattern over the background, which is a look those models
+did not have. Checked at 1:1 against the field it mattes: every cell
+on the right side, the feather exact to 0 error, a figure cell's
+colour untouched, and inverting swaps exactly the two sides. Two
+baselines, one of each kind.
+
+Transparent PNG export follows for free, since alpha is the same
+channel.
+
 The rest of the phase, still to do: animation
 targets, video-export semantics, a shipped `sim_sweep.rhai`; the
 script `sim` handle with SCRIPTING.md rows; the API enum (server

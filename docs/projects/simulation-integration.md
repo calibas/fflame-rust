@@ -86,7 +86,8 @@ Mirror `EscapeConfig`'s serde discipline (every field `default`, `skip_serializi
 | `steps_per_frame` | `u32` | 4 | interactive stepping and video export |
 | `dt` | `f32` | 1.0 | model time step where the model has one |
 | `boundary` | `SimBoundary` enum | model default | `Periodic`, `Clamp`, `Zero`, `Mirror` |
-| `warp` | `SimWarp` struct | identity | `zoom`, `rotation`, `pan`, `flow` (pipeline §4.1); `is_default` skip |
+| `warp` | `SimWarp` struct | identity | `zoom`, `rotation`, `pan`, `flow`, `filter` (pipeline §4.1); `is_default` skip. **Built 2026-09-05** |
+| `matte` | `SimMatte` struct | off | `channel`, `cutoff`, `softness`, `invert` — which cells are figure and which take the background colour, multiplied into the colouring's coverage in `sim_shade`. **Built 2026-09-05**, not in the original plan |
 | `model_params` | `BTreeMap<String, f32>` | empty | packed by name into slots, exactly `pack_params` |
 | `coloring_params` | `BTreeMap<String, f32>` | empty | same |
 | `agents` | `u32` | 0 | agent count for agent models (model default) |
@@ -100,6 +101,13 @@ Mirror `EscapeConfig`'s serde discipline (every field `default`, `skip_serializi
 Variants (all → a new `UpdateType::SimRerender`; a second `UpdateType::SimReseed` for the fields that restart the run — `SimGridMode`, `SimGridWidth`, `SimGridHeight`, seed, init, model, boundary; and a third, `UpdateType::SimResample`, for `SimGridScale`, which resamples the running field into the new grid instead of restarting — pipeline §7):
 
 `SimModel`, `SimColoring`, `SimGridMode`, `SimGridWidth`, `SimGridHeight`, `SimGridScale`, `SimSeed`, `SimInitKind`, `SimInitAmplitude`, `SimInitRadius`, `SimInitCount`, `SimSteps`, `SimStepsPerFrame`, `SimDt`, `SimBoundary`, `SimWarpZoom`, `SimWarpRotation`, `SimWarpPanX`, `SimWarpPanY`, `SimWarpFlow`, `SimAgents`, `SimUpscale`, `SimDownscale`, `SimModelParam { param }`, `SimColoringParam { param }`.
+
+**As built, 2026-09-05:** the warp shipped with a sixth path,
+`SimWarpFilter` (bilinear or nearest — the spec had no filter, and a
+bilinear resample every step erases a pattern over thousands of them),
+and the matte added four more, `SimMatteChannel`, `SimMatteCutoff`,
+`SimMatteSoftness` and `SimMatteInvert`. `SimAgents` is not built: the
+agent count comes from the model's own parameters.
 
 For each, the five tables escape fills: Display (`delta.rs:834-867`), i18n key (`:1072-1105`, `history.param.sim_*` — **and put the keys in `locales/en.yml`; escape's 14 shading keys and `escape_downsample` are missing there today, gap**), string key (`:2659-2692`, `Sim.Model` … `Sim.ModelParam.{param}`), parse (`:2856-2895`), and `json_to_config_value` (`:3452-3504`) for the animatable ones: every `f32`/`u32` field is animatable (`Float`/`UInt`); `SimModel`, `SimColoring`, `SimBoundary`, `SimInitKind`, `SimGridMode`, `SimUpscale`, `SimDownscale` are not.
 

@@ -153,7 +153,9 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimInitKind
         | ConfigPath::SimGridMode
         | ConfigPath::SimBoundary
-        | ConfigPath::SimWarpFilter => false,
+        | ConfigPath::SimWarpFilter
+        | ConfigPath::SimMatteChannel
+        | ConfigPath::SimMatteInvert => false,
         // ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
         // ConfigPath::ColorMode => false,
@@ -1833,6 +1835,12 @@ impl ConfigManager {
             ConfigPath::SimWarpFilter => {
                 Ok(ConfigValue::String(config.sim.warp.filter.name().to_string()))
             }
+            ConfigPath::SimMatteChannel => {
+                Ok(ConfigValue::String(config.sim.matte.channel.name().to_string()))
+            }
+            ConfigPath::SimMatteCutoff => Ok(ConfigValue::Float(config.sim.matte.cutoff)),
+            ConfigPath::SimMatteSoftness => Ok(ConfigValue::Float(config.sim.matte.softness)),
+            ConfigPath::SimMatteInvert => Ok(ConfigValue::Bool(config.sim.matte.invert)),
             ConfigPath::SimBoundary => {
                 Ok(ConfigValue::String(config.sim.boundary.name().to_string()))
             }
@@ -2913,6 +2921,28 @@ impl ConfigManager {
                 if let Some(f) = crate::config::sim::SimWarpFilter::from_name(&n) {
                     self.current.sim.warp.filter = f;
                 }
+            }
+            ConfigPath::SimMatteChannel => {
+                let n = String::try_from(value)?;
+                if let Some(c) = crate::config::sim::SimMatteChannel::from_name(&n) {
+                    self.current.sim.matte.channel = c;
+                }
+            }
+            // The cutoff is in the CHANNEL's units, which a model
+            // decides -- a sandpile's heights run to 3, a crystal
+            // mass past 2 -- so the range is wide and only a
+            // non-finite value is refused.
+            ConfigPath::SimMatteCutoff => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.matte.cutoff = if v.is_finite() { v } else { 0.5 };
+            }
+            ConfigPath::SimMatteSoftness => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.matte.softness =
+                    if v.is_finite() { v.max(0.0) } else { 0.0 };
+            }
+            ConfigPath::SimMatteInvert => {
+                self.current.sim.matte.invert = bool::try_from(value)?;
             }
             ConfigPath::SimUpscale => {
                 let n = String::try_from(value)?;
