@@ -437,16 +437,26 @@ pub enum SimUpscale {
     /// any.
     #[default]
     Nearest,
+    /// The state of the four surrounding cells, interpolated, then
+    /// coloured once (derived-fields plan, phase A). Continuous, with
+    /// creases at cell centres.
     Bilinear,
+    /// Catmull–Rom over the 4×4 surrounding cells (phase B). Smooth
+    /// through the cell centres as well as between them, so a
+    /// magnified blob is a blob rather than a rounded square. It can
+    /// overshoot a sharp step by a few percent, which the colourings'
+    /// clamps absorb and a matte cutoff does not mind.
+    Bicubic,
 }
 
 impl SimUpscale {
-    pub const NAMES: &'static [&'static str] = &["nearest", "bilinear"];
+    pub const NAMES: &'static [&'static str] = &["nearest", "bilinear", "bicubic"];
 
     pub fn name(&self) -> &'static str {
         match self {
             SimUpscale::Nearest => "nearest",
             SimUpscale::Bilinear => "bilinear",
+            SimUpscale::Bicubic => "bicubic",
         }
     }
 
@@ -454,6 +464,7 @@ impl SimUpscale {
         Some(match s {
             "nearest" => SimUpscale::Nearest,
             "bilinear" => SimUpscale::Bilinear,
+            "bicubic" => SimUpscale::Bicubic,
             _ => return None,
         })
     }

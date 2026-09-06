@@ -4333,3 +4333,116 @@ fn no_colouring_reads_the_cell_coordinate() {
         }
     }
 }
+
+/// Phase B of the derived-fields plan: the bicubic upscale
+/// reconstructs a smooth field better than the bilinear one.
+///
+/// A known smooth function is written straight into the field -- a
+/// Gaussian bump on a 32-cell grid, sampled at cell centres -- and
+/// the three upscales render it at 8x through the `channel` colouring
+/// and a linear greyscale palette, which returns the interpolated
+/// value itself. Each output pixel is then compared with the analytic
+/// function at that pixel's centre. Nearest is a staircase, bilinear
+/// has creases at every cell centre, and Catmull-Rom is C1 through
+/// them: the RMS reconstruction errors must fall in that order, with
+/// bicubic's a clear fraction of bilinear's, not a rounding hair.
+///
+/// The bump's width is chosen so the field's curvature is what the
+/// interpolants disagree about: too wide and everything is trivially
+/// right, too narrow and the grid cannot represent it at all.
+#[test]
+fn the_bicubic_upscale_reconstructs_a_smooth_field_better() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 32;
+    const MAG: u32 = 8;
+    const SIGMA: f32 = 2.5;
+    let palette = test_palette(&device, &queue);
+    let bump = |x: f32, y: f32| -> f32 {
+        let c = G as f32 * 0.5;
+        let d2 = (x - c) * (x - c) + (y - c) * (y - c);
+        // 0.9 rather than 1 so an overshoot has headroom before the
+        // colouring's clamp would hide it.
+        0.9 * (-d2 / (2.0 * SIGMA * SIGMA)).exp()
+    };
+
+    let mut cfg = SimConfig::default();
+    cfg.coloring = "channel".into();
+    cfg.grid = SimGrid::Fixed { width: G, height: G };
+    cfg.steps = 0;
+    cfg.coloring_params.insert("channel".into(), 0.0);
+    cfg.coloring_params.insert("scale".into(), 1.0);
+    cfg.coloring_params.insert("offset".into(), 0.0);
+
+    let mut errors = Vec::new();
+    for up in [
+        crate::config::sim::SimUpscale::Nearest,
+        crate::config::sim::SimUpscale::Bilinear,
+        crate::config::sim::SimUpscale::Bicubic,
+    ] {
+        cfg.upscale = up;
+        let out = G * MAG;
+        let mut r = SimRenderer::new(&device, &cfg, out, out);
+        r.seed(&device, &queue, &cfg);
+        // Overwrite the seeded field with the analytic bump at cell
+        // centres. The colour pass reads whatever is in the texture.
+        let mut texels = Vec::with_capacity((G * G * 4) as usize);
+        for y in 0..G {
+            for x in 0..G {
+                texels.extend_from_slice(&[bump(x as f32 + 0.5, y as f32 + 0.5), 0.0, 0.0, 0.0]);
+            }
+        }
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: r.field_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(&texels),
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(G * 16),
+                rows_per_image: Some(G),
+            },
+            Extent3d { width: G, height: G, depth_or_array_layers: 1 },
+        );
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let img = read_rgba32f(&device, &queue, r.output_texture(), out, out);
+
+        // Compare inside the bump's support only, where the field is
+        // not flat and the interpolants can differ.
+        let mut se = 0.0f64;
+        let mut n = 0usize;
+        let mut worst = 0.0f32;
+        for py in 0..out {
+            for px in 0..out {
+                // Output pixel centre in grid coordinates, as the
+                // colour pass maps it (1:MAG, no letterbox on a square).
+                let gx = (px as f32 + 0.5) / MAG as f32;
+                let gy = (py as f32 + 0.5) / MAG as f32;
+                let want = bump(gx, gy);
+                if want < 0.02 {
+                    continue;
+                }
+                let got = img[(py * out + px) as usize][0];
+                let e = got - want;
+                se += (e * e) as f64;
+                n += 1;
+                worst = worst.max(e.abs());
+            }
+        }
+        let rms = (se / n as f64).sqrt() as f32;
+        println!("{:<9} at {MAG}x: rms error {rms:.5}, worst {worst:.4}, over {n} pixels", up.name());
+        errors.push((up, rms));
+    }
+    let (nearest, bilinear, bicubic) = (errors[0].1, errors[1].1, errors[2].1);
+    assert!(bilinear < nearest, "bilinear ({bilinear:.5}) should beat nearest ({nearest:.5})");
+    assert!(
+        bicubic < bilinear * 0.5,
+        "bicubic ({bicubic:.5}) should be well under half bilinear's error ({bilinear:.5})"
+    );
+}

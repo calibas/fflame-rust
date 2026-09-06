@@ -580,7 +580,12 @@ impl SimRenderer {
             // against a CPU mirror of the rule.
             usage: TextureUsages::STORAGE_BINDING
                 | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_SRC,
+                | TextureUsages::COPY_SRC
+                // COPY_DST too: a test writes an analytic field straight
+                // in to measure the resolve against it, and the
+                // bound-grid resize resampler (plan section 7) will
+                // copy between pairs. Costs nothing on the render path.
+                | TextureUsages::COPY_DST,
             view_formats: &[],
         };
         let a = device.create_texture(&desc);

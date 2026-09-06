@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "f196b2af",
+  "git_hash": "8be2cf2f",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -509,6 +509,10 @@
     "sim-eden-cluster.png": {
       "bytes": 11681,
       "sha256": "1edd7718021b6a47d9ab01e9233e043e8ba0de96f12196306363253b8d11a7e1"
+    },
+    "sim-eden-matte-bicubic.png": {
+      "bytes": 14428,
+      "sha256": "f97ba5ef2646393550ed8d757417d4639b16826f2686af51d13096917d5c4e2a"
     },
     "sim-eden-matte-bilinear.png": {
       "bytes": 13435,
