@@ -100,6 +100,10 @@ struct SimParamsGpu {
     /// the assembler; the sizes must agree.
     warp_b: [f32; 2],
     _pad: [f32; 2],
+    /// The matte: channel index, mode (0 off, 1 normal, 2 inverted),
+    /// cutoff, softness. `SimMatte::packed` builds it, and that
+    /// function's mode word is what the shader branches on.
+    matte: [f32; 4],
 }
 
 /// The shader set for one (model, colouring, boundary, resolve)
@@ -954,6 +958,7 @@ impl SimRenderer {
                 },
             ],
             _pad: [0.0; 2],
+            matte: cfg.matte.packed(),
         }
     }
 

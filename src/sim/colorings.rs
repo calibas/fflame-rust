@@ -17,6 +17,12 @@
 //!
 //! **The output convention is the flame accumulator's**, which is what
 //! lets the whole tonemap → effects → readback tail work unchanged:
+//! The matte (`SimMatte`, applied in the colour template rather than
+//! here) multiplies into whatever coverage a colouring returns, so a
+//! colouring never has to think about which cells are background: it
+//! answers "what colour is this cell", and the matte answers "is this
+//! cell drawn at all".
+//!
 //! `rgb` is colour and `a` is coverage, 1.0 for a cell that is part of
 //! the picture. Because the tonemap reads alpha as a hit count, the
 //! mode enters with Linear tonemapping — a flame's Log-calibrated

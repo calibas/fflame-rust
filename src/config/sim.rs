@@ -299,6 +299,135 @@ impl SimWarp {
     }
 }
 
+/// Which state channel decides whether a cell is figure or
+/// background, or `Off` for "every cell is figure" -- the behaviour
+/// before the matte existed, and the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimMatteChannel {
+    #[default]
+    Off,
+    X,
+    Y,
+    Z,
+    W,
+}
+
+impl SimMatteChannel {
+    pub const NAMES: &'static [&'static str] = &["off", "x", "y", "z", "w"];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimMatteChannel::Off => "off",
+            SimMatteChannel::X => "x",
+            SimMatteChannel::Y => "y",
+            SimMatteChannel::Z => "z",
+            SimMatteChannel::W => "w",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "off" => SimMatteChannel::Off,
+            "x" => SimMatteChannel::X,
+            "y" => SimMatteChannel::Y,
+            "z" => SimMatteChannel::Z,
+            "w" => SimMatteChannel::W,
+            _ => return None,
+        })
+    }
+
+    /// 0-based index into the state vector; meaningless for `Off`.
+    pub fn index(&self) -> f32 {
+        match self {
+            SimMatteChannel::Off | SimMatteChannel::X => 0.0,
+            SimMatteChannel::Y => 1.0,
+            SimMatteChannel::Z => 2.0,
+            SimMatteChannel::W => 3.0,
+        }
+    }
+}
+
+/// Which cells are the picture and which are empty space.
+///
+/// A sim colouring returns `(rgb, coverage)`, and the shared tonemap
+/// composites the configured background wherever coverage is 0 --
+/// which is how a region outside the grid already works, and how a
+/// transparent PNG gets its alpha. What the colourings had no way to
+/// say is that a cell *inside* the grid is empty: `channel` and `age`
+/// return coverage 1 everywhere, so the palette covers the frame and
+/// the background colour never shows.
+///
+/// The matte says it. Below `cutoff` on the chosen channel a cell is
+/// background; above it, figure; `softness` feathers the crossing.
+/// It is applied per GRID CELL, before the resolve filter, so a
+/// magnified edge is antialiased by the same filter that magnifies it.
+///
+/// For a growth model the occupancy channel IS the matte -- DLA's
+/// `.x`, the snowfake's `.x`, the breakdown model's `.w` -- and a
+/// cutoff of 0.5 puts dendrites on the background colour. For a
+/// continuous field a soft matte floats the pattern instead.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SimMatte {
+    #[serde(default, skip_serializing_if = "is_default_matte_channel")]
+    pub channel: SimMatteChannel,
+    /// The value that separates background from figure.
+    #[serde(default = "default_matte_cutoff", skip_serializing_if = "is_default_matte_cutoff")]
+    pub cutoff: f32,
+    /// Width of the feather around the cutoff, in the channel's own
+    /// units. 0 is a hard edge, which is right for an occupancy flag.
+    #[serde(default, skip_serializing_if = "is_warp_zero")]
+    pub softness: f32,
+    /// Whether the LOW side is the figure instead.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub invert: bool,
+}
+
+fn default_matte_cutoff() -> f32 {
+    0.5
+}
+fn is_default_matte_cutoff(v: &f32) -> bool {
+    *v == 0.5
+}
+fn is_default_matte_channel(v: &SimMatteChannel) -> bool {
+    *v == SimMatteChannel::Off
+}
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+impl Default for SimMatte {
+    fn default() -> Self {
+        SimMatte {
+            channel: SimMatteChannel::Off,
+            cutoff: 0.5,
+            softness: 0.0,
+            invert: false,
+        }
+    }
+}
+
+impl SimMatte {
+    /// Whether every cell is figure -- no dispatch cost either way,
+    /// but it is what the shader is told so the branch is uniform.
+    pub fn is_off(&self) -> bool {
+        self.channel == SimMatteChannel::Off
+    }
+
+    /// What the uniform carries: channel index, mode (0 off, 1 normal,
+    /// 2 inverted), cutoff, softness.
+    pub fn packed(&self) -> [f32; 4] {
+        let mode = if self.is_off() {
+            0.0
+        } else if self.invert {
+            2.0
+        } else {
+            1.0
+        };
+        [self.channel.index(), mode, self.cutoff, self.softness.max(0.0)]
+    }
+}
+
 /// Resolve filter when the grid is smaller than the output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -407,6 +536,9 @@ fn is_default_init(v: &SimInit) -> bool {
 fn is_default_boundary(v: &SimBoundary) -> bool {
     *v == SimBoundary::default()
 }
+fn is_default_matte(v: &SimMatte) -> bool {
+    *v == SimMatte::default()
+}
 fn is_identity_warp(v: &SimWarp) -> bool {
     v.is_identity() && v.filter == SimWarpFilter::default()
 }
@@ -486,6 +618,11 @@ pub struct SimConfig {
     #[serde(default, skip_serializing_if = "is_empty_map")]
     pub coloring_params: BTreeMap<String, f32>,
 
+    /// Which cells are figure and which are background. Off by
+    /// default, and absent from the file then.
+    #[serde(default, skip_serializing_if = "is_default_matte")]
+    pub matte: SimMatte,
+
     /// Resolve filter when the grid is smaller than the output.
     #[serde(default, skip_serializing_if = "is_default_upscale")]
     pub upscale: SimUpscale,
@@ -510,6 +647,7 @@ impl Default for SimConfig {
             warp: SimWarp::default(),
             model_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
+            matte: SimMatte::default(),
             upscale: SimUpscale::default(),
             downscale: SimDownscale::default(),
         }
@@ -648,6 +786,10 @@ mod tests {
             ConfigPath::SimWarpPanY,
             ConfigPath::SimWarpFlow,
             ConfigPath::SimWarpFilter,
+            ConfigPath::SimMatteChannel,
+            ConfigPath::SimMatteCutoff,
+            ConfigPath::SimMatteSoftness,
+            ConfigPath::SimMatteInvert,
             ConfigPath::SimUpscale,
             ConfigPath::SimDownscale,
             ConfigPath::SimModelParam { param: "feed".into() },
@@ -676,6 +818,10 @@ mod tests {
             ConfigPath::SimWarpZoom,
             ConfigPath::SimWarpFlow,
             ConfigPath::SimWarpFilter,
+            ConfigPath::SimMatteChannel,
+            ConfigPath::SimMatteCutoff,
+            ConfigPath::SimMatteSoftness,
+            ConfigPath::SimMatteInvert,
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
         ] {
@@ -729,6 +875,45 @@ mod tests {
             Some(ConfigValue::Float(0.995))
         );
         assert!(json_to_config_value(&f, &ConfigPath::SimWarpFilter).is_none());
+        // The matte's thresholds animate -- a cutoff sweeping down is
+        // the figure growing into the background -- and its channel
+        // and its direction do not.
+        assert_eq!(
+            json_to_config_value(&f, &ConfigPath::SimMatteCutoff),
+            Some(ConfigValue::Float(0.995))
+        );
+        assert!(json_to_config_value(&f, &ConfigPath::SimMatteChannel).is_none());
+        assert!(json_to_config_value(&f, &ConfigPath::SimMatteInvert).is_none());
+    }
+
+    /// Off is the default and must leave the file alone; a set matte
+    /// must come back exactly. The packed form is what the shader
+    /// reads, so its mode word is checked here rather than on the GPU.
+    #[test]
+    fn the_matte_is_absent_when_off_and_packs_its_mode() {
+        let cfg = SimConfig::default();
+        assert!(cfg.matte.is_off());
+        assert!(!serde_json::to_string(&cfg).unwrap().contains("matte"));
+
+        let mut cfg = SimConfig::default();
+        cfg.matte = SimMatte {
+            channel: SimMatteChannel::W,
+            cutoff: 0.25,
+            softness: 0.1,
+            invert: true,
+        };
+        let back: SimConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.matte, cfg.matte);
+
+        assert_eq!(SimMatte::default().packed()[1], 0.0, "off");
+        let on = SimMatte { channel: SimMatteChannel::Z, ..Default::default() };
+        assert_eq!(on.packed(), [2.0, 1.0, 0.5, 0.0]);
+        let inv = SimMatte { channel: SimMatteChannel::Z, invert: true, ..Default::default() };
+        assert_eq!(inv.packed()[1], 2.0, "inverted");
+        // Off wins over invert: a mode of 0 is what turns the shader's
+        // branch off, whatever else is set.
+        let off = SimMatte { invert: true, ..Default::default() };
+        assert_eq!(off.packed()[1], 0.0);
     }
 
     /// The identity warp is the default and must leave the file alone;
@@ -773,6 +958,9 @@ mod tests {
         }
         for n in SimWarpFilter::NAMES {
             assert_eq!(SimWarpFilter::from_name(n).unwrap().name(), *n);
+        }
+        for n in SimMatteChannel::NAMES {
+            assert_eq!(SimMatteChannel::from_name(n).unwrap().name(), *n);
         }
         for k in SimInit::KINDS {
             assert_eq!(SimInit::default().with_kind(k).kind_name(), *k);

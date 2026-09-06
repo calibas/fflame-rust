@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "09e0b13d",
+  "git_hash": "27d71ba8",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -502,6 +502,10 @@
       "bytes": 16865,
       "sha256": "0b1158246c7a3c0e7fcb86f9bb944110022097be250e602bbf5cdc70757b8d24"
     },
+    "sim-dla-matte.png": {
+      "bytes": 19125,
+      "sha256": "79b24745da4371eb5d393363326db3ff46cb129fcf0d8731da62c21ef123eb37"
+    },
     "sim-eden-cluster.png": {
       "bytes": 11681,
       "sha256": "1edd7718021b6a47d9ab01e9233e043e8ba0de96f12196306363253b8d11a7e1"
@@ -537,6 +541,10 @@
     "sim-gray-scott-coral.png": {
       "bytes": 21945,
       "sha256": "4eef8f684e8819f0dfcde381264848f8b9d11e80e2d06038e3e82f964e0c0499"
+    },
+    "sim-gray-scott-matte-soft.png": {
+      "bytes": 31628,
+      "sha256": "391a49a30e1f4652598b10b0442a71fe333ae1472668a7fec89457430a6563a7"
     },
     "sim-gray-scott-maze.png": {
       "bytes": 20780,

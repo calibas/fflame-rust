@@ -829,6 +829,12 @@ fn apply_config_value(
             config.sim.warp.flow =
                 if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
         }
+        (ConfigPath::SimMatteCutoff, ConfigValue::Float(v)) => {
+            config.sim.matte.cutoff = if v.is_finite() { *v } else { 0.5 };
+        }
+        (ConfigPath::SimMatteSoftness, ConfigValue::Float(v)) => {
+            config.sim.matte.softness = if v.is_finite() { v.max(0.0) } else { 0.0 };
+        }
         (ConfigPath::SimModelParam { param }, ConfigValue::Float(v)) => {
             config.sim.model_params.insert(param.clone(), *v);
         }

@@ -13,7 +13,8 @@
 use crate::config::delta::ConfigPath;
 use crate::config::manager::ConfigManager;
 use crate::config::sim::{
-    SimBoundary, SimDownscale, SimGrid, SimInit, SimUpscale, SimWarp, SimWarpFilter,
+    SimBoundary, SimDownscale, SimGrid, SimInit, SimMatteChannel, SimUpscale, SimWarp,
+    SimWarpFilter,
 };
 use crate::scene::transforms::RenderMode;
 use crate::sim::{SimParamDef, COLORINGS, MODELS};
@@ -579,4 +580,60 @@ pub fn render_sim_content(
             );
         }
     }
+
+    // ---- Matte ----
+    // Which cells are figure and which are background. Under
+    // Colouring because that is what it is: the field is untouched.
+    let m = sim.matte;
+    ui.collapsing(t!("sim_panel.matte").as_ref(), |ui| {
+        ui.label(egui::RichText::new(t!("sim_panel.matte_tip")).small().weak());
+        ui.horizontal(|ui| {
+            ui.label(t!("sim_panel.matte_channel").as_ref());
+            egui::ComboBox::from_id_salt("sim_matte_channel")
+                .selected_text(m.channel.name())
+                .show_ui(ui, |ui| {
+                    for n in SimMatteChannel::NAMES {
+                        if ui.selectable_label(m.channel.name() == *n, *n).clicked() {
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimMatteChannel, (*n).to_string().into());
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("sim_panel.matte_channel_tip"));
+        });
+        // The rest only means anything once a channel is chosen.
+        ui.add_enabled_ui(!m.is_off(), |ui| {
+            let mut cut = m.cutoff;
+            if ui
+                .add(
+                    egui::Slider::new(&mut cut, 0.0..=4.0)
+                        .text(t!("sim_panel.matte_cutoff").as_ref()),
+                )
+                .on_hover_text(t!("sim_panel.matte_cutoff_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::SimMatteCutoff, cut.into());
+            }
+            let mut soft = m.softness;
+            if ui
+                .add(
+                    egui::Slider::new(&mut soft, 0.0..=2.0)
+                        .text(t!("sim_panel.matte_softness").as_ref()),
+                )
+                .on_hover_text(t!("sim_panel.matte_softness_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::SimMatteSoftness, soft.into());
+            }
+            let mut inv = m.invert;
+            if ui
+                .checkbox(&mut inv, t!("sim_panel.matte_invert").as_ref())
+                .on_hover_text(t!("sim_panel.matte_invert_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::SimMatteInvert, inv.into());
+            }
+        });
+    });
 }

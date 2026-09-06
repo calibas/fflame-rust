@@ -376,6 +376,14 @@ pub enum ConfigPath {
     SimWarpFlow,
     /// How the warp samples: bilinear or nearest. Not animatable.
     SimWarpFilter,
+    /// The matte: which cells are figure and which are background
+    /// (`SimMatte`). The channel and the direction are choices; the
+    /// cutoff and the softness are quantities and animate -- a cutoff
+    /// sweeping down is the figure growing into the background.
+    SimMatteChannel,
+    SimMatteCutoff,
+    SimMatteSoftness,
+    SimMatteInvert,
     /// Resolve filter when the grid is smaller than the output.
     SimUpscale,
     /// Resolve filter when the grid is larger than the output.
@@ -931,6 +939,10 @@ impl Display for ConfigPath {
             ConfigPath::SimWarpPanY => write!(f, "Simulation Warp Pan Y"),
             ConfigPath::SimWarpFlow => write!(f, "Simulation Warp Flow"),
             ConfigPath::SimWarpFilter => write!(f, "Simulation Warp Filter"),
+            ConfigPath::SimMatteChannel => write!(f, "Simulation Matte Channel"),
+            ConfigPath::SimMatteCutoff => write!(f, "Simulation Matte Cutoff"),
+            ConfigPath::SimMatteSoftness => write!(f, "Simulation Matte Softness"),
+            ConfigPath::SimMatteInvert => write!(f, "Simulation Matte Invert"),
             ConfigPath::SimUpscale => write!(f, "Simulation Upscale"),
             ConfigPath::SimDownscale => write!(f, "Simulation Downscale"),
             ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
@@ -1198,6 +1210,10 @@ impl ConfigPath {
             ConfigPath::SimWarpPanY => I18nKey::simple("history.param.sim_warp_pan_y"),
             ConfigPath::SimWarpFlow => I18nKey::simple("history.param.sim_warp_flow"),
             ConfigPath::SimWarpFilter => I18nKey::simple("history.param.sim_warp_filter"),
+            ConfigPath::SimMatteChannel => I18nKey::simple("history.param.sim_matte_channel"),
+            ConfigPath::SimMatteCutoff => I18nKey::simple("history.param.sim_matte_cutoff"),
+            ConfigPath::SimMatteSoftness => I18nKey::simple("history.param.sim_matte_softness"),
+            ConfigPath::SimMatteInvert => I18nKey::simple("history.param.sim_matte_invert"),
             ConfigPath::SimUpscale => I18nKey::simple("history.param.sim_upscale"),
             ConfigPath::SimDownscale => I18nKey::simple("history.param.sim_downscale"),
             ConfigPath::SimModelParam { param } => I18nKey::with_params(
@@ -2590,6 +2606,12 @@ impl ConfigPath {
             | ConfigPath::SimWarpPanY
             | ConfigPath::SimWarpFlow
             | ConfigPath::SimWarpFilter
+            // The matte is a colouring decision: the field is
+            // untouched, only which of it is drawn.
+            | ConfigPath::SimMatteChannel
+            | ConfigPath::SimMatteCutoff
+            | ConfigPath::SimMatteSoftness
+            | ConfigPath::SimMatteInvert
             | ConfigPath::SimModelParam { .. }
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
@@ -2879,6 +2901,10 @@ impl ConfigPath {
             ConfigPath::SimWarpPanY => "Sim.WarpPanY".to_string(),
             ConfigPath::SimWarpFlow => "Sim.WarpFlow".to_string(),
             ConfigPath::SimWarpFilter => "Sim.WarpFilter".to_string(),
+            ConfigPath::SimMatteChannel => "Sim.MatteChannel".to_string(),
+            ConfigPath::SimMatteCutoff => "Sim.MatteCutoff".to_string(),
+            ConfigPath::SimMatteSoftness => "Sim.MatteSoftness".to_string(),
+            ConfigPath::SimMatteInvert => "Sim.MatteInvert".to_string(),
             ConfigPath::SimUpscale => "Sim.Upscale".to_string(),
             ConfigPath::SimDownscale => "Sim.Downscale".to_string(),
             ConfigPath::SimModelParam { param } => format!("Sim.ModelParam.{param}"),
@@ -3147,6 +3173,10 @@ impl ConfigPath {
                 ["WarpPanY"] => return Some(ConfigPath::SimWarpPanY),
                 ["WarpFlow"] => return Some(ConfigPath::SimWarpFlow),
                 ["WarpFilter"] => return Some(ConfigPath::SimWarpFilter),
+                ["MatteChannel"] => return Some(ConfigPath::SimMatteChannel),
+                ["MatteCutoff"] => return Some(ConfigPath::SimMatteCutoff),
+                ["MatteSoftness"] => return Some(ConfigPath::SimMatteSoftness),
+                ["MatteInvert"] => return Some(ConfigPath::SimMatteInvert),
                 ["Upscale"] => return Some(ConfigPath::SimUpscale),
                 ["Downscale"] => return Some(ConfigPath::SimDownscale),
                 ["ModelParam", param] => {
@@ -3581,6 +3611,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimInitKind
         | ConfigPath::SimBoundary
         | ConfigPath::SimWarpFilter
+        | ConfigPath::SimMatteChannel
+        | ConfigPath::SimMatteInvert
         | ConfigPath::SimUpscale
         | ConfigPath::SimDownscale => None,
 
@@ -3761,6 +3793,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimWarpPanX
         | ConfigPath::SimWarpPanY
         | ConfigPath::SimWarpFlow
+        | ConfigPath::SimMatteCutoff
+        | ConfigPath::SimMatteSoftness
         | ConfigPath::SimModelParam { .. }
         | ConfigPath::SimColoringParam { .. } => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
