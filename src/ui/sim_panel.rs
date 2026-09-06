@@ -406,9 +406,12 @@ pub fn render_sim_content(
 
     // ---- Stepping ----
     let mut steps = sim.steps;
+    // From 0, which is the no-cap sentinel: an integer slider sets
+    // `smallest_positive` to 1, and egui's logarithmic sliders take a
+    // zero bound, so the leftmost stop is 0 and the next is 1.
     if ui
         .add(
-            egui::Slider::new(&mut steps, 1..=100_000)
+            egui::Slider::new(&mut steps, 0..=100_000)
                 .text(t!("sim_panel.steps").as_ref())
                 .logarithmic(true),
         )
@@ -416,6 +419,12 @@ pub fn render_sim_content(
         .changed()
     {
         let _ = config_manager.update_param(ConfigPath::SimSteps, steps.into());
+    }
+    if sim.steps == 0 {
+        // An export runs `steps` from the seed, so at 0 it is the
+        // seed. Saying it here beats finding out from a blank PNG.
+        ui.label(egui::RichText::new(t!("sim_panel.steps_uncapped")).small().weak())
+            .on_hover_text(t!("sim_panel.steps_uncapped_tip"));
     }
     let mut spf = sim.steps_per_frame;
     if ui

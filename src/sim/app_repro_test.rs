@@ -3990,3 +3990,87 @@ fn the_matte_makes_background_of_the_cells_it_cuts() {
     );
     assert!(worst < 1e-6, "the feather does not match its own formula: {worst:.2e}");
 }
+
+/// Running to Max Steps in the app gives EXACTLY what exporting the
+/// same config gives — which is the whole reason the cap exists.
+///
+/// The app advances a running simulation `steps_per_frame` at a time,
+/// so a cap that is not a multiple of that would be overshot by part
+/// of a frame. Here 250 is deliberately not a multiple of 100: the
+/// frames run 100, 100, then FIFTY, and the field that leaves is bit
+/// for bit the field `render_still` produces from the seed in one
+/// run of 250.
+///
+/// The rest of the contract is checked around it: an uncapped run
+/// (`steps == 0`) is never held back, a run that has reached the cap
+/// is not stuck there — `steps_remaining` stops holding it, which is
+/// what lets Run resume past — and a reseed arms the cap again.
+#[test]
+fn a_capped_run_stops_on_the_step_an_export_stops_on() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    const CAP: u32 = 250;
+    const PER_FRAME: u32 = 100;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.seed = 6;
+    cfg.steps = CAP;
+    cfg.steps_per_frame = PER_FRAME;
+
+    // The app's loop: frames of `steps_per_frame`, each clamped.
+    let mut app = SimRenderer::new(&device, &cfg, N, N);
+    let mut ran = Vec::new();
+    for _ in 0..3 {
+        let before = app.step_index();
+        app.render_frame(&device, &queue, &cfg, &palette, PER_FRAME);
+        ran.push(app.step_index() - before);
+    }
+    assert_eq!(
+        ran,
+        vec![PER_FRAME, PER_FRAME, CAP - 2 * PER_FRAME],
+        "the cap should cut the third frame short rather than overshoot"
+    );
+    assert_eq!(app.step_index(), CAP);
+    // The app pauses here; the rule that decides so is unit-tested in
+    // `sim::tests`. What this test is for is that the field it pauses
+    // on is the exported one.
+    assert!(crate::sim::should_pause_at_limit(CAP, true, app.step_index()));
+
+    // The export: exactly `steps` from the seed, in one run.
+    let mut export = SimRenderer::new(&device, &cfg, N, N);
+    export.render_still(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    assert_eq!(export.step_index(), CAP);
+
+    let on_screen = read_rgba32f(&device, &queue, app.output_texture(), N, N);
+    let exported = read_rgba32f(&device, &queue, export.output_texture(), N, N);
+    assert_eq!(
+        on_screen, exported,
+        "what the app shows at Max Steps is not what an export of the same config gives"
+    );
+
+    // Past the cap, nothing holds the run back: this is Run resuming.
+    assert_eq!(app.steps_remaining(&cfg), None);
+    app.render_frame(&device, &queue, &cfg, &palette, PER_FRAME);
+    assert_eq!(app.step_index(), CAP + PER_FRAME, "Run should carry on past the cap");
+
+    // A reseed arms it again.
+    app.request_seed();
+    assert!(app.will_reseed());
+    app.render_frame(&device, &queue, &cfg, &palette, PER_FRAME);
+    assert_eq!(app.step_index(), PER_FRAME, "a reseed restarts the count");
+
+    // Uncapped: never held back, however many frames.
+    let mut free = cfg.clone();
+    free.steps = 0;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    assert_eq!(r.steps_remaining(&free), None);
+    for _ in 0..3 {
+        r.render_frame(&device, &queue, &free, &palette, PER_FRAME);
+    }
+    assert_eq!(r.step_index(), 3 * PER_FRAME, "an uncapped run should not stop");
+}

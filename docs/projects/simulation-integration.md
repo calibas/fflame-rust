@@ -82,7 +82,7 @@ Mirror `EscapeConfig`'s serde discipline (every field `default`, `skip_serializi
 | `grid` | `SimGrid` enum | `Viewport { scale: 1.0 }` | `Fixed { width, height }` or `Viewport { scale }` — pipeline §7; serde as `{"fixed": [w, h]}` / `{"viewport": scale}` |
 | `seed` | `u64` | 1 | init RNG |
 | `init` | `SimInit` enum | `Noise` | `Noise{amplitude}`, `Blob{radius}`, `Blobs{count,radius}`, `Ring`, `Line`, `Center` (growth seeds) |
-| `steps` | `u32` | 2000 | export/settle contract: exact step count from seed |
+| `steps` | `u32` | 2000 | export/settle contract: exact step count from seed. **Shown as MAX STEPS and enforced in the app since 2026-09-06**: a running simulation stops on the step an export stops on, mid-frame if the batch would overshoot, and pauses rather than ends. **0 = no cap** (free-run; an export then renders the seed) |
 | `steps_per_frame` | `u32` | 4 | interactive stepping and video export |
 | `dt` | `f32` | 1.0 | model time step where the model has one |
 | `boundary` | `SimBoundary` enum | model default | `Periodic`, `Clamp`, `Zero`, `Mirror` |

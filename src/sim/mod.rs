@@ -218,6 +218,21 @@ pub const MINMAX_RING: u32 = 257;
 /// needs three (grow, relax, weigh).
 pub const MAX_PASSES: u32 = 4;
 
+/// The app's auto-pause rule: should a running simulation stop now?
+///
+/// True exactly when this frame CROSSED `cap` -- the run was short of
+/// it (or had just restarted, which is the same thing measured from
+/// 0) and has now reached it. `SimRenderer::render_frame` clamps a
+/// frame's batch so it cannot pass the cap, so "reached" is always
+/// "landed exactly on".
+///
+/// Crossing pauses; it does not end the run. A second Run press finds
+/// `was_below` false and keeps going, which is what makes the cap a
+/// place the simulation stops once rather than a wall.
+pub fn should_pause_at_limit(cap: u32, was_below: bool, now: u32) -> bool {
+    cap > 0 && was_below && now >= cap
+}
+
 /// The ceiling on a repeated pass's count. A relaxation slider that
 /// could ask for thousands of sweeps would hit the watchdog inside a
 /// single step, where the submit batching cannot help.
@@ -939,6 +954,24 @@ mod tests {
     /// another would run with a zero where it expected a rate, and
     /// still render something. This is the check the phase-3 review
     /// ran by hand once; it belongs in the suite.
+    /// The auto-pause fires once, on arrival, and never for an
+    /// uncapped run.
+    #[test]
+    fn the_run_pauses_on_arriving_at_the_cap_and_not_after() {
+        // Uncapped: nothing ever pauses it.
+        assert!(!should_pause_at_limit(0, true, 10_000));
+        // Short of the cap: keep going.
+        assert!(!should_pause_at_limit(2000, true, 1999));
+        // Landing on it: pause.
+        assert!(should_pause_at_limit(2000, true, 2000));
+        // Already past when the frame began -- Run was pressed again,
+        // so this must NOT pause, or the run would be stuck.
+        assert!(!should_pause_at_limit(2000, false, 2500));
+        // A reseed makes the frame count from 0 again, so the caller
+        // passes was_below and the pause re-arms.
+        assert!(should_pause_at_limit(2000, true, 2000));
+    }
+
     #[test]
     fn every_parameter_index_names_a_declared_parameter() {
         fn indices(wgsl: &str, accessor: &str) -> Vec<usize> {

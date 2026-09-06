@@ -1051,6 +1051,31 @@ baselines, one of each kind.
 Transparent PNG export follows for free, since alpha is the same
 channel.
 
+**Max Steps done 2026-09-06.** `steps` was the export contract and
+nothing else: the app free-ran at `steps_per_frame` and whatever was
+on screen when the user stopped looking had no particular relation to
+what an export produced. It is now shown as **Max Steps** and
+enforced. `SimRenderer::render_frame` clamps a frame's batch to what
+is left of the cap, so a cap of 250 with 100 a frame runs 100, 100,
+50 rather than overshooting to 300; the app then auto-pauses on
+arrival. Measured, that makes the paused frame BYTE-IDENTICAL to
+`render_still` on the same config, which is the point.
+
+Reaching the cap PAUSES rather than ends: `steps_remaining` stops
+holding the run back once the index is at or past the cap, so a second
+Run press carries on freely, and a reseed arms the pause again. The
+rule that decides it is `sim::should_pause_at_limit`, a function
+rather than three lines inside the winit closure, so the table it
+implements — uncapped never pauses, arriving pauses, already-past does
+not re-pause — is unit-tested without a window.
+
+**0 is the no-cap sentinel** and restores the old free-running
+behaviour; the slider goes down to it because egui's integer sliders
+set `smallest_positive` to 1 and its logarithmic sliders accept a zero
+bound, so no second control was needed. The one asymmetry is stated in
+the panel rather than left to be discovered: an export runs Max Steps
+from the seed, so at 0 it renders the seed.
+
 The rest of the phase, still to do: animation
 targets, video-export semantics, a shipped `sim_sweep.rhai`; the
 script `sim` handle with SCRIPTING.md rows; the API enum (server

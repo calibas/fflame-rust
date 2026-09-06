@@ -591,6 +591,29 @@ impl SimRenderer {
         self.step_index
     }
 
+    /// Whether the next frame will restart the run before stepping.
+    /// The caller needs this to know that a step index it is looking
+    /// at is about to become 0.
+    pub fn will_reseed(&self) -> bool {
+        self.needs_seed
+    }
+
+    /// How many steps are left before `cfg.steps`, or `None` when
+    /// nothing is holding the run back.
+    ///
+    /// `None` covers two cases deliberately: an uncapped run
+    /// (`steps == 0`), and a run that is already AT or past the cap.
+    /// The second is what lets Run resume after the auto-pause —
+    /// the limit is a place the run stops once, not a wall it can
+    /// never cross.
+    pub fn steps_remaining(&self, cfg: &SimConfig) -> Option<u32> {
+        if cfg.steps == 0 || self.step_index >= cfg.steps {
+            None
+        } else {
+            Some(cfg.steps - self.step_index)
+        }
+    }
+
     pub fn grid_size(&self) -> (u32, u32) {
         (self.grid_w, self.grid_h)
     }
@@ -1607,6 +1630,15 @@ impl SimRenderer {
         if self.needs_seed {
             self.seed(device, queue, cfg);
         }
+        // Never overshoot the cap, even by part of a frame's batch:
+        // the whole point of `steps` is that stopping there gives the
+        // picture an export of the same config gives, and 2,010 steps
+        // is not 2,000. Asked AFTER the seed, so a run that has just
+        // restarted measures from 0.
+        let steps = match self.steps_remaining(cfg) {
+            Some(left) => steps.min(left),
+            None => steps,
+        };
         if steps > 0 {
             self.run_steps(device, queue, cfg, steps);
         }
