@@ -1,8 +1,8 @@
 # Simulation: derived fields — resolve, matte edges, vector colourings
 
-**Status:** plan of record, 2026-09-06. **Phases A and B built and
-gated the same day**; C and D to follow. The IFS phase is scoped, not
-scheduled.
+**Status:** plan of record, 2026-09-06. **Phases A, B and C built
+and gated the same day** — C not as expected, see its section; D to
+follow. The IFS phase is scoped, not scheduled.
 
 This is the plan for three requests made together: a low-resolution
 grid that presents as a detailed picture rather than a pixelated one;
@@ -32,7 +32,7 @@ What is derived, and where it is consumed:
 |---|---|---|
 | interpolated state | the 2×2 or 4×4 cell neighbourhood | the resolve (phases A, B) |
 | gradient | central differences of a channel | colourings (exists), the matte edge (D) |
-| signed distance | occupancy, by jump flood | the matte edge (C) |
+| signed distance | occupancy, by jump flood | the matte's feather (C); distance colourings (D) |
 | structure tensor | smoothed gradient outer product | colourings (D) |
 | velocity | a model that has one, stored as magnitude + angle | colourings (D) |
 
@@ -120,32 +120,76 @@ cluster as phase A's through the new filter. Writing the field in
 from a test needed `COPY_DST` on the field textures, which the §7
 resize resampler will need anyway.
 
-### Phase C — a distance field for occupancy edges
+### Phase C — a distance field from the occupancy
 
-Interpolating a 0/1 field only ever gives a ramp one cell wide, and
+**Built 2026-09-06, and it does not do what this section expected.
+The expectation is kept here, struck through, because the measurement
+that overturned it is the useful part.**
+
+~~Interpolating a 0/1 field only ever gives a ramp one cell wide, and
 phase A's hard cutoff on that ramp is a boundary that is exactly right
 at the 0.5 isoline and wobbles between. The right primitive for a
-boundary at any magnification is a **signed distance field**: convert
-the matte's occupancy to the distance from the nearest occupied cell
-(jump flood — ⌈log₂ N⌉ passes over a `rg32float` seed-coordinate
-texture pair), sample *it* with the resolve's interpolant (distance
-fields interpolate well), and take coverage from a sub-cell threshold
-on the interpolated distance. This is font rendering's trick, and it
-makes a 128² DLA present at 4K with crisp, smooth dendrite edges.
+boundary at any magnification is a signed distance field … the font
+rendering trick, and it makes a 128² DLA present at 4K with crisp,
+smooth dendrite edges.~~
 
-- `SimMatte` gains `edge: Threshold | Distance`; the SDF runs only
-  when the matte is on and `Distance` is chosen, at colour time, so a
-  paused run recomputes nothing and a running one pays ⌈log₂ N⌉
-  cheap grid-resolution dispatches per frame.
-- The SDF also feeds the feather: `softness` becomes a distance in
-  cells, which is what a user means by it.
-- New machinery: a texture pair, a pipeline, a bind group, and a
-  binding in the colour template. Modelled on the pyramid stage.
+**What was measured.** A disc of radius 10.3 cells on a 32² grid,
+magnified 8× with a hard matte, through both edges: the threshold and
+the distance field classify **the same 568 pixels** the same way, with
+**the same 1.034 px RMS radial error**. Not close — identical. The
+reason is structural. A cell beside the edge has its nearest cell of
+the other kind *adjacent*, so it reads exactly +½ (inside) or −½
+(outside) in the distance field — which is the occupancy the threshold
+interpolates, shifted by a half. In every cell square the boundary
+passes through, the four corners are ±½, and the bilinear zero set of
+that is the bilinear ½-set of the occupancy. They differ only where a
+square has a cell two steps from the edge (a staircase corner), and
+there by ~0.02 cells: working the (1,1,1,0) square by hand, the
+occupancy's ½-isoline crosses the diagonal at t = 0.707 and the
+distance field's zero at 0.729. **A distance field built from cell
+centres knows no more about *where* the edge is than the cells do.**
+The font-rendering analogy was wrong: a glyph's SDF is sampled from an
+*exact* outline; ours is sampled from the occupancy, which is the
+whole of what the simulation knows.
 
-**Gate:** a disc of occupied cells at 8× — the coverage isoline lies
-within 0.15 output pixels of the analytic circle everywhere on its
-circumference (measured as the RMS radial error), and the interior and
-exterior are exactly 1 and 0.
+The 1.03 px (0.13 cells) both edges achieve is the occupancy data's
+own resolution of a curve, and phase A already had it.
+
+**What the distance field is actually for** — and it stays, because
+this is real:
+
+- **`softness` is a width in cells.** Under the threshold a feather is
+  measured in the channel's units, so the same setting is a different
+  width on every model and a wide one is a smear across a ramp. Under
+  the distance edge a 2-cell feather is 2 cells wide: measured, 32
+  output pixels per crossing at 8×. The field reads +0.5 / −0.5 either
+  side of a straight edge and ≈ R at a disc's centre, so the feather
+  is centred on the boundary and honest at any width.
+- **Phase D's distance colourings.** Distance from the crystal, an
+  outline, a glow that falls off in cells — all read this field, and
+  none could exist without it. This is the derived field §1's table
+  promised, and it is now produced.
+
+What shipped: `SimMatteEdge { Threshold, Distance }` on the matte,
+`ConfigPath::SimMatteEdge` through the tables; the jump flood as three
+templates (seed, jump, seeds-to-distance) over a grid-sized texture
+pair and a result texture, allocated when the edge is `Distance` and
+freed when it is not (three grid-sized textures are 800 MB at 4K);
+⌈log₂ N⌉ + 2 dispatches per coloured frame; a sixth binding in the
+colour template, a 1×1 dummy when unused and never read then. The
+seeds-to-distance pass had a bug the disc's centre caught: halving the
+difference of the two distances is right beside the edge and half the
+distance everywhere else, and it is `d_out − ½` inside, `½ − d_in`
+outside. Distances are measured within the grid, so at a periodic
+seam they are measured to the seam; said on the tooltip.
+
+**Gate (passing):** the two edges agree on the disc's boundary to
+within 5 % of the disagreeing pixels and 0.1 px RMS; the field is
+±0.5 across a straight edge and within 1.5 cells of R at the centre; a
+2-cell feather is 32 ± 8 output pixels per crossing at 8×
+(`the_distance_matte_agrees_on_the_edge_and_feathers_in_cells`). The
+test carries the finding in its name so nobody restores the
+expectation.
 
 ### Phase D — vector colourings
 
@@ -204,4 +248,5 @@ variation would sample.
 | a colouring that reads the cell coordinate | phase A hands it the nearest cell, which is wrong under interpolation | none does today; a test greps for it, so a future one fails loudly |
 | the SDF's cost on a running simulation | ⌈log₂ N⌉ dispatches per frame at grid resolution | only when the matte is on and `Distance` is chosen; measured at 1080p before it ships |
 | interpolation inventing detail | a smooth picture read as a finer one | said plainly in the tooltips: the grid is the information, the resolve is presentation |
+| a derived field promising more than the data holds | phase C's edge gate, written before the measurement | the gate measured it, the section keeps the struck-through expectation beside the finding, and the tooltip says what the field is for |
 | the bilinear baseline moving | a diff nobody inspected | inspected and described in the commit before it is accepted |

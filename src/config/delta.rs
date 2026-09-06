@@ -384,6 +384,9 @@ pub enum ConfigPath {
     SimMatteCutoff,
     SimMatteSoftness,
     SimMatteInvert,
+    /// Threshold or distance field (`SimMatteEdge`). A choice, not
+    /// animatable.
+    SimMatteEdge,
     /// Resolve filter when the grid is smaller than the output.
     SimUpscale,
     /// Resolve filter when the grid is larger than the output.
@@ -943,6 +946,7 @@ impl Display for ConfigPath {
             ConfigPath::SimMatteCutoff => write!(f, "Simulation Matte Cutoff"),
             ConfigPath::SimMatteSoftness => write!(f, "Simulation Matte Softness"),
             ConfigPath::SimMatteInvert => write!(f, "Simulation Matte Invert"),
+            ConfigPath::SimMatteEdge => write!(f, "Simulation Matte Edge"),
             ConfigPath::SimUpscale => write!(f, "Simulation Upscale"),
             ConfigPath::SimDownscale => write!(f, "Simulation Downscale"),
             ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
@@ -1214,6 +1218,7 @@ impl ConfigPath {
             ConfigPath::SimMatteCutoff => I18nKey::simple("history.param.sim_matte_cutoff"),
             ConfigPath::SimMatteSoftness => I18nKey::simple("history.param.sim_matte_softness"),
             ConfigPath::SimMatteInvert => I18nKey::simple("history.param.sim_matte_invert"),
+            ConfigPath::SimMatteEdge => I18nKey::simple("history.param.sim_matte_edge"),
             ConfigPath::SimUpscale => I18nKey::simple("history.param.sim_upscale"),
             ConfigPath::SimDownscale => I18nKey::simple("history.param.sim_downscale"),
             ConfigPath::SimModelParam { param } => I18nKey::with_params(
@@ -2612,6 +2617,7 @@ impl ConfigPath {
             | ConfigPath::SimMatteCutoff
             | ConfigPath::SimMatteSoftness
             | ConfigPath::SimMatteInvert
+            | ConfigPath::SimMatteEdge
             | ConfigPath::SimModelParam { .. }
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
@@ -2905,6 +2911,7 @@ impl ConfigPath {
             ConfigPath::SimMatteCutoff => "Sim.MatteCutoff".to_string(),
             ConfigPath::SimMatteSoftness => "Sim.MatteSoftness".to_string(),
             ConfigPath::SimMatteInvert => "Sim.MatteInvert".to_string(),
+            ConfigPath::SimMatteEdge => "Sim.MatteEdge".to_string(),
             ConfigPath::SimUpscale => "Sim.Upscale".to_string(),
             ConfigPath::SimDownscale => "Sim.Downscale".to_string(),
             ConfigPath::SimModelParam { param } => format!("Sim.ModelParam.{param}"),
@@ -3177,6 +3184,7 @@ impl ConfigPath {
                 ["MatteCutoff"] => return Some(ConfigPath::SimMatteCutoff),
                 ["MatteSoftness"] => return Some(ConfigPath::SimMatteSoftness),
                 ["MatteInvert"] => return Some(ConfigPath::SimMatteInvert),
+                ["MatteEdge"] => return Some(ConfigPath::SimMatteEdge),
                 ["Upscale"] => return Some(ConfigPath::SimUpscale),
                 ["Downscale"] => return Some(ConfigPath::SimDownscale),
                 ["ModelParam", param] => {
@@ -3613,6 +3621,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimWarpFilter
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
+        | ConfigPath::SimMatteEdge
         | ConfigPath::SimUpscale
         | ConfigPath::SimDownscale => None,
 

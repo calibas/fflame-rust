@@ -13,8 +13,8 @@
 use crate::config::delta::ConfigPath;
 use crate::config::manager::ConfigManager;
 use crate::config::sim::{
-    SimBoundary, SimDownscale, SimGrid, SimInit, SimMatteChannel, SimUpscale, SimWarp,
-    SimWarpFilter,
+    SimBoundary, SimDownscale, SimGrid, SimInit, SimMatteChannel, SimMatteEdge, SimUpscale,
+    SimWarp, SimWarpFilter,
 };
 use crate::scene::transforms::RenderMode;
 use crate::sim::{SimParamDef, COLORINGS, MODELS};
@@ -684,6 +684,21 @@ pub fn render_sim_content(
             {
                 let _ = config_manager.update_param(ConfigPath::SimMatteInvert, inv.into());
             }
+            ui.horizontal(|ui| {
+                ui.label(t!("sim_panel.matte_edge").as_ref());
+                egui::ComboBox::from_id_salt("sim_matte_edge")
+                    .selected_text(m.edge.name())
+                    .show_ui(ui, |ui| {
+                        for n in SimMatteEdge::NAMES {
+                            if ui.selectable_label(m.edge.name() == *n, *n).clicked() {
+                                let _ = config_manager
+                                    .update_param(ConfigPath::SimMatteEdge, (*n).to_string().into());
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("sim_panel.matte_edge_tip"));
+            });
         });
     });
 }

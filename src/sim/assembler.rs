@@ -47,9 +47,11 @@ struct SimParams {
     // vec2, so the struct is 80 bytes -- `SimParamsGpu` pads to match.
     warp_a: vec4<f32>,
     warp_b: vec2<f32>,
-    pad0: vec2<f32>,
+    // The matte's edge: 1 for a distance field, 0 for a threshold.
+    // Read by the colour pass and the jump flood.
+    matte_b: vec2<f32>,
     // The matte: channel index, mode (0 off, 1 normal, 2 inverted),
-    // cutoff, softness. Read by the colour pass alone.
+    // cutoff, softness. Read by the colour pass and the jump flood.
     matte: vec4<f32>,
 };
 
@@ -239,6 +241,135 @@ fn sim_read(p: vec2<i32>) -> vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
     return textureLoad(field_in, sim_wrap_sized(p, g), 0);
+}
+"#;
+
+/// The jump flood's seed pass: every cell records itself as the
+/// nearest cell of its own kind. `.xy` is the nearest cell INSIDE the
+/// matte's figure, `.zw` the nearest OUTSIDE, and JFA_FAR is "none
+/// found yet". Which side a cell is on is the matte's own rule --
+/// channel, cutoff, direction -- so the distance field agrees with
+/// the threshold about where the figure is and differs only in what
+/// it says about the cells around it.
+const JFA_INIT_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var jfa_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d<f32>;
+
+const JFA_FAR: f32 = -1.0e6;
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec2<i32>(params.grid);
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    let s = textureLoad(field_in, p, 0);
+    let which = i32(round(clamp(params.matte.x, 0.0, 3.0)));
+    var v = s.x;
+    if (which == 1) { v = s.y; }
+    else if (which == 2) { v = s.z; }
+    else if (which == 3) { v = s.w; }
+    var inside = v >= params.matte.z;
+    if (params.matte.y >= 1.5) {
+        inside = !inside;
+    }
+    let me = vec2<f32>(p);
+    let far = vec2<f32>(JFA_FAR, JFA_FAR);
+    textureStore(jfa_out, p, select(vec4<f32>(far, me), vec4<f32>(me, far), inside));
+}
+"#;
+
+/// One jump: each cell looks at its eight neighbours `k` cells away
+/// and keeps, for each of the two kinds, whichever candidate seed is
+/// nearer than what it has. Run for k = N/2, N/4, ..., 1, and once
+/// more at 1 (the "JFA+1" refinement), every cell ends up within a
+/// cell or so of its true nearest seed.
+const JFA_STEP_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var jfa_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(5) var jfa_in: texture_2d<f32>;
+
+const JFA_NONE: f32 = -1.0e5;
+
+fn jfa_nearer(best: vec2<f32>, cand: vec2<f32>, me: vec2<f32>) -> vec2<f32> {
+    if (cand.x <= JFA_NONE) {
+        return best;
+    }
+    if (best.x <= JFA_NONE) {
+        return cand;
+    }
+    return select(best, cand, distance(cand, me) < distance(best, me));
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec2<i32>(params.grid);
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    // The jump for this pass rides in the kernel-radius word, which
+    // nothing else in this shader reads.
+    let k = i32(params.kernel_radius);
+    let me = vec2<f32>(p);
+    var best = textureLoad(jfa_in, p, 0);
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            let q = p + vec2<i32>(dx, dy) * k;
+            if (q.x < 0 || q.y < 0 || q.x >= g.x || q.y >= g.y) {
+                continue;
+            }
+            let c = textureLoad(jfa_in, q, 0);
+            best = vec4<f32>(jfa_nearer(best.xy, c.xy, me), jfa_nearer(best.zw, c.zw, me));
+        }
+    }
+    textureStore(jfa_out, p, best);
+}
+"#;
+
+/// Seeds to a signed distance, in cells, positive inside the figure.
+///
+/// A cell is its own nearest seed of its own kind, so what carries
+/// information is the distance to the nearest cell of the OTHER kind,
+/// and the boundary between two cell centres lies half a cell short
+/// of it: inside, d = d_out - 1/2; outside, d = 1/2 - d_in. Beside a
+/// straight edge that is +1/2 and -1/2, so the resolve's interpolation
+/// puts the zero exactly between the two centres, and it is the true
+/// distance everywhere else -- the first version halved the
+/// difference of the two, which agreed at the edge and read half the
+/// distance from there on, so the distance edge could not differ from
+/// the threshold one (the test caught it at the disc's centre). A
+/// cell with no seed of the other kind (a grid that is all figure, or
+/// all background) reads as very far inside or outside, which is
+/// right.
+const JFA_FINAL_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var sdf_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(5) var jfa_in: texture_2d<f32>;
+
+const JFA_NONE: f32 = -1.0e5;
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = vec2<i32>(params.grid);
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    let v = textureLoad(jfa_in, p, 0);
+    let me = vec2<f32>(p);
+    let d_in = select(1.0e6, distance(v.xy, me), v.x > JFA_NONE);
+    let d_out = select(1.0e6, distance(v.zw, me), v.z > JFA_NONE);
+    // Inside iff this cell is its own inside seed, which the seed pass
+    // wrote and no jump replaces (nothing is nearer than 0).
+    let inside = d_in <= 0.0;
+    let d = select(0.5 - d_in, d_out - 0.5, inside);
+    textureStore(sdf_out, p, vec4<f32>(d, 0.0, 0.0, 0.0));
 }
 "#;
 
@@ -577,6 +708,9 @@ const COLOR_TEMPLATE: &str = r#"
 @group(0) @binding(3) var out_image: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(4) var field_in: texture_2d<f32>;
 @group(0) @binding(5) var palette_tex: texture_2d<f32>;
+// The signed distance field, when the matte's edge is Distance; a 1x1
+// dummy otherwise, which sim_sdf never reads.
+@group(0) @binding(6) var sdf_tex: texture_2d<f32>;
 
 //__BOUNDARY__
 
@@ -604,10 +738,32 @@ fn sim_palette(t: f32) -> vec3<f32> {
 //
 // The channel select is unrolled because WGSL cannot index a vec4 by
 // a runtime value -- the same shape the `channel` colouring uses.
-fn sim_matte(s: vec4<f32>) -> f32 {
+// The signed distance at a cell, in cells, positive inside the
+// figure. Only read when the matte's edge is Distance -- the branch is
+// on a uniform, so it is free, and it keeps the dummy binding unread.
+fn sim_sdf(p: vec2<i32>) -> f32 {
+    if (params.matte_b.x < 0.5) {
+        return 0.0;
+    }
+    let g = sim_grid();
+    return textureLoad(sdf_tex, clamp(p, vec2<i32>(0, 0), g - vec2<i32>(1, 1)), 0).x;
+}
+
+fn sim_matte(s: vec4<f32>, d: f32) -> f32 {
     let mode = params.matte.y;
     if (mode < 0.5) {
         return 1.0;
+    }
+    if (params.matte_b.x >= 0.5) {
+        // Distance: the jump flood already folded the channel, the
+        // cutoff and the direction into which side is inside, so d is
+        // signed toward the figure and the feather is a width in
+        // cells, centred on the edge.
+        let soft = params.matte.w;
+        if (soft <= 0.0) {
+            return select(0.0, 1.0, d >= 0.0);
+        }
+        return clamp(d / soft + 0.5, 0.0, 1.0);
     }
     let which = i32(round(clamp(params.matte.x, 0.0, 3.0)));
     var v = s.x;
@@ -648,15 +804,15 @@ fn sim_grad(p: vec2<i32>) -> vec2<f32> {
 // that is the nearest cell, which no colouring reads today -- a test
 // in app_repro_test greps for it, so one that starts to will fail
 // there rather than draw subtly wrong pictures at 8x.
-fn sim_shade_from(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
+fn sim_shade_from(s: vec4<f32>, grad: vec2<f32>, d: f32, p: vec2<i32>) -> vec4<f32> {
     var col = sim_color(s, grad, p);
-    col.a = col.a * sim_matte(s);
+    col.a = col.a * sim_matte(s, d);
     return col;
 }
 
 // One cell, as itself.
 fn sim_shade(p: vec2<i32>) -> vec4<f32> {
-    return sim_shade_from(sim_read(p), sim_grad(p), p);
+    return sim_shade_from(sim_read(p), sim_grad(p), sim_sdf(p), p);
 }
 
 // Catmull-Rom weights for the four taps at -1, 0, +1, +2 around a
@@ -738,7 +894,9 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
                 mix(sim_read(p01), sim_read(p11), t.x), t.y);
     let gr = mix(mix(sim_grad(p00), sim_grad(p10), t.x),
                  mix(sim_grad(p01), sim_grad(p11), t.x), t.y);
-    let col = sim_shade_from(s, gr, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
+    let d = mix(mix(sim_sdf(p00), sim_sdf(p10), t.x),
+                mix(sim_sdf(p01), sim_sdf(p11), t.x), t.y);
+    let col = sim_shade_from(s, gr, d, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
 "#
             .to_string(),
             SimUpscale::Bicubic => r#"
@@ -755,15 +913,17 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     let wy = sim_catmull_rom(t.y);
     var s = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var gr = vec2<f32>(0.0, 0.0);
+    var d = 0.0;
     for (var j = 0; j < 4; j = j + 1) {
         for (var i = 0; i < 4; i = i + 1) {
             let q = clamp(i0 + vec2<i32>(i - 1, j - 1), vec2<i32>(0, 0), lim);
             let w = wx[i] * wy[j];
             s = s + sim_read(q) * w;
             gr = gr + sim_grad(q) * w;
+            d = d + sim_sdf(q) * w;
         }
     }
-    let col = sim_shade_from(s, gr, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
+    let col = sim_shade_from(s, gr, d, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
 "#
             .to_string(),
         }
@@ -922,6 +1082,20 @@ fn splice(template: &str, boundary: SimBoundary, replacements: &[(&str, &str)]) 
         }
     }
     out.join("\n")
+}
+
+/// The jump flood's three passes. They read the grid, not its
+/// boundary rule: a distance is measured within the grid, so at a
+/// periodic seam it is measured to the seam. Stated on the matte's
+/// tooltip rather than hidden.
+pub fn assemble_jfa_init() -> String {
+    splice(JFA_INIT_TEMPLATE, SimBoundary::Clamp, &[])
+}
+pub fn assemble_jfa_step() -> String {
+    splice(JFA_STEP_TEMPLATE, SimBoundary::Clamp, &[])
+}
+pub fn assemble_jfa_final() -> String {
+    splice(JFA_FINAL_TEMPLATE, SimBoundary::Clamp, &[])
 }
 
 /// The warp stage. Depends on the boundary alone.
@@ -1313,6 +1487,13 @@ mod tests {
     /// compile. This is the assembler's whole safety net: a model is
     /// text until something parses it, and a typo in an unused
     /// combination would otherwise surface as a black viewport.
+    #[test]
+    fn the_jump_flood_validates() {
+        validate(&assemble_jfa_init(), "jfa init");
+        validate(&assemble_jfa_step(), "jfa step");
+        validate(&assemble_jfa_final(), "jfa final");
+    }
+
     #[test]
     fn the_warp_validates_under_every_boundary() {
         for b in [SimBoundary::Periodic, SimBoundary::Clamp, SimBoundary::Zero, SimBoundary::Mirror] {
