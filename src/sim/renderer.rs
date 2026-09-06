@@ -51,6 +51,13 @@ const MAX_STEPS_PER_SUBMIT: u32 = 256;
 /// an order of magnitude slower than range-5 cyclic CA (phase 3's
 /// large-kernel models) stays well inside the watchdog: 8 steps at
 /// 60 ms is half a second.
+///
+/// That arithmetic assumed a step is one or two dispatches. A model
+/// with a repeated pass can be two hundred, so `run_steps` scales this
+/// down by the dispatches in a step before the first, blind submit --
+/// the dielectric breakdown model at 4K with 200 relaxation sweeps
+/// would otherwise put about 1.6 s in one submission against a 2 s
+/// watchdog.
 const FIRST_SUBMIT: u32 = 8;
 
 /// Wall-clock budget for one submission. An eighth of the watchdog,
@@ -1362,6 +1369,16 @@ impl SimRenderer {
                 .collect()
         };
 
+        // The blind first submit is sized in DISPATCHES, so a step that
+        // is two hundred of them starts at one step rather than eight.
+        // `== FIRST_SUBMIT` is a sentinel for "nothing measured yet"; a
+        // calibrated batch that happens to equal it is shrunk once and
+        // re-measured, which costs one small submission and nothing
+        // else.
+        if self.steps_per_submit == FIRST_SUBMIT {
+            let dispatches: u32 = repeat.iter().sum::<u32>() + u32::from(wants_minmax);
+            self.steps_per_submit = (FIRST_SUBMIT * 2 / dispatches.max(1)).clamp(1, FIRST_SUBMIT);
+        }
         let mut done = 0;
         while done < count {
             let batch = self.steps_per_submit.clamp(1, MAX_STEPS_PER_SUBMIT).min(count - done);

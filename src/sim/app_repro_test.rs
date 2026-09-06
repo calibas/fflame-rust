@@ -3626,3 +3626,45 @@ fn dbm_grows_exactly_one_site_per_step() {
     );
     assert!(worst < 1e-3, "the potential is not a solution of Laplace's equation: {worst:.2e}");
 }
+
+/// Phase 5's models at 1080p, ms per step. A diagnostic, not a gate:
+/// run it with `--ignored --nocapture` after touching any of them.
+///
+/// The dielectric breakdown model is the one to watch: a step is
+/// `relax` + 2 dispatches plus the reduce, and one site joins per
+/// step, so a 5,000-site figure is 5,000 of them.
+#[test]
+#[ignore]
+fn phase5_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    for (model, boundary, init, extra) in [
+        ("sandpile", SimBoundary::Zero, SimInit::Center, vec![("grains_log2", 20.0f32)]),
+        ("invasion_percolation", SimBoundary::Zero, SimInit::Line, vec![]),
+        ("snowfake", SimBoundary::Clamp, SimInit::Center, vec![]),
+        ("dbm", SimBoundary::Clamp, SimInit::Center, vec![("relax", 5.0)]),
+        ("dbm", SimBoundary::Clamp, SimInit::Center, vec![("relax", 20.0)]),
+        ("dbm", SimBoundary::Clamp, SimInit::Center, vec![("relax", 50.0)]),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = model.into();
+        cfg.grid = SimGrid::Fixed { width: w, height: h };
+        cfg.init = init;
+        cfg.boundary = boundary;
+        let mut label = String::new();
+        for (k, v) in &extra {
+            cfg.model_params.insert((*k).into(), *v);
+            label = format!("{k}={v}");
+        }
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 20);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const STEPS: u32 = 100;
+        let t0 = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+        println!("{model:<21} {label:<10} {ms:>8.3} ms/step  ({:.0} steps/s)", 1e3 / ms);
+    }
+}
