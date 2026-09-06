@@ -585,6 +585,18 @@ pub struct SimConfig {
 
     /// Exactly how many steps a still is. Not a hint: the renderer
     /// runs this many from the seed and stops.
+    ///
+    /// It is the same number in the app, where it is shown as MAX
+    /// STEPS: a running simulation stops the moment it reaches it,
+    /// mid-frame if the frame's batch would overshoot, so what is on
+    /// screen when it stops is what an export of the same config
+    /// produces. Reaching it pauses the run rather than ending it —
+    /// pressing Run again carries on past, and a reseed arms the
+    /// pause again.
+    ///
+    /// **0 means no cap**: the app free-runs, which is what it did
+    /// before this number bounded it. An export at 0 renders 0 steps,
+    /// which is the seed — the panel says so.
     #[serde(default = "default_steps", skip_serializing_if = "is_default_steps")]
     pub steps: u32,
 

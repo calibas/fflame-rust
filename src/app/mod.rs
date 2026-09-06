@@ -2609,6 +2609,13 @@ impl App {
                     0
                 };
                 self.sim_step_once = false;
+                // Was the run short of Max Steps before this frame?
+                // `render_frame` clamps the batch so it cannot pass
+                // the cap, so crossing it is exactly "was below, is
+                // now at" -- and a frame that reseeds counts as below,
+                // because the index it is about to measure from is 0.
+                let cap = final_config.sim.steps;
+                let was_below = cap > 0 && (sim.will_reseed() || sim.step_index() < cap);
                 sim.render_frame(
                     &self.gpu.device,
                     &self.gpu.queue,
@@ -2616,6 +2623,15 @@ impl App {
                     renderer.palette_view(),
                     steps,
                 );
+                // Reaching Max Steps pauses; it does not end the run.
+                // Pressing Run again carries on past the cap, because
+                // `steps_remaining` stops holding it back once the
+                // index is there. A reseed arms the pause again.
+                if self.sim_running
+                    && crate::sim::should_pause_at_limit(cap, was_below, sim.step_index())
+                {
+                    self.sim_running = false;
+                }
                 if self.sim_running {
                     self.window.request_redraw();
                 }
