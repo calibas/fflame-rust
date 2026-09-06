@@ -4322,6 +4322,12 @@ fn the_bilinear_upscale_interpolates_state_not_colour() {
 #[test]
 fn no_colouring_reads_the_cell_coordinate() {
     for c in crate::sim::COLORINGS {
+        // A colouring that declares ReadsCell has said what it is: a
+        // texture computed at cell resolution and interpolated, which
+        // for a line integral convolution is the only thing it can be.
+        if c.has(crate::sim::ColoringFeature::ReadsCell) {
+            continue;
+        }
         // The signature names it `p`; a body that uses it would say
         // `p.x`, `p.y`, or pass `p` on.
         let body = c.wgsl.split("-> vec4<f32> {").nth(1).unwrap_or("");
@@ -4631,4 +4637,332 @@ fn the_distance_matte_agrees_on_the_edge_and_feathers_in_cells() {
     // Two crossings of the row, each about 2 cells = 16 px wide.
     println!("softness 2 cells: {band} feathered pixels across the middle row (expect ~{})", 2 * 2 * MAG);
     assert!((band as i64 - (4 * MAG) as i64).abs() <= MAG as i64, "the feather should be softness cells wide: {band}");
+}
+
+/// A settled Gray-Scott field at 1:1, periodic, with the palette that
+/// returns its argument -- the fixture the phase-D colourings are
+/// evaluated on. Returns the renderer (seeded and stepped) and the
+/// field read back.
+fn phase_d_fixture(device: &Device, queue: &Queue, n: u32) -> (SimConfig, SimRenderer, Vec<[f32; 4]>) {
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 3;
+    cfg.steps = 0;
+    let mut r = SimRenderer::new(device, &cfg, n, n);
+    r.seed(device, queue, &cfg);
+    r.run_steps(device, queue, &cfg, 600);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let field = read_rgba32f(device, queue, r.field_texture(), n, n);
+    (cfg, r, field)
+}
+
+/// Central-difference gradient of channel `c` at a cell, periodic.
+fn cpu_grad(f: &[[f32; 4]], n: usize, x: usize, y: usize, c: usize) -> (f32, f32) {
+    let at = |x: i64, y: i64| f[(y.rem_euclid(n as i64) as usize) * n + x.rem_euclid(n as i64) as usize][c];
+    let (x, y) = (x as i64, y as i64);
+    ((at(x + 1, y) - at(x - 1, y)) * 0.5, (at(x, y + 1) - at(x, y - 1)) * 0.5)
+}
+
+/// The `gradient` colouring against its own formula on the CPU.
+///
+/// The template's gradient is a central difference through the
+/// boundary rule; direction goes through ff_atan2 and magnitude
+/// through a scale and a clamp; the linear greyscale palette returns
+/// its argument. So the red channel of the output at 1:1 must equal
+/// t * mag to float precision, cell by cell -- and where the gradient
+/// is too small for the direction to mean anything the output is dark
+/// whatever the direction, which is the other half of the design.
+#[test]
+fn the_gradient_colouring_matches_its_formula() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, field) = phase_d_fixture(&device, &queue, N);
+    cfg.coloring = "gradient".into();
+    cfg.coloring_params.insert("channel".into(), 1.0);
+    cfg.coloring_params.insert("scale".into(), 6.0);
+    cfg.coloring_params.insert("rotate".into(), 0.2);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+
+    let n = N as usize;
+    let mut worst = 0.0f32;
+    let mut lit = 0usize;
+    for y in 0..n {
+        for x in 0..n {
+            let (gx, gy) = cpu_grad(&field, n, x, y, 1);
+            let mag = (gx * gx + gy * gy).sqrt();
+            let b = (mag * 6.0).clamp(0.0, 1.0);
+            let t = (gy.atan2(gx) / std::f32::consts::TAU + 0.5 + 0.2).rem_euclid(1.0);
+            let want = t * b;
+            let got = out[y * n + x][0];
+            // A direction at a near-zero gradient is noise on both
+            // machines; only the magnitude is compared there.
+            let tol = if mag < 1e-4 { 1e-3 } else { 2e-3 };
+            let e = (got - want).abs();
+            // fract wraps: t near 0 or 1 can land on the other side.
+            let e = e.min((got - (t - 1.0).abs() * b).abs()).min((got - (t + 1.0) * b).abs());
+            worst = worst.max(if e < tol { 0.0 } else { e });
+            if b > 0.1 {
+                lit += 1;
+            }
+        }
+    }
+    println!("gradient colouring: worst mismatch {worst:.2e}, {lit} of {} cells lit", n * n);
+    assert!(lit > n * n / 20, "the fixture should have slopes to draw");
+    assert_eq!(worst, 0.0, "the gradient colouring disagrees with its formula by {worst:.2e}");
+}
+
+/// The `structure` colouring against its own formula: the 3x3
+/// binomial-smoothed structure tensor of channel .x, in each of its
+/// three modes, on the CPU from the read-back field.
+#[test]
+fn the_structure_colouring_matches_its_formula() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, field) = phase_d_fixture(&device, &queue, N);
+    let n = N as usize;
+    // The tensor at every cell, once.
+    let mut tensor = vec![(0.0f32, 0.0f32, 0.0f32); n * n];
+    for y in 0..n {
+        for x in 0..n {
+            let (mut jxx, mut jxy, mut jyy) = (0.0f32, 0.0f32, 0.0f32);
+            for j in -1i64..=1 {
+                for i in -1i64..=1 {
+                    let qx = (x as i64 + i).rem_euclid(n as i64) as usize;
+                    let qy = (y as i64 + j).rem_euclid(n as i64) as usize;
+                    let (gx, gy) = cpu_grad(&field, n, qx, qy, 0);
+                    let w = ((2 - i.abs()) * (2 - j.abs())) as f32 / 16.0;
+                    jxx += w * gx * gx;
+                    jxy += w * gx * gy;
+                    jyy += w * gy * gy;
+                }
+            }
+            tensor[y * n + x] = (jxx, jxy, jyy);
+        }
+    }
+    cfg.coloring = "structure".into();
+    cfg.coloring_params.insert("scale".into(), 5.0);
+    cfg.coloring_params.insert("rotate".into(), 0.1);
+    for (mode, name) in [(0.0f32, "orientation"), (1.0, "coherence"), (2.0, "energy")] {
+        cfg.coloring_params.insert("mode".into(), mode);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        let mut worst = 0.0f32;
+        let mut varied = 0usize;
+        for k in 0..n * n {
+            let (jxx, jxy, jyy) = tensor[k];
+            let energy = jxx + jyy;
+            let strength = (energy.max(0.0).sqrt() * 5.0).clamp(0.0, 1.0);
+            let want = match name {
+                "coherence" => {
+                    let spread = ((jxx - jyy).powi(2) + 4.0 * jxy * jxy).sqrt();
+                    if energy > 1e-12 { (spread / energy).clamp(0.0, 1.0) } else { 0.0 }
+                }
+                "energy" => strength,
+                _ => {
+                    let theta = 0.5 * (2.0 * jxy).atan2(jxx - jyy);
+                    let t = (theta / std::f32::consts::PI + 0.5 + 0.1).rem_euclid(1.0);
+                    t * strength
+                }
+            };
+            let got = out[k][0];
+            let mut e = (got - want).abs();
+            if name == "orientation" {
+                // Wrap, and a direction at a near-zero tensor is noise.
+                let t_alt = (want / strength.max(1e-9)).rem_euclid(1.0);
+                e = e.min((got - ((t_alt - 1.0).abs() * strength)).abs());
+                if strength < 0.05 {
+                    e = e.min(got.abs());
+                }
+            }
+            if e > 3e-3 {
+                worst = worst.max(e);
+            }
+            if got > 0.1 {
+                varied += 1;
+            }
+        }
+        println!("structure/{name}: worst mismatch {worst:.2e}, {varied} of {} cells above 0.1", n * n);
+        assert!(varied > n * n / 50, "structure/{name}: nothing drawn");
+        assert_eq!(worst, 0.0, "structure/{name}: disagrees with its formula by {worst:.2e}");
+    }
+}
+
+/// The `distance` colouring against the distance field it reads, in
+/// each mode -- and the renderer building that field because the
+/// colouring asked, with the matte's own edge left at Threshold.
+#[test]
+fn the_distance_colouring_matches_the_field_it_reads() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, _field) = phase_d_fixture(&device, &queue, N);
+    // The matte on channel B at its median, edge left at THRESHOLD:
+    // the colouring's NeedsDistance is what must build the field.
+    cfg.matte = crate::config::sim::SimMatte {
+        channel: crate::config::sim::SimMatteChannel::Y,
+        cutoff: 0.15,
+        softness: 0.0,
+        invert: false,
+        edge: crate::config::sim::SimMatteEdge::Threshold,
+    };
+    cfg.coloring = "distance".into();
+    cfg.coloring_params.insert("scale".into(), 6.0);
+    let n = N as usize;
+    for (mode, name) in [(0.0f32, "signed"), (1.0, "depth"), (2.0, "outline")] {
+        cfg.coloring_params.insert("mode".into(), mode);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let sdf = read_rgba32f(&device, &queue, r.sdf_texture().expect("built for the colouring"), N, N);
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        let mut worst = 0.0f32;
+        for k in 0..n * n {
+            let d = sdf[k][0];
+            let want = match name {
+                "signed" => (d / 12.0 + 0.5).clamp(0.0, 1.0),
+                "depth" => (d / 6.0).clamp(0.0, 1.0),
+                _ => (1.0 - d.abs() / 6.0).clamp(0.0, 1.0),
+            };
+            // The matte still cuts at the threshold; compare colour on
+            // the figure only, where coverage is 1.
+            if out[k][3] < 0.5 {
+                continue;
+            }
+            worst = worst.max((out[k][0] - want).abs());
+        }
+        println!("distance/{name}: worst mismatch {worst:.2e}");
+        assert!(worst < 2e-3, "distance/{name}: disagrees with the field by {worst:.2e}");
+    }
+    // The field is real: signed either side, with some depth.
+    let sdf = read_rgba32f(&device, &queue, r.sdf_texture().unwrap(), N, N);
+    let (lo, hi) = sdf.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[0]), hi.max(p[0])));
+    println!("distance field spans {lo:.2} .. {hi:.2} cells");
+    assert!(lo < -1.0 && hi > 1.0, "the field should reach both sides of the edge");
+}
+
+/// The LIC is deterministic, finite, and draws lines: it varies, and
+/// it varies MORE across the flow than along it. On the fixture's
+/// contours, neighbouring cells along a contour share most of their
+/// streamline and so most of their average; cells across the front do
+/// not.
+#[test]
+fn the_lic_colouring_draws_lines_along_the_flow() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, field) = phase_d_fixture(&device, &queue, N);
+    cfg.coloring = "lic".into();
+    cfg.coloring_params.insert("channel".into(), 1.0);
+    cfg.coloring_params.insert("direction".into(), 0.0);
+    cfg.coloring_params.insert("length".into(), 8.0);
+    cfg.coloring_params.insert("contrast".into(), 1.0);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let a = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let b = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    assert_eq!(a, b, "the LIC must be deterministic frame to frame");
+    assert!(a.iter().all(|p| p[0].is_finite() && p[3] == 1.0));
+    let n = N as usize;
+    let mean = a.iter().map(|p| p[0]).sum::<f32>() / a.len() as f32;
+    let sd = (a.iter().map(|p| (p[0] - mean).powi(2)).sum::<f32>() / a.len() as f32).sqrt();
+    // Differences along the contour direction vs across it, where the
+    // gradient is strong enough to define them.
+    let (mut along, mut across, mut cnt) = (0.0f64, 0.0f64, 0usize);
+    for y in 1..n - 1 {
+        for x in 1..n - 1 {
+            let (gx, gy) = cpu_grad(&field, n, x, y, 1);
+            let m = (gx * gx + gy * gy).sqrt();
+            if m < 0.02 {
+                continue;
+            }
+            let (ux, uy) = (gx / m, gy / m);
+            // Step one cell across (up the gradient) and along (its
+            // perpendicular), rounded to a neighbour.
+            let pick = |dx: f32, dy: f32| {
+                let (px, py) = ((x as f32 + dx).round() as usize, (y as f32 + dy).round() as usize);
+                a[py * n + px][0]
+            };
+            let here = a[y * n + x][0];
+            across += (pick(ux, uy) - here).abs() as f64;
+            along += (pick(-uy, ux) - here).abs() as f64;
+            cnt += 1;
+        }
+    }
+    let (along, across) = (along / cnt as f64, across / cnt as f64);
+    println!("lic: sd {sd:.3}; mean step difference along {along:.4} vs across {across:.4} over {cnt} cells");
+    assert!(sd > 0.03, "the LIC drew nothing: sd {sd:.3}");
+    assert!(
+        across > along * 1.3,
+        "lines should run along the contours: across {across:.4} should exceed along {along:.4}"
+    );
+}
+
+/// Phase D's colourings at 1080p, ms per coloured frame. A diagnostic:
+/// the LIC is the one to watch.
+#[test]
+#[ignore]
+fn phase_d_colouring_cost() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    let palette = test_palette(&device, &queue);
+    for (name, extra) in [
+        ("channel", vec![]),
+        ("gradient", vec![]),
+        ("structure", vec![]),
+        ("distance", vec![]),
+        ("lic", vec![("length", 8.0f32)]),
+        ("lic", vec![("length", 24.0)]),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: w, height: h };
+        // Noise everywhere, so no cell is flat: the LIC's walk runs its
+        // full length from every cell, which is its worst case. On a
+        // seeded run most cells are flat and the walk exits at once.
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.coloring = name.into();
+        cfg.matte = crate::config::sim::SimMatte {
+            channel: crate::config::sim::SimMatteChannel::Y,
+            cutoff: 0.15,
+            softness: 0.0,
+            invert: false,
+            edge: crate::config::sim::SimMatteEdge::Threshold,
+        };
+        let mut label = String::new();
+        for (k, v) in &extra {
+            cfg.coloring_params.insert((*k).into(), *v);
+            label = format!("{k}={v}");
+        }
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 50);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const FRAMES: u32 = 20;
+        let t0 = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            r.color(&device, &queue, &cfg, &palette);
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / FRAMES as f64;
+        println!("{name:<10} {label:<12} {ms:>8.3} ms per coloured frame at 1080p");
+    }
 }

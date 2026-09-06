@@ -739,10 +739,11 @@ fn sim_palette(t: f32) -> vec3<f32> {
 // The channel select is unrolled because WGSL cannot index a vec4 by
 // a runtime value -- the same shape the `channel` colouring uses.
 // The signed distance at a cell, in cells, positive inside the
-// figure. Only read when the matte's edge is Distance -- the branch is
-// on a uniform, so it is free, and it keeps the dummy binding unread.
+// figure. Only read when a distance field was built this frame -- the
+// matte's edge asked for one, or a colouring did -- the branch is on
+// a uniform, so it is free, and it keeps the dummy binding unread.
 fn sim_sdf(p: vec2<i32>) -> f32 {
-    if (params.matte_b.x < 0.5) {
+    if (params.matte_b.y < 0.5) {
         return 0.0;
     }
     let g = sim_grid();
@@ -784,35 +785,97 @@ fn sim_matte(s: vec4<f32>, d: f32) -> f32 {
     return select(a, 1.0 - a, mode >= 1.5);
 }
 
-// The gradient a colouring may ask for, computed from the state at the
-// cell. Zero for colourings that do not declare NeedsGradient, so the
-// four extra reads are paid only where they are used.
-fn sim_grad(p: vec2<i32>) -> vec2<f32> {
-//__GRADIENT__
+// Everything a colouring may read at one sample point (derived-fields
+// plan, section 1). Built per CELL by sim_sample and blended by the
+// resolve, so a colouring never reads a neighbour itself: every
+// derived quantity is computed at the taps and interpolated exactly
+// as the state is. Each is zero unless the colouring declares the
+// feature that pays for it.
+struct SimSample {
+    // The state.
+    s: vec4<f32>,
+    // d/dx and d/dy of every channel, central differences. NeedsGradient.
+    gx: vec4<f32>,
+    gy: vec4<f32>,
+    // Signed distance to the matte's edge, in cells, positive inside.
+    // NeedsDistance, or the matte's own Distance edge.
+    dist: f32,
+    // Structure tensor of channel .x over a 3x3 binomial window:
+    // (Jxx, Jxy, Jyy). NeedsStructure.
+    tensor: vec3<f32>,
+};
+
+// The gradient of one channel, from a sample.
+fn sim_grad_of(x: SimSample, c: i32) -> vec2<f32> {
+    if (c == 1) { return vec2<f32>(x.gx.y, x.gy.y); }
+    if (c == 2) { return vec2<f32>(x.gx.z, x.gy.z); }
+    if (c == 3) { return vec2<f32>(x.gx.w, x.gy.w); }
+    return vec2<f32>(x.gx.x, x.gy.x);
 }
 
-// Colour and matte ONE state. The resolve decides what state that is:
-// a cell's own under Nearest, an interpolation of its neighbours'
-// under Bilinear -- which is the whole point of interpolating the
-// STATE rather than the colours (derived-fields plan, section 2):
+fn sim_sample(p: vec2<i32>) -> SimSample {
+    var x: SimSample;
+    x.s = sim_read(p);
+//__GRADIENT__
+    x.dist = sim_sdf(p);
+//__TENSOR__
+    return x;
+}
+
+fn sim_sample_zero() -> SimSample {
+    var x: SimSample;
+    x.s = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    x.gx = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    x.gy = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    x.dist = 0.0;
+    x.tensor = vec3<f32>(0.0, 0.0, 0.0);
+    return x;
+}
+
+// acc + x * w, for the bicubic sum.
+fn sim_sample_mad(acc: SimSample, x: SimSample, w: f32) -> SimSample {
+    var r = acc;
+    r.s = r.s + x.s * w;
+    r.gx = r.gx + x.gx * w;
+    r.gy = r.gy + x.gy * w;
+    r.dist = r.dist + x.dist * w;
+    r.tensor = r.tensor + x.tensor * w;
+    return r;
+}
+
+fn sim_sample_lerp(a: SimSample, b: SimSample, t: f32) -> SimSample {
+    var r: SimSample;
+    r.s = mix(a.s, b.s, t);
+    r.gx = mix(a.gx, b.gx, t);
+    r.gy = mix(a.gy, b.gy, t);
+    r.dist = mix(a.dist, b.dist, t);
+    r.tensor = mix(a.tensor, b.tensor, t);
+    return r;
+}
+
+// Colour and matte ONE sample. The resolve decides what sample that
+// is: a cell's own under Nearest, a blend of its neighbours' under
+// Bilinear and Bicubic -- which is the whole point of interpolating
+// the STATE rather than the colours (derived-fields plan, section 2):
 // every isoline of the field lands where the field crosses that
 // level, as a crisp curve, and the matte's cutoff on an interpolated
 // occupancy is a hard sub-cell boundary at the 0.5 isoline instead of
 // a cell-wide ramp of half-drawn pixels.
 //
 // `p` is the cell the colouring is told it is at. Under interpolation
-// that is the nearest cell, which no colouring reads today -- a test
-// in app_repro_test greps for it, so one that starts to will fail
-// there rather than draw subtly wrong pictures at 8x.
-fn sim_shade_from(s: vec4<f32>, grad: vec2<f32>, d: f32, p: vec2<i32>) -> vec4<f32> {
-    var col = sim_color(s, grad, p);
-    col.a = col.a * sim_matte(s, d);
+// that is the nearest cell, which no colouring reads unless it
+// declares ReadsCell -- a test in app_repro_test greps for it, so one
+// that starts to will fail there rather than draw subtly wrong
+// pictures at 8x.
+fn sim_shade_from(x: SimSample, p: vec2<i32>) -> vec4<f32> {
+    var col = sim_color(x, p);
+    col.a = col.a * sim_matte(x.s, x.dist);
     return col;
 }
 
 // One cell, as itself.
 fn sim_shade(p: vec2<i32>) -> vec4<f32> {
-    return sim_shade_from(sim_read(p), sim_grad(p), sim_sdf(p), p);
+    return sim_shade_from(sim_sample(p), p);
 }
 
 // Catmull-Rom weights for the four taps at -1, 0, +1, +2 around a
@@ -890,13 +953,12 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     let p10 = clamp(i0 + vec2<i32>(1, 0), vec2<i32>(0, 0), lim);
     let p01 = clamp(i0 + vec2<i32>(0, 1), vec2<i32>(0, 0), lim);
     let p11 = clamp(i0 + vec2<i32>(1, 1), vec2<i32>(0, 0), lim);
-    let s = mix(mix(sim_read(p00), sim_read(p10), t.x),
-                mix(sim_read(p01), sim_read(p11), t.x), t.y);
-    let gr = mix(mix(sim_grad(p00), sim_grad(p10), t.x),
-                 mix(sim_grad(p01), sim_grad(p11), t.x), t.y);
-    let d = mix(mix(sim_sdf(p00), sim_sdf(p10), t.x),
-                mix(sim_sdf(p01), sim_sdf(p11), t.x), t.y);
-    let col = sim_shade_from(s, gr, d, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
+    let x = sim_sample_lerp(
+        sim_sample_lerp(sim_sample(p00), sim_sample(p10), t.x),
+        sim_sample_lerp(sim_sample(p01), sim_sample(p11), t.x),
+        t.y,
+    );
+    let col = sim_shade_from(x, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
 "#
             .to_string(),
             SimUpscale::Bicubic => r#"
@@ -911,19 +973,14 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
     let lim = g - vec2<i32>(1, 1);
     let wx = sim_catmull_rom(t.x);
     let wy = sim_catmull_rom(t.y);
-    var s = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    var gr = vec2<f32>(0.0, 0.0);
-    var d = 0.0;
+    var x = sim_sample_zero();
     for (var j = 0; j < 4; j = j + 1) {
         for (var i = 0; i < 4; i = i + 1) {
             let q = clamp(i0 + vec2<i32>(i - 1, j - 1), vec2<i32>(0, 0), lim);
-            let w = wx[i] * wy[j];
-            s = s + sim_read(q) * w;
-            gr = gr + sim_grad(q) * w;
-            d = d + sim_sdf(q) * w;
+            x = sim_sample_mad(x, sim_sample(q), wx[i] * wy[j]);
         }
     }
-    let col = sim_shade_from(s, gr, d, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
+    let col = sim_shade_from(x, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
 "#
             .to_string(),
         }
@@ -1427,12 +1484,42 @@ pub fn assemble_color(
     // never reads `grad` gets a constant instead; the compiler then
     // has nothing to keep.
     let gradient = if coloring.has(ColoringFeature::NeedsGradient) {
-        r#"    // Central-difference gradient of .x for this colouring.
-    let gx = sim_read(p + vec2<i32>(1, 0)).x - sim_read(p - vec2<i32>(1, 0)).x;
-    let gy = sim_read(p + vec2<i32>(0, 1)).x - sim_read(p - vec2<i32>(0, 1)).x;
-    return vec2<f32>(gx, gy) * 0.5;"#
+        r#"    // Central-difference gradient of every channel: the same four
+    // reads give all four.
+    let gr = sim_read(p + vec2<i32>(1, 0));
+    let gl = sim_read(p - vec2<i32>(1, 0));
+    let gu = sim_read(p + vec2<i32>(0, 1));
+    let gd = sim_read(p - vec2<i32>(0, 1));
+    x.gx = (gr - gl) * 0.5;
+    x.gy = (gu - gd) * 0.5;"#
     } else {
-        "    return vec2<f32>(0.0, 0.0);"
+        r#"    x.gx = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    x.gy = vec4<f32>(0.0, 0.0, 0.0, 0.0);"#
+    };
+    let tensor = if coloring.has(ColoringFeature::NeedsStructure) {
+        r#"    // Structure tensor of .x: the gradient's outer product, summed
+    // over a 3x3 window with binomial weights (1 2 1)/4 each way. The
+    // smoothing is what makes it a tensor of the TEXTURE rather than
+    // of one cell's slope.
+    var jxx = 0.0;
+    var jxy = 0.0;
+    var jyy = 0.0;
+    for (var j = -1; j <= 1; j = j + 1) {
+        for (var i = -1; i <= 1; i = i + 1) {
+            let q = p + vec2<i32>(i, j);
+            let g = vec2<f32>(
+                sim_read(q + vec2<i32>(1, 0)).x - sim_read(q - vec2<i32>(1, 0)).x,
+                sim_read(q + vec2<i32>(0, 1)).x - sim_read(q - vec2<i32>(0, 1)).x,
+            ) * 0.5;
+            let w = f32((2 - abs(i)) * (2 - abs(j))) / 16.0;
+            jxx = jxx + w * g.x * g.x;
+            jxy = jxy + w * g.x * g.y;
+            jyy = jyy + w * g.y * g.y;
+        }
+    }
+    x.tensor = vec3<f32>(jxx, jxy, jyy);"#
+    } else {
+        "    x.tensor = vec3<f32>(0.0, 0.0, 0.0);"
     };
     splice(
         COLOR_TEMPLATE,
@@ -1441,6 +1528,7 @@ pub fn assemble_color(
             ("//__COLORING__", coloring.wgsl),
             ("//__RESOLVE__", &resolve),
             ("//__GRADIENT__", gradient),
+            ("//__TENSOR__", tensor),
         ],
     )
 }
@@ -1605,13 +1693,21 @@ mod tests {
                 SimDownscale::Box,
                 true,
             );
-            let has_reads = src.contains("let gx = sim_read(");
+            let has_reads = src.contains("x.gx = (gr - gl)");
             assert_eq!(
                 has_reads,
                 c.has(ColoringFeature::NeedsGradient),
                 "{}: gradient reads present={has_reads} but NeedsGradient={}",
                 c.name,
                 c.has(ColoringFeature::NeedsGradient)
+            );
+            let has_tensor = src.contains("jxx = jxx + w * g.x * g.x");
+            assert_eq!(
+                has_tensor,
+                c.has(ColoringFeature::NeedsStructure),
+                "{}: tensor window present={has_tensor} but NeedsStructure={}",
+                c.name,
+                c.has(ColoringFeature::NeedsStructure)
             );
         }
     }

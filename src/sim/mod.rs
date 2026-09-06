@@ -281,12 +281,32 @@ pub const MAX_INNER_ITERATIONS: u32 = 200;
 /// Capability flags a colouring opts into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColoringFeature {
-    /// The colouring reads `grad`, the central-difference gradient of
-    /// channel `.x`. Costs four extra texture reads per output pixel,
-    /// so the template computes it ONLY for colourings that declare it
-    /// -- measured, the reads were 4 of the 5 the colour pass made, and
-    /// the bilinear resolve multiplied them by four again.
+    /// The colouring reads `x.gx` / `x.gy`, the central-difference
+    /// gradient of every channel. Costs four extra texture reads per
+    /// tap, so the template computes it ONLY for colourings that
+    /// declare it -- measured, the reads were 4 of the 5 the colour
+    /// pass made, and the bilinear resolve multiplied them by four
+    /// again.
     NeedsGradient,
+    /// The colouring reads `x.tensor`, the structure tensor of channel
+    /// `.x` -- the gradient's outer product, smoothed over a 3x3
+    /// binomial window. Thirty-six reads per tap; only the colourings
+    /// that draw orientation or coherence pay it.
+    NeedsStructure,
+    /// The colouring reads `x.dist`, the signed distance to the matte's
+    /// edge in cells. The renderer runs the jump flood for it whenever
+    /// the matte is on, whatever the matte's own edge setting; with
+    /// the matte off there is no figure to be distant from and the
+    /// value is 0.
+    NeedsDistance,
+    /// The colouring reads the cell coordinate `p` and the field
+    /// around it directly -- a line integral convolution has to walk
+    /// the field. Under an interpolating resolve `p` is the NEAREST
+    /// cell, so such a colouring is computed at cell resolution and
+    /// its result interpolated, which for a texture-making colouring
+    /// is its nature. `no_colouring_reads_the_cell_coordinate` exempts
+    /// colourings that declare this and no others.
+    ReadsCell,
 }
 
 /// The Sims 3×3 Laplacian's most negative eigenvalue (centre −1,
@@ -646,6 +666,10 @@ pub static COLORINGS: &[&SimColoringDef] =
     &colorings::LABEL,
     &colorings::SCALE_MIX,
     &colorings::OCCUPANCY,
+    &colorings::GRADIENT,
+    &colorings::STRUCTURE,
+    &colorings::DISTANCE,
+    &colorings::LIC,
 ];
 
 /// Look up a model by name, falling back to the first registered one.
