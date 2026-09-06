@@ -1,9 +1,13 @@
 # Simulation Mode — master plan
 
-**Status:** Planning, 2026-09-01. **No code has been written**; the
-only artefacts are these documents and two NumPy prototypes under
-`output/sim_proto/` (gitignored). Branch context: `escape-time` at
-`331160e8`.
+**Status:** Phases 0–4 shipped and phase 5 under way, 2026-09-05.
+24 models and 6 colourings are in the registry, on branch
+`simulation-mode`. The header below said "no code has been written"
+until phase 5 wave 1, four phases after it stopped being true —
+**§5 is where the per-phase status lives**, and each wave records what
+it measured there rather than here. The plan's decisions (§3) are
+unchanged; where a measurement contradicted one, the phase note says
+so.
 
 This is the plan of record for the third fractal family — the
 neighbour-coupled simulations (reaction–diffusion, cellular automata,
@@ -808,6 +812,56 @@ read**; its parameters are unverified today.
 
 **Gate:** step budgets measured, not estimated; DBM η = 1 visually
 matches the DLA of phase 4.
+
+**Papers, as of 2026-09-05:** Part II, the DBM paper
+(Niemeyer–Pietronero–Wiesmann) and Saffman–Taylor 1958 are all in
+`output/pdf/`. Nothing in this phase is now blocked on a source.
+
+**What the phase needs that does not exist yet**, found by reading the
+code against these five models before starting:
+
+1. `ModelDef::passes` is capped at 1 or 2 — the invariant test, the
+   `sim_step2` naming and the renderer's pipeline struct all assume
+   it. The snowfake has FOUR substeps that must each complete before
+   the next reads the field.
+2. There is no per-step repeat count. DBM relaxes K = 5–50 sweeps per
+   growth step and K is a slider, not a compile-time count.
+3. There is no scan. The reduce does min/max only; exact selection
+   needs a sum plus a descent to locate the chosen site. The
+   approximation (`selection: parallel`) ships first, so this gates
+   only the Tier-4 refinement.
+
+Hex addressing (phase 2), the min/max reduce and the pyramid (phase 3)
+cover everything else these models ask for.
+
+#### Wave 1 — the two that needed nothing built
+
+**Done 2026-09-05.** Sandpile and invasion percolation, both on
+machinery already shipped, both held by a CPU mirror rather than by a
+picture.
+
+- **The sandpile is checked against an exact-integer mirror of the
+  same parallel schedule**: 0 cells differ at 2¹², mass conserved to
+  the grain, and the round count pinned from both sides (stable after
+  `rounds`, over-full after `rounds − 1`). The prototype's counts are
+  the shader's — 787 at 2¹², 12,837 at 2¹⁶ — so the presets' step
+  counts are measurements. The Moore variant was measured rather than
+  guessed and came out the opposite way round to the guess: denser,
+  smaller and SOONER (4,652 rounds, 133 cells across, against 12,837
+  and 189).
+- **Invasion percolation's rising-threshold rule is checked against a
+  flood fill** of the shader's own threshold field: 0 sites missing, 0
+  extra, front finished at 1,640 of 2,000 steps. Measurement changed
+  the design twice — a point seed turned out to be a lottery (three of
+  five seeds gave a ~90-site cluster), so the presets inject from an
+  edge as the paper does; and box counting at 256² does not resolve
+  91/48, so the dimension is kept as a ramification check and the
+  catalogue's D ≈ 1.89 is qualified rather than quoted.
+- Two pictures were rendered and rejected rather than shipped: the
+  spanning cluster (reads as noise at 50% occupancy) and the
+  last-avalanche age field (nearly black). The odometer and the
+  wrapped invasion contours took their places.
+- 24 models, 5 new visual baselines, no existing baseline moved.
 
 ### Phase 6 — polish and reach
 
