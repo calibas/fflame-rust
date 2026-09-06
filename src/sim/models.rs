@@ -96,6 +96,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             params: &[("feed", 0.0367), ("kill", 0.0649)],
             steps: 10000,
             init: None,
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "coral",
@@ -103,6 +106,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             params: &[("feed", 0.0545), ("kill", 0.062)],
             steps: 10000,
             init: None,
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "maze",
@@ -110,6 +116,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             params: &[("feed", 0.030), ("kill", 0.057)],
             steps: 10000,
             init: None,
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "worms",
@@ -117,6 +126,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             params: &[("feed", 0.046), ("kill", 0.065)],
             steps: 10000,
             init: None,
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -288,6 +300,9 @@ pub static FITZHUGH_NAGUMO: ModelDef = ModelDef {
         // an earlier note said 1,000 without looking at that frame).
         steps: 4000,
         init: Some(crate::config::sim::SimInit::BrokenWave),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 0.4), ("offset", 0.5), ("wrap", 0.0)],
+        matte: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -431,6 +446,9 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             // through a settle-window bug).
             steps: 1180,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.05 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.3), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "oscillating",
@@ -445,6 +463,9 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             // point: the field is developed and keeps moving.
             steps: 2000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.05 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.3), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -576,6 +597,9 @@ pub static SCHNAKENBERG: ModelDef = ModelDef {
         // sweep gave 5,100 from a different seed.
         steps: 4900,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.02 }),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.0), ("wrap", 0.0)],
+        matte: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -756,6 +780,9 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             // visible spiral cores; at 10 the field is mush.
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.005), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "dewdney",
@@ -769,6 +796,9 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.005), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -941,6 +971,9 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
             ],
             steps: 300,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.0714286), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "moore_1_3_3",
@@ -953,6 +986,9 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
             ],
             steps: 60,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.3333333), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -1081,6 +1117,9 @@ pub static SPATIAL_RPS: ModelDef = ModelDef {
         params: &[("species", 3.0), ("p_select", 1.0), ("p_reproduce", 1.0)],
         steps: 400,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 0.25), ("offset", 0.0), ("wrap", 0.0)],
+        matte: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -1207,6 +1246,9 @@ pub static ISING: ModelDef = ModelDef {
             // 600 sweeps; a step is a half-sweep.
             steps: 1200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "coarsening",
@@ -1215,6 +1257,9 @@ pub static ISING: ModelDef = ModelDef {
             // Measured to need ~436 sweeps before it looks like anything.
             steps: 1000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -1315,6 +1360,14 @@ pub static EDEN: ModelDef = ModelDef {
             // Measured: 256 steps to reach the edge of a 256 grid.
             steps: 250,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("age"),
+            coloring_params: &[("window", 250.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "rough_front",
@@ -1326,6 +1379,14 @@ pub static EDEN: ModelDef = ModelDef {
             // want Zero.
             steps: 500,
             init: Some(crate::config::sim::SimInit::Line),
+            coloring: Some("age"),
+            coloring_params: &[("window", 500.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
     ],
     wgsl: r#"
@@ -1426,6 +1487,14 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
             params: &[("p_drop", 0.5), ("sideways", 1.0)],
             steps: 360,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("age"),
+            coloring_params: &[("window", 360.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "random_deposition",
@@ -1433,6 +1502,14 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
             params: &[("p_drop", 0.5), ("sideways", 0.0)],
             steps: 450,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("age"),
+            coloring_params: &[("window", 450.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
     ],
     wgsl: r#"
@@ -1531,6 +1608,9 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             params: &[("rule", 90.0)],
             steps: 256,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "rule_30",
@@ -1538,6 +1618,9 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             params: &[("rule", 30.0)],
             steps: 256,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "rule_110",
@@ -1545,6 +1628,9 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             params: &[("rule", 110.0)],
             steps: 256,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -1652,6 +1738,14 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
             params: &[("rule_mask", 2.0)],
             steps: 125,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("age"),
+            coloring_params: &[("window", 125.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "rule_13",
@@ -1659,6 +1753,14 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
             params: &[("rule_mask", 10.0)],
             steps: 125,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("age"),
+            coloring_params: &[("window", 125.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "rule_134",
@@ -1666,6 +1768,14 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
             params: &[("rule_mask", 26.0)],
             steps: 125,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("age"),
+            coloring_params: &[("window", 125.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
     ],
     wgsl: r#"
@@ -1778,6 +1888,9 @@ pub static PERCOLATION: ModelDef = ModelDef {
             params: &[("p_open", 0.592746)],
             steps: 400,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("label"),
+            coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
+            matte: None,
         },
         SimPreset {
             name: "subcritical",
@@ -1785,6 +1898,9 @@ pub static PERCOLATION: ModelDef = ModelDef {
             params: &[("p_open", 0.45)],
             steps: 400,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("label"),
+            coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
+            matte: None,
         },
         SimPreset {
             name: "supercritical",
@@ -1792,6 +1908,9 @@ pub static PERCOLATION: ModelDef = ModelDef {
             params: &[("p_open", 0.75)],
             steps: 400,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("label"),
+            coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -1961,6 +2080,9 @@ pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
             // Measured: settles at 4,600 steps at 256^2.
             steps: 5000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "spots",
@@ -1970,6 +2092,9 @@ pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
             // labyrinth's +0.00, which is the asymmetry showing up.
             steps: 6000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -2130,6 +2255,9 @@ pub static CAHN_HILLIARD: ModelDef = ModelDef {
             // cells at 1,000 steps, 13.2 at 5,000, 18.6 at 20,000.
             steps: 20000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "droplets",
@@ -2137,6 +2265,9 @@ pub static CAHN_HILLIARD: ModelDef = ModelDef {
             params: &[("mobility", 1.0), ("gamma", 0.5), ("mean", 0.4)],
             steps: 20000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -2325,6 +2456,9 @@ pub static OREGONATOR: ModelDef = ModelDef {
         // have begun to collide by 15,000 steps at dt = 1e-4.
         steps: 15000,
         init: Some(crate::config::sim::SimInit::Blobs { count: 5, radius: 5 }),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.0), ("wrap", 0.0)],
+        matte: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -2507,6 +2641,9 @@ pub static KOBAYASHI: ModelDef = ModelDef {
             // at dt = 1e-4, so 4,000 leaves the arms clear of the wall.
             steps: 4000,
             init: Some(crate::config::sim::SimInit::Blob { radius: 4 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "metallic",
@@ -2520,6 +2657,9 @@ pub static KOBAYASHI: ModelDef = ModelDef {
             ],
             steps: 4000,
             init: Some(crate::config::sim::SimInit::Blob { radius: 4 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -2744,6 +2884,9 @@ pub static LENIA: ModelDef = ModelDef {
         // Measured: filaments by 200, still moving at 600.
         steps: 600,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+        matte: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -2950,6 +3093,9 @@ pub static SMOOTHLIFE: ModelDef = ModelDef {
         // labyrinth by 400.
         steps: 400,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+        matte: None,
     }],
     wgsl: r#"
 fn sl_sigma(x: f32, a: f32, al: f32) -> f32 {
@@ -3192,6 +3338,9 @@ pub static MCCABE: ModelDef = ModelDef {
             // stills.
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("scale_mix"),
+            coloring_params: &[("scales", 5.0), ("value_scale", 0.5)],
+            matte: None,
         },
         SimPreset {
             name: "coarse",
@@ -3210,6 +3359,9 @@ pub static MCCABE: ModelDef = ModelDef {
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "rosette",
@@ -3224,6 +3376,9 @@ pub static MCCABE: ModelDef = ModelDef {
             ],
             steps: 200,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -3452,6 +3607,9 @@ pub static PHYSARUM: ModelDef = ModelDef {
             // polygonal network by 600, and it keeps rearranging.
             steps: 600,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.15), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "coarse",
@@ -3469,6 +3627,9 @@ pub static PHYSARUM: ModelDef = ModelDef {
             ],
             steps: 600,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.15), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -3724,6 +3885,14 @@ pub static DLA: ModelDef = ModelDef {
         // walls.
         steps: 1200,
         init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("age"),
+            coloring_params: &[("window", 1200.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -3937,6 +4106,9 @@ pub static SANDPILE: ModelDef = ModelDef {
             // and span 188 cells, which fits a 256 grid with margin.
             steps: 12_837,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.3333333), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "moore",
@@ -3948,6 +4120,9 @@ pub static SANDPILE: ModelDef = ModelDef {
             // the same mass settles denser, smaller and sooner.
             steps: 4_652,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.1428571), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
@@ -4118,6 +4293,14 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
             // this and extra steps then change nothing.
             steps: 2_000,
             init: Some(crate::config::sim::SimInit::Line),
+            coloring: Some("age"),
+            coloring_params: &[("window", 2000.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "spanning",
@@ -4128,6 +4311,14 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
             params: &[("dp", 0.0005), ("p_max", 0.635)],
             steps: 2_000,
             init: Some(crate::config::sim::SimInit::Line),
+            coloring: Some("age"),
+            coloring_params: &[("window", 2000.0), ("invert", 1.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
     ],
     wgsl: r#"
@@ -4396,6 +4587,14 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             // large enough".
             steps: 24_000,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "simple_star",
@@ -4412,6 +4611,14 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             // the internal markings the figure is described by.
             steps: 12_000,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "plate_ends",
@@ -4428,6 +4635,14 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             // 40,000 is where the plate ends are unmistakable here.
             steps: 40_000,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "dendrite_ends",
@@ -4442,6 +4657,14 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             // Measured at 512^2: 31% of the grid, with side branching.
             steps: 20_000,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::X,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
     ],
     wgsl: r#"
@@ -4761,6 +4984,14 @@ pub static DBM: ModelDef = ModelDef {
             // paper's figure 3 is "about 5000 steps".
             steps: 5_000,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::W,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "dense",
@@ -4771,6 +5002,14 @@ pub static DBM: ModelDef = ModelDef {
                      ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
             steps: 5_000,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::W,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
         SimPreset {
             name: "sparse",
@@ -4780,6 +5019,14 @@ pub static DBM: ModelDef = ModelDef {
                      ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
             steps: 5_000,
             init: Some(crate::config::sim::SimInit::Center),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: Some(crate::config::sim::SimMatte {
+                channel: crate::config::sim::SimMatteChannel::W,
+                cutoff: 0.5,
+                softness: 0.0,
+                invert: false,
+            }),
         },
     ],
     wgsl: r#"
@@ -5097,6 +5344,9 @@ pub static FINGERING: ModelDef = ModelDef {
             // the way with the fingers' shielding well developed.
             steps: 800,
             init: Some(crate::config::sim::SimInit::Line),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
         SimPreset {
             name: "stable",
@@ -5109,6 +5359,9 @@ pub static FINGERING: ModelDef = ModelDef {
             ],
             steps: 600,
             init: Some(crate::config::sim::SimInit::Line),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+            matte: None,
         },
     ],
     wgsl: r#"
