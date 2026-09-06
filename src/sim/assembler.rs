@@ -628,21 +628,35 @@ fn sim_matte(s: vec4<f32>) -> f32 {
     return select(a, 1.0 - a, mode >= 1.5);
 }
 
-// Resolve: the coloured GRID mapped to the OUTPUT size. Separate from
-// the colouring because the grid is its own quantity -- a 256-cell
-// Gray-Scott shown at 1080p is 256 cells of information, and which
-// filter presents them is a user choice, not a consequence.
-//
-// The matte is applied HERE, per grid cell, before the resolve
-// filter: a magnified edge is then antialiased by the same filter
-// that magnifies it, rather than being a staircase the filter never
-// sees.
-fn sim_shade(p: vec2<i32>) -> vec4<f32> {
-    let s = sim_read(p);
+// The gradient a colouring may ask for, computed from the state at the
+// cell. Zero for colourings that do not declare NeedsGradient, so the
+// four extra reads are paid only where they are used.
+fn sim_grad(p: vec2<i32>) -> vec2<f32> {
 //__GRADIENT__
+}
+
+// Colour and matte ONE state. The resolve decides what state that is:
+// a cell's own under Nearest, an interpolation of its neighbours'
+// under Bilinear -- which is the whole point of interpolating the
+// STATE rather than the colours (derived-fields plan, section 2):
+// every isoline of the field lands where the field crosses that
+// level, as a crisp curve, and the matte's cutoff on an interpolated
+// occupancy is a hard sub-cell boundary at the 0.5 isoline instead of
+// a cell-wide ramp of half-drawn pixels.
+//
+// `p` is the cell the colouring is told it is at. Under interpolation
+// that is the nearest cell, which no colouring reads today -- a test
+// in app_repro_test greps for it, so one that starts to will fail
+// there rather than draw subtly wrong pictures at 8x.
+fn sim_shade_from(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32> {
     var col = sim_color(s, grad, p);
     col.a = col.a * sim_matte(s);
     return col;
+}
+
+// One cell, as itself.
+fn sim_shade(p: vec2<i32>) -> vec4<f32> {
+    return sim_shade_from(sim_read(p), sim_grad(p), p);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -690,16 +704,26 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
 "#
             .to_string(),
             SimUpscale::Bilinear => r#"
-    // Bilinear over the four surrounding CELL CENTRES, which is why
-    // the half-cell shift is subtracted first.
+    // Interpolate the STATE of the four surrounding cells, and the
+    // gradient where the colouring wants one, then colour that once.
+    // Blending four coloured cells instead -- the first version --
+    // smeared palette entries across a magnified boundary and turned
+    // a matte edge into a cell-wide ramp; see sim_shade_from.
+    // Over the four surrounding CELL CENTRES, which is why the
+    // half-cell shift is subtracted first.
     let f = gf - vec2<f32>(0.5, 0.5);
     let i0 = vec2<i32>(floor(f));
     let t = f - floor(f);
-    let c00 = sim_shade(clamp(i0, vec2<i32>(0, 0), g - vec2<i32>(1, 1)));
-    let c10 = sim_shade(clamp(i0 + vec2<i32>(1, 0), vec2<i32>(0, 0), g - vec2<i32>(1, 1)));
-    let c01 = sim_shade(clamp(i0 + vec2<i32>(0, 1), vec2<i32>(0, 0), g - vec2<i32>(1, 1)));
-    let c11 = sim_shade(clamp(i0 + vec2<i32>(1, 1), vec2<i32>(0, 0), g - vec2<i32>(1, 1)));
-    let col = mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);
+    let lim = g - vec2<i32>(1, 1);
+    let p00 = clamp(i0, vec2<i32>(0, 0), lim);
+    let p10 = clamp(i0 + vec2<i32>(1, 0), vec2<i32>(0, 0), lim);
+    let p01 = clamp(i0 + vec2<i32>(0, 1), vec2<i32>(0, 0), lim);
+    let p11 = clamp(i0 + vec2<i32>(1, 1), vec2<i32>(0, 0), lim);
+    let s = mix(mix(sim_read(p00), sim_read(p10), t.x),
+                mix(sim_read(p01), sim_read(p11), t.x), t.y);
+    let gr = mix(mix(sim_grad(p00), sim_grad(p10), t.x),
+                 mix(sim_grad(p01), sim_grad(p11), t.x), t.y);
+    let col = sim_shade_from(s, gr, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
 "#
             .to_string(),
         }
@@ -1192,9 +1216,9 @@ pub fn assemble_color(
         r#"    // Central-difference gradient of .x for this colouring.
     let gx = sim_read(p + vec2<i32>(1, 0)).x - sim_read(p - vec2<i32>(1, 0)).x;
     let gy = sim_read(p + vec2<i32>(0, 1)).x - sim_read(p - vec2<i32>(0, 1)).x;
-    let grad = vec2<f32>(gx, gy) * 0.5;"#
+    return vec2<f32>(gx, gy) * 0.5;"#
     } else {
-        "    let grad = vec2<f32>(0.0, 0.0);"
+        "    return vec2<f32>(0.0, 0.0);"
     };
     splice(
         COLOR_TEMPLATE,
