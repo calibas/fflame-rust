@@ -152,7 +152,8 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimColoring
         | ConfigPath::SimInitKind
         | ConfigPath::SimGridMode
-        | ConfigPath::SimBoundary => false,
+        | ConfigPath::SimBoundary
+        | ConfigPath::SimWarpFilter => false,
         // ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
         // ConfigPath::ColorMode => false,
@@ -1824,6 +1825,14 @@ impl ConfigManager {
             ConfigPath::SimSteps => Ok(ConfigValue::UInt(config.sim.steps)),
             ConfigPath::SimStepsPerFrame => Ok(ConfigValue::UInt(config.sim.steps_per_frame)),
             ConfigPath::SimDt => Ok(ConfigValue::Float(config.sim.dt)),
+            ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
+            ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
+            ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
+            ConfigPath::SimWarpPanY => Ok(ConfigValue::Float(config.sim.warp.pan_y)),
+            ConfigPath::SimWarpFlow => Ok(ConfigValue::Float(config.sim.warp.flow)),
+            ConfigPath::SimWarpFilter => {
+                Ok(ConfigValue::String(config.sim.warp.filter.name().to_string()))
+            }
             ConfigPath::SimBoundary => {
                 Ok(ConfigValue::String(config.sim.boundary.name().to_string()))
             }
@@ -2871,6 +2880,38 @@ impl ConfigManager {
                 let n = String::try_from(value)?;
                 if let Some(b) = crate::config::sim::SimBoundary::from_name(&n) {
                     self.current.sim.boundary = b;
+                }
+            }
+            // Per-step rates, so the bounds are what one step can
+            // sanely do: a zoom outside [1/2, 2] a step, or a pan of
+            // more than 64 cells a step, is a typo, and a NaN from a
+            // signal must not reach the resampler.
+            ConfigPath::SimWarpZoom => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.zoom = if v.is_finite() { v.clamp(0.5, 2.0) } else { 1.0 };
+            }
+            ConfigPath::SimWarpRotation => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.rotation =
+                    if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+            }
+            ConfigPath::SimWarpPanX => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.pan_x = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+            }
+            ConfigPath::SimWarpPanY => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.pan_y = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+            }
+            ConfigPath::SimWarpFlow => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.flow =
+                    if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+            }
+            ConfigPath::SimWarpFilter => {
+                let n = String::try_from(value)?;
+                if let Some(f) = crate::config::sim::SimWarpFilter::from_name(&n) {
+                    self.current.sim.warp.filter = f;
                 }
             }
             ConfigPath::SimUpscale => {

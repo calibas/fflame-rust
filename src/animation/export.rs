@@ -810,6 +810,25 @@ fn apply_config_value(
             // NaN from a wild signal must not make the solver diverge.
             config.sim.dt = if v.is_finite() { v.clamp(1e-4, 10.0) } else { 1.0 };
         }
+        // The warp's rates, bounded as the manager bounds them, so a
+        // wild signal cannot ask the resampler for a NaN.
+        (ConfigPath::SimWarpZoom, ConfigValue::Float(v)) => {
+            config.sim.warp.zoom = if v.is_finite() { v.clamp(0.5, 2.0) } else { 1.0 };
+        }
+        (ConfigPath::SimWarpRotation, ConfigValue::Float(v)) => {
+            config.sim.warp.rotation =
+                if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+        }
+        (ConfigPath::SimWarpPanX, ConfigValue::Float(v)) => {
+            config.sim.warp.pan_x = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+        }
+        (ConfigPath::SimWarpPanY, ConfigValue::Float(v)) => {
+            config.sim.warp.pan_y = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+        }
+        (ConfigPath::SimWarpFlow, ConfigValue::Float(v)) => {
+            config.sim.warp.flow =
+                if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+        }
         (ConfigPath::SimModelParam { param }, ConfigValue::Float(v)) => {
             config.sim.model_params.insert(param.clone(), *v);
         }

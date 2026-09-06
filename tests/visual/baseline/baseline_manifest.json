@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "1c87cce8",
+  "git_hash": "09e0b13d",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -526,6 +526,10 @@
       "bytes": 4378,
       "sha256": "f02e07f52307b87ef2b103899bf44849d4f82ad2a8e60c07ce66ef2cf828cf56"
     },
+    "sim-fitzhugh-nagumo-warp-vortex.png": {
+      "bytes": 11725,
+      "sha256": "53bfedac9fc661945e244b16fd81c0aaec87c3619cbbef69ba9cc4dcf9cb6964"
+    },
     "sim-gray-scott-bilinear-upscale.png": {
       "bytes": 8300,
       "sha256": "cdd883acaea09a5691c48f7b2c9cdea02c009b370efa6918a992f360f5816b60"
@@ -557,6 +561,10 @@
     "sim-hodgepodge-spirals.png": {
       "bytes": 32840,
       "sha256": "c1ece631c7eb7e35f9e7156623c0662d61c521cdf0284ce0b6a1b12a38e585da"
+    },
+    "sim-hodgepodge-warp-swirl.png": {
+      "bytes": 26478,
+      "sha256": "e5bb5a8a6436e15f579d65aba5f6f26105184d6fedba5163787a633475588b8d"
     },
     "sim-invasion-percolation-front.png": {
       "bytes": 16723,

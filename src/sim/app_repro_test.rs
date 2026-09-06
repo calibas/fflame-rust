@@ -3754,3 +3754,145 @@ fn fingering_is_unstable_only_when_the_driving_fluid_is_less_viscous() {
     assert!(s1_s < s0_s.max(1.0) * 1.5, "stable case: roughness {s0_s:.2} -> {s1_s:.2} did not stay flat");
     assert!(s1_u > 3.0 * s1_s, "the two cases should be unmistakably different: {s1_u:.2} vs {s1_s:.2}");
 }
+
+/// The warp's inverse map on the CPU: where destination cell `p` reads
+/// from, in source coordinates. Mirrors the shader exactly.
+fn warp_source(p: (usize, usize), n: usize, w: &crate::config::sim::SimWarp) -> (f32, f32) {
+    let centre = (n as f32 - 1.0) * 0.5;
+    let (dx, dy) = (p.0 as f32 - centre, p.1 as f32 - centre);
+    let rim = (n as f32 * 0.5).max(1.0);
+    let theta = w.rotation + w.flow * ((dx * dx + dy * dy).sqrt() / rim);
+    let (qx, qy) = ((dx - w.pan_x) / w.zoom, (dy - w.pan_y) / w.zoom);
+    let (cs, sn) = (theta.cos(), theta.sin());
+    (centre + cs * qx + sn * qy, centre - sn * qx + cs * qy)
+}
+
+/// A periodic read of channel .y, as the Periodic boundary body does it.
+fn wrap_read(f: &[[f32; 4]], n: usize, x: i64, y: i64) -> f32 {
+    let (x, y) = (x.rem_euclid(n as i64) as usize, y.rem_euclid(n as i64) as usize);
+    f[y * n + x][1]
+}
+
+/// The warp stage against a CPU resample of the same field through
+/// the same affine, in both filters.
+///
+/// The field is invasion percolation's channel .y: a per-cell random
+/// threshold the seed draws and the step NEVER writes, whatever the
+/// step does to the other channels. So after one step that channel is
+/// exactly the warp of what it was, with no assumption about the
+/// model at all. Nearest must match EXACTLY (it moves values, it does
+/// not make new ones); bilinear to float precision. The affine has
+/// every term switched on at once -- zoom, rotation, pan and swirl --
+/// so a wrong sign or a swapped axis anywhere in the inverse map shows
+/// up.
+#[test]
+fn the_warp_matches_a_cpu_resample_of_the_same_field() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    for filter in [
+        crate::config::sim::SimWarpFilter::Nearest,
+        crate::config::sim::SimWarpFilter::Bilinear,
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "invasion_percolation".into();
+        cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+        cfg.init = SimInit::Center;
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 9;
+        cfg.warp = crate::config::sim::SimWarp {
+            zoom: 0.97,
+            rotation: 0.08,
+            pan_x: 1.5,
+            pan_y: -0.75,
+            flow: 0.05,
+            filter,
+        };
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let before = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let after = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+        let mut worst = 0.0f32;
+        let mut moved = 0usize;
+        let mut wrong = 0usize;
+        for y in 0..N {
+            for x in 0..N {
+                let (sx, sy) = warp_source((x, y), N, &cfg.warp);
+                let want = match filter {
+                    crate::config::sim::SimWarpFilter::Nearest => {
+                        wrap_read(&before, N, (sx + 0.5).floor() as i64, (sy + 0.5).floor() as i64)
+                    }
+                    crate::config::sim::SimWarpFilter::Bilinear => {
+                        let (ix, iy) = (sx.floor(), sy.floor());
+                        let (fx, fy) = (sx - ix, sy - iy);
+                        let (ix, iy) = (ix as i64, iy as i64);
+                        let a = wrap_read(&before, N, ix, iy);
+                        let b = wrap_read(&before, N, ix + 1, iy);
+                        let c = wrap_read(&before, N, ix, iy + 1);
+                        let d = wrap_read(&before, N, ix + 1, iy + 1);
+                        (a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy
+                    }
+                };
+                let got = after[y * N + x][1];
+                let diff = (got - want).abs();
+                worst = worst.max(diff);
+                if diff > 1e-6 {
+                    wrong += 1;
+                }
+                if (got - before[y * N + x][1]).abs() > 1e-6 {
+                    moved += 1;
+                }
+            }
+        }
+        println!(
+            "warp {filter:?}: worst difference {worst:.2e}, {wrong} cells off, {moved} of {} moved",
+            N * N
+        );
+        assert!(moved > N * N / 2, "{filter:?}: the warp moved almost nothing");
+        match filter {
+            // A source that lands within an ulp of a cell boundary can
+            // round the other way on the GPU; a couple in 4,096 is
+            // rounding, a hundred is a wrong map.
+            crate::config::sim::SimWarpFilter::Nearest => {
+                assert!(wrong <= 4, "{filter:?}: {wrong} cells read from the wrong source cell")
+            }
+            crate::config::sim::SimWarpFilter::Bilinear => {
+                assert!(worst < 2e-5, "{filter:?}: worst difference {worst:.2e}")
+            }
+        }
+    }
+}
+
+/// An identity warp is no dispatch at all: the run is bit-identical
+/// to one with no warp configured, which is what lets the field stay
+/// exactly where it was for every model that does not ask.
+#[test]
+fn an_identity_warp_changes_nothing() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.seed = 4;
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 50);
+    let plain = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // Identity rates with a non-default filter: still the identity.
+    cfg.warp.filter = crate::config::sim::SimWarpFilter::Nearest;
+    assert!(cfg.warp.is_identity());
+    let mut r2 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r2.seed(&device, &queue, &cfg);
+    r2.run_steps(&device, &queue, &cfg, 50);
+    let with = read_rgba32f(&device, &queue, r2.field_texture(), N as u32, N as u32);
+    assert_eq!(plain, with, "an identity warp altered the run");
+}

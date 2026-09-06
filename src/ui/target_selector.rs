@@ -377,6 +377,11 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
     let mut items = vec![
         TargetItem::new(ConfigPath::SimSteps, "Steps (animates the run)"),
         TargetItem::new(ConfigPath::SimDt, "Time step (dt)"),
+        TargetItem::new(ConfigPath::SimWarpZoom, "Warp: zoom per step"),
+        TargetItem::new(ConfigPath::SimWarpRotation, "Warp: rotation per step"),
+        TargetItem::new(ConfigPath::SimWarpPanX, "Warp: pan X per step"),
+        TargetItem::new(ConfigPath::SimWarpPanY, "Warp: pan Y per step"),
+        TargetItem::new(ConfigPath::SimWarpFlow, "Warp: swirl per step"),
     ];
     let model = crate::sim::model_or_default(&sim.model);
     for p in model.parameters {

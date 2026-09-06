@@ -92,6 +92,14 @@ struct SimParamsGpu {
     /// Min/max ring slot for this dispatch: the reduce pass writes it,
     /// the step pass reads the slot before it.
     minmax_slot: u32,
+    /// The warp stage's per-step affine: zoom, rotation, pan x, pan y.
+    /// A vec4 in WGSL, so 16-aligned: the ten words above end at 48.
+    warp_a: [f32; 4],
+    /// Swirl rate and the filter (0 bilinear, 1 nearest), then padding
+    /// to the struct's 16-byte alignment. Mirrored in `SimParams` in
+    /// the assembler; the sizes must agree.
+    warp_b: [f32; 2],
+    _pad: [f32; 2],
 }
 
 /// The shader set for one (model, colouring, boundary, resolve)
@@ -102,6 +110,11 @@ struct Pipelines {
     /// The dispatches of one step, in order: `sim_step`, then
     /// `sim_step2`, and so on for as many as the model declares.
     steps: Vec<ComputePipeline>,
+    /// The warp stage: a resample of the field through the per-step
+    /// affine, first in the step. Built with every set (it depends on
+    /// the boundary alone) and dispatched only when the config's warp
+    /// is not the identity.
+    warp: ComputePipeline,
     color: ComputePipeline,
     /// One pyramid level from the one below it; built only for a
     /// model that declares `NeedsPyramid`.
@@ -665,6 +678,7 @@ impl SimRenderer {
         let step_srcs: Vec<String> = (0..model.passes)
             .map(|pass| assembler::assemble_step(model, cfg.boundary, pass))
             .collect();
+        let warp_src = assembler::assemble_warp(cfg.boundary);
         let color_src = assembler::assemble_color(
             coloring,
             cfg.boundary,
@@ -697,6 +711,7 @@ impl SimRenderer {
         let seed_mod = make("Sim Seed", &seed_src);
         let step_mods: Vec<ShaderModule> =
             step_srcs.iter().map(|src| make("Sim Step", src)).collect();
+        let warp_mod = make("Sim Warp", &warp_src);
         let color_mod = make("Sim Color", &color_src);
         let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
         let reduce_mod = reduce_src.as_ref().map(|src| make("Sim Reduce", src));
@@ -871,6 +886,9 @@ impl SimRenderer {
                 .iter()
                 .map(|m| pipeline("Sim Step", &step_layout, m))
                 .collect(),
+            // Same layout as a step: it reads binding 4 and writes 3,
+            // and ignores the rest.
+            warp: pipeline("Sim Warp", &step_layout, &warp_mod),
             color: pipeline("Sim Color", &color_layout, &color_mod),
             pyramid: pyramid_mod
                 .as_ref()
@@ -927,6 +945,15 @@ impl SimRenderer {
             init_p1: p1,
             kernel_radius: self.kernel_radius,
             minmax_slot: step_index % MINMAX_RING,
+            warp_a: [cfg.warp.zoom, cfg.warp.rotation, cfg.warp.pan_x, cfg.warp.pan_y],
+            warp_b: [
+                cfg.warp.flow,
+                match cfg.warp.filter {
+                    crate::config::sim::SimWarpFilter::Bilinear => 0.0,
+                    crate::config::sim::SimWarpFilter::Nearest => 1.0,
+                },
+            ],
+            _pad: [0.0; 2],
         }
     }
 
@@ -1375,8 +1402,10 @@ impl SimRenderer {
         // calibrated batch that happens to equal it is shrunk once and
         // re-measured, which costs one small submission and nothing
         // else.
+        let warping = !cfg.warp.is_identity();
         if self.steps_per_submit == FIRST_SUBMIT {
-            let dispatches: u32 = repeat.iter().sum::<u32>() + u32::from(wants_minmax);
+            let dispatches: u32 =
+                repeat.iter().sum::<u32>() + u32::from(wants_minmax) + u32::from(warping);
             self.steps_per_submit = (FIRST_SUBMIT * 2 / dispatches.max(1)).clamp(1, FIRST_SUBMIT);
         }
         let mut done = 0;
@@ -1403,7 +1432,19 @@ impl SimRenderer {
                     timestamp_writes: None,
                 });
                 for i in 0..batch {
-                    // The agents move, sense and deposit FIRST, from
+                    // The warp goes first, before anything reads the
+                    // field (pipeline section 4.1): it moves the
+                    // FIELD, through the boundary rule, and nothing
+                    // else -- an agent population's positions stay
+                    // where they are, which a model that carries both
+                    // should know. One resample, one flip.
+                    if warping {
+                        pass.set_pipeline(&p.warp);
+                        pass.set_bind_group(0, &groups[self.current], &[i * stride]);
+                        pass.dispatch_workgroups(gx, gy, 1);
+                        self.current = 1 - self.current;
+                    }
+                    // The agents move, sense and deposit next, from
                     // the field as the last step left it -- Jones'
                     // order, where the population acts and the trail
                     // map is diffused after. The step pass then folds
@@ -1436,7 +1477,7 @@ impl SimRenderer {
                     // field[1 - src], so alternating the index IS the
                     // ping-pong.
                     //
-    // Every pass of a step reads the same ring slot: the only
+                    // Every pass of a step reads the same ring slot: the only
                     // per-step value in it is the step index, and every
                     // dispatch of step i is step i. Nothing downstream
                     // needs to know how many passes there were -- the
