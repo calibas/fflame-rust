@@ -3943,6 +3943,7 @@ fn the_matte_makes_background_of_the_cells_it_cuts() {
         cutoff: 0.5,
         softness: 0.0,
         invert: false,
+        edge: crate::config::sim::SimMatteEdge::Threshold,
     };
     r.color(&device, &queue, &cfg, &palette);
     let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
@@ -4270,6 +4271,7 @@ fn the_bilinear_upscale_interpolates_state_not_colour() {
         cutoff: 0.5,
         softness: 0.0,
         invert: false,
+        edge: crate::config::sim::SimMatteEdge::Threshold,
     };
 
     let render = |cfg: &SimConfig, out: u32| {
@@ -4445,4 +4447,188 @@ fn the_bicubic_upscale_reconstructs_a_smooth_field_better() {
         bicubic < bilinear * 0.5,
         "bicubic ({bicubic:.5}) should be well under half bilinear's error ({bilinear:.5})"
     );
+}
+
+/// Phase C of the derived-fields plan: the distance-field matte.
+///
+/// A disc of occupied cells is written into a 32-cell field and
+/// magnified 8x with a hard matte, once through the threshold edge
+/// and once through the distance edge, and each output pixel's
+/// coverage is compared with the analytic disc at the pixel's centre.
+///
+/// The plan expected the distance edge to follow the curve better.
+/// IT DOES NOT, AND THIS TEST SAYS SO: the two edges classify the
+/// same 568 pixels the same way, with the same 1.03 px RMS radial
+/// error. Every cell beside the edge reads +1/2 or -1/2 in the
+/// distance field -- its nearest cell of the other kind is adjacent
+/// -- which is exactly the occupancy the threshold interpolates,
+/// shifted by a half; the two zero sets coincide up to a
+/// second-order wobble at corners. A cell-centre distance field knows
+/// no more about WHERE the edge is than the occupancy does.
+///
+/// What it knows is how far a cell is FROM the edge, which is what
+/// the rest of the test is about: the field reads +0.5 / -0.5 either
+/// side of the edge and about R at the disc's centre, and a feather
+/// set to 2 cells is 2 cells wide -- 32 output pixels per crossing at
+/// 8x -- which is what `softness` means under this edge and what it
+/// could not mean under the threshold, where it was a width in the
+/// channel's units.
+#[test]
+fn the_distance_matte_agrees_on_the_edge_and_feathers_in_cells() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 32;
+    const MAG: u32 = 8;
+    const R: f32 = 10.3; // not an integer, so the disc is not lattice-aligned
+    let palette = test_palette(&device, &queue);
+    let centre = G as f32 * 0.5; // between cells, deliberately
+    let inside = |x: f32, y: f32| (x - centre).powi(2) + (y - centre).powi(2) < R * R;
+
+    let base = || {
+        let mut cfg = SimConfig::default();
+        cfg.coloring = "channel".into();
+        cfg.grid = SimGrid::Fixed { width: G, height: G };
+        cfg.steps = 0;
+        cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+        cfg.coloring_params.insert("channel".into(), 0.0);
+        cfg.coloring_params.insert("scale".into(), 1.0);
+        cfg.coloring_params.insert("offset".into(), 0.0);
+        cfg.matte = crate::config::sim::SimMatte {
+            channel: crate::config::sim::SimMatteChannel::X,
+            cutoff: 0.5,
+            softness: 0.0,
+            invert: false,
+            edge: crate::config::sim::SimMatteEdge::Threshold,
+        };
+        cfg
+    };
+    let write_disc = |r: &SimRenderer| {
+        // f32, said so: an unanchored `1.0` infers f64, cast_slice ships
+        // doubles into an f32 texture, and the disc quietly reads as
+        // zeros. Found by exactly that.
+        let mut texels: Vec<f32> = Vec::with_capacity((G * G * 4) as usize);
+        for y in 0..G {
+            for x in 0..G {
+                let on = inside(x as f32 + 0.5, y as f32 + 0.5);
+                texels.extend_from_slice(&[if on { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
+            }
+        }
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: r.field_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(&texels),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(G * 16), rows_per_image: Some(G) },
+            Extent3d { width: G, height: G, depth_or_array_layers: 1 },
+        );
+    };
+    // The edge's radial error and how many pixels disagree, for one
+    // rendering.
+    let out = G * MAG;
+    let measure = |img: &[[f32; 4]]| -> (f64, usize, usize) {
+        let mut se = 0.0f64;
+        let mut wrong = 0usize;
+        let mut partial = 0usize;
+        for py in 0..out {
+            for px in 0..out {
+                let gx = (px as f32 + 0.5) / MAG as f32;
+                let gy = (py as f32 + 0.5) / MAG as f32;
+                let cov = img[(py * out + px) as usize][3];
+                if cov > 0.0 && cov < 1.0 {
+                    partial += 1;
+                }
+                let want = if inside(gx, gy) { 1.0 } else { 0.0 };
+                if (cov >= 0.5) != (want >= 0.5) {
+                    wrong += 1;
+                    let rr = ((gx - centre).powi(2) + (gy - centre).powi(2)).sqrt();
+                    // In OUTPUT pixels.
+                    let e = ((rr - R) * MAG as f32) as f64;
+                    se += e * e;
+                }
+            }
+        }
+        ((se / wrong.max(1) as f64).sqrt(), wrong, partial)
+    };
+
+    let mut results = Vec::new();
+    for edge in [
+        crate::config::sim::SimMatteEdge::Threshold,
+        crate::config::sim::SimMatteEdge::Distance,
+    ] {
+        let mut cfg = base();
+        cfg.matte.edge = edge;
+        let mut r = SimRenderer::new(&device, &cfg, out, out);
+        r.seed(&device, &queue, &cfg);
+        write_disc(&r);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let img = read_rgba32f(&device, &queue, r.output_texture(), out, out);
+        let (rms, wrong, partial) = measure(&img);
+        println!(
+            "{:<9} edge at {MAG}x: {wrong} pixels on the wrong side, rms radial error {rms:.3} px, {partial} partial",
+            edge.name()
+        );
+        assert_eq!(partial, 0, "{}: a hard matte should have no half-drawn pixels", edge.name());
+        // Nobody is wrong by more than a cell: the occupancy only
+        // knows the circle to that, and neither edge may invent worse.
+        assert!(rms < MAG as f64 * 0.5, "{}: rms radial error {rms:.2} px is over half a cell", edge.name());
+        results.push((edge, rms, wrong));
+
+        if edge == crate::config::sim::SimMatteEdge::Distance {
+            // The field itself: signed, in cells, +0.5 / -0.5 either
+            // side of a straight-ish edge, read at the disc's
+            // leftmost row where the boundary runs almost vertical.
+            let sdf = read_rgba32f(&device, &queue, r.sdf_texture().unwrap(), G, G);
+            let y = G / 2;
+            let row: Vec<f32> = (0..G).map(|x| sdf[(y * G + x) as usize][0]).collect();
+            let first_in = (0..G as usize).find(|&x| inside(x as f32 + 0.5, y as f32 + 0.5)).unwrap();
+            let (d_out, d_in) = (row[first_in - 1], row[first_in]);
+            println!("distance field across the edge: {d_out:+.3} | {d_in:+.3} (cells)");
+            assert!(d_in > 0.0 && d_out < 0.0, "the sign must flip across the edge");
+            assert!((d_in + d_out).abs() < 0.15, "the edge should sit near the middle: {d_out:+.3}/{d_in:+.3}");
+            let mid = sdf[((G / 2) * G + G / 2) as usize][0];
+            assert!((mid - (R - 0.5)).abs() < 1.5, "the centre should be about R inside: {mid:.2}");
+        }
+    }
+
+    // THE EDGE DOES NOT MOVE, and that is the measured finding rather
+    // than the plan's expectation. Every cell beside the edge is +1/2
+    // or -1/2 in the distance field -- its nearest cell of the other
+    // kind is adjacent -- which is exactly the occupancy the threshold
+    // interpolates, shifted by a half, so the two zero sets coincide
+    // to a second-order wobble at corners (~0.02 cells, worked through
+    // in the plan). A cell-centre distance field knows no more about
+    // WHERE the edge is than the occupancy does. What it knows is how
+    // far a cell is FROM it, which is the feather below.
+    let (thr, dist) = (results[0].1, results[1].1);
+    let (thr_n, dist_n) = (results[0].2, results[1].2);
+    assert!(
+        (dist - thr).abs() < 0.1 && (dist_n as i64 - thr_n as i64).abs() <= (thr_n / 20) as i64 + 2,
+        "the two edges should agree on the boundary: {thr:.3}/{thr_n} vs {dist:.3}/{dist_n}"
+    );
+
+    // Softness is a width in cells under the distance edge: a feather
+    // of 2 cells spans about 2 * MAG output pixels across the edge.
+    let mut cfg = base();
+    cfg.matte.edge = crate::config::sim::SimMatteEdge::Distance;
+    cfg.matte.softness = 2.0;
+    let mut r = SimRenderer::new(&device, &cfg, out, out);
+    r.seed(&device, &queue, &cfg);
+    write_disc(&r);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let img = read_rgba32f(&device, &queue, r.output_texture(), out, out);
+    let y = out / 2;
+    let band = (0..out).filter(|&x| {
+        let c = img[(y * out + x) as usize][3];
+        c > 0.02 && c < 0.98
+    }).count();
+    // Two crossings of the row, each about 2 cells = 16 px wide.
+    println!("softness 2 cells: {band} feathered pixels across the middle row (expect ~{})", 2 * 2 * MAG);
+    assert!((band as i64 - (4 * MAG) as i64).abs() <= MAG as i64, "the feather should be softness cells wide: {band}");
 }

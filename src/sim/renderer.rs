@@ -60,6 +60,10 @@ const MAX_STEPS_PER_SUBMIT: u32 = 256;
 /// watchdog.
 const FIRST_SUBMIT: u32 = 8;
 
+/// Jump-flood passes a frame can need: ceil(log2 N) + 1, so sixteen is
+/// a 32768-cell grid, past the grid cap.
+const JFA_SLOTS: usize = 16;
+
 /// Wall-clock budget for one submission. An eighth of the watchdog,
 /// so a card half as fast as the one measured on, or a frame that
 /// shares the GPU with something else, still has margin; and long
@@ -99,7 +103,9 @@ struct SimParamsGpu {
     /// to the struct's 16-byte alignment. Mirrored in `SimParams` in
     /// the assembler; the sizes must agree.
     warp_b: [f32; 2],
-    _pad: [f32; 2],
+    /// The matte's edge -- 1 for a distance field, 0 for a threshold
+    /// -- and a spare word. Fills what was padding.
+    matte_b: [f32; 2],
     /// The matte: channel index, mode (0 off, 1 normal, 2 inverted),
     /// cutoff, softness. `SimMatte::packed` builds it, and that
     /// function's mode word is what the shader branches on.
@@ -161,6 +167,13 @@ struct Pipelines {
     pyramid: Option<ComputePipeline>,
     /// The global min/max reduce; built only for `NeedsMinMax`.
     reduce: Option<ComputePipeline>,
+    /// The jump flood -- seed, jump, and seeds-to-distance -- for a
+    /// matte whose edge is Distance. Always built; they depend on
+    /// nothing in the key.
+    jfa_init: ComputePipeline,
+    jfa_step: ComputePipeline,
+    jfa_final: ComputePipeline,
+    jfa_layout: BindGroupLayout,
     /// The agent passes and their seeding, for `NeedsAgents`.
     agents: Vec<ComputePipeline>,
     agent_seed: Option<ComputePipeline>,
@@ -241,6 +254,18 @@ pub struct SimRenderer {
     /// A 1x1 texture bound to every pyramid slot a model does not use:
     /// the layout carries seven, and a bind group must fill them.
     pyramid_dummy: (Texture, TextureView),
+    /// The jump flood's ping-pong pair and its result, the signed
+    /// distance field, all at grid size. Allocated when the matte's
+    /// edge is Distance and freed when it is not -- three grid-sized
+    /// textures are 800 MB at 4K and nothing reads them otherwise.
+    jfa: Option<[(Texture, TextureView); 2]>,
+    sdf: Option<(Texture, TextureView)>,
+    /// Bound at the colour pass's distance slot when there is no
+    /// distance field; the shader never reads it then.
+    sdf_dummy: (Texture, TextureView),
+    /// One `SimParamsGpu` per jump-flood pass, its jump in the
+    /// kernel-radius word. Sixteen slots covers a 32768-cell grid.
+    jfa_params_buffer: Buffer,
     /// One uniform per pyramid level, holding that level's SOURCE size
     /// in `grid` so the shared boundary wrap applies at the right
     /// scale. Same layout as the step ring; selected by dynamic offset.
@@ -316,6 +341,13 @@ impl SimRenderer {
         // it.
         let pyramid = Vec::new();
         let pyramid_dummy = Self::create_level(device, 1, 1, "Sim Pyramid Dummy");
+        let sdf_dummy = Self::create_level(device, 1, 1, "Sim SDF Dummy");
+        let jfa_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Sim JFA Params"),
+            size: params_stride * JFA_SLOTS as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let level_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Level Params"),
             size: params_stride * MAX_PYRAMID_LEVELS as u64,
@@ -362,6 +394,10 @@ impl SimRenderer {
             kernel_buffer,
             pyramid,
             pyramid_dummy,
+            jfa: None,
+            sdf: None,
+            sdf_dummy,
+            jfa_params_buffer,
             level_params_buffer,
             minmax_buffer,
             agent_buffer: None,
@@ -558,6 +594,129 @@ impl SimRenderer {
         self.pyramid_bind_groups = None;
     }
 
+    /// Allocate the jump flood's textures when the matte asks for a
+    /// distance field, free them when it stops asking.
+    fn ensure_sdf(&mut self, device: &Device, wants: bool) {
+        if wants == self.sdf.is_some() {
+            return;
+        }
+        if wants {
+            let (w, h) = (self.grid_w, self.grid_h);
+            self.jfa = Some([
+                Self::create_level(device, w, h, "Sim JFA A"),
+                Self::create_level(device, w, h, "Sim JFA B"),
+            ]);
+            self.sdf = Some(Self::create_level(device, w, h, "Sim SDF"));
+        } else {
+            self.jfa = None;
+            self.sdf = None;
+        }
+    }
+
+    /// The signed distance field, for a test to read back.
+    pub fn sdf_texture(&self) -> Option<&Texture> {
+        self.sdf.as_ref().map(|(t, _)| t)
+    }
+
+    /// The jump flood over the live field, into `self.sdf`: seed, then
+    /// jumps of N/2 down to 1 and one more at 1, then seeds to
+    /// distance. Each pass reads its own uniform slot, whose
+    /// kernel-radius word is the jump.
+    fn encode_jump_flood(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        cfg: &SimConfig,
+        enc: &mut CommandEncoder,
+    ) {
+        let n = self.grid_w.max(self.grid_h).next_power_of_two();
+        let mut jumps: Vec<u32> = Vec::new();
+        let mut k = (n / 2).max(1);
+        loop {
+            jumps.push(k);
+            if k == 1 {
+                break;
+            }
+            k /= 2;
+        }
+        jumps.push(1);
+        assert!(jumps.len() + 1 <= JFA_SLOTS, "grid too large for the jump-flood slots");
+
+        // Slot 0 seeds; slot 1 + i is jump i.
+        let stride = self.params_stride as usize;
+        let mut bytes = vec![0u8; stride * (jumps.len() + 1)];
+        for (i, slot) in std::iter::once(0u32).chain(jumps.iter().copied()).enumerate() {
+            let mut p = self.params_for(cfg, self.step_index);
+            p.kernel_radius = slot;
+            let at = i * stride;
+            bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
+                .copy_from_slice(bytemuck::bytes_of(&p));
+        }
+        queue.write_buffer(&self.jfa_params_buffer, 0, &bytes);
+
+        let p = self.pipelines.as_ref().expect("pipelines built above");
+        let jfa = self.jfa.as_ref().expect("ensure_sdf allocated it");
+        let sdf = self.sdf.as_ref().expect("ensure_sdf allocated it");
+        let group = |out: &TextureView, ping: &TextureView| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Sim JFA BG"),
+                layout: &p.jfa_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::Buffer(BufferBinding {
+                            buffer: &self.jfa_params_buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(
+                                std::mem::size_of::<SimParamsGpu>() as u64,
+                            ),
+                        }),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: self.model_params_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: self.coloring_params_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(out) },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: BindingResource::TextureView(&self.field_view[self.current]),
+                    },
+                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(ping) },
+                ],
+            })
+        };
+        let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
+        let stride32 = self.params_stride as u32;
+        let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Sim Jump Flood"),
+            timestamp_writes: None,
+        });
+        // Seed into A. The ping slot is unused here; bind B.
+        let init_bg = group(&jfa[0].1, &jfa[1].1);
+        pass.set_pipeline(&p.jfa_init);
+        pass.set_bind_group(0, &init_bg, &[0]);
+        pass.dispatch_workgroups(gx, gy, 1);
+        // Jump A -> B -> A ...
+        let mut src = 0usize;
+        let mut groups = Vec::with_capacity(jumps.len());
+        for i in 0..jumps.len() {
+            groups.push(group(&jfa[1 - src].1, &jfa[src].1));
+            pass.set_pipeline(&p.jfa_step);
+            pass.set_bind_group(0, &groups[i], &[(i as u32 + 1) * stride32]);
+            pass.dispatch_workgroups(gx, gy, 1);
+            src = 1 - src;
+        }
+        // Seeds to distance, from whichever holds the last jump.
+        let final_bg = group(&sdf.1, &jfa[src].1);
+        pass.set_pipeline(&p.jfa_final);
+        pass.set_bind_group(0, &final_bg, &[0]);
+        pass.dispatch_workgroups(gx, gy, 1);
+    }
+
     /// Level `l` of the pyramid (1..), for a test to read back.
     pub fn pyramid_texture(&self, level: usize) -> Option<&Texture> {
         self.pyramid.get(level.checked_sub(1)?).map(|(t, _)| t)
@@ -702,6 +861,8 @@ impl SimRenderer {
             self.field_view = fv;
             // Re-created lazily at the new size, if the model reads it.
             self.pyramid.clear();
+            self.jfa = None;
+            self.sdf = None;
             let (d, c) = Self::create_cell_buffers(device, gw, gh);
             self.deposit_buffer = d;
             self.claim_buffer = c;
@@ -793,6 +954,9 @@ impl SimRenderer {
         let color_mod = make("Sim Color", &color_src);
         let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
         let reduce_mod = reduce_src.as_ref().map(|src| make("Sim Reduce", src));
+        let jfa_init_mod = make("Sim JFA Init", &assembler::assemble_jfa_init());
+        let jfa_step_mod = make("Sim JFA Step", &assembler::assemble_jfa_step());
+        let jfa_final_mod = make("Sim JFA Final", &assembler::assemble_jfa_final());
         let agent_mods: Vec<ShaderModule> =
             agent_srcs.iter().map(|src| make("Sim Agents", src)).collect();
         let agent_seed_mod = agent_seed_src.as_ref().map(|src| make("Sim Agent Seed", src));
@@ -932,6 +1096,22 @@ impl SimRenderer {
                 storage_tex(3),
                 sampled_tex(4, true),
                 sampled_tex(5, false),
+                // The distance field, or its dummy.
+                sampled_tex(6, true),
+            ],
+        });
+        // The jump flood: the shared uniform and param buffers (its
+        // shaders carry the common header), one storage target, the
+        // field for the seed pass, and the ping texture for the rest.
+        let jfa_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Sim JFA Layout"),
+            entries: &[
+                uniform_entry(0),
+                storage_ro(1),
+                storage_ro(2),
+                storage_tex(3),
+                sampled_tex(4, true),
+                sampled_tex(5, true),
             ],
         });
 
@@ -968,6 +1148,10 @@ impl SimRenderer {
             // and ignores the rest.
             warp: pipeline("Sim Warp", &step_layout, &warp_mod),
             color: pipeline("Sim Color", &color_layout, &color_mod),
+            jfa_init: pipeline("Sim JFA Init", &jfa_layout, &jfa_init_mod),
+            jfa_step: pipeline("Sim JFA Step", &jfa_layout, &jfa_step_mod),
+            jfa_final: pipeline("Sim JFA Final", &jfa_layout, &jfa_final_mod),
+            jfa_layout,
             pyramid: pyramid_mod
                 .as_ref()
                 .map(|m| pipeline("Sim Pyramid", &step_layout, m)),
@@ -1031,7 +1215,7 @@ impl SimRenderer {
                     crate::config::sim::SimWarpFilter::Nearest => 1.0,
                 },
             ],
-            _pad: [0.0; 2],
+            matte_b: [if cfg.matte.uses_distance() { 1.0 } else { 0.0 }, 0.0],
             matte: cfg.matte.packed(),
         }
     }
@@ -1625,7 +1809,15 @@ impl SimRenderer {
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
 
+        self.ensure_sdf(device, cfg.matte.uses_distance());
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Sim Color"),
+        });
+        if cfg.matte.uses_distance() {
+            self.encode_jump_flood(device, queue, cfg, &mut enc);
+        }
         let p = self.pipelines.as_ref().expect("pipelines built above");
+        let sdf_view = self.sdf.as_ref().map(|(_, v)| v).unwrap_or(&self.sdf_dummy.1);
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Sim Color BG"),
             layout: &p.color_layout,
@@ -1651,10 +1843,8 @@ impl SimRenderer {
                     resource: BindingResource::TextureView(&self.field_view[self.current]),
                 },
                 BindGroupEntry { binding: 5, resource: BindingResource::TextureView(palette_view) },
+                BindGroupEntry { binding: 6, resource: BindingResource::TextureView(sdf_view) },
             ],
-        });
-        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Sim Color"),
         });
         {
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {

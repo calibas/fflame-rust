@@ -155,7 +155,8 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimBoundary
         | ConfigPath::SimWarpFilter
         | ConfigPath::SimMatteChannel
-        | ConfigPath::SimMatteInvert => false,
+        | ConfigPath::SimMatteInvert
+        | ConfigPath::SimMatteEdge => false,
         // ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
         // ConfigPath::ColorMode => false,
@@ -1841,6 +1842,9 @@ impl ConfigManager {
             ConfigPath::SimMatteCutoff => Ok(ConfigValue::Float(config.sim.matte.cutoff)),
             ConfigPath::SimMatteSoftness => Ok(ConfigValue::Float(config.sim.matte.softness)),
             ConfigPath::SimMatteInvert => Ok(ConfigValue::Bool(config.sim.matte.invert)),
+            ConfigPath::SimMatteEdge => {
+                Ok(ConfigValue::String(config.sim.matte.edge.name().to_string()))
+            }
             ConfigPath::SimBoundary => {
                 Ok(ConfigValue::String(config.sim.boundary.name().to_string()))
             }
@@ -2943,6 +2947,12 @@ impl ConfigManager {
             }
             ConfigPath::SimMatteInvert => {
                 self.current.sim.matte.invert = bool::try_from(value)?;
+            }
+            ConfigPath::SimMatteEdge => {
+                let n = String::try_from(value)?;
+                if let Some(e) = crate::config::sim::SimMatteEdge::from_name(&n) {
+                    self.current.sim.matte.edge = e;
+                }
             }
             ConfigPath::SimUpscale => {
                 let n = String::try_from(value)?;

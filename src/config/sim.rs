@@ -348,6 +348,44 @@ impl SimMatteChannel {
     }
 }
 
+/// How the matte finds its edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimMatteEdge {
+    /// The cutoff on the (interpolated) channel value. Exact at the
+    /// 0.5 isoline of a 0/1 field and a straight line between two
+    /// cells, but a curve is approximated cell by cell and a feather
+    /// is measured in the channel's units.
+    #[default]
+    Threshold,
+    /// A signed distance to the edge, in cells, from a jump flood
+    /// over the occupancy (derived-fields plan, phase C). The edge is
+    /// the same sub-cell boundary, but the field around it is a
+    /// distance, so it interpolates smoothly at any magnification and
+    /// `softness` becomes a width in cells. Costs ceil(log2 N) + 2
+    /// grid-resolution dispatches per coloured frame.
+    Distance,
+}
+
+impl SimMatteEdge {
+    pub const NAMES: &'static [&'static str] = &["threshold", "distance"];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimMatteEdge::Threshold => "threshold",
+            SimMatteEdge::Distance => "distance",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "threshold" => SimMatteEdge::Threshold,
+            "distance" => SimMatteEdge::Distance,
+            _ => return None,
+        })
+    }
+}
+
 /// Which cells are the picture and which are empty space.
 ///
 /// A sim colouring returns `(rgb, coverage)`, and the shared tonemap
@@ -381,6 +419,13 @@ pub struct SimMatte {
     /// Whether the LOW side is the figure instead.
     #[serde(default, skip_serializing_if = "is_false")]
     pub invert: bool,
+    /// Threshold on the channel, or a distance field from it.
+    #[serde(default, skip_serializing_if = "is_default_matte_edge")]
+    pub edge: SimMatteEdge,
+}
+
+fn is_default_matte_edge(v: &SimMatteEdge) -> bool {
+    *v == SimMatteEdge::default()
 }
 
 fn default_matte_cutoff() -> f32 {
@@ -403,6 +448,7 @@ impl Default for SimMatte {
             cutoff: 0.5,
             softness: 0.0,
             invert: false,
+            edge: SimMatteEdge::Threshold,
         }
     }
 }
@@ -425,6 +471,13 @@ impl SimMatte {
             1.0
         };
         [self.channel.index(), mode, self.cutoff, self.softness.max(0.0)]
+    }
+
+    /// Whether the matte runs the distance field: 1 or 0, as the
+    /// uniform carries it. Off implies no, whatever `edge` says, so
+    /// the renderer never builds a distance field nobody reads.
+    pub fn uses_distance(&self) -> bool {
+        !self.is_off() && self.edge == SimMatteEdge::Distance
     }
 }
 
@@ -827,6 +880,7 @@ mod tests {
             ConfigPath::SimMatteCutoff,
             ConfigPath::SimMatteSoftness,
             ConfigPath::SimMatteInvert,
+            ConfigPath::SimMatteEdge,
             ConfigPath::SimUpscale,
             ConfigPath::SimDownscale,
             ConfigPath::SimModelParam { param: "feed".into() },
@@ -859,6 +913,7 @@ mod tests {
             ConfigPath::SimMatteCutoff,
             ConfigPath::SimMatteSoftness,
             ConfigPath::SimMatteInvert,
+            ConfigPath::SimMatteEdge,
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
         ] {
@@ -921,6 +976,7 @@ mod tests {
         );
         assert!(json_to_config_value(&f, &ConfigPath::SimMatteChannel).is_none());
         assert!(json_to_config_value(&f, &ConfigPath::SimMatteInvert).is_none());
+        assert!(json_to_config_value(&f, &ConfigPath::SimMatteEdge).is_none());
     }
 
     /// Off is the default and must leave the file alone; a set matte
@@ -938,6 +994,7 @@ mod tests {
             cutoff: 0.25,
             softness: 0.1,
             invert: true,
+            edge: SimMatteEdge::Distance,
         };
         let back: SimConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back.matte, cfg.matte);
@@ -998,6 +1055,9 @@ mod tests {
         }
         for n in SimMatteChannel::NAMES {
             assert_eq!(SimMatteChannel::from_name(n).unwrap().name(), *n);
+        }
+        for n in SimMatteEdge::NAMES {
+            assert_eq!(SimMatteEdge::from_name(n).unwrap().name(), *n);
         }
         for k in SimInit::KINDS {
             assert_eq!(SimInit::default().with_kind(k).kind_name(), *k);

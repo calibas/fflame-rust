@@ -1367,6 +1367,7 @@ pub static EDEN: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -1386,6 +1387,7 @@ pub static EDEN: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
     ],
@@ -1494,6 +1496,7 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -1509,6 +1512,7 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
     ],
@@ -1745,6 +1749,7 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -1760,6 +1765,7 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -1775,6 +1781,7 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
     ],
@@ -3892,6 +3899,7 @@ pub static DLA: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
     }],
     wgsl: r#"
@@ -4300,6 +4308,7 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -4318,6 +4327,7 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
     ],
@@ -4594,6 +4604,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -4618,6 +4629,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -4642,6 +4654,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -4664,6 +4677,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
     ],
@@ -4991,6 +5005,7 @@ pub static DBM: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -5009,6 +5024,7 @@ pub static DBM: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
         SimPreset {
@@ -5026,6 +5042,7 @@ pub static DBM: ModelDef = ModelDef {
                 cutoff: 0.5,
                 softness: 0.0,
                 invert: false,
+                edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
         },
     ],

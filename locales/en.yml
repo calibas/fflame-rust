@@ -828,6 +828,7 @@ history:
     sim_matte_cutoff: "Simulation Matte Cutoff"
     sim_matte_softness: "Simulation Matte Softness"
     sim_matte_invert: "Simulation Matte Invert"
+    sim_matte_edge: "Simulation Matte Edge"
     sim_upscale: "Simulation Upscale"
     sim_downscale: "Simulation Downscale"
     sim_model_param: "Simulation %{param}"
@@ -2017,6 +2018,8 @@ sim_panel:
   matte_softness_tip: "Width of the feather around the cutoff. 0 is a hard edge, right for an occupancy flag; widen it to float a continuous pattern over the background."
   matte_invert: "Low side is the figure"
   matte_invert_tip: "Swaps which side of the cutoff is drawn — for a model whose interesting phase is the low one."
+  matte_edge: "Edge"
+  matte_edge_tip: "What Softness measures. Both settings put the edge in the same place — a distance field built from cells knows no more about where the boundary is than the cells do, and that was measured. Threshold feathers in the channel's own units, so the same Softness is a different width on every model. Distance builds a distance field every coloured frame, so Softness is a width in cells, the same on every model, and a wide feather stays a feather rather than a smear. It costs a few grid-sized passes per frame."
 
 escape_panel:
   contrast: "Auto Contrast"
