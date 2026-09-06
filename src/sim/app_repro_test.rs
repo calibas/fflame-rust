@@ -3109,3 +3109,292 @@ fn invasion_percolation_invades_the_true_component() {
         N * N
     );
 }
+
+#[test]
+fn snow_probe_tmp() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: usize = 128;
+    let mut cfg = SimConfig::default();
+    cfg.model = "snowfake".into();
+    cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 1;
+    cfg.steps = 4000;
+    let m = crate::sim::model_or_default("snowfake");
+    for (k, v) in m.preset("simple_star").unwrap().params { cfg.model_params.insert((*k).into(), *v); }
+    let count = |f: &Vec<[f32; 4]>| f.iter().filter(|p| p[0] > 0.5).count();
+
+    // (a) exactly what render.rs does: seed, then 512-step batches.
+    let mut r = SimRenderer::new(&device, &cfg, 512, 512);
+    r.seed(&device, &queue, &cfg);
+    let mut done = 0u32;
+    while done < cfg.steps {
+        let batch = 512.min(cfg.steps - done);
+        r.run_steps(&device, &queue, &cfg, batch);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        done += batch;
+    }
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    println!("(a) render.rs loop, out 512: attached {}", count(&f));
+
+    // (b) one call, out = grid.
+    let mut r2 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r2.seed(&device, &queue, &cfg);
+    r2.run_steps(&device, &queue, &cfg, 4000);
+    let f2 = read_rgba32f(&device, &queue, r2.field_texture(), N as u32, N as u32);
+    println!("(b) one 4000-step call, out 128: attached {}", count(&f2));
+
+    // (c) one call, out 512 -- the only difference from (b).
+    let mut r3 = SimRenderer::new(&device, &cfg, 512, 512);
+    r3.seed(&device, &queue, &cfg);
+    r3.run_steps(&device, &queue, &cfg, 4000);
+    let f3 = read_rgba32f(&device, &queue, r3.field_texture(), N as u32, N as u32);
+    println!("(c) one 4000-step call, out 512: attached {}", count(&f3));
+
+    // (d) 512-batches, out = grid.
+    let mut r4 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r4.seed(&device, &queue, &cfg);
+    let mut done = 0u32;
+    while done < cfg.steps {
+        let batch = 512.min(cfg.steps - done);
+        r4.run_steps(&device, &queue, &cfg, batch);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        done += batch;
+    }
+    let f4 = read_rgba32f(&device, &queue, r4.field_texture(), N as u32, N as u32);
+    println!("(d) 512-batches, out 128: attached {}", count(&f4));
+}
+
+/// The Gravner-Griffeath rule on the CPU, in the paper's four substeps
+/// and its own order, against which the two-pass shader is checked.
+///
+/// Channels as the shader stores them: a, b, c, d.
+fn cpu_snowfake(n: usize, p: &[f32; 8], steps: u32) -> Vec<[f32; 4]> {
+    let (rho, beta, alpha, theta, kappa, mu, gamma) =
+        (p[0], p[1], p[2], p[3], p[4], p[5], p[6]);
+    let mut f = vec![[0.0f32, 0.0, 0.0, rho]; n * n];
+    f[(n / 2) * n + n / 2] = [1.0, 0.0, 1.0, 0.0];
+    // Offset-row hex neighbours, clamped at the grid edge exactly as
+    // the Clamp boundary body does.
+    let nb = |x: usize, y: usize, i: usize| -> usize {
+        let k: i64 = if y % 2 == 1 { 0 } else { -1 };
+        let (dx, dy): (i64, i64) = match i {
+            0 => (-1, 0),
+            1 => (1, 0),
+            2 => (k, -1),
+            3 => (k + 1, -1),
+            4 => (k, 1),
+            _ => (k + 1, 1),
+        };
+        let sx = (x as i64 + dx).clamp(0, n as i64 - 1) as usize;
+        let sy = (y as i64 + dy).clamp(0, n as i64 - 1) as usize;
+        sy * n + sx
+    };
+    for _ in 0..steps {
+        // (i) diffusion, then (ii) freezing.
+        let old = f.clone();
+        for y in 0..n {
+            for x in 0..n {
+                let k = y * n + x;
+                if old[k][0] > 0.5 {
+                    continue;
+                }
+                let mut attached = 0;
+                let mut sum = old[k][3];
+                for i in 0..6 {
+                    let q = old[nb(x, y, i)];
+                    if q[0] > 0.5 {
+                        attached += 1;
+                        sum += old[k][3];
+                    } else {
+                        sum += q[3];
+                    }
+                }
+                let mut d = sum * (1.0 / 7.0);
+                let (mut b, mut c) = (old[k][1], old[k][2]);
+                if attached > 0 {
+                    b += (1.0 - kappa) * d;
+                    c += kappa * d;
+                    d = 0.0;
+                }
+                f[k] = [0.0, b, c, d];
+            }
+        }
+        // (iii) attachment, then (iv) melting.
+        let old = f.clone();
+        for y in 0..n {
+            for x in 0..n {
+                let k = y * n + x;
+                if old[k][0] > 0.5 {
+                    continue;
+                }
+                let mut cnt = 0;
+                let mut dsum = old[k][3];
+                for i in 0..6 {
+                    let q = old[nb(x, y, i)];
+                    if q[0] > 0.5 {
+                        cnt += 1;
+                    }
+                    dsum += q[3];
+                }
+                if cnt == 0 {
+                    continue;
+                }
+                let attach = if cnt >= 4 {
+                    true
+                } else if cnt == 3 {
+                    old[k][1] >= 1.0 || (dsum < theta && old[k][1] >= alpha)
+                } else {
+                    old[k][1] >= beta
+                };
+                f[k] = if attach {
+                    [1.0, 0.0, old[k][1] + old[k][2], 0.0]
+                } else {
+                    [
+                        0.0,
+                        (1.0 - mu) * old[k][1],
+                        (1.0 - gamma) * old[k][2],
+                        old[k][3] + mu * old[k][1] + gamma * old[k][2],
+                    ]
+                };
+            }
+        }
+    }
+    f
+}
+
+fn snowfake_config(n: u32, preset: &str) -> (SimConfig, [f32; 8]) {
+    let mut cfg = SimConfig::default();
+    cfg.model = "snowfake".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Center;
+    // Reflecting at the box edge, so no vapour leaves: the paper's own
+    // conservation check only means anything under a closed boundary.
+    // Closed, so no vapour enters or leaves and the paper's
+    // conservation check means something. The paper uses a periodic
+    // box; measured, Clamp gives the same mass drift to two figures,
+    // and it degrades more gracefully when a crystal does reach the
+    // edge -- a wrap grows the crystal into itself.
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 1;
+    let m = crate::sim::model_or_default("snowfake");
+    for (k, v) in m.preset(preset).unwrap().params {
+        cfg.model_params.insert((*k).into(), *v);
+    }
+    let packed = m.pack_params(&cfg);
+    let mut p = [0.0f32; 8];
+    p.copy_from_slice(&packed[..8]);
+    (cfg, p)
+}
+
+/// The snowfake against a CPU mirror of the paper's four substeps, run
+/// in the paper's order.
+///
+/// The shader merges them into two dispatches — freezing needs only the
+/// vapour diffusion just left at the site itself, and melting only the
+/// site's own masses — and this is what says that merge is exact. The
+/// mirror keeps the substeps separate and clones the field between
+/// them, so if (ii) or (iv) secretly read a neighbour, or if the pass
+/// boundary sat in the wrong place, the two would part company.
+///
+/// Run long enough to attach thousands of cells, so the comparison
+/// covers all three attachment cases and the knife-edge, not just the
+/// first ring.
+#[test]
+fn snowfake_matches_a_cpu_mirror_of_the_four_substeps() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    const STEPS: u32 = 400;
+    let (cfg, p) = snowfake_config(N as u32, "simple_star");
+    let want = cpu_snowfake(N, &p, STEPS);
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, STEPS);
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let attached = got.iter().filter(|q| q[0] > 0.5).count();
+    let wrong_a = (0..N * N).filter(|&k| (want[k][0] > 0.5) != (got[k][0] > 0.5)).count();
+    // Both machines' mass drift, against the mass they started with.
+    // The point of printing both: the drift is f32 arithmetic, not the
+    // shader. A CPU mirror in the same precision drifts the same way,
+    // so `the_snowfake_conserves_mass` is bounded by what f32 can do
+    // rather than by what the paper's algebra says.
+    let start = p[0] as f64 * (N * N - 1) as f64 + 1.0;
+    let mass = |f: &Vec<[f32; 4]>| -> f64 {
+        f.iter().map(|q| q[1] as f64 + q[2] as f64 + q[3] as f64).sum()
+    };
+    let (dc, dg) = ((mass(&want) - start) / start, (mass(&got) - start) / start);
+    let mut worst = 0.0f32;
+    for k in 0..N * N {
+        for ch in 1..4 {
+            worst = worst.max((want[k][ch] - got[k][ch]).abs());
+        }
+    }
+    println!(
+        "snowfake {STEPS} steps at {N}^2: {attached} attached, {wrong_a} disagree on attachment, \
+         worst mass difference {worst:.2e}; mass drift CPU {dc:.1e} GPU {dg:.1e}"
+    );
+    assert!(attached > 400, "only {attached} cells attached; the run is too short to prove much");
+    assert_eq!(wrong_a, 0, "the shader attaches different cells from the paper's rule");
+    // f32 arithmetic in a different order on the two machines, over
+    // hundreds of steps of a diffusion that mixes every cell.
+    assert!(worst < 1e-3, "masses diverge from the mirror by {worst:.2e}");
+}
+
+/// "Without noise, note that total mass is conserved. Not only is this
+/// property appealing from a physical perspective; it also helps in
+/// debugging code and checking numerical stability." — the paper, §5.
+///
+/// So: b + c + d summed over the grid must still equal the vapour it
+/// started with plus the seed's one unit of ice, after tens of
+/// thousands of steps of a crystal that has eaten most of it. Every
+/// substep moves mass between the three fields and none creates or
+/// destroys any, so a sign or a factor wrong anywhere shows up here
+/// even when the picture still looks like a snowflake.
+#[test]
+fn the_snowfake_conserves_mass() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 256;
+    for preset in ["primitive", "simple_star", "dendrite_ends"] {
+        let (cfg, p) = snowfake_config(N as u32, preset);
+        let rho = p[0] as f64;
+        let want = rho * (N * N - 1) as f64 + 1.0;
+
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 4_000);
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let got: f64 = f.iter().map(|q| q[1] as f64 + q[2] as f64 + q[3] as f64).sum();
+        let attached = f.iter().filter(|q| q[0] > 0.5).count();
+        let rel = (got - want).abs() / want;
+        println!(
+            "snowfake {preset}: {attached} cells attached, mass {got:.1} against {want:.1} \
+             ({:.1e} relative)",
+            rel
+        );
+        assert!(attached > 1_000, "{preset}: barely grew, so this proves little");
+        // Measured on Windows/Vulkan: about 1e-4 after 4,000 steps,
+        // in EITHER direction -- -6.8e-5 at 64^2 over 400 steps,
+        // +1.2e-4 at 256^2 over 4,000 -- because which way half an ulp
+        // falls depends on rho's binary expansion. It is f32, not the
+        // rule: the CPU mirror in
+        // `snowfake_matches_a_cpu_mirror_of_the_four_substeps` drifts
+        // the same way and prints both. A uniform far field is a fixed
+        // point of the exact average but not of the rounded one, so
+        // every untouched cell gains an ulp a step. The
+        // bound is looser than that on purpose -- Metal's fast-math
+        // may turn the division by 7 back into a multiply by the
+        // biased reciprocal, which drifts about 1e-4 over this run --
+        // and it is still three orders inside anything a wrong factor
+        // or sign in one of the four substeps would produce.
+        assert!(rel < 1e-3, "{preset}: mass is not conserved ({rel:.2e} relative)");
+    }
+}

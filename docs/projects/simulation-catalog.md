@@ -1337,6 +1337,98 @@ uses a finite box with the density held at the edge — `[verify]`).
 
 ---
 
+**PART II READ IN FULL AND SHIPPED, 2026-09-05.** Everything above this
+line is Part III's rule standing in for Part II's, and it is wrong in
+five ways. What Part II actually says (revised version, September 2007;
+text at `output/gg2.txt`):
+
+- **Four fields, not three.** ξ(x) = (a, b, c, d): a ∈ {0,1} attached,
+  b boundary mass (the quasi-liquid layer), c CRYSTAL mass (ice), d
+  diffusive mass (vapour). Part III's three-field version has no
+  separate ice field. Four fields is four channels, exactly.
+- **The seed is ONE cell** with a = c = 1, in vapour of density ρ. The
+  hexagon of radius 2 above is Part III's.
+- **Freezing spends all the vapour**: b += (1−κ)d, c += κd, **d = 0**.
+  Part III keeps κd AS vapour. And κ here is a single constant, not a
+  function of the neighbour count.
+- **The neighbour count enters only through the three attachment
+  cases**: 1 or 2 attached neighbours need b ≥ β; 3 need b ≥ 1, or the
+  knife-edge; 4 or more attach unconditionally. So the parameters are
+  **ρ β α θ κ µ γ σ** — eight constants — and the
+  `kappa1..3 / beta1..3 / mu1..3` guessed above was wrong in shape as
+  well as in value.
+- **α and θ have no Part III analogue.** They are the knife-edge
+  instability: a concave site may attach on only α of boundary mass
+  once the vapour summed over its neighbourhood falls below θ. It is
+  what fills the regions between the six main branches long after they
+  have passed, and the paper calls it the most speculative part of the
+  model.
+
+**TWO PASSES, not the four this entry planned for.** Substeps (ii)
+freezing and (iv) melting read no neighbour — freezing needs only the
+vapour diffusion just left at the site itself, melting only the site's
+own masses — so (i)+(ii) are one dispatch and (iii)+(iv) another. The
+pass boundary sits where it must: attachment reads its neighbours'
+vapour after freezing has zeroed it at every boundary site. A CPU
+mirror that keeps all four substeps separate agrees with the shader
+exactly on which cells attach, over 400 steps and 543 attachments, so
+the merge is not an approximation.
+
+**The paper contradicts itself about α and θ, and measurement settles
+it.** Equation (3b) has θ bounding the vapour and α the boundary mass;
+section 5's prose says the reverse. The appendix tabulates every
+figure's parameters as ρ β α θ κ µ γ σ, and for figure 13 left the
+table reads α = .2, θ = .026 where section 6's text reads α = .026,
+θ = .2. **Under the equation with the table's values, all three case
+studies reproduce the morphology the text describes**; under the
+equation with the text's values, figure 13 left grows a featureless
+hexagonal plate at every size and duration tried, up to 40,000 steps
+on a 1024² grid, because a vapour cutoff of 0.2 fires the knife-edge
+everywhere around a large crystal and a threshold of 0.026 then fills
+each concavity as fast as it forms. The table is what ships. (It also
+gives figure 13 right γ = .0006 where the text says .00006.)
+
+**Mass conservation is the paper's own check** — "it also helps in
+debugging code and checking numerical stability" — and it is a test:
+b + c + d over the grid against what it started with. Measured, the
+drift is f32 and not the rule, about 1e-4 after 4,000 steps and in
+either direction (−6.8e-5 at 64² over 400 steps, +1.2e-4 at 256² over
+4,000), because a uniform far field is a fixed point of the exact
+average but not of the rounded one. The CPU mirror in the same
+precision drifts identically, which is what attributes it. Dividing by
+7 rather than multiplying by the f32 reciprocal, which is biased high,
+did not change the measurement.
+
+**Lattice.** The paper works on ℤ² with six of the eight directions
+{N, S, E, W, NE, SW} and maps to the triangular lattice by a 45°
+rotation and a 1/√3 vertical rescale. This uses the offset-row
+addressing §17's Packard snowflake already had — isomorphic, and no
+post-mapping, at the cost of the same vertical stretch by 2/√3.
+
+**Boundary.** The paper uses a periodic box with L at least 1.5× the
+final crystal diameter, twice for slow-growing plates. The shipped
+configs use Clamp: both are closed, measured they give the same mass
+drift to two figures, and a clamp degrades more gracefully when a
+crystal does reach the edge, where a wrap grows it into itself.
+
+**Cost, measured at 512²**: about 0.1 ms a step, so the shipped presets
+are 1 to 4 seconds — 24,000 steps for the primitive case, 12,000 for
+the simple star, 20,000 for the plate with dendrite ends, 40,000 for
+the slow stellar plate (the paper's own figure took "more than
+100,000" at its scale).
+
+**Colouring, as shipped.** `channel` on `.z` is the picture: the
+crystal, with its internal markings where the ice mass varies.
+`two_channel` shows crystal against vapour. **There is no `age`** —
+that colouring reads `.z`, which here is crystal mass, and the four
+fields leave no channel for an attachment time.
+
+**Presets** are four rows of the appendix, unmodified: figure 4's
+primitive case (only ρ and β nonzero — anisotropy alone, and it ferns),
+and figures 13 left, middle and right.
+
+---
+
 ## 19. Diffusion-limited aggregation
 
 **Sources.** T. A. Witten, L. M. Sander, "Diffusion-limited aggregation,
