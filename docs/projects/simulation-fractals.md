@@ -1076,6 +1076,43 @@ bound, so no second control was needed. The one asymmetry is stated in
 the panel rather than left to be discovered: an export runs Max Steps
 from the seed, so at 0 it renders the seed.
 
+**Two reset bugs, 2026-09-06.**
+
+*A loaded file inherited the previous run.* `import_config` — the
+funnel for every file load, preset, undo and redo — synchronised the
+flame renderer and said nothing about the simulation, and a
+whole-config replacement never passes through the delta path that
+computes `UpdateType::SimReseed`. So the old field, step count and
+transport state carried straight into the new config. The serde half
+was already right (`FractalConfig.sim` is `#[serde(default)]` and
+`SimConfig` from `{}` is the default, both asserted now); it was the
+renderer that ignored what it had been handed.
+
+Fixed at the renderer, where it covers every route in rather than
+just the one that was reported: `SeedIdentity` is the part of a
+`SimConfig` the FIELD's meaning depends on — model, boundary, init,
+seed — recorded at each seed and compared every frame, so a config
+arriving from a file, a preset, a script, the API or the animation
+exporter cannot inherit a field that does not belong to it. Model and
+colouring parameters are deliberately absent (turning Gray–Scott's
+feed rate is what the slider is for), and the grid is absent because
+`resize` already reseeds. `import_config` additionally restarts the
+transport on a LOAD — running, from step zero — while undo and redo
+pass `false` and let the identity decide, so undoing a colour change
+does not throw away a ten-thousand-step run.
+
+*The window slept on a stale panel.* The UI is built earlier in the
+frame than the simulation steps, so the frame that auto-paused at Max
+Steps drew a panel still saying "Pause" over the previous step count —
+and, with nothing left running, that was the last frame drawn. The
+pause now asks for one more redraw.
+
+Found while fixing it: the snowfake's ρ tooltip claimed "changing it
+reseeds", which no model parameter does. ρ is read by the seed alone,
+so the tooltip now says it takes effect on the next Reset. The general
+version of that — a parameter that only the seed reads should say so,
+or reseed — is not built.
+
 The rest of the phase, still to do: animation
 targets, video-export semantics, a shipped `sim_sweep.rhai`; the
 script `sim` handle with SCRIPTING.md rows; the API enum (server

@@ -725,6 +725,20 @@ mod tests {
         assert_eq!(c.steps, 4000);
         assert_eq!(c.dt, 1.0);
         assert_eq!(c.model, "gray_scott");
+        // And at the level a file actually arrives at. A config whose
+        // file has no `sim` block gets the default one, so nothing of
+        // a previous simulation survives a load through serde. What
+        // used to survive it was the RENDERER's field, which
+        // `SeedIdentity` now restarts.
+        let mut outer = crate::config::FractalConfig::default();
+        outer.sim.model = "dla".into();
+        outer.sim.seed = 99;
+        outer.sim.steps = 123;
+        let mut json: serde_json::Value = serde_json::to_value(&outer).unwrap();
+        assert!(json.get("sim").is_some(), "the fixture should have had a sim block");
+        json.as_object_mut().unwrap().remove("sim");
+        let loaded: crate::config::FractalConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.sim, SimConfig::default());
     }
 
     #[test]

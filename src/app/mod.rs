@@ -882,7 +882,7 @@ impl App {
         app.signal_manager.add_producer(app.audio_capture.create_producer());
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
-        app.import_config(initial_config);
+        app.import_config(initial_config, true);
 
         // Detect compact (mobile) mode from logical window size
         {
@@ -2615,7 +2615,7 @@ impl App {
                 // now at" -- and a frame that reseeds counts as below,
                 // because the index it is about to measure from is 0.
                 let cap = final_config.sim.steps;
-                let was_below = cap > 0 && (sim.will_reseed() || sim.step_index() < cap);
+                let was_below = cap > 0 && (sim.will_reseed(&final_config.sim) || sim.step_index() < cap);
                 sim.render_frame(
                     &self.gpu.device,
                     &self.gpu.queue,
@@ -2631,6 +2631,12 @@ impl App {
                     && crate::sim::should_pause_at_limit(cap, was_below, sim.step_index())
                 {
                     self.sim_running = false;
+                    // THE PANEL FOR THIS FRAME WAS BUILT BEFORE THE
+                    // STEP RAN, so it still says Pause and shows the
+                    // previous step count. Without one more frame the
+                    // window sleeps on that, and the last thing drawn
+                    // is a stale panel over a finished picture.
+                    self.window.request_redraw();
                 }
                 if self.sim_running {
                     self.window.request_redraw();

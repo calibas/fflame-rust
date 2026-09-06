@@ -106,6 +106,42 @@ struct SimParamsGpu {
     matte: [f32; 4],
 }
 
+/// The part of a `SimConfig` the FIELD's meaning depends on.
+///
+/// A field is only ever the state of the run that produced it. Change
+/// the rule, what a step reads past the edges, the shape it started
+/// from or the RNG stream, and the cells sitting in the texture are
+/// the answer to a question nobody asked -- so the run restarts.
+///
+/// This exists because a whole-config replacement does not come
+/// through the delta path that computes `UpdateType::SimReseed`:
+/// loading a file, applying a preset, a script writing a config, the
+/// animation exporter building one per frame. Before it, loading a
+/// file left the previous simulation's field on screen.
+///
+/// Deliberately NOT included: model and colouring parameters. Turning
+/// Gray-Scott's feed rate while it runs is what the slider is for, and
+/// reseeding on it would make every model unusable. The grid is absent
+/// for a different reason -- `resize` already reseeds when it changes.
+#[derive(Clone, PartialEq)]
+struct SeedIdentity {
+    model: &'static str,
+    boundary: crate::config::sim::SimBoundary,
+    init: crate::config::sim::SimInit,
+    seed: u64,
+}
+
+impl SeedIdentity {
+    fn of(cfg: &SimConfig) -> Self {
+        SeedIdentity {
+            model: model_or_default(&cfg.model).name,
+            boundary: cfg.boundary,
+            init: cfg.init,
+            seed: cfg.seed,
+        }
+    }
+}
+
 /// The shader set for one (model, colouring, boundary, resolve)
 /// combination. Rebuilt when any of those change, which is rare —
 /// parameter edits do not touch it.
@@ -240,6 +276,11 @@ pub struct SimRenderer {
     /// Set when the field has not been seeded yet, or the config
     /// changed in a way that invalidates it.
     needs_seed: bool,
+    /// What the live field was seeded from, or `None` before the
+    /// first seed. Compared against the config every frame, so a
+    /// config that arrives by any route at all cannot inherit the
+    /// previous run's field.
+    seeded_as: Option<SeedIdentity>,
 }
 
 impl SimRenderer {
@@ -333,6 +374,7 @@ impl SimRenderer {
             kernel_radius: 1,
             steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
+            seeded_as: None,
         }
     }
 
@@ -594,8 +636,12 @@ impl SimRenderer {
     /// Whether the next frame will restart the run before stepping.
     /// The caller needs this to know that a step index it is looking
     /// at is about to become 0.
-    pub fn will_reseed(&self) -> bool {
-        self.needs_seed
+    ///
+    /// True either because something asked for a reseed, or because
+    /// the config no longer describes the field that is loaded --
+    /// see `SeedIdentity`.
+    pub fn will_reseed(&self, cfg: &SimConfig) -> bool {
+        self.needs_seed || self.seeded_as.as_ref() != Some(&SeedIdentity::of(cfg))
     }
 
     /// How many steps are left before `cfg.steps`, or `None` when
@@ -1296,6 +1342,7 @@ impl SimRenderer {
         }
         queue.submit(std::iter::once(enc.finish()));
         self.needs_seed = false;
+        self.seeded_as = Some(SeedIdentity::of(cfg));
 
         // A model that renormalises needs the seed's range before its
         // first step. Step 0 reads slot (0 - 1) mod RING, so the seed's
@@ -1627,7 +1674,7 @@ impl SimRenderer {
         palette_view: &TextureView,
         steps: u32,
     ) {
-        if self.needs_seed {
+        if self.will_reseed(cfg) {
             self.seed(device, queue, cfg);
         }
         // Never overshoot the cap, even by part of a frame's batch:

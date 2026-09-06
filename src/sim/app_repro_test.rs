@@ -4060,7 +4060,7 @@ fn a_capped_run_stops_on_the_step_an_export_stops_on() {
 
     // A reseed arms it again.
     app.request_seed();
-    assert!(app.will_reseed());
+    assert!(app.will_reseed(&cfg));
     app.render_frame(&device, &queue, &cfg, &palette, PER_FRAME);
     assert_eq!(app.step_index(), PER_FRAME, "a reseed restarts the count");
 
@@ -4073,4 +4073,80 @@ fn a_capped_run_stops_on_the_step_an_export_stops_on() {
         r.render_frame(&device, &queue, &free, &palette, PER_FRAME);
     }
     assert_eq!(r.step_index(), 3 * PER_FRAME, "an uncapped run should not stop");
+}
+
+/// A field belongs to the config that produced it.
+///
+/// Loading a file does not come through the delta path that decides
+/// `UpdateType::SimReseed` — it replaces the whole config at once —
+/// and before `SeedIdentity` the previous simulation's field, step
+/// count and all simply carried over into the new one. This is that,
+/// at the renderer: hand `render_frame` a config describing a
+/// different field and it must start over, whatever nobody told it.
+///
+/// And the other half, which is just as important: a config that
+/// describes the SAME field must NOT restart. Turning a model's
+/// parameter is what its slider is for, and a reseed on every drag
+/// would make Gray–Scott unusable.
+#[test]
+fn a_config_that_means_a_different_field_restarts_the_run() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let mut a = SimConfig::default();
+    a.grid = SimGrid::Fixed { width: N, height: N };
+    a.seed = 11;
+    a.steps = 0; // uncapped, so only the reseed can move the index
+
+    let mut r = SimRenderer::new(&device, &a, N, N);
+    r.render_frame(&device, &queue, &a, &palette, 120);
+    assert_eq!(r.step_index(), 120);
+    assert!(!r.will_reseed(&a), "nothing changed; the run should continue");
+
+    // Each of these is a different field, and each must restart the
+    // run on its own.
+    for (label, cfg) in [
+        ("model", SimConfig { model: "fitzhugh_nagumo".into(), ..a.clone() }),
+        ("seed", SimConfig { seed: 12, ..a.clone() }),
+        ("init", SimConfig { init: SimInit::Center, ..a.clone() }),
+        ("boundary", SimConfig { boundary: SimBoundary::Zero, ..a.clone() }),
+    ] {
+        let mut r = SimRenderer::new(&device, &a, N, N);
+        r.render_frame(&device, &queue, &a, &palette, 120);
+        assert_eq!(r.step_index(), 120);
+        assert!(r.will_reseed(&cfg), "{label}: should restart");
+        r.render_frame(&device, &queue, &cfg, &palette, 10);
+        assert_eq!(r.step_index(), 10, "{label}: the run did not restart from zero");
+        // And the field is the new config's, not the old one's carried
+        // forward: seeding the same config from scratch gives the same
+        // ten steps.
+        let mut fresh = SimRenderer::new(&device, &cfg, N, N);
+        fresh.render_frame(&device, &queue, &cfg, &palette, 10);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        assert_eq!(
+            read_rgba32f(&device, &queue, r.field_texture(), N, N),
+            read_rgba32f(&device, &queue, fresh.field_texture(), N, N),
+            "{label}: the loaded config inherited the previous run's field"
+        );
+    }
+
+    // A model parameter is NOT a different field: the run continues.
+    let mut tuned = a.clone();
+    tuned.model_params.insert("feed".into(), 0.03);
+    let mut r = SimRenderer::new(&device, &a, N, N);
+    r.render_frame(&device, &queue, &a, &palette, 120);
+    assert!(!r.will_reseed(&tuned), "a parameter change must not throw away the run");
+    r.render_frame(&device, &queue, &tuned, &palette, 10);
+    assert_eq!(r.step_index(), 130, "a parameter change restarted the run");
+
+    // Nor is a colouring, a warp, a matte or the step cap.
+    let mut recoloured = a.clone();
+    recoloured.coloring = "age".into();
+    recoloured.warp.zoom = 0.99;
+    recoloured.matte.channel = crate::config::sim::SimMatteChannel::X;
+    recoloured.steps = 500;
+    assert!(!r.will_reseed(&recoloured), "presentation must not restart the run");
 }
