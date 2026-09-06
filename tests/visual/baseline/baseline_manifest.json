@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "83b387c6",
+  "git_hash": "1c87cce8",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -509,6 +509,18 @@
     "sim-eden-rough-front.png": {
       "bytes": 9313,
       "sha256": "a2826a96eaad62df3c33dcb2171b81e6e6331b67f7aefe55106d122dfcd677eb"
+    },
+    "sim-fingering-fingers.png": {
+      "bytes": 4722,
+      "sha256": "1bb5888e6552b908fec22002a5f79535713baf9339689ed54666bdb6cbc9f87e"
+    },
+    "sim-fingering-stable.png": {
+      "bytes": 2071,
+      "sha256": "5746e6932e98f7d86a71d2cc654f52a8b6b96fdfd19a9634f9c9a17046b1dc5a"
+    },
+    "sim-fingering-thin.png": {
+      "bytes": 4215,
+      "sha256": "2a51b8e49d093dafe3a259f7f645d8b8ec0d1214fd88a34590c6c891e5e39211"
     },
     "sim-fitzhugh-nagumo-spiral.png": {
       "bytes": 4378,

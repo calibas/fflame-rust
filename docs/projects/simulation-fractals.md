@@ -904,6 +904,38 @@ measurements saying why are in the catalogue rather than in a preset.
   numbers and a note on what a working version would need.
 - Three presets, four visual baselines, 26 models.
 
+**Review (2026-09-05) of the three phase-5 commits, what it found and
+measured:**
+
+- **Cost at 1080p**: sandpile 0.25 ms/step, invasion percolation 0.25,
+  snowfake 0.74, dielectric breakdown 1.8 / 5.5 / 12.8 at 5 / 20 / 50
+  relaxation sweeps. DBM's cost is its sweep count, so the review
+  measured how few the pattern survives: the η = 1 dimension over
+  three samples is 1.696, 1.692, 1.707, 1.689 at 3, 5, 10, 20 sweeps
+  — inside sample noise, as it already was from 20 to 150. **The
+  default dropped from 20 to 10**, inside the paper's "5 to 50" and
+  twice as fast; the visual configs pin their own value and did not
+  move.
+- **The blind first submit counted steps, and a step is now up to 200
+  dispatches.** DBM at 4K with 200 sweeps would have put ~1.6 s into
+  one submission against a 2 s watchdog. It is sized in dispatches
+  now — the same sixteen as before, so nothing else changes.
+- Two sentences in the DBM still promised the viscous finger wave 3
+  withdrew. Gone.
+- The passes generalisation, the repeat, and the exponential race
+  were read again and stand: every pass of a step reads the same
+  ring slot, the live field is `field[current]` whatever the flip
+  parity, and the race key round-trips the ordered-u32 map exactly.
+- **§23 is no longer open.** The review had a second brief: fix
+  Saffman–Taylor if it was not a huge effort, with Holzbecher's paper.
+  It was not: his miscible formulation is a PDE that fits two passes
+  on the wave-3 machinery, with the flow normalised to peak speed by
+  the same reduce DBM's rate mode uses. The `fingering` model ships,
+  gated by Saffman and Taylor's own sentence: the same disturbance
+  pushed by a thinner fluid roughens 0 → 6.39 cells, by a thicker one
+  0 → 0.59. The DBM tip penalty stays as the record of why the first
+  route could not work. 27 models.
+
 #### Wave 2 — Part II, and the snowfake
 
 **Done 2026-09-05.** The Gravner–Griffeath snowfake ships, from the

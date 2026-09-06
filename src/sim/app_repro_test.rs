@@ -3668,3 +3668,89 @@ fn phase5_step_cost_at_1080p() {
         println!("{model:<21} {label:<10} {ms:>8.3} ms/step  ({:.0} steps/s)", 1e3 / ms);
     }
 }
+
+fn fingering_config(n: u32, log_mobility: f32) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "fingering".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Line;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 3;
+    for (k, v) in [
+        ("log_mobility", log_mobility),
+        ("speed", 0.3),
+        ("diffusion", 0.02),
+        ("disturbance", 0.05),
+        ("relax", 20.0),
+    ] {
+        cfg.model_params.insert(k.into(), v);
+    }
+    cfg
+}
+
+/// Where the front is in each column: the first row from the outlet
+/// side where c crosses one half. Returns (mean position, its standard
+/// deviation across columns) -- the roughness of the interface.
+fn front_roughness(f: &[[f32; 4]], n: usize) -> (f64, f64) {
+    let pos: Vec<f64> = (0..n)
+        .map(|x| {
+            for y in 0..n {
+                if f[y * n + x][2] >= 0.5 {
+                    return y as f64;
+                }
+            }
+            n as f64
+        })
+        .collect();
+    let mean = pos.iter().sum::<f64>() / n as f64;
+    let var = pos.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / n as f64;
+    (mean, var.sqrt())
+}
+
+/// Saffman and Taylor, 1958, on the interface between two fluids in a
+/// porous medium or Hele-Shaw cell: it "is liable to be unstable if
+/// the driving fluid is the less viscous of the two". This is that
+/// sentence as a test, on Holzbecher's miscible formulation.
+///
+/// The same seeded disturbance is pushed by a thinner fluid (R > 0)
+/// and by a thicker one (R < 0), and the interface's roughness -- the
+/// spread of the front's position across the width -- must GROW in
+/// the first case and SHRINK in the second. Both fronts advance the
+/// same distance, because the drive is normalised to peak speed; only
+/// their shape differs. A model that fingered both ways, or neither,
+/// would be advecting a random field rather than modelling the
+/// instability.
+#[test]
+fn fingering_is_unstable_only_when_the_driving_fluid_is_less_viscous() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 128;
+    const STEPS: u32 = 300;
+    let mut results = Vec::new();
+    for r in [2.0f32, -2.0] {
+        let cfg = fingering_config(N as u32, r);
+        let mut sim = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        sim.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f0 = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+        sim.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f1 = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+        let (m0, s0) = front_roughness(&f0, N);
+        let (m1, s1) = front_roughness(&f1, N);
+        // Concentration stays a fraction, and every cell has one.
+        assert!(f1.iter().all(|q| (0.0..=1.0).contains(&q[2]) && q[2].is_finite()));
+        println!(
+            "fingering R = {r:+}: front {m0:.1} -> {m1:.1}, roughness {s0:.2} -> {s1:.2} cells"
+        );
+        results.push((r, m0, m1, s0, s1));
+    }
+    let (_, _, adv_u, s0_u, s1_u) = results[0];
+    let (_, _, adv_s, s0_s, s1_s) = results[1];
+    assert!(adv_u < N as f64 - 20.0 && adv_s < N as f64 - 20.0, "both fronts should have advanced");
+    assert!(s1_u > 4.0 * s0_u.max(0.5), "unstable case: roughness {s0_u:.2} -> {s1_u:.2} did not grow");
+    assert!(s1_s < s0_s.max(1.0) * 1.5, "stable case: roughness {s0_s:.2} -> {s1_s:.2} did not stay flat");
+    assert!(s1_u > 3.0 * s1_s, "the two cases should be unmistakably different: {s1_u:.2} vs {s1_s:.2}");
+}

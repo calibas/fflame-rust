@@ -580,6 +580,7 @@ pub static MODELS: &[&ModelDef] = &[
     &models::INVASION_PERCOLATION,
     &models::SNOWFAKE,
     &models::DBM,
+    &models::FINGERING,
 ];
 
 /// Every colouring, in registration order. Append only.
