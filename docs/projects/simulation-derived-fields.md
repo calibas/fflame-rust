@@ -1,7 +1,7 @@
 # Simulation: derived fields — resolve, matte edges, vector colourings
 
-**Status:** plan of record, 2026-09-06. **Phase A built and gated the
-same day**; B–D to follow in order. The IFS phase is scoped, not
+**Status:** plan of record, 2026-09-06. **Phases A and B built and
+gated the same day**; C and D to follow. The IFS phase is scoped, not
 scheduled.
 
 This is the plan for three requests made together: a low-resolution
@@ -100,10 +100,25 @@ might read the cell coordinate is a test now
 - The panel's upscale picker gains the entry; the config enum and its
   names round-trip like the others.
 
-**Gate:** sampled from a smooth analytic field on a coarse grid
-(a Gaussian bump, say, 32² cells at 8×), the reconstruction error
-against the analytic value is measurably lower than bilinear's, and
-Nearest/Bilinear are unchanged.
+**Gate (built 2026-09-06, passing):** a Gaussian bump (σ = 2.5 cells)
+written straight into a 32² field and rendered at 8× through the
+`channel` colouring, whose linear greyscale palette returns the
+interpolated value itself, compared with the analytic function at each
+output pixel's centre over the bump's support:
+
+| upscale | RMS error | worst |
+|---|---|---|
+| nearest | 0.0372 | 0.134 |
+| bilinear | 0.0065 | 0.035 |
+| bicubic | **0.00064** | **0.003** |
+
+Ten times better than bilinear against a bar of two
+(`the_bicubic_upscale_reconstructs_a_smooth_field_better`). Nearest
+and Bilinear are unchanged — every existing baseline held — and a
+second magnified-matte baseline, `eden-matte-bicubic`, is the same
+cluster as phase A's through the new filter. Writing the field in
+from a test needed `COPY_DST` on the field textures, which the §7
+resize resampler will need anyway.
 
 ### Phase C — a distance field for occupancy edges
 

@@ -659,6 +659,21 @@ fn sim_shade(p: vec2<i32>) -> vec4<f32> {
     return sim_shade_from(sim_read(p), sim_grad(p), p);
 }
 
+// Catmull-Rom weights for the four taps at -1, 0, +1, +2 around a
+// sample at fraction t past tap 0. They sum to 1 for every t, so a
+// constant field stays constant; the spline passes through the taps
+// and is C1 across them.
+fn sim_catmull_rom(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return 0.5 * vec4<f32>(
+        -t3 + 2.0 * t2 - t,
+        3.0 * t3 - 5.0 * t2 + 2.0,
+        -3.0 * t3 + 4.0 * t2 + t,
+        t3 - t2,
+    );
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let out_size = vec2<i32>(params.out_size);
@@ -723,6 +738,31 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
                 mix(sim_read(p01), sim_read(p11), t.x), t.y);
     let gr = mix(mix(sim_grad(p00), sim_grad(p10), t.x),
                  mix(sim_grad(p01), sim_grad(p11), t.x), t.y);
+    let col = sim_shade_from(s, gr, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
+"#
+            .to_string(),
+            SimUpscale::Bicubic => r#"
+    // Catmull-Rom over the 4x4 surrounding cell centres: the state
+    // interpolated with a C1 kernel, then coloured once. Sixteen
+    // reads of state, and sixteen of the gradient where the colouring
+    // asks for one. The weights are the standard Catmull-Rom
+    // cardinal-spline weights for taps at -1, 0, +1, +2.
+    let f = gf - vec2<f32>(0.5, 0.5);
+    let i0 = vec2<i32>(floor(f));
+    let t = f - floor(f);
+    let lim = g - vec2<i32>(1, 1);
+    let wx = sim_catmull_rom(t.x);
+    let wy = sim_catmull_rom(t.y);
+    var s = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var gr = vec2<f32>(0.0, 0.0);
+    for (var j = 0; j < 4; j = j + 1) {
+        for (var i = 0; i < 4; i = i + 1) {
+            let q = clamp(i0 + vec2<i32>(i - 1, j - 1), vec2<i32>(0, 0), lim);
+            let w = wx[i] * wy[j];
+            s = s + sim_read(q) * w;
+            gr = gr + sim_grad(q) * w;
+        }
+    }
     let col = sim_shade_from(s, gr, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
 "#
             .to_string(),

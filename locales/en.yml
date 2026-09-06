@@ -1971,7 +1971,7 @@ sim_panel:
   grid_scale_tip: "1.0 fills the window; 0.5 is a half-resolution grid upscaled; 2.0 is a supersampled grid filtered down."
   grid_size: "Grid"
   upscale: "Upscale"
-  upscale_tip: "How cells are shown when the grid is smaller than the output. Nearest keeps cells as cells."
+  upscale_tip: "How cells are shown when the grid is smaller than the output. Nearest keeps cells as cells — honest about what the grid holds. Bilinear and bicubic interpolate the cells' STATE and colour the result, so every level of the field is a crisp curve and a matte edge is a sub-cell boundary; bicubic is smooth through the cell centres too, so a magnified blob is a blob rather than a rounded square. None of them adds detail the grid does not have."
   downscale: "Downscale"
   seed: "Seed"
   randomize: "🎲"
