@@ -89,6 +89,45 @@ pub struct SimPreset {
     /// preset that carried only numbers would ship a picture of
     /// nothing. `None` leaves whatever the user has.
     pub init: Option<crate::config::sim::SimInit>,
+    /// The colouring this preset is meant to be seen through.
+    ///
+    /// Which one to use is not something a user should have to work
+    /// out. It is a property of the MODEL's state layout -- which
+    /// channel holds the thing worth drawing, and over what range --
+    /// so the preset that knows the parameters knows this too. A
+    /// sandpile's heights want a scale of 1/3 and a Moore sandpile's
+    /// 1/7; the snowfake's crystal is channel `.z`; DLA reads as a
+    /// cluster only through arrival order. `None` leaves the user's
+    /// choice alone.
+    pub coloring: Option<&'static str>,
+    /// The colouring's parameters, `(name, value)`.
+    ///
+    /// A preset that names a colouring must set EVERY parameter that
+    /// colouring declares, and `preset_colorings_are_complete`
+    /// enforces it. The reason is that parameters are stored by name
+    /// in one map for whichever colouring is current, so a name two
+    /// colourings share -- `channel` and `occupancy` both have
+    /// `scale` -- would otherwise carry the old colouring's value
+    /// into the new one and the preset would not be the picture it
+    /// promises.
+    pub coloring_params: &'static [(&'static str, f32)],
+    /// Which cells this preset considers empty space, for the models
+    /// where "empty" is a real state.
+    ///
+    /// A growth model needs it to be legible at all, because `age`
+    /// cannot tell a cell that NEVER grew from one that grew long ago
+    /// — both sit at one end of the palette — so without a matte a
+    /// discharge is either a white sheet with dark tracery on it or a
+    /// cluster whose trunk fades into the background. With the matte,
+    /// un-grown cells take the background colour and the palette
+    /// spans only the growth.
+    ///
+    /// `None` for every model where a channel value of zero is part
+    /// of the picture rather than the absence of one: a sandpile's
+    /// height 0 is one of its four colours and appears INSIDE the
+    /// pile, and Wolfram's 0 cells are half the space-time diagram.
+    /// Matting those would punch holes in the pattern.
+    pub matte: Option<crate::config::sim::SimMatte>,
 }
 
 /// Capability flags a model opts into. Absence means "doesn't have
@@ -954,6 +993,66 @@ mod tests {
     /// another would run with a zero where it expected a rate, and
     /// still render something. This is the check the phase-3 review
     /// ran by hand once; it belongs in the suite.
+    /// A preset carries the colouring it is meant to be seen through,
+    /// and every one of that colouring's parameters.
+    ///
+    /// Completeness is the load-bearing half. Colouring parameters
+    /// live in one map keyed by NAME for whichever colouring is
+    /// current, so a preset that switched to `occupancy` without
+    /// setting its `scale` would inherit `channel`'s -- 0.004 from a
+    /// DLA preset, say -- and draw nothing. Every name a colouring
+    /// declares must be set.
+    #[test]
+    fn preset_colorings_are_complete() {
+        for m in MODELS {
+            for p in m.presets {
+                let Some(name) = p.coloring else { continue };
+                let c = COLORINGS
+                    .iter()
+                    .find(|c| c.name == name)
+                    .unwrap_or_else(|| panic!("{}/{}: no colouring {name:?}", m.name, p.name));
+                for want in c.parameters {
+                    assert!(
+                        p.coloring_params.iter().any(|(k, _)| *k == want.name),
+                        "{}/{}: colouring {name:?} declares {:?}, which the preset does not set \
+                         -- an unset parameter keeps whatever the last colouring left under \
+                         that name",
+                        m.name,
+                        p.name,
+                        want.name
+                    );
+                }
+                for (k, _) in p.coloring_params {
+                    assert!(
+                        c.parameters.iter().any(|d| d.name == *k),
+                        "{}/{}: sets {k:?}, which colouring {name:?} does not have",
+                        m.name,
+                        p.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every preset names a colouring. Not a law of the type -- the
+    /// field is an `Option` so a future preset may decline -- but the
+    /// point of having it is that a user never has to work out which
+    /// colouring a model wants, and a preset without one puts them
+    /// back in front of that question.
+    #[test]
+    fn every_preset_names_a_colouring() {
+        let missing: Vec<String> = MODELS
+            .iter()
+            .flat_map(|m| {
+                m.presets
+                    .iter()
+                    .filter(|p| p.coloring.is_none())
+                    .map(move |p| format!("{}/{}", m.name, p.name))
+            })
+            .collect();
+        assert!(missing.is_empty(), "presets with no colouring: {missing:?}");
+    }
+
     /// The auto-pause fires once, on arrival, and never for an
     /// uncapped run.
     #[test]

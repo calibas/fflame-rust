@@ -1113,6 +1113,47 @@ so the tooltip now says it takes effect on the next Reset. The general
 version of that — a parameter that only the seed reads should say so,
 or reseed — is not built.
 
+**Presets carry their colouring, 2026-09-06**, asked for so a user
+does not have to work out which colouring a model wants. They should
+not have to: it is a property of the model's STATE LAYOUT — which
+channel holds the thing worth drawing, over what range — and the
+preset that knows the parameters knows this too. A sandpile's heights
+want a scale of 1/3 and a Moore sandpile's 1/7; the snowfake's crystal
+is channel `.z`; percolation wants `label`, McCabe's multiscale wants
+`scale_mix`.
+
+`SimPreset` gains `coloring`, `coloring_params` and `matte`, and
+applying a preset now also sets the model's `dt` — a preset is a whole
+recipe, and Lenia at the dt of whatever model preceded it dies. All 56
+presets are filled in from the colouring its model's visual config was
+rendered and inspected through, so none of it is a guess.
+
+**Two invariants and a probe.** Colouring parameters live in one map
+keyed by name for whichever colouring is current, so a preset that
+switched to `occupancy` without setting its `scale` would inherit
+`channel`'s — `preset_colorings_are_complete` requires every parameter
+of the named colouring, and rejects names it does not have.
+`every_preset_names_a_colouring` keeps the point of the feature.
+Neither can see whether the choice DRAWS anything, so
+`every_preset_draws_something` renders all 56 at their own step counts
+and fails any that comes out flat.
+
+It earned its place at once: it caught Lenia's soup rendering black
+(the probe's own fault — it had not applied the model's `dt`, which is
+what made presets carry dt) and the Oregonator flat at 128² but fine
+at 256. It also showed what no name check could: `age` cannot tell a
+cell that NEVER grew from one that grew long ago, both being at one
+end of the palette, so every growth model came up as a white sheet
+with dark tracery on it. Hence the matte on the seven models where
+"empty" is unambiguous — and NOT on the sandpile, whose height 0 is
+one of its four colours and appears inside the pile, nor on Wolfram,
+whose 0 cells are half the diagram. Rendered, the last one to hold out
+was the dielectric breakdown model: at 8% coverage its oldest, inner
+branches sat at the palette end that matches the background and the
+trunk vanished, so its three presets draw a flat figure over the matte
+instead — which is what the paper's own photograph of a Lichtenberg
+figure looks like.
+
 The rest of the phase, still to do: animation
 targets, video-export semantics, a shipped `sim_sweep.rhai`; the
 script `sim` handle with SCRIPTING.md rows; the API enum (server

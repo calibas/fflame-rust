@@ -200,6 +200,15 @@ pub fn render_sim_content(
                         })
                         .collect();
                     changes.push((ConfigPath::SimSteps, pre.steps.into()));
+                    // And the model's time step. A preset is a whole
+                    // recipe -- parameters, steps, initial field,
+                    // colouring -- and a dt the user had dragged
+                    // somewhere else would show a different picture
+                    // from the one the preset is named for. Lenia is
+                    // the sharp case: it runs at 0.1 and dies at 1.
+                    if !model.has(crate::sim::ModelFeature::NoTimeStep) {
+                        changes.push((ConfigPath::SimDt, model.default_dt.into()));
+                    }
                     // A preset that names an initial field brings it:
                     // FitzHugh-Nagumo's constants give spirals from a
                     // cut wavefront and a flat field from noise, so
@@ -211,6 +220,38 @@ pub fn render_sim_content(
                             init.kind_name().to_string().into(),
                         ));
                     }
+                    // And the colouring it is meant to be seen
+                    // through, with all of that colouring's
+                    // parameters. Which colouring a model wants is a
+                    // property of its state layout, not a taste the
+                    // user should have to acquire: a sandpile's
+                    // heights want 1/3, the snowfake's crystal is
+                    // channel .z, DLA reads as a cluster only through
+                    // arrival order.
+                    if let Some(c) = pre.coloring {
+                        changes.push((ConfigPath::SimColoring, c.to_string().into()));
+                        for (k, v) in pre.coloring_params {
+                            changes.push((
+                                ConfigPath::SimColoringParam { param: (*k).to_string() },
+                                (*v).into(),
+                            ));
+                        }
+                    }
+                    // And what the model calls empty space. A growth
+                    // model without this is illegible: `age` cannot
+                    // tell a cell that never grew from one that grew
+                    // long ago, so the two ends of the palette are
+                    // "background" and "oldest" at once. Set either
+                    // way, so choosing a preset that wants no matte
+                    // clears one the last preset set.
+                    let matte = pre.matte.unwrap_or_default();
+                    changes.push((
+                        ConfigPath::SimMatteChannel,
+                        matte.channel.name().to_string().into(),
+                    ));
+                    changes.push((ConfigPath::SimMatteCutoff, matte.cutoff.into()));
+                    changes.push((ConfigPath::SimMatteSoftness, matte.softness.into()));
+                    changes.push((ConfigPath::SimMatteInvert, matte.invert.into()));
                     let _ = config_manager
                         .update_batch(changes, "history.action.sim_preset".to_string());
                     *state.reseed = true;

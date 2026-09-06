@@ -4150,3 +4150,83 @@ fn a_config_that_means_a_different_field_restarts_the_run() {
     recoloured.steps = 500;
     assert!(!r.will_reseed(&recoloured), "presentation must not restart the run");
 }
+
+/// Every preset, rendered through the colouring it names, reported as
+/// the contrast of the picture it makes.
+///
+/// A preset's colouring is only right if it DRAWS something: a channel
+/// scale an order of magnitude off, or a channel that holds nothing
+/// for this model, gives a flat frame — one colour everywhere — and no
+/// invariant about names can see that. This one can. Ignored because
+/// it runs every preset to its own step count; run it after touching
+/// any preset's colouring.
+///
+/// The gate is deliberately weak (some coverage, some variation)
+/// because "is this a good picture" is not a number. It catches the
+/// failure that matters: a preset that comes up blank.
+#[test]
+#[ignore]
+fn every_preset_draws_something() {
+    let Some((device, queue)) = repro_device() else { return; };
+    // 256, not 128: several models need room to be themselves —
+    // Lenia's kernel is 13 cells across and its soup dies on a small
+    // grid — and a preset that works at the size a user gets should
+    // not be failed here for a size nobody runs.
+    const N: u32 = 256;
+    let palette = test_palette(&device, &queue);
+    let mut flat = Vec::new();
+    for m in crate::sim::MODELS {
+        for pre in m.presets {
+            let mut cfg = SimConfig::default();
+            cfg.model = m.name.into();
+            cfg.grid = SimGrid::Fixed { width: N, height: N };
+            cfg.seed = 7;
+            cfg.steps = pre.steps;
+            // Selecting a model sets its dt (manager.rs), and so does
+            // applying a preset; Lenia runs at 0.1 and dies at 1.0.
+            cfg.dt = m.default_dt;
+            for (k, v) in pre.params {
+                cfg.model_params.insert((*k).into(), *v);
+            }
+            if let Some(init) = pre.init {
+                cfg.init = init;
+            }
+            if let Some(c) = pre.coloring {
+                cfg.coloring = c.into();
+                for (k, v) in pre.coloring_params {
+                    cfg.coloring_params.insert((*k).into(), *v);
+                }
+            }
+            cfg.matte = pre.matte.unwrap_or_default();
+            let mut r = SimRenderer::new(&device, &cfg, N, N);
+            r.render_still(&device, &queue, &cfg, &palette);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+
+            // Luminance of what is actually drawn, weighted by
+            // coverage: a matte-less sim covers everything, so this is
+            // just the picture.
+            let lum: Vec<f32> = out.iter().map(|p| (p[0] + p[1] + p[2]) / 3.0 * p[3]).collect();
+            let mean = lum.iter().sum::<f32>() / lum.len() as f32;
+            let sd = (lum.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / lum.len() as f32).sqrt();
+            let covered = out.iter().filter(|p| p[3] > 0.5).count() as f32 / lum.len() as f32;
+            assert!(
+                out.iter().all(|p| p.iter().all(|v| v.is_finite())),
+                "{}/{}: the coloured output is not finite",
+                m.name,
+                pre.name
+            );
+            println!(
+                "{:<22} {:<16} {:>6} steps  mean {mean:.3}  sd {sd:.3}  covered {:.0}%",
+                m.name,
+                pre.name,
+                pre.steps,
+                covered * 100.0
+            );
+            if sd < 0.01 {
+                flat.push(format!("{}/{} (sd {sd:.4})", m.name, pre.name));
+            }
+        }
+    }
+    assert!(flat.is_empty(), "these presets draw a flat frame: {flat:#?}");
+}
