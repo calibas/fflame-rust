@@ -594,6 +594,15 @@ impl SimRenderer {
         self.pyramid_bind_groups = None;
     }
 
+    /// Whether this frame builds a distance field: the matte's edge
+    /// asked for one, or the colouring reads one. Either way the matte
+    /// must be on -- it is what says which cells are the figure.
+    fn wants_sdf(cfg: &SimConfig) -> bool {
+        !cfg.matte.is_off()
+            && (cfg.matte.uses_distance()
+                || coloring_or_default(&cfg.coloring).has(ColoringFeature::NeedsDistance))
+    }
+
     /// Allocate the jump flood's textures when the matte asks for a
     /// distance field, free them when it stops asking.
     fn ensure_sdf(&mut self, device: &Device, wants: bool) {
@@ -1215,7 +1224,10 @@ impl SimRenderer {
                     crate::config::sim::SimWarpFilter::Nearest => 1.0,
                 },
             ],
-            matte_b: [if cfg.matte.uses_distance() { 1.0 } else { 0.0 }, 0.0],
+            matte_b: [
+                if cfg.matte.uses_distance() { 1.0 } else { 0.0 },
+                if Self::wants_sdf(cfg) { 1.0 } else { 0.0 },
+            ],
             matte: cfg.matte.packed(),
         }
     }
@@ -1809,11 +1821,12 @@ impl SimRenderer {
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
 
-        self.ensure_sdf(device, cfg.matte.uses_distance());
+        let sdf = Self::wants_sdf(cfg);
+        self.ensure_sdf(device, sdf);
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Sim Color"),
         });
-        if cfg.matte.uses_distance() {
+        if sdf {
             self.encode_jump_flood(device, queue, cfg, &mut enc);
         }
         let p = self.pipelines.as_ref().expect("pipelines built above");

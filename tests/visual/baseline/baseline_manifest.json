@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "be6b2c7a",
+  "git_hash": "bdd0aa36",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -466,6 +466,10 @@
       "bytes": 28949,
       "sha256": "c11baaa3334217b974ca576b663fa83929207561e91b85f5fd12f52f775b8ec5"
     },
+    "sim-cahn-hilliard-structure.png": {
+      "bytes": 34574,
+      "sha256": "ec3d85d172c677d35f29295364e011b7f3af924ce1ff483fc3964aa41579dfe6"
+    },
     "sim-cyclic-ca-1-1-14.png": {
       "bytes": 30600,
       "sha256": "9bce899af1324682d83259bcb1c0993df4af3db94b2f723692146cc4dcd35514"
@@ -502,6 +506,14 @@
       "bytes": 16865,
       "sha256": "0b1158246c7a3c0e7fcb86f9bb944110022097be250e602bbf5cdc70757b8d24"
     },
+    "sim-dla-distance-depth.png": {
+      "bytes": 14046,
+      "sha256": "5c9f773f4f894c3742da48952afda4118fbe807ad554cafe9c59547472666cc7"
+    },
+    "sim-dla-distance-glow.png": {
+      "bytes": 19743,
+      "sha256": "c1b11c69c438982bd941a95f34c8789da48731cd1f77fa8d6d1bbf12a2bd92f8"
+    },
     "sim-dla-matte.png": {
       "bytes": 19125,
       "sha256": "79b24745da4371eb5d393363326db3ff46cb129fcf0d8731da62c21ef123eb37"
@@ -530,6 +542,10 @@
       "bytes": 4722,
       "sha256": "1bb5888e6552b908fec22002a5f79535713baf9339689ed54666bdb6cbc9f87e"
     },
+    "sim-fingering-lic.png": {
+      "bytes": 20845,
+      "sha256": "b56244ae76555b139d38c2ba23efee2d79832903811af2c5e55196f383e43999"
+    },
     "sim-fingering-stable.png": {
       "bytes": 2071,
       "sha256": "5746e6932e98f7d86a71d2cc654f52a8b6b96fdfd19a9634f9c9a17046b1dc5a"
@@ -553,6 +569,10 @@
     "sim-gray-scott-coral.png": {
       "bytes": 21945,
       "sha256": "4eef8f684e8819f0dfcde381264848f8b9d11e80e2d06038e3e82f964e0c0499"
+    },
+    "sim-gray-scott-gradient.png": {
+      "bytes": 24004,
+      "sha256": "d32f01bb89eae874d336deccbd7683d49df32a6045c3a495cb1791051cf59f8f"
     },
     "sim-gray-scott-matte-soft.png": {
       "bytes": 31628,

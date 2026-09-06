@@ -1,8 +1,8 @@
 # Simulation: derived fields — resolve, matte edges, vector colourings
 
-**Status:** plan of record, 2026-09-06. **Phases A, B and C built
-and gated the same day** — C not as expected, see its section; D to
-follow. The IFS phase is scoped, not scheduled.
+**Status:** plan of record, 2026-09-06. **Phases A–D built and gated
+the same day** — C not as expected, see its section. The IFS phase is
+scoped, not scheduled.
 
 This is the plan for three requests made together: a low-resolution
 grid that presents as a detailed picture rather than a pixelated one;
@@ -193,28 +193,71 @@ expectation.
 
 ### Phase D — vector colourings
 
-All derived at colour time, none needing a model change except the
-last:
+**Built 2026-09-06.** All derived at colour time; no model changed.
 
-- **`gradient`**: direction to hue, magnitude to value — the flow
-  picture, on any model. Uses the existing `grad`.
-- **`structure`**: the structure tensor (gradient outer product,
-  smoothed over a small window) — its coherence separates ridges from
-  blobs, its orientation gives the local texture direction. A second
-  `ColoringFeature` so only this colouring pays for the window.
-- **`flow` for models that have a velocity**: fingering computes
-  `u = −m∇p` and keeps only `|u|` (channel `.x`, for the reduce). It
-  stores the angle in the spare `.w` (`ff_atan2`, for Metal) so the
-  vector is recoverable, and a colouring draws it. Model-specific and
-  optional.
-- **Line integral convolution** is the flow colouring everyone wants
-  and is a hundred samples per pixel along the field. Last, and only
-  if the cost measures acceptable at 1080p.
+**The interface first.** A colouring now receives one `SimSample` —
+the state, the gradient of *every* channel, the signed distance, the
+structure tensor — built per cell by `sim_sample` and **interpolated
+by the resolve** like the state (bilinear lerps it, bicubic
+accumulates it). A colouring never reads a neighbour itself, so under
+a magnifying filter it sees smoothly varying derived quantities
+without doing anything; and each derived quantity is zero, and its
+reads skipped, unless the colouring declares the feature that pays
+for it (`NeedsGradient`, `NeedsStructure`, `NeedsDistance` —
+`a_colouring_without_needs_gradient_reads_no_neighbours` checks the
+generated WGSL for both the gradient reads and the tensor window). The
+six existing colourings changed only their signature.
 
-**Gate:** each colouring is checked against a CPU evaluation of its
-formula on a read-back field, the way the existing colourings are;
-`every_preset_draws_something` still passes; no existing baseline
-moves.
+- **`gradient`** — the gradient of a chosen channel: direction through
+  the palette (`ff_atan2`, exact at the zero pair a flat cell hands
+  it), magnitude as brightness. Gradient of every channel from the
+  same four reads is what made the plan's `flow` entry unnecessary:
+  fingering's velocity is `−m∇p`, and ∇p is the gradient of `.y`, so
+  its direction is exact and its speed right up to the mobility,
+  without the model storing an angle.
+- **`structure`** — the structure tensor of `.x` over a 3×3 binomial
+  window: orientation (half a turn is the palette once, bright where
+  strong), coherence (`(λ₁−λ₂)/(λ₁+λ₂)`: 1 on a line, 0 on a blob),
+  energy.
+- **`distance`** — depth into the figure, an outline, or the signed
+  distance, in cells, from phase C's field; the renderer builds the
+  field for this colouring whatever the matte's edge. Found while
+  writing its visual config: the matte cuts everything outside the
+  figure, so an "outside" mode is never seen — the modes colour the
+  figure by its own depth, and the space around a cluster is coloured
+  by inverting the matte. Said on the tooltip.
+- **`lic`** — line integral convolution: per-cell noise (keyed by cell
+  and seed, not step, so it holds still while the run advances)
+  averaged along the gradient of a channel or its perpendicular,
+  `length` cells each way, the sign kept continuous. It has to walk
+  the field, so it declares `ReadsCell` and is the one colouring
+  computed at cell resolution and then interpolated.
+
+**Measured**, ms per coloured 1080p frame, on a noise-filled field so
+no cell is flat (the LIC's worst case — on a seeded run most walks
+exit at once and it measured 0.7 ms):
+
+| colouring | ms |
+|---|---|
+| `channel` (reference) | 0.68 |
+| `gradient` | 1.03 |
+| `structure` | 1.69 |
+| `distance` | 7.86 — the jump flood, phase C's cost, the same the Distance edge pays |
+| `lic`, length 8 (default) | 3.05 |
+| `lic`, length 24 | 8.70 |
+
+**Gate (passing):** `gradient` and `structure` (all three modes) agree
+with a CPU evaluation of their formulas on a read-back Gray–Scott
+field, through the linear test palette, **exactly** (worst mismatch
+0.0 over 64²); `distance` agrees with the field it reads to 6e-8 in
+each mode, with the matte's edge left at Threshold so the colouring's
+own feature is what builds the field; the LIC is deterministic, and
+its output differs 1.87× more across the flow than along it (0.388 vs
+0.207 mean step difference). `every_preset_draws_something` passes;
+the 75 sim baselines are unchanged under the new template; five new
+baselines: `gray-scott-gradient`, `cahn-hilliard-structure`,
+`dla-distance-depth`, `dla-distance-glow` (inverted matte),
+`fingering-lic` (the flow through the fingers).
 
 ### Later — the field as a flame transform
 
