@@ -1055,6 +1055,39 @@ sinks).
 **Colouring.** `channel` categorical on h ∈ {0,1,2,3} (the classic
 four-colour picture).
 
+**Shipped 2026-09-05**, and held to the rule by an exact-integer CPU
+mirror of the same parallel schedule.
+
+- **The GPU topples the CPU's pile exactly.** At 2¹² grains on 128²,
+  both neighbourhoods: **0 cells differ**, mass is conserved to the
+  grain (4,096 of 4,096, nothing at the edge), and the round count is
+  tight from both sides — stable after `rounds`, still over-full after
+  `rounds − 1`. Heights are small integers and f32 counts them
+  exactly, so "identical" is the right assertion and any disagreement
+  would be a rule difference rather than rounding.
+- **The prototype's round counts are the shader's**: 787 at 2¹², and
+  12,837 at 2¹⁶ spanning 189 cells. So the preset's step count is a
+  measurement.
+- **The Moore variant measured, not assumed**: 269 rounds at 2¹²,
+  4,652 at 2¹⁶ spanning 133 cells. It holds up to 7 grains per site,
+  so the same mass settles denser, smaller and sooner than von
+  Neumann's — the opposite of the guess that a wider neighbourhood
+  spreads a pile further — and colouring by height wants a scale of
+  1/7 rather than 1/3.
+- **The boundary must be Zero, and the other two are not merely
+  different but wrong.** Under Clamp the outside mirrors the edge
+  cell, so an edge site receives copies of its own topplings and the
+  pile GAINS mass; under Periodic it wraps. Only Zero is the open
+  boundary the model is defined with. Said in the shader, in the
+  description, and asserted in the test.
+- **The 2²⁴ ceiling on the grains slider is f32, not taste**: the
+  field counts integers exactly to 2²⁴ and no further. It coincides
+  with the cost ceiling — 2²⁴ extrapolates to ~3M rounds.
+- **The odometer ships as channel `.y`** — how many times each site has
+  toppled, the discrete superharmonic function the theory is written
+  in terms of. Measured max ≈20,000 at 2¹⁶; wrapped contours every 500
+  draw the limit shape's facets as a topographic map.
+
 ---
 
 ## 15. Wolfram elementary cellular automata
@@ -1660,6 +1693,49 @@ order (for colouring) is the step index.
 `stop_at_span` (boolean).
 **Stages.** `update`, `settle`, `color`. **Colouring.** `age`
 (invasion time — the standard picture), `channel` on r.
+
+**Shipped 2026-09-05.** The rising-threshold equivalence above is
+right, and is now checked rather than argued: the invaded set is
+compared against a CPU flood fill of {r < p_max} from the seed,
+through the shader's OWN threshold field read back from the texture —
+so there is no RNG to mirror and the comparison is exact. At the
+shipped preset: **0 sites missing, 0 extra**, with the front finishing
+at step 1,640 of 2,000. A run that ends while the front is still
+moving fails that test, which is what sizes `steps`.
+
+Three things this section did not anticipate, all measured at 256²:
+
+- **A point seed is a lottery.** Flooding to p = 0.60 from one cell
+  gave 8,526, 5,007, 87, 97 and 78 sites over five seeds — three of
+  five landed in a small finite cluster, because near the threshold
+  almost every site belongs to one. So the `seed` parameter is not
+  exposed as point-or-edge; **the presets inject from an edge**, which
+  is Wilkinson and Willemsen's own geometry (a fluid pushed in at one
+  face) and gives the same picture from any seed. The choice of seed
+  SHAPE is the init shape, as it is for Eden — one fewer parameter
+  that means two things.
+- **The interesting window is narrow, and above p_c.** The cluster
+  spans between p = 0.600 and p = 0.610, above the infinite-lattice
+  0.5927 as a finite grid should. Below spanning it is ramified
+  (15,907 sites at 0.600, a quarter of the grid); a few hundredths
+  higher it is half the grid and reads as a solid with holes, which
+  is why there is no "spanning" preset — it was rendered and it looks
+  like noise. The slider is bounded to 0.45–0.80 so the window is
+  reachable.
+- **Box counting at this size does not resolve D = 91/48**, and the
+  entry's "same D ≈ 1.89" should not be read as something a 256²
+  render will show. Measured: 1.66 to 1.77 near the threshold — a
+  finite-size crossover, not a wrong theory — climbing past 1.89 only
+  once the cluster is merely dense. It is kept as a ramification
+  check (a runaway front leaves a disc, which reads 2.0), not as
+  evidence of criticality.
+
+`stop_at_span` is **not implemented**: stopping on a condition needs
+the settle reduction, and the ceiling `p_max` does the same job by
+hand. `dp` defaults slow (0.0005) for a reason beyond accuracy — with
+the threshold rising slowly the front is never the constraint, so
+`age` records the ORDER sites were invaded in, which is the
+sequential model's own picture, rather than distance from the seed.
 
 ---
 

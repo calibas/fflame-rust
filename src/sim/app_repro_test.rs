@@ -2813,3 +2813,299 @@ fn physarum_agents_do_not_pass_through_a_wall() {
     assert!(blocked > 0, "no agent was ever blocked, so the wall was never tested");
     assert_eq!(stale, 0, "{stale} cells still hold a claim after the step: some claim was never checked");
 }
+
+/// Bulk toppling on the CPU: the same parallel schedule the shader
+/// runs, in exact integers. Returns the number of rounds to a stable
+/// configuration and the final heights.
+///
+/// The edges are sinks: a grain sent off the grid is added nowhere.
+fn cpu_sandpile(n: usize, grains: i64, moore: bool) -> (u32, Vec<i64>) {
+    let thresh: i64 = if moore { 8 } else { 4 };
+    let mut h = vec![0i64; n * n];
+    h[(n / 2) * n + n / 2] = grains;
+    let mut fires = vec![0i64; n * n];
+    let mut rounds = 0u32;
+    loop {
+        let mut any = false;
+        for k in 0..n * n {
+            fires[k] = h[k] / thresh;
+            any |= fires[k] > 0;
+        }
+        if !any {
+            return (rounds, h);
+        }
+        for y in 0..n {
+            for x in 0..n {
+                let f = fires[y * n + x];
+                let mut got = 0i64;
+                let mut add = |dx: i64, dy: i64| {
+                    let (sx, sy) = (x as i64 + dx, y as i64 + dy);
+                    if sx >= 0 && sy >= 0 && (sx as usize) < n && (sy as usize) < n {
+                        got += fires[sy as usize * n + sx as usize];
+                    }
+                };
+                add(1, 0);
+                add(-1, 0);
+                add(0, 1);
+                add(0, -1);
+                if moore {
+                    add(1, 1);
+                    add(1, -1);
+                    add(-1, 1);
+                    add(-1, -1);
+                }
+                h[y * n + x] += got - f * thresh;
+            }
+        }
+        rounds += 1;
+    }
+}
+
+fn sandpile_config(n: u32, log2: f32, moore: bool) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "sandpile".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Center;
+    // The edges must be sinks. Under Clamp an edge site would receive
+    // copies of its own topplings and the pile would GAIN mass.
+    cfg.boundary = SimBoundary::Zero;
+    cfg.model_params.insert("grains_log2".into(), log2);
+    cfg.model_params.insert("neighbourhood".into(), if moore { 1.0 } else { 0.0 });
+    cfg
+}
+
+/// The sandpile against an exact-integer CPU mirror of the same
+/// parallel schedule: every cell of the final pile, both
+/// neighbourhoods, and the round count pinned from both sides.
+///
+/// Three things are checked that a picture would not show. The pile is
+/// IDENTICAL, not close -- heights are small integers and f32 counts
+/// them exactly, so any disagreement is a rule difference. MASS IS
+/// CONSERVED: the grid is large enough that nothing reaches the edge,
+/// so the grains are all still there, and a boundary that created or
+/// destroyed any would show up here. And the round count is TIGHT: the
+/// pile is stable after `rounds` and is not after `rounds - 1`, which
+/// is what lets a preset's step count be a measurement rather than a
+/// guess.
+#[test]
+fn sandpile_matches_an_exact_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 128;
+    const LOG2: u32 = 12;
+    let grains = 1i64 << LOG2;
+    for moore in [false, true] {
+        let (rounds, want) = cpu_sandpile(N, grains, moore);
+        let cfg = sandpile_config(N as u32, LOG2 as f32, moore);
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, rounds);
+        let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+        let mut mass = 0i64;
+        let mut differ = 0usize;
+        let mut worst = 0i64;
+        for k in 0..N * N {
+            let h = got[k][0] as i64;
+            mass += h;
+            if h != want[k] {
+                differ += 1;
+                worst = worst.max((h - want[k]).abs());
+            }
+        }
+        let edge: i64 = (0..N)
+            .map(|i| got[i][0] as i64 + got[(N - 1) * N + i][0] as i64 + got[i * N][0] as i64 + got[i * N + N - 1][0] as i64)
+            .sum();
+        // One round short: still over-full somewhere, so the count is
+        // not merely sufficient but exact.
+        let mut r2 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r2.seed(&device, &queue, &cfg);
+        r2.run_steps(&device, &queue, &cfg, rounds - 1);
+        let early = read_rgba32f(&device, &queue, r2.field_texture(), N as u32, N as u32);
+        let thresh = if moore { 8.0 } else { 4.0 };
+        let unstable = early.iter().filter(|p| p[0] >= thresh).count();
+
+        let name = if moore { "Moore" } else { "von Neumann" };
+        println!(
+            "sandpile 2^{LOG2} {name}: {rounds} rounds, {differ} cells differ (worst {worst}), \
+             mass {mass} of {grains}, {unstable} sites still over-full one round earlier"
+        );
+        assert_eq!(differ, 0, "{name}: the shader is not toppling the CPU rule");
+        assert_eq!(edge, 0, "{name}: the pile reached the edge, so mass left the grid");
+        assert_eq!(mass, grains, "{name}: mass is not conserved");
+        assert!(unstable > 0, "{name}: stable a round early, so {rounds} overstates the count");
+    }
+}
+
+/// The round counts the presets are built on, at the size they ship
+/// at, and the confirmation that the shipped `steps` actually finishes
+/// the pile.
+///
+/// The CPU mirror gives the count (the schedule is deterministic, and
+/// `sandpile_matches_an_exact_cpu_mirror` establishes the GPU runs the
+/// same schedule); the GPU then runs the preset's own step count and
+/// must come out stable with its mass intact. 2^16 is a few seconds of
+/// CPU, so this is a diagnostic rather than a gate.
+#[test]
+#[ignore]
+fn sandpile_preset_step_counts() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: usize = 256;
+    for moore in [false, true] {
+        let (rounds, want) = cpu_sandpile(N, 1 << 16, moore);
+        let span = {
+            let occ: Vec<usize> = (0..N * N).filter(|&k| want[k] > 0).collect();
+            let (mut lo, mut hi) = (N, 0usize);
+            for k in occ {
+                lo = lo.min(k % N).min(k / N);
+                hi = hi.max(k % N).max(k / N);
+            }
+            hi + 1 - lo
+        };
+        let model = crate::sim::model_or_default("sandpile");
+        let preset = model.preset(if moore { "moore" } else { "pile" }).unwrap();
+        let cfg = sandpile_config(N as u32, 16.0, moore);
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, preset.steps);
+        let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let thresh = if moore { 8.0 } else { 4.0 };
+        let unstable = got.iter().filter(|p| p[0] >= thresh).count();
+        let mass: i64 = got.iter().map(|p| p[0] as i64).sum();
+        println!(
+            "sandpile 2^16 {}: {rounds} rounds, spans {span} cells; preset runs {} steps -> \
+             {unstable} over-full, mass {mass} of 65536",
+            if moore { "Moore" } else { "von Neumann" },
+            preset.steps
+        );
+        assert_eq!(unstable, 0, "the preset's step count does not finish the pile");
+        assert_eq!(mass, 1 << 16, "mass is not conserved at the preset's size");
+        assert!(span < N, "the pile fills the grid at the shipped size");
+    }
+}
+
+/// Invasion percolation must invade the CLUSTER, not a disc.
+///
+/// The rising-threshold rule is only equal to Wilkinson-Willemsen's
+/// once its one-cell-per-step front has caught up with the threshold.
+/// So this floods the grid on the CPU from the seed, through the
+/// shader's OWN threshold field read back from the texture -- no RNG
+/// to mirror, and the comparison is exact -- and asserts the GPU
+/// reached that connected component and nothing else. A run that ends
+/// while the front is still moving fails, which is what pins the
+/// preset's step count.
+///
+/// It also reports the cluster's box-counting dimension, as a
+/// RAMIFICATION check and not as evidence of criticality: at 256² the
+/// measurement does not resolve the exact 91/48 = 1.896 (it reads
+/// nearer 1.7 close to the threshold, a finite-size crossover, and
+/// climbs past 1.89 once the cluster is merely dense). What it does
+/// catch is the failure that matters -- a front that ran away from
+/// the threshold and left a disc, which reads 2.
+#[test]
+fn invasion_percolation_invades_the_true_component() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 256;
+    // The preset's ceiling, and the value the flood fill must use.
+    const P_MAX: f32 = 0.60;
+    let mut cfg = SimConfig::default();
+    cfg.model = "invasion_percolation".into();
+    cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+    // The preset's own geometry and parameters: injection from an
+    // edge, which is the paper's and, unlike a point seed, the same
+    // picture from any seed.
+    cfg.init = SimInit::Line;
+    cfg.boundary = SimBoundary::Zero;
+    cfg.seed = 3;
+    let model = crate::sim::model_or_default("invasion_percolation");
+    let preset = model.preset("front").unwrap();
+    for (k, v) in preset.params {
+        cfg.model_params.insert((*k).into(), *v);
+    }
+    let steps = preset.steps;
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, steps);
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // The component of {r < p_max} reachable from the injected edge,
+    // by flood fill through the field's OWN thresholds read back from
+    // the texture -- so there is no RNG to mirror and the comparison
+    // is exact. `Line` seeds the top two rows.
+    let mut want = vec![false; N * N];
+    let mut stack: Vec<usize> = Vec::new();
+    for k in (N - 2) * N..N * N {
+        want[k] = true;
+        stack.push(k);
+    }
+    while let Some(k) = stack.pop() {
+        let (x, y) = ((k % N) as i64, (k / N) as i64);
+        for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+            let (sx, sy) = (x + dx, y + dy);
+            if sx < 0 || sy < 0 || sx as usize >= N || sy as usize >= N {
+                continue;
+            }
+            let j = sy as usize * N + sx as usize;
+            if !want[j] && got[j][1] < P_MAX {
+                want[j] = true;
+                stack.push(j);
+            }
+        }
+    }
+
+    let invaded: Vec<bool> = got.iter().map(|p| p[0] > 0.5).collect();
+    let missing = (0..N * N).filter(|&k| want[k] && !invaded[k]).count();
+    let extra = (0..N * N).filter(|&k| !want[k] && invaded[k]).count();
+    let size = invaded.iter().filter(|&&b| b).count();
+    // When did the front finish? The last step any cell was invaded.
+    let last = got
+        .iter()
+        .filter(|p| p[0] > 0.5)
+        .map(|p| p[2] as u32)
+        .max()
+        .unwrap_or(0);
+
+    // Box counting over the cluster's own bounding box.
+    let occ: Vec<(usize, usize)> = (0..N * N).filter(|&k| invaded[k]).map(|k| (k % N, k / N)).collect();
+    let (x0, x1) = (occ.iter().map(|c| c.0).min().unwrap(), occ.iter().map(|c| c.0).max().unwrap());
+    let (y0, y1) = (occ.iter().map(|c| c.1).min().unwrap(), occ.iter().map(|c| c.1).max().unwrap());
+    let side = (x1 - x0).max(y1 - y0) + 1;
+    let mut pts = Vec::new();
+    let mut b = 1usize;
+    while b * 8 <= side {
+        let mut seen = std::collections::HashSet::new();
+        for &(x, y) in &occ {
+            seen.insert(((x - x0) / b, (y - y0) / b));
+        }
+        pts.push(((1.0 / b as f64).ln(), (seen.len() as f64).ln()));
+        b *= 2;
+    }
+    let m = pts.len() as f64;
+    let (sx, sy) = (pts.iter().map(|p| p.0).sum::<f64>(), pts.iter().map(|p| p.1).sum::<f64>());
+    let sxy: f64 = pts.iter().map(|p| p.0 * p.1).sum();
+    let sxx: f64 = pts.iter().map(|p| p.0 * p.0).sum();
+    let dim = (m * sxy - sx * sy) / (m * sxx - sx * sx);
+
+    println!(
+        "invasion percolation at p = {P_MAX}: {size} sites, {missing} missing, {extra} extra; \
+         front finished at step {last} of {steps}; box dimension {dim:.3} (91/48 = 1.896)"
+    );
+    assert_eq!(extra, 0, "the GPU invaded {extra} sites outside the component");
+    assert_eq!(missing, 0, "the front had not finished: {missing} sites of the component missing");
+    assert!(last < steps, "the front was still moving at the last step");
+    assert!(
+        (1.60..1.85).contains(&dim),
+        "box dimension {dim:.3}: the cluster is not ramified (a disc reads 2.0)"
+    );
+    assert!(
+        (0.15..0.35).contains(&(size as f64 / (N * N) as f64)),
+        "{size} sites of {} is not the pre-spanning cluster the preset is set for",
+        N * N
+    );
+}

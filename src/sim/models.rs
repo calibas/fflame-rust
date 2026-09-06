@@ -3835,3 +3835,320 @@ fn sim_agent(a: SimAgent, i: u32) -> SimAgent {
     max_dt: 1.0,
     default_dt: 1.0,
 };
+
+
+/// The Abelian sandpile: integer grains that topple when a site holds
+/// four or more, one to each von Neumann neighbour, until nothing is
+/// over full.
+///
+/// Bak, Tang and Wiesenfeld introduced it as the canonical model of
+/// self-organised criticality (*Phys. Rev. Lett.* 59 (1987) 381); the
+/// picture here is the one Pegden and Smart's scaling-limit theorem is
+/// about -- N grains dropped on ONE site and stabilised, whose
+/// coloured height field converges to a fractal limit shape as
+/// N grows.
+///
+/// **Why a GPU may topple every site at once.** The model is Abelian:
+/// the stable configuration does not depend on the order the topplings
+/// are applied in. So a round may fire every over-full site
+/// simultaneously, and a site holding `h` may fire `floor(h / 4)` times
+/// in that one round, which is just that many consecutive single
+/// topplings. One round is one dispatch, a five-tap integer gather with
+/// no atomics.
+///
+/// **The cost is quadratic in the picture's radius**, which is the one
+/// thing the plan could not estimate and `proto_sandpile.py` measured:
+/// rounds ~ N^0.978 and radius ~ N^0.495, so rounds / radius itself
+/// grows as sqrt(N). Measured round counts, edge sinks, mass
+/// conservation asserted: 787 at 2^12, 3,695 at 2^14, 12,837 at 2^16,
+/// 49,232 at 2^18, **190,006 at 2^20**. A guess of "rounds >= radius"
+/// undersold the target size by a factor of 500.
+///
+/// Channels: `.x` = height, `.y` = the ODOMETER (how many times the
+/// site has ever toppled -- the discrete superharmonic function the
+/// theory is written in terms of), `.z` = the last round it toppled,
+/// which is what `age` draws as the avalanche front.
+pub static SANDPILE: ModelDef = ModelDef {
+    name: "sandpile",
+    display_name: "Abelian Sandpile",
+    description: "Grains dropped on one site and toppled until stable. The four-colour \
+                  height field is a fractal limit shape; the edges are sinks.",
+    features: &[ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "grains_log2",
+            display_name: "Grains (2ⁿ)",
+            default: 16.0,
+            min: 10.0,
+            max: 24.0,
+            tooltip: "How many grains land on the seed, as a power of two. THE COST IS \
+                      QUADRATIC IN THE PICTURE'S RADIUS: measured, 2¹⁶ stabilises in 12,837 \
+                      rounds and 2²⁰ in 190,006, so raising this by one costs roughly twice \
+                      the steps and needs a grid √2 wider. Raise Steps with it — a pile that \
+                      runs out of steps is simply unfinished. 24 is the ceiling because the \
+                      field is f32, which counts exactly to 2²⁴ and no further.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "neighbourhood",
+            display_name: "Neighbourhood",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The graph the pile topples on. Von Neumann is the classic square \
+                      lattice: topple at 4, one grain to each edge neighbour, and stable \
+                      heights are 0–3. Moore is the same rule on the 8-neighbour graph — \
+                      topple at 8, stable heights 0–7 — so the same mass settles denser \
+                      and over a smaller, rounder shape (measured at 2¹⁶: 133 cells across \
+                      in 4,652 rounds, against 189 in 12,837). Colouring by height wants a \
+                      scale of 1/7 rather than 1/3.",
+            choices: &["Von Neumann (4)", "Moore (8)"],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "pile",
+            display_name: "Pile",
+            params: &[("grains_log2", 16.0), ("neighbourhood", 0.0)],
+            // Measured, both on the CPU prototype and against this
+            // shader: 2^16 grains stabilise in exactly 12,837 rounds
+            // and span 188 cells, which fits a 256 grid with margin.
+            steps: 12_837,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "moore",
+            display_name: "Moore pile",
+            params: &[("grains_log2", 16.0), ("neighbourhood", 1.0)],
+            // Measured against the CPU mirror at this size: 4,652
+            // rounds, spanning 133 cells against von Neumann's 189.
+            // The 8-neighbour graph holds up to 7 grains per site, so
+            // the same mass settles denser, smaller and sooner.
+            steps: 4_652,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+    ],
+    wgsl: r#"
+// How many times a site holding `h` fires in one round: floor(h / n),
+// which is that many consecutive single topplings.
+fn sand_fires(h: f32, thresh: f32) -> f32 {
+    return floor(h / thresh);
+}
+
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let moore = mparam(1u) >= 0.5;
+    let thresh = select(4.0, 8.0, moore);
+
+    // What leaves, and what arrives. Every neighbour's contribution is
+    // read from ITS height, so this is a pure gather -- no atomics, and
+    // the round is order-independent for the same reason the model is
+    // Abelian.
+    let fired = sand_fires(s.x, thresh);
+    var got = sand_fires(sim_read(p + vec2<i32>( 1,  0)).x, thresh)
+            + sand_fires(sim_read(p + vec2<i32>(-1,  0)).x, thresh)
+            + sand_fires(sim_read(p + vec2<i32>( 0,  1)).x, thresh)
+            + sand_fires(sim_read(p + vec2<i32>( 0, -1)).x, thresh);
+    if (moore) {
+        got = got + sand_fires(sim_read(p + vec2<i32>( 1,  1)).x, thresh)
+                  + sand_fires(sim_read(p + vec2<i32>( 1, -1)).x, thresh)
+                  + sand_fires(sim_read(p + vec2<i32>(-1,  1)).x, thresh)
+                  + sand_fires(sim_read(p + vec2<i32>(-1, -1)).x, thresh);
+    }
+
+    // THE BOUNDARY IS THE SINK, and it has to be Zero. Grains sent off
+    // the edge are read by nobody and are gone, which is the model's
+    // open boundary. Under Clamp the outside mirrors the edge cell, so
+    // an edge site receives copies of its own topplings and the pile
+    // GAINS mass; under Periodic it wraps and the picture is a torus.
+    // Both are boundary conditions, neither is Bak-Tang-Wiesenfeld.
+    let h = s.x - fired * thresh + got;
+    let last = select(s.z, f32(sim_step_index()), fired > 0.0);
+    return vec4<f32>(h, s.y + fired, last, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // The whole pile on the init shape. Center is one cell, which is
+    // the classic picture; a Blob spreads the same mass over a square
+    // and settles into the same limit shape from a blunter start.
+    //
+    // Rounded rather than taken raw: exp2 of an integer should be
+    // exact, but the seed mass is not a thing to leave to a library's
+    // last ulp, and every value here is far more than half a unit from
+    // its neighbours.
+    let n = floor(exp2(floor(clamp(mparam(0u), 1.0, 24.0))) + 0.5);
+    return vec4<f32>(select(0.0, n, inside >= 0.5), 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 12_837,
+    passes: 1,
+    agents: None,
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+/// Invasion percolation: a cluster that grows by always taking the
+/// easiest site available to it.
+///
+/// Wilkinson and Willemsen (*J. Phys. A* 16 (1983) 3365) gave every
+/// site a random threshold and grew the invaded region by repeatedly
+/// adding the boundary site with the LOWEST threshold — one site per
+/// step, a global argmin.
+///
+/// **The GPU rule is a rising threshold, and it is the same set.**
+/// Because the sequential rule only ever adds sites in increasing
+/// order of threshold, the region it has invaded at the moment its
+/// running maximum reaches p is exactly the seed's connected component
+/// among the sites with r < p. So raise a threshold p(t) instead and
+/// let every eligible front site join at once: the invaded set is that
+/// component, and a whole front advances per dispatch instead of one
+/// site per dispatch. What it does NOT reproduce is the sequential
+/// ORDER within a step, so the `age` colouring draws the front's
+/// arrival time rather than the invasion sequence.
+///
+/// **The one thing that can go wrong is the front falling behind.**
+/// The set is right only once the one-cell-per-step wavefront has
+/// caught up with the threshold; a p that rises too fast leaves a
+/// ball, not a cluster. That is what `p_max` is for -- the threshold
+/// stops there and the remaining steps let the front finish. It is
+/// also why `dp` is small by default: with the threshold rising slowly
+/// the front is never the constraint, so `age` records the ORDER
+/// SITES WERE INVADED IN rather than how far they are from the seed,
+/// which is the picture the sequential model draws. Measured at 256²
+/// with the shipped preset, the invaded set equals a CPU flood fill of
+/// {r < p_max} from the seed, exactly, and the front finishes with
+/// steps to spare.
+///
+/// **A point seed is a lottery, and that is why the presets inject
+/// from an edge** -- which is also Wilkinson and Willemsen's own
+/// geometry, a fluid pushed in at one face of a porous medium.
+/// Measured at 256², seeding one cell and flooding to p = 0.60: five
+/// seeds gave 8,526, 5,007, 87, 97 and 78 sites. Three of five landed
+/// in a small finite cluster, because at p near the threshold almost
+/// every site belongs to one. An injected edge always meets the large
+/// cluster and the picture is the same from any seed.
+///
+/// **The interesting window is narrow and slightly above p_c.**
+/// Measured at 256² from an edge: the cluster spans between p = 0.600
+/// and p = 0.610, above the infinite-lattice threshold 0.5927 as a
+/// finite grid should. Below spanning it is ramified (15,907 sites at
+/// p = 0.600, a quarter of the grid); a few hundredths higher it is
+/// half the grid and reads as a solid with holes. Both presets sit in
+/// that window. Box counting at this size does NOT resolve the
+/// critical exponent -- it reads 1.66 to 1.71 near the threshold
+/// against the exact 91/48 = 1.896, a crossover the grid is too small
+/// to escape, and it climbs past 1.89 once the cluster is dense, so
+/// the number is a ramification check and not evidence of criticality.
+///
+/// Channels: `.x` = invaded, `.y` = the site's threshold r, `.z` = the
+/// step it was invaded.
+pub static INVASION_PERCOLATION: ModelDef = ModelDef {
+    name: "invasion_percolation",
+    display_name: "Invasion Percolation",
+    description: "A cluster that spreads into whichever sites resist it least, as a rising \
+                  threshold. At the percolation threshold it is a critical cluster, all \
+                  fjords and dangling ends.",
+    features: &[ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "dp",
+            display_name: "Threshold rise per step",
+            default: 0.0005,
+            min: 0.00002,
+            max: 0.05,
+            tooltip: "How fast the invasion threshold climbs. This is a RATE, not a shape — \
+                      the final cluster is the same set however slowly you reach the ceiling \
+                      — but it decides what Age draws. Slow, and the front is never the \
+                      constraint, so Age records the order sites were invaded in, which is \
+                      the sequential model's own picture. Fast, and everything is eligible \
+                      at once and Age just measures distance from the seed.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "p_max",
+            display_name: "Threshold ceiling",
+            default: 0.60,
+            min: 0.45,
+            max: 0.80,
+            tooltip: "Where the threshold stops climbing, letting the remaining steps finish \
+                      the front. THE INTERESTING WINDOW IS NARROW: the infinite lattice's \
+                      site threshold is 0.5927, and measured on a 256² grid the cluster \
+                      spans between 0.600 and 0.610. Below that it is ramified and full of \
+                      fjords; a few hundredths above, it is half the grid and reads as a \
+                      solid with holes. Far below, the invasion dies at once.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "front",
+            display_name: "Invading front",
+            // Injection from an edge, stopped just short of spanning:
+            // measured at 256^2 this is 15,907 sites, a quarter of the
+            // grid, all fjords and dangling ends.
+            params: &[("dp", 0.0005), ("p_max", 0.60)],
+            // p reaches the ceiling at step 1,200 and the front needs
+            // a few hundred more; measured, it finishes well inside
+            // this and extra steps then change nothing.
+            steps: 2_000,
+            init: Some(crate::config::sim::SimInit::Line),
+        },
+        SimPreset {
+            name: "spanning",
+            display_name: "Spanning cluster",
+            // The same injection carried past the transition, where
+            // the cluster crosses the grid and the fjords behind it
+            // fill in.
+            params: &[("dp", 0.0005), ("p_max", 0.635)],
+            steps: 2_000,
+            init: Some(crate::config::sim::SimInit::Line),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // Invasion is permanent.
+    if (s.x > 0.5) {
+        return s;
+    }
+    // The threshold at this step, held at the ceiling once it arrives.
+    // `step_index + 1` so the first step already has somewhere to go.
+    let pt = min(f32(sim_step_index() + 1u) * mparam(0u), mparam(1u));
+    if (s.y >= pt) {
+        return s;
+    }
+    // Von Neumann adjacency, as in Wilkinson-Willemsen: the invaded
+    // region is a lattice animal, and diagonal contact would let it
+    // cross its own fjords.
+    let n = sim_read(p + vec2<i32>( 1,  0)).x
+          + sim_read(p + vec2<i32>(-1,  0)).x
+          + sim_read(p + vec2<i32>( 0,  1)).x
+          + sim_read(p + vec2<i32>( 0, -1)).x;
+    if (n < 0.5) {
+        return s;
+    }
+    return vec4<f32>(1.0, s.y, f32(sim_step_index()), 0.0);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Every site draws its threshold once, here, and keeps it for the
+    // whole run: the disorder is quenched, which is what makes the
+    // cluster a property of the field rather than of the schedule.
+    // Its own salt, so an init shape that is itself noise does not
+    // correlate the thresholds with the seed region.
+    let r = sim_rand(p, 0x1a5u);
+    return vec4<f32>(select(0.0, 1.0, inside >= 0.5), r, 0.0, 0.0);
+}
+"#,
+    default_steps: 2_000,
+    passes: 1,
+    agents: None,
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};

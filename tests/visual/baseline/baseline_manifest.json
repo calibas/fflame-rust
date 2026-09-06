@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "f380ce46",
+  "git_hash": "ab8f317a",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -530,6 +530,14 @@
       "bytes": 32840,
       "sha256": "c1ece631c7eb7e35f9e7156623c0662d61c521cdf0284ce0b6a1b12a38e585da"
     },
+    "sim-invasion-percolation-front.png": {
+      "bytes": 16723,
+      "sha256": "3d5c923a2eb6ab7f62561b42be5eecaa5f406ca9e41b2278f669bc74984a95dc"
+    },
+    "sim-invasion-percolation-rings.png": {
+      "bytes": 20576,
+      "sha256": "de3f3b6736d1fbc96312ec02f0e0f55c29a8fbc7c8a21cecbce53b2e3ef53fc2"
+    },
     "sim-ising-coarsening.png": {
       "bytes": 7320,
       "sha256": "af351b7f43f8af0a326065ba1a41f7c3643f176a6951e3cdb1993f14fb4d1c3d"
@@ -609,6 +617,18 @@
     "sim-random-deposition.png": {
       "bytes": 10337,
       "sha256": "25c31f48b2f921a8e37e47c0686721e2088819ee385b6fcefb24ed1d11ae184f"
+    },
+    "sim-sandpile-moore.png": {
+      "bytes": 8021,
+      "sha256": "37c2502cec01ffa70517340e7c30c78ea205cf605cbbdee27f70816b19141ee8"
+    },
+    "sim-sandpile-odometer.png": {
+      "bytes": 12732,
+      "sha256": "ddb2e159f6b101870c4004bb805b38a216da245e187674f7e6446d4cd51995db"
+    },
+    "sim-sandpile-pile.png": {
+      "bytes": 15311,
+      "sha256": "b7d29ae98ae0ed4e4bce15770e27ef2a32c68e60b3560939281e7490d623f5b4"
     },
     "sim-schnakenberg-turing.png": {
       "bytes": 37168,
