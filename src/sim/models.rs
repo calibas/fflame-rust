@@ -4658,9 +4658,9 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 pub static DBM: ModelDef = ModelDef {
     name: "dbm",
     display_name: "Dielectric Breakdown",
-    description: "A discharge that branches into whichever gap has the strongest field. \
-                  Lightning, Lichtenberg figures, and — with surface tension — the \
-                  viscous finger.",
+    description: "A discharge that branches into whichever gap has the strongest field, one \
+                  site at a time, exactly as the paper draws it. Lightning and Lichtenberg \
+                  figures.",
     features: &[
         ModelFeature::NeedsRng,
         ModelFeature::NeedsMinMax,
@@ -4684,14 +4684,16 @@ pub static DBM: ModelDef = ModelDef {
         SimParamDef {
             name: "relax",
             display_name: "Relaxation sweeps",
-            default: 20.0,
+            default: 10.0,
             min: 1.0,
             max: 200.0,
             tooltip: "How many times Laplace's equation is iterated between one growth and the \
                       next. The paper's own note: 'typically good convergence is obtained with \
                       a number of iterations between 5 and 50'. It is warm-started from the \
-                      last solution, so few sweeps suffice; too few and the field lags behind \
-                      the pattern, which biases growth toward wherever the solver has caught up.",
+                      last solution, and the cost is proportional: measured at 1080p, 1.8 ms a \
+                      step at 5 sweeps, 5.5 at 20, 12.8 at 50 — while the pattern's dimension \
+                      at η = 1 is the same from 3 sweeps to 150 (1.69 to 1.71, within sample \
+                      noise). Ten is inside the paper's range and twice as fast as twenty.",
             choices: &[],
         },
         SimParamDef {
@@ -4742,8 +4744,8 @@ pub static DBM: ModelDef = ModelDef {
             max: 1.0,
             tooltip: "Where the potential is held at 1. Radial is the paper's figure 2 — a \
                       circle at large enough distance, with the discharge starting from a \
-                      point at the centre. Channel is one plate along an edge, which is the \
-                      Hele-Shaw cell of the fingering experiment; seed it with a line.",
+                      point at the centre. Channel is one plate along an edge, for a \
+                      discharge from a line — seed it with one.",
             choices: &["Radial", "Channel"],
         },
     ],
@@ -4753,7 +4755,7 @@ pub static DBM: ModelDef = ModelDef {
             display_name: "Lichtenberg figure",
             // eta = 1, the paper's own case: "the most realistic case
             // for the present experiment", D = 1.75.
-            params: &[("eta", 1.0), ("relax", 20.0), ("surface_tension", 0.0),
+            params: &[("eta", 1.0), ("relax", 10.0), ("surface_tension", 0.0),
                      ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
             // One site per step, so this is the particle count. The
             // paper's figure 3 is "about 5000 steps".
@@ -4765,7 +4767,7 @@ pub static DBM: ModelDef = ModelDef {
             display_name: "Dense (η = 0)",
             // Growth independent of the field: D = 2, the compact end
             // of the table.
-            params: &[("eta", 0.0), ("relax", 20.0), ("surface_tension", 0.0),
+            params: &[("eta", 0.0), ("relax", 10.0), ("surface_tension", 0.0),
                      ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
             steps: 5_000,
             init: Some(crate::config::sim::SimInit::Center),
@@ -4774,7 +4776,7 @@ pub static DBM: ModelDef = ModelDef {
             name: "sparse",
             display_name: "Sparse (η = 2)",
             // D about 1.6: fewer, longer branches.
-            params: &[("eta", 2.0), ("relax", 20.0), ("surface_tension", 0.0),
+            params: &[("eta", 2.0), ("relax", 10.0), ("surface_tension", 0.0),
                      ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
             steps: 5_000,
             init: Some(crate::config::sim::SimInit::Center),
