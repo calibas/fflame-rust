@@ -769,11 +769,11 @@ pub fn assemble_seed(model: &ModelDef, init_kind: &str) -> String {
 
 /// The step pass: one application of the model's rule to every cell.
 ///
-/// `pass` is 0 for the first dispatch of a step and 1 for the second,
-/// which only a fourth-order PDE has ([`ModelDef::passes`]). Both
-/// modules carry the model's WHOLE `wgsl` -- so a helper written once
-/// is visible to both -- and differ only in which function the entry
-/// point calls.
+/// `pass` indexes the dispatches of one step ([`ModelDef::passes`],
+/// at most [`crate::sim::MAX_PASSES`]): 0 calls `sim_step`, 1 calls
+/// `sim_step2`, and so on. Every module carries the model's WHOLE
+/// `wgsl` -- so a helper written once is visible to all of them -- and
+/// they differ only in which function the entry point calls.
 pub fn assemble_step(model: &ModelDef, boundary: SimBoundary, pass: u32) -> String {
     let rng_note = if model.has(ModelFeature::NeedsRng) {
         "// model draws random numbers: keyed by (seed, cell, step)\n"
@@ -830,7 +830,14 @@ fn sim_kernel_taps() -> u32 {
     } else {
         ""
     };
-    let entry = if pass == 0 { "sim_step" } else { "sim_step2" };
+    // sim_step, sim_step2, sim_step3, ... -- the model writes as many
+    // as it declares passes, and every module carries the model's
+    // whole WGSL so a helper written once is visible to all of them.
+    let entry = if pass == 0 {
+        "sim_step".to_string()
+    } else {
+        format!("sim_step{}", pass + 1)
+    };
     let call = format!("    textureStore(field_out, p, {entry}(textureLoad(field_in, p, 0), p));");
     splice(
         STEP_TEMPLATE,

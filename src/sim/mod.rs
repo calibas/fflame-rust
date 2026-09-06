@@ -213,6 +213,16 @@ pub const MAX_PYRAMID_LEVELS: u32 = 8;
 /// the slots the batch clears before running.
 pub const MINMAX_RING: u32 = 257;
 
+/// How many dispatches one step may be. Four covers the catalogue:
+/// the fourth-order PDEs need two, and the dielectric breakdown model
+/// needs three (grow, relax, weigh).
+pub const MAX_PASSES: u32 = 4;
+
+/// The ceiling on a repeated pass's count. A relaxation slider that
+/// could ask for thousands of sweeps would hit the watchdog inside a
+/// single step, where the submit batching cannot help.
+pub const MAX_INNER_ITERATIONS: u32 = 200;
+
 
 /// Capability flags a colouring opts into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -320,7 +330,7 @@ pub struct ModelDef {
     pub presets: &'static [SimPreset],
     /// The step rule. See the type docs for the signature.
     ///
-    /// When [`ModelDef::passes`] is 2 this must ALSO define
+    /// When [`ModelDef::passes`] is more than 1 this must ALSO define
     /// `fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32>`. The
     /// whole string is spliced into both pass modules and each entry
     /// point calls its own function, so helpers are written once and
@@ -342,6 +352,17 @@ pub struct ModelDef {
     /// step is a step whatever it costs to compute, and the age
     /// channel and the animation track both count steps.
     pub passes: u32,
+    /// One pass may run several times within a step, which is what a
+    /// relaxation is: `Some((pass, param))` repeats that pass the
+    /// number of times the named parameter says, before the rest of
+    /// the step runs once.
+    ///
+    /// The dielectric breakdown model is the reason this exists — it
+    /// re-solves Laplace's equation between one growth and the next,
+    /// and the count is a slider (the paper's "between 5 and 50"),
+    /// not something a shader can be compiled for. Capped at
+    /// [`MAX_INNER_ITERATIONS`].
+    pub repeat: Option<(u32, &'static str)>,
     /// Largest `dt` the explicit scheme is stable at, for the DEFAULT
     /// diffusion rates. Measured per model (see each model's note); the
     /// reaction terms usually bind before diffusion does.
@@ -558,6 +579,7 @@ pub static MODELS: &[&ModelDef] = &[
     &models::SANDPILE,
     &models::INVASION_PERCOLATION,
     &models::SNOWFAKE,
+    &models::DBM,
 ];
 
 /// Every colouring, in registration order. Append only.
@@ -769,24 +791,38 @@ mod tests {
     fn the_pass_count_matches_the_functions_the_model_defines() {
         for m in MODELS {
             assert!(
-                m.passes == 1 || m.passes == 2,
-                "{}: passes {} is neither 1 nor 2",
+                (1..=MAX_PASSES).contains(&m.passes),
+                "{}: passes {} is not in 1..={MAX_PASSES}",
                 m.name,
                 m.passes
             );
-            assert!(
-                m.wgsl.contains("fn sim_step("),
-                "{}: no sim_step",
-                m.name
-            );
-            assert_eq!(
-                m.wgsl.contains("fn sim_step2("),
-                m.passes == 2,
-                "{}: passes = {} but sim_step2 {} defined",
-                m.name,
-                m.passes,
-                if m.passes == 2 { "is not" } else { "is" }
-            );
+            // Every pass from the second up needs its entry point,
+            // and a model must not carry one it never dispatches.
+            for n in 2..=MAX_PASSES {
+                let name = format!("fn sim_step{n}(");
+                let has = m.wgsl.contains(&name);
+                assert_eq!(
+                    has,
+                    m.passes >= n,
+                    "{}: passes = {} but sim_step{n} {} defined",
+                    m.name,
+                    m.passes,
+                    if has { "IS" } else { "is not" }
+                );
+            }
+            if let Some((pass, param)) = m.repeat {
+                assert!(
+                    pass < m.passes,
+                    "{}: repeats pass {pass} but has only {} passes",
+                    m.name,
+                    m.passes
+                );
+                assert!(
+                    m.parameters.iter().any(|p| p.name == param),
+                    "{}: repeat names parameter {param:?}, which it does not declare",
+                    m.name
+                );
+            }
         }
     }
 

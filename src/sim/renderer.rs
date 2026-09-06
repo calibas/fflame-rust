@@ -92,9 +92,9 @@ struct SimParamsGpu {
 /// parameter edits do not touch it.
 struct Pipelines {
     seed: ComputePipeline,
-    step: ComputePipeline,
-    /// The second dispatch of a step, for fourth-order PDEs only.
-    step2: Option<ComputePipeline>,
+    /// The dispatches of one step, in order: `sim_step`, then
+    /// `sim_step2`, and so on for as many as the model declares.
+    steps: Vec<ComputePipeline>,
     color: ComputePipeline,
     /// One pyramid level from the one below it; built only for a
     /// model that declares `NeedsPyramid`.
@@ -655,8 +655,9 @@ impl SimRenderer {
         let coloring = coloring_or_default(&cfg.coloring);
 
         let seed_src = assembler::assemble_seed(model, cfg.init.kind_name());
-        let step_src = assembler::assemble_step(model, cfg.boundary, 0);
-        let step2_src = (model.passes > 1).then(|| assembler::assemble_step(model, cfg.boundary, 1));
+        let step_srcs: Vec<String> = (0..model.passes)
+            .map(|pass| assembler::assemble_step(model, cfg.boundary, pass))
+            .collect();
         let color_src = assembler::assemble_color(
             coloring,
             cfg.boundary,
@@ -687,8 +688,8 @@ impl SimRenderer {
             })
         };
         let seed_mod = make("Sim Seed", &seed_src);
-        let step_mod = make("Sim Step", &step_src);
-        let step2_mod = step2_src.as_ref().map(|src| make("Sim Step 2", src));
+        let step_mods: Vec<ShaderModule> =
+            step_srcs.iter().map(|src| make("Sim Step", src)).collect();
         let color_mod = make("Sim Color", &color_src);
         let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
         let reduce_mod = reduce_src.as_ref().map(|src| make("Sim Reduce", src));
@@ -859,10 +860,10 @@ impl SimRenderer {
         self.steps_per_submit = FIRST_SUBMIT;
         self.pipelines = Some(Pipelines {
             seed: pipeline("Sim Seed", &seed_layout, &seed_mod),
-            step: pipeline("Sim Step", &step_layout, &step_mod),
-            step2: step2_mod
-                .as_ref()
-                .map(|m| pipeline("Sim Step 2", &step_layout, m)),
+            steps: step_mods
+                .iter()
+                .map(|m| pipeline("Sim Step", &step_layout, m))
+                .collect(),
             color: pipeline("Sim Color", &color_layout, &color_mod),
             pyramid: pyramid_mod
                 .as_ref()
@@ -1331,6 +1332,24 @@ impl SimRenderer {
         let stride = self.params_stride as u32;
         let wants_pyramid = model.has(ModelFeature::NeedsPyramid);
         let wants_minmax = model.has(ModelFeature::NeedsMinMax);
+        // How many times each pass runs inside one step. All 1 unless
+        // the model declares a repeat, in which case that pass reads
+        // its count from a parameter -- a relaxation whose sweep count
+        // is a slider cannot be compiled in.
+        let repeat: Vec<u32> = (0..model.passes)
+            .map(|n| match model.repeat {
+                Some((idx, name)) if idx == n => model
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == name)
+                    .map(|p| cfg.model_param(p.name, p.default))
+                    .unwrap_or(1.0)
+                    .round()
+                    .clamp(1.0, crate::sim::MAX_INNER_ITERATIONS as f32)
+                    as u32,
+                _ => 1,
+            })
+            .collect();
         // Per-level dispatch sizes, level 1 upward.
         let level_dispatch: Vec<(u32, u32)> = {
             let (mut w, mut h) = (self.grid_w, self.grid_h);
@@ -1400,21 +1419,19 @@ impl SimRenderer {
                     // field[1 - src], so alternating the index IS the
                     // ping-pong.
                     //
-                    // A two-pass model ping-pongs TWICE per step and so
-                    // lands back where it started, which is why nothing
-                    // downstream has to know how many passes a model
-                    // has. Both passes read the same ring slot: the
-                    // only per-step value in it is the step index, and
-                    // both passes of step i are step i.
-                    pass.set_pipeline(&p.step);
-                    pass.set_bind_group(0, &groups[self.current], &[i * stride]);
-                    pass.dispatch_workgroups(gx, gy, 1);
-                    self.current = 1 - self.current;
-                    if let Some(step2) = &p.step2 {
-                        pass.set_pipeline(step2);
-                        pass.set_bind_group(0, &groups[self.current], &[i * stride]);
-                        pass.dispatch_workgroups(gx, gy, 1);
-                        self.current = 1 - self.current;
+    // Every pass of a step reads the same ring slot: the only
+                    // per-step value in it is the step index, and every
+                    // dispatch of step i is step i. Nothing downstream
+                    // needs to know how many passes there were -- the
+                    // live state is always `field[current]`, whether
+                    // the count of flips was odd or even.
+                    for (n, sp) in p.steps.iter().enumerate() {
+                        for _ in 0..repeat[n] {
+                            pass.set_pipeline(sp);
+                            pass.set_bind_group(0, &groups[self.current], &[i * stride]);
+                            pass.dispatch_workgroups(gx, gy, 1);
+                            self.current = 1 - self.current;
+                        }
                     }
                     // The new field's range, into this step's slot, for
                     // the next step to normalise by.

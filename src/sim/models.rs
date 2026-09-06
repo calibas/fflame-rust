@@ -177,6 +177,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // past it as garbage rather than NaN, which is worse -- so the cap
     // is enforced everywhere dt can be set, not left to the clamp.
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -350,6 +351,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // 1.0. A first probe ran from noise and reported 0.5 -- it was
     // measuring the stability of a field doing nothing.
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -501,6 +503,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // said 0.02 after testing only 0.01 and 0.05 -- a cap written down
     // without running the rung it names.
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -620,6 +623,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // Every rung run: 0.01 and 0.02 stable, 0.03 diverges at step 486,
     // 0.04 at 26, 0.05 at 17.
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -855,6 +859,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // No time step: a generation is a generation. The value is unused,
     // and the panel hides the slider.
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1006,6 +1011,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 300,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1128,6 +1134,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1250,6 +1257,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 1200,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1352,6 +1360,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 250,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1467,6 +1476,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 360,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1576,6 +1586,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 256,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1703,6 +1714,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 125,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -1832,6 +1844,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -2020,6 +2033,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 5000,
     passes: 2,
+    repeat: None,
     // Explicit Euler on the 5-point Laplacian, whose symbol runs over
     // [-8, 0]: the quartic operator is largest at the checkerboard,
     // (8 - q0^2)^2, and the drive r offsets it. Measured at
@@ -2175,6 +2189,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 20000,
     passes: 2,
+    repeat: None,
     // Linearised about |c| = 1, the symbol is
     //   D L (3c^2 - 1 - gamma L),  L in [-8, 0]
     // whose most negative value is at the checkerboard L = -8:
@@ -2361,6 +2376,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 15000,
     passes: 1,
+    repeat: None,
     // The stiff term is the activator's threshold. Differentiating the
     // reaction, d/du[-f v (u-q)/(u+q)] = -2 f v q/(u+q)^2, which is
     // largest near u = q at -f v/(2q); with v of order 1 and the
@@ -2614,6 +2630,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 4000,
     passes: 2,
+    repeat: None,
     // The temperature equation is plain diffusion with D = 1 on a mesh
     // of 0.03, so explicit Euler needs dt <= dx^2/4 = 2.25e-4. That is
     // the binding constraint: the phase equation's eps^2/tau = 0.333
@@ -2772,6 +2789,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 600,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: Some(|p| {
         // The exponential core, scaled to R and normalised to sum 1.
@@ -2986,6 +3004,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 400,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: Some(|p| {
         // Two blocks: the inner disc, then the annulus out to 3 r_i.
@@ -3281,6 +3300,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 200,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -3487,6 +3507,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 600,
     passes: 1,
+    repeat: None,
     agents: Some(crate::sim::AgentDef {
         count: |p, w, h| {
             // The paper's %p: a percentage of the image AREA, so the
@@ -3734,6 +3755,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 1200,
     passes: 1,
+    repeat: None,
     agents: Some(crate::sim::AgentDef {
         count: |p, w, h| {
             let pct = p.get("walkers").clamp(0.05, 40.0);
@@ -3982,6 +4004,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 12_837,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -4145,6 +4168,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 2_000,
     passes: 1,
+    repeat: None,
     agents: None,
     kernel: None,
     dt_bound: None,
@@ -4555,6 +4579,387 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 "#,
     default_steps: 6_000,
     passes: 2,
+    repeat: None,
+    agents: None,
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+
+/// The dielectric breakdown model: a discharge pattern that grows one
+/// site at a time, each chosen with probability proportional to the
+/// local field raised to a power.
+///
+/// L. Niemeyer, L. Pietronero, H. J. Wiesmann, "Fractal dimension of
+/// dielectric breakdown", *Phys. Rev. Lett.* 52 (1984) 1033. Read in
+/// full (the scan is `output/pdf/dielectric_break.pdf`).
+///
+/// **The rule**, its section (a)-(c) and equations (3)-(5). The
+/// pattern is an equipotential at φ = 0 and the far electrode is held
+/// at φ = 1; between them ∇²φ = 0, discretised as
+/// φ = ¼(φ₊ₓ + φ₋ₓ + φ₊ᵧ + φ₋ᵧ) and solved by iterating it. At each
+/// step ONE bond is added, linking a site of the pattern to a new
+/// site, chosen among all such bonds with
+/// p ∝ (φ of the new site)^η. The paper's own convergence note is
+/// where the relaxation slider's range comes from: "typically good
+/// convergence is obtained with a number of iterations between 5 and
+/// 50".
+///
+/// **One site per step, exactly, without a prefix scan.** The plan
+/// expected the paper's global weighted choice to need a scan and
+/// shipped a parallel approximation instead. It does not: drawing
+/// E ~ Exp(1) per candidate and taking the ARGMIN of E/w is a draw
+/// proportional to w -- the exponential race -- and a global minimum
+/// is the min/max reduction phase 3 already built. So this is the
+/// paper's rule and not an approximation of it, at the cost of one
+/// extra pass.
+///
+/// **A white point reachable from several black points is likelier**,
+/// because each bond is a candidate: the weight is the number of
+/// pattern neighbours times φ^η. The paper says so in passing, for
+/// η = 0, and it is what makes that case not quite the Eden model.
+///
+/// Table I is the gate: D = 2 at η = 0, 1.89 ± 0.01 at η = 0.5,
+/// 1.75 ± 0.02 at η = 1, about 1.6 at η = 2. The η = 1 value is also
+/// the experimental Lichtenberg figure's (≈1.7 from photographs) and
+/// DLA's, which this catalogue measured at 1.753 in phase 4.
+///
+/// **The Saffman-Taylor half of this wave did not work, and the knob
+/// that remains is named for what it does.** Saffman and Taylor
+/// (*Proc. R. Soc. A* 245 (1958) 312, read) measured a finger
+/// occupying "a little more than half the width of the channel" --
+/// λ = 0.485, 0.502, 0.508, 0.514 at four stations at 1 mm/s, and
+/// 0.87 at a twentieth of that speed, where surface tension matters
+/// more. The catalogue proposed reaching that by holding the pattern
+/// at φ = −d₀κ instead of 0, with κ from the 3×3 occupancy.
+///
+/// Measured in a 256-wide channel, it does not. At d₀ of 0, 0.01 and
+/// 0.03 the pattern crosses the cell as a branched dendrite whose
+/// width at three stations reads 0.02 to 0.23 of the channel, against
+/// the experiment's 0.5 -- and raising d₀ makes it NARROWER, where
+/// the experiment makes it wider. Above about 0.05 growth stops
+/// entirely (78 sites in 8,000 steps), because a tip held at a
+/// negative potential drags its whole neighbourhood below zero and
+/// nothing is a candidate any more. Growing every candidate at once
+/// rather than one per step -- which is the right rule for a moving
+/// interface, and is why `selection` exists -- fixed the stalling but
+/// not the width.
+///
+/// So there is no "viscous finger" preset: a lattice interface that
+/// advances by independent per-site coin flips stays rough, and
+/// smoothing its potential does not make it compact. `d₀` ships as a
+/// tip penalty, which is what it measurably is.
+///
+/// Channels: `.x` = this step's race key (the reduce's channel),
+/// `.y` = φ, `.z` = the step the site joined, `.w` = in the pattern.
+pub static DBM: ModelDef = ModelDef {
+    name: "dbm",
+    display_name: "Dielectric Breakdown",
+    description: "A discharge that branches into whichever gap has the strongest field. \
+                  Lightning, Lichtenberg figures, and — with surface tension — the \
+                  viscous finger.",
+    features: &[
+        ModelFeature::NeedsRng,
+        ModelFeature::NeedsMinMax,
+        ModelFeature::NoTimeStep,
+    ],
+    parameters: &[
+        SimParamDef {
+            name: "eta",
+            display_name: "Field exponent η",
+            default: 1.0,
+            min: 0.0,
+            max: 4.0,
+            tooltip: "How sharply growth prefers a strong field. THE DIMENSION DEPENDS ON IT \
+                      and the paper tabulates it: 2 at η = 0, 1.89 at 0.5, 1.75 at 1, about \
+                      1.6 at 2. η = 1 is growth proportional to the field — the realistic case \
+                      for a discharge, and the one whose pattern and dimension match both a \
+                      photographed Lichtenberg figure and DLA. Higher makes the structure more \
+                      nearly linear.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "relax",
+            display_name: "Relaxation sweeps",
+            default: 20.0,
+            min: 1.0,
+            max: 200.0,
+            tooltip: "How many times Laplace's equation is iterated between one growth and the \
+                      next. The paper's own note: 'typically good convergence is obtained with \
+                      a number of iterations between 5 and 50'. It is warm-started from the \
+                      last solution, so few sweeps suffice; too few and the field lags behind \
+                      the pattern, which biases growth toward wherever the solver has caught up.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "surface_tension",
+            display_name: "Tip penalty d₀",
+            default: 0.0,
+            min: 0.0,
+            max: 0.1,
+            tooltip: "Holds the pattern at −d₀ × curvature instead of at 0, so a protruding tip \
+                      sits at a lower potential and grows more slowly. It thins and straightens \
+                      the pattern. IT IS NOT SAFFMAN–TAYLOR: it was added as the lattice \
+                      analogue of their surface-tension boundary condition and measurably does \
+                      not reproduce their finger — see the model's notes. Above about 0.05 it \
+                      stops growth altogether. Zero is the dielectric breakdown model as \
+                      published.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "selection",
+            display_name: "Growth",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How many sites join per step. One site is the paper's rule exactly — a \
+                      single bond added per step, chosen among all candidates in proportion to \
+                      the field — and it is what a branching DISCHARGE is. All sites advances \
+                      the whole interface at once, each candidate independently at a rate \
+                      proportional to the field, which is what a moving FLUID interface is. \
+                      They are different processes, not an approximation of one another.",
+            choices: &["One site (race)", "All sites (rate)"],
+        },
+        SimParamDef {
+            name: "rate",
+            display_name: "Growth rate",
+            default: 0.05,
+            min: 0.001,
+            max: 1.0,
+            tooltip: "In All-sites mode, the chance per step that a candidate with unit field \
+                      joins. Small keeps the interface smooth and costs steps; large advances \
+                      it in coarse jumps. Ignored in One-site mode.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "electrode",
+            display_name: "Far electrode",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Where the potential is held at 1. Radial is the paper's figure 2 — a \
+                      circle at large enough distance, with the discharge starting from a \
+                      point at the centre. Channel is one plate along an edge, which is the \
+                      Hele-Shaw cell of the fingering experiment; seed it with a line.",
+            choices: &["Radial", "Channel"],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "lichtenberg",
+            display_name: "Lichtenberg figure",
+            // eta = 1, the paper's own case: "the most realistic case
+            // for the present experiment", D = 1.75.
+            params: &[("eta", 1.0), ("relax", 20.0), ("surface_tension", 0.0),
+                     ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
+            // One site per step, so this is the particle count. The
+            // paper's figure 3 is "about 5000 steps".
+            steps: 5_000,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "dense",
+            display_name: "Dense (η = 0)",
+            // Growth independent of the field: D = 2, the compact end
+            // of the table.
+            params: &[("eta", 0.0), ("relax", 20.0), ("surface_tension", 0.0),
+                     ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
+            steps: 5_000,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+        SimPreset {
+            name: "sparse",
+            display_name: "Sparse (η = 2)",
+            // D about 1.6: fewer, longer branches.
+            params: &[("eta", 2.0), ("relax", 20.0), ("surface_tension", 0.0),
+                     ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
+            steps: 5_000,
+            init: Some(crate::config::sim::SimInit::Center),
+        },
+    ],
+    wgsl: r#"
+// The key a site that cannot grow writes: larger than any real race
+// key, so the global minimum ignores it.
+const DBM_FAR: f32 = 1.0e30;
+
+// Where the potential is held at 1.
+fn dbm_electrode(p: vec2<i32>) -> bool {
+    let g = sim_grid();
+    if (mparam(5u) >= 0.5) {
+        // Channel: one plate along the near edge of the cell.
+        return p.y <= 0;
+    }
+    // Radial: "the other electrode is modeled as a circle at large
+    // enough distance", the paper's figure 2.
+    let c = vec2<f32>(g) * 0.5;
+    let r = min(f32(g.x), f32(g.y)) * 0.48;
+    return length(vec2<f32>(p) - c) >= r;
+}
+
+// How many of the four nearest neighbours are in the pattern. Each is
+// one of the paper's dashed bonds, so it is also the number of ways
+// this site can be reached.
+fn dbm_bonds(p: vec2<i32>) -> f32 {
+    return sim_read(p + vec2<i32>( 1,  0)).w
+         + sim_read(p + vec2<i32>(-1,  0)).w
+         + sim_read(p + vec2<i32>( 0,  1)).w
+         + sim_read(p + vec2<i32>( 0, -1)).w;
+}
+
+// A 3x3 occupancy estimate of interface curvature, positive at a
+// protruding tip. A flat interface has five of eight neighbours in the
+// pattern, a tip fewer, a notch more. OURS: Saffman and Taylor give
+// the continuum boundary condition, not a lattice estimate of it.
+// Interior sites are not interface and stay at 0.
+fn dbm_curvature(p: vec2<i32>) -> f32 {
+    var n = 0.0;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            if (dx != 0 || dy != 0) {
+                n = n + sim_read(p + vec2<i32>(dx, dy)).w;
+            }
+        }
+    }
+    if (n > 7.5) {
+        return 0.0;
+    }
+    return (5.0 - n) * (1.0 / 3.0);
+}
+
+// What a site's growth is proportional to: the field to the power eta,
+// times the number of bonds that reach it. Zero for anything that is
+// not a candidate.
+fn dbm_weight(s: vec4<f32>, p: vec2<i32>) -> f32 {
+    if (s.w > 0.5 || dbm_electrode(p)) {
+        return 0.0;
+    }
+    let bonds = dbm_bonds(p);
+    let phi = max(s.y, 0.0);
+    if (bonds < 0.5 || phi <= 0.0) {
+        return 0.0;
+    }
+    // Per BOND, so a site reachable from several pattern sites is
+    // likelier in proportion -- the paper says so in passing, and it
+    // is what makes eta = 0 not quite the Eden model.
+    return bonds * pow(phi, mparam(0u));
+}
+
+// Pass 1 of 3 -- growth, by whichever rule `selection` names.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    var out = s;
+    var joins = false;
+    if (s.w < 0.5) {
+        if (mparam(3u) >= 0.5) {
+            // All sites: every candidate independently, at a rate
+            // proportional to its weight. A moving interface, not a
+            // discharge -- and `steps` is then time rather than a
+            // particle count.
+            //
+            // NORMALISED BY THE STRONGEST CANDIDATE, which the same
+            // reduce provides as the maximum of channel .x. Without
+            // it the rate would depend on how far away the electrode
+            // is: in a channel 254 cells deep the converged field at
+            // the interface is about 1/254, so a rate of 0.05 grew 373
+            // sites in 3,000 steps -- measured -- and the slider would
+            // mean something different at every grid size.
+            let w = dbm_weight(s, p);
+            let peak = max(sim_minmax().y, 1.0e-20);
+            joins = w > 0.0 && sim_rand(p, 0x7bu) < mparam(4u) * w / peak;
+        } else {
+            // One site: the winner of the exponential race started at
+            // the end of the last step. Every site that could not grow
+            // wrote DBM_FAR, so a minimum anywhere near it means there
+            // was no candidate -- which is also what the reduce's
+            // fallback gives before the first race has run.
+            let best = sim_minmax().x;
+            joins = best < DBM_FAR * 0.5 && s.x == best;
+        }
+    }
+    if (joins) {
+        out.w = 1.0;
+        out.y = 0.0;
+        out.z = f32(sim_step_index());
+    }
+    // A key belongs to one step. Clearing here means a site that lost
+    // cannot win later on a stale draw.
+    out.x = DBM_FAR;
+    return out;
+}
+
+// Pass 2 of 3 -- one Jacobi sweep of Laplace's equation, equation (5).
+// This is the pass that repeats: `relax` of them between one growth
+// and the next, warm-started from the last solution.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    var out = s;
+    if (dbm_electrode(p)) {
+        out.y = 1.0;
+        return out;
+    }
+    if (s.w > 0.5) {
+        // The discharge pattern is an equipotential at 0 -- or, with
+        // surface tension, at minus the interface's curvature, so a
+        // tip is at a lower potential than a flat face and grows more
+        // slowly.
+        out.y = -mparam(2u) * dbm_curvature(p);
+        return out;
+    }
+    out.y = 0.25 * (sim_read(p + vec2<i32>( 1,  0)).y
+                  + sim_read(p + vec2<i32>(-1,  0)).y
+                  + sim_read(p + vec2<i32>( 0,  1)).y
+                  + sim_read(p + vec2<i32>( 0, -1)).y);
+    return out;
+}
+
+// Pass 3 of 3 -- weigh every candidate and start its race.
+fn sim_step3(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    var out = s;
+    // A candidate is a site outside the pattern with a pattern
+    // neighbour: the far end of one of the paper's dashed bonds.
+    let w = dbm_weight(s, p);
+
+    // All-sites mode wants the largest weight, so channel .x carries
+    // the weights themselves and the reduce's MAXIMUM is what the next
+    // step normalises by. One-site mode wants the smallest race key,
+    // and the same reduce's MINIMUM is the winner.
+    if (mparam(3u) >= 0.5) {
+        out.x = w;
+        return out;
+    }
+    out.x = DBM_FAR;
+    if (w <= 0.0) {
+        return out;
+    }
+
+    // The exponential race. With E ~ Exp(1) drawn independently per
+    // candidate, argmin(E / w) is distributed exactly as the paper's
+    // equation (3) -- and argmin over the grid is the reduction.
+    let u = max(sim_rand(p, 0xdbu), 1.0e-7);
+    out.x = -log(u) / max(w, 1.0e-30);
+    return out;
+}
+"#,
+    wgsl_seed: r#"
+// Declared again because the seed pass carries `wgsl_seed` alone, not
+// the model's `wgsl`; the two never share a module, so this is not a
+// redefinition.
+const DBM_FAR: f32 = 1.0e30;
+
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // The init shape IS the starting pattern: Center for the paper's
+    // radial discharge from a point, Line for a plane interface.
+    let pat = select(0.0, 1.0, inside >= 0.5);
+    // The potential starts at the electrode's value everywhere else
+    // and the relaxation pulls it down toward the pattern.
+    return vec4<f32>(DBM_FAR, select(1.0, 0.0, pat > 0.5), 0.0, pat);
+}
+"#,
+    default_steps: 5_000,
+    passes: 3,
+    // The relaxation: pass 1 runs `relax` times per growth.
+    repeat: Some((1, "relax")),
     agents: None,
     kernel: None,
     dt_bound: None,

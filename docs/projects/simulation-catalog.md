@@ -1657,6 +1657,59 @@ for exact selection), `color`. Boundary Clamp (φ = 1 on the frame).
 field around the figure is itself a beautiful thing to draw),
 `hillshade` on φ.
 
+**Read in full and shipped 2026-09-05** (the scan is
+`output/pdf/dielectric_break.pdf`). The rule above is right, and the
+"5–50 sweeps" is the paper's own sentence. Four things it did not say:
+
+- **EXACT SELECTION NEEDS NO SCAN.** The plan budgeted a prefix scan
+  for the paper's global weighted choice and proposed shipping a
+  parallel approximation first. It is not needed: draw E ~ Exp(1) per
+  candidate and take the ARGMIN of E/w — the exponential race — and
+  the result is distributed exactly as equation (3). A global minimum
+  is the min/max reduction phase 3 already built. So the shipped model
+  is the paper's rule, one bond per step, at the cost of one extra
+  pass; `dbm_grows_exactly_one_site_per_step` checks the count in six
+  batches, and the same test checks the potential really is a solution
+  of Laplace's equation (residual 1.8e-4 over 9,649 interior cells).
+- **The parallel rule still ships, because it is a different process
+  and not an approximation.** One site per step is a branching
+  DISCHARGE; every candidate advancing at once, at a rate proportional
+  to the field, is a moving INTERFACE. `selection` chooses. The
+  all-sites rate is normalised by the strongest candidate, from the
+  same reduce's maximum — without that, the rate would mean something
+  different at every geometry, since the converged field at an
+  interface 254 cells from the electrode is about 1/254 (measured: 373
+  sites in 3,000 steps before normalising, 10,856 after).
+- **A white point reachable from several black points is likelier**,
+  in proportion, because each bond is a candidate. The paper mentions
+  it in passing for η = 0, and it is what makes that case not quite
+  the Eden model.
+- **THE GATE, measured the paper's own way** (N(r) against r, averaged
+  over three samples of ~5,000 sites at 512², each verified to have
+  stayed clear of the electrode):
+
+  | η | ours | Table I |
+  |---|---|---|
+  | 0 | 1.980 | 2 |
+  | 0.5 | 1.856 | 1.89 ± 0.01 |
+  | 1 | **1.689** | **1.75 ± 0.02** |
+  | 2 | 1.359 | ~1.6 (their ref. 13) |
+
+  We read low, by 0.02, 0.034 and 0.046 as η rises through 0, 0.5 and
+  1. It is not the solver: η = 1 reads 1.704, 1.718 and 1.715 at 20,
+  60 and 150 relaxation sweeps, so 20 is converged and the paper's
+  "5 to 50" is right. The paper says the same of its own numbers —
+  "the possibility of a larger systematic error due to the finite size
+  of the systems considered cannot be excluded". **η = 2 is not
+  gated**: their value there is quoted from another reference rather
+  than measured, and at this size ours is dominated by sample noise
+  (1.49, 1.63, 1.54 across three runs — a spread of 0.14 with no trend
+  in it). The three gated rows assert to 0.08.
+
+  η = 1 also lands within 0.06 of DLA's 1.753 from phase 4, which is
+  the phase gate: the same dimension by a completely different
+  mechanism.
+
 ---
 
 ## 23. Saffman–Taylor viscous fingering
@@ -1684,6 +1737,47 @@ tooltip.
 
 **Parameters.** DBM's plus `surface_tension` d₀.
 **Stages / colouring.** As §22.
+
+**ATTEMPTED 2026-09-05 AND IT DOES NOT WORK.** The Saffman–Taylor
+paper was read (`output/pdf/saffman1958.pdf`) and gives a sharp target:
+a finger occupying "a little more than half the width of the channel",
+measured λ = 0.485, 0.502, 0.508 and 0.514 at four stations at 1 mm/s,
+and 0.87 at a twentieth of that speed where surface tension matters
+more. So: more surface tension, WIDER finger.
+
+The recipe above — hold the cluster at φ = −d₀κ with κ from the 3×3
+occupancy — was implemented and measured in a 256-wide channel. It
+produces a branched dendrite, not a finger, and it moves the wrong
+way:
+
+| d₀ | sites grown | width at 3 stations |
+|---|---|---|
+| 0 | 7,999 | 0.16 / 0.24 / 0.09 |
+| 0.01 | 5,184 | 0.07 / 0.02 / 0.07 |
+| 0.03 | 2,888 | 0.06 / 0.04 / 0.04 |
+| 0.1 | 113 | growth has stopped |
+
+Raising d₀ narrows the structure where the experiment widens it, and
+above about 0.05 growth stops altogether: a tip held at a negative
+potential drags its neighbourhood below zero and nothing is a
+candidate any more. Growing every candidate at once instead of one per
+step — the right rule for a moving interface, and the reason
+`selection` exists at all — fixed the stalling and not the width
+(0.02–0.23 against 0.5).
+
+**Why, as far as this goes:** a lattice interface advancing by
+independent per-site coin flips stays rough, and smoothing the
+potential it grows into does not make it compact. Reproducing the
+finger looks like it needs a deterministic interface advance with an
+explicit curvature-driven surface energy — a different discretisation,
+not a parameter on this one.
+
+**What shipped instead:** the parameter survives as `Tip penalty d₀`,
+named for what it measurably does (it thins and straightens the
+pattern), with its slider capped at 0.1 and its tooltip saying it is
+not Saffman–Taylor. **There is no "viscous finger" preset**, because
+naming one that would be a claim this section cannot support. §23
+remains open.
 
 ---
 

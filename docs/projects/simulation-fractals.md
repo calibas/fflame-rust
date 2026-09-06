@@ -825,12 +825,16 @@ code against these five models before starting:
    four substeps read no neighbour, so they fold into the two that do,
    and a CPU mirror keeping all four separate agrees with the two-pass
    shader exactly. The cap stays until something actually needs it.
-2. There is no per-step repeat count. DBM relaxes K = 5–50 sweeps per
-   growth step and K is a slider, not a compile-time count.
-3. There is no scan. The reduce does min/max only; exact selection
-   needs a sum plus a descent to locate the chosen site. The
-   approximation (`selection: parallel`) ships first, so this gates
-   only the Tier-4 refinement.
+2. ~~There is no per-step repeat count.~~ **Built in wave 3.**
+   `ModelDef::repeat` names a pass and a parameter, and the renderer
+   runs that pass that many times per step. `passes` went from a
+   1-or-2 special case to 1..=`MAX_PASSES` at the same time, with the
+   entry points `sim_step`, `sim_step2`, `sim_step3`, …
+3. ~~There is no scan, so exact selection waits for Tier 4.~~ **Not
+   needed — found in wave 3.** Drawing E ~ Exp(1) per candidate and
+   taking the argmin of E/w samples exactly in proportion to w, and
+   argmin over the grid is the min/max reduce that already exists. The
+   paper's rule ships, not an approximation of it.
 
 Hex addressing (phase 2), the min/max reduce and the pyramid (phase 3)
 cover everything else these models ask for.
@@ -863,6 +867,42 @@ picture.
   last-avalanche age field (nearly black). The odometer and the
   wrapped invasion contours took their places.
 - 24 models, 5 new visual baselines, no existing baseline moved.
+
+#### Wave 3 — the dielectric breakdown model, and one that did not work
+
+**Done 2026-09-05.** DBM ships, with its dimension gate met against
+the paper's own table. Saffman–Taylor does not ship, and the
+measurements saying why are in the catalogue rather than in a preset.
+
+- **Two prerequisites this phase listed turned out differently.** The
+  per-step repeat count was built (`ModelDef::repeat`, and `passes`
+  generalised to `MAX_PASSES` while it was open). The prefix scan was
+  NOT built, because it is not needed: an exponential race — argmin of
+  E/w with E ~ Exp(1) — samples exactly in proportion to w using the
+  min/max reduce phase 3 already had. So the paper's exact rule ships,
+  one bond per step, rather than the parallel approximation the plan
+  had scheduled.
+- **The parallel rule ships too, as a second `selection` mode**, not
+  as an approximation: one site per step is a branching discharge,
+  every candidate advancing at once is a moving interface. They are
+  different processes.
+- **GATE MET.** Measured the paper's way, N(r) against r, three
+  samples of 5,000 sites each: D = 1.980, 1.856 and 1.689 at η = 0,
+  0.5 and 1, against Table I's 2, 1.89 ± 0.01 and 1.75 ± 0.02. η = 1
+  is within 0.06 of phase 4's DLA (1.753), which is the phase gate —
+  the same dimension reached by a completely different mechanism. We
+  read systematically low by up to 0.05, and it is not the solver: the
+  η = 1 value does not move between 20 and 150 relaxation sweeps. η = 2
+  is reported and not gated, because the paper's value there is quoted
+  from another reference and ours varies by 0.14 between samples.
+- **Saffman–Taylor was implemented, measured and withdrawn.** The
+  paper gives λ ≈ 0.5, rising to 0.87 as surface tension grows. The
+  catalogue's lattice recipe gives 0.02–0.23 and moves the wrong way
+  with d₀, stopping growth entirely above 0.05. The knob survives
+  renamed as a tip penalty, for what it does; there is no preset named
+  for a phenomenon it does not reproduce, and §23 stays open with the
+  numbers and a note on what a working version would need.
+- Three presets, four visual baselines, 26 models.
 
 #### Wave 2 — Part II, and the snowfake
 

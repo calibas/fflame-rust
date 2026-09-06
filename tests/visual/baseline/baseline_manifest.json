@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "ea6fb618",
+  "git_hash": "83b387c6",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -477,6 +477,22 @@
     "sim-cyclic-ca-moore-1-3-3.png": {
       "bytes": 34210,
       "sha256": "b15424ab0b7861a3b6816c346af2fb42045dfdc5894891cf63aef07b310fd875"
+    },
+    "sim-dbm-dense.png": {
+      "bytes": 3970,
+      "sha256": "3e1ca7adb3ad908b5015bc16a45111b9ee0658bb3d82e5c8c287f620e5a7a189"
+    },
+    "sim-dbm-lichtenberg.png": {
+      "bytes": 7690,
+      "sha256": "3378efc3263e6e874f7794661a8b181d19ace3c5e166a001136fb3740e9a2f45"
+    },
+    "sim-dbm-potential.png": {
+      "bytes": 6574,
+      "sha256": "1983a2a1dc73f517520b0355e86234212286d81eecbaca96457d27a70d36d253"
+    },
+    "sim-dbm-sparse.png": {
+      "bytes": 5917,
+      "sha256": "b436d6294346c3f5d85340d214aa34126430d762c2ba9edbb168109755c3622f"
     },
     "sim-dla-age.png": {
       "bytes": 16267,
