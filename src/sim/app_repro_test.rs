@@ -3398,3 +3398,231 @@ fn the_snowfake_conserves_mass() {
         assert!(rel < 1e-3, "{preset}: mass is not conserved ({rel:.2e} relative)");
     }
 }
+
+/// The paper's own dimension estimator: the number of pattern sites
+/// within radius r of the seed, against r, on a log-log fit.
+///
+/// "we have plotted the logarithm of the total number of points within
+/// a certain radius as a function of the logarithm of this radius"
+/// — Niemeyer, Pietronero and Wiesmann, on their figure 3.
+///
+/// The fit skips the innermost cells, where the count is a handful and
+/// the lattice shows, and stops before the cluster's own edge, where it
+/// saturates.
+fn radial_dimension(pattern: &[bool], n: usize) -> f64 {
+    let c = (n / 2) as f64;
+    let mut radii: Vec<f64> = pattern
+        .iter()
+        .enumerate()
+        .filter(|(_, &b)| b)
+        .map(|(k, _)| {
+            let (x, y) = ((k % n) as f64 - c, (k / n) as f64 - c);
+            (x * x + y * y).sqrt()
+        })
+        .collect();
+    radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let outer = radii[radii.len() * 9 / 10];
+    let mut pts = Vec::new();
+    let mut r = 6.0;
+    while r <= outer {
+        let cnt = radii.partition_point(|&v| v <= r) as f64;
+        if cnt >= 10.0 {
+            pts.push((r.ln(), cnt.ln()));
+        }
+        r *= 1.25;
+    }
+    let m = pts.len() as f64;
+    let (sx, sy) = (pts.iter().map(|p| p.0).sum::<f64>(), pts.iter().map(|p| p.1).sum::<f64>());
+    let sxy: f64 = pts.iter().map(|p| p.0 * p.1).sum();
+    let sxx: f64 = pts.iter().map(|p| p.0 * p.0).sum();
+    (m * sxy - sx * sy) / (m * sxx - sx * sx)
+}
+
+fn dbm_config(n: u32, eta: f32, steps: u32) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "dbm".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 5;
+    cfg.steps = steps;
+    for (k, v) in [
+        ("eta", eta),
+        ("relax", 20.0),
+        ("surface_tension", 0.0),
+        ("selection", 0.0),
+        ("rate", 0.05),
+        ("electrode", 0.0),
+    ] {
+        cfg.model_params.insert(k.into(), v);
+    }
+    cfg
+}
+
+/// THE GATE for phase 5: the dielectric breakdown model's Hausdorff
+/// dimension against the paper's Table I.
+///
+///   eta   0     0.5          1            2
+///   D     2     1.89±0.01    1.75±0.02    ~1.6
+///
+/// Measured the paper's way (N(r) against r) on its own scale — about
+/// 5,000 sites. The eta = 1 row is also the row the whole phase turns
+/// on: it is the photographed Lichtenberg figure's dimension (≈1.7)
+/// and DLA's, which phase 4 measured at 1.753 by box counting.
+///
+/// Each run also confirms the selection rule is EXACT: one site joins
+/// per step and no more, which is what the exponential race buys over
+/// the parallel approximation the plan expected to ship.
+#[test]
+#[ignore]
+fn dbm_dimension_matches_the_papers_table() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: usize = 512;
+    const STEPS: u32 = 5_000;
+    println!("  eta      D      paper");
+    let mut rows = Vec::new();
+    // The paper averages "over five large samples of about 5000 points
+    // each"; three is enough here to stop one realisation deciding it.
+    // eta = 2 gets fewer sites because the structure is nearly linear
+    // and 5,000 of them reach the electrode, where growth is no longer
+    // free and the radial fit is truncated -- measured, that reads
+    // 1.375 instead of 1.6.
+    // The last column: whether the row is asserted. eta = 2 is not,
+    // twice over. The paper's own value there is quoted from its
+    // reference 13 rather than measured, and at this size our estimate
+    // is dominated by sample noise -- measured, single runs at 1,500
+    // sites gave 1.49, 1.63 and 1.54 for 20, 60 and 150 relaxation
+    // sweeps, a spread of 0.14 with no trend in it. A number that
+    // moves by 0.14 between samples cannot test a claim of 0.05.
+    for (eta, want, label, steps, gated) in [
+        (0.0f32, 2.0f64, "2", STEPS, true),
+        (0.5, 1.89, "1.89 +- 0.01", STEPS, true),
+        (1.0, 1.75, "1.75 +- 0.02", STEPS, true),
+        (2.0, 1.6, "~1.6 (their ref 13)", 1_500, false),
+    ] {
+        let mut ds = Vec::new();
+        let mut sites = 0usize;
+        let mut pattern = Vec::new();
+        for seed in 0..3u64 {
+            let mut cfg = dbm_config(N as u32, eta, steps);
+            cfg.seed = 5 + seed;
+            let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+            r.seed(&device, &queue, &cfg);
+            r.run_steps(&device, &queue, &cfg, steps);
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+            pattern = f.iter().map(|q| q[3] > 0.5).collect();
+            sites = pattern.iter().filter(|&&b| b).count();
+            ds.push(radial_dimension(&pattern, N));
+        }
+        let d = ds.iter().sum::<f64>() / ds.len() as f64;
+        // How close the pattern came to the electrode circle, which is
+        // where growth stops being free.
+        let c = (N / 2) as f64;
+        let reach = (0..N * N)
+            .filter(|&k| pattern[k])
+            .map(|k| (((k % N) as f64 - c).powi(2) + ((k / N) as f64 - c).powi(2)).sqrt())
+            .fold(0.0f64, f64::max);
+        println!(
+            "  {eta:3}   {d:.3}    {label:12}  ({sites} sites, reach {reach:.0} of {:.0})",
+            N as f64 * 0.48
+        );
+        // One site per step, exactly: the seed is one cell and the
+        // first step has no race to read.
+        assert!(
+            sites as u32 >= steps - 2 && sites as u32 <= steps,
+            "eta {eta}: {sites} sites from {steps} steps -- the selection is not one per step"
+        );
+        // Only believe a dimension measured on a cluster that never
+        // touched the electrode. The same discipline DLA's gate uses
+        // for the walls.
+        assert!(
+            reach < N as f64 * 0.48 * 0.85,
+            "eta {eta}: the pattern reached {reach:.0} of {:.0}, so the fit is truncated",
+            N as f64 * 0.48
+        );
+        rows.push((eta, d, want, label, gated));
+    }
+    for (eta, d, want, label, gated) in &rows {
+        if !gated {
+            continue;
+        }
+        // 0.08, against the paper's own 0.01-0.02 statistical bars.
+        // Measured, we read low by 0.02, 0.034 and 0.046 as eta rises
+        // through 0, 0.5 and 1, and the eta = 1 value does not move
+        // when the relaxation goes from 20 sweeps to 150 (1.704,
+        // 1.718, 1.715), so it is not the solver. The paper says the
+        // same of itself: "the possibility of a larger systematic
+        // error due to the finite size of the systems considered
+        // cannot be excluded".
+        assert!(
+            (d - want).abs() < 0.08,
+            "eta {eta}: D = {d:.3}, the paper says {label}"
+        );
+    }
+}
+
+/// One site per step and no more, at the size the visual baselines use
+/// — the cheap always-on half of the gate above.
+///
+/// This is what says the exponential race is the paper's rule rather
+/// than an approximation of it: argmin of E/w with E ~ Exp(1) draws
+/// exactly in proportion to w, and it needs only the global minimum
+/// the reduce stage already computes. The plan had budgeted a prefix
+/// scan for this and planned to ship a parallel approximation first.
+#[test]
+fn dbm_grows_exactly_one_site_per_step() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 128;
+    const STEPS: u32 = 600;
+    let cfg = dbm_config(N as u32, 1.0, STEPS);
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let mut prev = 1usize;
+    for k in 1..=6 {
+        r.run_steps(&device, &queue, &cfg, STEPS / 6);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let sites = f.iter().filter(|q| q[3] > 0.5).count();
+        let grown = sites - prev;
+        // The first step has no race behind it, so it grows nothing.
+        let want = STEPS as usize / 6 - usize::from(k == 1);
+        assert_eq!(grown, want, "batch {k}: {grown} sites joined, expected {want}");
+        prev = sites;
+    }
+    // And the field is a solution of Laplace's equation between them:
+    // every site outside the pattern and inside the electrode is the
+    // average of its four neighbours, to the tolerance 20 warm-started
+    // Jacobi sweeps reach.
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    let c = (N as f64 / 2.0, N as f64 / 2.0);
+    let rad = N as f64 * 0.48;
+    let mut worst = 0.0f64;
+    let mut checked = 0;
+    for y in 1..N - 1 {
+        for x in 1..N - 1 {
+            let k = y * N + x;
+            if f[k][3] > 0.5 {
+                continue;
+            }
+            let d = ((x as f64 - c.0).powi(2) + (y as f64 - c.1).powi(2)).sqrt();
+            // Away from both the pattern and the electrode circle.
+            if d > rad - 3.0 {
+                continue;
+            }
+            let nb = [k + 1, k - 1, k + N, k - N];
+            if nb.iter().any(|&j| f[j][3] > 0.5) {
+                continue;
+            }
+            let avg: f64 = nb.iter().map(|&j| f[j][1] as f64).sum::<f64>() / 4.0;
+            worst = worst.max((f[k][1] as f64 - avg).abs());
+            checked += 1;
+        }
+    }
+    println!(
+        "DBM: {prev} sites in {STEPS} steps; Laplace residual {worst:.2e} over {checked} interior cells"
+    );
+    assert!(worst < 1e-3, "the potential is not a solution of Laplace's equation: {worst:.2e}");
+}
