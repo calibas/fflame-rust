@@ -4969,3 +4969,256 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 1.0,
     default_dt: 1.0,
 };
+
+
+/// Viscous fingering: a less viscous fluid pushed into a more viscous
+/// one through a porous medium or Hele-Shaw cell, as a MISCIBLE
+/// displacement -- concentration-dependent viscosity, Darcy flow, and
+/// advection of the concentration by the flow it sets up.
+///
+/// **The instability is Saffman and Taylor's** (*Proc. R. Soc. A* 245
+/// (1958) 312, read): "the interface between them is liable to be
+/// unstable if the driving fluid is the less viscous of the two". That
+/// sentence is the gate -- see `fingering_is_unstable_only_when_the_driving_fluid_is_less_viscous`.
+///
+/// **The formulation is Holzbecher's** ("Modeling of Viscous
+/// Fingering", COMSOL Conference 2009, Milan; `output/pdf/Holzbecher.pdf`,
+/// read), after Zimmerman & Homsy and Coutinho & Alves: incompressible
+/// Darcy flow ∇·u = 0, u = −(k/μ)∇p, with the mobility depending on
+/// concentration as k/μ = exp(R c) (his equation 8, R = ln M for
+/// mobility ratio M), and the transport equation ∂c/∂t = ∇·(D∇c) − u·∇c
+/// (his 2). The less viscous fluid enters at one edge with c = 1 into
+/// a cell initially at c = 0, between two impermeable walls, and the
+/// initial concentration near the inlet carries a random disturbance
+/// of size ζ (his 12) -- without it a perfectly flat front stays flat
+/// for ever. His own runs are at "M log(3)" in Table 1, whose meaning
+/// the extracted text does not settle (M = 3, or ln M = 3); this
+/// model does not claim his value and exposes R.
+///
+/// **What is simplified, and why.** Holzbecher's dispersion is a
+/// tensor aligned with the flow (his 3); this uses isotropic diffusion,
+/// which changes how fingers smear but not whether they grow. And the
+/// cell is driven at constant PEAK SPEED rather than his constant
+/// flux: the velocity field is Darcy's exactly in shape and is
+/// rescaled each step so the fastest cell moves `speed` cells a step
+/// -- the maximum the min/max reduce already computes. Darcy flow is
+/// quasi-static and linear in the pressure drop, so this is the same
+/// flow under a pressure drop that varies in time, and it is what
+/// makes the explicit upwind advection unconditionally stable: the
+/// Courant number is `speed`, by construction, whatever R and the
+/// pattern do to the field.
+///
+/// **This is what the dielectric breakdown model's tip penalty was
+/// for and could not do.** A lattice interface advancing by per-site
+/// coin flips stays rough; a concentration advected by a divergence-
+/// free flow does not. The catalogue's section 23 records both.
+///
+/// Channels: `.x` = |u| (the reduce's channel, for the speed
+/// normalisation), `.y` = p, `.z` = c -- the picture, `.w` = spare.
+pub static FINGERING: ModelDef = ModelDef {
+    name: "fingering",
+    display_name: "Viscous Fingering",
+    description: "A thin fluid pushed into a thick one in a porous slab: the front is \
+                  unstable and breaks into fingers that race ahead and shield their \
+                  neighbours. Saffman–Taylor's instability, as a miscible displacement.",
+    features: &[ModelFeature::NeedsMinMax, ModelFeature::NoTimeStep],
+    parameters: &[
+        SimParamDef {
+            name: "log_mobility",
+            display_name: "Log mobility ratio R",
+            default: 2.0,
+            min: -3.0,
+            max: 5.0,
+            tooltip: "ln of the viscosity ratio between the displaced fluid and the displacing \
+                      one: mobility is exp(R × concentration), so R > 0 means the entering \
+                      fluid is thinner. THIS IS THE INSTABILITY: positive and the front \
+                      fingers, negative and it flattens, zero and it just advects. Larger \
+                      makes fingers narrower and faster.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "speed",
+            display_name: "Peak speed (cells/step)",
+            default: 0.3,
+            min: 0.02,
+            max: 0.5,
+            tooltip: "How far the fastest cell moves in one step. The flow is rescaled to \
+                      this every step, which is a choice of time unit and also the Courant \
+                      number of the advection — so it is capped at one half, where an upwind \
+                      step stays stable.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "diffusion",
+            display_name: "Diffusion",
+            default: 0.02,
+            min: 0.0,
+            max: 0.2,
+            tooltip: "Isotropic mixing of the two fluids, per step. It sets the smallest \
+                      finger that can survive: less and the front breaks into many fine \
+                      fingers, more and only a few broad ones grow. Capped at 0.2, where the \
+                      explicit five-point step is still stable.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "disturbance",
+            display_name: "Inlet disturbance ζ",
+            default: 0.05,
+            min: 0.0,
+            max: 0.5,
+            tooltip: "Random noise on the initial concentration next to the inlet, which the \
+                      instability amplifies. Zero is a perfectly flat front, which stays flat: \
+                      the fingers need something to grow from. Holzbecher uses 0.01 with a \
+                      much finer mesh than a grid this size has.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "relax",
+            display_name: "Pressure sweeps",
+            default: 20.0,
+            min: 1.0,
+            max: 200.0,
+            tooltip: "Jacobi iterations of the pressure equation per step, warm-started from \
+                      the last step. Darcy flow is quasi-static, so the pressure has to be \
+                      re-solved every time the concentration moves; too few sweeps and the \
+                      flow lags the front.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "fingers",
+            display_name: "Fingers",
+            params: &[
+                ("log_mobility", 2.0), ("speed", 0.3), ("diffusion", 0.02),
+                ("disturbance", 0.05), ("relax", 20.0),
+            ],
+            // Measured at 256^2: 800 steps carries the front about 40% of
+            // the way with the fingers' shielding well developed.
+            steps: 800,
+            init: Some(crate::config::sim::SimInit::Line),
+        },
+        SimPreset {
+            name: "stable",
+            display_name: "Stable (thick pushes thin)",
+            // The same disturbance with the viscosities the other way
+            // round: the front flattens instead.
+            params: &[
+                ("log_mobility", -2.0), ("speed", 0.3), ("diffusion", 0.02),
+                ("disturbance", 0.05), ("relax", 20.0),
+            ],
+            steps: 600,
+            init: Some(crate::config::sim::SimInit::Line),
+        },
+    ],
+    wgsl: r#"
+// Mobility k/mu as a function of concentration, Holzbecher's (8).
+fn fing_mobility(c: f32) -> f32 {
+    return exp(mparam(0u) * clamp(c, 0.0, 1.0));
+}
+
+// The inlet is the LAST rows (where the Line init puts the entering
+// fluid) and the outlet the first: the flow runs toward y = 0.
+fn fing_inlet(p: vec2<i32>) -> bool {
+    return p.y >= sim_grid().y - 1;
+}
+fn fing_outlet(p: vec2<i32>) -> bool {
+    return p.y <= 0;
+}
+
+// Pass 1 of 2 -- one Jacobi sweep of the pressure equation
+// div(m grad p) = 0, with the face mobility the harmonic mean of the
+// two cells' (the finite-volume transmissibility). Repeated `relax`
+// times per step. Dirichlet at inlet and outlet; the side walls are
+// closed, which Clamp gives for free -- a ghost cell equal to the edge
+// cell is a zero normal gradient.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    var out = s;
+    if (fing_inlet(p)) {
+        out.y = 1.0;
+        return out;
+    }
+    if (fing_outlet(p)) {
+        out.y = 0.0;
+        return out;
+    }
+    let m0 = fing_mobility(s.z);
+    var num = 0.0;
+    var den = 0.0;
+    for (var i = 0; i < 4; i = i + 1) {
+        var d = vec2<i32>(1, 0);
+        if (i == 1) { d = vec2<i32>(-1, 0); }
+        else if (i == 2) { d = vec2<i32>(0, 1); }
+        else if (i == 3) { d = vec2<i32>(0, -1); }
+        let q = sim_read(p + d);
+        let m1 = fing_mobility(q.z);
+        let t = 2.0 * m0 * m1 / max(m0 + m1, 1.0e-20);
+        num = num + t * q.y;
+        den = den + t;
+    }
+    out.y = num / max(den, 1.0e-20);
+    return out;
+}
+
+// Pass 2 of 2 -- Darcy velocity from the pressure, then one upwind
+// advection-diffusion step of the concentration.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    var out = s;
+    let l = sim_read(p + vec2<i32>(-1, 0));
+    let r = sim_read(p + vec2<i32>( 1, 0));
+    let d = sim_read(p + vec2<i32>( 0, -1));
+    let u = sim_read(p + vec2<i32>( 0, 1));
+
+    // u = -m grad p, central differences. Stored unscaled in .x so the
+    // reduce finds this step's peak; USED scaled by last step's peak so
+    // the fastest cell moves `speed` cells. Darcy flow is linear in
+    // the pressure drop, so this is a time unit, not a change of flow.
+    let m = fing_mobility(s.z);
+    let vel = -m * 0.5 * vec2<f32>(r.y - l.y, u.y - d.y);
+    out.x = length(vel);
+    let peak = max(sim_minmax().y, 1.0e-12);
+    let v = vel * (mparam(1u) / peak);
+
+    if (fing_inlet(p)) {
+        // The entering fluid.
+        out.z = 1.0;
+        return out;
+    }
+
+    // Upwind: each axis takes the difference from the cell the flow
+    // comes from. Stable for a Courant number up to 1 per axis; the
+    // rescaling above holds it at `speed` <= 0.5.
+    let dcx = select(s.z - l.z, r.z - s.z, v.x < 0.0);
+    let dcy = select(s.z - d.z, u.z - s.z, v.y < 0.0);
+    let adv = v.x * dcx + v.y * dcy;
+    let lap = l.z + r.z + d.z + u.z - 4.0 * s.z;
+    out.z = clamp(s.z - adv + mparam(2u) * lap, 0.0, 1.0);
+    return out;
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    let g = vec2<f32>(sim_grid());
+    // Pressure: the linear profile that already satisfies the boundary
+    // conditions, Holzbecher's initial state.
+    let pr = f32(p.y) / max(g.y - 1.0, 1.0);
+    // Concentration: the init shape is the entering fluid (Line puts
+    // it along the inlet), plus a random disturbance that decays away
+    // from the inlet over a few cells -- his (12), with the penetration
+    // length in cells rather than metres.
+    let dist = g.y - 1.0 - f32(p.y);
+    let bump = mparam(3u) * (noise - 0.5) * 2.0 * exp(-dist * dist / 16.0);
+    let c = clamp(select(0.0, 1.0, inside >= 0.5) + bump, 0.0, 1.0);
+    return vec4<f32>(0.0, pr, c, 0.0);
+}
+"#,
+    default_steps: 800,
+    passes: 2,
+    repeat: Some((0, "relax")),
+    agents: None,
+    kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};

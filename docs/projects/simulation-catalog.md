@@ -1698,7 +1698,12 @@ field around the figure is itself a beautiful thing to draw),
   We read low, by 0.02, 0.034 and 0.046 as η rises through 0, 0.5 and
   1. It is not the solver: η = 1 reads 1.704, 1.718 and 1.715 at 20,
   60 and 150 relaxation sweeps, so 20 is converged and the paper's
-  "5 to 50" is right. The paper says the same of its own numbers —
+  "5 to 50" is right. **Reviewed 2026-09-05, downward too**: three
+  samples at 3, 5, 10 and 20 sweeps give 1.696, 1.692, 1.707 and
+  1.689 — no trend inside sample noise — while the cost at 1080p is
+  1.8, 5.5 and 12.8 ms a step at 5, 20 and 50 sweeps. The default is
+  now 10: inside the paper's range, twice as fast as 20, and measured
+  indistinguishable. The paper says the same of its own numbers —
   "the possibility of a larger systematic error due to the finite size
   of the systems considered cannot be excluded". **η = 2 is not
   gated**: their value there is quoted from another reference rather
@@ -1772,12 +1777,58 @@ finger looks like it needs a deterministic interface advance with an
 explicit curvature-driven surface energy — a different discretisation,
 not a parameter on this one.
 
-**What shipped instead:** the parameter survives as `Tip penalty d₀`,
-named for what it measurably does (it thins and straightens the
-pattern), with its slider capped at 0.1 and its tooltip saying it is
-not Saffman–Taylor. **There is no "viscous finger" preset**, because
-naming one that would be a claim this section cannot support. §23
-remains open.
+**What shipped instead, in wave 3:** the parameter survives on the
+DBM as `Tip penalty d₀`, named for what it measurably does (it thins
+and straightens the pattern), with its slider capped at 0.1 and its
+tooltip saying it is not Saffman–Taylor.
+
+**RESOLVED IN THE PHASE-5 REVIEW, 2026-09-05, by a different
+discretisation** — the one the paragraph above asked for. E. Holzbecher,
+"Modeling of Viscous Fingering", COMSOL Conference 2009 Milan
+(`output/pdf/Holzbecher.pdf`, read) gives the standard MISCIBLE
+formulation after Zimmerman & Homsy and Coutinho & Alves: Darcy flow
+∇·u = 0, u = −(k/μ)∇p with mobility k/μ = exp(R c), and transport
+∂c/∂t = ∇·(D∇c) − u·∇c, the thin fluid entering at c = 1 with a random
+disturbance near the inlet. That is a PDE, and it is two passes on the
+machinery wave 3 built: the pressure equation relaxed `relax` times
+per step (a Jacobi sweep of div(m ∇p) = 0 with harmonic-mean face
+mobilities), then one upwind advection–diffusion step of c. Shipped
+as the `fingering` model.
+
+Two simplifications, both stated on the model: isotropic diffusion in
+place of his flow-aligned dispersion tensor, and the cell driven at
+constant PEAK SPEED rather than his constant flux — the Darcy field is
+rescaled each step so the fastest cell moves `speed` cells, using the
+maximum the min/max reduce already computes. Darcy flow is linear in
+the pressure drop, so that is the same flow under a time-varying
+drop, and it makes the explicit advection unconditionally stable: the
+Courant number is `speed` by construction, capped at ½.
+
+**The gate is Saffman and Taylor's own sentence** — the interface "is
+liable to be unstable if the driving fluid is the less viscous of the
+two" — and it is a test. The same seeded disturbance, pushed by a
+thinner fluid (R = +2) and by a thicker one (R = −2), for 300 steps at
+128²: both fronts advance about 50 cells, and the interface's
+roughness (the spread of the front's position across the width) goes
+**0 → 6.39 cells** in the unstable case and **0 → 0.59** in the stable
+one. Rendered at 256², R = 2 gives a fingered front with tip-splitting
+and shielding, R = 4 fewer, narrower, faster fingers, and R = −2 a
+smooth diffuse front.
+
+What this does NOT reproduce, and says so: the immiscible single
+finger at λ ≈ 0.5, which needs surface tension and a sharp interface.
+Miscible fingering has many fingers whose spacing is set by diffusion,
+which is what Holzbecher's figure 1 shows and what this draws. His
+Table 1 row "Mobility ratio M log(3)" is ambiguous in the extracted
+text (M = 3, or ln M = 3), so the model exposes R and claims no value
+of his.
+
+**Why the DBM route failed and this one works:** a lattice interface
+advancing by independent per-site coin flips is rough by construction,
+and smoothing the potential it grows into cannot make it compact; a
+concentration advected by a divergence-free flow is smooth by
+construction, and the instability is in the flow. Section 22's tip
+penalty stays as the record of the attempt.
 
 ---
 
