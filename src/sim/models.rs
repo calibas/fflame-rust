@@ -4281,7 +4281,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             tooltip: "How much vapour the cloud starts with, at every cell that is not the \
                       seed. The paper's crystals use 0.35 to 0.8, and it is the easiest \
                       parameter to read: more vapour grows faster and pushes the form from \
-                      plate to sectored plate to dendrite. Changing it reseeds.",
+                      plate to sectored plate to dendrite. It is read by the SEED, so a                       change to it shows on the next Reset rather than in the running                       crystal.",
             choices: &[],
         },
         SimParamDef {

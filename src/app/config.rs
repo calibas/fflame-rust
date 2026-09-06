@@ -56,7 +56,7 @@ impl App {
 
         // Sync all app state from ConfigManager (triggers GPU update)
         let active_config = self.config_manager.active_config().clone();
-        self.import_config(active_config);
+        self.import_config(active_config, true);
 
         // Re-bind animation tracks against the just-loaded config.
         // The new config carries fresh session-local IDs (assigned by
@@ -135,7 +135,18 @@ impl App {
     }
 
     /// Import configuration from FractalConfig
-    pub fn import_config(&mut self, config: FractalConfig) {
+    /// Push a whole config into the renderers.
+    ///
+    /// `restart_sim` is for the difference between REPLACING the
+    /// config and MOVING WITHIN its history. Loading a file or a
+    /// preset is a new picture and the simulation starts over,
+    /// running, from step zero; an undo is a step back through edits
+    /// the user just made, and throwing away a ten-thousand-step run
+    /// because they undid a colour change would be its own bug. Undo
+    /// and redo pass `false` and let `SeedIdentity` decide -- it
+    /// restarts exactly when the config they land on describes a
+    /// different field.
+    pub fn import_config(&mut self, config: FractalConfig, restart_sim: bool) {
         // Sync working copy for renderer (only field not in ConfigManager)
         self.flame = config.flame.clone();
 
@@ -153,6 +164,18 @@ impl App {
 
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
         }
+
+        #[cfg(feature = "engine-sim")]
+        if restart_sim {
+            // The field, the step count and the transport state are
+            // all the old picture's. Nothing here is worth carrying
+            // into a config the user has just chosen.
+            self.sim_reseed = true;
+            self.sim_running = true;
+            self.sim_step_once = false;
+        }
+        #[cfg(not(feature = "engine-sim"))]
+        let _ = restart_sim;
     }
 
     /// Undo to previous state
@@ -164,7 +187,7 @@ impl App {
         if let Ok(_update_type) = self.config_manager.undo() {
             // Sync App working copy and GPU state from ConfigManager
             let config = self.config_manager.config();
-            self.import_config(config.clone());
+            self.import_config(config.clone(), false);
             self.restore_api_state_for_undo(pos_before);
         }
     }
@@ -176,7 +199,7 @@ impl App {
         let pos_before = self.config_manager.position();
         if let Ok(_update_type) = self.config_manager.redo() {
             let config = self.config_manager.config();
-            self.import_config(config.clone());
+            self.import_config(config.clone(), false);
             self.restore_api_state_for_redo(pos_before);
         }
     }
