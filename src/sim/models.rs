@@ -3461,6 +3461,16 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
         }
     }
     // What the agents left here since the last step, and clear it.
+    //
+    // ONE STEP LATER THAN JONES, and measured to not matter. The paper
+    // deposits, then takes the 3x3 mean, then decays, so a fresh
+    // deposit is spread the step it is laid; this takes the mean of
+    // the OLD trail and adds the raw deposit, which spreads it on the
+    // next step instead. Doing it the paper's way needs a cell to read
+    // its neighbours' deposits while they are being cleared, which is
+    // a race without a second buffer. Run both ways on the prototype
+    // from the same seed: sd 3.58 against 3.67, the same polygonal
+    // network, filaments slightly grainier. Not worth the buffer.
     let dep = sim_take_deposit(p);
     let trail = (acc * (1.0 / 9.0) + dep) * (1.0 - mparam(6u));
     // The deposit rides in .w: it is where the agents ARE, which is a
@@ -3497,6 +3507,19 @@ fn phys_dir(h: f32) -> vec2<f32> {
 }
 
 // One sensor: the trail at SO ahead, offset by `off` from the heading.
+// Would a move to `dest` leave the grid? Only a periodic field lets a
+// position wrap; under any other boundary a wall is an unsuccessful
+// move. BOTH passes ask this, and must agree: a claim made in pass 1
+// is released only by the same agent's check in pass 2, so a move that
+// pass 2 will refuse must not be claimed in pass 1 -- the first
+// version did, and the claim stayed on the edge cell for ever, until
+// the whole edge column was unenterable. The wall test caught it.
+fn phys_off_grid(dest: vec2<f32>) -> bool {
+    let g = vec2<f32>(sim_grid());
+    return !SIM_PERIODIC
+        && (dest.x < -0.5 || dest.y < -0.5 || dest.x >= g.x - 0.5 || dest.y >= g.y - 0.5);
+}
+
 fn phys_sense(a: SimAgent, off: f32) -> f32 {
     let q = a.pos + phys_dir(a.heading + off) * mparam(3u);
     return sim_read(vec2<i32>(floor(q + vec2<f32>(0.5, 0.5)))).x;
@@ -3521,20 +3544,23 @@ fn sim_agent(a: SimAgent, i: u32) -> SimAgent {
     let l = phys_sense(a, sa);
     let r = phys_sense(a, -sa);
 
+    // Jones' figure 3, in its order. The one that is easy to get
+    // wrong is the second branch: when BOTH sides beat the front the
+    // turn is random, whichever side is stronger -- not a turn toward
+    // the stronger one. The first version of this shader did the
+    // latter; the prototype that validated the parameters did not, and
+    // the phase-4 review caught the difference.
     var turn = 0.0;
     if (f >= l && f >= r) {
-        // Forward is strongest: keep going. This is the "forward
-        // biased" behaviour the paper says keeps the dynamic
-        // continuous.
+        // Forward is strongest: keep going. The "forward bias" the
+        // paper says keeps the dynamic continuous.
         turn = 0.0;
+    } else if (f < l && f < r) {
+        turn = select(-ra, ra, agent_rand(i, 0x14u) < 0.5);
     } else if (l > r) {
         turn = ra;
     } else if (r > l) {
         turn = -ra;
-    } else {
-        // Both sides beat the front and are equal: turn at random,
-        // which is what stops a tie becoming a bias.
-        turn = select(-ra, ra, agent_rand(i, 0x14u) < 0.5);
     }
 
     var out = a;
@@ -3542,7 +3568,9 @@ fn sim_agent(a: SimAgent, i: u32) -> SimAgent {
     // `dest`, not `target`: that is a WGSL reserved keyword, and naga
     // rejects it -- the same trap the escape assembler hit with `root`.
     let dest = out.pos + phys_dir(out.heading) * mparam(4u);
-    agent_claim(vec2<i32>(floor(dest + vec2<f32>(0.5, 0.5))), i);
+    if (!phys_off_grid(dest)) {
+        agent_claim(vec2<i32>(floor(dest + vec2<f32>(0.5, 0.5))), i);
+    }
     return out;
 }
 
@@ -3553,10 +3581,20 @@ fn sim_agent2(a: SimAgent, i: u32) -> SimAgent {
     let dest = a.pos + phys_dir(a.heading) * mparam(4u);
     let cell = vec2<i32>(floor(dest + vec2<f32>(0.5, 0.5)));
     var out = a;
-    if (agent_claim_check(cell, i)) {
-        // Float position wrapped to the grid: the agent is
-        // semi-continuous, and only its DEPOSIT is on the lattice.
-        out.pos = dest - g * floor(dest / g);
+    // A wall is an unsuccessful move: the agent stays and takes a new
+    // random heading, exactly as for an occupied cell. (The first
+    // version wrapped the position under every boundary while the
+    // deposit clamped, so an agent could walk off one edge and
+    // reappear on the other.) Pass 1 made no claim for this move, so
+    // there is none to check.
+    if (!phys_off_grid(dest) && agent_claim_check(cell, i)) {
+        // The agent is semi-continuous, and only its DEPOSIT is on the
+        // lattice. A periodic field wraps the float position; any other
+        // keeps it, and the off-grid test above has already confined
+        // it to [-0.5, g - 0.5). Wrapping unconditionally was the third
+        // wall bug: a destination of x = -0.4 is inside cell 0 and
+        // passes the wall test, and the wrap then put it at g - 0.4.
+        out.pos = select(dest, dest - g * floor(dest / g), SIM_PERIODIC);
         agent_deposit(vec2<i32>(floor(out.pos + vec2<f32>(0.5, 0.5))), mparam(5u));
     } else {
         out.heading = agent_rand(i, 0x15u) * PHYS_TAU;

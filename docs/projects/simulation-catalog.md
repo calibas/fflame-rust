@@ -1371,6 +1371,12 @@ Boundary Clamp.
   exceeds 16 — every walker then died on the step it was born and the
   run ended with one particle, the seed. The kill radius is now
   always at least the launch radius plus 16.
+- **Reviewed 2026-09-05**: the walker seed ran before the reduce that
+  measures the seed's radius, so it read the previous run's slot;
+  reordered (no image moved — a fresh slot gives the same answer as a
+  centred seed). `occupancy` draws `.w`, which this model's step does
+  not fill, so the "vapour halo" above is not there yet. Cost at
+  1080p: 0.42 ms/step at 4%, most walkers dormant by design.
 - **GATE MET: box-counting dimension 1.753** at 512² with 39,000
   particles at a radius of 216 (DLA is ≈1.71). The measurement is
   sensitive to the cluster's size, and the test says so: a cluster
@@ -1790,6 +1796,17 @@ ring, centre, edges), `wrap` (boolean).
 - **Reproducibility measured at the gate's scale**: 1,048,576 agents
   on a 2048² grid, 40 steps, two independent renderers — **0 of
   4,194,304 cells differ**.
+- **Reviewed 2026-09-05**, and now held to the paper by a CPU mirror
+  of the whole step (sense, turn, claim-by-minimum, move, deposit,
+  diffuse, decay, with the shader's PCG mirrored): 819 agents, two
+  steps, headings and trail bit-exact, positions within 1e-5. The
+  review found the turn rule turning toward the stronger side where
+  figure 3 turns at random, and walls that were not walls (positions
+  wrapped under every boundary); fixing the walls took three tries,
+  each caught by a test — see the plan's review note. The deposit is
+  diffused one step later than the paper's order, measured immaterial
+  (sd 3.58 vs 3.67, same network) and recorded in the model. Cost at
+  1080p: 1.39 ms/step at 5%, 2.72 at 15%.
 
 ---
 

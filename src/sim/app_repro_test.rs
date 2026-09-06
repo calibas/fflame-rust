@@ -2533,3 +2533,283 @@ fn dla_grows_a_cluster_of_the_right_fractal_dimension() {
          dense reads toward 2 and one that is too sparse toward 1"
     );
 }
+
+/// Review probe: what an agent step costs at 1080p, with the agent
+/// passes and the field pass separated.
+#[test]
+#[ignore = "diagnostic"]
+fn agent_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    for (model, param, v, boundary) in [
+        ("physarum", "population", 5.0f32, SimBoundary::Periodic),
+        ("physarum", "population", 15.0, SimBoundary::Periodic),
+        ("dla", "walkers", 4.0, SimBoundary::Clamp),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = model.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
+        cfg.init = if model == "dla" { crate::config::sim::SimInit::Center }
+                   else { crate::config::sim::SimInit::Noise { amplitude: 0.0 } };
+        cfg.boundary = boundary;
+        cfg.model_params.insert(param.into(), v);
+        let m = crate::sim::model_or_default(model);
+        let agents = (m.agents.unwrap().count)(&m.params_view(&cfg.model_params), w, h);
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 30);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const STEPS: u32 = 120;
+        let t0 = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+        println!("{model:<9} {param}={v:<5} {agents:>8} agents  {ms:>7.3} ms/step  ({:.0} steps/s)", 1e3 / ms);
+    }
+}
+
+/// The shader's PCG, mirrored: WGSL u32 arithmetic wraps.
+fn sim_pcg(v: u32) -> u32 {
+    let state = v.wrapping_mul(747796405).wrapping_add(2891336453);
+    let word = ((state >> ((state >> 28) + 4)) ^ state).wrapping_mul(277803737);
+    (word >> 22) ^ word
+}
+
+/// `agent_rand(i, salt)` as the shader computes it for a given step.
+fn agent_rand(seed: u64, step: u32, i: u32, salt: u32) -> f32 {
+    let mut h = sim_pcg(i ^ (seed as u32));
+    h = sim_pcg(h ^ ((seed >> 32) as u32) ^ salt);
+    h = sim_pcg(h ^ step);
+    (h >> 8) as f32 * (1.0 / 16777216.0)
+}
+
+/// The agent buffer, as (pos.x, pos.y, heading, state) per agent.
+fn read_agents(device: &Device, queue: &Queue, buf: &Buffer, n: usize) -> Vec<[f32; 4]> {
+    read_u32s(device, queue, buf, 0, n * 4)
+        .chunks_exact(4)
+        .map(|c| [f32::from_bits(c[0]), f32::from_bits(c[1]), f32::from_bits(c[2]), f32::from_bits(c[3])])
+        .collect()
+}
+
+/// Physarum's whole step -- sense, turn, claim, move, deposit, diffuse,
+/// decay -- against a CPU mirror of Jones' rule from the GPU's own
+/// seeded population, for two steps so the turn rule sees a trail.
+///
+/// This is the test the wave lacked. Its gates checked that a run
+/// REPRODUCES and that DLA's dimension is right; nothing checked that
+/// the rule was Jones'. The phase-4 review found the shader turning
+/// toward the stronger side when both sides beat the front, where the
+/// paper's figure 3 (and the prototype that validated every
+/// parameter) turns at random. That still builds a network. This
+/// would have failed on it.
+///
+/// The claim is mirrored as the atomic minimum it is, and the random
+/// draws through a mirror of the shader's PCG, so agents and field are
+/// compared to float precision rather than statistically.
+#[test]
+fn physarum_matches_a_cpu_mirror_of_jones_rule() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "physarum".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 0.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 7;
+    // Dense, so claims collide and the exclusion is exercised.
+    cfg.model_params.insert("population".into(), 20.0);
+    let model = crate::sim::model_or_default("physarum");
+    let count = (model.agents.unwrap().count)(&model.params_view(&cfg.model_params), N as u32, N as u32) as usize;
+    let p = model.pack_params(&cfg);
+    let (sa, ra, so, ss, dep, decay) = (
+        p[1] * std::f32::consts::PI / 180.0,
+        p[2] * std::f32::consts::PI / 180.0,
+        p[3], p[4], p[5], p[6],
+    );
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let mut agents = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+    let mut trail: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+        .iter().map(|px| px[0]).collect();
+
+    const STEPS: u32 = 2;
+    r.run_steps(&device, &queue, &cfg, STEPS);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got_agents = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+    let got_field = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let n = N as i64;
+    let g = N as f32;
+    let mut lost = 0usize;
+    let cell_of = |x: f32, y: f32| -> (usize, usize) {
+        let cx = ((x + 0.5).floor() as i64).rem_euclid(n) as usize;
+        let cy = ((y + 0.5).floor() as i64).rem_euclid(n) as usize;
+        (cx, cy)
+    };
+    for step in 0..STEPS {
+        // Pass 1: sense, turn, claim.
+        let mut claim = vec![u32::MAX; N * N];
+        let mut turned: Vec<[f32; 4]> = agents.clone();
+        for (i, a) in agents.iter().enumerate() {
+            let sense = |off: f32| -> f32 {
+                let h = a[2] + off;
+                let (cx, cy) = cell_of(a[0] + h.cos() * so, a[1] + h.sin() * so);
+                trail[cy * N + cx]
+            };
+            let (f, l, rr) = (sense(0.0), sense(sa), sense(-sa));
+            let turn = if f >= l && f >= rr {
+                0.0
+            } else if f < l && f < rr {
+                if agent_rand(cfg.seed, step, i as u32, 0x14) < 0.5 { ra } else { -ra }
+            } else if l > rr {
+                ra
+            } else if rr > l {
+                -ra
+            } else {
+                0.0
+            };
+            turned[i][2] = a[2] + turn;
+            let h = turned[i][2];
+            let (cx, cy) = cell_of(a[0] + h.cos() * ss, a[1] + h.sin() * ss);
+            let slot = &mut claim[cy * N + cx];
+            *slot = (*slot).min(i as u32);
+        }
+        // Pass 2: move if won, else a new heading. Deposits.
+        let mut deposit = vec![0.0f32; N * N];
+        let mut moved = turned.clone();
+        for (i, a) in turned.iter().enumerate() {
+            let h = a[2];
+            let (dx, dy) = (a[0] + h.cos() * ss, a[1] + h.sin() * ss);
+            let (cx, cy) = cell_of(dx, dy);
+            if claim[cy * N + cx] == i as u32 {
+                let wx = dx - g * (dx / g).floor();
+                let wy = dy - g * (dy / g).floor();
+                moved[i][0] = wx;
+                moved[i][1] = wy;
+                let (px, py) = cell_of(wx, wy);
+                deposit[py * N + px] += dep;
+            } else {
+                lost += 1;
+                moved[i][2] = agent_rand(cfg.seed, step, i as u32, 0x15) * std::f32::consts::TAU;
+            }
+        }
+        // The field: 3x3 mean of the old trail, plus the deposit, decayed.
+        let mut next = vec![0.0f32; N * N];
+        for y in 0..N {
+            for x in 0..N {
+                let mut acc = 0.0f32;
+                for ddy in -1i64..=1 {
+                    for ddx in -1i64..=1 {
+                        let sx = (x as i64 + ddx).rem_euclid(n) as usize;
+                        let sy = (y as i64 + ddy).rem_euclid(n) as usize;
+                        acc += trail[sy * N + sx];
+                    }
+                }
+                next[y * N + x] = (acc / 9.0 + deposit[y * N + x]) * (1.0 - decay);
+            }
+        }
+        agents = moved;
+        trail = next;
+    }
+
+    let mut worst_pos = 0.0f32;
+    let mut worst_head = 0.0f32;
+    for i in 0..count {
+        // Around the torus: the shorter way.
+        let dx = (agents[i][0] - got_agents[i][0]).abs();
+        let dy = (agents[i][1] - got_agents[i][1]).abs();
+        worst_pos = worst_pos.max(dx.min(g - dx)).max(dy.min(g - dy));
+        worst_head = worst_head.max((agents[i][2] - got_agents[i][2]).abs());
+    }
+    let worst_field = (0..N * N)
+        .map(|k| (trail[k] - got_field[k][0]).abs())
+        .fold(0.0f32, f32::max);
+    println!(
+        "Physarum {count} agents, {STEPS} steps vs CPU mirror: positions {worst_pos:.2e}, \
+         headings {worst_head:.2e}, trail {worst_field:.2e}; {lost} moves lost to the exclusion"
+    );
+    assert!(lost > 0, "no agent ever lost a claim, so the exclusion was not exercised");
+    assert!(worst_pos < 1e-4, "agent positions diverge from Jones' rule by {worst_pos:.2e}");
+    assert!(worst_head < 1e-4, "agent headings diverge from Jones' rule by {worst_head:.2e}");
+    assert!(worst_field < 1e-4, "the trail diverges from the mirror by {worst_field:.2e}");
+}
+
+/// A wall is a wall. Under a non-periodic boundary an agent must not
+/// leave the grid, and it must not reappear on the far side.
+///
+/// The first version wrapped every position periodically whatever the
+/// boundary, while the DEPOSIT clamped -- so under Clamp an agent that
+/// walked off the left edge reappeared on the right. An in-range check
+/// cannot catch that (a wrapped position is in range); a per-step
+/// displacement can, because a wrap is a jump of nearly the grid.
+///
+/// The FIX to that had two bugs of its own. This test caught one on
+/// its first run: a destination of x = -0.4 is inside cell 0 and
+/// passes the wall check, and the unconditional float wrap then put
+/// the agent at 63.6 -- so the range assertion below is not redundant
+/// after all. The other was found reading the code while chasing it:
+/// refusing the move in pass 2 but still claiming the clamped edge
+/// cell in pass 1 leaks the claim, since only its owner's check
+/// releases one, and the edge silts up until an agent beside the wall
+/// can never move again. Hence the last assertion: after a run the
+/// claim buffer is empty. Measured with the pass-1 guard removed, it
+/// reads 129 stale cells on this grid, so the assertion does fire.
+#[test]
+fn physarum_agents_do_not_pass_through_a_wall() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "physarum".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 0.0 };
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 11;
+    cfg.model_params.insert("population".into(), 5.0);
+    let model = crate::sim::model_or_default("physarum");
+    let count = (model.agents.unwrap().count)(&model.params_view(&cfg.model_params), N as u32, N as u32) as usize;
+    let ss = model.pack_params(&cfg)[4];
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 100);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let mut prev = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+    let mut worst_jump = 0.0f32;
+    let mut blocked = 0usize;
+    for _ in 0..40 {
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let now = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+        for i in 0..count {
+            let d = ((now[i][0] - prev[i][0]).powi(2) + (now[i][1] - prev[i][1]).powi(2)).sqrt();
+            worst_jump = worst_jump.max(d);
+            assert!(
+                now[i][0] >= -0.5 && now[i][0] < N as f32 - 0.5 && now[i][1] >= -0.5 && now[i][1] < N as f32 - 0.5,
+                "agent {i} is outside the grid at ({}, {})", now[i][0], now[i][1]
+            );
+            if d == 0.0 && now[i][2] != prev[i][2] {
+                blocked += 1;
+            }
+        }
+        prev = now;
+    }
+    let stale = read_u32s(&device, &queue, r.claim_buffer(), 0, N * N)
+        .iter()
+        .filter(|&&c| c != u32::MAX)
+        .count();
+    println!(
+        "Physarum under Clamp: largest per-step move {worst_jump:.3} (step size {ss}), \
+         {blocked} blocked moves in 40 steps, {stale} stale claims"
+    );
+    assert!(worst_jump <= ss * 1.001, "an agent jumped {worst_jump:.2} cells in one step: it passed through a wall");
+    assert!(blocked > 0, "no agent was ever blocked, so the wall was never tested");
+    assert_eq!(stale, 0, "{stale} cells still hold a claim after the step: some claim was never checked");
+}

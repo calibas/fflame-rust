@@ -130,6 +130,7 @@ fn boundary_body(boundary: SimBoundary) -> &'static str {
     match boundary {
         SimBoundary::Periodic => {
             r#"
+const SIM_PERIODIC: bool = true;
 fn sim_wrap_sized(p: vec2<i32>, g: vec2<i32>) -> vec2<i32> {
     // `%` is remainder, not modulo: it is negative for negative
     // operands, so a bare p % g reads out of bounds on the left and
@@ -179,6 +180,7 @@ fn sim_outside(p: vec2<i32>, g: vec2<i32>) -> bool {
         }
         SimBoundary::Clamp => {
             r#"
+const SIM_PERIODIC: bool = false;
 fn sim_wrap_sized(p: vec2<i32>, g: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), g - vec2<i32>(1));
 }
@@ -189,6 +191,7 @@ fn sim_outside(p: vec2<i32>, g: vec2<i32>) -> bool {
         }
         SimBoundary::Zero => {
             r#"
+const SIM_PERIODIC: bool = false;
 fn sim_wrap_sized(p: vec2<i32>, g: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), g - vec2<i32>(1));
 }
@@ -199,6 +202,7 @@ fn sim_outside(p: vec2<i32>, g: vec2<i32>) -> bool {
         }
         SimBoundary::Mirror => {
             r#"
+const SIM_PERIODIC: bool = false;
 fn sim_mirror1(v: i32, n: i32) -> i32 {
     if (v < 0) { return -v - 1; }
     if (v >= n) { return 2 * n - v - 1; }
@@ -320,6 +324,16 @@ fn agent_deposit(p: vec2<i32>, amount: f32) {
 // whoever the hardware happened to run first -- atomicMin is
 // associative and commutative, so the outcome is the same however the
 // dispatch is ordered, and the run reproduces.
+//
+// THE CONTRACT: every claim is followed, in the next pass, by the
+// same agent's `agent_claim_check` on the same cell. Nothing else
+// clears the buffer between steps -- the winner's check does, and a
+// claimed cell has exactly one winner -- so a claim that is never
+// checked stays on that cell for the rest of the run, and no agent
+// with a higher index can ever enter it. Decide whether the move is
+// possible BEFORE claiming, not after. (Physarum's first wall fix
+// decided after, and the edge column silted up with stale claims.)
+// A test reads the buffer back after a run and asserts it is empty.
 fn agent_claim(p: vec2<i32>, i: u32) {
     let g = sim_grid();
     if (sim_outside(p, g)) {

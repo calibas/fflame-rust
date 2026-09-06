@@ -467,6 +467,12 @@ impl SimRenderer {
         self.agent_buffer.as_ref()
     }
 
+    /// The per-cell claim buffer, for a test to check it is empty
+    /// between steps (see `agent_claim`'s contract in the assembler).
+    pub fn claim_buffer(&self) -> &Buffer {
+        &self.claim_buffer
+    }
+
     /// Allocate the pyramid when the model reads one, free it when the
     /// model does not. Called wherever `ensure_pipelines` is, so a
     /// model or grid change is caught before the next dispatch.
@@ -1228,35 +1234,6 @@ impl SimRenderer {
         queue.submit(std::iter::once(enc.finish()));
         self.needs_seed = false;
 
-        // The agent population and the two per-cell integer buffers.
-        // Deposit starts empty; claim starts at "unclaimed", which is
-        // u32::MAX because the claim is an atomic MINIMUM.
-        if model.agents.is_some() {
-            let cells = (self.grid_w as usize) * (self.grid_h as usize);
-            queue.write_buffer(&self.deposit_buffer, 0, bytemuck::cast_slice(&vec![0u32; cells]));
-            queue.write_buffer(
-                &self.claim_buffer,
-                0,
-                bytemuck::cast_slice(&vec![u32::MAX; cells]),
-            );
-            self.ensure_stage_bind_groups(device);
-            let pipes = self.pipelines.as_ref().expect("built above");
-            let groups = self.agent_bind_groups.as_ref().expect("built above");
-            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Sim Agent Seed"),
-            });
-            {
-                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
-                    label: Some("Sim Agent Seed"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(pipes.agent_seed.as_ref().expect("an agent model builds it"));
-                pass.set_bind_group(0, &groups[self.current], &[0]);
-                pass.dispatch_workgroups(self.agent_capacity.div_ceil(64), 1, 1);
-            }
-            queue.submit(std::iter::once(enc.finish()));
-        }
-
         // A model that renormalises needs the seed's range before its
         // first step. Step 0 reads slot (0 - 1) mod RING, so the seed's
         // reduce writes THAT slot; the uniform is rewritten for it,
@@ -1282,6 +1259,39 @@ impl SimRenderer {
                 pass.set_bind_group(0, &groups[self.current], &[0]);
                 let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
                 pass.dispatch_workgroups(gx, gy, 1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+        }
+
+        // The agent population and the two per-cell integer buffers.
+        // After the reduce above, not before: an agent seed that reads
+        // the field's range -- DLA launches just outside the cluster
+        // -- has to see the seeded field's, not whatever the previous
+        // run left in that slot.
+        // Deposit starts empty; claim starts at "unclaimed", which is
+        // u32::MAX because the claim is an atomic MINIMUM.
+        if model.agents.is_some() {
+            let cells = (self.grid_w as usize) * (self.grid_h as usize);
+            queue.write_buffer(&self.deposit_buffer, 0, bytemuck::cast_slice(&vec![0u32; cells]));
+            queue.write_buffer(
+                &self.claim_buffer,
+                0,
+                bytemuck::cast_slice(&vec![u32::MAX; cells]),
+            );
+            self.ensure_stage_bind_groups(device);
+            let pipes = self.pipelines.as_ref().expect("built above");
+            let groups = self.agent_bind_groups.as_ref().expect("built above");
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Sim Agent Seed"),
+            });
+            {
+                let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("Sim Agent Seed"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipes.agent_seed.as_ref().expect("an agent model builds it"));
+                pass.set_bind_group(0, &groups[self.current], &[0]);
+                pass.dispatch_workgroups(self.agent_capacity.div_ceil(64), 1, 1);
             }
             queue.submit(std::iter::once(enc.finish()));
         }
