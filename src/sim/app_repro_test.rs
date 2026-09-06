@@ -4230,3 +4230,106 @@ fn every_preset_draws_something() {
     }
     assert!(flat.is_empty(), "these presets draw a flat frame: {flat:#?}");
 }
+
+/// Phase A of the derived-fields plan: the bilinear upscale
+/// interpolates the STATE and colours once, rather than blending four
+/// coloured cells.
+///
+/// The gate is the matte edge, because it is the sharpest thing the
+/// change does. An occupancy field that is 1 on the left half of the
+/// grid and 0 on the right, magnified 8x with a hard matte at 0.5:
+/// blending four half-drawn cells gave a full cell's width -- eight
+/// output pixels -- of partial coverage along the edge; a cutoff on
+/// the interpolated occupancy gives NONE, a hard boundary at the 0.5
+/// isoline. And at 1:1 the two filters must agree byte for byte,
+/// because interpolation at cell centres is the identity.
+#[test]
+fn the_bilinear_upscale_interpolates_state_not_colour() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 32;
+    const MAG: u32 = 8;
+    let palette = test_palette(&device, &queue);
+    // Eden with a Line init occupies a band of rows and nothing else,
+    // and with p_grow at its floor nothing grows in one step: a clean
+    // 0/1 field with a straight edge.
+    let mut cfg = SimConfig::default();
+    cfg.model = "eden".into();
+    cfg.coloring = "channel".into();
+    cfg.grid = SimGrid::Fixed { width: G, height: G };
+    cfg.init = SimInit::Line;
+    cfg.boundary = SimBoundary::Zero;
+    cfg.steps = 1;
+    cfg.model_params.insert("p_grow".into(), 0.01);
+    cfg.coloring_params.insert("channel".into(), 0.0);
+    cfg.coloring_params.insert("scale".into(), 1.0);
+    cfg.matte = crate::config::sim::SimMatte {
+        channel: crate::config::sim::SimMatteChannel::X,
+        cutoff: 0.5,
+        softness: 0.0,
+        invert: false,
+    };
+
+    let render = |cfg: &SimConfig, out: u32| {
+        let mut r = SimRenderer::new(&device, cfg, out, out);
+        r.render_still(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.output_texture(), out, out)
+    };
+
+    // 8x, bilinear: the edge is hard.
+    cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+    let big = render(&cfg, G * MAG);
+    let partial = big.iter().filter(|p| p[3] > 0.0 && p[3] < 1.0).count();
+    let covered = big.iter().filter(|p| p[3] == 1.0).count();
+    let n = (G * MAG) as usize;
+    println!(
+        "bilinear at {MAG}x: {partial} partial-coverage pixels, {covered} covered of {}",
+        n * n
+    );
+    assert_eq!(partial, 0, "a hard matte on interpolated occupancy must have no half-drawn pixels");
+    assert!(covered > n * n / 20 && covered < n * n / 2, "the band should be a minority of the frame");
+
+    // And the edge is where it belongs: a straight line, so every
+    // column has the same count of covered rows, and that count sits
+    // within one output pixel of where the 0.5 isoline of a linear
+    // ramp between cell centres falls.
+    let per_column: Vec<usize> = (0..n)
+        .map(|x| (0..n).filter(|&y| big[y * n + x][3] == 1.0).count())
+        .collect();
+    assert!(
+        per_column.iter().all(|&c| c == per_column[0]),
+        "the edge of a straight band should be straight: {:?}",
+        &per_column[..8]
+    );
+
+    // 1:1: Bilinear is Nearest exactly.
+    cfg.upscale = crate::config::sim::SimUpscale::Nearest;
+    let one_n = render(&cfg, G);
+    cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+    let one_b = render(&cfg, G);
+    assert_eq!(one_n, one_b, "at 1:1 the two filters must agree byte for byte");
+}
+
+/// Under interpolation the colouring is told it is at the NEAREST
+/// cell, which is only harmless while no colouring reads the cell
+/// coordinate. None does; this makes sure one that starts to fails
+/// here rather than drawing subtly wrong pictures at 8x.
+#[test]
+fn no_colouring_reads_the_cell_coordinate() {
+    for c in crate::sim::COLORINGS {
+        // The signature names it `p`; a body that uses it would say
+        // `p.x`, `p.y`, or pass `p` on.
+        let body = c.wgsl.split("-> vec4<f32> {").nth(1).unwrap_or("");
+        for needle in ["p.x", "p.y", "(p,", ", p)", "(p)"] {
+            assert!(
+                !body.contains(needle),
+                "colouring {:?} reads the cell coordinate ({needle:?}); under the \
+                 bilinear resolve that is the nearest cell, not the sample point",
+                c.name
+            );
+        }
+    }
+}
