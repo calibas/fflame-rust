@@ -115,6 +115,10 @@ struct SimParamsGpu {
     /// cutoff, softness. `SimMatte::packed` builds it, and that
     /// function's mode word is what the shader branches on.
     matte: [f32; 4],
+    /// The view magnification the colour pass applies about the grid's
+    /// centre -- the octave mode's accumulated zoom, 1 otherwise -- and
+    /// three spare words.
+    view: [f32; 4],
 }
 
 /// The part of a `SimConfig` the FIELD's meaning depends on.
@@ -1221,12 +1225,26 @@ impl SimRenderer {
             init_p1: p1,
             kernel_radius: self.kernel_radius,
             minmax_slot: step_index % MINMAX_RING,
-            warp_a: [cfg.warp.zoom, cfg.warp.rotation, cfg.warp.pan_x, cfg.warp.pan_y],
+            warp_a: match cfg.warp.mode {
+                crate::config::sim::SimWarpMode::Continuous => {
+                    [cfg.warp.zoom, cfg.warp.rotation, cfg.warp.pan_x, cfg.warp.pan_y]
+                }
+                // Zoom only, and only on a doubling step; the warp is
+                // not dispatched on the others, so the value there is
+                // moot.
+                crate::config::sim::SimWarpMode::Octaves => {
+                    [cfg.warp.octave(step_index).warp.unwrap_or(1.0), 0.0, 0.0, 0.0]
+                }
+            },
             warp_b: [
-                cfg.warp.flow,
+                match cfg.warp.mode {
+                    crate::config::sim::SimWarpMode::Continuous => cfg.warp.flow,
+                    crate::config::sim::SimWarpMode::Octaves => 0.0,
+                },
                 match cfg.warp.filter {
                     crate::config::sim::SimWarpFilter::Bilinear => 0.0,
                     crate::config::sim::SimWarpFilter::Nearest => 1.0,
+                    crate::config::sim::SimWarpFilter::Bicubic => 2.0,
                 },
             ],
             matte_b: [
@@ -1234,6 +1252,15 @@ impl SimRenderer {
                 if Self::wants_sdf(cfg) { 1.0 } else { 0.0 },
             ],
             matte: cfg.matte.packed(),
+            view: [
+                match cfg.warp.mode {
+                    crate::config::sim::SimWarpMode::Continuous => 1.0,
+                    crate::config::sim::SimWarpMode::Octaves => cfg.warp.octave(step_index).view,
+                },
+                0.0,
+                0.0,
+                0.0,
+            ],
         }
     }
 
@@ -1690,6 +1717,7 @@ impl SimRenderer {
         // re-measured, which costs one small submission and nothing
         // else.
         let warping = !cfg.warp.is_identity();
+        let octaves = cfg.warp.mode == crate::config::sim::SimWarpMode::Octaves;
         if self.steps_per_submit == FIRST_SUBMIT {
             let dispatches: u32 =
                 repeat.iter().sum::<u32>() + u32::from(wants_minmax) + u32::from(warping);
@@ -1725,7 +1753,16 @@ impl SimRenderer {
                     // else -- an agent population's positions stay
                     // where they are, which a model that carries both
                     // should know. One resample, one flip.
-                    if warping {
+                    // In octave mode the field is resampled only on
+                    // the steps where the accumulated zoom crosses a
+                    // power of two -- decided from the step index, so
+                    // a batch boundary cannot move it.
+                    let warp_now = if octaves {
+                        cfg.warp.octave(self.step_index).warp.is_some()
+                    } else {
+                        warping
+                    };
+                    if warp_now {
                         pass.set_pipeline(&p.warp);
                         pass.set_bind_group(0, &groups[self.current], &[i * stride]);
                         pass.dispatch_workgroups(gx, gy, 1);

@@ -171,6 +171,40 @@ This is the seed doc's "expanding space" resample promoted to a stage. It buys t
 
 **Built 2026-09-05, and measured (master plan, phase 6):** a fractional-pixel bilinear resample is a blur of variance f(1−f) per axis, and a step applies one, so over thousands of steps the stage erases a reaction–diffusion pattern rather than moving it — the "zooming BZ" at 0.4 %/step for 4,000 steps is a dot. Nearest at a rate under half a cell is the identity. The stage therefore ships with a `filter` the spec did not have, and the regimes that work are nearest at rates that move whole cells, integer pans, and bilinear over short runs. It reuses nothing from the flame affine machinery in code — the maths is a 2×3 matrix — but it reuses the *vocabulary* the View panel already has (zoom, rotation, pan), which is what the panel exposes.
 
+**Octave mode, 2026-09-07.** The blur above has a second face: a
+bilinear read at fractional offset f blurs by f(1−f) *per axis*, and
+on the two central axes one offset is zero, so the field there is
+blurred along one axis only — a cross, visible in any run long enough,
+and a radial gradient of blur with it. Both are properties of
+resampling the state by a small factor every step, so `SimWarpMode::
+Octaves` never does that: the per-step zoom accumulates as a *view*
+magnification m in [1, 2) that the colour pass applies about the grid
+centre (`params.view`), and the field is resampled once, by exactly 2,
+each time m reaches 2 — a 2× resample has the same fractional offset
+everywhere, so its blur is uniform and isotropic. The old grid at 2×
+is the new grid at 1×, so the doubling is invisible: measured, the
+frame change across a doubling step is 0.048 against 0.049 across an
+ordinary step. m and the doubling steps are a function of the step
+index alone (`SimWarp::octave`, f64: 2^doublings · m = zoom^n to 1e-4
+over 5,000 steps, unit-tested), so a run is batch invariant — 300
+steps in one call and in three are bit-identical with four doublings
+inside. The axis cross measured as the ratio of gradient energy on the
+central lines to off them: 1.12 continuous, 1.05 octaves. A `bicubic`
+filter (Catmull–Rom, sixteen taps, CPU-mirrored to 1.5e-5) was added
+for the doubling. Rotation, pan and flow are not applied in octave
+mode; the outer ring of the grid beyond the view is simulated and then
+cropped away at the next doubling, up to three quarters of the cells
+at m ≈ 2.
+
+What the doubling looks like from the reaction's side: the pattern is
+suddenly at twice its intrinsic scale and refines back. At the coupled
+lattice's step 0.05 and zoom 1.002 (an octave every 347 steps) that is
+a burst — the cells have split within ~60 steps and then grow with the
+view for the rest of the octave. The ratio of the reaction's time
+constant (1 / step) to the octave period (log 2 / log zoom) decides
+whether refinement is a burst or continuous; a step near 0.003 makes
+it continuous at that zoom.
+
 ### 4.2 Pyramid build (optional)
 
 `log2(max radius)` downsample passes from `field[read]` (or from the warped copy). Each pass reads level *l* and writes level *l+1* by a 2×2 box. Cost: 1/3 of one full-resolution read+write in total. Runs once per step; every scale then costs 8 loads per texel in the update stage.

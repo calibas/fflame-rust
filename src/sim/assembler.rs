@@ -53,6 +53,9 @@ struct SimParams {
     // The matte: channel index, mode (0 off, 1 normal, 2 inverted),
     // cutoff, softness. Read by the colour pass and the jump flood.
     matte: vec4<f32>,
+    // The colour pass's view magnification about the grid centre (the
+    // octave mode's accumulated zoom; 1 otherwise), and spare words.
+    view: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -402,6 +405,33 @@ fn warp_bilinear(src: vec2<f32>) -> vec4<f32> {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+// Catmull-Rom weights for a fractional position, as the colour pass's.
+fn warp_catmull_rom(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4<f32>(
+        -0.5 * t3 + t2 - 0.5 * t,
+        1.5 * t3 - 2.5 * t2 + 1.0,
+        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+        0.5 * t3 - 0.5 * t2,
+    );
+}
+
+// Sixteen taps, through sim_read, so every tap honours the boundary.
+fn warp_bicubic(src: vec2<f32>) -> vec4<f32> {
+    let i0 = vec2<i32>(floor(src));
+    let f = src - vec2<f32>(i0);
+    let wx = warp_catmull_rom(f.x);
+    let wy = warp_catmull_rom(f.y);
+    var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var j = 0; j < 4; j = j + 1) {
+        for (var i = 0; i < 4; i = i + 1) {
+            acc = acc + sim_read(i0 + vec2<i32>(i - 1, j - 1)) * (wx[i] * wy[j]);
+        }
+    }
+    return acc;
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let g = sim_grid();
@@ -423,7 +453,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sn = sin(theta);
     let src = centre + vec2<f32>(cs * q.x + sn * q.y, -sn * q.x + cs * q.y);
     var v: vec4<f32>;
-    if (params.warp_b.y >= 0.5) {
+    if (params.warp_b.y >= 1.5) {
+        v = warp_bicubic(src);
+    } else if (params.warp_b.y >= 0.5) {
         v = sim_read(vec2<i32>(floor(src + vec2<f32>(0.5, 0.5))));
     } else {
         v = warp_bilinear(src);
@@ -913,7 +945,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Cell-centre mapping: pixel centre (o + 0.5) to grid space.
     // Sampling at the pixel's corner instead shifts the image half a
     // cell, which is invisible at 1:1 and obvious at 8x.
-    let gf = (vec2<f32>(o) + vec2<f32>(0.5, 0.5) - origin) / fit;
+    let gf0 = (vec2<f32>(o) + vec2<f32>(0.5, 0.5) - origin) / fit;
+    // The view: the octave mode's accumulated zoom, about the grid's
+    // centre. 1 otherwise, and then this is gf0 exactly.
+    let gc = vec2<f32>(g) * 0.5;
+    let gf = gc + (gf0 - gc) / max(params.view.x, 1.0e-4);
     if (gf.x < 0.0 || gf.y < 0.0 || gf.x >= vec2<f32>(g).x || gf.y >= vec2<f32>(g).y) {
         // Outside the grid: zero coverage, so the shared tonemap
         // composites the configured background exactly as it does for

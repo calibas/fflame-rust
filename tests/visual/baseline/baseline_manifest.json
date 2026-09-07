@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "e4455fa7",
+  "git_hash": "d3c0a397",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -637,6 +637,10 @@
     "sim-lattice4-cells-inflating.png": {
       "bytes": 25290,
       "sha256": "e4ca60843c8b15c49a1e05d7aefea8f8f7e7ef2e70435db7b805056229cba77b"
+    },
+    "sim-lattice4-cells-octaves.png": {
+      "bytes": 30128,
+      "sha256": "24644cccf818aeb90e6dbdc4976c54c503800990a611ccac278eb96a4ca28794"
     },
     "sim-lattice4-inflating.png": {
       "bytes": 21697,
