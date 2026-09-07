@@ -154,6 +154,7 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimGridMode
         | ConfigPath::SimBoundary
         | ConfigPath::SimWarpFilter
+        | ConfigPath::SimWarpMode
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
         | ConfigPath::SimMatteEdge => false,
@@ -1836,6 +1837,9 @@ impl ConfigManager {
             ConfigPath::SimWarpFilter => {
                 Ok(ConfigValue::String(config.sim.warp.filter.name().to_string()))
             }
+            ConfigPath::SimWarpMode => {
+                Ok(ConfigValue::String(config.sim.warp.mode.name().to_string()))
+            }
             ConfigPath::SimMatteChannel => {
                 Ok(ConfigValue::String(config.sim.matte.channel.name().to_string()))
             }
@@ -2924,6 +2928,12 @@ impl ConfigManager {
                 let n = String::try_from(value)?;
                 if let Some(f) = crate::config::sim::SimWarpFilter::from_name(&n) {
                     self.current.sim.warp.filter = f;
+                }
+            }
+            ConfigPath::SimWarpMode => {
+                let n = String::try_from(value)?;
+                if let Some(m) = crate::config::sim::SimWarpMode::from_name(&n) {
+                    self.current.sim.warp.mode = m;
                 }
             }
             ConfigPath::SimMatteChannel => {

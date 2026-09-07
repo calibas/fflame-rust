@@ -263,6 +263,7 @@ pub fn render_sim_content(
                     changes.push((ConfigPath::SimWarpPanY, warp.pan_y.into()));
                     changes.push((ConfigPath::SimWarpFlow, warp.flow.into()));
                     changes.push((ConfigPath::SimWarpFilter, warp.filter.name().to_string().into()));
+                    changes.push((ConfigPath::SimWarpMode, warp.mode.name().to_string().into()));
                     let _ = config_manager
                         .update_batch(changes, "history.action.sim_preset".to_string());
                     *state.reseed = true;
@@ -596,6 +597,19 @@ pub fn render_sim_content(
                 })
                 .response
                 .on_hover_text(t!("sim_panel.warp_filter_tip"));
+            ui.label(t!("sim_panel.warp_mode").as_ref());
+            egui::ComboBox::from_id_salt("sim_warp_mode")
+                .selected_text(w.mode.name())
+                .show_ui(ui, |ui| {
+                    for n in crate::config::sim::SimWarpMode::NAMES {
+                        if ui.selectable_label(w.mode.name() == *n, *n).clicked() {
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimWarpMode, (*n).to_string().into());
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t!("sim_panel.warp_mode_tip"));
             if !w.is_identity() && ui.small_button(t!("sim_panel.warp_reset").as_ref()).clicked() {
                 let id = SimWarp::default();
                 let changes = vec![

@@ -2230,9 +2230,11 @@ only when the field is at noise scale; not fixed.
 (−2..2), `memory` (D is a Turing pattern / a memory), `leak`.
 **Presets.** `ring`, `independent`, `cells` (a three-ring, q = 1.5,
 D the memory biasing A and C by ±0.2·D), `cells_inflating`,
-`inflating` (zoom 1.002 / step, bilinear — the first preset to carry a
-warp; `SimPreset.warp` was added for it and the panel applies it,
-identity when absent).
+`inflating` (zoom 1.002 / step — the first preset to carry a warp;
+`SimPreset.warp` was added for it and the panel applies it, identity
+when absent). Both inflating presets run the warp in **octave mode**
+with the bicubic doubling (pipeline §4.1), which is what removed the
+cross the continuous mode draws along the central axes.
 **Stages.** `update` (kernel gather), `warp` when the preset asks,
 `color`. Periodic.
 **Colouring.** `species`: the angle of (A − C, B − D) as hue, its

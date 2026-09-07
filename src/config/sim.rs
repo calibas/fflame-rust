@@ -207,15 +207,20 @@ pub enum SimWarpFilter {
     Bilinear,
     /// One tap. Keeps integer state integer, at the cost of aliasing.
     Nearest,
+    /// Sixteen taps, Catmull-Rom. Sharper than bilinear under
+    /// magnification; the right filter for an octave doubling, which
+    /// resamples by exactly 2 once per octave.
+    Bicubic,
 }
 
 impl SimWarpFilter {
-    pub const NAMES: &'static [&'static str] = &["bilinear", "nearest"];
+    pub const NAMES: &'static [&'static str] = &["bilinear", "nearest", "bicubic"];
 
     pub fn name(&self) -> &'static str {
         match self {
             SimWarpFilter::Bilinear => "bilinear",
             SimWarpFilter::Nearest => "nearest",
+            SimWarpFilter::Bicubic => "bicubic",
         }
     }
 
@@ -223,9 +228,57 @@ impl SimWarpFilter {
         Some(match s {
             "bilinear" => SimWarpFilter::Bilinear,
             "nearest" => SimWarpFilter::Nearest,
+            "bicubic" => SimWarpFilter::Bicubic,
             _ => return None,
         })
     }
+}
+
+/// How the warp's zoom is applied over a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimWarpMode {
+    /// The whole affine, resampled into the field every step.
+    #[default]
+    Continuous,
+    /// Zoom only. The per-step zoom accumulates as a VIEW magnification
+    /// in [1, 2) that the colour pass applies about the centre, and the
+    /// field is resampled once, by exactly 2, each time it reaches 2.
+    /// The state is never resampled by a small factor, so there is no
+    /// per-step blur and no cross along the central axes (a bilinear
+    /// read at fractional offset f blurs by f(1-f) per axis, and on the
+    /// axes one offset is zero); structure forms at the grid's own
+    /// scale and is enlarged by the view. Rotation, pan and flow are
+    /// not applied in this mode.
+    Octaves,
+}
+
+impl SimWarpMode {
+    pub const NAMES: &'static [&'static str] = &["continuous", "octaves"];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimWarpMode::Continuous => "continuous",
+            SimWarpMode::Octaves => "octaves",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "continuous" => SimWarpMode::Continuous,
+            "octaves" => SimWarpMode::Octaves,
+            _ => return None,
+        })
+    }
+}
+
+/// What the octave mode does at one step: the view magnification the
+/// colour pass shows the field at, and the factor the field itself is
+/// resampled by at this step, if it is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OctaveState {
+    pub view: f32,
+    pub warp: Option<f32>,
 }
 
 /// The warp stage: an affine applied to the whole field EVERY STEP,
@@ -259,6 +312,8 @@ pub struct SimWarp {
     pub flow: f32,
     #[serde(default, skip_serializing_if = "is_default_warp_filter")]
     pub filter: SimWarpFilter,
+    #[serde(default, skip_serializing_if = "is_default_warp_mode")]
+    pub mode: SimWarpMode,
 }
 
 fn warp_one() -> f32 {
@@ -273,6 +328,9 @@ fn is_warp_zero(v: &f32) -> bool {
 fn is_default_warp_filter(v: &SimWarpFilter) -> bool {
     *v == SimWarpFilter::default()
 }
+fn is_default_warp_mode(v: &SimWarpMode) -> bool {
+    *v == SimWarpMode::default()
+}
 
 impl Default for SimWarp {
     fn default() -> Self {
@@ -283,11 +341,34 @@ impl Default for SimWarp {
             pan_y: 0.0,
             flow: 0.0,
             filter: SimWarpFilter::Bilinear,
+            mode: SimWarpMode::Continuous,
         }
     }
 }
 
 impl SimWarp {
+    /// The octave mode's state after `step` steps, from the step index
+    /// alone -- no accumulator, so a run is reproducible and batch
+    /// invariant. With L(n) = n * log2(zoom): the field has been
+    /// doubled floor(L(n)) times, the view shows the rest,
+    /// 2^(L(n) - floor(L(n))) in [1, 2), and step n doubles the field
+    /// when floor(L(n + 1)) moves past floor(L(n)) -- by 2, or by 1/2
+    /// when the zoom is under 1 and L runs downward. In f64: at a
+    /// million steps L is a few thousand and its fraction must still
+    /// be exact to a pixel.
+    pub fn octave(&self, step: u32) -> OctaveState {
+        let z = self.zoom as f64;
+        if !(z.is_finite() && z > 0.0) || z == 1.0 {
+            return OctaveState { view: 1.0, warp: None };
+        }
+        let l = |n: u32| n as f64 * z.log2();
+        let k0 = l(step).floor();
+        let k1 = l(step + 1).floor();
+        let view = 2f64.powf(l(step) - k0) as f32;
+        let warp = if k1 != k0 { Some(2f64.powf(k1 - k0) as f32) } else { None };
+        OctaveState { view, warp }
+    }
+
     /// Whether the stage would move nothing -- the filter is
     /// irrelevant then, and the renderer skips the dispatch.
     pub fn is_identity(&self) -> bool {
@@ -604,7 +685,7 @@ fn is_default_matte(v: &SimMatte) -> bool {
     *v == SimMatte::default()
 }
 fn is_identity_warp(v: &SimWarp) -> bool {
-    v.is_identity() && v.filter == SimWarpFilter::default()
+    v.is_identity() && v.filter == SimWarpFilter::default() && v.mode == SimWarpMode::default()
 }
 fn is_default_upscale(v: &SimUpscale) -> bool {
     *v == SimUpscale::default()
@@ -876,6 +957,7 @@ mod tests {
             ConfigPath::SimWarpPanY,
             ConfigPath::SimWarpFlow,
             ConfigPath::SimWarpFilter,
+            ConfigPath::SimWarpMode,
             ConfigPath::SimMatteChannel,
             ConfigPath::SimMatteCutoff,
             ConfigPath::SimMatteSoftness,
@@ -909,6 +991,7 @@ mod tests {
             ConfigPath::SimWarpZoom,
             ConfigPath::SimWarpFlow,
             ConfigPath::SimWarpFilter,
+            ConfigPath::SimWarpMode,
             ConfigPath::SimMatteChannel,
             ConfigPath::SimMatteCutoff,
             ConfigPath::SimMatteSoftness,
@@ -1027,6 +1110,7 @@ mod tests {
             pan_y: -0.5,
             flow: 0.02,
             filter: SimWarpFilter::Nearest,
+            mode: SimWarpMode::Octaves,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: SimConfig = serde_json::from_str(&json).unwrap();
@@ -1053,6 +1137,9 @@ mod tests {
         for n in SimWarpFilter::NAMES {
             assert_eq!(SimWarpFilter::from_name(n).unwrap().name(), *n);
         }
+        for n in SimWarpMode::NAMES {
+            assert_eq!(SimWarpMode::from_name(n).unwrap().name(), *n);
+        }
         for n in SimMatteChannel::NAMES {
             assert_eq!(SimMatteChannel::from_name(n).unwrap().name(), *n);
         }
@@ -1062,5 +1149,36 @@ mod tests {
         for k in SimInit::KINDS {
             assert_eq!(SimInit::default().with_kind(k).kind_name(), *k);
         }
+    }
+
+    /// The octave state is a function of the step index alone, and
+    /// the doublings and the view together are exactly the continuous
+    /// zoom: after n steps, 2^(doublings) * view == zoom^n.
+    #[test]
+    fn octave_doublings_and_view_multiply_to_the_continuous_zoom() {
+        for zoom in [1.002f32, 1.01, 1.1, 0.995] {
+            let w = SimWarp { zoom, ..SimWarp::default() };
+            let mut total = 1.0f64;
+            let mut doublings = 0i32;
+            for n in 0..5000u32 {
+                let st = w.octave(n);
+                assert!((1.0..2.0).contains(&st.view), "view {} at step {n}", st.view);
+                let expect = (zoom as f64).powi(n as i32);
+                let have = 2f64.powi(doublings) * st.view as f64;
+                assert!(
+                    (have / expect - 1.0).abs() < 1e-4,
+                    "zoom {zoom} step {n}: 2^{doublings} * {} != {expect}",
+                    st.view
+                );
+                if let Some(f) = st.warp {
+                    assert!(f == 2.0 || f == 0.5, "a doubling is by 2 or 1/2, not {f}");
+                    doublings += if f > 1.0 { 1 } else { -1 };
+                    total *= f as f64;
+                }
+            }
+            assert!(total != 1.0, "zoom {zoom}: no doubling in 5000 steps");
+        }
+        let id = SimWarp::default();
+        assert_eq!(id.octave(12345), OctaveState { view: 1.0, warp: None });
     }
 }
