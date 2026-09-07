@@ -768,3 +768,54 @@ fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
 }
 "#,
 };
+
+
+/// Four fields as one hue: the circular mean of the four channels
+/// placed a quarter turn apart around the palette.
+///
+/// For a field whose channels are four competing patterns (the
+/// coupled Turing lattice), the natural picture is which one leads
+/// and by how much. A and C are placed opposite, B and D opposite, so
+/// the vector (A − C, B − D) points at the leading field; its angle
+/// is the hue and its length the brightness. A cell whose four fields
+/// chase one another sweeps smoothly through the palette in place,
+/// and a cell where all four balance -- a membrane between regions --
+/// is dark.
+pub static SPECIES: SimColoringDef = SimColoringDef {
+    name: "species",
+    display_name: "Four-way mix",
+    description: "The four channels a quarter turn apart around the palette: the hue is which \
+                  leads, the brightness by how much, and balanced cells go dark. For the \
+                  coupled Turing lattice.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 1.0,
+            min: 0.1,
+            max: 10.0,
+            tooltip: "Multiplies the lead before it becomes brightness. The lead is the length \
+                      of (A − C, B − D), at most about 1.4.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "rotate",
+            display_name: "Rotate",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Turns which field lands at the start of the palette, as a fraction of \
+                      the whole.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
+    let c = vec2<f32>(x.s.x - x.s.z, x.s.y - x.s.w);
+    let hue = fract(ff_atan2(c.y, c.x) / 6.283185307 + cparam(1u));
+    let bright = clamp(length(c) * cparam(0u), 0.0, 1.0);
+    return vec4<f32>(sim_palette(hue) * bright, 1.0);
+}
+"#,
+};

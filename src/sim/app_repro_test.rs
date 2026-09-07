@@ -2270,7 +2270,9 @@ fn mccabe_matches_a_cpu_mirror() {
     };
     let level_avg = |l: usize, px: f32, py: f32| -> f32 {
         let s = (1u32 << l) as f32;
-        let (fx, fy) = (px / s - 0.5, py / s - 0.5);
+        // Texel i of level l is centred on base cell i * 2^l: see
+        // pyr_level_avg in the assembler for why this is not px / s - 0.5.
+        let (fx, fy) = ((px - 0.5) / s, (py - 0.5) / s);
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - x0, fy - y0);
         let (ix, iy) = (x0 as i64, y0 as i64);
@@ -4964,5 +4966,271 @@ fn phase_d_colouring_cost() {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         let ms = t0.elapsed().as_secs_f64() * 1e3 / FRAMES as f64;
         println!("{name:<10} {label:<12} {ms:>8.3} ms per coloured frame at 1080p");
+    }
+}
+
+/// A coupled-Turing-lattice config from one of its presets, periodic,
+/// at N x N.
+fn lattice4_config(preset: &str, n: u32, seed: u64) -> SimConfig {
+    let m = crate::sim::model_or_default("lattice4");
+    assert_eq!(m.name, "lattice4");
+    let pre = m.preset(preset).unwrap();
+    let mut cfg = SimConfig::default();
+    cfg.model = "lattice4".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.init = pre.init.unwrap();
+    if let Some(w) = pre.warp {
+        cfg.warp = w;
+    }
+    cfg.seed = seed;
+    cfg.steps = 0;
+    for (k, v) in pre.params {
+        cfg.model_params.insert((*k).to_string(), *v);
+    }
+    cfg
+}
+
+/// The angle of (A - C, B - D) at every cell: which field leads.
+fn lattice4_angles(f: &[[f32; 4]]) -> Vec<f32> {
+    f.iter().map(|c| (c[1] - c[3]).atan2(c[0] - c[2])).collect()
+}
+
+/// "Three interacting Turing patterns equals one Belousov–Zhabotinsky
+/// reaction": with the fields chained in a ring, a cell's leading
+/// field goes round and round -- the angle of (A − C, B − D) advances
+/// with a consistent sign across the grid -- and with the identity
+/// matrix, four independent patterns, it does not. Measured as the
+/// mean angular velocity over 1500 steps after 1500 of settling, and
+/// the fraction of cells turning the majority way.
+#[test]
+fn lattice4_cycles_in_place_only_when_the_fields_interact() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 96;
+    let palette = test_palette(&device, &queue);
+    let mut result = Vec::new();
+    for preset in ["ring", "independent"] {
+        let cfg = lattice4_config(preset, N, 3);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 1500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let n = (N * N) as usize;
+        let mut total = vec![0.0f32; n];
+        let mut prev = lattice4_angles(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        // Samples must come well within a turn or the angle aliases:
+        // at the defaults a turn takes ~50 steps, and a 50-step gap
+        // measured 0.04 turns per 1000 steps for a ring turning 20.
+        const SAMPLES: u32 = 200;
+        const GAP: u32 = 5;
+        for _ in 0..SAMPLES {
+            r.run_steps(&device, &queue, &cfg, GAP);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let now = lattice4_angles(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+            for k in 0..n {
+                // Unwrapped step, in (-pi, pi].
+                let mut d = now[k] - prev[k];
+                if d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+                if d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+                total[k] += d;
+            }
+            prev = now;
+        }
+        let steps = (SAMPLES * GAP) as f32;
+        let turns: Vec<f32> = total.iter().map(|t| t / std::f32::consts::TAU).collect();
+        let mean = turns.iter().sum::<f32>() / n as f32;
+        let same_sign = turns.iter().filter(|&&t| (t > 0.0) == (mean > 0.0) && t.abs() > 0.05).count() as f32 / n as f32;
+        println!(
+            "lattice4/{preset}: mean {:+.3} turns per 1000 steps; {:.0}% of cells turning the majority way",
+            mean * 1000.0 / steps,
+            100.0 * same_sign
+        );
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        assert!(out.iter().all(|p| p[0].is_finite()));
+        result.push((preset, mean * 1000.0 / steps, same_sign));
+    }
+    let (_, ring_rate, ring_same) = result[0];
+    let (_, ind_rate, _) = result[1];
+    assert!(ring_rate.abs() > 0.2, "the ring should cycle: {ring_rate:+.3} turns per 1000 steps");
+    assert!(ring_same > 0.7, "the ring should cycle the same way almost everywhere: {:.0}%", 100.0 * ring_same);
+    assert!(ind_rate.abs() < ring_rate.abs() * 0.2, "independent patterns should not cycle: {ind_rate:+.3}");
+}
+
+/// Under the inflating preset the geometry moves WITH the inflation
+/// rather than rearranging: undo 100 steps of zoom on the earlier
+/// membrane map (the cells where no field leads) and it matches the
+/// later one better than the raw comparison does. That is what makes
+/// a recorded run read as a still image the camera zooms into.
+#[test]
+fn lattice4_under_inflation_drifts_rather_than_rearranges() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 192;
+    let cfg = lattice4_config("inflating", N, 2);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 4000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f1 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    const K: u32 = 100;
+    r.run_steps(&device, &queue, &cfg, K);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f2 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let lead = |f: &[[f32; 4]]| -> Vec<f32> {
+        f.iter().map(|c| ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()).collect()
+    };
+    let (l1, l2) = (lead(&f1), lead(&f2));
+    let mut sorted = l1.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let thr = sorted[sorted.len() / 4]; // the darkest quarter are the membranes
+    let m1: Vec<bool> = l1.iter().map(|&v| v < thr).collect();
+    let m2: Vec<bool> = l2.iter().map(|&v| v < thr).collect();
+    let n = N as usize;
+    let mag = cfg.warp.zoom.powi(K as i32);
+    let c = N as f32 * 0.5;
+    let lo = (n as f32 * 0.2) as usize;
+    let hi = (n as f32 * 0.8) as usize;
+    let (mut raw, mut undone, mut cnt) = (0usize, 0usize, 0usize);
+    for y in lo..hi {
+        for x in lo..hi {
+            let later = m2[y * n + x];
+            raw += (m1[y * n + x] != later) as usize;
+            let px = (c + (x as f32 + 0.5 - c) / mag).floor() as usize;
+            let py = (c + (y as f32 + 0.5 - c) / mag).floor() as usize;
+            undone += (m1[py * n + px] != later) as usize;
+            cnt += 1;
+        }
+    }
+    let (raw, undone) = (raw as f32 / cnt as f32, undone as f32 / cnt as f32);
+    println!(
+        "lattice4 inflating: over {K} steps ({mag:.3}x) the membrane map differs on {:.1}% of cells raw, \
+         {:.1}% with the inflation undone",
+        100.0 * raw,
+        100.0 * undone
+    );
+    assert!(f2.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    assert!(raw > 0.0, "the picture should move at all");
+    assert!(undone < raw, "undoing the inflation should explain some of the motion");
+}
+
+/// Sweep of the coupling weights: turn rate against how fast the
+/// membrane geometry moves, without inflation. The picture McCabe
+/// describes has a high turn rate and a still geometry.
+#[test]
+#[ignore]
+fn lattice4_coupling_sweep() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 96;
+    let n = (N * N) as usize;
+    for (selfw, follow, against, amount, gain, decay) in [
+        (1.0f32, 1.5f32, -1.5f32, 0.05f32, 4.0f32, 0.5f32),
+        (1.0, 1.5, -1.5, 0.05, 4.0, 1.0),
+        (1.0, 1.5, -1.5, 0.05, 4.0, 1.5),
+        (1.0, 1.5, -1.5, 0.05, 2.0, 1.0),
+        (1.0, 1.5, -1.5, 0.05, 8.0, 1.5),
+        (0.3, 1.5, -1.5, 0.05, 4.0, 1.0),
+        (0.0, 1.5, -1.5, 0.05, 4.0, 1.0),
+        (1.0, 1.0, -1.0, 0.05, 4.0, 1.0),
+        (1.0, 1.5, -1.5, 0.02, 4.0, 1.0),
+    ] {
+        let mut cfg = lattice4_config("ring", N, 3);
+        let sp = ["a", "b", "c", "d"];
+        for i in 0..4 {
+            for j in 0..4 {
+                let v = match (j + 4 - i) % 4 { 0 => selfw, 3 => follow, 1 => against, _ => 0.0 };
+                cfg.model_params.insert(format!("k{}{}", sp[i], sp[j]), v);
+            }
+        }
+        cfg.model_params.insert("amount".into(), amount);
+        cfg.model_params.insert("gain".into(), gain);
+        cfg.model_params.insert("decay".into(), decay);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 1500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f1 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let mut prev = lattice4_angles(&f1);
+        let mut total = vec![0.0f32; n];
+        for _ in 0..10 {
+            r.run_steps(&device, &queue, &cfg, 10);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let now = lattice4_angles(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+            for k in 0..n {
+                let mut d = now[k] - prev[k];
+                if d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+                if d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+                total[k] += d;
+            }
+            prev = now;
+        }
+        let f2 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let turns = total.iter().sum::<f32>() / n as f32 / std::f32::consts::TAU * 10.0; // per 1000 steps
+        let lead = |f: &[[f32; 4]]| -> Vec<f32> {
+            f.iter().map(|c| ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()).collect()
+        };
+        let (l1, l2) = (lead(&f1), lead(&f2));
+        let mut sorted = l1.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let thr = sorted[n / 4];
+        let moved = (0..n).filter(|&k| (l1[k] < thr) != (l2[k] < thr)).count() as f32 / n as f32;
+        let mean_lead = l1.iter().sum::<f32>() / n as f32;
+        println!(
+            "self {selfw:.1} follow {follow:+.1} against {against:+.1} amount {amount:.2} gain {gain:>4.1} decay {decay:.1}: {turns:+6.2} turns/1000 steps; \
+             membrane map moved {:.1}% in 100 steps; mean lead {mean_lead:.2}",
+            100.0 * moved
+        );
+    }
+}
+
+/// Where does the pattern go? The shift that best aligns the lead map
+/// 50 steps later with the one now, by brute-force cross-correlation
+/// over +-8 cells. A Turing pattern should not translate; a
+/// consistent shift is an anisotropy in the machinery.
+#[test]
+#[ignore]
+fn lattice4_drift_probe() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 96;
+    let n = N as usize;
+    for preset in ["ring", "independent"] {
+        let cfg = lattice4_config(preset, N, 3);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 1500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let lead = |f: &[[f32; 4]]| -> Vec<f32> {
+            f.iter().map(|c| ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()).collect()
+        };
+        let a = lead(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        r.run_steps(&device, &queue, &cfg, 50);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let b = lead(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        let ma = a.iter().sum::<f32>() / a.len() as f32;
+        let mb = b.iter().sum::<f32>() / b.len() as f32;
+        let mut best = (f32::MIN, 0i32, 0i32);
+        for dy in -8i32..=8 {
+            for dx in -8i32..=8 {
+                let mut c = 0.0f32;
+                for y in 0..n {
+                    for x in 0..n {
+                        let xs = (x as i32 + dx).rem_euclid(n as i32) as usize;
+                        let ys = (y as i32 + dy).rem_euclid(n as i32) as usize;
+                        c += (a[y * n + x] - ma) * (b[ys * n + xs] - mb);
+                    }
+                }
+                if c > best.0 { best = (c, dx, dy); }
+            }
+        }
+        let mut c0 = 0.0f32;
+        for k in 0..n * n { c0 += (a[k] - ma) * (b[k] - mb); }
+        println!("lattice4/{preset}: best shift over 50 steps ({}, {}) cells, correlation {:.3} vs {:.3} unshifted",
+                 best.1, best.2, best.0 / (n * n) as f32, c0 / (n * n) as f32);
     }
 }

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "bdd0aa36",
+  "git_hash": "0f610d26",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -634,25 +634,33 @@
       "bytes": 17390,
       "sha256": "584a997a76657cbcf4b5fec6bff575a6d45f1c12d516d1235641dab08c640f0d"
     },
+    "sim-lattice4-inflating.png": {
+      "bytes": 21638,
+      "sha256": "b1c914c336d9f0b2f4d6ab7e1a68ab0542612eb5680a81214373e98d3a210f20"
+    },
+    "sim-lattice4-ring.png": {
+      "bytes": 21980,
+      "sha256": "c5a8454d7f3367290f6184defa5d68485c04e296636dd11125a9410577629676"
+    },
     "sim-lenia-soup.png": {
       "bytes": 27549,
       "sha256": "547b0b4f3423d8aae738e18be3e55b3143547a914aae40195b812cd126b27b1c"
     },
     "sim-mccabe-coarse.png": {
-      "bytes": 22601,
-      "sha256": "b51628e8a00750914bef94b3908a046b8f9027e13b977a5fcf01791007b349cd"
+      "bytes": 24491,
+      "sha256": "5999a8e9d6918e9d61fc38be2c7fc56eb3753b09c204b929635e456bde8f6777"
     },
     "sim-mccabe-field.png": {
-      "bytes": 20013,
-      "sha256": "ce655dd4a5b9db6a1de3e8ed5044154a8ffcd2159f3641b0ccd81d3850aa9f04"
+      "bytes": 23734,
+      "sha256": "02b0a5ef212b34f776e02e6c0b7136511765fe21228b19adebab4f9d784353e4"
     },
     "sim-mccabe-multiscale.png": {
-      "bytes": 25535,
-      "sha256": "d245de4c4ad641ebee4ea235a0ae75cba5853190ce7db47c6b9dc7c87d94f724"
+      "bytes": 26640,
+      "sha256": "030366db46d77d0153b0db399b232a56c2e10821d7ac599b3d64c4edd20a859b"
     },
     "sim-mccabe-rosette.png": {
-      "bytes": 22881,
-      "sha256": "4c6310b6e27925036f8080098105249987b4dd96e77b4962515cdcef412fd5e4"
+      "bytes": 23354,
+      "sha256": "17fa910854e736bed83f535ba668258631bf56c2c7c9274ddf52abf0d929ae32"
     },
     "sim-oregonator-wave-trains.png": {
       "bytes": 8515,

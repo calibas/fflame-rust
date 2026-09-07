@@ -26,6 +26,11 @@
 //!   256x range, so batching is purely a watchdog and pacing device.
 
 use crate::config::sim::{SimConfig, SimGrid};
+
+/// Floats in the model-parameter buffer. Sixteen was every model until
+/// the coupled Turing lattice, whose coupling matrix alone is sixteen;
+/// `every_model_fits_the_parameter_buffer` keeps this honest.
+pub const MODEL_PARAM_SLOTS: usize = 32;
 use crate::sim::{assembler, coloring_or_default, model_or_default, pyramid_levels, ModelDef, ModelFeature, SimColoringDef, MAX_KERNEL_RADIUS, MAX_PYRAMID_LEVELS, MINMAX_RING, MAX_AGENTS};
 #[allow(unused_imports)]
 use crate::sim::ColoringFeature;
@@ -327,7 +332,7 @@ impl SimRenderer {
         // read once per invocation.
         let model_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Sim Model Params"),
-            contents: bytemuck::cast_slice(&[0.0f32; 16]),
+            contents: bytemuck::cast_slice(&[0.0f32; MODEL_PARAM_SLOTS]),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
         let coloring_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -1285,7 +1290,13 @@ impl SimRenderer {
         // the shader only ever indexes as far as the definition
         // declares.
         let mut mp = model.pack_params(cfg);
-        mp.resize(16, 0.0);
+        assert!(
+            mp.len() <= MODEL_PARAM_SLOTS,
+            "{} declares {} parameters; the buffer holds {MODEL_PARAM_SLOTS}",
+            model.name,
+            mp.len()
+        );
+        mp.resize(MODEL_PARAM_SLOTS, 0.0);
         let mut cp = coloring.pack_params(cfg);
         cp.resize(16, 0.0);
         queue.write_buffer(&self.model_params_buffer, 0, bytemuck::cast_slice(&mp));
