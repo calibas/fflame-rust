@@ -5674,3 +5674,343 @@ fn culling_off_screen_cells_does_not_change_what_is_shown() {
     assert!(field > 0.0, "the cull changed nothing, so it was not on");
     assert!(shown < 0.02, "the cull changed what is shown: rms {shown:.4}");
 }
+
+/// The two-layer Brusselator against a CPU mirror of one step, from a
+/// read-back field, periodic, in both coupling forms.
+#[test]
+fn brusselator2_matches_a_cpu_mirror_in_both_couplings() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    for cubic in [0.0f32, 1.0] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "brusselator2".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 11;
+        cfg.dt = 0.001;
+        cfg.model_params.insert("coupling".into(), cubic);
+        cfg.model_params.insert("q".into(), 0.15);
+        let m = crate::sim::model_or_default("brusselator2");
+        assert_eq!(m.name, "brusselator2");
+        let a = m.pack_params(&cfg);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let before = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let after = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let n = N as usize;
+        let at = |x: i64, y: i64| before[(y.rem_euclid(n as i64) as usize) * n + x.rem_euclid(n as i64) as usize];
+        let mut worst = 0.0f32;
+        for y in 0..n {
+            for x in 0..n {
+                let (xi, yi) = (x as i64, y as i64);
+                let s = at(xi, yi);
+                let (u1, v1, u2, v2) = (s[0], s[1], s[2], s[3]);
+                let (aa, bb, q) = (a[0], a[1], a[7]);
+                let f1 = aa - (bb + 1.0) * u1 + u1 * u1 * v1;
+                let g1 = bb * u1 - u1 * u1 * v1;
+                let f2 = aa - (bb + 1.0) * u2 + u2 * u2 * v2;
+                let g2 = bb * u2 - u2 * u2 * v2;
+                let (mut cu, mut cv) = (q * (u2 - u1), q * (v2 - v1));
+                if cubic > 0.5 {
+                    cu *= u1 * u2;
+                    cv *= v1 * v2;
+                }
+                let rate = [f1 + cu, g1 + cv, f2 - cu, g2 - cv];
+                for c in 0..4 {
+                    let lap = at(xi, yi - 1)[c] + at(xi, yi + 1)[c] + at(xi - 1, yi)[c] + at(xi + 1, yi)[c] - 4.0 * s[c];
+                    let want = (s[c] + 0.001 * (a[2 + c] * lap + rate[c])).max(0.0);
+                    worst = worst.max((after[y * n + x][c] - want).abs());
+                }
+            }
+        }
+        println!("brusselator2 mirror, cubic {cubic}: worst {worst:.2e}");
+        assert!(worst < 5e-5, "brusselator2 disagrees with its mirror by {worst:.2e}");
+    }
+}
+
+/// A radix-2 FFT, in place, for the spectrum gate.
+fn fft_1d(re: &mut [f32], im: &mut [f32]) {
+    let n = re.len();
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let ang = -std::f32::consts::TAU / len as f32;
+        for start in (0..n).step_by(len) {
+            for k in 0..len / 2 {
+                let (wr, wi) = ((ang * k as f32).cos(), (ang * k as f32).sin());
+                let (ar, ai) = (re[start + k], im[start + k]);
+                let (br, bi) = (re[start + k + len / 2], im[start + k + len / 2]);
+                let (tr, ti) = (br * wr - bi * wi, br * wi + bi * wr);
+                re[start + k] = ar + tr;
+                im[start + k] = ai + ti;
+                re[start + k + len / 2] = ar - tr;
+                im[start + k + len / 2] = ai - ti;
+            }
+        }
+        len <<= 1;
+    }
+}
+
+/// The radial power spectrum of one channel of a square field, by
+/// |k| in cycles per cell, binned to 1/n.
+fn radial_spectrum(f: &[[f32; 4]], n: usize, c: usize) -> Vec<f32> {
+    let mean = f.iter().map(|v| v[c]).sum::<f32>() / f.len() as f32;
+    let mut re: Vec<f32> = f.iter().map(|v| v[c] - mean).collect();
+    let mut im = vec![0.0f32; n * n];
+    for y in 0..n {
+        fft_1d(&mut re[y * n..(y + 1) * n], &mut im[y * n..(y + 1) * n]);
+    }
+    for x in 0..n {
+        let (mut cr, mut ci) = (vec![0.0f32; n], vec![0.0f32; n]);
+        for y in 0..n {
+            cr[y] = re[y * n + x];
+            ci[y] = im[y * n + x];
+        }
+        fft_1d(&mut cr, &mut ci);
+        for y in 0..n {
+            re[y * n + x] = cr[y];
+            im[y * n + x] = ci[y];
+        }
+    }
+    let mut power = vec![0.0f32; n / 2 + 1];
+    for y in 0..n {
+        for x in 0..n {
+            let kx = if x <= n / 2 { x as f32 } else { x as f32 - n as f32 };
+            let ky = if y <= n / 2 { y as f32 } else { y as f32 - n as f32 };
+            let k = (kx * kx + ky * ky).sqrt().round() as usize;
+            if k <= n / 2 {
+                power[k] += re[y * n + x].powi(2) + im[y * n + x].powi(2);
+            }
+        }
+    }
+    power
+}
+
+/// The paper's evidence for its patterns is the Fourier spectrum: two
+/// rings, one per layer's wavelength. Under cubic coupling at the
+/// Fig. 3 parameters the boats carry power at both k ≈ 0.2 and
+/// k ≈ 1.0 radians per cell (wavelengths ~31 and ~6 cells); an
+/// uncoupled layer 1 carries only its own. Measured on a 128² grid
+/// after 200,000 steps at dt 0.001.
+#[test]
+#[ignore]
+fn brusselator2_boats_carry_two_wavelengths() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let n = N as usize;
+    let mut out = Vec::new();
+    for (q, label) in [(0.15f32, "boats"), (0.0, "uncoupled")] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "brusselator2".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.dt = 0.001;
+        cfg.model_params.insert("q".into(), q);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 200_000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        assert!(f.iter().all(|c| c.iter().all(|v| v.is_finite())));
+        let p = radial_spectrum(&f, n, 0);
+        let total: f32 = p[1..].iter().sum();
+        // k in radians per cell = 2 pi * bin / n; the paper's rings at
+        // 0.2 and 1.0 are bins ~4 and ~20 on 128.
+        let band = |lo: f32, hi: f32| -> f32 {
+            (1..=n / 2)
+                .filter(|&b| {
+                    let k = std::f32::consts::TAU * b as f32 / n as f32;
+                    k >= lo && k < hi
+                })
+                .map(|b| p[b])
+                .sum::<f32>()
+                / total
+        };
+        let (long, short) = (band(0.1, 0.4), band(0.7, 1.4));
+        println!("brusselator2 {label} (q {q}): power fraction at k 0.1-0.4: {long:.3}, at 0.7-1.4: {short:.3}");
+        out.push((long, short));
+    }
+    // Measured: coupled 0.791 long / 0.074 short, uncoupled 0.000 /
+    // 0.968. The coupling hands layer 1 the long wavelength and keeps
+    // a short-wavelength remainder, as the paper's Fig. 4 dispersion
+    // says (only the low-k wing clearly unstable).
+    let ((bl, bs), (ul, us)) = (out[0], out[1]);
+    assert!(bl > 0.5 && bs > 0.03, "boats should carry both wavelengths: {bl:.3} / {bs:.3}");
+    assert!(us > 0.8 && ul < 0.05, "the uncoupled layer 1 should be one-wavelength: {ul:.3} / {us:.3}");
+}
+
+/// The Rössler lattice against a CPU mirror of one step, from a
+/// read-back field, periodic, envelope included.
+#[test]
+fn rossler_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 40;
+    let mut cfg = SimConfig::default();
+    cfg.model = "rossler".into();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.seed = 5;
+    cfg.dt = 0.002;
+    cfg.model_params.insert("forget".into(), 0.01);
+    let m = crate::sim::model_or_default("rossler");
+    assert_eq!(m.name, "rossler");
+    let a = m.pack_params(&cfg);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 2000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let before = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let after = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let n = N as usize;
+    let at = |x: i64, y: i64| before[(y.rem_euclid(n as i64) as usize) * n + x.rem_euclid(n as i64) as usize];
+    let h = a[5];
+    let d = [a[3] / (h * h), a[3] / (h * h), a[4] / (h * h)];
+    let mut worst = 0.0f32;
+    for y in 0..n {
+        for x in 0..n {
+            let (xi, yi) = (x as i64, y as i64);
+            let s = at(xi, yi);
+            let (u, v, w) = (s[0], s[1], s[2]);
+            let rate = [-v - w, u + a[0] * v, a[1] + w * (u - a[2])];
+            let mut nx = [0.0f32; 3];
+            for c in 0..3 {
+                let lap = at(xi, yi - 1)[c] + at(xi, yi + 1)[c] + at(xi - 1, yi)[c] + at(xi + 1, yi)[c] - 4.0 * s[c];
+                nx[c] = s[c] + 0.002 * (d[c] * lap + rate[c]);
+                worst = worst.max((after[y * n + x][c] - nx[c]).abs());
+            }
+            let env = nx[0].max(s[3] - a[6] * 0.002);
+            worst = worst.max((after[y * n + x][3] - env).abs());
+        }
+    }
+    println!("rossler mirror: worst {worst:.2e}");
+    assert!(worst < 1e-4, "rossler disagrees with its mirror by {worst:.2e}");
+}
+
+/// The paper's claim, measured: the snapshot is chaotic and the
+/// envelope is ordered. After a long run at a Fig. 3 parameter set
+/// the envelope has settled (it changes little over the last tenth of
+/// the run), and it is spatially structured (its spread across the
+/// grid is a real fraction of its mean). Reproducing the paper's
+/// panels one for one is not claimed.
+#[test]
+#[ignore]
+fn rossler_envelope_settles_into_a_structured_map() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 40;
+    let m = crate::sim::model_or_default("rossler");
+    let pre = m.preset("carpet").unwrap();
+    let mut cfg = SimConfig::default();
+    cfg.model = "rossler".into();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.init = pre.init.unwrap();
+    cfg.seed = 2;
+    cfg.dt = 0.005;
+    for (k, v) in pre.params {
+        cfg.model_params.insert((*k).to_string(), *v);
+    }
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 900_000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f1 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    r.run_steps(&device, &queue, &cfg, 100_000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f2 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    assert!(f2.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    let n = f2.len() as f32;
+    let mean = f2.iter().map(|c| c[3]).sum::<f32>() / n;
+    let sd = (f2.iter().map(|c| (c[3] - mean).powi(2)).sum::<f32>() / n).sqrt();
+    let drift = (f1.iter().zip(&f2).map(|(a, b)| (a[3] - b[3]).powi(2)).sum::<f32>() / n).sqrt();
+    let snap_sd = {
+        let mu = f2.iter().map(|c| c[0]).sum::<f32>() / n;
+        (f2.iter().map(|c| (c[0] - mu).powi(2)).sum::<f32>() / n).sqrt()
+    };
+    println!(
+        "rossler carpet at t = 5000: envelope mean {mean:.2}, spread {sd:.3} ({:.1}% of mean), drift over the last tenth \
+         {drift:.3}; snapshot spread {snap_sd:.3}",
+        100.0 * sd / mean
+    );
+    assert!(sd / mean > 0.01, "the envelope should be spatially structured");
+    assert!(drift < sd, "the envelope should have settled: drift {drift:.3} vs spread {sd:.3}");
+}
+
+/// Diagnostic: the Rössler field's range over a long run, for the
+/// parameter sets that came out blank or split.
+#[test]
+#[ignore]
+fn rossler_range_probe() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 40;
+    for (label, duv, dw, dt) in [
+        ("asymmetric", 0.017f32, 1.25f32, 0.002f32),
+        ("diagonal", 0.015, 0.65, 0.002),
+        ("translational", 0.023, 2.5, 0.002),
+        ("top", 0.048, 0.048, 0.002),
+        ("carpet", 0.003, 2.5, 0.002),
+        ("architecture", 0.01, 2.5, 0.002),
+        ("square", 0.032, 2.5, 0.002),
+        ("conventional", 0.03, 2.5, 0.002),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "rossler".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.dt = dt;
+        cfg.model_params.insert("duv".into(), duv);
+        cfg.model_params.insert("dw".into(), dw);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let mut done = 0u32;
+        let steps_for = |t: f32| (t / dt) as u32;
+        for target in [steps_for(2000.0), steps_for(4000.0)] {
+            r.run_steps(&device, &queue, &cfg, target - done);
+            done = target;
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+            let nan = f.iter().filter(|c| !c[0].is_finite()).count();
+            let (mut umin, mut umax, mut emin, mut emax) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+            for c in &f {
+                if c[0].is_finite() { umin = umin.min(c[0]); umax = umax.max(c[0]); }
+                if c[3].is_finite() { emin = emin.min(c[3]); emax = emax.max(c[3]); }
+            }
+            println!("{label:<12} t={:>6.0}: u in [{umin:8.2}, {umax:8.2}], envelope in [{emin:8.2}, {emax:8.2}], {nan} non-finite", done as f32 * dt);
+        }
+    }
+}

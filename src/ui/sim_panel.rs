@@ -478,7 +478,9 @@ pub fn render_sim_content(
     // zero bound, so the leftmost stop is 0 and the next is 1.
     if ui
         .add(
-            egui::Slider::new(&mut steps, 0..=100_000)
+            // Ten million: the coupled-Brusselator and Rossler papers
+            // settle over 10^5 to 10^6 steps at their dt.
+            egui::Slider::new(&mut steps, 0..=10_000_000)
                 .text(t!("sim_panel.steps").as_ref())
                 .logarithmic(true),
         )
@@ -495,7 +497,11 @@ pub fn render_sim_content(
     }
     let mut spf = sim.steps_per_frame;
     if ui
-        .add(egui::Slider::new(&mut spf, 1..=256).text(t!("sim_panel.steps_per_frame").as_ref()))
+        .add(
+            egui::Slider::new(&mut spf, 1..=2048)
+                .text(t!("sim_panel.steps_per_frame").as_ref())
+                .logarithmic(true),
+        )
         .on_hover_text(t!("sim_panel.steps_per_frame_tip"))
         .changed()
     {
