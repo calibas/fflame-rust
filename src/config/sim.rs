@@ -314,6 +314,14 @@ pub struct SimWarp {
     pub filter: SimWarpFilter,
     #[serde(default, skip_serializing_if = "is_default_warp_mode")]
     pub mode: SimWarpMode,
+    /// Octave mode only: freeze the cells outside the visible window
+    /// and a halo around it. They are cropped away at the next
+    /// doubling anyway, so nothing that is ever shown depends on them
+    /// beyond the halo's width; measured in
+    /// `culling_off_screen_cells_does_not_change_what_is_shown`. Saves
+    /// up to three quarters of the step near the end of an octave.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cull: bool,
 }
 
 fn warp_one() -> f32 {
@@ -342,6 +350,7 @@ impl Default for SimWarp {
             flow: 0.0,
             filter: SimWarpFilter::Bilinear,
             mode: SimWarpMode::Continuous,
+            cull: false,
         }
     }
 }
@@ -685,10 +694,45 @@ fn is_default_matte(v: &SimMatte) -> bool {
     *v == SimMatte::default()
 }
 fn is_identity_warp(v: &SimWarp) -> bool {
-    v.is_identity() && v.filter == SimWarpFilter::default() && v.mode == SimWarpMode::default()
+    v.is_identity() && v.filter == SimWarpFilter::default() && v.mode == SimWarpMode::default() && !v.cull
 }
 fn is_default_upscale(v: &SimUpscale) -> bool {
     *v == SimUpscale::default()
+}
+/// How the grid is framed in an output of a different aspect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimFit {
+    /// The whole grid, with bars where the aspects differ.
+    #[default]
+    Letterbox,
+    /// The output filled, the grid cropped along the axis that does not
+    /// fit. What an inflating run wants: the frame stays the frame and
+    /// the content zooms inside it.
+    Cover,
+}
+
+impl SimFit {
+    pub const NAMES: &'static [&'static str] = &["letterbox", "cover"];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimFit::Letterbox => "letterbox",
+            SimFit::Cover => "cover",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "letterbox" => SimFit::Letterbox,
+            "cover" => SimFit::Cover,
+            _ => return None,
+        })
+    }
+}
+
+fn is_default_fit(v: &SimFit) -> bool {
+    *v == SimFit::default()
 }
 fn is_default_downscale(v: &SimDownscale) -> bool {
     *v == SimDownscale::default()
@@ -787,6 +831,10 @@ pub struct SimConfig {
     /// Resolve filter when the grid is larger than the output.
     #[serde(default, skip_serializing_if = "is_default_downscale")]
     pub downscale: SimDownscale,
+
+    /// How the grid is framed when the output's aspect differs.
+    #[serde(default, skip_serializing_if = "is_default_fit")]
+    pub fit: SimFit,
 }
 
 impl Default for SimConfig {
@@ -807,6 +855,7 @@ impl Default for SimConfig {
             matte: SimMatte::default(),
             upscale: SimUpscale::default(),
             downscale: SimDownscale::default(),
+            fit: SimFit::default(),
         }
     }
 }
@@ -958,6 +1007,7 @@ mod tests {
             ConfigPath::SimWarpFlow,
             ConfigPath::SimWarpFilter,
             ConfigPath::SimWarpMode,
+            ConfigPath::SimWarpCull,
             ConfigPath::SimMatteChannel,
             ConfigPath::SimMatteCutoff,
             ConfigPath::SimMatteSoftness,
@@ -965,6 +1015,7 @@ mod tests {
             ConfigPath::SimMatteEdge,
             ConfigPath::SimUpscale,
             ConfigPath::SimDownscale,
+            ConfigPath::SimFit,
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
         ];
@@ -1111,6 +1162,7 @@ mod tests {
             flow: 0.02,
             filter: SimWarpFilter::Nearest,
             mode: SimWarpMode::Octaves,
+            cull: true,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: SimConfig = serde_json::from_str(&json).unwrap();
@@ -1139,6 +1191,9 @@ mod tests {
         }
         for n in SimWarpMode::NAMES {
             assert_eq!(SimWarpMode::from_name(n).unwrap().name(), *n);
+        }
+        for n in SimFit::NAMES {
+            assert_eq!(SimFit::from_name(n).unwrap().name(), *n);
         }
         for n in SimMatteChannel::NAMES {
             assert_eq!(SimMatteChannel::from_name(n).unwrap().name(), *n);

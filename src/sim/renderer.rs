@@ -115,9 +115,11 @@ struct SimParamsGpu {
     /// cutoff, softness. `SimMatte::packed` builds it, and that
     /// function's mode word is what the shader branches on.
     matte: [f32; 4],
-    /// The view magnification the colour pass applies about the grid's
-    /// centre -- the octave mode's accumulated zoom, 1 otherwise -- and
-    /// three spare words.
+    /// x: the view magnification the colour pass applies about the
+    /// grid's centre -- the octave mode's accumulated zoom, 1
+    /// otherwise. y: the fit, 0 letterbox, 1 cover. z: 1 when the step
+    /// freezes cells outside the visible window (octave mode with
+    /// `cull`). w: the halo around that window, in cells.
     view: [f32; 4],
 }
 
@@ -1257,9 +1259,19 @@ impl SimRenderer {
                     crate::config::sim::SimWarpMode::Continuous => 1.0,
                     crate::config::sim::SimWarpMode::Octaves => cfg.warp.octave(step_index).view,
                 },
-                0.0,
-                0.0,
-                0.0,
+                match cfg.fit {
+                    crate::config::sim::SimFit::Letterbox => 0.0,
+                    crate::config::sim::SimFit::Cover => 1.0,
+                },
+                if cfg.warp.cull && cfg.warp.mode == crate::config::sim::SimWarpMode::Octaves {
+                    1.0
+                } else {
+                    0.0
+                },
+                // The halo: the kernel's reach plus a pattern's worth
+                // of cells, so the frozen ring's staleness cannot
+                // reach the window within an octave.
+                (self.kernel_radius + 24) as f32,
             ],
         }
     }

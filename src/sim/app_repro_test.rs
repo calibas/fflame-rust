@@ -3822,6 +3822,7 @@ fn the_warp_matches_a_cpu_resample_of_the_same_field() {
             flow: 0.05,
             filter,
             mode: crate::config::sim::SimWarpMode::Continuous,
+            cull: false,
         };
         let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
         r.seed(&device, &queue, &cfg);
@@ -5566,4 +5567,110 @@ fn octave_doublings_do_not_move_with_the_batch() {
     let doublings = (0..300u32).filter(|&n| cfg.warp.octave(n).warp.is_some()).count();
     println!("octave batch invariance: {doublings} doublings in 300 steps, fields identical");
     assert!(doublings >= 3);
+}
+
+/// The frame does not move with the view. A square grid in a wide
+/// output is letterboxed; at every view magnification the bar pixels
+/// stay empty and the picture stays inside the same rectangle. With
+/// the cover fit there are no bars and every pixel is drawn.
+#[test]
+fn the_letterbox_frame_holds_at_every_view_magnification() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 96;
+    const W: u32 = 256;
+    const H: u32 = 96;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = lattice4_config("ring", G, 6);
+    cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+    cfg.warp = crate::config::sim::SimWarp {
+        zoom: 1.01,
+        mode: crate::config::sim::SimWarpMode::Octaves,
+        ..Default::default()
+    };
+    // A step near the end of an octave, where the view is largest.
+    let step = (300..400u32)
+        .filter(|&n| cfg.warp.octave(n).view > 1.9)
+        .next()
+        .expect("a view near 2 exists");
+    for fit in [crate::config::sim::SimFit::Letterbox, crate::config::sim::SimFit::Cover] {
+        cfg.fit = fit;
+        let mut r = SimRenderer::new(&device, &cfg, W, H);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, step);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), W, H);
+        let bar = (W - H) / 2; // the letterbox: 96 of 256 shown, bars of 80
+        let covered = |x0: u32, x1: u32| -> usize {
+            (0..H).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| out[(y * W + x) as usize][3] > 0.0).count()
+        };
+        let in_bars = covered(0, bar) + covered(W - bar, W);
+        let inside = covered(bar, W - bar);
+        let view = cfg.warp.octave(step).view;
+        println!("{fit:?} at view {view:.2}: {in_bars} bar pixels drawn, {inside} of {} inside the frame", H * H);
+        match fit {
+            crate::config::sim::SimFit::Letterbox => {
+                assert_eq!(in_bars, 0, "the view reached into the letterbox bars");
+                assert_eq!(inside, (H * H) as usize, "the frame should be fully drawn");
+            }
+            crate::config::sim::SimFit::Cover => {
+                assert_eq!(in_bars + inside, (W * H) as usize, "cover should draw every pixel");
+            }
+        }
+    }
+}
+
+/// Culling the off-screen cells does not change what is shown. The
+/// same seed run for several octaves with and without the cull, in a
+/// wide output under the cover fit so most of the grid is off screen;
+/// the OUTPUT images agree to a small RMS, and the fields differ
+/// outside the window, which is what proves the cull was on.
+#[test]
+fn culling_off_screen_cells_does_not_change_what_is_shown() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 192;
+    const W: u32 = 192;
+    const H: u32 = 108;
+    let palette = test_palette(&device, &queue);
+    let mut outs = Vec::new();
+    let mut fields = Vec::new();
+    for cull in [false, true] {
+        let mut cfg = lattice4_config("ring", G, 7);
+        cfg.model_params.insert("radius".into(), 4.0);
+        cfg.fit = crate::config::sim::SimFit::Cover;
+        cfg.upscale = crate::config::sim::SimUpscale::Bicubic;
+        cfg.warp = crate::config::sim::SimWarp {
+            zoom: 1.01,
+            filter: crate::config::sim::SimWarpFilter::Bicubic,
+            mode: crate::config::sim::SimWarpMode::Octaves,
+            cull,
+            ..Default::default()
+        };
+        let mut r = SimRenderer::new(&device, &cfg, W, H);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 400);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        outs.push(read_rgba32f(&device, &queue, r.output_texture(), W, H));
+        fields.push(read_rgba32f(&device, &queue, r.field_texture(), G, G));
+    }
+    let rms = |a: &[[f32; 4]], b: &[[f32; 4]]| -> f32 {
+        (a.iter().zip(b).map(|(x, y)| (x[0] - y[0]).powi(2)).sum::<f32>() / a.len() as f32).sqrt()
+    };
+    let shown = rms(&outs[0], &outs[1]);
+    let field = rms(&fields[0], &fields[1]);
+    let frozen = fields[1].iter().zip(&fields[0]).filter(|(a, b)| a != b).count();
+    println!(
+        "octave cull over 400 steps (5.7 octaves): shown images differ by rms {shown:.4}; fields by {field:.4}, \
+         {frozen} of {} cells differ",
+        G * G
+    );
+    assert!(field > 0.0, "the cull changed nothing, so it was not on");
+    assert!(shown < 0.02, "the cull changed what is shown: rms {shown:.4}");
 }

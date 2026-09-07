@@ -196,6 +196,26 @@ mode; the outer ring of the grid beyond the view is simulated and then
 cropped away at the next doubling, up to three quarters of the cells
 at m ≈ 2.
 
+**The frame, found in the app the same day.** The first version
+tested the *magnified* coordinate against the grid, so a pixel in a
+letterbox bar — outside the grid at 1× — mapped inside it once the
+view divided its distance from the centre by m: with a fixed square
+grid in a wide viewport the picture widened into the bars over each
+octave and snapped back at the doubling. The frame is now decided
+before the view (`the_letterbox_frame_holds_at_every_view_magnification`:
+0 bar pixels drawn at view 1.92). With it came `SimFit`, letterbox or
+**cover** — fill the output and crop the grid along the axis that
+does not fit — which is what an inflating run wants in a viewport of
+another aspect: the frame stays the frame and the content zooms
+inside it. And `SimWarp::cull`, octave mode only: cells outside the
+visible window plus a halo (kernel radius + 24 cells) are carried
+across unchanged instead of stepped. They are cropped away at the
+next doubling; measured over 5.7 octaves in a 16:9 cover view, the
+shown image differs from the uncalled run by 0.008 RMS while the
+field differs everywhere
+(`culling_off_screen_cells_does_not_change_what_is_shown`). Up to
+three quarters of a step saved near the end of an octave.
+
 What the doubling looks like from the reaction's side: the pattern is
 suddenly at twice its intrinsic scale and refines back. At the coupled
 lattice's step 0.05 and zoom 1.002 (an octave every 347 steps) that is
