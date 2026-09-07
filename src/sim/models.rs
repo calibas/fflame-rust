@@ -5589,11 +5589,20 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// every radius tried. (The pyramid also had a sampling-phase bug this
 /// model found; fixed in `pyr_level_avg`.)
 ///
-/// Not here: a stripes-to-spots bias. A constant added to every
-/// field's signal was tried; the ring's rows sum to 1, so it pushes
-/// all four fields equally, the difference vector the dynamics live
-/// on sees nothing, and every field saturates into noise. Spots need
-/// an asymmetry of a different shape, not yet found.
+/// Stripes to cells, two ingredients (measured, `lattice4_cells_*`):
+/// the `quadratic` term -- an even term in the saturation, which is
+/// what Turing theory says selects spots over stripes -- closes the
+/// pattern's dark lines into a connected net of MEMBRANES; and the
+/// memory column, a small per-field asymmetry of the ring (+0.2 on A,
+/// -0.2 on C, scaled by the memory), closes the net into blobs. A
+/// uniform bias on all four fields did neither: the ring's rows sum to
+/// 1, so it moved every field together and the difference vector the
+/// dynamics live on saw nothing. The `cells` presets are those two
+/// together on a three-ring, with D the memory. What the memory holds
+/// today is a moving average of the amplitude, nearly uniform, so it
+/// acts as that asymmetry rather than as McCabe's "different dynamics
+/// in areas"; the wiring for a spatial memory is here, the spatial
+/// part is unproven.
 ///
 /// Channels: the four fields, one per channel, each in [−1, 1].
 pub static LATTICE4: ModelDef = ModelDef {
@@ -5860,38 +5869,103 @@ pub static LATTICE4: ModelDef = ModelDef {
                       without it every field saturates at its bounds.",
             choices: &[],
         },
+        SimParamDef {
+            name: "quadratic",
+            display_name: "Quadratic",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "An even term in the saturation, x + q·x². Turing theory: an odd \
+                      nonlinearity selects stripes, an even one selects spots. Which sign \
+                      gives spots rather than holes depends on the palette's reading of a \
+                      lead.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "memory",
+            display_name: "Field D is",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "A fourth Turing pattern, or a MEMORY: a moving average of what the \
+                      patterns did — row D weights their values, and D ← D weights their \
+                      amplitude, which is the geometry and does not average away as a \
+                      cycling field does — so under inflation it holds old, magnified \
+                      structure. Column D is how it biases each pattern, place by place: \
+                      different dynamics in different areas.",
+            choices: &["Turing pattern", "Memory"],
+        },
+        SimParamDef {
+            name: "leak",
+            display_name: "Memory leak",
+            default: 0.05,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How fast the memory fades, as a fraction of the step amount: at 0.05 \
+                      and step 0.05 it remembers about 400 steps.",
+            choices: &[],
+        },
     ],
     presets: &[
         SimPreset {
             name: "ring",
             display_name: "Chasing ring",
-            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0)],
+            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0), ("memory", 0.0), ("leak", 0.05)],
             steps: 2000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
-            coloring_params: &[("scale", 1.0), ("rotate", 0.0)],
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)],
             matte: None,
             warp: None,
         },
         SimPreset {
             name: "independent",
             display_name: "Four independent patterns",
-            params: &[("kaa", 1.0), ("kab", 0.0), ("kac", 0.0), ("kad", 0.0), ("kba", 0.0), ("kbb", 1.0), ("kbc", 0.0), ("kbd", 0.0), ("kca", 0.0), ("kcb", 0.0), ("kcc", 1.0), ("kcd", 0.0), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0)],
+            params: &[("kaa", 1.0), ("kab", 0.0), ("kac", 0.0), ("kad", 0.0), ("kba", 0.0), ("kbb", 1.0), ("kbc", 0.0), ("kbd", 0.0), ("kca", 0.0), ("kcb", 0.0), ("kcc", 1.0), ("kcd", 0.0), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0), ("memory", 0.0), ("leak", 0.05)],
             steps: 2000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
-            coloring_params: &[("scale", 1.0), ("rotate", 0.0)],
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)],
             matte: None,
             warp: None,
         },
         SimPreset {
+            name: "cells",
+            display_name: "Cells",
+            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 1.5), ("kad", 0.2), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", -1.5), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -0.2), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 6.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 1.5), ("memory", 1.0), ("leak", 0.05)],
+            steps: 3000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("species"),
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 1.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "cells_inflating",
+            display_name: "Cells, inflating",
+            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 1.5), ("kad", 0.2), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", -1.5), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -0.2), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 6.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 1.5), ("memory", 1.0), ("leak", 0.05)],
+            steps: 8000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("species"),
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 1.0)],
+            matte: None,
+            warp: Some(crate::config::sim::SimWarp {
+                zoom: 1.002,
+                rotation: 0.0,
+                pan_x: 0.0,
+                pan_y: 0.0,
+                flow: 0.0,
+                filter: crate::config::sim::SimWarpFilter::Bilinear,
+            }),
+        },
+        SimPreset {
             name: "inflating",
             display_name: "Inflating space",
-            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0)],
+            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0), ("memory", 0.0), ("leak", 0.05)],
             steps: 6000,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
-            coloring_params: &[("scale", 1.0), ("rotate", 0.0)],
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)],
             matte: None,
             warp: Some(crate::config::sim::SimWarp {
                 zoom: 1.002,
@@ -5909,6 +5983,9 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let noise = mparam(19u);
     let gain = mparam(20u);
     let decay = mparam(21u);
+    let quad = mparam(22u);
+    let memory = mparam(23u) >= 0.5;
+    let leak = mparam(24u);
     // Every field's Turing signal in one gather: the table holds the
     // activator disc and then the inhibitor disc, each normalised, so
     // one read weighted by their difference is act - inh.
@@ -5928,7 +6005,13 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let k1 = vec4<f32>(mparam(4u), mparam(5u), mparam(6u), mparam(7u));
     let k2 = vec4<f32>(mparam(8u), mparam(9u), mparam(10u), mparam(11u));
     let k3 = vec4<f32>(mparam(12u), mparam(13u), mparam(14u), mparam(15u));
-    let drive = vec4<f32>(dot(k0, t), dot(k1, t), dot(k2, t), dot(k3, t));
+    // With D a memory, what the others read of it is its VALUE -- the
+    // stored, magnified past -- not a Turing signal of it.
+    var tt = t;
+    if (memory) {
+        tt.w = s.w;
+    }
+    let drive = vec4<f32>(dot(k0, tt), dot(k1, tt), dot(k2, tt), dot(k3, tt));
 
     // The fluctuations: four independent draws, fresh every step.
     let xi = vec4<f32>(sim_rand(p, 0x41u), sim_rand(p, 0x42u), sim_rand(p, 0x43u), sim_rand(p, 0x44u))
@@ -5941,9 +6024,20 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     // it the system is linear, whose only equilibria are zero and the
     // rails, so every field still ended at +-1. The soft curve has a
     // graded fixed point, set by the local signal strength.
-    let x = drive * gain;
+    var x = drive * gain;
+    // The even term: x + q x^2 before the saturation.
+    x = x + quad * x * x;
     let sat = x / (vec4<f32>(1.0, 1.0, 1.0, 1.0) + abs(x));
-    let n = s * (1.0 - amount * decay) + amount * sat + xi * noise;
+    var n = s * (1.0 - amount * decay) + amount * sat + xi * noise;
+    if (memory) {
+        // The memory: a moving average with time constant 1 / (amount
+        // * leak) of row D's mix of the fields' values and, in D's own
+        // slot, their three-field amplitude. Values of a cycling field
+        // average to zero; the amplitude is the geometry and does not.
+        let c3 = vec2<f32>(s.x - 0.5 * (s.y + s.z), 0.8660254 * (s.y - s.z));
+        let fed = k3.x * s.x + k3.y * s.y + k3.z * s.z + k3.w * length(c3);
+        n.w = s.w * (1.0 - amount * leak) + amount * leak * fed + xi.w * noise;
+    }
     return clamp(n, vec4<f32>(-1.0, -1.0, -1.0, -1.0), vec4<f32>(1.0, 1.0, 1.0, 1.0));
 }
 "#,

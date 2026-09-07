@@ -5234,3 +5234,141 @@ fn lattice4_drift_probe() {
                  best.1, best.2, best.0 / (n * n) as f32, c0 / (n * n) as f32);
     }
 }
+
+/// The area-weighted mean compactness P^2 / A of a mask's connected
+/// components (4-connected, periodic; components under 20 cells
+/// ignored). A disc is 4 pi = 12.6; a stripe is far larger.
+fn lattice4_compactness(mask: &[bool], n: usize) -> (usize, f64) {
+    let mut seen = vec![false; n * n];
+    let mut count = 0;
+    let (mut weighted, mut total_area) = (0.0f64, 0.0f64);
+    for start in 0..n * n {
+        if !mask[start] || seen[start] {
+            continue;
+        }
+        let mut stack = vec![start];
+        seen[start] = true;
+        let (mut area, mut perimeter) = (0usize, 0usize);
+        while let Some(k) = stack.pop() {
+            area += 1;
+            let (x, y) = (k % n, k / n);
+            for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                let nx = (x as i64 + dx).rem_euclid(n as i64) as usize;
+                let ny = (y as i64 + dy).rem_euclid(n as i64) as usize;
+                let j = ny * n + nx;
+                if !mask[j] {
+                    perimeter += 1;
+                } else if !seen[j] {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+        if area >= 20 {
+            count += 1;
+            weighted += (perimeter * perimeter) as f64 / area as f64 * area as f64;
+            total_area += area as f64;
+        }
+    }
+    (count, weighted / total_area.max(1.0))
+}
+
+/// The `cells` preset is blobs, the `ring` preset is a labyrinth:
+/// the cells where A leads are compact components for cells (P^2/A
+/// nearer a disc's 12.6) and elongated ones for the ring. And the cells still
+/// cycle: the hue turns, at a rate well below the ring's but well
+/// above zero -- the memory bias slows the ring, it does not stop it.
+#[test]
+fn lattice4_cells_are_blobs_that_still_cycle() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let n = N as usize;
+    let mut out = Vec::new();
+    for preset in ["cells", "ring"] {
+        let mut cfg = lattice4_config(preset, N, 3);
+        cfg.model_params.insert("radius".into(), 6.0);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 2500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let three = preset == "cells";
+        let lead: Vec<f32> = f
+            .iter()
+            .map(|c| {
+                if three {
+                    let cx = c[0] - 0.5 * (c[1] + c[2]);
+                    let cy = 0.8660254 * (c[1] - c[2]);
+                    (cx * cx + cy * cy).sqrt()
+                } else {
+                    ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()
+                }
+            })
+            .collect();
+        // The blobs in the picture are HUE domains: where A leads. The
+        // amplitude mask is speckled by the fluctuation term on both
+        // presets and does not tell them apart (measured: P^2/A 577
+        // against 592).
+        let _ = lead;
+        let mask: Vec<bool> = f
+            .iter()
+            .map(|c| {
+                let (cx, cy) = if three {
+                    (c[0] - 0.5 * (c[1] + c[2]), 0.8660254 * (c[1] - c[2]))
+                } else {
+                    (c[0] - c[2], c[1] - c[3])
+                };
+                let len = (cx * cx + cy * cy).sqrt();
+                len > 1e-3 && cx / len > 0.5
+            })
+            .collect();
+        let (components, compactness) = lattice4_compactness(&mask, n);
+        // Turn rate over 500 steps, sampled every 5.
+        let angle = |f: &[[f32; 4]]| -> Vec<f32> {
+            f.iter()
+                .map(|c| {
+                    if three {
+                        (0.8660254 * (c[1] - c[2])).atan2(c[0] - 0.5 * (c[1] + c[2]))
+                    } else {
+                        (c[1] - c[3]).atan2(c[0] - c[2])
+                    }
+                })
+                .collect()
+        };
+        let mut prev = angle(&f);
+        let mut total = 0.0f64;
+        for _ in 0..100 {
+            r.run_steps(&device, &queue, &cfg, 5);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let now = angle(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+            for k in 0..n * n {
+                let mut d = now[k] - prev[k];
+                if d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+                if d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+                total += d as f64;
+            }
+            prev = now;
+        }
+        let turns = (total / (n * n) as f64 / std::f64::consts::TAU) * 2.0; // per 1000 steps
+        println!(
+            "lattice4/{preset}: {components} bright components of 20+ cells on {n}x{n}, compactness P^2/A {compactness:.0}              (a disc is 12.6); {turns:+.2} turns per 1000 steps"
+        );
+        out.push((components, compactness, turns));
+    }
+    let ((cells_n, cells_c, cells_t), (ring_n, ring_c, ring_t)) = (out[0], out[1]);
+    // Measured at 128^2, seed 3: cells 27 components at P^2/A 91, ring 9
+    // at 146. A lattice disc counts about 20 by this perimeter.
+    assert!(
+        cells_c < 0.8 * ring_c,
+        "cells should be more compact (P^2/A {cells_c:.0}) than the ring's stripes ({ring_c:.0})"
+    );
+    assert!(
+        cells_n >= 2 * ring_n,
+        "cells should be many more pieces ({cells_n}) than the ring ({ring_n})"
+    );
+    assert!(cells_t.abs() > 0.5, "cells should still cycle: {cells_t:+.2} turns per 1000 steps");
+    assert!(cells_t.abs() < ring_t.abs(), "the memory bias should slow the ring, not speed it");
+}
