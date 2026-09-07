@@ -99,6 +99,7 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "coral",
@@ -109,6 +110,7 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "maze",
@@ -119,6 +121,7 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "worms",
@@ -129,6 +132,7 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -303,6 +307,7 @@ pub static FITZHUGH_NAGUMO: ModelDef = ModelDef {
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 0.4), ("offset", 0.5), ("wrap", 0.0)],
         matte: None,
+        warp: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -449,6 +454,7 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "oscillating",
@@ -466,6 +472,7 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -600,6 +607,7 @@ pub static SCHNAKENBERG: ModelDef = ModelDef {
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.0), ("wrap", 0.0)],
         matte: None,
+        warp: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -783,6 +791,7 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.005), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "dewdney",
@@ -799,6 +808,7 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.005), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -974,6 +984,7 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.0714286), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "moore_1_3_3",
@@ -989,6 +1000,7 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3333333), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -1120,6 +1132,7 @@ pub static SPATIAL_RPS: ModelDef = ModelDef {
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 0.25), ("offset", 0.0), ("wrap", 0.0)],
         matte: None,
+        warp: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -1249,6 +1262,7 @@ pub static ISING: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "coarsening",
@@ -1260,6 +1274,7 @@ pub static ISING: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -1369,6 +1384,7 @@ pub static EDEN: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "rough_front",
@@ -1389,6 +1405,7 @@ pub static EDEN: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -1498,6 +1515,7 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "random_deposition",
@@ -1514,6 +1532,7 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -1615,6 +1634,7 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "rule_30",
@@ -1625,6 +1645,7 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "rule_110",
@@ -1635,6 +1656,7 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -1751,6 +1773,7 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "rule_13",
@@ -1767,6 +1790,7 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "rule_134",
@@ -1783,6 +1807,7 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -1898,6 +1923,7 @@ pub static PERCOLATION: ModelDef = ModelDef {
             coloring: Some("label"),
             coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "subcritical",
@@ -1908,6 +1934,7 @@ pub static PERCOLATION: ModelDef = ModelDef {
             coloring: Some("label"),
             coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "supercritical",
@@ -1918,6 +1945,7 @@ pub static PERCOLATION: ModelDef = ModelDef {
             coloring: Some("label"),
             coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -2090,6 +2118,7 @@ pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "spots",
@@ -2102,6 +2131,7 @@ pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -2265,6 +2295,7 @@ pub static CAHN_HILLIARD: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "droplets",
@@ -2275,6 +2306,7 @@ pub static CAHN_HILLIARD: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -2466,6 +2498,7 @@ pub static OREGONATOR: ModelDef = ModelDef {
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.0), ("wrap", 0.0)],
         matte: None,
+        warp: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -2651,6 +2684,7 @@ pub static KOBAYASHI: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "metallic",
@@ -2667,6 +2701,7 @@ pub static KOBAYASHI: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -2894,6 +2929,7 @@ pub static LENIA: ModelDef = ModelDef {
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
         matte: None,
+        warp: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -3103,6 +3139,7 @@ pub static SMOOTHLIFE: ModelDef = ModelDef {
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
         matte: None,
+        warp: None,
     }],
     wgsl: r#"
 fn sl_sigma(x: f32, a: f32, al: f32) -> f32 {
@@ -3348,6 +3385,7 @@ pub static MCCABE: ModelDef = ModelDef {
             coloring: Some("scale_mix"),
             coloring_params: &[("scales", 5.0), ("value_scale", 0.5)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "coarse",
@@ -3369,6 +3407,7 @@ pub static MCCABE: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "rosette",
@@ -3386,6 +3425,7 @@ pub static MCCABE: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -3617,6 +3657,7 @@ pub static PHYSARUM: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.15), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "coarse",
@@ -3637,6 +3678,7 @@ pub static PHYSARUM: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.15), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -3901,6 +3943,7 @@ pub static DLA: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+        warp: None,
     }],
     wgsl: r#"
 fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
@@ -4117,6 +4160,7 @@ pub static SANDPILE: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3333333), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "moore",
@@ -4131,6 +4175,7 @@ pub static SANDPILE: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.1428571), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -4310,6 +4355,7 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "spanning",
@@ -4329,6 +4375,7 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -4606,6 +4653,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "simple_star",
@@ -4631,6 +4679,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "plate_ends",
@@ -4656,6 +4705,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "dendrite_ends",
@@ -4679,6 +4729,7 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -5007,6 +5058,7 @@ pub static DBM: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "dense",
@@ -5026,6 +5078,7 @@ pub static DBM: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
         SimPreset {
             name: "sparse",
@@ -5044,6 +5097,7 @@ pub static DBM: ModelDef = ModelDef {
                 invert: false,
                 edge: crate::config::sim::SimMatteEdge::Threshold,
             }),
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -5364,6 +5418,7 @@ pub static FINGERING: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
         SimPreset {
             name: "stable",
@@ -5379,6 +5434,7 @@ pub static FINGERING: ModelDef = ModelDef {
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
+            warp: None,
         },
     ],
     wgsl: r#"
@@ -5487,6 +5543,457 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     repeat: Some((0, "relax")),
     agents: None,
     kernel: None,
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};
+
+
+/// Four coupled Turing patterns: a lattice of four variables with a
+/// 4×4 coupling matrix, each variable a single-scale Turing field.
+///
+/// Built after Jonathan McCabe's description of his inflating-space
+/// pieces: "a lattice model of 4 variables with 16 couplings is
+/// perturbed by inflated fluctuations from previous time steps,
+/// giving different dynamics in areas leading to what looks like
+/// membrane bound structures", and his remark that "three interacting
+/// Turing patterns equals one Belousov–Zhabotinsky reaction". His
+/// rule and his sixteen values are not published; this is the
+/// construction those two sentences describe, in the terms of our own
+/// McCabe model:
+///
+/// ```text
+/// t_j = disc(u_j, r) − disc(u_j, r·ratio)       the Turing signal of field j
+/// u_i ← clamp(u_i·(1 − amount·decay) + amount · sat(gain · Σ_j K_ij t_j) + ξ_i, −1, 1)
+/// ```
+///
+/// With K the identity each channel is an independent Turing pattern
+/// (McCabe's rule at one scale, clamped rather than renormalised),
+/// and it freezes into a labyrinth as a single Turing pattern does.
+/// The coupling that cycles is an ANTISYMMETRIC ring: each field
+/// follows the previous field's pattern and is pushed against the
+/// next one's, so where A leads B rises and D falls, and B's rise
+/// then pushes A down -- a rotation A → B → C → D → A at every cell.
+/// A one-sided ring (each field merely pushed against the previous)
+/// was tried first and measured frozen: 0.001 turns per 1000 steps.
+/// Measured in `lattice4_*` (app_repro_test). The inflation is the
+/// warp stage's zoom, applied by the preset; the fluctuations are the
+/// noise term, which is what an inflating space magnifies.
+///
+/// The averages are a single gather over a difference-of-discs table,
+/// both discs anti-aliased over a one-cell band, not the pyramid: the
+/// pyramid's low levels are one separable [1 4 6 4 1] pass, square
+/// rather than round, and a phase-locked ring amplifies whatever mode
+/// is most unstable -- on the pyramid that was an axis-aligned mesh at
+/// every radius tried. (The pyramid also had a sampling-phase bug this
+/// model found; fixed in `pyr_level_avg`.)
+///
+/// Not here: a stripes-to-spots bias. A constant added to every
+/// field's signal was tried; the ring's rows sum to 1, so it pushes
+/// all four fields equally, the difference vector the dynamics live
+/// on sees nothing, and every field saturates into noise. Spots need
+/// an asymmetry of a different shape, not yet found.
+///
+/// Channels: the four fields, one per channel, each in [−1, 1].
+pub static LATTICE4: ModelDef = ModelDef {
+    name: "lattice4",
+    display_name: "Coupled Turing Lattice",
+    description: "Four Turing patterns on one lattice, coupled by a 4×4 matrix. Chained in a \
+                  ring they chase each other and every cell cycles in place, like a \
+                  Belousov–Zhabotinsky reaction; under the warp's inflation the structure is \
+                  carried outward while new structure forms within it.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "kaa",
+            display_name: "A ← A",
+            default: 1.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field A follows its own Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kab",
+            display_name: "A ← B",
+            default: -1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field A follows the next field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kac",
+            display_name: "A ← C",
+            default: 0.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field A follows the opposite field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kad",
+            display_name: "A ← D",
+            default: 1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field A follows the previous field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kba",
+            display_name: "B ← A",
+            default: 1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field B follows the previous field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kbb",
+            display_name: "B ← B",
+            default: 1.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field B follows its own Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kbc",
+            display_name: "B ← C",
+            default: -1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field B follows the next field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kbd",
+            display_name: "B ← D",
+            default: 0.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field B follows the opposite field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kca",
+            display_name: "C ← A",
+            default: 0.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field C follows the opposite field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kcb",
+            display_name: "C ← B",
+            default: 1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field C follows the previous field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kcc",
+            display_name: "C ← C",
+            default: 1.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field C follows its own Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kcd",
+            display_name: "C ← D",
+            default: -1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field C follows the next field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kda",
+            display_name: "D ← A",
+            default: -1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field D follows the next field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kdb",
+            display_name: "D ← B",
+            default: 0.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field D follows the opposite field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kdc",
+            display_name: "D ← C",
+            default: 1.5,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field D follows the previous field's Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "kdd",
+            display_name: "D ← D",
+            default: 1.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much field D follows its own Turing signal (activator minus \
+                      inhibitor). Positive follows it, negative pushes against it. The \
+                      diagonal at 1 is a plain Turing pattern; following the previous field \
+                      and opposing the next, all the way round, is the ring that cycles.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "radius",
+            display_name: "Activator radius",
+            default: 4.0,
+            min: 1.0,
+            max: 15.0,
+            tooltip: "The averaging radius of every field's activator, in cells: the size of \
+                      the pattern. Under inflation it must stay well above the edge's per-step \
+                      displacement, or the resample blurs the pattern away.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "ratio",
+            display_name: "Inhibitor ratio",
+            default: 2.0,
+            min: 1.2,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius. McCabe's 2.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "amount",
+            display_name: "Step",
+            default: 0.05,
+            min: 0.001,
+            max: 0.5,
+            tooltip: "How far a field moves per step, in a range of 2. Larger is faster and \
+                      coarser-grained in time.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "noise",
+            display_name: "Fluctuations",
+            default: 0.01,
+            min: 0.0,
+            max: 0.5,
+            tooltip: "Random perturbation of every field every step — the microscopic \
+                      fluctuations. Under inflation these are what grow into structure.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "gain",
+            display_name: "Gain",
+            default: 4.0,
+            min: 0.5,
+            max: 50.0,
+            tooltip: "Multiplies the coupled Turing signal before it saturates. High gain is \
+                      McCabe's all-or-nothing step and a hard-edged picture; low gain is \
+                      graded, with amplitude falling to nothing where activator and inhibitor \
+                      cancel — the membranes.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "decay",
+            display_name: "Decay",
+            default: 1.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Pulls every field back toward zero each step, as a fraction of the step \
+                      amount. With decay the amplitude settles where the drive balances it; \
+                      without it every field saturates at its bounds.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "ring",
+            display_name: "Chasing ring",
+            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0)],
+            steps: 2000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("species"),
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "independent",
+            display_name: "Four independent patterns",
+            params: &[("kaa", 1.0), ("kab", 0.0), ("kac", 0.0), ("kad", 0.0), ("kba", 0.0), ("kbb", 1.0), ("kbc", 0.0), ("kbd", 0.0), ("kca", 0.0), ("kcb", 0.0), ("kcc", 1.0), ("kcd", 0.0), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0)],
+            steps: 2000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("species"),
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "inflating",
+            display_name: "Inflating space",
+            params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0)],
+            steps: 6000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("species"),
+            coloring_params: &[("scale", 1.0), ("rotate", 0.0)],
+            matte: None,
+            warp: Some(crate::config::sim::SimWarp {
+                zoom: 1.002,
+                rotation: 0.0,
+                pan_x: 0.0,
+                pan_y: 0.0,
+                flow: 0.0,
+                filter: crate::config::sim::SimWarpFilter::Bilinear,
+            }),
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let amount = mparam(18u);
+    let noise = mparam(19u);
+    let gain = mparam(20u);
+    let decay = mparam(21u);
+    // Every field's Turing signal in one gather: the table holds the
+    // activator disc and then the inhibitor disc, each normalised, so
+    // one read weighted by their difference is act - inh.
+    let r = sim_kernel_radius();
+    let w = 2 * r + 1;
+    let taps = sim_kernel_taps();
+    var t = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var dy = -r; dy <= r; dy = dy + 1) {
+        for (var dx = -r; dx <= r; dx = dx + 1) {
+            let i = u32((dy + r) * w + (dx + r));
+            t = t + (klut(i) - klut(taps + i)) * sim_read(p + vec2<i32>(dx, dy));
+        }
+    }
+
+    // K[i][j] = mparam(4i + j): how field j's signal drives field i.
+    let k0 = vec4<f32>(mparam(0u), mparam(1u), mparam(2u), mparam(3u));
+    let k1 = vec4<f32>(mparam(4u), mparam(5u), mparam(6u), mparam(7u));
+    let k2 = vec4<f32>(mparam(8u), mparam(9u), mparam(10u), mparam(11u));
+    let k3 = vec4<f32>(mparam(12u), mparam(13u), mparam(14u), mparam(15u));
+    let drive = vec4<f32>(dot(k0, t), dot(k1, t), dot(k2, t), dot(k3, t));
+
+    // The fluctuations: four independent draws, fresh every step.
+    let xi = vec4<f32>(sim_rand(p, 0x41u), sim_rand(p, 0x42u), sim_rand(p, 0x43u), sim_rand(p, 0x44u))
+        - vec4<f32>(0.5, 0.5, 0.5, 0.5);
+    // A smooth, saturating drive against a decay, so the amplitude
+    // settles where they balance instead of at the bounds. sign() --
+    // McCabe's own all-or-nothing step -- was tried first: every field
+    // saturated at +-1, and a saturated field has no membranes.
+    // x / (1 + |x|): a soft saturation. A hard clamp was tried: below
+    // it the system is linear, whose only equilibria are zero and the
+    // rails, so every field still ended at +-1. The soft curve has a
+    // graded fixed point, set by the local signal strength.
+    let x = drive * gain;
+    let sat = x / (vec4<f32>(1.0, 1.0, 1.0, 1.0) + abs(x));
+    let n = s * (1.0 - amount * decay) + amount * sat + xi * noise;
+    return clamp(n, vec4<f32>(-1.0, -1.0, -1.0, -1.0), vec4<f32>(1.0, 1.0, 1.0, 1.0));
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // Four independent draws in [-0.5, 0.5], scaled by the init mask:
+    // a noise init stirs every cell by its amplitude, a blob init
+    // stirs the blob and leaves the rest exactly flat.
+    let draws = vec4<f32>(sim_rand(p, 0x51u), sim_rand(p, 0x52u), sim_rand(p, 0x53u), sim_rand(p, 0x54u))
+        - vec4<f32>(0.5, 0.5, 0.5, 0.5);
+    return draws * inside;
+}
+"#,
+    default_steps: 2000,
+    passes: 1,
+    repeat: None,
+    agents: None,
+    kernel: Some(|p| {
+        // Two blocks: the activator disc, then the inhibitor disc, each
+        // normalised to sum 1 and anti-aliased over a one-cell band. The
+        // shader subtracts them per tap.
+        let ra = p.get("radius").clamp(1.0, 15.0);
+        let rb = ra * p.get("ratio").clamp(1.2, 4.0);
+        let r = ((rb.ceil() as u32) + 1).clamp(1, MAX_KERNEL_RADIUS);
+        let w = 2 * r as usize + 1;
+        let mut a = vec![0.0f32; w * w];
+        let mut b = vec![0.0f32; w * w];
+        let (mut sa, mut sb) = (0.0f64, 0.0f64);
+        for iy in 0..w {
+            for ix in 0..w {
+                let dx = ix as f32 - r as f32;
+                let dy = iy as f32 - r as f32;
+                let d = (dx * dx + dy * dy).sqrt();
+                let wa = (ra + 0.5 - d).clamp(0.0, 1.0);
+                let wb = (rb + 0.5 - d).clamp(0.0, 1.0);
+                a[iy * w + ix] = wa;
+                b[iy * w + ix] = wb;
+                sa += wa as f64;
+                sb += wb as f64;
+            }
+        }
+        for x in a.iter_mut() {
+            *x = (*x as f64 / sa.max(1e-12)) as f32;
+        }
+        for x in b.iter_mut() {
+            *x = (*x as f64 / sb.max(1e-12)) as f32;
+        }
+        a.extend_from_slice(&b);
+        crate::sim::SimKernel { radius: r, weights: a }
+    }),
     dt_bound: None,
     diffusion: &[],
     max_dt: 1.0,

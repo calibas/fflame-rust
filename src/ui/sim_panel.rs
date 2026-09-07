@@ -252,6 +252,17 @@ pub fn render_sim_content(
                     changes.push((ConfigPath::SimMatteCutoff, matte.cutoff.into()));
                     changes.push((ConfigPath::SimMatteSoftness, matte.softness.into()));
                     changes.push((ConfigPath::SimMatteInvert, matte.invert.into()));
+                    // And the warp, for the presets whose subject is
+                    // an inflating space. Set either way, as the
+                    // matte is, so a preset that wants no warp clears
+                    // one the last preset set.
+                    let warp = pre.warp.unwrap_or_default();
+                    changes.push((ConfigPath::SimWarpZoom, warp.zoom.into()));
+                    changes.push((ConfigPath::SimWarpRotation, warp.rotation.into()));
+                    changes.push((ConfigPath::SimWarpPanX, warp.pan_x.into()));
+                    changes.push((ConfigPath::SimWarpPanY, warp.pan_y.into()));
+                    changes.push((ConfigPath::SimWarpFlow, warp.flow.into()));
+                    changes.push((ConfigPath::SimWarpFilter, warp.filter.name().to_string().into()));
                     let _ = config_manager
                         .update_batch(changes, "history.action.sim_preset".to_string());
                     *state.reseed = true;

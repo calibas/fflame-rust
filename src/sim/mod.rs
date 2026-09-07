@@ -128,6 +128,12 @@ pub struct SimPreset {
     /// pile, and Wolfram's 0 cells are half the space-time diagram.
     /// Matting those would punch holes in the pattern.
     pub matte: Option<crate::config::sim::SimMatte>,
+    /// The warp stage the preset runs under, when the picture IS the
+    /// warp: an inflating space is a preset's whole subject, not a
+    /// setting the user would think to reach for. `None` sets the
+    /// identity, so choosing a preset that wants no warp clears one
+    /// the last preset set.
+    pub warp: Option<crate::config::sim::SimWarp>,
 }
 
 /// Capability flags a model opts into. Absence means "doesn't have
@@ -655,6 +661,7 @@ pub static MODELS: &[&ModelDef] = &[
     &models::SNOWFAKE,
     &models::DBM,
     &models::FINGERING,
+    &models::LATTICE4,
 ];
 
 /// Every colouring, in registration order. Append only.
@@ -670,6 +677,7 @@ pub static COLORINGS: &[&SimColoringDef] =
     &colorings::STRUCTURE,
     &colorings::DISTANCE,
     &colorings::LIC,
+    &colorings::SPECIES,
 ];
 
 /// Look up a model by name, falling back to the first registered one.
@@ -1063,6 +1071,19 @@ mod tests {
     /// point of having it is that a user never has to work out which
     /// colouring a model wants, and a preset without one puts them
     /// back in front of that question.
+    #[test]
+    fn every_model_fits_the_parameter_buffer() {
+        for m in MODELS {
+            assert!(
+                m.parameters.len() <= crate::sim::renderer::MODEL_PARAM_SLOTS,
+                "{}: {} parameters, buffer holds {}",
+                m.name,
+                m.parameters.len(),
+                crate::sim::renderer::MODEL_PARAM_SLOTS
+            );
+        }
+    }
+
     #[test]
     fn every_preset_names_a_colouring() {
         let missing: Vec<String> = MODELS

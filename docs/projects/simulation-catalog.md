@@ -797,6 +797,20 @@ the plan assumed.
   disc reference's feature size (56.9 against 56.9 cells) and
   amplitude (sd 0.2695 against 0.2665). That constant is in the
   shader, so the shipped radius ladder means what the paper's does.
+- **A sampling-phase bug, fixed 2026-09-06.** The decimation centres
+  level texel p on source cell 2p, so texel i of level l is centred on
+  base cell i·2ˡ; the reader assumed (i + ½)·2ˡ. The error is
+  (2ˡ − 1)/2 cells along both axes, growing with the level, so an
+  activator read at one level and an inhibitor at the next were
+  averaged about points a cell or more apart on the diagonal. Nothing
+  in this model's own tests could see it (its mirror mirrored the same
+  formula); the coupled Turing lattice (§28) found it, because a
+  phase-locked ring amplifies any such bias into stripes that all run
+  one way and travel — measured (3, 2) cells per 50 steps before, (0, 0)
+  after. The four `mccabe-*` baselines were re-promoted; the rosette's
+  rings are more concentric and the field's specks sharper. The
+  0.55 calibration above was measured on the biased reader and has
+  not been re-run.
 - **The stage is pinned by three mirrors.** Each pyramid level against
   a CPU decimation of the level below it (6e-8, so a wrong per-level
   size in the wrap would fail at the edges); the min/max reduce
@@ -2123,7 +2137,88 @@ ring, centre, edges), `wrap` (boolean).
 
 ---
 
-## 28. Cross-cutting notes
+## 28. Coupled Turing lattice (McCabe's inflating space)
+
+**Sources.** Jonathan McCabe's own descriptions of his inflating-space
+pieces, quoted by the user `[not a paper; no rule or values published]`:
+"Dynamics like a Belousov–Zhabotinsky reaction in an inflating space
+… A lattice model of 4 variables with 16 couplings is perturbed by
+inflated fluctuations from previous time steps, giving different
+dynamics in areas leading to what looks like membrane bound
+structures", and "Three interacting Turing patterns equals one
+Belousov–Zhabotinsky reaction!" Everything below is a construction
+from those two sentences in the terms of §10, and says so.
+
+**Rule** (four fields u ∈ [−1, 1]⁴, one per channel):
+
+```
+t_j = disc(u_j, r) − disc(u_j, r·ratio)                 each field's Turing signal
+u_i ← clamp(u_i·(1 − amount·decay) + amount·sat(gain·Σ_j K_ij t_j) + ξ_i, −1, 1)
+sat(x) = x / (1 + |x|)
+```
+
+K is the 4×4 coupling matrix — the sixteen couplings — as sixteen
+parameters. The identity is four independent single-scale Turing
+patterns. The coupling that cycles is an **antisymmetric ring**: each
+field follows the previous field's signal (+1.5) and is pushed against
+the next one's (−1.5), so where A leads B rises and D falls, and B's
+rise then pushes A down — a rotation A → B → C → D → A at every cell.
+That is the "three interacting Turing patterns = one BZ" in a matrix.
+The inflation is the warp stage's zoom (§6 of the derived-fields plan),
+carried by the preset; the fluctuations are ξ, which is what an
+inflating space magnifies.
+
+**What was tried and measured on the way** — each of these is a
+different picture, and two of them were bugs elsewhere:
+
+| attempt | measured | verdict |
+|---|---|---|
+| one-sided ring (each field pushed against the previous only) | 0.001 turns / 1000 steps | frozen: no rotation in a one-sided coupling |
+| antisymmetric ring, `sign()` step (McCabe's own) | 7 turns / 1000 steps, every field at ±1 | cycles, but saturated fields have no amplitude and so no membranes |
+| hard clamp on a gain | still ±1 | below the clamp the system is linear; its only equilibria are 0 and the rails |
+| soft `x/(1+\|x\|)` against a decay of 1 | mean lead 0.5, graded | amplitude settles where drive meets decay |
+| on the pyramid | stripes all on one diagonal, travelling (3, 2) cells / 50 steps | the §10 sampling-phase bug, amplified |
+| pyramid fixed | axis-aligned mesh at every radius | the low levels are one separable [1 4 6 4 1] pass — square — and the ring grows the most unstable mode |
+| **difference-of-discs gather** (shipped) | isotropic labyrinth, (0, 0) drift | one table, both discs anti-aliased over a one-cell band, all four channels per read |
+| a uniform bias for spots | dark noise | the ring's rows sum to 1, so a uniform push moves all four fields together and the difference vector sees nothing; removed |
+
+**Gates** (`lattice4_*`, app_repro_test): the ring turns **20.1 times
+per 1000 steps with 100 % of cells turning the same way**; the identity
+matrix turns 0.001 (`lattice4_cycles_in_place_only_when_the_fields_interact`
+— sampled every 5 steps, because a 50-step gap aliased a 20-turn ring
+to 0.04). Under the inflating preset the membrane map (darkest quarter
+of the lead) moves with the inflation: over 100 steps it differs on
+23.9 % of cells raw and 17.9 % with the inflation undone
+(`lattice4_under_inflation_drifts_rather_than_rearranges`). The
+coupling sweep (`lattice4_coupling_sweep`, ignored) at the shipped
+defaults: 20 turns / 1000 steps against a membrane map that moves
+12 % per 100 steps — two full colour cycles per 100 steps over a
+geometry that barely moves, which is the "still image whose colours
+change as you zoom" the pieces show.
+
+**What it is not yet.** Labyrinth stripes, each carrying a full hue
+cycle across it; McCabe's are blobs bounded by membranes, and a
+stripes-to-spots asymmetry of the right shape has not been found (see
+the bias row). His "inflated fluctuations from previous time steps"
+may also mean a separate history field rather than the whole state
+inflated, which would need a second texture; not built.
+
+**Parameters.** Sixteen `k??` couplings (−3..3), `radius` (activator,
+1..15 cells; the table's radius is `ratio·radius + 1`, capped at 32),
+`ratio` (1.2..4), `amount`, `noise`, `gain`, `decay`.
+**Presets.** `ring`, `independent`, `inflating` (zoom 1.002 / step,
+bilinear — the first preset to carry a warp; `SimPreset.warp` was added
+for it and the panel applies it, identity when absent).
+**Stages.** `update` (kernel gather), `warp` when the preset asks,
+`color`. Periodic.
+**Colouring.** `species`: the angle of (A − C, B − D) as hue, its
+length as brightness, so a cycling cell sweeps the palette in place and
+a balanced cell is dark. Added for this model; any four-channel field
+can use it.
+**Cost.** A (2·(ratio·radius + 1) + 1)² gather per cell: 361 taps at
+the default radius 4, 841 at 6.
+
+## 29. Cross-cutting notes
 
 - **Determinism.** Every stochastic model draws from the PCG in
   `shaders/core/rng.wgsl` seeded by (config seed, cell or agent

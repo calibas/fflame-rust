@@ -1356,12 +1356,67 @@ fn pyr_load_sized(l: i32, q: vec2<i32>, g: vec2<i32>) -> f32 {
     }
 }
 
+// The same reads, all four channels: for a model whose channels are
+// four fields each wanting its own averages. The pyramid is RGBA and
+// its downsample already carries every channel; only the reads took
+// `.x`.
+fn pyr_load4_sized(l: i32, q: vec2<i32>, g: vec2<i32>) -> vec4<f32> {
+    if (sim_outside(q, g)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let w = sim_wrap_sized(q, g);
+    switch l {
+        case 0: { return textureLoad(field_in, w, 0); }
+        case 1: { return textureLoad(pyr1, w, 0); }
+        case 2: { return textureLoad(pyr2, w, 0); }
+        case 3: { return textureLoad(pyr3, w, 0); }
+        case 4: { return textureLoad(pyr4, w, 0); }
+        case 5: { return textureLoad(pyr5, w, 0); }
+        case 6: { return textureLoad(pyr6, w, 0); }
+        default: { return textureLoad(pyr7, w, 0); }
+    }
+}
+
+fn pyr_level_avg4(l: i32, pos: vec2<f32>) -> vec4<f32> {
+    let s = f32(1 << u32(l));
+    let f = (pos - vec2<f32>(0.5, 0.5)) / s;
+    let f0 = floor(f);
+    let t = f - f0;
+    let i0 = vec2<i32>(f0);
+    let g = pyr_sizes[l];
+    let a = pyr_load4_sized(l, i0, g);
+    let b = pyr_load4_sized(l, i0 + vec2<i32>(1, 0), g);
+    let c = pyr_load4_sized(l, i0 + vec2<i32>(0, 1), g);
+    let d = pyr_load4_sized(l, i0 + vec2<i32>(1, 1), g);
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+
+fn pyr_sample4(level: f32, pos: vec2<f32>) -> vec4<f32> {
+    let top = f32(pyr_top_cached);
+    let lf = clamp(level, 0.0, top);
+    let l0 = i32(floor(lf));
+    let l1 = min(l0 + 1, i32(top));
+    let t = lf - floor(lf);
+    return mix(pyr_level_avg4(l0, pos), pyr_level_avg4(l1, pos), t);
+}
+
 // Bilinear within level l at a position given in BASE cells (a cell
 // centre is p + 0.5). Four loads. `FLOAT32_FILTERABLE` is optional
 // and never requested, so the filtering is written out.
+// Texel i of level l is centred on BASE CELL i * 2^l -- the decimation
+// above blurs about source cell 2p -- so its centre in base
+// coordinates is i * s + 0.5, and the fractional texel index of a
+// base position is (pos - 0.5) / s. The first version wrote
+// pos / s - 0.5, which assumes a texel centred at (i + 0.5) * s: an
+// error of (s - 1) / 2 cells along BOTH axes, growing with the level,
+// so an activator read at one level and an inhibitor at the next were
+// averaged about points a cell or more apart on the diagonal. Found
+// by the coupled Turing lattice, whose ring amplifies any such bias
+// into stripes that all run one way and travel (3, 2) cells per 50
+// steps; `lattice4_ring_does_not_drift` pins it.
 fn pyr_level_avg(l: i32, pos: vec2<f32>) -> f32 {
     let s = f32(1 << u32(l));
-    let f = pos / s - vec2<f32>(0.5, 0.5);
+    let f = (pos - vec2<f32>(0.5, 0.5)) / s;
     let f0 = floor(f);
     let t = f - f0;
     let i0 = vec2<i32>(f0);
