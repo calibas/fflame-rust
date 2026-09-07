@@ -2182,7 +2182,28 @@ different picture, and two of them were bugs elsewhere:
 | **difference-of-discs gather** (shipped) | isotropic labyrinth, (0, 0) drift | one table, both discs anti-aliased over a one-cell band, all four channels per read |
 | a uniform bias for spots | dark noise | the ring's rows sum to 1, so a uniform push moves all four fields together and the difference vector sees nothing; removed |
 
-**Gates** (`lattice4_*`, app_repro_test): the ring turns **20.1 times
+**The two leads, followed the next session (2026-09-07):**
+
+| lead | tried | seen | verdict |
+|---|---|---|---|
+| spots: an even term | `quadratic`: x + q·x² before the saturation (Turing theory: odd nonlinearities select stripes, even ones spots) | at q = ±0.7 dark boundary lines between the colour bands; at 1.5 a connected dark net enclosing elongated cells, carried outward under inflation | **membranes.** The net is where all fields balance |
+| the memory as a slow field | D as an integrator of A at gain 1 against leak 0.05 | high-frequency noise; under inflation a two-colour split with lines on the axes | saturated from the initial noise and pinned the patterns to it; a memory of a CYCLING field is also zero on average |
+| the memory as a moving average of the AMPLITUDE | D ← (1 − a·leak)·D + a·leak·‖(A − ½(B+C), (√3/2)(B − C))‖, column D biasing A by +b and C by −b | b = 0.6: frozen single hue, striped; b = 0.2 with q = 1.5: **blobs with dark membranes, hues shifting over a still geometry, pinched into dumbbells as the inflation stretches them**; b = 0.4: yellow cells with green nuclei, mostly frozen; b = 0: the membrane net again | the memory column is what closes the net into blobs. Shipped as `cells` / `cells_inflating` |
+
+What the memory holds today is nearly uniform (a moving average of the
+amplitude), so what it contributes is a small **per-field asymmetry of
+the ring** — +0.2·D on A, −0.2·D on C — which a uniform bias could not
+be. That is the shape of asymmetry the first commit said was not yet
+found. McCabe's "different dynamics in areas" would need the memory to
+vary in space; the wiring is here (row D can feed on the fields'
+values or their amplitude), the spatial part is unproven.
+
+**Gates** (`lattice4_*`, app_repro_test): the `cells` preset's
+A-leading domains are 27 compact pieces (P²/A 91) where the ring's are
+9 elongated ones (146; a lattice disc counts about 20 by this
+perimeter), and the cells still cycle, 4.7 turns per 1000 steps
+against the ring's 20 — the memory bias slows the ring, it does not
+stop it (`lattice4_cells_are_blobs_that_still_cycle`). The ring turns **20.1 times
 per 1000 steps with 100 % of cells turning the same way**; the identity
 matrix turns 0.001 (`lattice4_cycles_in_place_only_when_the_fields_interact`
 — sampled every 5 steps, because a 50-step gap aliased a 20-turn ring
@@ -2196,25 +2217,29 @@ defaults: 20 turns / 1000 steps against a membrane map that moves
 geometry that barely moves, which is the "still image whose colours
 change as you zoom" the pieces show.
 
-**What it is not yet.** Labyrinth stripes, each carrying a full hue
-cycle across it; McCabe's are blobs bounded by membranes, and a
-stripes-to-spots asymmetry of the right shape has not been found (see
-the bias row). His "inflated fluctuations from previous time steps"
-may also mean a separate history field rather than the whole state
-inflated, which would need a second texture; not built.
+**What it is not yet.** The cells are one scale; his are blobs
+within blobs, which the memory would have to carry as magnified old
+structure and today does not (it is nearly uniform). The axis lines
+seen in the noisy memory run are a warp-stage artefact — cells on the
+lines through the centre are resampled along one axis only — visible
+only when the field is at noise scale; not fixed.
 
 **Parameters.** Sixteen `k??` couplings (−3..3), `radius` (activator,
 1..15 cells; the table's radius is `ratio·radius + 1`, capped at 32),
-`ratio` (1.2..4), `amount`, `noise`, `gain`, `decay`.
-**Presets.** `ring`, `independent`, `inflating` (zoom 1.002 / step,
-bilinear — the first preset to carry a warp; `SimPreset.warp` was added
-for it and the panel applies it, identity when absent).
+`ratio` (1.2..4), `amount`, `noise`, `gain`, `decay`, `quadratic`
+(−2..2), `memory` (D is a Turing pattern / a memory), `leak`.
+**Presets.** `ring`, `independent`, `cells` (a three-ring, q = 1.5,
+D the memory biasing A and C by ±0.2·D), `cells_inflating`,
+`inflating` (zoom 1.002 / step, bilinear — the first preset to carry a
+warp; `SimPreset.warp` was added for it and the panel applies it,
+identity when absent).
 **Stages.** `update` (kernel gather), `warp` when the preset asks,
 `color`. Periodic.
 **Colouring.** `species`: the angle of (A − C, B − D) as hue, its
 length as brightness, so a cycling cell sweeps the palette in place and
-a balanced cell is dark. Added for this model; any four-channel field
-can use it.
+a balanced cell is dark; `fields = Three` places A, B, C a third of a
+turn apart and ignores D, for the memory presets. Added for this
+model; any four-channel field can use it.
 **Cost.** A (2·(ratio·radius + 1) + 1)² gather per cell: 361 taps at
 the default radius 4, 841 at 6.
 

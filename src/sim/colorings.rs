@@ -809,10 +809,25 @@ pub static SPECIES: SimColoringDef = SimColoringDef {
                       the whole.",
             choices: &[],
         },
+        SimParamDef {
+            name: "fields",
+            display_name: "Fields",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Four places the channels a quarter turn apart. Three places x, y, z a \
+                      third of a turn apart and ignores w — for the lattice with a memory in \
+                      its fourth channel.",
+            choices: &["Four", "Three"],
+        },
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
-    let c = vec2<f32>(x.s.x - x.s.z, x.s.y - x.s.w);
+    var c = vec2<f32>(x.s.x - x.s.z, x.s.y - x.s.w);
+    if (cparam(2u) >= 0.5) {
+        // A at 0, B at 120 degrees, C at 240.
+        c = vec2<f32>(x.s.x - 0.5 * (x.s.y + x.s.z), 0.8660254 * (x.s.y - x.s.z));
+    }
     let hue = fract(ff_atan2(c.y, c.x) / 6.283185307 + cparam(1u));
     let bright = clamp(length(c) * cparam(0u), 0.0, 1.0);
     return vec4<f32>(sim_palette(hue) * bright, 1.0);
