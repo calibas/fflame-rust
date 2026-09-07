@@ -6097,3 +6097,565 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     max_dt: 1.0,
     default_dt: 1.0,
 };
+
+
+/// Two Brusselator layers, coupled linearly or cubically.
+///
+/// Kyttä, Kaski & Barrio, "Complex Turing patterns in non-linearly
+/// coupled systems", Physica A 385 (2007) 105–114, after Yang,
+/// Dolnik, Zhabotinsky & Epstein, PRL 88 (2002) 208303 for the linear
+/// case. Each layer is a Brusselator with its own diffusion pair, so
+/// its own Turing wavelength; the coupling conserves morphogen and
+/// keeps the uncoupled fixed point (a, b/a):
+///
+/// ```text
+/// ∂u_i/∂t = D_ui ∇²u_i + coupling_u + a − (b+1)u_i + u_i²v_i
+/// ∂v_i/∂t = D_vi ∇²v_i + coupling_v + b u_i − u_i²v_i
+/// linear:  q (u_j − u_i)          (paper eq. 5, α = β = q)
+/// cubic:   q u_i u_j (u_j − u_i)  (paper eq. 6, q1 = q2 = q)
+/// ```
+///
+/// The paper's finding: with linear coupling the strength hardly
+/// matters and the patterns are superpositions of the two layers'
+/// wavelengths; with cubic coupling the strength selects the pattern
+/// — at its Fig. 3 parameters (a = 3, b = 9, D = 1.85 / 5.66 / 50.6 /
+/// 186) q from 0.01 to 0.29 runs through superimposed stripes, spots
+/// with internal structure, "boats" at 0.15, elongated boats, and
+/// long stripes. Its numerics: a 200×200 periodic grid, the 5-point
+/// Laplacian at unit spacing, Euler at dt = 0.001, seeded with small
+/// noise about the fixed point, u_1 minus its mean plotted. This model
+/// keeps all of that: the 5-point stencil (not Sims'), the bound
+/// 0.25 / D_max for it, and the presets are the paper's parameter
+/// sets. Step counts are measured, not the paper's (it gives none).
+///
+/// Channels: `.x` = u₁, `.y` = v₁, `.z` = u₂, `.w` = v₂.
+pub static BRUSSELATOR2: ModelDef = ModelDef {
+    name: "brusselator2",
+    display_name: "Two-Layer Brusselator",
+    description: "Two Brusselator layers with different wavelengths, coupled linearly or \
+                  cubically. Cubic coupling of the right strength makes patterns that are \
+                  neither spots nor stripes nor their superposition — Kyttä, Kaski & Barrio's \
+                  boats and beans.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "a",
+            display_name: "a",
+            default: 3.0,
+            min: 0.5,
+            max: 8.0,
+            tooltip: "The Brusselator's feed. The fixed point of both layers is (a, b/a).",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "b",
+            display_name: "b",
+            default: 9.0,
+            min: 1.0,
+            max: 20.0,
+            tooltip: "The Brusselator's control parameter. Turing patterns need b above \
+                      1 + a²·D_u/D_v for the layer; Hopf oscillations above 1 + a².",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "du1",
+            display_name: "Layer 1 D_u",
+            default: 1.85,
+            min: 0.1,
+            max: 100.0,
+            tooltip: "Activator diffusion of layer 1, in cells² per unit time.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "dv1",
+            display_name: "Layer 1 D_v",
+            default: 5.66,
+            min: 0.1,
+            max: 400.0,
+            tooltip: "Inhibitor diffusion of layer 1. The ratio to D_u sets the layer's \
+                      wavelength.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "du2",
+            display_name: "Layer 2 D_u",
+            default: 50.6,
+            min: 0.1,
+            max: 100.0,
+            tooltip: "Activator diffusion of layer 2.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "dv2",
+            display_name: "Layer 2 D_v",
+            default: 186.0,
+            min: 0.1,
+            max: 400.0,
+            tooltip: "Inhibitor diffusion of layer 2. The largest diffusion sets the time \
+                      step: 0.25 / D_max on this stencil, 0.0013 at 186.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "coupling",
+            display_name: "Coupling",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Linear is diffusion between the layers, q·(u₂ − u₁): the strength hardly \
+                      matters and the patterns superimpose. Cubic is an active middle layer, \
+                      q·u₁·u₂·(u₂ − u₁): the strength selects the pattern.",
+            choices: &["Linear", "Cubic"],
+        },
+        SimParamDef {
+            name: "q",
+            display_name: "Strength (q)",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The coupling strength, the same for both morphogens. Under cubic \
+                      coupling at the default parameters: 0.01–0.05 superimposed stripes, \
+                      0.09 spots with inner structure, 0.15 boats, 0.19 elongated boats, \
+                      0.27–0.29 long stripes.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "boats",
+            display_name: "Boats",
+            // Paper Fig. 3(f) / Fig. 4. Measured: elongated blobs at
+            // 200,000 steps (t = 200), long stripes with inner structure
+            // by 600,000. The paper calls its boats an oscillatory state
+            // and gives no run time; which of ours is its panel is not
+            // settled.
+            params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.15)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "spots_inside",
+            display_name: "Spots with inner structure",
+            // Paper Fig. 3(e).
+            params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.09)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "superimposed_stripes",
+            display_name: "Superimposed stripes",
+            // Paper Fig. 3(c)-(d).
+            params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.03)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "long_stripes",
+            display_name: "Long stripes",
+            // Paper Fig. 3(h).
+            params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.27)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "superposition",
+            display_name: "Superposition",
+            // Paper Fig. 2(a).
+            params: &[("a", 4.5), ("b", 11.0), ("du1", 1.85), ("dv1", 16.66), ("du2", 25.741), ("dv2", 196.0), ("coupling", 1.0), ("q", 0.1)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.75), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "beans",
+            display_name: "Beans",
+            // Paper Fig. 2(c).
+            params: &[("a", 4.5), ("b", 11.0), ("du1", 7.5), ("dv1", 32.5), ("du2", 27.5), ("dv2", 121.5), ("coupling", 1.0), ("q", 0.01)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.75), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "linear_weak",
+            display_name: "Linear, weak",
+            // Yang et al. 2002 Fig. 3(a) parameters as this paper gives them.
+            params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 0.0), ("q", 0.1)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "linear_strong",
+            display_name: "Linear, strong",
+            // Yang et al. 2002 Fig. 3(b).
+            params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 0.0), ("q", 1.0)],
+            steps: 200000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // The 5-point Laplacian at unit spacing, as the paper's, on all
+    // four channels at once.
+    let up = sim_read(p + vec2<i32>(0, -1));
+    let dn = sim_read(p + vec2<i32>(0, 1));
+    let lf = sim_read(p + vec2<i32>(-1, 0));
+    let rt = sim_read(p + vec2<i32>(1, 0));
+    let lap = up + dn + lf + rt - 4.0 * s;
+
+    let a = mparam(0u);
+    let b = mparam(1u);
+    let d = vec4<f32>(mparam(2u), mparam(3u), mparam(4u), mparam(5u));
+    let cubic = mparam(6u) >= 0.5;
+    let q = mparam(7u);
+    let dt = sim_dt();
+
+    let u1 = s.x;
+    let v1 = s.y;
+    let u2 = s.z;
+    let v2 = s.w;
+    // The kinetics, each layer its own.
+    let f1 = a - (b + 1.0) * u1 + u1 * u1 * v1;
+    let g1 = b * u1 - u1 * u1 * v1;
+    let f2 = a - (b + 1.0) * u2 + u2 * u2 * v2;
+    let g2 = b * u2 - u2 * u2 * v2;
+    // The coupling, conserving morphogen: what leaves one layer
+    // enters the other.
+    var cu = q * (u2 - u1);
+    var cv = q * (v2 - v1);
+    if (cubic) {
+        cu = cu * u1 * u2;
+        cv = cv * v1 * v2;
+    }
+    let rate = vec4<f32>(f1 + cu, g1 + cv, f2 - cu, g2 - cv);
+    // Concentrations: negative is unphysical and, through u*u*v, the
+    // road to NaN.
+    return max(s + dt * (d * lap + rate), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // The fixed point (a, b/a) in both layers plus small independent
+    // noise, as the paper seeds: "small random values around the
+    // uniform steady state".
+    let a = mparam(0u);
+    let b = mparam(1u);
+    let fp = vec4<f32>(a, b / max(a, 1.0e-3), a, b / max(a, 1.0e-3));
+    let draws = vec4<f32>(sim_rand(p, 0x91u), sim_rand(p, 0x92u), sim_rand(p, 0x93u), sim_rand(p, 0x94u))
+        - vec4<f32>(0.5, 0.5, 0.5, 0.5);
+    return max(fp + draws * 0.1, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+}
+"#,
+    default_steps: 200000,
+    passes: 1,
+    repeat: None,
+    agents: None,
+    kernel: None,
+    // The 5-point Laplacian's most negative eigenvalue is -8 (the
+    // checkerboard), so explicit Euler holds while dt * D * 8 < 2:
+    // dt < 0.25 / D_max. 0.0013 at the paper's D_v2 = 186; it used
+    // 0.001.
+    dt_bound: Some(|p| {
+        let dmax = ["du1", "dv1", "du2", "dv2"].iter().map(|k| p.get(k)).fold(0.0f32, f32::max);
+        0.25 / dmax.max(1.0e-3)
+    }),
+    diffusion: &[],
+    max_dt: 0.005,
+    default_dt: 0.001,
+};
+
+
+/// Diffusively coupled Rössler oscillators: chaotic Turing patterns.
+///
+/// Xiao, Li, Yang & Hu, "Chaotic Turing pattern formation in
+/// spatiotemporal systems", Front. Phys. China 2 (2006) 204–208. Every
+/// cell is a chaotic Rössler oscillator, coupled to its neighbours by
+/// diffusion:
+///
+/// ```text
+/// ∂u/∂t = −v − w + D_u ∇²u
+/// ∂v/∂t = u + a v + D_v ∇²v
+/// ∂w/∂t = b + w (u − c) + D_w ∇²w
+/// ```
+///
+/// with a = b = 0.2, c = 4.5, D_u = D_v, on a periodic 40×40 lattice
+/// for a 10×10 domain (spacing 0.25), seeded with u = v = w = δ(x, y)
+/// random in [0, 0.2]. The paper's point: the snapshots are chaotic in
+/// time and space, but the TIME MAXIMUM of u at each cell over a long
+/// window (T = 20,000, about 3,000 oscillations) is a still, ordered,
+/// localised pattern, and twelve different ones come from the
+/// diffusion coefficients alone (its Fig. 3). That envelope is this
+/// model's fourth channel: `.w` = max of u so far, with an optional
+/// forgetting rate so it can be a recent envelope rather than a
+/// lifetime one; the presets colour it. The synchronous-chaos
+/// threshold of its Fig. 1(a) is what the presets sit below.
+///
+/// Its symmetries are lattice-commensurate (translations by L/4, L/5,
+/// L/18 on a 40-cell box), so they are as much a property of the box
+/// and the discretisation as of the equations; this model reproduces
+/// the equations, the 5-point stencil, the spacing and the seed, and
+/// which of the twelve panels come out is a matter of running them.
+///
+/// Channels: `.x` = u, `.y` = v, `.z` = w, `.w` = the envelope of u.
+pub static ROSSLER: ModelDef = ModelDef {
+    name: "rossler",
+    display_name: "Rössler Lattice",
+    description: "Chaotic Rössler oscillators coupled by diffusion. The snapshots are chaos; \
+                  the time-maximum of u, kept in the fourth channel, is a still, ordered \
+                  pattern — Xiao et al.'s chaotic Turing patterns.",
+    features: &[],
+    parameters: &[
+        SimParamDef {
+            name: "a",
+            display_name: "a",
+            default: 0.2,
+            min: 0.05,
+            max: 0.5,
+            tooltip: "Rössler's a. The paper's 0.2.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "b",
+            display_name: "b",
+            default: 0.2,
+            min: 0.05,
+            max: 2.0,
+            tooltip: "Rössler's b. The paper's 0.2.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "c",
+            display_name: "c",
+            default: 4.5,
+            min: 2.0,
+            max: 8.0,
+            tooltip: "Rössler's c: the route to chaos. With a = b = 0.2, period one near 2.3, \
+                      period doubling past 3, chaos by the paper's 4.5.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "duv",
+            display_name: "D_u = D_v",
+            default: 0.017,
+            min: 0.0,
+            max: 0.1,
+            tooltip: "Diffusion of u and v, in the paper's units (domain length 10). Its \
+                      Fig. 3 runs 0.003 to 0.048; above the Fig. 1(a) threshold the lattice \
+                      synchronises and there is no pattern.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "dw",
+            display_name: "D_w",
+            default: 1.25,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Diffusion of w, in the paper's units. Its Fig. 3 runs 0.25 to 2.5. \
+                      The largest diffusion sets the time step through the spacing.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "spacing",
+            display_name: "Cell spacing",
+            default: 0.25,
+            min: 0.05,
+            max: 1.0,
+            tooltip: "Physical size of a cell: the paper's 40 cells for a domain of 10 is \
+                      0.25. Diffusion in cells is D / spacing², so a coarser spacing allows a \
+                      larger time step and a shorter run, at the cost of the paper's \
+                      resolution.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "forget",
+            display_name: "Envelope forgetting",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How fast the time-maximum in the fourth channel decays, per unit time. \
+                      0 is the paper's lifetime maximum; a small value makes it an envelope \
+                      of the recent past that keeps following the pattern.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "asymmetric",
+            display_name: "Asymmetric",
+            // Paper Fig. 3(a): 'like a launching rocket'. Envelope measured in [10.85, 13.89] at t = 4000; the
+            // colouring spans that.
+            params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.017), ("dw", 1.25), ("spacing", 0.25), ("forget", 0.0)],
+            steps: 2000000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 0.2961), ("offset", -3.1622), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "diagonal_mirror",
+            display_name: "Diagonal mirror",
+            // Paper Fig. 3(b): mirror symmetry about a diagonal. Envelope measured in [8.99, 12.43] at t = 4000; the
+            // colouring spans that.
+            params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.015), ("dw", 0.65), ("spacing", 0.25), ("forget", 0.0)],
+            steps: 2000000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 0.2616), ("offset", -2.3020), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "translational",
+            display_name: "Translational",
+            // Paper Fig. 3(c): continuous translational symmetry in x. Envelope measured in [8.99, 16.07] at t = 4000; the
+            // colouring spans that.
+            params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.023), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
+            steps: 2000000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 0.1271), ("offset", -1.0928), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "carpet",
+            display_name: "Carpet",
+            // Paper Fig. 3(g): translations by L/4. Envelope measured in [13.1, 41.71] at t = 4000; the
+            // colouring spans that.
+            params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.003), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
+            steps: 2000000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 0.0315), ("offset", -0.3621), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "architecture",
+            display_name: "Architecture",
+            // Paper Fig. 3(i): 36 parallel diagonal mirror axes. Envelope measured in [9.24, 22.97] at t = 4000; the
+            // colouring spans that.
+            params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.01), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
+            steps: 2000000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 0.0655), ("offset", -0.5557), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "square",
+            display_name: "Square",
+            // Paper Fig. 3(k): quarter-turn rotational symmetry. Envelope measured in [9.08, 15.2] at t = 4000; the
+            // colouring spans that.
+            params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.032), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
+            steps: 2000000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 0.1471), ("offset", -1.2853), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+        SimPreset {
+            name: "conventional",
+            display_name: "Conventional",
+            // Paper Fig. 3(l): the full lattice symmetry group. Envelope measured in [9.05, 15.55] at t = 4000; the
+            // colouring spans that.
+            params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.03), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
+            steps: 2000000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 3.0), ("scale", 0.1385), ("offset", -1.2031), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+    ],
+    wgsl: r#"
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    // The 5-point Laplacian, scaled by the spacing to the paper's
+    // diffusion units.
+    let up = sim_read(p + vec2<i32>(0, -1));
+    let dn = sim_read(p + vec2<i32>(0, 1));
+    let lf = sim_read(p + vec2<i32>(-1, 0));
+    let rt = sim_read(p + vec2<i32>(1, 0));
+    let lap = (up.xyz + dn.xyz + lf.xyz + rt.xyz - 4.0 * s.xyz);
+
+    let a = mparam(0u);
+    let b = mparam(1u);
+    let c = mparam(2u);
+    let h = max(mparam(5u), 1.0e-3);
+    let d = vec3<f32>(mparam(3u), mparam(3u), mparam(4u)) / (h * h);
+    let forget = mparam(6u);
+    let dt = sim_dt();
+
+    let u = s.x;
+    let v = s.y;
+    let w = s.z;
+    let rate = vec3<f32>(-v - w, u + a * v, b + w * (u - c));
+    let n = s.xyz + dt * (d * lap + rate);
+    // The envelope: the time maximum of u, decaying at `forget` per
+    // unit time so it can follow a changing pattern.
+    let env = max(n.x, s.w - forget * dt);
+    return vec4<f32>(n, env);
+}
+"#,
+    wgsl_seed: r#"
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // u = v = w = delta(x, y), one random value in [0, 0.2] per cell,
+    // as the paper seeds; the init mask scales it.
+    let delta = sim_rand(p, 0xa1u) * 0.2 * inside;
+    return vec4<f32>(delta, delta, delta, delta);
+}
+"#,
+    default_steps: 2000000,
+    passes: 1,
+    repeat: None,
+    agents: None,
+    kernel: None,
+    // Diffusion in cells is D / spacing^2 -- 40 for the paper's D_w =
+    // 2.5 at 0.25 -- and the 5-point stencil's bound is 0.25 / that.
+    // The coupled system is stiffer than diffusion alone: at the
+    // paper's carpet set dt 0.005 satisfies that bound and still
+    // reaches infinity by t = 4000, where 0.002 and 0.001 agree with
+    // each other (u within +-40, the envelope to 43). 0.002 is the
+    // ceiling. Its Fig. 3(d) set (D_uv = D_w = 0.048) synchronises
+    // here -- a uniform envelope of 9.15 -- so it is not a preset.
+    dt_bound: Some(|p| {
+        let h = p.get("spacing").max(1.0e-3);
+        let dmax = p.get("duv").max(p.get("dw")).max(1.0e-6) / (h * h);
+        (0.25 / dmax).min(0.002)
+    }),
+    diffusion: &[],
+    max_dt: 0.002,
+    // Under the cap at defaults, 0.96 * 0.002.
+    default_dt: 0.0018,
+};

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "5ab10c61",
+  "git_hash": "f70558c4",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -454,6 +454,14 @@
       "bytes": 30116,
       "sha256": "2e3c6a4486b0c760023be8ab96589581e8a588aba579598cef50df33c56576c7"
     },
+    "sim-brusselator2-beans.png": {
+      "bytes": 23293,
+      "sha256": "6b4406893af8f4b6fd0cb90cd56167aceb29466ecac5ec23230b2e79fce3c3f0"
+    },
+    "sim-brusselator2-spots-inside.png": {
+      "bytes": 22093,
+      "sha256": "f484fcc602a5e007db40f42ce38d24c0b7e62cd6c53888b4b2eac0e68ebdc749"
+    },
     "sim-cahn-hilliard-age.png": {
       "bytes": 33709,
       "sha256": "8856864590acbd5ee4f5c6261b29cba81fcf633fb37796f287f2c6baa4a64e13"
@@ -709,6 +717,10 @@
     "sim-random-deposition.png": {
       "bytes": 10337,
       "sha256": "25c31f48b2f921a8e37e47c0686721e2088819ee385b6fcefb24ed1d11ae184f"
+    },
+    "sim-rossler-asymmetric.png": {
+      "bytes": 14108,
+      "sha256": "e15dd3626e87780480cf24e73475cbdab0430183eb05bac8cb2dc2c37b5647c1"
     },
     "sim-sandpile-moore.png": {
       "bytes": 8021,

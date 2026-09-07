@@ -662,6 +662,8 @@ pub static MODELS: &[&ModelDef] = &[
     &models::DBM,
     &models::FINGERING,
     &models::LATTICE4,
+    &models::BRUSSELATOR2,
+    &models::ROSSLER,
 ];
 
 /// Every colouring, in registration order. Append only.

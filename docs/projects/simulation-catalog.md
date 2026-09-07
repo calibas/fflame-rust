@@ -2245,7 +2245,111 @@ model; any four-channel field can use it.
 **Cost.** A (2·(ratio·radius + 1) + 1)² gather per cell: 361 taps at
 the default radius 4, 841 at 6.
 
-## 29. Cross-cutting notes
+## 29. Two-layer Brusselator (Kyttä, Kaski & Barrio)
+
+**Sources.** K. Kyttä, K. Kaski, R. A. Barrio, "Complex Turing
+patterns in non-linearly coupled systems", Physica A 385 (2007)
+105–114 `[read — text at output/complex-turing-2007.txt]`; the linear
+case after L. Yang, M. Dolnik, A. Zhabotinsky, I. Epstein, PRL 88
+(2002) 208303 `[not read; only the diffusion set this paper quotes]`.
+
+**Rule.** Two Brusselator layers, each `∂u = D_u∇²u + a − (b+1)u +
+u²v`, `∂v = D_v∇²v + bu − u²v`, coupled so that morphogen is conserved
+and the fixed point (a, b/a) is kept: linear `q(u_j − u_i)` (eq. 5,
+α = β = q) or cubic `q u_i u_j (u_j − u_i)` (eq. 6, q₁ = q₂ = q).
+Numerics as the paper's: 200×200 periodic, the 5-point Laplacian at
+unit spacing, Euler at dt = 0.001, seeded with small noise about the
+fixed point, u₁ minus its mean plotted.
+
+**Reproduced.** The paper gives every parameter, and the Fig. 3
+sweep came out panel for panel at 200,000 steps (t = 200): q = 0
+layer 1's own labyrinth (3a); 0.05 wide stripes with fine dashes
+inside (3c–d); **0.09 spots with internal structure on a distorted
+hexagonal lattice (3e)**; 0.27 spots giving way to long stripes (3h).
+Fig. 2(a)'s superposition (wide stripes with fine dots, "the eyes
+are not formed") and Fig. 2(c)'s **beans** came out as described; Yang's
+strong linear case (q = 1) gives "small white-eye dots superimposed
+in stripes". Two things did not: the boats at q = 0.15 — we get
+elongated blobs at t = 200 and long stripes with inner structure by
+t = 600, the paper calls its boats an oscillatory state and gives no
+run time, so which of ours is its panel is not settled; and weak
+linear coupling gives layer 1's labyrinth rather than Yang's black-eye
+strings, whose own diffusion set this paper does not give.
+
+**Gates.** A CPU mirror of one step in both couplings (worst 2.4e-7,
+`brusselator2_matches_a_cpu_mirror_in_both_couplings`). The paper's
+own evidence is the Fourier spectrum's two rings; measured on 128² at
+200,000 steps, layer 1 under cubic coupling at q = 0.15 carries 79 %
+of its power at k 0.1–0.4 and 7 % at 0.7–1.4 radians per cell, and
+uncoupled 0 % and 97 % — the coupling hands layer 1 the long
+wavelength and keeps a short-wavelength remainder, as its Fig. 4
+dispersion says (`brusselator2_boats_carry_two_wavelengths`,
+ignored: a minute of GPU).
+
+**Parameters.** `a`, `b`, `du1`, `dv1`, `du2`, `dv2`, `coupling`
+(linear / cubic), `q`. **Presets** are the paper's sets: `boats`,
+`spots_inside`, `superimposed_stripes`, `long_stripes` (Fig. 3),
+`superposition`, `beans` (Fig. 2), `linear_weak`, `linear_strong`.
+**dt.** The 5-point stencil's bound 0.25 / D_max — 0.0013 at
+D_v2 = 186 — as a `dt_bound`; default 0.001. **Cost.** Trivial per
+step; the run is the cost: 200,000 steps at dt 0.001, a minute in
+batch at 200², dispatch-bound. The Max Steps slider was raised to ten
+million and steps-per-frame to 2,048 for this and §30.
+
+## 30. Rössler lattice (Xiao, Li, Yang & Hu)
+
+**Sources.** J.-H. Xiao, H.-H. Li, J.-Z. Yang, G. Hu, "Chaotic Turing
+pattern formation in spatiotemporal systems", Front. Phys. China 2
+(2006) 204–208 `[read — text at output/xiao2006.txt]`.
+
+**Rule.** Diffusively coupled Rössler oscillators, `u̇ = −v − w +
+D_u∇²u`, `v̇ = u + av + D_v∇²v`, `ẇ = b + w(u − c) + D_w∇²w`, a = b =
+0.2, c = 4.5, D_u = D_v, on a 40×40 periodic lattice for a 10×10
+domain (spacing 0.25, so diffusion in cells is D / 0.0625), seeded
+with u = v = w = δ(x, y) random in [0, 0.2]. The paper's point: the
+snapshots are chaos in time and space; the **time maximum** of u at
+each cell over a long window (T = 20,000) is a still, ordered,
+localised pattern, twelve of them from the diffusion pair alone (its
+Fig. 3, D_uv 0.003–0.048, D_w 0.25–2.5). That envelope is the fourth
+channel here, with an optional forgetting rate; the presets are the
+Fig. 3 parameter sets and colour the envelope.
+
+**What the paper does not say, and what was measured.** Its time
+step and integrator are not given. The pure-diffusion bound on this
+stencil is 0.25 / (D_w / 0.0625) = 0.006 at D_w = 2.5, and at dt =
+0.005 the carpet set reaches infinity by t = 4,000 while dt = 0.002
+and 0.001 agree with each other (u within ±40, the envelope to 43):
+the coupled system is stiffer than diffusion alone, and 0.002 is the
+ceiling. The uncoupled lattice's envelope is a uniform 9.25, Rössler's
+own amplitude; with coupling it is spatially structured and settles —
+at the carpet set, 15 % spread across the grid with a drift of a
+fifth of that over the last tenth of a T = 5,000 run
+(`rossler_envelope_settles_into_a_structured_map`, ignored). The
+envelope's RANGE differs by parameter set — asymmetric 10.9–13.9, diagonal 9.0–12.4, translational 9.0–16.1, carpet 13.1–41.7, architecture 9.2–23.0, square 9.1–15.2, conventional 9.1–15.6, at t = 4,000 — so a
+single colour scale cannot serve them; each preset carries the scale
+it was measured with, and a changed diffusion wants the channel
+colouring's scale and offset moved.
+
+**Not claimed.** The paper's twelve symmetric panels are
+lattice-commensurate (translations by L/4, L/5, L/18 on a 40-cell
+box) and depend on its discretisation as much as on the equations;
+this model has the equations, the stencil, the spacing and the seed,
+and which panels come out is a matter of running them. What was seen at
+t = 4,000 (seed 3): the asymmetric set gives diagonal banding with a
+few bright blobs; the carpet set a fine cell-scale texture rather
+than the paper's L/4 carpet; the square and conventional sets a
+roughly 4×4 arrangement of bright blobs, which is the paper's
+description of (l); the Fig. 3(d) set (D_uv = D_w = 0.048)
+synchronises here — a uniform envelope of 9.15 — so it is above the
+Fig. 1(a) threshold at this discretisation and is not a preset.
+
+**Gates.** A CPU mirror of one step, envelope included (worst 4e-9,
+`rossler_matches_a_cpu_mirror`). **Parameters.** `a`, `b`, `c`,
+`duv`, `dw`, `spacing`, `forget`. **Cost.** Trivial per step at 40²;
+a T = 4,000 run is two million steps at dt 0.002, a minute and a half
+in batch.
+
+## 31. Cross-cutting notes
 
 - **Determinism.** Every stochastic model draws from the PCG in
   `shaders/core/rng.wgsl` seeded by (config seed, cell or agent
