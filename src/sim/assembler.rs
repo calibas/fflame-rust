@@ -53,10 +53,26 @@ struct SimParams {
     // The matte: channel index, mode (0 off, 1 normal, 2 inverted),
     // cutoff, softness. Read by the colour pass and the jump flood.
     matte: vec4<f32>,
-    // The colour pass's view magnification about the grid centre (the
-    // octave mode's accumulated zoom; 1 otherwise), and spare words.
+    // x: the view magnification about the grid centre (the octave
+    // mode's accumulated zoom; 1 otherwise). y: fit, 0 letterbox /
+    // 1 cover. z: 1 when the step freezes cells outside the visible
+    // window. w: the halo around that window, in cells.
     view: vec4<f32>,
 };
+
+// The scale from grid cells to output pixels, by the fit: the smaller
+// ratio shows the whole grid with bars, the larger fills the output
+// and crops.
+fn sim_fit_scale() -> f32 {
+    let r = vec2<f32>(params.out_size) / vec2<f32>(sim_grid());
+    return select(min(r.x, r.y), max(r.x, r.y), params.view.y >= 0.5);
+}
+
+// Half the visible window, in cells, about the grid centre: what the
+// colour pass shows at the current view magnification.
+fn sim_visible_halfextent() -> vec2<f32> {
+    return (vec2<f32>(params.out_size) * 0.5) / (sim_fit_scale() * max(params.view.x, 1.0e-4));
+}
 
 @group(0) @binding(0) var<uniform> params: SimParams;
 @group(0) @binding(1) var<storage, read> model_params: array<f32>;
@@ -507,6 +523,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (p.x >= g.x || p.y >= g.y) {
         return;
     }
+    // Octave culling: a cell outside the visible window and its halo
+    // is carried across unchanged. It is cropped away at the next
+    // doubling, and the halo is wide enough that its staleness does
+    // not reach the window before then.
+    if (params.view.z >= 0.5) {
+        let he = sim_visible_halfextent() + vec2<f32>(params.view.w, params.view.w);
+        let d = abs(vec2<f32>(p) + vec2<f32>(0.5, 0.5) - vec2<f32>(g) * 0.5);
+        if (d.x > he.x || d.y > he.y) {
+            textureStore(field_out, p, textureLoad(field_in, p, 0));
+            return;
+        }
+    }
 //__STEP_CALL__
 }
 "#;
@@ -938,14 +966,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // square picture with bars -- not an ellipse field. Stretching was
     // the first behaviour here and it was obviously wrong the moment a
     // square grid met a widescreen export.
-    let fit = min(vec2<f32>(out_size).x / vec2<f32>(g).x,
-                  vec2<f32>(out_size).y / vec2<f32>(g).y);
+    // ... unless the fit is COVER, which fills the output and crops
+    // the grid along the axis that does not fit.
+    let fit = sim_fit_scale();
     let shown = vec2<f32>(g) * fit;
     let origin = (vec2<f32>(out_size) - shown) * 0.5;
     // Cell-centre mapping: pixel centre (o + 0.5) to grid space.
     // Sampling at the pixel's corner instead shifts the image half a
     // cell, which is invisible at 1:1 and obvious at 8x.
     let gf0 = (vec2<f32>(o) + vec2<f32>(0.5, 0.5) - origin) / fit;
+    // The FRAME is decided before the view: a pixel in a letterbox
+    // bar stays a bar at every magnification. The first version
+    // tested the magnified coordinate, and a bar pixel that maps
+    // outside the grid at 1x maps inside it once the view divides
+    // its distance from the centre by m -- so the picture widened
+    // into the bars over an octave and snapped back at the doubling.
+    if (gf0.x < 0.0 || gf0.y < 0.0 || gf0.x >= vec2<f32>(g).x || gf0.y >= vec2<f32>(g).y) {
+        textureStore(out_image, o, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
     // The view: the octave mode's accumulated zoom, about the grid's
     // centre. 1 otherwise, and then this is gf0 exactly.
     let gc = vec2<f32>(g) * 0.5;

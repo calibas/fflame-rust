@@ -155,6 +155,7 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimBoundary
         | ConfigPath::SimWarpFilter
         | ConfigPath::SimWarpMode
+        | ConfigPath::SimWarpCull
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
         | ConfigPath::SimMatteEdge => false,
@@ -1840,6 +1841,7 @@ impl ConfigManager {
             ConfigPath::SimWarpMode => {
                 Ok(ConfigValue::String(config.sim.warp.mode.name().to_string()))
             }
+            ConfigPath::SimWarpCull => Ok(ConfigValue::Bool(config.sim.warp.cull)),
             ConfigPath::SimMatteChannel => {
                 Ok(ConfigValue::String(config.sim.matte.channel.name().to_string()))
             }
@@ -1858,6 +1860,7 @@ impl ConfigManager {
             ConfigPath::SimDownscale => {
                 Ok(ConfigValue::String(config.sim.downscale.name().to_string()))
             }
+            ConfigPath::SimFit => Ok(ConfigValue::String(config.sim.fit.name().to_string())),
             ConfigPath::SimModelParam { param } => Ok(ConfigValue::Float(
                 config.sim.model_params.get(param).copied().unwrap_or(0.0),
             )),
@@ -2936,6 +2939,9 @@ impl ConfigManager {
                     self.current.sim.warp.mode = m;
                 }
             }
+            ConfigPath::SimWarpCull => {
+                self.current.sim.warp.cull = bool::try_from(value)?;
+            }
             ConfigPath::SimMatteChannel => {
                 let n = String::try_from(value)?;
                 if let Some(c) = crate::config::sim::SimMatteChannel::from_name(&n) {
@@ -2974,6 +2980,12 @@ impl ConfigManager {
                 let n = String::try_from(value)?;
                 if let Some(d) = crate::config::sim::SimDownscale::from_name(&n) {
                     self.current.sim.downscale = d;
+                }
+            }
+            ConfigPath::SimFit => {
+                let n = String::try_from(value)?;
+                if let Some(v) = crate::config::sim::SimFit::from_name(&n) {
+                    self.current.sim.fit = v;
                 }
             }
             ConfigPath::SimModelParam { param } => {

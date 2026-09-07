@@ -264,6 +264,7 @@ pub fn render_sim_content(
                     changes.push((ConfigPath::SimWarpFlow, warp.flow.into()));
                     changes.push((ConfigPath::SimWarpFilter, warp.filter.name().to_string().into()));
                     changes.push((ConfigPath::SimWarpMode, warp.mode.name().to_string().into()));
+                    changes.push((ConfigPath::SimWarpCull, warp.cull.into()));
                     let _ = config_manager
                         .update_batch(changes, "history.action.sim_preset".to_string());
                     *state.reseed = true;
@@ -345,6 +346,19 @@ pub fn render_sim_content(
             })
             .response
             .on_hover_text(t!("sim_panel.upscale_tip"));
+        ui.label(t!("sim_panel.fit").as_ref());
+        egui::ComboBox::from_id_salt("sim_fit")
+            .selected_text(sim.fit.name())
+            .show_ui(ui, |ui| {
+                for n in crate::config::sim::SimFit::NAMES {
+                    if ui.selectable_label(sim.fit.name() == *n, *n).clicked() {
+                        let _ = config_manager
+                            .update_param(ConfigPath::SimFit, (*n).to_string().into());
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("sim_panel.fit_tip"));
         ui.label(t!("sim_panel.downscale").as_ref());
         egui::ComboBox::from_id_salt("sim_downscale")
             .selected_text(sim.downscale.name())
@@ -610,6 +624,16 @@ pub fn render_sim_content(
                 })
                 .response
                 .on_hover_text(t!("sim_panel.warp_mode_tip"));
+            if w.mode == crate::config::sim::SimWarpMode::Octaves {
+                let mut cull = w.cull;
+                if ui
+                    .checkbox(&mut cull, t!("sim_panel.warp_cull").as_ref())
+                    .on_hover_text(t!("sim_panel.warp_cull_tip"))
+                    .changed()
+                {
+                    let _ = config_manager.update_param(ConfigPath::SimWarpCull, cull.into());
+                }
+            }
             if !w.is_identity() && ui.small_button(t!("sim_panel.warp_reset").as_ref()).clicked() {
                 let id = SimWarp::default();
                 let changes = vec![
