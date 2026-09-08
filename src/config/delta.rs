@@ -380,6 +380,8 @@ pub enum ConfigPath {
     SimWarpMode,
     /// Octave mode: freeze the cells outside the visible window. Bool.
     SimWarpCull,
+    /// Which channels the warp moves, a bit mask 0..15. Int.
+    SimWarpLayers,
     /// The matte: which cells are figure and which are background
     /// (`SimMatte`). The channel and the direction are choices; the
     /// cutoff and the softness are quantities and animate -- a cutoff
@@ -950,6 +952,7 @@ impl Display for ConfigPath {
             ConfigPath::SimWarpFilter => write!(f, "Simulation Warp Filter"),
             ConfigPath::SimWarpMode => write!(f, "Simulation Warp Mode"),
             ConfigPath::SimWarpCull => write!(f, "Simulation Warp Cull"),
+            ConfigPath::SimWarpLayers => write!(f, "Simulation Warp Layers"),
             ConfigPath::SimMatteChannel => write!(f, "Simulation Matte Channel"),
             ConfigPath::SimMatteCutoff => write!(f, "Simulation Matte Cutoff"),
             ConfigPath::SimMatteSoftness => write!(f, "Simulation Matte Softness"),
@@ -1225,6 +1228,7 @@ impl ConfigPath {
             ConfigPath::SimWarpFilter => I18nKey::simple("history.param.sim_warp_filter"),
             ConfigPath::SimWarpMode => I18nKey::simple("history.param.sim_warp_mode"),
             ConfigPath::SimWarpCull => I18nKey::simple("history.param.sim_warp_cull"),
+            ConfigPath::SimWarpLayers => I18nKey::simple("history.param.sim_warp_layers"),
             ConfigPath::SimMatteChannel => I18nKey::simple("history.param.sim_matte_channel"),
             ConfigPath::SimMatteCutoff => I18nKey::simple("history.param.sim_matte_cutoff"),
             ConfigPath::SimMatteSoftness => I18nKey::simple("history.param.sim_matte_softness"),
@@ -2626,6 +2630,7 @@ impl ConfigPath {
             | ConfigPath::SimWarpFilter
             | ConfigPath::SimWarpMode
             | ConfigPath::SimWarpCull
+            | ConfigPath::SimWarpLayers
             // The matte is a colouring decision: the field is
             // untouched, only which of it is drawn.
             | ConfigPath::SimMatteChannel
@@ -2924,6 +2929,7 @@ impl ConfigPath {
             ConfigPath::SimWarpFilter => "Sim.WarpFilter".to_string(),
             ConfigPath::SimWarpMode => "Sim.WarpMode".to_string(),
             ConfigPath::SimWarpCull => "Sim.WarpCull".to_string(),
+            ConfigPath::SimWarpLayers => "Sim.WarpLayers".to_string(),
             ConfigPath::SimMatteChannel => "Sim.MatteChannel".to_string(),
             ConfigPath::SimMatteCutoff => "Sim.MatteCutoff".to_string(),
             ConfigPath::SimMatteSoftness => "Sim.MatteSoftness".to_string(),
@@ -3200,6 +3206,7 @@ impl ConfigPath {
                 ["WarpFilter"] => return Some(ConfigPath::SimWarpFilter),
                 ["WarpMode"] => return Some(ConfigPath::SimWarpMode),
                 ["WarpCull"] => return Some(ConfigPath::SimWarpCull),
+                ["WarpLayers"] => return Some(ConfigPath::SimWarpLayers),
                 ["MatteChannel"] => return Some(ConfigPath::SimMatteChannel),
                 ["MatteCutoff"] => return Some(ConfigPath::SimMatteCutoff),
                 ["MatteSoftness"] => return Some(ConfigPath::SimMatteSoftness),
@@ -3642,6 +3649,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimWarpFilter
         | ConfigPath::SimWarpMode
         | ConfigPath::SimWarpCull
+        | ConfigPath::SimWarpLayers
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
         | ConfigPath::SimMatteEdge

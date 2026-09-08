@@ -156,6 +156,7 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimWarpFilter
         | ConfigPath::SimWarpMode
         | ConfigPath::SimWarpCull
+        | ConfigPath::SimWarpLayers
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
         | ConfigPath::SimMatteEdge => false,
@@ -1842,6 +1843,7 @@ impl ConfigManager {
                 Ok(ConfigValue::String(config.sim.warp.mode.name().to_string()))
             }
             ConfigPath::SimWarpCull => Ok(ConfigValue::Bool(config.sim.warp.cull)),
+            ConfigPath::SimWarpLayers => Ok(ConfigValue::Int(config.sim.warp.layers as i32)),
             ConfigPath::SimMatteChannel => {
                 Ok(ConfigValue::String(config.sim.matte.channel.name().to_string()))
             }
@@ -2941,6 +2943,10 @@ impl ConfigManager {
             }
             ConfigPath::SimWarpCull => {
                 self.current.sim.warp.cull = bool::try_from(value)?;
+            }
+            ConfigPath::SimWarpLayers => {
+                let v: i32 = i32::try_from(value)?;
+                self.current.sim.warp.layers = (v.clamp(0, 15)) as u32;
             }
             ConfigPath::SimMatteChannel => {
                 let n = String::try_from(value)?;

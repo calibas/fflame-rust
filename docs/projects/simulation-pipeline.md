@@ -216,6 +216,30 @@ field differs everywhere
 (`culling_off_screen_cells_does_not_change_what_is_shown`). Up to
 three quarters of a step saved near the end of an octave.
 
+**Layer-selective warps, 2026-09-08.** `SimWarp::layers` is a bit
+mask of the channels the warp moves; the others keep their own value
+(`mix(stay, warped, mask)` in the warp shader, continuous mode only —
+the octave view is one view of all four channels). Moving one layer
+past layers that sit still is differential advection, a
+pattern-forming instability in its own right (Rovinsky & Menzinger,
+1992), and the experiment on the coupled Turing lattice bore that
+out: at 0.002 rad/step on one of four ring layers the random
+labyrinth becomes long parallel bands; on two layers the bands wrap
+into arcs about the rotation centre; a swirl on one layer organises
+the stripes radially with a seam; a pan of 0.05 cells/step on one
+layer aligns the stripes with the drift; and on the cells presets,
+inflating only the memory channel makes the cells smaller and more
+numerous. Renders in `output/lattice4/layers/png/`. Gate: with mask
+0101, one 0.3 rad rotation from a settled field changes the moved
+channels by 0.26 RMS and the still ones by 0.024, one reaction step
+(`the_warp_moves_only_the_channels_it_is_told_to`).
+
+This is the cheap half of "an IFS on Turing layers": one map per
+layer. The other half — more than four layers, and flame variations
+as the map — needs a texture array for the state and the variation's
+WGSL as the warp's source coordinate; both are scoped in the catalog's
+cross-cutting notes, not built.
+
 What the doubling looks like from the reaction's side: the pattern is
 suddenly at twice its intrinsic scale and refines back. At the coupled
 lattice's step 0.05 and zoom 1.002 (an octave every 347 steps) that is

@@ -265,6 +265,7 @@ pub fn render_sim_content(
                     changes.push((ConfigPath::SimWarpFilter, warp.filter.name().to_string().into()));
                     changes.push((ConfigPath::SimWarpMode, warp.mode.name().to_string().into()));
                     changes.push((ConfigPath::SimWarpCull, warp.cull.into()));
+                    changes.push((ConfigPath::SimWarpLayers, (warp.layers as i32).into()));
                     let _ = config_manager
                         .update_batch(changes, "history.action.sim_preset".to_string());
                     *state.reseed = true;
@@ -630,6 +631,19 @@ pub fn render_sim_content(
                 })
                 .response
                 .on_hover_text(t!("sim_panel.warp_mode_tip"));
+            if w.mode == crate::config::sim::SimWarpMode::Continuous {
+                ui.horizontal(|ui| {
+                    ui.label(t!("sim_panel.warp_layers").as_ref());
+                    for (bit, name) in ["x", "y", "z", "w"].iter().enumerate() {
+                        let mut on = w.layers & (1 << bit) != 0;
+                        if ui.checkbox(&mut on, *name).on_hover_text(t!("sim_panel.warp_layers_tip")).changed() {
+                            let mask = if on { w.layers | (1 << bit) } else { w.layers & !(1 << bit) };
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimWarpLayers, (mask as i32).into());
+                        }
+                    }
+                });
+            }
             if w.mode == crate::config::sim::SimWarpMode::Octaves {
                 let mut cull = w.cull;
                 if ui

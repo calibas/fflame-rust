@@ -121,6 +121,9 @@ struct SimParamsGpu {
     /// freezes cells outside the visible window (octave mode with
     /// `cull`). w: the halo around that window, in cells.
     view: [f32; 4],
+    /// Which channels the warp moves, 1 or 0 per channel. Continuous
+    /// mode only; all four in octave mode.
+    warp_mask: [f32; 4],
 }
 
 /// The part of a `SimConfig` the FIELD's meaning depends on.
@@ -1273,6 +1276,13 @@ impl SimRenderer {
                 // reach the window within an octave.
                 (self.kernel_radius + 24) as f32,
             ],
+            warp_mask: {
+                let m = match cfg.warp.mode {
+                    crate::config::sim::SimWarpMode::Continuous => cfg.warp.layers,
+                    crate::config::sim::SimWarpMode::Octaves => 15,
+                };
+                [0, 1, 2, 3].map(|b| if m & (1 << b) != 0 { 1.0 } else { 0.0 })
+            },
         }
     }
 
