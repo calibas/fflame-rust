@@ -2349,7 +2349,48 @@ Fig. 1(a) threshold at this discretisation and is not a preset.
 a T = 4,000 run is two million steps at dt 0.002, a minute and a half
 in batch.
 
-## 31. Cross-cutting notes
+## 31. Layered simulations
+
+**Sources.** The simulation-layers plan (`docs/projects/simulation-
+layers.md`), phases 1 and 2; the coupling forms from §29's papers.
+
+**What it is.** Any registered model on any slice of a texture-array
+field, coupled by a table the step template applies after the
+layer's own rule: `n = rule(s) + dt · Σ strength · form(mine, theirs)`
+over the couplings aimed at that layer, channel-wise (x to x, y to
+y), forms Linear `v − u`, Cubic `u·v·(v − u)`, Quadratic `v² − u²`,
+Product `u·v`. One dt serves every layer; the tightest stability cap
+wins. Layers sharing a model share compiled pipelines; a layer is
+carried through a stage it has no pass for by the warp with an
+all-zero mask, exactly.
+
+**Gates.** Layer 0 of a two-layer config beside a two-pass model is
+bit-identical to the single-layer run of the same model and seed;
+three mixed layers are batch invariant on every slice; two
+`brusselator` layers on the 5-point stencil under a cubic coupling
+match the `brusselator2` model from an identical seed to 4e-6 RMS
+after 1,000 steps; every model's coupled step shader validates and
+its uncoupled one is unchanged.
+
+**Presets** (`LAYERED_PRESETS`, each run before it shipped):
+
+| preset | layers | coupling | seen |
+|---|---|---|---|
+| `two_gray_scotts` | Gray–Scott coral (0.0545, 0.062) and maze (0.030, 0.057), blob-seeded | linear, 0.02 both ways, channels x y | a coral labyrinth carrying the maze layer's modulation as brightness; at 0.1 a fine labyrinth of thin dark lines; at 0.3 both layers die |
+| `brusselator_layers` | two Brusselators, a = 3, b = 9, D = 1.85/5.66 and 50.6/186, 5-point | cubic, 0.09 both ways, channels x y | §29's spots with internal structure on a distorted hexagonal lattice, through the layered path |
+
+**Not shipped, with the reason.** A Gray–Scott gated by a
+Brusselator through a Product coupling: Gray–Scott runs at dt 1 and
+the Brusselator at 0.01, and one dt serves every layer, so at 0.01
+the Gray–Scott's blobs sat where they were seeded for 6,000 steps.
+Layers whose time scales differ by a hundred cannot share a step;
+a per-layer sub-stepping would be the fix and is not built.
+
+**Cost.** Per-layer cost is flat: Gray–Scott at 1080p 0.290 ms/step
+alone, 0.284 per layer at two, 0.319 at eight; 63 MB of field per
+layer at 1080p.
+
+## 32. Cross-cutting notes
 
 - **Determinism.** Every stochastic model draws from the PCG in
   `shaders/core/rng.wgsl` seeded by (config seed, cell or agent

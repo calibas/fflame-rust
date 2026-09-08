@@ -863,7 +863,89 @@ pub struct SimConfig {
     /// parameters on its own slice of the field; `model` is unused.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<SimLayer>,
+
+    /// The couplings between layers (plan section 3), applied by the
+    /// template after a layer's own rule. Empty for a single system.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub couplings: Vec<SimCoupling>,
 }
+
+/// One coupling: layer `from` drives layer `to` by `form`, at
+/// `strength`, on the channels in the mask.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimCoupling {
+    pub from: usize,
+    pub to: usize,
+    #[serde(default)]
+    pub form: SimCouplingForm,
+    #[serde(default = "coupling_strength_default")]
+    pub strength: f32,
+    /// Bit mask of the channels the term is added to; 15 is all four.
+    #[serde(default = "warp_all_layers", skip_serializing_if = "is_all_layers")]
+    pub channels: u32,
+}
+
+fn coupling_strength_default() -> f32 {
+    0.1
+}
+
+impl Default for SimCoupling {
+    fn default() -> Self {
+        SimCoupling { from: 0, to: 1, form: SimCouplingForm::Linear, strength: 0.1, channels: 15 }
+    }
+}
+
+/// The form of a coupling term, per channel, with `u` the driven
+/// layer's value and `v` the driving layer's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimCouplingForm {
+    /// `v − u`: diffusion between the layers (Yang et al. 2002).
+    #[default]
+    Linear,
+    /// `u·v·(v − u)`: an active middle layer (Kyttä et al. 2007).
+    Cubic,
+    /// `v² − u²` (Barrio et al. 1999).
+    Quadratic,
+    /// `u·v`: one layer gates another's growth.
+    Product,
+}
+
+impl SimCouplingForm {
+    pub const NAMES: &'static [&'static str] = &["linear", "cubic", "quadratic", "product"];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimCouplingForm::Linear => "linear",
+            SimCouplingForm::Cubic => "cubic",
+            SimCouplingForm::Quadratic => "quadratic",
+            SimCouplingForm::Product => "product",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "linear" => SimCouplingForm::Linear,
+            "cubic" => SimCouplingForm::Cubic,
+            "quadratic" => SimCouplingForm::Quadratic,
+            "product" => SimCouplingForm::Product,
+            _ => return None,
+        })
+    }
+
+    /// The word the shader switches on.
+    pub fn code(&self) -> u32 {
+        match self {
+            SimCouplingForm::Linear => 0,
+            SimCouplingForm::Cubic => 1,
+            SimCouplingForm::Quadratic => 2,
+            SimCouplingForm::Product => 3,
+        }
+    }
+}
+
+/// The most couplings a config may carry: the shader's table.
+pub const MAX_COUPLINGS: usize = 32;
 
 /// One layer of a layered simulation: a model and its parameters on
 /// one slice of the field.
@@ -937,6 +1019,7 @@ impl Default for SimConfig {
             downscale: SimDownscale::default(),
             fit: SimFit::default(),
             layers: Vec::new(),
+            couplings: Vec::new(),
         }
     }
 }
@@ -1098,6 +1181,14 @@ mod tests {
             ConfigPath::SimUpscale,
             ConfigPath::SimDownscale,
             ConfigPath::SimFit,
+            ConfigPath::SimLayerModel { layer: 1 },
+            ConfigPath::SimLayerEnabled { layer: 2 },
+            ConfigPath::SimLayerParam { layer: 0, param: "feed".into() },
+            ConfigPath::SimCouplingFrom { index: 0 },
+            ConfigPath::SimCouplingTo { index: 3 },
+            ConfigPath::SimCouplingForm { index: 1 },
+            ConfigPath::SimCouplingStrength { index: 2 },
+            ConfigPath::SimCouplingChannels { index: 0 },
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
         ];
@@ -1277,6 +1368,9 @@ mod tests {
         }
         for n in SimFit::NAMES {
             assert_eq!(SimFit::from_name(n).unwrap().name(), *n);
+        }
+        for n in SimCouplingForm::NAMES {
+            assert_eq!(SimCouplingForm::from_name(n).unwrap().name(), *n);
         }
         for n in SimMatteChannel::NAMES {
             assert_eq!(SimMatteChannel::from_name(n).unwrap().name(), *n);

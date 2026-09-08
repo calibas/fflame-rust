@@ -412,7 +412,7 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             display_name: "B",
             default: 3.0,
             min: 0.1,
-            max: 6.0,
+            max: 20.0,
             tooltip: "Drives the instability. Above 1 + A² the uniform state oscillates; \
                       with unequal diffusion it forms stationary spots instead.",
             choices: &[],
@@ -422,7 +422,7 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             display_name: "Diffusion X",
             default: 1.0,
             min: 0.0,
-            max: 4.0,
+            max: 100.0,
             tooltip: "Spread of the activator.",
             choices: &[],
         },
@@ -431,10 +431,21 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             display_name: "Diffusion Y",
             default: 8.0,
             min: 0.0,
-            max: 40.0,
+            max: 400.0,
             tooltip: "Spread of the inhibitor. It must exceed X's for a Turing pattern; \
                       equal rates give bulk oscillation and no structure.",
             choices: &[],
+        },
+        SimParamDef {
+            name: "stencil",
+            display_name: "Laplacian",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The 9-point Sims stencil (this model's own) or the plain 5-point one the \
+                      coupled-layer papers use. Two Brusselator layers on the 5-point stencil \
+                      under a cubic coupling are the two-layer Brusselator model.",
+            choices: &["9-point (Sims)", "5-point"],
         },
     ],
     presets: &[
@@ -485,9 +496,12 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let ur = sim_read(p + vec2<i32>(1, -1));
     let dl = sim_read(p + vec2<i32>(-1, 1));
     let dr = sim_read(p + vec2<i32>(1, 1));
-    let lap = -s.xy
+    let lap9 = -s.xy
         + 0.2 * (up.xy + dn.xy + lf.xy + rt.xy)
         + 0.05 * (ul.xy + ur.xy + dl.xy + dr.xy);
+    // The 5-point stencil at unit spacing, as the layered papers use.
+    let lap5 = up.xy + dn.xy + lf.xy + rt.xy - 4.0 * s.xy;
+    let lap = select(lap9, lap5, mparam(4u) >= 0.5);
 
     let ca = mparam(0u);
     let cb = mparam(1u);

@@ -635,6 +635,100 @@ impl SimColoringDef {
     }
 }
 
+/// A layered preset: several models on one grid with their couplings
+/// (simulation-layers plan, section 3). Applied whole, as a
+/// full-config edit, since it replaces the layer list.
+pub struct SimLayeredPreset {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    pub description: &'static str,
+    /// Per layer: the model and its parameters.
+    pub layers: &'static [(&'static str, &'static [(&'static str, f32)])],
+    /// (from, to, form, strength, channel mask).
+    pub couplings: &'static [(usize, usize, crate::config::sim::SimCouplingForm, f32, u32)],
+    pub steps: u32,
+    pub dt: f32,
+    pub init: crate::config::sim::SimInit,
+    pub coloring: &'static str,
+    pub coloring_params: &'static [(&'static str, f32)],
+}
+
+impl SimLayeredPreset {
+    /// Write the preset into a config: layers, couplings, dt, steps,
+    /// init and colouring; `model` follows layer 0 so a config with the
+    /// layers removed is still that model.
+    pub fn apply(&self, sim: &mut crate::config::sim::SimConfig) {
+        use crate::config::sim::{SimCoupling, SimLayer};
+        sim.layers = self
+            .layers
+            .iter()
+            .map(|(m, ps)| SimLayer {
+                model: (*m).to_string(),
+                model_params: ps.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+                enabled: true,
+            })
+            .collect();
+        sim.couplings = self
+            .couplings
+            .iter()
+            .map(|&(from, to, form, strength, channels)| SimCoupling { from, to, form, strength, channels })
+            .collect();
+        sim.model = self.layers[0].0.to_string();
+        sim.model_params.clear();
+        sim.steps = self.steps;
+        sim.dt = self.dt;
+        sim.init = self.init;
+        sim.coloring = self.coloring.to_string();
+        sim.coloring_params = self.coloring_params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect();
+    }
+}
+
+/// The layered presets, each run before it shipped (catalog section
+/// 31).
+pub static LAYERED_PRESETS: &[SimLayeredPreset] = &[
+    SimLayeredPreset {
+        name: "two_gray_scotts",
+        display_name: "Two Gray–Scotts, coupled",
+        description: "Coral and maze parameters on two layers, joined by weak inter-layer \
+                      diffusion: a coral labyrinth carrying the maze's modulation. At 0.1 the \
+                      labyrinth turns fine; at 0.3 both die.",
+        layers: &[
+            ("gray_scott", &[("feed", 0.0545), ("kill", 0.062)]),
+            ("gray_scott", &[("feed", 0.030), ("kill", 0.057)]),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Linear, 0.02, 3),
+            (0, 1, crate::config::sim::SimCouplingForm::Linear, 0.02, 3),
+        ],
+        steps: 6000,
+        dt: 1.0,
+        init: crate::config::sim::SimInit::Blobs { count: 6, radius: 24 },
+        coloring: "channel",
+        coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
+    },
+    SimLayeredPreset {
+        name: "brusselator_layers",
+        display_name: "Two Brusselators, cubic",
+        description: "Kyttä, Kaski & Barrio's two-layer Brusselator built from two `brusselator` \
+                      layers on the 5-point stencil under a cubic coupling of 0.09: spots with \
+                      internal structure. The same system as the `brusselator2` model, which \
+                      is the layered path's gate.",
+        layers: &[
+            ("brusselator", &[("feed_a", 3.0), ("feed_b", 9.0), ("diffusion_x", 1.85), ("diffusion_y", 5.66), ("stencil", 1.0)]),
+            ("brusselator", &[("feed_a", 3.0), ("feed_b", 9.0), ("diffusion_x", 50.6), ("diffusion_y", 186.0), ("stencil", 1.0)]),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Cubic, 0.09, 3),
+            (0, 1, crate::config::sim::SimCouplingForm::Cubic, 0.09, 3),
+        ],
+        steps: 200000,
+        dt: 0.001,
+        init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
+        coloring: "channel",
+        coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+    },
+];
+
 /// Every model, in registration order. **Append only** — the order is
 /// the UI order and, once presets and configs name them, the names are
 /// a compatibility surface.
@@ -1088,6 +1182,43 @@ mod tests {
                 m.parameters.len(),
                 crate::sim::renderer::MODEL_PARAM_SLOTS
             );
+        }
+    }
+
+    /// Every layered preset names registered models and colourings,
+    /// couples layers that exist, and sets every parameter it names
+    /// within range.
+    #[test]
+    fn every_layered_preset_is_well_formed() {
+        for p in LAYERED_PRESETS {
+            assert!(!p.layers.is_empty(), "{}: no layers", p.name);
+            for (m, ps) in p.layers {
+                let model = model_or_default(m);
+                assert_eq!(model.name, *m, "{}: unknown model {m}", p.name);
+                for (k, v) in *ps {
+                    let pd = model
+                        .parameters
+                        .iter()
+                        .find(|pd| pd.name == *k)
+                        .unwrap_or_else(|| panic!("{}: {m} has no parameter {k}", p.name));
+                    assert!(*v >= pd.min && *v <= pd.max, "{}: {m}.{k} = {v} outside range", p.name);
+                }
+            }
+            for &(from, to, _, strength, mask) in p.couplings {
+                assert!(from < p.layers.len() && to < p.layers.len(), "{}: coupling names a missing layer", p.name);
+                assert!(from != to, "{}: a layer coupled to itself", p.name);
+                assert!(strength.is_finite() && mask <= 15, "{}: bad coupling", p.name);
+            }
+            let c = coloring_or_default(p.coloring);
+            assert_eq!(c.name, p.coloring, "{}: unknown colouring", p.name);
+            for pd in c.parameters {
+                assert!(
+                    p.coloring_params.iter().any(|(k, _)| *k == pd.name),
+                    "{}: colouring parameter {} not set",
+                    p.name,
+                    pd.name
+                );
+            }
         }
     }
 

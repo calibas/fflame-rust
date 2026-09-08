@@ -6183,3 +6183,131 @@ fn layered_step_cost_at_1080p() {
         );
     }
 }
+
+/// Phase 2 of the simulation-layers plan: two `brusselator` layers on
+/// the 5-point stencil under a cubic coupling of strength q are the
+/// `brusselator2` model. Both start from the same analytic field --
+/// the fixed point plus a smooth bump -- so the seeds agree; after
+/// 1,000 steps at the paper's dt the layered field matches the
+/// two-layer model's to rounding (the coupling term is added after
+/// the rule's own clamp there and inside its Euler sum here, which
+/// only differs where the clamp acts, and at a = 3, b = 9 it never
+/// does).
+#[test]
+fn two_brusselator_layers_are_the_two_layer_brusselator() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let (a, b, q) = (3.0f32, 9.0f32, 0.15f32);
+    let d = [1.85f32, 5.66, 50.6, 186.0];
+    // The shared initial field, per layer: (u, v) about (a, b/a).
+    let init = |layer: usize, x: u32, y: u32| -> [f32; 2] {
+        let fx = x as f32 / N as f32;
+        let fy = y as f32 / N as f32;
+        let bump = 0.1 * (std::f32::consts::TAU * (fx * 2.0 + layer as f32 * 0.3)).sin()
+            * (std::f32::consts::TAU * fy * 3.0).cos();
+        [a + bump, b / a - 0.5 * bump]
+    };
+    let write = |r: &SimRenderer, texels: &[f32], layer: u32| {
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: r.field_texture(),
+                mip_level: 0,
+                origin: Origin3d { x: 0, y: 0, z: layer },
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(texels),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(N * 16), rows_per_image: Some(N) },
+            Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+        );
+    };
+    let steps = 1000;
+
+    // The two-layer model: (u1, v1, u2, v2) in one slice.
+    let mut two = SimConfig::default();
+    two.model = "brusselator2".into();
+    two.grid = SimGrid::Fixed { width: N, height: N };
+    two.boundary = SimBoundary::Periodic;
+    two.dt = 0.001;
+    two.steps = 0;
+    for (k, v) in [("a", a), ("b", b), ("du1", d[0]), ("dv1", d[1]), ("du2", d[2]), ("dv2", d[3]), ("coupling", 1.0), ("q", q)] {
+        two.model_params.insert(k.into(), v);
+    }
+    let mut r2 = SimRenderer::new(&device, &two, N, N);
+    r2.seed(&device, &queue, &two);
+    let mut texels = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let l0 = init(0, x, y);
+            let l1 = init(1, x, y);
+            texels.extend_from_slice(&[l0[0], l0[1], l1[0], l1[1]]);
+        }
+    }
+    write(&r2, &texels, 0);
+    r2.run_steps(&device, &queue, &two, steps);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f2 = read_rgba32f(&device, &queue, r2.field_texture(), N, N);
+
+    // The layered config: two Brusselators, 5-point, cubic both ways.
+    let mut layered = SimConfig::default();
+    layered.grid = SimGrid::Fixed { width: N, height: N };
+    layered.boundary = SimBoundary::Periodic;
+    layered.dt = 0.001;
+    layered.steps = 0;
+    let layer = |dx: f32, dy: f32| crate::config::sim::SimLayer {
+        model: "brusselator".into(),
+        model_params: [("feed_a", a), ("feed_b", b), ("diffusion_x", dx), ("diffusion_y", dy), ("stencil", 1.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        enabled: true,
+    };
+    layered.layers = vec![layer(d[0], d[1]), layer(d[2], d[3])];
+    let coupling = |from: usize, to: usize| crate::config::sim::SimCoupling {
+        from,
+        to,
+        form: crate::config::sim::SimCouplingForm::Cubic,
+        strength: q,
+        channels: 3,
+    };
+    layered.couplings = vec![coupling(1, 0), coupling(0, 1)];
+    let mut rl = SimRenderer::new(&device, &layered, N, N);
+    rl.seed(&device, &queue, &layered);
+    for l in 0..2u32 {
+        let mut texels = Vec::with_capacity((N * N * 4) as usize);
+        for y in 0..N {
+            for x in 0..N {
+                let v = init(l as usize, x, y);
+                texels.extend_from_slice(&[v[0], v[1], 0.0, 0.0]);
+            }
+        }
+        write(&rl, &texels, l);
+    }
+    rl.run_steps(&device, &queue, &layered, steps);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let l0 = read_rgba32f_layer(&device, &queue, rl.field_texture(), N, N, 0);
+    let l1 = read_rgba32f_layer(&device, &queue, rl.field_texture(), N, N, 1);
+
+    let n = (N * N) as f32;
+    let rms = |get: &dyn Fn(usize) -> (f32, f32)| -> f32 {
+        ((0..(N * N) as usize).map(|k| { let (x, y) = get(k); (x - y).powi(2) }).sum::<f32>() / n).sqrt()
+    };
+    let e = [
+        rms(&|k| (l0[k][0], f2[k][0])),
+        rms(&|k| (l0[k][1], f2[k][1])),
+        rms(&|k| (l1[k][0], f2[k][2])),
+        rms(&|k| (l1[k][1], f2[k][3])),
+    ];
+    let moved = rms(&|k| (f2[k][0], init(0, (k % N as usize) as u32, (k / N as usize) as u32)[0]));
+    println!(
+        "two Brusselator layers vs brusselator2 after {steps} steps: rms u1 {:.2e} v1 {:.2e} u2 {:.2e} v2 {:.2e}; the field moved {moved:.3} from its seed",
+        e[0], e[1], e[2], e[3]
+    );
+    assert!(moved > 0.01, "the run should have left its seed");
+    assert!(f2.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    for (i, err) in e.iter().enumerate() {
+        assert!(*err < 1e-3, "channel {i} differs by rms {err:.2e}");
+    }
+}

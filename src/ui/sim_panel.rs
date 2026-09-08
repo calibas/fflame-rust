@@ -14,7 +14,7 @@ use crate::config::delta::ConfigPath;
 use crate::config::manager::ConfigManager;
 use crate::config::sim::{
     SimBoundary, SimDownscale, SimGrid, SimInit, SimMatteChannel, SimMatteEdge, SimUpscale,
-    SimWarp, SimWarpFilter,
+    SimConfig, SimWarp, SimWarpFilter,
 };
 use crate::scene::transforms::RenderMode;
 use crate::sim::{SimParamDef, COLORINGS, MODELS};
@@ -284,6 +284,12 @@ pub fn render_sim_content(
             );
         }
     }
+
+
+    ui.separator();
+
+    // ---- Layers and couplings (simulation-layers plan, sections 2-3) ----
+    render_layers(ui, config_manager, &config, &sim);
 
     ui.separator();
 
@@ -770,4 +776,225 @@ pub fn render_sim_content(
             });
         });
     });
+}
+
+
+/// The Layers and Couplings lists. Per-field edits go through
+/// ConfigPath; adding or removing a layer or a coupling is a
+/// structural edit and goes through a full-config snapshot, which
+/// undoes as one step.
+fn render_layers(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    config: &crate::config::FractalConfig,
+    sim: &SimConfig,
+) {
+    use crate::config::sim::{SimCoupling, SimCouplingForm, SimLayer, MAX_COUPLINGS, MAX_LAYERS};
+    let structural = |config_manager: &mut ConfigManager, edit: &dyn Fn(&mut SimConfig)| {
+        let mut after = config.clone();
+        edit(&mut after.sim);
+        let _ = config_manager.load_config(after, "history.action.sim_layers".to_string());
+    };
+    egui::CollapsingHeader::new(t!("sim_panel.layers").as_ref())
+        .default_open(!sim.layers.is_empty())
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(t!("sim_panel.layers_tip")).small().weak());
+            ui.horizontal(|ui| {
+                ui.label(t!("sim_panel.layered_presets").as_ref());
+                egui::ComboBox::from_id_salt("sim_layered_preset")
+                    .selected_text(t!("sim_panel.layered_preset_pick").as_ref())
+                    .show_ui(ui, |ui| {
+                        for p in crate::sim::LAYERED_PRESETS {
+                            if ui.selectable_label(false, p.display_name).on_hover_text(p.description).clicked() {
+                                structural(config_manager, &|s: &mut SimConfig| p.apply(s));
+                            }
+                        }
+                    });
+            });
+            if sim.layers.is_empty() {
+                // One system today. Splitting into layers keeps it as
+                // layer 0 and adds a second of the same model.
+                if ui
+                    .button(t!("sim_panel.add_layer").as_ref())
+                    .on_hover_text(t!("sim_panel.add_layer_tip"))
+                    .clicked()
+                {
+                    let (model, params) = (sim.model.clone(), sim.model_params.clone());
+                    structural(config_manager, &|s: &mut SimConfig| {
+                        s.layers = vec![
+                            SimLayer { model: model.clone(), model_params: params.clone(), enabled: true },
+                            SimLayer { model: model.clone(), model_params: Default::default(), enabled: true },
+                        ];
+                    });
+                }
+                return;
+            }
+            for (i, layer) in sim.layers.iter().enumerate() {
+                let model = crate::sim::model_or_default(&layer.model);
+                let mut remove = false;
+                ui.horizontal(|ui| {
+                    ui.label(t!("sim_panel.layer_label", n = i.to_string()).as_ref());
+                    egui::ComboBox::from_id_salt(format!("sim_layer_model_{i}"))
+                        .selected_text(model.display_name)
+                        .show_ui(ui, |ui| {
+                            for m in MODELS {
+                                if ui
+                                    .selectable_label(m.name == model.name, m.display_name)
+                                    .on_hover_text(m.description)
+                                    .clicked()
+                                    && m.name != model.name
+                                {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::SimLayerModel { layer: i },
+                                        m.name.to_string().into(),
+                                    );
+                                }
+                            }
+                        });
+                    let mut on = layer.enabled;
+                    if ui
+                        .checkbox(&mut on, t!("sim_panel.layer_enabled").as_ref())
+                        .on_hover_text(t!("sim_panel.layer_enabled_tip"))
+                        .changed()
+                    {
+                        let _ = config_manager
+                            .update_param(ConfigPath::SimLayerEnabled { layer: i }, on.into());
+                    }
+                    if ui.small_button(t!("sim_panel.remove").as_ref()).clicked() {
+                        remove = true;
+                    }
+                });
+                if remove {
+                    structural(config_manager, &|s: &mut SimConfig| {
+                        s.layers.remove(i);
+                        // Couplings that named the layer go; the rest
+                        // renumber past it.
+                        s.couplings.retain(|c| c.from != i && c.to != i);
+                        for c in &mut s.couplings {
+                            if c.from > i {
+                                c.from -= 1;
+                            }
+                            if c.to > i {
+                                c.to -= 1;
+                            }
+                        }
+                        if s.layers.len() == 1 {
+                            // Back to one system: the layer becomes it.
+                            let only = s.layers.remove(0);
+                            s.model = only.model;
+                            s.model_params = only.model_params;
+                            s.couplings.clear();
+                        }
+                    });
+                    return;
+                }
+                ui.indent(format!("sim_layer_params_{i}"), |ui| {
+                    for p in model.parameters.iter() {
+                        let mut v = layer.model_params.get(p.name).copied().unwrap_or(p.default);
+                        if param_control(ui, &mut v, p, &format!("sim_layer_{i}")) {
+                            let _ = config_manager.update_param(
+                                ConfigPath::SimLayerParam { layer: i, param: p.name.to_string() },
+                                v.into(),
+                            );
+                        }
+                    }
+                });
+            }
+            if sim.layers.len() < MAX_LAYERS
+                && ui
+                    .button(t!("sim_panel.add_layer").as_ref())
+                    .on_hover_text(t!("sim_panel.add_layer_tip"))
+                    .clicked()
+            {
+                let model = sim.layers.last().map(|l| l.model.clone()).unwrap_or_else(|| sim.model.clone());
+                structural(config_manager, &|s: &mut SimConfig| {
+                    s.layers.push(SimLayer { model: model.clone(), model_params: Default::default(), enabled: true });
+                });
+            }
+        });
+
+    if sim.layers.len() < 2 {
+        return;
+    }
+    egui::CollapsingHeader::new(t!("sim_panel.couplings").as_ref())
+        .default_open(!sim.couplings.is_empty())
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(t!("sim_panel.couplings_tip")).small().weak());
+            let n = sim.layers.len();
+            for (i, c) in sim.couplings.iter().enumerate() {
+                let mut remove = false;
+                ui.horizontal(|ui| {
+                    let layer_combo = |ui: &mut egui::Ui, salt: String, value: usize, path: ConfigPath, config_manager: &mut ConfigManager| {
+                        egui::ComboBox::from_id_salt(salt)
+                            .selected_text(t!("sim_panel.layer_label", n = value.to_string()).as_ref())
+                            .show_ui(ui, |ui| {
+                                for l in 0..n {
+                                    if ui
+                                        .selectable_label(l == value, t!("sim_panel.layer_label", n = l.to_string()).as_ref())
+                                        .clicked()
+                                    {
+                                        let _ = config_manager.update_param(path.clone(), (l as i32).into());
+                                    }
+                                }
+                            });
+                    };
+                    layer_combo(ui, format!("sim_coupling_from_{i}"), c.from, ConfigPath::SimCouplingFrom { index: i }, config_manager);
+                    ui.label("→");
+                    layer_combo(ui, format!("sim_coupling_to_{i}"), c.to, ConfigPath::SimCouplingTo { index: i }, config_manager);
+                    egui::ComboBox::from_id_salt(format!("sim_coupling_form_{i}"))
+                        .selected_text(c.form.name())
+                        .show_ui(ui, |ui| {
+                            for name in SimCouplingForm::NAMES {
+                                if ui.selectable_label(c.form.name() == *name, *name).clicked() {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::SimCouplingForm { index: i },
+                                        (*name).to_string().into(),
+                                    );
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("sim_panel.coupling_form_tip"));
+                    if ui.small_button(t!("sim_panel.remove").as_ref()).clicked() {
+                        remove = true;
+                    }
+                });
+                if remove {
+                    structural(config_manager, &|s: &mut SimConfig| {
+                        s.couplings.remove(i);
+                    });
+                    return;
+                }
+                ui.horizontal(|ui| {
+                    let mut strength = c.strength;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut strength, -2.0..=2.0)
+                                .text(t!("sim_panel.coupling_strength").as_ref())
+                                .fixed_decimals(3),
+                        )
+                        .on_hover_text(t!("sim_panel.coupling_strength_tip"))
+                        .changed()
+                    {
+                        let _ = config_manager
+                            .update_param(ConfigPath::SimCouplingStrength { index: i }, strength.into());
+                    }
+                    for (bit, name) in ["x", "y", "z", "w"].iter().enumerate() {
+                        let mut on = c.channels & (1 << bit) != 0;
+                        if ui.checkbox(&mut on, *name).on_hover_text(t!("sim_panel.coupling_channels_tip")).changed() {
+                            let mask = if on { c.channels | (1 << bit) } else { c.channels & !(1 << bit) };
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimCouplingChannels { index: i }, (mask as i32).into());
+                        }
+                    }
+                });
+            }
+            if sim.couplings.len() < MAX_COUPLINGS
+                && ui.button(t!("sim_panel.add_coupling").as_ref()).clicked()
+            {
+                structural(config_manager, &|s: &mut SimConfig| {
+                    s.couplings.push(SimCoupling::default());
+                });
+            }
+        });
 }

@@ -838,6 +838,16 @@ fn apply_config_value(
         (ConfigPath::SimModelParam { param }, ConfigValue::Float(v)) => {
             config.sim.model_params.insert(param.clone(), *v);
         }
+        (ConfigPath::SimLayerParam { layer, param }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.layers.get_mut(*layer) {
+                l.model_params.insert(param.clone(), *v);
+            }
+        }
+        (ConfigPath::SimCouplingStrength { index }, ConfigValue::Float(v)) => {
+            if let Some(c) = config.sim.couplings.get_mut(*index) {
+                c.strength = *v;
+            }
+        }
         (ConfigPath::SimColoringParam { param }, ConfigValue::Float(v)) => {
             config.sim.coloring_params.insert(param.clone(), *v);
         }
