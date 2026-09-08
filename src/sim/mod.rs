@@ -587,9 +587,14 @@ impl ModelDef {
     /// `mparam(i)` indexes, so it is the one place that ordering is
     /// decided.
     pub fn pack_params(&self, cfg: &crate::config::sim::SimConfig) -> Vec<f32> {
+        self.pack_params_from(&cfg.model_params)
+    }
+
+    /// The same, from a parameter map -- one layer's.
+    pub fn pack_params_from(&self, map: &std::collections::BTreeMap<String, f32>) -> Vec<f32> {
         self.parameters
             .iter()
-            .map(|p| cfg.model_param(p.name, p.default))
+            .map(|p| map.get(p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.default))
             .collect()
     }
 

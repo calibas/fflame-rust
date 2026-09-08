@@ -856,6 +856,65 @@ pub struct SimConfig {
     /// How the grid is framed when the output's aspect differs.
     #[serde(default, skip_serializing_if = "is_default_fit")]
     pub fit: SimFit,
+
+    /// The layers (simulation-layers plan, section 3). Empty is the
+    /// single system `model` / `model_params` describe, and every
+    /// existing config. With layers, each is its own model and
+    /// parameters on its own slice of the field; `model` is unused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<SimLayer>,
+}
+
+/// One layer of a layered simulation: a model and its parameters on
+/// one slice of the field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimLayer {
+    pub model: String,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub model_params: std::collections::BTreeMap<String, f32>,
+    /// A disabled layer keeps its state and is not stepped.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn is_true(v: &bool) -> bool {
+    *v
+}
+
+/// The most layers a field may carry: one slice each, sixteen floats
+/// of parameters each in the model-parameter buffer.
+pub const MAX_LAYERS: usize = 16;
+
+impl SimConfig {
+    /// How many layers the field has: the `layers` list, or one.
+    pub fn layer_count(&self) -> usize {
+        self.layers.len().clamp(1, MAX_LAYERS)
+    }
+
+    /// The model of layer `l`: the layer's, or `model` when there are
+    /// no layers.
+    pub fn layer_model_name(&self, l: usize) -> &str {
+        match self.layers.get(l) {
+            Some(layer) => &layer.model,
+            None => &self.model,
+        }
+    }
+
+    /// The parameter map of layer `l`, likewise.
+    pub fn layer_model_params(&self, l: usize) -> &std::collections::BTreeMap<String, f32> {
+        match self.layers.get(l) {
+            Some(layer) => &layer.model_params,
+            None => &self.model_params,
+        }
+    }
+
+    /// Whether layer `l` is stepped.
+    pub fn layer_enabled(&self, l: usize) -> bool {
+        self.layers.get(l).is_none_or(|layer| layer.enabled)
+    }
 }
 
 impl Default for SimConfig {
@@ -877,6 +936,7 @@ impl Default for SimConfig {
             upscale: SimUpscale::default(),
             downscale: SimDownscale::default(),
             fit: SimFit::default(),
+            layers: Vec::new(),
         }
     }
 }

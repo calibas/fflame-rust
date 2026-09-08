@@ -25,7 +25,7 @@
 //!   phase 0 established that per-submit overhead is 0.8% across a
 //!   256x range, so batching is purely a watchdog and pacing device.
 
-use crate::config::sim::{SimConfig, SimGrid};
+use crate::config::sim::{SimConfig, SimGrid, MAX_LAYERS};
 
 /// Floats in the model-parameter buffer. Sixteen was every model until
 /// the coupled Turing lattice, whose coupling matrix alone is sixteen;
@@ -82,7 +82,13 @@ const MAX_GRID_DIM: u32 = 8192;
 
 /// Ring slots for per-step uniforms. One per step in a submission, so
 /// each step reads its own step index.
-const RING_SLOTS: u32 = MAX_STEPS_PER_SUBMIT;
+/// Ring slots: one per (step, layer, variant), where the variant is
+/// the layer's own step or the copy-through a layer makes in a stage
+/// it has no pass for. The batch divides by layers x 2 to fit.
+const RING_SLOTS: u32 = MAX_STEPS_PER_SUBMIT * 2;
+/// The second slot of a (step, layer) pair: the warp with an all-zero
+/// channel mask, which carries the layer across unchanged.
+const VARIANT_COPY: u32 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -99,8 +105,17 @@ struct SimParamsGpu {
     /// shader can bound its gather. 0 for a model with no kernel.
     kernel_radius: u32,
     /// Min/max ring slot for this dispatch: the reduce pass writes it,
-    /// the step pass reads the slot before it.
+    /// the step pass reads the slot `minmax_back` before it.
     minmax_slot: u32,
+    /// The layer this dispatch is (simulation-layers plan, section 2):
+    /// the slice it reads as its own and writes.
+    layer: u32,
+    /// Where this layer's convolution table starts in the shared LUT.
+    kernel_offset: u32,
+    /// How far back the previous min/max slot of the same layer is:
+    /// the layer count.
+    minmax_back: u32,
+    layer_pad: u32,
     /// The warp stage's per-step affine: zoom, rotation, pan x, pan y.
     /// A vec4 in WGSL, so 16-aligned: the ten words above end at 48.
     warp_a: [f32; 4],
@@ -145,7 +160,8 @@ struct SimParamsGpu {
 /// for a different reason -- `resize` already reseeds when it changes.
 #[derive(Clone, PartialEq)]
 struct SeedIdentity {
-    model: &'static str,
+    /// The model of every layer, layer 0 first.
+    layers: Vec<&'static str>,
     boundary: crate::config::sim::SimBoundary,
     init: crate::config::sim::SimInit,
     seed: u64,
@@ -154,7 +170,7 @@ struct SeedIdentity {
 impl SeedIdentity {
     fn of(cfg: &SimConfig) -> Self {
         SeedIdentity {
-            model: model_or_default(&cfg.model).name,
+            layers: layer_models(cfg).iter().map(|m| m.name).collect(),
             boundary: cfg.boundary,
             init: cfg.init,
             seed: cfg.seed,
@@ -162,14 +178,26 @@ impl SeedIdentity {
     }
 }
 
+/// The model of each layer, layer 0 first; one entry for a config
+/// without layers.
+fn layer_models(cfg: &SimConfig) -> Vec<&'static ModelDef> {
+    (0..cfg.layer_count()).map(|l| model_or_default(cfg.layer_model_name(l))).collect()
+}
+
 /// The shader set for one (model, colouring, boundary, resolve)
 /// combination. Rebuilt when any of those change, which is rare —
 /// parameter edits do not touch it.
 struct Pipelines {
     seed: ComputePipeline,
-    /// The dispatches of one step, in order: `sim_step`, then
-    /// `sim_step2`, and so on for as many as the model declares.
-    steps: Vec<ComputePipeline>,
+    /// Per layer, the dispatches of one step in order: `sim_step`,
+    /// then `sim_step2`, and so on for as many as that layer's model
+    /// declares. Layers sharing a model share the compiled pipelines.
+    layer_steps: Vec<Vec<ComputePipeline>>,
+    /// The layer whose model has agents, if one does. One population
+    /// and one deposit buffer serve the grid, so one layer.
+    agent_layer: Option<usize>,
+    /// Per layer, its model's seed pipeline.
+    layer_seeds: Vec<ComputePipeline>,
     /// The warp stage: a resample of the field through the per-step
     /// affine, first in the step. Built with every set (it depends on
     /// the boundary alone) and dispatched only when the config's warp
@@ -203,7 +231,7 @@ struct Pipelines {
 
 #[derive(Clone, PartialEq, Eq)]
 struct PipelineKey {
-    model: &'static str,
+    layers: Vec<&'static str>,
     coloring: &'static str,
     boundary: crate::config::sim::SimBoundary,
     upscale: crate::config::sim::SimUpscale,
@@ -255,6 +283,12 @@ pub struct SimRenderer {
 
     /// Steps applied since the last reseed. The state's identity.
     step_index: u32,
+    /// Per layer: the convolution table's radius (0 = none) and where
+    /// its block starts in `kernel_buffer`.
+    kernel_radii: Vec<u32>,
+    kernel_offsets: Vec<u32>,
+    /// How many slices the field arrays carry.
+    layers: u32,
     /// The convolution table for the large-kernel models, rebuilt and
     /// uploaded with the parameters. Sized once for the largest
     /// kernel the engine allows, so it never resizes.
@@ -264,7 +298,7 @@ pub struct SimRenderer {
     /// that declares `NeedsPyramid` and rebuilt every step; empty
     /// otherwise, and freed again when the model changes to one that
     /// does not read it.
-    pyramid: Vec<(Texture, TextureView)>,
+    pyramid: Vec<(Texture, TextureView, TextureView)>,
     /// A 1x1 texture bound to every pyramid slot a model does not use:
     /// the layout carries seven, and a bind group must fill them.
     pyramid_dummy: (Texture, TextureView),
@@ -304,9 +338,6 @@ pub struct SimRenderer {
     pyramid_bind_groups: Option<Vec<Vec<BindGroup>>>,
     /// Reduce bind groups per ping-pong side.
     reduce_bind_groups: Option<[BindGroup; 2]>,
-    /// Half-width of the kernel currently in that buffer, which the
-    /// step shader reads from the uniform to bound its loops.
-    kernel_radius: u32,
     /// Steps in the next submission: adapted from the measured cost
     /// of the previous one, reset to [`FIRST_SUBMIT`] whenever the
     /// pipeline or the grid changes and the old measurement no longer
@@ -325,7 +356,8 @@ pub struct SimRenderer {
 impl SimRenderer {
     pub fn new(device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> Self {
         let (grid_w, grid_h) = Self::allocatable_grid(cfg, out_w, out_h);
-        let (field, field_view) = Self::create_field_pair(device, grid_w, grid_h);
+        let layers = cfg.layer_count();
+        let (field, field_view) = Self::create_field_pair(device, grid_w, grid_h, layers as u32);
         let (output_texture, output_view) = Self::create_output(device, out_w, out_h);
 
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
@@ -341,7 +373,7 @@ impl SimRenderer {
         // read once per invocation.
         let model_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Sim Model Params"),
-            contents: bytemuck::cast_slice(&[0.0f32; MODEL_PARAM_SLOTS]),
+            contents: bytemuck::cast_slice(&[0.0f32; MODEL_PARAM_SLOTS * MAX_LAYERS]),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
         let coloring_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -364,7 +396,7 @@ impl SimRenderer {
         });
         let level_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Level Params"),
-            size: params_stride * MAX_PYRAMID_LEVELS as u64,
+            size: params_stride * MAX_PYRAMID_LEVELS as u64 * MAX_LAYERS as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -380,7 +412,7 @@ impl SimRenderer {
 
         // Two blocks of (2R+1)^2 at the maximum radius: a model may
         // carry a pair of kernels (SmoothLife's disc and annulus).
-        let kernel_floats = 2 * (2 * MAX_KERNEL_RADIUS as usize + 1).pow(2);
+        let kernel_floats = 2 * (2 * MAX_KERNEL_RADIUS as usize + 1).pow(2) * MAX_LAYERS;
         let kernel_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Kernel LUT"),
             size: (kernel_floats * std::mem::size_of::<f32>()) as u64,
@@ -421,7 +453,9 @@ impl SimRenderer {
             agent_bind_groups: None,
             pyramid_bind_groups: None,
             reduce_bind_groups: None,
-            kernel_radius: 1,
+            kernel_radii: Vec::new(),
+            kernel_offsets: Vec::new(),
+            layers: layers as u32,
             steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
             seeded_as: None,
@@ -514,14 +548,19 @@ impl SimRenderer {
     /// than mip levels of one, because a level is written as a storage
     /// texture and read as a sampled one, and the two views of one
     /// texture's mips do not mix cleanly.
-    fn create_pyramid(device: &Device, w: u32, h: u32) -> Vec<(Texture, TextureView)> {
+    fn create_pyramid(device: &Device, w: u32, h: u32) -> Vec<(Texture, TextureView, TextureView)> {
         let levels = pyramid_levels(w, h);
         let (mut lw, mut lh) = (w, h);
         (1..levels)
             .map(|l| {
                 lw = lw.div_ceil(2);
                 lh = lh.div_ceil(2);
-                Self::create_level(device, lw, lh, &format!("Sim Pyramid L{l}"))
+                let (t, v) = Self::create_level(device, lw, lh, &format!("Sim Pyramid L{l}"));
+                // The 2D view for the step's level bindings, the array
+                // view for the pyramid pass, which shares the step
+                // layout and so binds levels as one-layer arrays.
+                let va = t.create_view(&Self::array_view());
+                (t, v, va)
             })
             .collect()
     }
@@ -552,10 +591,12 @@ impl SimRenderer {
     /// forces a reseed, because a population is state and half of a
     /// new one is not a state.
     fn ensure_agents(&mut self, device: &Device, cfg: &SimConfig) {
-        let model = model_or_default(&cfg.model);
-        let want = match model.agents {
-            Some(a) => (a.count)(
-                &model.params_view(&cfg.model_params),
+        // The first layer with agents, if any: one population serves
+        // the grid.
+        let models = layer_models(cfg);
+        let want = match models.iter().enumerate().find_map(|(l, m)| m.agents.map(|a| (l, m, a))) {
+            Some((l, model, a)) => (a.count)(
+                &model.params_view(cfg.layer_model_params(l)),
                 self.grid_w,
                 self.grid_h,
             )
@@ -593,7 +634,7 @@ impl SimRenderer {
     /// model does not. Called wherever `ensure_pipelines` is, so a
     /// model or grid change is caught before the next dispatch.
     fn ensure_pyramid(&mut self, device: &Device, cfg: &SimConfig) {
-        let wants = model_or_default(&cfg.model).has(ModelFeature::NeedsPyramid);
+        let wants = layer_models(cfg).iter().any(|m| m.has(ModelFeature::NeedsPyramid));
         let expected = if wants { pyramid_levels(self.grid_w, self.grid_h) as usize - 1 } else { 0 };
         if self.pyramid.len() == expected {
             return;
@@ -611,6 +652,25 @@ impl SimRenderer {
     /// Whether this frame builds a distance field: the matte's edge
     /// asked for one, or the colouring reads one. Either way the matte
     /// must be on -- it is what says which cells are the figure.
+    /// A config with a different number of layers needs field arrays
+    /// with that many slices; the state cannot survive, so it reseeds.
+    fn ensure_layers(&mut self, device: &Device, cfg: &SimConfig) {
+        let want = cfg.layer_count() as u32;
+        if want == self.layers {
+            return;
+        }
+        let (f, fv) = Self::create_field_pair(device, self.grid_w, self.grid_h, want);
+        self.field = f;
+        self.field_view = fv;
+        self.layers = want;
+        self.current = 0;
+        self.step_bind_groups = None;
+        self.pyramid_bind_groups = None;
+        self.reduce_bind_groups = None;
+        self.agent_bind_groups = None;
+        self.needs_seed = true;
+    }
+
     fn wants_sdf(cfg: &SimConfig) -> bool {
         !cfg.matte.is_off()
             && (cfg.matte.uses_distance()
@@ -742,16 +802,18 @@ impl SimRenderer {
 
     /// Level `l` of the pyramid (1..), for a test to read back.
     pub fn pyramid_texture(&self, level: usize) -> Option<&Texture> {
-        self.pyramid.get(level.checked_sub(1)?).map(|(t, _)| t)
+        self.pyramid.get(level.checked_sub(1)?).map(|(t, _, _)| t)
     }
 
-    fn create_field_pair(device: &Device, w: u32, h: u32) -> ([Texture; 2], [TextureView; 2]) {
+    fn create_field_pair(device: &Device, w: u32, h: u32, layers: u32) -> ([Texture; 2], [TextureView; 2]) {
         let desc = TextureDescriptor {
             label: Some("Sim Field"),
+            // One slice per layer (simulation-layers plan, section 2);
+            // a single system is an array of one.
             size: Extent3d {
                 width: w,
                 height: h,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: layers.max(1),
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -772,9 +834,19 @@ impl SimRenderer {
         };
         let a = device.create_texture(&desc);
         let b = device.create_texture(&desc);
-        let va = a.create_view(&TextureViewDescriptor::default());
-        let vb = b.create_view(&TextureViewDescriptor::default());
+        let va = a.create_view(&Self::array_view());
+        let vb = b.create_view(&Self::array_view());
         ([a, b], [va, vb])
+    }
+
+    /// A view that binds a texture as a 2D array, which is how every
+    /// pass declares the field -- and how the pyramid pass declares a
+    /// level, whose texture has one layer.
+    fn array_view() -> TextureViewDescriptor<'static> {
+        TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::D2Array),
+            ..Default::default()
+        }
     }
 
     fn create_output(device: &Device, w: u32, h: u32) -> (Texture, TextureView) {
@@ -879,7 +951,7 @@ impl SimRenderer {
             self.out_h = out_h;
         }
         if grid_changed {
-            let (f, fv) = Self::create_field_pair(device, gw, gh);
+            let (f, fv) = Self::create_field_pair(device, gw, gh, self.layers);
             self.field = f;
             self.field_view = fv;
             // Re-created lazily at the new size, if the model reads it.
@@ -912,7 +984,7 @@ impl SimRenderer {
 
     fn pipeline_key(&self, cfg: &SimConfig) -> PipelineKey {
         PipelineKey {
-            model: model_or_default(&cfg.model).name,
+            layers: layer_models(cfg).iter().map(|m| m.name).collect(),
             coloring: coloring_or_default(&cfg.coloring).name,
             boundary: cfg.boundary,
             upscale: cfg.upscale,
@@ -933,13 +1005,40 @@ impl SimRenderer {
         if self.pipelines.as_ref().is_some_and(|p| p.key == key) {
             return;
         }
-        let model = model_or_default(&cfg.model);
+        let models = layer_models(cfg);
+        let model = models[0];
         let coloring = coloring_or_default(&cfg.coloring);
 
-        let seed_src = assembler::assemble_seed(model, cfg.init.kind_name());
-        let step_srcs: Vec<String> = (0..model.passes)
-            .map(|pass| assembler::assemble_step(model, cfg.boundary, pass))
-            .collect();
+        // The seed is layer 0's model's -- every layer of a layered
+        // config is seeded by its own model below, through one shader
+        // per distinct model.
+        let seed_srcs: Vec<(&'static str, String)> = {
+            let mut v: Vec<(&'static str, String)> = Vec::new();
+            for m in &models {
+                if !v.iter().any(|(n, _)| *n == m.name) {
+                    v.push((m.name, assembler::assemble_seed(m, cfg.init.kind_name())));
+                }
+            }
+            v
+        };
+        let _ = model;
+        // Step shaders per distinct model; a layer looks its model up.
+        let step_srcs: Vec<(&'static str, Vec<String>)> = {
+            let mut v: Vec<(&'static str, Vec<String>)> = Vec::new();
+            for m in &models {
+                if !v.iter().any(|(n, _)| *n == m.name) {
+                    v.push((
+                        m.name,
+                        (0..m.passes).map(|pass| assembler::assemble_step(m, cfg.boundary, pass)).collect(),
+                    ));
+                }
+            }
+            v
+        };
+        let any_pyramid = models.iter().any(|m| m.has(ModelFeature::NeedsPyramid));
+        let any_minmax = models.iter().any(|m| m.has(ModelFeature::NeedsMinMax));
+        let agent_layer = models.iter().position(|m| m.agents.is_some());
+        let agent_model = agent_layer.map(|l| models[l]);
         let warp_src = assembler::assemble_warp(cfg.boundary);
         let color_src = assembler::assemble_color(
             coloring,
@@ -948,21 +1047,15 @@ impl SimRenderer {
             cfg.downscale,
             key.magnifying,
         );
-        let pyramid_src = model
-            .has(ModelFeature::NeedsPyramid)
-            .then(|| assembler::assemble_pyramid(cfg.boundary));
-        let reduce_src = model
-            .has(ModelFeature::NeedsMinMax)
-            .then(assembler::assemble_reduce);
-        let agent_srcs: Vec<String> = match model.agents {
-            Some(a) => (0..a.passes)
-                .map(|p| assembler::assemble_agents(model, cfg.boundary, p))
+        let pyramid_src = any_pyramid.then(|| assembler::assemble_pyramid(cfg.boundary));
+        let reduce_src = any_minmax.then(assembler::assemble_reduce);
+        let agent_srcs: Vec<String> = match agent_model.and_then(|m| m.agents.map(|a| (m, a))) {
+            Some((m, a)) => (0..a.passes)
+                .map(|p| assembler::assemble_agents(m, cfg.boundary, p))
                 .collect(),
             None => Vec::new(),
         };
-        let agent_seed_src = model
-            .agents
-            .map(|_| assembler::assemble_agent_seed(model, cfg.boundary));
+        let agent_seed_src = agent_model.map(|m| assembler::assemble_agent_seed(m, cfg.boundary));
 
         let make = |label: &str, src: &str| {
             device.create_shader_module(ShaderModuleDescriptor {
@@ -970,9 +1063,12 @@ impl SimRenderer {
                 source: ShaderSource::Wgsl(src.into()),
             })
         };
-        let seed_mod = make("Sim Seed", &seed_src);
-        let step_mods: Vec<ShaderModule> =
-            step_srcs.iter().map(|src| make("Sim Step", src)).collect();
+        let seed_mods: Vec<(&'static str, ShaderModule)> =
+            seed_srcs.iter().map(|(n, src)| (*n, make("Sim Seed", src))).collect();
+        let step_mods: Vec<(&'static str, Vec<ShaderModule>)> = step_srcs
+            .iter()
+            .map(|(n, srcs)| (*n, srcs.iter().map(|src| make("Sim Step", src)).collect()))
+            .collect();
         let warp_mod = make("Sim Warp", &warp_src);
         let color_mod = make("Sim Color", &color_src);
         let pyramid_mod = pyramid_src.as_ref().map(|src| make("Sim Pyramid", src));
@@ -1019,28 +1115,38 @@ impl SimRenderer {
             },
             count: None,
         };
-        let storage_tex = |binding: u32| BindGroupLayoutEntry {
+        // The FIELD is a texture array, one slice per layer; the other
+        // textures (pyramid levels, jump flood, distance, output,
+        // palette) are plain 2D. Binding 4 is the field in every pass;
+        // binding 3 is the field in seed, step and warp and a 2D
+        // target elsewhere -- the pyramid writes its level through a
+        // one-layer array view, since it shares the step layout.
+        let storage_tex_dim = |binding: u32, dim: TextureViewDimension| BindGroupLayoutEntry {
             binding,
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::StorageTexture {
                 access: StorageTextureAccess::WriteOnly,
                 format: TextureFormat::Rgba32Float,
-                view_dimension: TextureViewDimension::D2,
+                view_dimension: dim,
             },
             count: None,
         };
-        let sampled_tex = |binding: u32, float32: bool| BindGroupLayoutEntry {
+        let storage_tex = |binding: u32| storage_tex_dim(binding, TextureViewDimension::D2);
+        let storage_tex_array = |binding: u32| storage_tex_dim(binding, TextureViewDimension::D2Array);
+        let sampled_tex_dim = |binding: u32, float32: bool, dim: TextureViewDimension| BindGroupLayoutEntry {
             binding,
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::Texture {
                 // Non-filterable: FLOAT32_FILTERABLE is an optional
                 // feature, and every read here is a textureLoad anyway.
                 sample_type: TextureSampleType::Float { filterable: !float32 },
-                view_dimension: TextureViewDimension::D2,
+                view_dimension: dim,
                 multisampled: false,
             },
             count: None,
         };
+        let sampled_tex = |binding: u32, float32: bool| sampled_tex_dim(binding, float32, TextureViewDimension::D2);
+        let sampled_field = |binding: u32| sampled_tex_dim(binding, true, TextureViewDimension::D2Array);
 
         let seed_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Sim Seed Layout"),
@@ -1048,7 +1154,7 @@ impl SimRenderer {
                 uniform_entry(0),
                 storage_ro(1),
                 storage_ro(2),
-                storage_tex(3),
+                storage_tex_array(3),
             ],
         });
         let step_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -1057,8 +1163,8 @@ impl SimRenderer {
                 uniform_entry(0),
                 storage_ro(1),
                 storage_ro(2),
-                storage_tex(3),
-                sampled_tex(4, true),
+                storage_tex_array(3),
+                sampled_field(4),
                 // The convolution table. Always bound, declared in the
                 // WGSL only by the models that gather against it -- a
                 // layout may carry an entry the shader does not use.
@@ -1084,7 +1190,7 @@ impl SimRenderer {
                 uniform_entry(0),
                 storage_ro(1),
                 storage_ro(2),
-                sampled_tex(4, true),
+                sampled_field(4),
                 storage_rw(13),
                 storage_rw(15),
                 storage_rw(16),
@@ -1097,7 +1203,7 @@ impl SimRenderer {
             label: Some("Sim Reduce Layout"),
             entries: &[
                 uniform_entry(0),
-                sampled_tex(4, true),
+                sampled_field(4),
                 BindGroupLayoutEntry {
                     binding: 14,
                     visibility: ShaderStages::COMPUTE,
@@ -1117,7 +1223,7 @@ impl SimRenderer {
                 storage_ro(1),
                 storage_ro(2),
                 storage_tex(3),
-                sampled_tex(4, true),
+                sampled_field(4),
                 sampled_tex(5, false),
                 // The distance field, or its dummy.
                 sampled_tex(6, true),
@@ -1133,7 +1239,7 @@ impl SimRenderer {
                 storage_ro(1),
                 storage_ro(2),
                 storage_tex(3),
-                sampled_tex(4, true),
+                sampled_field(4),
                 sampled_tex(5, true),
             ],
         });
@@ -1161,12 +1267,24 @@ impl SimRenderer {
         self.reduce_bind_groups = None;
         self.agent_bind_groups = None;
         self.steps_per_submit = FIRST_SUBMIT;
+        let seed_pipelines: Vec<(&'static str, ComputePipeline)> = seed_mods
+            .iter()
+            .map(|(n, m)| (*n, pipeline("Sim Seed", &seed_layout, m)))
+            .collect();
+        let step_pipelines: Vec<(&'static str, Vec<ComputePipeline>)> = step_mods
+            .iter()
+            .map(|(n, ms)| (*n, ms.iter().map(|m| pipeline("Sim Step", &step_layout, m)).collect()))
+            .collect();
+        let lookup_steps = |name: &str| -> Vec<ComputePipeline> {
+            step_pipelines.iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone()).unwrap_or_default()
+        };
         self.pipelines = Some(Pipelines {
-            seed: pipeline("Sim Seed", &seed_layout, &seed_mod),
-            steps: step_mods
-                .iter()
-                .map(|m| pipeline("Sim Step", &step_layout, m))
-                .collect(),
+            seed: seed_pipelines[0].1.clone(),
+            layer_seeds: models.iter().map(|m| {
+                seed_pipelines.iter().find(|(n, _)| *n == m.name).map(|(_, p)| p.clone()).expect("built above")
+            }).collect(),
+            layer_steps: models.iter().map(|m| lookup_steps(m.name)).collect(),
+            agent_layer,
             // Same layout as a step: it reads binding 4 and writes 3,
             // and ignores the rest.
             warp: pipeline("Sim Warp", &step_layout, &warp_mod),
@@ -1197,8 +1315,14 @@ impl SimRenderer {
         });
     }
 
-    /// The uniform for one step index.
+    /// The uniform for one step index, for layer 0.
     fn params_for(&self, cfg: &SimConfig, step_index: u32) -> SimParamsGpu {
+        self.params_for_layer(cfg, step_index, 0)
+    }
+
+    /// The uniform for one step index and one layer.
+    fn params_for_layer(&self, cfg: &SimConfig, step_index: u32, layer: usize) -> SimParamsGpu {
+        let layers = cfg.layer_count() as u32;
         let (p0, p1) = match cfg.init {
             crate::config::sim::SimInit::Noise { amplitude } => (amplitude, 0.0),
             crate::config::sim::SimInit::Blob { radius } => (radius as f32, 0.0),
@@ -1223,13 +1347,20 @@ impl SimRenderer {
             // depends on the diffusion rates in force, not just the
             // model, which is why it is computed from the params.
             dt: {
-                let max_dt = model_or_default(&cfg.model).max_dt_for(&cfg.model_params);
+                // One dt for every layer: the tightest cap wins.
+                let max_dt = (0..cfg.layer_count())
+                    .map(|l| model_or_default(cfg.layer_model_name(l)).max_dt_for(cfg.layer_model_params(l)))
+                    .fold(f32::MAX, f32::min);
                 if cfg.dt.is_finite() { cfg.dt.clamp(1e-4, max_dt) } else { 1.0 }
             },
             init_p0: p0,
             init_p1: p1,
-            kernel_radius: self.kernel_radius,
-            minmax_slot: step_index % MINMAX_RING,
+            kernel_radius: self.kernel_radii.get(layer).copied().unwrap_or(0),
+            minmax_slot: (step_index * layers + layer as u32) % MINMAX_RING,
+            layer: layer as u32,
+            kernel_offset: self.kernel_offsets.get(layer).copied().unwrap_or(0),
+            minmax_back: layers,
+            layer_pad: 0,
             warp_a: match cfg.warp.mode {
                 crate::config::sim::SimWarpMode::Continuous => {
                     [cfg.warp.zoom, cfg.warp.rotation, cfg.warp.pan_x, cfg.warp.pan_y]
@@ -1274,7 +1405,7 @@ impl SimRenderer {
                 // The halo: the kernel's reach plus a pattern's worth
                 // of cells, so the frozen ring's staleness cannot
                 // reach the window within an octave.
-                (self.kernel_radius + 24) as f32,
+                (self.kernel_radii.get(layer).copied().unwrap_or(0) + 24) as f32,
             ],
             warp_mask: {
                 let m = match cfg.warp.mode {
@@ -1300,14 +1431,31 @@ impl SimRenderer {
     /// in the batch the last step's index.
     fn write_params_ring(&self, queue: &Queue, cfg: &SimConfig, start: u32, count: u32) {
         let stride = self.params_stride as usize;
-        let mut bytes = vec![0u8; stride * count as usize];
+        let layers = cfg.layer_count();
+        let mut bytes = vec![0u8; stride * count as usize * layers * 2];
         for i in 0..count {
-            let p = self.params_for(cfg, start + i);
-            let at = i as usize * stride;
-            bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
-                .copy_from_slice(bytemuck::bytes_of(&p));
+            for l in 0..layers {
+                let p = self.params_for_layer(cfg, start + i, l);
+                let at = self.ring_slot(i, l, 0, layers) as usize * stride;
+                bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
+                    .copy_from_slice(bytemuck::bytes_of(&p));
+                // The copy variant: the warp with nothing moved, which
+                // carries this layer through a stage it has no pass for.
+                let mut c = p;
+                c.warp_a = [1.0, 0.0, 0.0, 0.0];
+                c.warp_b = [0.0, 1.0];
+                c.warp_mask = [0.0; 4];
+                let at = self.ring_slot(i, l, VARIANT_COPY, layers) as usize * stride;
+                bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
+                    .copy_from_slice(bytemuck::bytes_of(&c));
+            }
         }
         queue.write_buffer(&self.params_buffer, 0, &bytes);
+    }
+
+    /// The ring slot of (step in batch, layer, variant).
+    fn ring_slot(&self, i: u32, layer: usize, variant: u32, layers: usize) -> u32 {
+        (i * layers as u32 + layer as u32) * 2 + variant
     }
 
     /// Build the two step bind groups once. They depend only on the
@@ -1335,17 +1483,25 @@ impl SimRenderer {
     }
 
     fn write_param_arrays(&mut self, queue: &Queue, model: &ModelDef, coloring: &SimColoringDef, cfg: &SimConfig) {
-        // Padded to a fixed length so the buffer never needs resizing;
-        // the shader only ever indexes as far as the definition
-        // declares.
-        let mut mp = model.pack_params(cfg);
-        assert!(
-            mp.len() <= MODEL_PARAM_SLOTS,
-            "{} declares {} parameters; the buffer holds {MODEL_PARAM_SLOTS}",
-            model.name,
-            mp.len()
-        );
-        mp.resize(MODEL_PARAM_SLOTS, 0.0);
+        let _ = model;
+        // One block of MODEL_PARAM_SLOTS per layer, padded so the
+        // buffer never needs resizing; the shader indexes its own
+        // layer's block.
+        let layers = cfg.layer_count();
+        let mut mp: Vec<f32> = Vec::with_capacity(MODEL_PARAM_SLOTS * MAX_LAYERS);
+        for l in 0..layers {
+            let m = model_or_default(cfg.layer_model_name(l));
+            let mut block = m.pack_params_from(cfg.layer_model_params(l));
+            assert!(
+                block.len() <= MODEL_PARAM_SLOTS,
+                "{} declares {} parameters; the buffer holds {MODEL_PARAM_SLOTS}",
+                m.name,
+                block.len()
+            );
+            block.resize(MODEL_PARAM_SLOTS, 0.0);
+            mp.extend_from_slice(&block);
+        }
+        mp.resize(MODEL_PARAM_SLOTS * MAX_LAYERS, 0.0);
         let mut cp = coloring.pack_params(cfg);
         cp.resize(16, 0.0);
         queue.write_buffer(&self.model_params_buffer, 0, bytemuck::cast_slice(&mp));
@@ -1356,29 +1512,47 @@ impl SimRenderer {
         // and this runs once per batch, not per step, so tracking
         // staleness would cost more than it saves and could get it
         // wrong.
-        match model.kernel_for(&cfg.model_params) {
-            Some(k) => {
-                self.kernel_radius = k.radius;
-                queue.write_buffer(&self.kernel_buffer, 0, bytemuck::cast_slice(&k.weights));
+        // Every layer's table, one after another; each layer reads
+        // its own through `kernel_offset`.
+        let mut lut: Vec<f32> = Vec::new();
+        self.kernel_radii.clear();
+        self.kernel_offsets.clear();
+        for l in 0..layers {
+            let m = model_or_default(cfg.layer_model_name(l));
+            self.kernel_offsets.push(lut.len() as u32);
+            match m.kernel_for(cfg.layer_model_params(l)) {
+                Some(k) => {
+                    self.kernel_radii.push(k.radius);
+                    lut.extend_from_slice(&k.weights);
+                }
+                None => self.kernel_radii.push(0),
             }
-            None => self.kernel_radius = 0,
+        }
+        if !lut.is_empty() {
+            queue.write_buffer(&self.kernel_buffer, 0, bytemuck::cast_slice(&lut));
         }
 
         // One uniform per pyramid level, carrying the SOURCE level's
         // size: the pyramid pass reads its input through the shared
         // boundary wrap, which sizes itself from `grid`.
-        if model.has(ModelFeature::NeedsPyramid) {
+        if layer_models(cfg).iter().any(|m| m.has(ModelFeature::NeedsPyramid)) {
             let stride = self.params_stride as usize;
             let levels = pyramid_levels(self.grid_w, self.grid_h) as usize;
-            let mut bytes = vec![0u8; stride * levels];
+            // Slots (layer, level): level 0 reads the layer's own slice
+            // of the field, every level above reads a one-layer level
+            // texture, so its slot says layer 0.
+            let mut bytes = vec![0u8; stride * levels * layers];
+            for layer in 0..layers {
             let (mut w, mut h) = (self.grid_w, self.grid_h);
             for l in 0..levels {
-                let mut p = self.params_for(cfg, self.step_index);
+                let mut p = self.params_for_layer(cfg, self.step_index, if l == 0 { layer } else { 0 });
                 p.grid = [w, h];
-                bytes[l * stride..l * stride + std::mem::size_of::<SimParamsGpu>()]
+                let at = (layer * levels + l) * stride;
+                bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
                     .copy_from_slice(bytemuck::bytes_of(&p));
                 w = w.div_ceil(2);
                 h = h.div_ceil(2);
+            }
             }
             queue.write_buffer(&self.level_params_buffer, 0, &bytes);
         }
@@ -1418,8 +1592,8 @@ impl SimRenderer {
                 let sides: Vec<usize> = if l == 0 { vec![0, 1] } else { vec![0] };
                 let mut per_side = Vec::new();
                 for src in sides {
-                    let input = if l == 0 { &self.field_view[src] } else { &self.pyramid[l - 1].1 };
-                    let output = &self.pyramid[l].1;
+                    let input = if l == 0 { &self.field_view[src] } else { &self.pyramid[l - 1].2 };
+                    let output = &self.pyramid[l].2;
                     per_side.push(device.create_bind_group(&BindGroupDescriptor {
                         label: Some("Sim Pyramid BG"),
                         layout: &p.step_layout,
@@ -1526,7 +1700,7 @@ impl SimRenderer {
         // pyramid is shorter (or absent).
         for i in 0..(MAX_PYRAMID_LEVELS as usize - 1) {
             let view = if with_pyramid {
-                self.pyramid.get(i).map(|(_, v)| v).unwrap_or(&self.pyramid_dummy.1)
+                self.pyramid.get(i).map(|(_, v, _)| v).unwrap_or(&self.pyramid_dummy.1)
             } else {
                 &self.pyramid_dummy.1
             };
@@ -1548,6 +1722,7 @@ impl SimRenderer {
     /// pair (seed, step_index) is the state's identity, and a reseed
     /// starts a new run.
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
+        self.ensure_layers(device, cfg);
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
         // `ensure_agents` may set `needs_seed`; this IS the seed, so
@@ -1563,7 +1738,10 @@ impl SimRenderer {
         // previous model had left there (1 on a fresh renderer). The
         // phase-3 review found it; the soup baseline was regenerated.
         self.write_param_arrays(queue, model, coloring, cfg);
-        self.write_params_slot0(queue, cfg);
+        // Ring slots (0, layer, 0): each layer's seed reads its own.
+        self.write_params_ring(queue, cfg, 0, 1);
+        let layers = cfg.layer_count();
+        let stride = self.params_stride as u32;
 
         let p = self.pipelines.as_ref().expect("pipelines built above");
         let bg = device.create_bind_group(&BindGroupDescriptor {
@@ -1596,10 +1774,12 @@ impl SimRenderer {
                 label: Some("Sim Seed"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&p.seed);
-            pass.set_bind_group(0, &bg, &[0]);
             let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
-            pass.dispatch_workgroups(gx, gy, 1);
+            for l in 0..layers {
+                pass.set_pipeline(&p.layer_seeds[l]);
+                pass.set_bind_group(0, &bg, &[self.ring_slot(0, l, 0, layers) * stride]);
+                pass.dispatch_workgroups(gx, gy, 1);
+            }
         }
         queue.submit(std::iter::once(enc.finish()));
         self.needs_seed = false;
@@ -1609,13 +1789,25 @@ impl SimRenderer {
         // first step. Step 0 reads slot (0 - 1) mod RING, so the seed's
         // reduce writes THAT slot; the uniform is rewritten for it,
         // after the seed's own submission has consumed slot 0.
-        if model.has(ModelFeature::NeedsMinMax) {
+        let models = layer_models(cfg);
+        if models.iter().any(|m| m.has(ModelFeature::NeedsMinMax)) {
             self.ensure_step_bind_groups(device);
             self.ensure_stage_bind_groups(device);
-            let mut p = self.params_for(cfg, 0);
-            p.minmax_slot = MINMAX_RING - 1;
-            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&p));
-            self.clear_minmax_slots(queue, MINMAX_RING - 1, 1);
+            // Step 0 of layer l reads slot (0 * N + l - N) mod RING:
+            // each layer's seed reduce writes that slot. Its uniform
+            // goes in the layer's ring slot, rewritten for the purpose.
+            let n = layers as u32;
+            let stride_b = self.params_stride as usize;
+            let mut bytes = vec![0u8; stride_b * layers * 2];
+            for l in 0..layers {
+                let mut p = self.params_for_layer(cfg, 0, l);
+                p.minmax_slot = (MINMAX_RING + l as u32 - n) % MINMAX_RING;
+                let at = self.ring_slot(0, l, 0, layers) as usize * stride_b;
+                bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
+                    .copy_from_slice(bytemuck::bytes_of(&p));
+            }
+            queue.write_buffer(&self.params_buffer, 0, &bytes);
+            self.clear_minmax_slots(queue, MINMAX_RING - n, n);
             let pipes = self.pipelines.as_ref().expect("built above");
             let groups = self.reduce_bind_groups.as_ref().expect("built above");
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
@@ -1627,9 +1819,14 @@ impl SimRenderer {
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(pipes.reduce.as_ref().expect("NeedsMinMax builds it"));
-                pass.set_bind_group(0, &groups[self.current], &[0]);
                 let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
-                pass.dispatch_workgroups(gx, gy, 1);
+                for l in 0..layers {
+                    if !models[l].has(ModelFeature::NeedsMinMax) {
+                        continue;
+                    }
+                    pass.set_bind_group(0, &groups[self.current], &[self.ring_slot(0, l, 0, layers) * stride]);
+                    pass.dispatch_workgroups(gx, gy, 1);
+                }
             }
             queue.submit(std::iter::once(enc.finish()));
         }
@@ -1690,7 +1887,8 @@ impl SimRenderer {
         }
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
-        let model = model_or_default(&cfg.model);
+        self.ensure_layers(device, cfg);
+        let model = model_or_default(cfg.layer_model_name(0));
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
 
@@ -1700,26 +1898,44 @@ impl SimRenderer {
         let agent_groups = self.agent_capacity.div_ceil(64);
         let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
         let stride = self.params_stride as u32;
-        let wants_pyramid = model.has(ModelFeature::NeedsPyramid);
-        let wants_minmax = model.has(ModelFeature::NeedsMinMax);
-        // How many times each pass runs inside one step. All 1 unless
-        // the model declares a repeat, in which case that pass reads
-        // its count from a parameter -- a relaxation whose sweep count
-        // is a slider cannot be compiled in.
-        let repeat: Vec<u32> = (0..model.passes)
-            .map(|n| match model.repeat {
-                Some((idx, name)) if idx == n => model
-                    .parameters
-                    .iter()
-                    .find(|p| p.name == name)
-                    .map(|p| cfg.model_param(p.name, p.default))
-                    .unwrap_or(1.0)
-                    .round()
-                    .clamp(1.0, crate::sim::MAX_INNER_ITERATIONS as f32)
-                    as u32,
-                _ => 1,
+        let layers = cfg.layer_count();
+        let models = layer_models(cfg);
+        let wants_minmax = models.iter().any(|m| m.has(ModelFeature::NeedsMinMax));
+        // Per layer, its passes in order with their repeats unrolled:
+        // one entry per dispatch, naming the pass. A relaxation whose
+        // sweep count is a slider cannot be compiled in.
+        let layer_stages: Vec<Vec<usize>> = models
+            .iter()
+            .enumerate()
+            .map(|(l, m)| {
+                let params = cfg.layer_model_params(l);
+                let mut v = Vec::new();
+                for n in 0..m.passes {
+                    let rep = match m.repeat {
+                        Some((idx, name)) if idx == n => m
+                            .parameters
+                            .iter()
+                            .find(|p| p.name == name)
+                            .map(|p| params.get(p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.default))
+                            .unwrap_or(1.0)
+                            .round()
+                            .clamp(1.0, crate::sim::MAX_INNER_ITERATIONS as f32)
+                            as u32,
+                        _ => 1,
+                    };
+                    for _ in 0..rep {
+                        v.push(n as usize);
+                    }
+                }
+                v
             })
             .collect();
+        // Every stage writes every layer -- the layer's own pass, or a
+        // copy-through where it has none -- and then the pair flips,
+        // so no dispatch ever reads a slice another layer's dispatch
+        // has not written this stage (simulation-layers plan, section
+        // 2). With one layer this is exactly the old sequence.
+        let max_stages = layer_stages.iter().map(|v| v.len()).max().unwrap_or(1).max(1);
         // Per-level dispatch sizes, level 1 upward.
         let level_dispatch: Vec<(u32, u32)> = {
             let (mut w, mut h) = (self.grid_w, self.grid_h);
@@ -1731,6 +1947,7 @@ impl SimRenderer {
                 })
                 .collect()
         };
+        let levels = pyramid_levels(self.grid_w, self.grid_h) as usize;
 
         // The blind first submit is sized in DISPATCHES, so a step that
         // is two hundred of them starts at one step rather than eight.
@@ -1742,18 +1959,20 @@ impl SimRenderer {
         let octaves = cfg.warp.mode == crate::config::sim::SimWarpMode::Octaves;
         if self.steps_per_submit == FIRST_SUBMIT {
             let dispatches: u32 =
-                repeat.iter().sum::<u32>() + u32::from(wants_minmax) + u32::from(warping);
+                (max_stages as u32 + u32::from(wants_minmax) + u32::from(warping)) * layers as u32;
             self.steps_per_submit = (FIRST_SUBMIT * 2 / dispatches.max(1)).clamp(1, FIRST_SUBMIT);
         }
+        // The ring holds (step, layer, variant) slots.
+        let per_submit_cap = (MAX_STEPS_PER_SUBMIT / layers as u32).max(1);
         let mut done = 0;
         while done < count {
-            let batch = self.steps_per_submit.clamp(1, MAX_STEPS_PER_SUBMIT).min(count - done);
+            let batch = self.steps_per_submit.clamp(1, per_submit_cap).min(count - done);
             // One write for the whole batch, and one compute pass: the
             // dispatches inside it are ordered against each other, and
             // each reads its own ring slot by dynamic offset.
             self.write_params_ring(queue, cfg, self.step_index, batch);
             if wants_minmax {
-                self.clear_minmax_slots(queue, self.step_index, batch);
+                self.clear_minmax_slots(queue, self.step_index * layers as u32, batch * layers as u32);
             }
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Sim Steps"),
@@ -1769,16 +1988,14 @@ impl SimRenderer {
                     timestamp_writes: None,
                 });
                 for i in 0..batch {
+                    let slot = |l: usize, variant: u32| (i * layers as u32 + l as u32) * 2 + variant;
                     // The warp goes first, before anything reads the
-                    // field (pipeline section 4.1): it moves the
-                    // FIELD, through the boundary rule, and nothing
-                    // else -- an agent population's positions stay
-                    // where they are, which a model that carries both
-                    // should know. One resample, one flip.
-                    // In octave mode the field is resampled only on
-                    // the steps where the accumulated zoom crosses a
-                    // power of two -- decided from the step index, so
-                    // a batch boundary cannot move it.
+                    // field: it moves the FIELD, through the boundary
+                    // rule, and nothing else -- an agent population's
+                    // positions stay where they are. Every layer is
+                    // written, so the pair flips once. In octave mode
+                    // the field is resampled only on the steps where
+                    // the accumulated zoom crosses a power of two.
                     let warp_now = if octaves {
                         cfg.warp.octave(self.step_index).warp.is_some()
                     } else {
@@ -1786,68 +2003,78 @@ impl SimRenderer {
                     };
                     if warp_now {
                         pass.set_pipeline(&p.warp);
-                        pass.set_bind_group(0, &groups[self.current], &[i * stride]);
-                        pass.dispatch_workgroups(gx, gy, 1);
+                        for l in 0..layers {
+                            pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                            pass.dispatch_workgroups(gx, gy, 1);
+                        }
                         self.current = 1 - self.current;
                     }
                     // The agents move, sense and deposit next, from
                     // the field as the last step left it -- Jones'
-                    // order, where the population acts and the trail
-                    // map is diffused after. The step pass then folds
-                    // what they deposited and clears it.
-                    if let Some(agroups) = self.agent_bind_groups.as_ref() {
+                    // order. The agent layer's step then folds what
+                    // they deposited and clears it.
+                    if let (Some(al), Some(agroups)) = (p.agent_layer, self.agent_bind_groups.as_ref()) {
                         for ap in p.agents.iter() {
                             pass.set_pipeline(ap);
-                            pass.set_bind_group(0, &agroups[self.current], &[i * stride]);
+                            pass.set_bind_group(0, &agroups[self.current], &[slot(al, 0) * stride]);
                             pass.dispatch_workgroups(agent_groups, 1, 1);
                         }
                     }
-                    // The pyramid of the CURRENT field, level by level:
-                    // each dispatch reads the level below through its
-                    // own uniform (source size) and writes the next.
-                    if wants_pyramid {
-                        let pyr = p.pyramid.as_ref().expect("NeedsPyramid builds it");
+                    // The pyramid of each layer that reads one, from
+                    // the current field, level by level: each dispatch
+                    // reads the level below through its own uniform.
+                    if let Some(pyr) = p.pyramid.as_ref() {
                         let pgroups = self
                             .pyramid_bind_groups
                             .as_ref()
                             .expect("built by ensure_stage_bind_groups");
                         pass.set_pipeline(pyr);
-                        for (l, per_side) in pgroups.iter().enumerate() {
-                            let bg = if l == 0 { &per_side[self.current] } else { &per_side[0] };
-                            pass.set_bind_group(0, bg, &[l as u32 * stride]);
-                            let (lx, ly) = level_dispatch[l];
-                            pass.dispatch_workgroups(lx, ly, 1);
+                        for l in 0..layers {
+                            if !models[l].has(ModelFeature::NeedsPyramid) {
+                                continue;
+                            }
+                            for (lv, per_side) in pgroups.iter().enumerate() {
+                                let bg = if lv == 0 { &per_side[self.current] } else { &per_side[0] };
+                                pass.set_bind_group(0, bg, &[((l * levels + lv) as u32) * stride]);
+                                let (lx, ly) = level_dispatch[lv];
+                                pass.dispatch_workgroups(lx, ly, 1);
+                            }
                         }
                     }
                     // groups[src] reads field[src] and writes
                     // field[1 - src], so alternating the index IS the
-                    // ping-pong.
-                    //
-                    // Every pass of a step reads the same ring slot: the only
-                    // per-step value in it is the step index, and every
-                    // dispatch of step i is step i. Nothing downstream
-                    // needs to know how many passes there were -- the
-                    // live state is always `field[current]`, whether
-                    // the count of flips was odd or even.
-                    for (n, sp) in p.steps.iter().enumerate() {
-                        for _ in 0..repeat[n] {
-                            pass.set_pipeline(sp);
-                            pass.set_bind_group(0, &groups[self.current], &[i * stride]);
+                    // ping-pong. Every stage writes every layer.
+                    for stage in 0..max_stages {
+                        for l in 0..layers {
+                            match layer_stages[l].get(stage) {
+                                Some(&n) if cfg.layer_enabled(l) => {
+                                    pass.set_pipeline(&p.layer_steps[l][n]);
+                                    pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                                }
+                                _ => {
+                                    pass.set_pipeline(&p.warp);
+                                    pass.set_bind_group(0, &groups[self.current], &[slot(l, VARIANT_COPY) * stride]);
+                                }
+                            }
                             pass.dispatch_workgroups(gx, gy, 1);
-                            self.current = 1 - self.current;
                         }
+                        self.current = 1 - self.current;
                     }
                     // The new field's range, into this step's slot, for
                     // the next step to normalise by.
-                    if wants_minmax {
-                        let red = p.reduce.as_ref().expect("NeedsMinMax builds it");
+                    if let Some(red) = p.reduce.as_ref() {
                         let rgroups = self
                             .reduce_bind_groups
                             .as_ref()
                             .expect("built by ensure_stage_bind_groups");
                         pass.set_pipeline(red);
-                        pass.set_bind_group(0, &rgroups[self.current], &[i * stride]);
-                        pass.dispatch_workgroups(gx, gy, 1);
+                        for l in 0..layers {
+                            if !models[l].has(ModelFeature::NeedsMinMax) {
+                                continue;
+                            }
+                            pass.set_bind_group(0, &rgroups[self.current], &[slot(l, 0) * stride]);
+                            pass.dispatch_workgroups(gx, gy, 1);
+                        }
                     }
                     self.step_index += 1;
                 }
