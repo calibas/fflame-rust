@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "f70558c4",
+  "git_hash": "eec85eb2",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -657,6 +657,14 @@
     "sim-lattice4-ring.png": {
       "bytes": 21980,
       "sha256": "c5a8454d7f3367290f6184defa5d68485c04e296636dd11125a9410577629676"
+    },
+    "sim-layers-brusselator-spots.png": {
+      "bytes": 21891,
+      "sha256": "83a2b35a7bf83564b93600b24acca93bd866ed3577149d8a445feb052a80a75b"
+    },
+    "sim-layers-two-gray-scotts.png": {
+      "bytes": 22401,
+      "sha256": "557f7746ef4b8d0d203cacd9998ad974d5ac812544c26bd048dda1c0296c309c"
     },
     "sim-lenia-soup.png": {
       "bytes": 27549,

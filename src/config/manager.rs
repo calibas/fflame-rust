@@ -159,6 +159,12 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimWarpLayers
         | ConfigPath::SimMatteChannel
         | ConfigPath::SimMatteInvert
+        | ConfigPath::SimLayerModel { .. }
+        | ConfigPath::SimLayerEnabled { .. }
+        | ConfigPath::SimCouplingFrom { .. }
+        | ConfigPath::SimCouplingTo { .. }
+        | ConfigPath::SimCouplingForm { .. }
+        | ConfigPath::SimCouplingChannels { .. }
         | ConfigPath::SimMatteEdge => false,
         // ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
@@ -1866,6 +1872,35 @@ impl ConfigManager {
             ConfigPath::SimModelParam { param } => Ok(ConfigValue::Float(
                 config.sim.model_params.get(param).copied().unwrap_or(0.0),
             )),
+            ConfigPath::SimLayerModel { layer } => Ok(ConfigValue::String(
+                config.sim.layers.get(*layer).map(|l| l.model.clone()).unwrap_or_default(),
+            )),
+            ConfigPath::SimLayerEnabled { layer } => Ok(ConfigValue::Bool(
+                config.sim.layers.get(*layer).is_none_or(|l| l.enabled),
+            )),
+            ConfigPath::SimLayerParam { layer, param } => Ok(ConfigValue::Float(
+                config
+                    .sim
+                    .layers
+                    .get(*layer)
+                    .and_then(|l| l.model_params.get(param).copied())
+                    .unwrap_or(0.0),
+            )),
+            ConfigPath::SimCouplingFrom { index } => Ok(ConfigValue::Int(
+                config.sim.couplings.get(*index).map(|c| c.from as i32).unwrap_or(0),
+            )),
+            ConfigPath::SimCouplingTo { index } => Ok(ConfigValue::Int(
+                config.sim.couplings.get(*index).map(|c| c.to as i32).unwrap_or(0),
+            )),
+            ConfigPath::SimCouplingForm { index } => Ok(ConfigValue::String(
+                config.sim.couplings.get(*index).map(|c| c.form.name().to_string()).unwrap_or_default(),
+            )),
+            ConfigPath::SimCouplingStrength { index } => Ok(ConfigValue::Float(
+                config.sim.couplings.get(*index).map(|c| c.strength).unwrap_or(0.0),
+            )),
+            ConfigPath::SimCouplingChannels { index } => Ok(ConfigValue::Int(
+                config.sim.couplings.get(*index).map(|c| c.channels as i32).unwrap_or(15),
+            )),
             ConfigPath::SimColoringParam { param } => Ok(ConfigValue::Float(
                 config.sim.coloring_params.get(param).copied().unwrap_or(0.0),
             )),
@@ -3017,6 +3052,62 @@ impl ConfigManager {
             ConfigPath::SimColoringParam { param } => {
                 let v: f32 = f32::try_from(value)?;
                 self.current.sim.coloring_params.insert(param.clone(), v);
+            }
+            ConfigPath::SimLayerModel { layer } => {
+                let name = String::try_from(value)?;
+                if let Some(l) = self.current.sim.layers.get_mut(*layer) {
+                    if l.model != name {
+                        l.model = name;
+                        // As for SimModel: parameters belong to the model
+                        // that declared them.
+                        l.model_params.clear();
+                    }
+                }
+            }
+            ConfigPath::SimLayerEnabled { layer } => {
+                let v = bool::try_from(value)?;
+                if let Some(l) = self.current.sim.layers.get_mut(*layer) {
+                    l.enabled = v;
+                }
+            }
+            ConfigPath::SimLayerParam { layer, param } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.layers.get_mut(*layer) {
+                    l.model_params.insert(param.clone(), v);
+                }
+            }
+            ConfigPath::SimCouplingFrom { index } => {
+                let v: i32 = i32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.from = v.max(0) as usize;
+                }
+            }
+            ConfigPath::SimCouplingTo { index } => {
+                let v: i32 = i32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.to = v.max(0) as usize;
+                }
+            }
+            ConfigPath::SimCouplingForm { index } => {
+                let n = String::try_from(value)?;
+                if let (Some(c), Some(f)) = (
+                    self.current.sim.couplings.get_mut(*index),
+                    crate::config::sim::SimCouplingForm::from_name(&n),
+                ) {
+                    c.form = f;
+                }
+            }
+            ConfigPath::SimCouplingStrength { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.strength = if v.is_finite() { v } else { 0.0 };
+                }
+            }
+            ConfigPath::SimCouplingChannels { index } => {
+                let v: i32 = i32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.channels = v.clamp(0, 15) as u32;
+                }
             }
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;

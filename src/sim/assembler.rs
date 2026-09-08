@@ -51,7 +51,8 @@ struct SimParams {
     // Where this layer's convolution table starts in the shared LUT.
     kernel_offset: u32,
     minmax_back: u32,
-    layer_pad: u32,
+    // How many entries of the coupling table apply this frame.
+    coupling_count: u32,
     // The warp stage's affine: zoom, rotation, pan x, pan y; then the
     // swirl rate and the filter (0 bilinear, 1 nearest). vec4 then
     // vec2, so the struct is 80 bytes -- `SimParamsGpu` pads to match.
@@ -536,6 +537,8 @@ const STEP_TEMPLATE: &str = r#"
 //__KERNEL__
 
 //__BOUNDARY__
+
+//__COUPLING__
 
 //__PYRAMID__
 
@@ -1287,6 +1290,68 @@ pub fn assemble_seed(model: &ModelDef, init_kind: &str) -> String {
 /// `wgsl` -- so a helper written once is visible to all of them -- and
 /// they differ only in which function the entry point calls.
 pub fn assemble_step(model: &ModelDef, boundary: SimBoundary, pass: u32) -> String {
+    assemble_step_coupled(model, boundary, pass, false)
+}
+
+/// The coupling accessors, spliced only into a coupled config's step
+/// shaders: an uncoupled config's shader is byte-for-byte what it was.
+const COUPLING_ACCESSORS: &str = r#"
+// One coupling: layer `from` drives layer `to` by `form` at
+// `strength`, on the channels in `mask` (simulation-layers plan,
+// section 3).
+struct SimCouplingGpu {
+    to_layer: u32,
+    from_layer: u32,
+    form: u32,
+    mask: u32,
+    strength: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
+};
+@group(0) @binding(17) var<storage, read> couplings: array<SimCouplingGpu>;
+
+// Another layer's value at this cell, through the boundary rule.
+fn sim_read_layer(l: i32, p: vec2<i32>) -> vec4<f32> {
+    let g = sim_grid();
+    if (sim_outside(p, g)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return textureLoad(field_in, sim_wrap_sized(p, g), l, 0);
+}
+
+// The sum of the coupling terms aimed at this layer, per channel,
+// with u this layer's value and v the driving layer's. Added to the
+// rule's result times dt, after the rule's own clamp.
+fn sim_coupling(u: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    let n = params.coupling_count;
+    for (var i = 0u; i < n; i = i + 1u) {
+        let c = couplings[i];
+        if (c.to_layer != params.layer) {
+            continue;
+        }
+        let v = sim_read_layer(i32(c.from_layer), p);
+        var term = v - u;
+        if (c.form == 1u) {
+            term = u * v * (v - u);
+        } else if (c.form == 2u) {
+            term = v * v - u * u;
+        } else if (c.form == 3u) {
+            term = u * v;
+        }
+        let on = vec4<bool>(
+            (c.mask & 1u) != 0u, (c.mask & 2u) != 0u, (c.mask & 4u) != 0u, (c.mask & 8u) != 0u,
+        );
+        acc = acc + c.strength * select(vec4<f32>(0.0, 0.0, 0.0, 0.0), term, on);
+    }
+    return acc;
+}
+"#;
+
+/// A step shader, with the coupling applied to the model's LAST pass
+/// when `coupled`.
+pub fn assemble_step_coupled(model: &ModelDef, boundary: SimBoundary, pass: u32, coupled: bool) -> String {
     let rng_note = if model.has(ModelFeature::NeedsRng) {
         "// model draws random numbers: keyed by (seed, cell, step)\n"
     } else {
@@ -1350,15 +1415,24 @@ fn sim_kernel_taps() -> u32 {
     } else {
         format!("sim_step{}", pass + 1)
     };
-    let call = format!(
-        "    textureStore(field_out, p, sim_layer(), {entry}(textureLoad(field_in, p, sim_layer(), 0), p));"
-    );
+    let last = pass + 1 == model.passes;
+    let call = if coupled && last {
+        format!(
+            "    let s_in = textureLoad(field_in, p, sim_layer(), 0);\n    textureStore(field_out, p, sim_layer(), {entry}(s_in, p) + sim_dt() * sim_coupling(s_in, p));"
+        )
+    } else {
+        format!(
+            "    textureStore(field_out, p, sim_layer(), {entry}(textureLoad(field_in, p, sim_layer(), 0), p));"
+        )
+    };
+    let coupling = if coupled { COUPLING_ACCESSORS } else { "" };
     splice(
         STEP_TEMPLATE,
         boundary,
         &[
             ("//__MODEL__", &format!("{rng_note}{}", model.wgsl)),
             ("//__STEP_CALL__", &call),
+            ("//__COUPLING__", coupling),
             ("//__KERNEL__", kernel),
             ("//__PYRAMID__", pyramid),
             ("//__MINMAX__", minmax),
@@ -1748,6 +1822,32 @@ mod tests {
     fn the_warp_validates_under_every_boundary() {
         for b in [SimBoundary::Periodic, SimBoundary::Clamp, SimBoundary::Zero, SimBoundary::Mirror] {
             validate(&assemble_warp(b), &format!("warp {b:?}"));
+        }
+    }
+
+    /// Every model's step shaders validate with the coupling spliced
+    /// in (simulation-layers plan, section 3), and an uncoupled
+    /// shader is byte-for-byte the shader it was.
+    #[test]
+    fn every_model_validates_coupled_and_uncoupled_is_unchanged() {
+        for m in MODELS {
+            for pass in 0..m.passes {
+                validate(
+                    &assemble_step_coupled(m, SimBoundary::Periodic, pass, true),
+                    &format!("coupled step {}/{pass}", m.name),
+                );
+                assert_eq!(
+                    assemble_step_coupled(m, SimBoundary::Periodic, pass, false),
+                    assemble_step(m, SimBoundary::Periodic, pass),
+                    "{}: the uncoupled shader must be unchanged",
+                    m.name
+                );
+                assert!(
+                    !assemble_step(m, SimBoundary::Periodic, pass).contains("sim_coupling"),
+                    "{}: an uncoupled shader carries the coupling",
+                    m.name
+                );
+            }
         }
     }
 

@@ -25,7 +25,20 @@
 //!   phase 0 established that per-submit overhead is 0.8% across a
 //!   256x range, so batching is purely a watchdog and pacing device.
 
-use crate::config::sim::{SimConfig, SimGrid, MAX_LAYERS};
+use crate::config::sim::{SimConfig, SimGrid, MAX_COUPLINGS, MAX_LAYERS};
+
+/// One coupling as the step shader reads it; mirrored in the
+/// assembler's `SimCouplingGpu`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SimCouplingGpu {
+    to: u32,
+    from: u32,
+    form: u32,
+    mask: u32,
+    strength: f32,
+    pad: [f32; 3],
+}
 
 /// Floats in the model-parameter buffer. Sixteen was every model until
 /// the coupled Turing lattice, whose coupling matrix alone is sixteen;
@@ -115,7 +128,8 @@ struct SimParamsGpu {
     /// How far back the previous min/max slot of the same layer is:
     /// the layer count.
     minmax_back: u32,
-    layer_pad: u32,
+    /// Entries of the coupling table in force.
+    coupling_count: u32,
     /// The warp stage's per-step affine: zoom, rotation, pan x, pan y.
     /// A vec4 in WGSL, so 16-aligned: the ten words above end at 48.
     warp_a: [f32; 4],
@@ -232,6 +246,8 @@ struct Pipelines {
 #[derive(Clone, PartialEq, Eq)]
 struct PipelineKey {
     layers: Vec<&'static str>,
+    /// Whether the step shaders carry the coupling.
+    coupled: bool,
     coloring: &'static str,
     boundary: crate::config::sim::SimBoundary,
     upscale: crate::config::sim::SimUpscale,
@@ -289,6 +305,8 @@ pub struct SimRenderer {
     kernel_offsets: Vec<u32>,
     /// How many slices the field arrays carry.
     layers: u32,
+    /// The coupling table (`SimCouplingGpu` x MAX_COUPLINGS).
+    coupling_buffer: Buffer,
     /// The convolution table for the large-kernel models, rebuilt and
     /// uploaded with the parameters. Sized once for the largest
     /// kernel the engine allows, so it never resizes.
@@ -413,6 +431,11 @@ impl SimRenderer {
         // Two blocks of (2R+1)^2 at the maximum radius: a model may
         // carry a pair of kernels (SmoothLife's disc and annulus).
         let kernel_floats = 2 * (2 * MAX_KERNEL_RADIUS as usize + 1).pow(2) * MAX_LAYERS;
+        let coupling_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Sim Couplings"),
+            contents: bytemuck::cast_slice(&[<SimCouplingGpu as bytemuck::Zeroable>::zeroed(); MAX_COUPLINGS]),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        });
         let kernel_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Sim Kernel LUT"),
             size: (kernel_floats * std::mem::size_of::<f32>()) as u64,
@@ -456,6 +479,7 @@ impl SimRenderer {
             kernel_radii: Vec::new(),
             kernel_offsets: Vec::new(),
             layers: layers as u32,
+            coupling_buffer,
             steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
             seeded_as: None,
@@ -985,6 +1009,7 @@ impl SimRenderer {
     fn pipeline_key(&self, cfg: &SimConfig) -> PipelineKey {
         PipelineKey {
             layers: layer_models(cfg).iter().map(|m| m.name).collect(),
+            coupled: !cfg.couplings.is_empty(),
             coloring: coloring_or_default(&cfg.coloring).name,
             boundary: cfg.boundary,
             upscale: cfg.upscale,
@@ -1029,7 +1054,9 @@ impl SimRenderer {
                 if !v.iter().any(|(n, _)| *n == m.name) {
                     v.push((
                         m.name,
-                        (0..m.passes).map(|pass| assembler::assemble_step(m, cfg.boundary, pass)).collect(),
+                        (0..m.passes)
+                            .map(|pass| assembler::assemble_step_coupled(m, cfg.boundary, pass, key.coupled))
+                            .collect(),
                     ));
                 }
             }
@@ -1182,6 +1209,9 @@ impl SimRenderer {
                 storage_ro(14),
                 // The agents' deposit: read and cleared by the step.
                 storage_rw(13),
+                // The coupling table, declared only by a coupled
+                // config's step shaders.
+                storage_ro(17),
             ],
         });
         let agent_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -1360,7 +1390,7 @@ impl SimRenderer {
             layer: layer as u32,
             kernel_offset: self.kernel_offsets.get(layer).copied().unwrap_or(0),
             minmax_back: layers,
-            layer_pad: 0,
+            coupling_count: cfg.couplings.len().min(crate::config::sim::MAX_COUPLINGS) as u32,
             warp_a: match cfg.warp.mode {
                 crate::config::sim::SimWarpMode::Continuous => {
                     [cfg.warp.zoom, cfg.warp.rotation, cfg.warp.pan_x, cfg.warp.pan_y]
@@ -1530,6 +1560,24 @@ impl SimRenderer {
         }
         if !lut.is_empty() {
             queue.write_buffer(&self.kernel_buffer, 0, bytemuck::cast_slice(&lut));
+        }
+
+        // The coupling table, in config order, capped at the table.
+        if !cfg.couplings.is_empty() {
+            let table: Vec<SimCouplingGpu> = cfg
+                .couplings
+                .iter()
+                .take(MAX_COUPLINGS)
+                .map(|c| SimCouplingGpu {
+                    to: c.to.min(layers.saturating_sub(1)) as u32,
+                    from: c.from.min(layers.saturating_sub(1)) as u32,
+                    form: c.form.code(),
+                    mask: c.channels & 15,
+                    strength: if c.strength.is_finite() { c.strength } else { 0.0 },
+                    pad: [0.0; 3],
+                })
+                .collect();
+            queue.write_buffer(&self.coupling_buffer, 0, bytemuck::cast_slice(&table));
         }
 
         // One uniform per pyramid level, carrying the SOURCE level's
@@ -1711,6 +1759,7 @@ impl SimRenderer {
         }
         entries.push(BindGroupEntry { binding: 14, resource: self.minmax_buffer.as_entire_binding() });
         entries.push(BindGroupEntry { binding: 13, resource: self.deposit_buffer.as_entire_binding() });
+        entries.push(BindGroupEntry { binding: 17, resource: self.coupling_buffer.as_entire_binding() });
         entries
     }
 
