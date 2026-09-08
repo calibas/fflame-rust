@@ -80,6 +80,11 @@ fn test_palette(device: &Device, queue: &Queue) -> TextureView {
 
 /// Read an `Rgba32Float` texture back as `[f32; 4]` per texel.
 fn read_rgba32f(device: &Device, queue: &Queue, tex: &Texture, w: u32, h: u32) -> Vec<[f32; 4]> {
+    read_rgba32f_layer(device, queue, tex, w, h, 0)
+}
+
+/// One slice of a layered field.
+fn read_rgba32f_layer(device: &Device, queue: &Queue, tex: &Texture, w: u32, h: u32, layer: u32) -> Vec<[f32; 4]> {
     // Copy rows are 256-byte aligned, so a padded staging buffer is
     // required and the padding has to be stripped after mapping.
     let unpadded = (w * 16) as usize;
@@ -95,7 +100,7 @@ fn read_rgba32f(device: &Device, queue: &Queue, tex: &Texture, w: u32, h: u32) -
         TexelCopyTextureInfo {
             texture: tex,
             mip_level: 0,
-            origin: Origin3d::ZERO,
+            origin: Origin3d { x: 0, y: 0, z: layer },
             aspect: TextureAspect::All,
         },
         TexelCopyBufferInfo {
@@ -6050,4 +6055,131 @@ fn the_warp_moves_only_the_channels_it_is_told_to() {
     let (mx, my, mz, mw) = (rms(0), rms(1), rms(2), rms(3));
     println!("warp mask 0101, one step: rms change x {mx:.4} y {my:.4} z {mz:.4} w {mw:.4}; warping={} identity={}", !cfg.warp.is_identity(), cfg.warp.is_identity());
     assert!(mx > 5.0 * my && mz > 5.0 * mw, "the moved channels should change far more than the still ones");
+}
+
+/// Phase 1 of the simulation-layers plan: a layer is the same run it
+/// would be alone. Layer 0 of a two-layer config -- with a two-pass
+/// model beside it, so the single-pass layer is carried through the
+/// stage it has no pass for -- is bit-identical to the single-layer
+/// run of the same model, parameters and seed.
+#[test]
+fn a_layer_is_the_same_run_it_would_be_alone() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let alone = lattice4_config("ring", N, 6);
+    let mut r = SimRenderer::new(&device, &alone, N, N);
+    r.seed(&device, &queue, &alone);
+    r.run_steps(&device, &queue, &alone, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let single = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let mut layered = alone.clone();
+    layered.layers = vec![
+        crate::config::sim::SimLayer {
+            model: "lattice4".into(),
+            model_params: alone.model_params.clone(),
+            enabled: true,
+        },
+        crate::config::sim::SimLayer {
+            model: "cahn_hilliard".into(),
+            model_params: Default::default(),
+            enabled: true,
+        },
+    ];
+    let mut r = SimRenderer::new(&device, &layered, N, N);
+    r.seed(&device, &queue, &layered);
+    r.run_steps(&device, &queue, &layered, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let layer0 = read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, 0);
+    let layer1 = read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, 1);
+    let differ = single.iter().zip(&layer0).filter(|(a, b)| a != b).count();
+    println!("layer 0 beside a two-pass layer: {differ} cells differ from the single-layer run");
+    assert_eq!(differ, 0, "layer 0 should be the run it would be alone");
+    assert!(layer1.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    assert!(layer1.iter().any(|c| c[0] != layer1[0][0]), "layer 1 should have run");
+}
+
+/// Three layers, batch invariant: 300 steps in one call and in three
+/// are the same field on every slice.
+#[test]
+fn layered_steps_are_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.seed = 12;
+    cfg.steps = 0;
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    let layer = |model: &str| crate::config::sim::SimLayer {
+        model: model.into(),
+        model_params: Default::default(),
+        enabled: true,
+    };
+    cfg.layers = vec![layer("gray_scott"), layer("brusselator"), layer("lattice4")];
+    let run = |chunks: &[u32]| -> Vec<Vec<[f32; 4]>> {
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        for &c in chunks {
+            r.run_steps(&device, &queue, &cfg, c);
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (0..3).map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l)).collect()
+    };
+    let a = run(&[300]);
+    let b = run(&[70, 130, 100]);
+    for l in 0..3 {
+        assert_eq!(a[l], b[l], "layer {l} moved with the batch boundary");
+        assert!(a[l].iter().all(|c| c.iter().all(|v| v.is_finite())));
+    }
+    // The layers are different runs: their seeds are salted by layer.
+    assert_ne!(a[0], a[1]);
+    println!("three layers (gray_scott, brusselator, lattice4): batch invariant, all finite");
+}
+
+/// Phase-1 cost probe (simulation-layers plan, section 8): ms per
+/// step at 1080p for one Gray-Scott layer against four, and the
+/// submit batch the ring allows at each.
+#[test]
+#[ignore]
+fn layered_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    for n in [1usize, 2, 4, 8] {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: w, height: h };
+        cfg.steps = 0;
+        cfg.layers = (0..n)
+            .map(|_| crate::config::sim::SimLayer {
+                model: "gray_scott".into(),
+                model_params: Default::default(),
+                enabled: true,
+            })
+            .collect();
+        if n == 1 {
+            cfg.layers.clear();
+        }
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 32);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const STEPS: u32 = 100;
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t0 = std::time::Instant::now();
+            r.run_steps(&device, &queue, &cfg, STEPS);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            best = best.min(t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64);
+        }
+        println!(
+            "{n} layer(s) of Gray-Scott at 1080p: {best:.3} ms/step ({:.3} per layer); field memory {} MB",
+            best / n as f64,
+            (n as u64 * 2 * (w as u64) * (h as u64) * 16) >> 20
+        );
+    }
 }

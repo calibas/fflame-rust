@@ -1,9 +1,10 @@
 # Simulation layers: N coupled systems, per-layer transforms, colouring layers
 
-**Status:** plan of record, 2026-09-08. Nothing built. Phases are
-ordered so that each one ships with every existing baseline
-byte-identical, and the decision points a reader should argue with
-are marked **decision**.
+**Status:** plan of record, 2026-09-08. **Phase 1 built and gated the
+same day** (section 7); phases 2–5 to follow. Phases are ordered so
+that each one ships with every existing baseline byte-identical, and
+the decision points a reader should argue with are marked
+**decision**.
 
 ## 0. What is being asked for
 
@@ -219,7 +220,7 @@ transform UI by construction (§4).
 
 | phase | builds | gate |
 |---|---|---|
-| 1 | texture-array state, per-layer dispatch, `params.layer`, N = 1 everywhere | every baseline byte-identical; batch invariance at N = 3 |
+| 1 | texture-array state, per-layer dispatch, `params.layer`, N = 1 everywhere | every baseline byte-identical; batch invariance at N = 3 — **built**: 87/87 sim baselines byte-identical; three mixed layers (Gray–Scott, Brusselator, lattice) batch invariant on every slice; and a stronger gate than planned, layer 0 of a two-layer config beside a two-pass model is bit-identical to the single-layer run (`a_layer_is_the_same_run_it_would_be_alone`). `SimLayer { model, model_params, enabled }` and `SimConfig::layers` landed here rather than in phase 2, since the per-layer dispatch needs each layer's model; couplings and the panel are phase 2. Cost probe (`layered_step_cost_at_1080p`): Gray–Scott at 1080p 0.290 ms/step alone, 0.284 per layer at two, 0.299 at four, 0.319 at eight — per-layer cost is flat; memory 63 MB per layer as predicted. One agent layer per config (one population, one deposit buffer); a layer is carried through a stage it has no pass for by the warp with an all-zero mask, exact. |
 | 2 | `layers` + `couplings` in the config, template coupling, panel lists | `brusselator2` reproduced from two layers; every model runs as a layer |
 | 3 | `build_definitions`, flame buffers bound to the warp, weight = rate, panels un-gated in Simulation mode | rotation-only transform equals the global warp; every variation validates |
 | 4 | `color_layers`, K colourings spliced, blend modes | single Normal layer byte-identical; blend modes vs CPU |

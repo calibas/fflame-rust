@@ -40,8 +40,18 @@ struct SimParams {
     init_p1: f32,
     kernel_radius: u32,
     // The min/max ring slot this dispatch belongs to: the reduce pass
-    // writes it, the step pass reads the slot BEFORE it.
+    // writes it, the step pass reads the slot `minmax_back` before it
+    // -- one per layer, so with N layers a layer's previous slot is N
+    // back.
     minmax_slot: u32,
+    // The layer this dispatch is: the slice of the field it reads as
+    // its own and writes. The colour and jump-flood passes read the
+    // layer they are told to.
+    layer: u32,
+    // Where this layer's convolution table starts in the shared LUT.
+    kernel_offset: u32,
+    minmax_back: u32,
+    layer_pad: u32,
     // The warp stage's affine: zoom, rotation, pan x, pan y; then the
     // swirl rate and the filter (0 bilinear, 1 nearest). vec4 then
     // vec2, so the struct is 80 bytes -- `SimParamsGpu` pads to match.
@@ -80,8 +90,15 @@ fn sim_visible_halfextent() -> vec2<f32> {
 @group(0) @binding(1) var<storage, read> model_params: array<f32>;
 @group(0) @binding(2) var<storage, read> coloring_params: array<f32>;
 
+// Each layer's parameters sit in their own block of the buffer;
+// the block is `MODEL_PARAM_SLOTS` floats, mirrored in the renderer.
 fn mparam(i: u32) -> f32 {
-    return model_params[i];
+    return model_params[params.layer * 32u + i];
+}
+
+// The slice of the field this dispatch owns.
+fn sim_layer() -> i32 {
+    return i32(params.layer);
 }
 fn cparam(i: u32) -> f32 {
     return coloring_params[i];
@@ -136,7 +153,10 @@ fn sim_pcg(v: u32) -> u32 {
 fn sim_rand(p: vec2<i32>, salt: u32) -> f32 {
     let g = sim_grid();
     let idx = u32(p.y * g.x + p.x);
-    var h = sim_pcg(idx ^ params.seed_lo);
+    // The layer salts the stream, so two layers seeded alike draw
+    // different noise; layer 0's salt is zero, so a single field's
+    // stream is what it always was.
+    var h = sim_pcg(idx ^ params.seed_lo ^ (params.layer * 0x9E3779B9u));
     h = sim_pcg(h ^ params.seed_hi ^ salt);
     h = sim_pcg(h ^ params.step_index);
     // 24 bits into [0, 1): the mantissa's exact range, so the value is
@@ -261,7 +281,7 @@ fn sim_read(p: vec2<i32>) -> vec4<f32> {
     if (sim_outside(p, g)) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    return textureLoad(field_in, sim_wrap_sized(p, g), 0);
+    return textureLoad(field_in, sim_wrap_sized(p, g), sim_layer(), 0);
 }
 "#;
 
@@ -275,7 +295,7 @@ fn sim_read(p: vec2<i32>) -> vec4<f32> {
 const JFA_INIT_TEMPLATE: &str = r#"
 //__COMMON__
 @group(0) @binding(3) var jfa_out: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 
 const JFA_FAR: f32 = -1.0e6;
 
@@ -286,7 +306,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (p.x >= g.x || p.y >= g.y) {
         return;
     }
-    let s = textureLoad(field_in, p, 0);
+    let s = textureLoad(field_in, p, sim_layer(), 0);
     let which = i32(round(clamp(params.matte.x, 0.0, 3.0)));
     var v = s.x;
     if (which == 1) { v = s.y; }
@@ -406,8 +426,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// zoom, and then the rotation the swirl adds to at its own radius.
 const WARP_TEMPLATE: &str = r#"
 //__COMMON__
-@group(0) @binding(3) var field_out: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(3) var field_out: texture_storage_2d_array<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 
 //__BOUNDARY__
 
@@ -483,15 +503,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // select, not mix: mix(stay, v, 1) is stay + (v - stay) * 1,
     // which is not v to the last bit, and a chaotic run amplifies the
     // difference -- measured, three baselines moved.
-    let stay = textureLoad(field_in, p, 0);
+    let stay = textureLoad(field_in, p, sim_layer(), 0);
     v = select(stay, v, params.warp_mask >= vec4<f32>(0.5, 0.5, 0.5, 0.5));
-    textureStore(field_out, p, v);
+    textureStore(field_out, p, sim_layer(), v);
 }
 "#;
 
 const SEED_TEMPLATE: &str = r#"
 //__COMMON__
-@group(0) @binding(3) var field_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var field_out: texture_storage_2d_array<rgba32float, write>;
 
 //__MODEL_SEED__
 
@@ -504,14 +524,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let inside = sim_init_mask(p);
     let noise = sim_rand(p, 0x5eedu);
-    textureStore(field_out, p, sim_seed(inside, noise, p));
+    textureStore(field_out, p, sim_layer(), sim_seed(inside, noise, p));
 }
 "#;
 
 const STEP_TEMPLATE: &str = r#"
 //__COMMON__
-@group(0) @binding(3) var field_out: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(3) var field_out: texture_storage_2d_array<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 
 //__KERNEL__
 
@@ -540,7 +560,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let he = sim_visible_halfextent() + vec2<f32>(params.view.w, params.view.w);
         let d = abs(vec2<f32>(p) + vec2<f32>(0.5, 0.5) - vec2<f32>(g) * 0.5);
         if (d.x > he.x || d.y > he.y) {
-            textureStore(field_out, p, textureLoad(field_in, p, 0));
+            textureStore(field_out, p, sim_layer(), textureLoad(field_in, p, sim_layer(), 0));
             return;
         }
     }
@@ -632,7 +652,7 @@ fn agent_claim_check(p: vec2<i32>, i: u32) -> bool {
 /// The move-and-deposit pass. One thread per agent.
 const AGENT_TEMPLATE: &str = r#"
 //__COMMON__
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 @group(0) @binding(13) var<storage, read_write> deposit: array<atomic<u32>>;
 
 //__BOUNDARY__
@@ -656,7 +676,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// The population's initial state. One thread per agent.
 const AGENT_SEED_TEMPLATE: &str = r#"
 //__COMMON__
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 @group(0) @binding(13) var<storage, read_write> deposit: array<atomic<u32>>;
 
 //__BOUNDARY__
@@ -690,8 +710,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// a Gaussian, which is round.
 const PYRAMID_TEMPLATE: &str = r#"
 //__COMMON__
-@group(0) @binding(3) var field_out: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(3) var field_out: texture_storage_2d_array<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 
 //__BOUNDARY__
 
@@ -713,7 +733,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             acc = acc + w * sim_read(c + vec2<i32>(dx, dy));
         }
     }
-    textureStore(field_out, p, acc);
+    // A pyramid level is a one-layer array: always layer 0.
+    textureStore(field_out, p, 0, acc);
 }
 "#;
 
@@ -727,7 +748,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// renderer before the batch that will write it.
 const REDUCE_TEMPLATE: &str = r#"
 //__COMMON__
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 @group(0) @binding(14) var<storage, read_write> minmax: array<atomic<u32>>;
 
 var<workgroup> wg_min: array<u32, 64>;
@@ -750,7 +771,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
     var lo = 0xFFFFFFFFu;
     var hi = 0u;
     if (p.x < g.x && p.y < g.y) {
-        let v = minmax_ord(textureLoad(field_in, p, 0).x);
+        let v = minmax_ord(textureLoad(field_in, p, sim_layer(), 0).x);
         lo = v;
         hi = v;
     }
@@ -775,7 +796,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
 const COLOR_TEMPLATE: &str = r#"
 //__COMMON__
 @group(0) @binding(3) var out_image: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(4) var field_in: texture_2d<f32>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
 @group(0) @binding(5) var palette_tex: texture_2d<f32>;
 // The signed distance field, when the matte's edge is Distance; a 1x1
 // dummy otherwise, which sim_sdf never reads.
@@ -1290,7 +1311,7 @@ fn sim_kernel_radius() -> i32 {
 // axes; a model carrying two kernels stores the second block straight
 // after the first and offsets into it.
 fn klut(i: u32) -> f32 {
-    return kernel_lut[i];
+    return kernel_lut[params.kernel_offset + i];
 }
 
 // Taps in one block, which is also the offset of a second one.
@@ -1329,7 +1350,9 @@ fn sim_kernel_taps() -> u32 {
     } else {
         format!("sim_step{}", pass + 1)
     };
-    let call = format!("    textureStore(field_out, p, {entry}(textureLoad(field_in, p, 0), p));");
+    let call = format!(
+        "    textureStore(field_out, p, sim_layer(), {entry}(textureLoad(field_in, p, sim_layer(), 0), p));"
+    );
     splice(
         STEP_TEMPLATE,
         boundary,
@@ -1429,7 +1452,7 @@ fn pyr_load_sized(l: i32, q: vec2<i32>, g: vec2<i32>) -> f32 {
     }
     let w = sim_wrap_sized(q, g);
     switch l {
-        case 0: { return textureLoad(field_in, w, 0).x; }
+        case 0: { return textureLoad(field_in, w, sim_layer(), 0).x; }
         case 1: { return textureLoad(pyr1, w, 0).x; }
         case 2: { return textureLoad(pyr2, w, 0).x; }
         case 3: { return textureLoad(pyr3, w, 0).x; }
@@ -1450,7 +1473,7 @@ fn pyr_load4_sized(l: i32, q: vec2<i32>, g: vec2<i32>) -> vec4<f32> {
     }
     let w = sim_wrap_sized(q, g);
     switch l {
-        case 0: { return textureLoad(field_in, w, 0); }
+        case 0: { return textureLoad(field_in, w, sim_layer(), 0); }
         case 1: { return textureLoad(pyr1, w, 0); }
         case 2: { return textureLoad(pyr2, w, 0); }
         case 3: { return textureLoad(pyr3, w, 0); }
@@ -1550,7 +1573,7 @@ fn minmax_unord(e: u32) -> f32 {
 // has run (the slot still holds its cleared identities) it reports
 // [-1, 1], which is the range a freshly seeded McCabe field has.
 fn sim_minmax() -> vec2<f32> {
-    let prev = (params.minmax_slot + 256u) % 257u;
+    let prev = (params.minmax_slot + 257u - params.minmax_back) % 257u;
     let lo = minmax_in[2u * prev];
     let hi = minmax_in[2u * prev + 1u];
     if (lo == 0xFFFFFFFFu || hi == 0u) {
