@@ -58,6 +58,8 @@ struct SimParams {
     // 1 cover. z: 1 when the step freezes cells outside the visible
     // window. w: the halo around that window, in cells.
     view: vec4<f32>,
+    // Which channels the warp moves, 1 or 0 each.
+    warp_mask: vec4<f32>,
 };
 
 // The scale from grid cells to output pixels, by the fit: the smaller
@@ -476,6 +478,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else {
         v = warp_bilinear(src);
     }
+    // The channels the warp does not move keep their own value: a
+    // layer advected past layers that sit still.
+    // select, not mix: mix(stay, v, 1) is stay + (v - stay) * 1,
+    // which is not v to the last bit, and a chaotic run amplifies the
+    // difference -- measured, three baselines moved.
+    let stay = textureLoad(field_in, p, 0);
+    v = select(stay, v, params.warp_mask >= vec4<f32>(0.5, 0.5, 0.5, 0.5));
     textureStore(field_out, p, v);
 }
 "#;

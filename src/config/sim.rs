@@ -322,6 +322,22 @@ pub struct SimWarp {
     /// up to three quarters of the step near the end of an octave.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cull: bool,
+    /// Which channels the warp moves, as a bit mask (bit 0 = x ... bit
+    /// 3 = w); 15 is all four. Continuous mode only -- the octave
+    /// mode's view is one view of all four channels, so a doubling
+    /// that skipped a channel would show it zoomed and then jumping.
+    /// A layer moved while its neighbours sit still is differential
+    /// advection, which is a pattern-forming instability in its own
+    /// right (Rovinsky & Menzinger 1992).
+    #[serde(default = "warp_all_layers", skip_serializing_if = "is_all_layers")]
+    pub layers: u32,
+}
+
+fn warp_all_layers() -> u32 {
+    15
+}
+fn is_all_layers(v: &u32) -> bool {
+    *v & 15 == 15
 }
 
 fn warp_one() -> f32 {
@@ -351,6 +367,7 @@ impl Default for SimWarp {
             filter: SimWarpFilter::Bilinear,
             mode: SimWarpMode::Continuous,
             cull: false,
+            layers: 15,
         }
     }
 }
@@ -694,7 +711,11 @@ fn is_default_matte(v: &SimMatte) -> bool {
     *v == SimMatte::default()
 }
 fn is_identity_warp(v: &SimWarp) -> bool {
-    v.is_identity() && v.filter == SimWarpFilter::default() && v.mode == SimWarpMode::default() && !v.cull
+    v.is_identity()
+        && v.filter == SimWarpFilter::default()
+        && v.mode == SimWarpMode::default()
+        && !v.cull
+        && v.layers & 15 == 15
 }
 fn is_default_upscale(v: &SimUpscale) -> bool {
     *v == SimUpscale::default()
@@ -1008,6 +1029,7 @@ mod tests {
             ConfigPath::SimWarpFilter,
             ConfigPath::SimWarpMode,
             ConfigPath::SimWarpCull,
+            ConfigPath::SimWarpLayers,
             ConfigPath::SimMatteChannel,
             ConfigPath::SimMatteCutoff,
             ConfigPath::SimMatteSoftness,
@@ -1163,6 +1185,7 @@ mod tests {
             filter: SimWarpFilter::Nearest,
             mode: SimWarpMode::Octaves,
             cull: true,
+            layers: 5,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: SimConfig = serde_json::from_str(&json).unwrap();

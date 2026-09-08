@@ -3823,6 +3823,7 @@ fn the_warp_matches_a_cpu_resample_of_the_same_field() {
             filter,
             mode: crate::config::sim::SimWarpMode::Continuous,
             cull: false,
+            layers: 15,
         };
         let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
         r.seed(&device, &queue, &cfg);
@@ -6013,4 +6014,40 @@ fn rossler_range_probe() {
             println!("{label:<12} t={:>6.0}: u in [{umin:8.2}, {umax:8.2}], envelope in [{emin:8.2}, {emax:8.2}], {nan} non-finite", done as f32 * dt);
         }
     }
+}
+
+/// The warp's channel mask: the moved channels are the warp's, the
+/// others are exactly what they were.
+#[test]
+fn the_warp_moves_only_the_channels_it_is_told_to() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    // Settle WITHOUT the warp -- a 0.3 rad rotation applied every step
+    // blurs the moved channels flat, and rotating a flat field
+    // changes nothing (measured: the first version of this test) --
+    // then rotate once, and compare: the moved channels differ from
+    // `before` by a rotation's worth, the still ones by one step of
+    // reaction, which is far smaller.
+    let mut cfg = lattice4_config("ring", N, 8);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let before = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    cfg.warp = crate::config::sim::SimWarp {
+        rotation: 0.3,
+        layers: 0b0101, // x and z move; y and w stay
+        ..Default::default()
+    };
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let after = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let n = (N * N) as f32;
+    let rms = |c: usize| (before.iter().zip(&after).map(|(a, b)| (a[c] - b[c]).powi(2)).sum::<f32>() / n).sqrt();
+    let (mx, my, mz, mw) = (rms(0), rms(1), rms(2), rms(3));
+    println!("warp mask 0101, one step: rms change x {mx:.4} y {my:.4} z {mz:.4} w {mw:.4}; warping={} identity={}", !cfg.warp.is_identity(), cfg.warp.is_identity());
+    assert!(mx > 5.0 * my && mz > 5.0 * mw, "the moved channels should change far more than the still ones");
 }

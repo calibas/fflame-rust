@@ -5958,6 +5958,7 @@ pub static LATTICE4: ModelDef = ModelDef {
                 filter: crate::config::sim::SimWarpFilter::Bicubic,
                 mode: crate::config::sim::SimWarpMode::Octaves,
                 cull: false,
+                layers: 15,
             }),
         },
         SimPreset {
@@ -5978,6 +5979,7 @@ pub static LATTICE4: ModelDef = ModelDef {
                 filter: crate::config::sim::SimWarpFilter::Bicubic,
                 mode: crate::config::sim::SimWarpMode::Octaves,
                 cull: false,
+                layers: 15,
             }),
         },
     ],
