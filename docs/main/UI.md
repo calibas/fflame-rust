@@ -9,7 +9,7 @@ reopened from the Window menu.
 - [I18N.md](I18N.md) - Internationalization support
 - [RENDERER.md](RENDERER.md) - Rendering pipeline
 - [TRANSFORMS.md](TRANSFORMS.md) - Transform editing
-- [../projects/ui-render-modes.md](../projects/ui-render-modes.md) - the
+- [../archive/projects/ui-render-modes.md](../archive/projects/ui-render-modes.md) - the
   render-mode project: the survey the current design came from, the
   decisions, and the bugs it found but did not fix
 

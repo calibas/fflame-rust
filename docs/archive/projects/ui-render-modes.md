@@ -1,6 +1,9 @@
 # UI by render mode: one Mode menu, one visibility policy
 
-**Status:** plan of record, 2026-09-09. Branch `ui-modes`, off
+**Status: ARCHIVED 2026-09-09 — done.** Kept as the record of why the UI is shaped this way; the living description is
+[docs/main/UI.md](../../main/UI.md), which this project rewrote. Anything still outstanding is in **What is still open** below.
+
+**Was:** plan of record, 2026-09-09. Branch `ui-modes`, off
 `simulation-mode`. Surveyed before planning; every claim below carries
 its `file:line` so a reader can argue with the code rather than with
 the prose. **All six phases built and gated** (section 4), 2026-09-09,
@@ -11,6 +14,19 @@ Section 1 describes the code **as it was before this project**, and is
 left in the past tense on purpose: it is the evidence the decisions
 were made from. What each phase actually changed is recorded under
 section 4.
+
+## What is still open
+
+Everything this document planned is built. These outlived it, and are
+listed here so archiving does not bury them.
+
+| Item | Kind | Where |
+|---|---|---|
+| WASM custom-size export has an escape-only generator, so a custom-size Simulation export on the web encodes the empty accumulator. Desktop is fine. | **Bug** | `src/app/mod.rs:2068` and the block below it |
+| Leaving a non-flame mode does not restore the flame's tone mapping | Deliberate; the argument and the shape of a fix are at `switch_render_mode` | `src/ui/render_mode.rs` |
+| Per-mode layout memory is session-only; a restart gives the built-in layouts | Deferred feature — needs `serde` on `DockState` and a versioned settings field | §3.3 |
+| The simulation has no display-time view, so viewport navigation is refused there rather than wired | Feature. `params.view.x` is already most of it | §5, and `Control::ViewNavigation` |
+| The DensityVisualization alpha blend mixes an exposure-scaled alpha with a density-scaled one, which is not what the control says | Minor, cosmetic drift | `shaders/tonemap.wgsl` |
 
 ## 0. What is being asked for
 
@@ -333,11 +349,12 @@ button is inert in both, and the Simulation panel's own Run/Step/Reset
 transport is the real control there.
 
 That leaves the panel showing **VSync and target FPS alone in
-Simulation**, plus the orbit cache in Escape. Since both are
-`SystemSettings` device preferences rather than fractal parameters,
-phase 4 should decide whether the panel is worth showing at all in
-Simulation or whether those two move to a preferences home. Recorded as
-an open question, not settled here.
+Simulation**, plus the orbit cache in Escape. Both are `SystemSettings`
+device preferences rather than fractal parameters, so this was raised
+as a question — whether the panel is worth showing there at all, or
+whether those two belong in a preferences home. **Settled 2026-09-09:
+it is fine as it stands.** The panel is not moved and neither control
+is relocated.
 
 The same policy removes the Iterations-per-Thread submenu and Reset
 Accumulation from the Rendering menu in non-flame modes.
@@ -618,16 +635,11 @@ argument, including the shape a fix would have to take.
 
 ### Found while fixing, still open
 
-- **WASM custom-size export has an escape-only generator**
-  (`src/app/mod.rs:2068` and the block below it), so a custom-size
-  Simulation export on the web encodes the empty accumulator. Desktop
-  custom-size is fine — it routes through `render.rs`, which handles
-  both engines. Same shape as the transparent-export bug, different
-  code path.
-- **The DensityVisualization branch's alpha blend is accidentally
-  meaningful**: it mixes an exposure-scaled alpha with a
-  density-scale-scaled one, which is not what the control describes.
-  Left alone as the smaller instance of the same drift.
+Both are carried at the top of this document, under **What is still
+open**. The WASM custom-size export is the same shape as the
+transparent-export bug on a different code path; the
+DensityVisualization alpha blend is the smaller instance of the same
+drift as the Linear one.
 
 ## 6. Risks
 

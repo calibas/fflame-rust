@@ -8,7 +8,7 @@
 //! one-line stub -- and the stub's text was a single shared string that
 //! was wrong in two of the three places it appeared.
 //!
-//! See `docs/projects/ui-render-modes.md` section 3.2. Panels depend on
+//! See `docs/archive/projects/ui-render-modes.md` section 3.2. Panels depend on
 //! the render mode alone; controls also depend on the tone-map mode,
 //! because some of the tonemap's own parameters are read by one branch
 //! of it and not the others. There is room for the skill level that
@@ -142,7 +142,7 @@ pub fn panel(p: PanelType, m: RenderMode) -> Vis {
 /// for every slider the logarithmic branch alone reads, and a variant
 /// each would be nine ways to get the same decision wrong. The
 /// groupings come from measuring what the shaders actually read --
-/// `docs/projects/ui-render-modes.md` sections 1.4 and 3.4.
+/// `docs/archive/projects/ui-render-modes.md` sections 1.4 and 3.4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
     /// Everything driven by the chaos game: pause, reset accumulation,
