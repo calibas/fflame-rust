@@ -21,9 +21,10 @@ pub fn render_settings_content(
     // plus escape's deep-zoom orbit cache.
     use super::visibility::{control, Control, Vis};
     let mode = config.render_mode;
-    let chaos = control(Control::ChaosGame, mode) != Vis::Hide;
+    let tone = config.tonemap_mode;
+    let chaos = control(Control::ChaosGame, mode, tone) != Vis::Hide;
     let show_orbit =
-        cfg!(not(target_arch = "wasm32")) && control(Control::OrbitCache, mode).is_show();
+        cfg!(not(target_arch = "wasm32")) && control(Control::OrbitCache, mode, tone).is_show();
 
     if chaos {
         // Section: Rendering Controls

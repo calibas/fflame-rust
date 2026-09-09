@@ -788,6 +788,19 @@ impl Default for FractalConfig {
 }
 
 impl FractalConfig {
+    /// Whether the density Levels remap should run.
+    ///
+    /// Off in Escape and Simulation whatever the config says: Levels
+    /// divides by a sample density that only the chaos game produces,
+    /// and neither engine writes one. The interactive frame loop has
+    /// always suppressed it; this is what lets the offline paths --
+    /// CLI export, thumbnails, video -- agree with it, instead of
+    /// passing the raw flag and relying on the arithmetic happening to
+    /// come out the same.
+    pub fn effective_levels_enabled(&self) -> bool {
+        self.levels_enabled && !self.render_mode.is_non_flame()
+    }
+
     /// Convert a screen-aligned XY delta into the pan coordinate frame.
     ///
     /// Both render pipelines apply pan BEFORE the screen rotation

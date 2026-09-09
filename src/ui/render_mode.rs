@@ -21,8 +21,35 @@ use crate::scene::transforms::RenderMode;
 /// entry with the mode change; switching between the two non-flame
 /// modes does not, because the values are already right.
 ///
-/// The reset is deliberately one-way: leaving does not restore what
-/// you had. That is a known wart, filed in the plan's section 5.
+/// The reset is one-way on purpose, and the reason is worth keeping
+/// because "just restore it on the way out" looks obviously right and
+/// is not.
+///
+/// What would have to be restored is session state: the config holds
+/// exactly one tone-mapping triple, and two mode families take turns
+/// owning it. A saved escape or simulation config carries its Linear
+/// mapping legitimately -- that is part of how it looks -- so the
+/// previous flame's values belong nowhere on disk. Remembering them
+/// anywhere else makes a side channel that undo cannot see, and the
+/// mode change is then recorded in two places that drift apart: redo
+/// re-applies the batch without going through here, so the memory and
+/// the history disagree after any undo tour. There are sharper edges
+/// too. The reset is conditional on Logarithmic, so a naive memory
+/// would not refresh when it does not fire and would later restore
+/// over a mapping the user chose deliberately. And loading a different
+/// fractal while in Escape would hand ITS tone mapping to the config
+/// that arrives.
+///
+/// Against all that: the tone-map MODE selector is already disabled in
+/// the non-flame modes, so a round trip cannot lose a chosen mapping.
+/// It loses exposure and gamma, two sliders, and it is visible the
+/// instant it happens because the picture changes.
+///
+/// If it is ever fixed, the shape is a per-mode stash mirroring
+/// `Workspace::stashed`: recorded on every entry rather than only when
+/// the reset fires, stamped with the config's load generation so a
+/// load invalidates it, and applied inside the same batch as the mode
+/// change so one undo still reverses the whole thing.
 pub fn switch_render_mode(
     config_manager: &mut ConfigManager,
     mode: RenderMode,
@@ -64,7 +91,7 @@ pub fn switch_render_mode(
 
 /// The two engines that are not the chaos game.
 pub fn is_non_flame(mode: RenderMode) -> bool {
-    matches!(mode, RenderMode::Escape | RenderMode::Simulation)
+    mode.is_non_flame()
 }
 
 /// Whether the fly camera means anything in this mode.

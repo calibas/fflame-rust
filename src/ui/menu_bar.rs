@@ -123,23 +123,30 @@ pub fn render_menu_bar(
                 ui.add_enabled(false, egui::Button::new(t!("menu.preferences")));
             });
 
-            // View Menu
-            ui.menu_button(t!("menu.view"), |ui| {
-                if ui.button(t!("menu.reset_view")).clicked() {
-                    menu_actions.view.reset_view = true;
-                }
+            // View Menu -- all three rows move a view, which
+            // Simulation does not have, so the whole menu goes there.
+            if super::visibility::control(
+                super::visibility::Control::ViewNavigation,
+                menu_state.render_mode,
+                menu_state.tonemap_mode,
+            ) != super::visibility::Vis::Hide
+            {
+                ui.menu_button(t!("menu.view"), |ui| {
+                    if ui.button(t!("menu.reset_view")).clicked() {
+                        menu_actions.view.reset_view = true;
+                    }
 
-                ui.separator();
+                    ui.separator();
 
-                if ui.button(t!("menu.zoom_in")).clicked() {
-                    menu_actions.view.zoom_in = true;
-                }
+                    if ui.button(t!("menu.zoom_in")).clicked() {
+                        menu_actions.view.zoom_in = true;
+                    }
 
-                if ui.button(t!("menu.zoom_out")).clicked() {
-                    menu_actions.view.zoom_out = true;
-                }
-
-            });
+                    if ui.button(t!("menu.zoom_out")).clicked() {
+                        menu_actions.view.zoom_out = true;
+                    }
+                });
+            }
 
             // Mode Menu — the four engines as peers. The View menu used
             // to carry a 2D/3D pair, which could not name the other two
@@ -167,6 +174,7 @@ pub fn render_menu_bar(
             if super::visibility::control(
                 super::visibility::Control::ChaosGame,
                 menu_state.render_mode,
+                menu_state.tonemap_mode,
             ) != super::visibility::Vis::Hide
             {
             ui.menu_button(t!("menu.rendering"), |ui| {
@@ -263,12 +271,14 @@ pub fn render_menu_bar(
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Scripting, t!("menu.layout_scripting").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Scripting);
                     }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::EscapeTime, t!("menu.layout_escape").as_ref()).clicked() {
-                        workspace.apply_layout(super::workspace::WorkspaceLayout::EscapeTime);
-                    }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Simulation, t!("menu.layout_simulation").as_ref()).clicked() {
-                        workspace.apply_layout(super::workspace::WorkspaceLayout::Simulation);
-                    }
+                    // The Escape Time and Simulation layouts are NOT
+                    // offered here. They rearranged panels without
+                    // changing the mode, so they read as mode switches
+                    // that did half the job; and since the workspace
+                    // follows the mode on its own, picking the mode is
+                    // now the way to get its layout. The layouts
+                    // themselves still exist -- `render_mode::layout_for`
+                    // is what asks for them.
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
                     //     workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
                     // }

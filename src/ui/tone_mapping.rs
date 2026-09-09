@@ -201,8 +201,9 @@ pub fn render_colors_content(
     // re-black the picture.
     use super::visibility::{control, gated, Control, Vis};
     let mode = config_manager.active_config().render_mode;
-    let show_presets = control(Control::TonemapPresets, mode) != Vis::Hide;
-    let show_color_mode = control(Control::ColorMode, mode) != Vis::Hide;
+    let tone = config_manager.active_config().tonemap_mode;
+    let show_presets = control(Control::TonemapPresets, mode, tone) != Vis::Hide;
+    let show_color_mode = control(Control::ColorMode, mode, tone) != Vis::Hide;
 
     // Section 1: Tone Mapping
     egui::CollapsingHeader::new(t!("tonemap.title"))
@@ -262,7 +263,7 @@ pub fn render_colors_content(
                 max_update = max_update.max(result.update_type);
             }
 
-            gated(ui, Control::LogOnlyTone, mode, |ui| {
+            gated(ui, Control::LogOnlyTone, mode, tone, |ui| {
                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::GammaThreshold, 0.0..=1000.0, t!("tonemap.gamma_threshold").as_ref(), Some(t!("tonemap.tooltip_gamma_threshold").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
@@ -304,7 +305,7 @@ pub fn render_colors_content(
                         ToneMapMode::Logarithmic => t!("tonemap.mode_log"),
                         ToneMapMode::DensityVisualization => t!("tonemap.mode_density"),
                     };
-                    gated(ui, Control::TonemapMode, mode, |ui| {
+                    gated(ui, Control::TonemapMode, mode, tone, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(t!("tonemap.mode"));
                             egui::ComboBox::from_id_salt("tonemap_mode_combo")
@@ -364,7 +365,7 @@ pub fn render_colors_content(
                         .show(ui, |ui| {
                             ui.label(t!("tonemap.alpha_blending_desc"));
 
-                            gated(ui, Control::AlphaBlendCurve, mode, |ui| {
+                            gated(ui, Control::AlphaBlendCurve, mode, tone, |ui| {
                                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendLow, 0.0..=1.0, t!("tonemap.alpha_blend_low").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_low").as_ref())) {
                                     max_update = max_update.max(result.update_type);
                                 }
@@ -379,7 +380,7 @@ pub fn render_colors_content(
                             }
                         });
 
-                    if control(Control::SpatialFilter, mode) != Vis::Hide {
+                    if control(Control::SpatialFilter, mode, tone) != Vis::Hide {
                         // Spatial Filter — Apo's per-sample Gaussian (filter
                         // attribute in .flame XML). Applied to the per-batch
                         // histogram before accumulate, so it smooths
@@ -460,7 +461,7 @@ pub fn render_colors_content(
     // image is a constant 1 sample/px) — the render path hard-offs
     // the remap there, and the panel says so instead of offering
     // controls wired to stale flame data.
-    let show_levels = control(Control::DensityLevels, mode) != Vis::Hide;
+    let show_levels = control(Control::DensityLevels, mode, tone) != Vis::Hide;
     let levels_enabled = config_manager.active_config().levels_enabled;
     let levels_resp = show_levels.then(|| egui::CollapsingHeader::new(t!("tonemap.histogram"))
         .default_open(false)

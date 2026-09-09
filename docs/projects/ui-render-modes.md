@@ -3,9 +3,9 @@
 **Status:** plan of record, 2026-09-09. Branch `ui-modes`, off
 `simulation-mode`. Surveyed before planning; every claim below carries
 its `file:line` so a reader can argue with the code rather than with
-the prose. **All six phases built and gated** (section 4), 2026-09-09.
-The bugs found while surveying (section 5) were deliberately left
-unfixed and are still open.
+the prose. **All six phases built and gated** (section 4), 2026-09-09,
+and nine of the ten bugs found while surveying (section 5) fixed the
+same day. The tenth is deliberately left, with its reasoning in the code.
 
 Section 1 describes the code **as it was before this project**, and is
 left in the past tense on purpose: it is the evidence the decisions
@@ -526,23 +526,108 @@ Simulation layout. Whole-config load paths are exempted from the scan
 by name, since they carry a mode in from a file rather than switching.
 1,059 unit tests and all release gates pass.
 
-## 5. Bugs found, filed not fixed
+## 5. Bugs found while surveying
 
-Per decision 3. None is caused by this work; all were found surveying
-for it.
+Filed unfixed under decision 3, then **worked through on 2026-09-09**.
+Nine of the ten are fixed; the tenth is deliberately not, with its
+reasoning now in the code rather than in a doc nobody will open.
 
-| Bug | Where | Effect |
-|---|---|---|
-| Simulation viewport navigation is a silent no-op | `src/ui/panel_viewer.rs:477,523,1559` branch on Escape only | dragging the viewport writes `config.zoom`/`pan_x/y`, which the sim ignores, creating undo entries for nothing; the sim's own view is `sim.warp.*` |
-| Levels diverge between viewport and export | `src/app/mod.rs:2893` hard-offs for non-flame; `src/renderer/compute_kernel.rs:1886` does not | CLI, thumbnail and video export enable Levels for escape and sim where the app does not. A numerical no-op today only because `sample_density` floors at `1e-6` |
-| Transparent PNG export ignores Simulation | `src/app/mod.rs:1843,2282` branch on Escape only | a transparent sim PNG re-tonemaps from the empty flame accumulator |
-| Leaving a non-flame mode never restores tone mapping | `src/ui/escape_panel.rs:1487-1493` | the reset is one-way, so a mode round trip silently rewrites a flame's tone mapping |
-| PathMap in a non-flame mode costs memory for nothing | tonemap PathMap branch | allocates ~58 MB, forces a flame shader recompile, and hides the palette controls the mode needs. Phase 4 hides the control, which masks but does not fix it |
-| `alpha_blend_low/high` are no-ops in Linear | `shaders/tonemap.wgsl:451` vs `:710` | the two mixed values are computed by the same expression. Affects flame modes too |
-| `TonemapParams.num_transforms` is never read | `shaders/tonemap.wgsl:183-207` | dead uniform in every mode |
-| Workspace Layout ▸ Escape Time / Simulation do not switch mode | `src/ui/menu_bar.rs:345-372` | they look like mode switches and do half the job. Phase 3 may absorb this by removing them |
-| Dead locale keys and a zero-byte file | `locales/en.yml`, `src/ui/panels.rs` | `menu.fractal`, `panels.preset_library`, `panels.file_browser`, `panels.settings`, `panels.tone_mapping` |
-| Stale comment | `src/scene/transforms.rs:1847-1860` | says Save Online is guarded client-side; `src/api/sync.rs:21-33` now maps both non-flame modes |
+None was caused by this project. Each was investigated before it was
+touched, and three of the ten turned out to affect **more sites than
+the original filing named**.
+
+| Bug | Status |
+|---|---|
+| Simulation viewport navigation is a silent no-op | **Fixed** — refused rather than misdirected |
+| Levels diverge between viewport and export | **Fixed** — one predicate, four sites |
+| Transparent PNG export ignores Simulation | **Fixed** — three sites, not two |
+| Leaving a non-flame mode never restores tone mapping | **Not fixed, deliberately** |
+| PathMap in a non-flame mode costs memory for nothing | **Fixed** — 58 MB at 1080p |
+| `alpha_blend_low/high` are no-ops in Linear | **Fixed** — disabled, shader untouched |
+| `TonemapParams.num_transforms` is never read | **Fixed** — dead parameter, uniform kept |
+| Workspace Layout ▸ Escape Time / Simulation | **Fixed** — entries removed |
+| Dead locale keys and a zero-byte file | **Fixed** |
+| Stale Save Online comment | **Fixed** |
+
+### The ones with something to say
+
+**Simulation viewport navigation.** The tempting fix — wire the drag to
+`sim.warp` — is wrong, and this is the one worth recording. The warp is
+a **per-step transform of the field**, a velocity applied to the
+content, not a camera over it. Setting a pan from a drag would advect
+the field forever rather than by the drag's distance, blur it through a
+resample every step, do nothing at all while the simulation is paused,
+and do nothing in octave mode, where pan and rotation are not applied.
+So the gesture is refused: `Control::ViewNavigation` is `Hide` in
+Simulation, and drag, wheel, pinch, the arrow keys and the View menu
+all consult it. A genuine display-time view for the simulation is a
+feature — `params.view.x` is already exactly that, minus pan and minus
+user control — and when it exists that arm becomes `Show`.
+
+**Levels.** The flag reached the shader from four places, not the two
+filed: `load_config`, `set_transparent_mode`, the live frame loop, and
+the resize path, whose gate tested Escape alone so Simulation leaked
+through. All four now call `FractalConfig::effective_levels_enabled`.
+The claim that this changes no pixels was **verified rather than
+argued**: the flag flips from 1 to 0 for all 179 escape and simulation
+baselines, and 330 of 330 stayed byte-identical. The predicate lives on
+`RenderMode` in `scene`, not in `ui`, because the headless renderer
+needs it and `ui` is behind the `web-app` feature — that split is how
+the two paths came to disagree in the first place.
+
+**Transparent PNG.** Three sites carried a byte-identical copy of the
+same Escape-only test: the export tonemap, the restore after it, and
+the wasm viewport export. All three now ask for whichever non-flame
+engine is active. This is the one fix that deliberately changes output
+— a transparent simulation PNG used to encode the empty flame
+accumulator. Written as field access rather than a helper method,
+because the call sites already hold `&mut self.flame_renderer` and only
+field-level borrows are disjoint from it.
+
+**The alpha-blend pair.** It mixes between a gamma-corrected alpha and
+a linear one, but only the logarithmic branch gamma-corrects alpha, so
+under Linear the two operands are computed by the same expression. Git
+history shows the feature was correct when written, before the tonemap
+grew per-mode branches. Making it act under Linear would rewrite every
+escape and simulation baseline, so the **control is disabled and the
+shader is untouched**. This is why `control` now takes the tone-map
+mode as well as the render mode: it is a fact about the mapping, not
+about the engine, and it is equally true in a flame on Linear.
+
+**`num_transforms`.** The uniform stays; the dead *parameter* goes. The
+field is followed by six others, so removing it shifts their offsets —
+and a WGSL-only edit would still validate, because the struct's 16-byte
+alignment absorbs the loss, while every field after it silently read
+its neighbour's bytes. A `const _: () = assert!(size_of == 144)` now
+pins the Rust half, which nothing did before.
+
+### The one left alone
+
+**Leaving a non-flame mode does not restore the flame's tone mapping.**
+The restore information is *session* state — the config holds one
+tone-mapping triple that two mode families take turns owning, and a
+saved escape config carries its Linear mapping legitimately. Keeping it
+anywhere else creates a side channel undo cannot see: redo re-applies
+the mode batch without going through the switch helper, so memory and
+history drift apart after any undo tour. There are sharper edges too,
+recorded in full at `switch_render_mode`. Against that, the tone-map
+*mode* selector is already disabled in the non-flame modes, so a round
+trip cannot lose a chosen mapping — it loses exposure and gamma, and it
+is visible the moment it happens. The doc comment now carries the whole
+argument, including the shape a fix would have to take.
+
+### Found while fixing, still open
+
+- **WASM custom-size export has an escape-only generator**
+  (`src/app/mod.rs:2068` and the block below it), so a custom-size
+  Simulation export on the web encodes the empty accumulator. Desktop
+  custom-size is fine — it routes through `render.rs`, which handles
+  both engines. Same shape as the transparent-export bug, different
+  code path.
+- **The DensityVisualization branch's alpha blend is accidentally
+  meaningful**: it mixes an exposure-scaled alpha with a
+  density-scale-scaled one, which is not what the control describes.
+  Left alone as the smaller instance of the same drift.
 
 ## 6. Risks
 

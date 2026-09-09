@@ -478,6 +478,19 @@ pub fn pan_fractal_view(
         escape_pan_view(config_manager, drag_delta, panel_size);
         return;
     }
+    // Simulation has no view to move (see `Control::ViewNavigation`).
+    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
+    // which the simulation ignores -- an invisible gesture that still
+    // drifted the flame view and filled the history.
+    if super::visibility::control(
+        super::visibility::Control::ViewNavigation,
+        config.render_mode,
+        config.tonemap_mode,
+    ) == super::visibility::Vis::Hide
+    {
+        return;
+    }
+
 
     // Convert screen pixel delta to fractal space.
     // Use the smaller dimension for both axes so drag speed is consistent
@@ -524,6 +537,19 @@ pub fn zoom_fractal_view(
         escape_zoom_view(config_manager, scroll_delta, mouse_pos, panel_rect, panel_size, zoom_to_cursor);
         return;
     }
+    // Simulation has no view to move (see `Control::ViewNavigation`).
+    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
+    // which the simulation ignores -- an invisible gesture that still
+    // drifted the flame view and filled the history.
+    if super::visibility::control(
+        super::visibility::Control::ViewNavigation,
+        config.render_mode,
+        config.tonemap_mode,
+    ) == super::visibility::Vis::Hide
+    {
+        return;
+    }
+
 
     // Use power-based zoom for smooth scrolling (matches original code)
     let zoom_factor = if scroll_delta.abs() > 0.1 {
@@ -1559,6 +1585,16 @@ impl<'a> PanelViewer<'a> {
                     "history.action.wheel_zoom".to_string(),
                 );
             }
+            return;
+        }
+
+        // Same refusal as the drag and wheel paths.
+        if super::visibility::control(
+            super::visibility::Control::ViewNavigation,
+            config.render_mode,
+            config.tonemap_mode,
+        ) == super::visibility::Vis::Hide
+        {
             return;
         }
 
