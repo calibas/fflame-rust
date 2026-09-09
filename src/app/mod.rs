@@ -1366,6 +1366,41 @@ impl App {
     /// Only ever called when `load_generation` moved, so an explicit
     /// layout choice survives everything except loading a fractal of
     /// the other kind.
+    /// Give back the GPU state of whichever engine the new mode does
+    /// not use (ui-render-modes plan, phase 5).
+    ///
+    /// Both engines are created lazily and were previously dropped
+    /// only on device loss or before a synchronous export, so leaving
+    /// a mode left everything allocated. The escape renderer alone
+    /// holds gigabytes at a high antialiasing factor -- the same
+    /// reason a high-res export already frees it.
+    ///
+    /// The two cases are not symmetric, and the comment is here so
+    /// nobody has to rediscover it: the escape renderer rebuilds
+    /// itself from the config, so returning costs only the re-render,
+    /// but the simulation's grid IS its state, so returning restarts
+    /// it from the seed.
+    fn release_inactive_engines(&mut self, mode: crate::scene::transforms::RenderMode) {
+        if !crate::ui::render_mode::keeps_escape_engine(mode) {
+            if let Some(esc) = self.escape_renderer.take() {
+                let mb = esc.resident_bytes() as f64 / (1024.0 * 1024.0);
+                esc.destroy();
+                log::info!("Left escape mode: freed {mb:.0} MB of escape renderer state");
+            }
+            // Rebuilt lazily; the flag makes the first frame back render.
+            self.escape_dirty = true;
+        }
+        #[cfg(feature = "engine-sim")]
+        if !crate::ui::render_mode::keeps_sim_engine(mode) {
+            if self.sim_renderer.take().is_some() {
+                log::info!("Left simulation mode: freed the simulation grid");
+                // The grid was the state; coming back starts from the
+                // seed rather than from an uninitialised field.
+                self.sim_reseed = true;
+            }
+        }
+    }
+
     fn follow_loaded_render_mode(&mut self) {
         use crate::ui::workspace::{PanelType, WorkspaceLayout};
         use crate::scene::transforms::RenderMode;
@@ -1651,6 +1686,7 @@ impl App {
         if self.last_render_mode != mode_now {
             self.last_render_mode = mode_now;
             self.follow_loaded_render_mode();
+            self.release_inactive_engines(mode_now);
         }
 
         // Consume fly-mode responses produced by the UI this frame.

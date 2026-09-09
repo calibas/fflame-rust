@@ -352,7 +352,7 @@ Each phase leaves the app working and every existing test green.
 | 2 | `src/ui/visibility.rs` with the panel table; dispatcher and both menus consult it; per-case hint text | every `PanelType` × `RenderMode` has an explicit answer (exhaustive match, no `_` arm); no menu row opens onto a stub; the existing layout tests stay green — **built**, see below |
 | 3 | The Mode menu; the two menu-bar 2D/3D pairs deleted (**the View panel keeps its own**); per-mode layout memory | the menu offers exactly `RenderMode::ALL`; a test that no other site writes `ConfigPath::RenderMode`; switching away and back restores the arrangement — **built**, see below |
 | 4 | Control-level policy in Colors, Rendering, Effects per §1.4; dead sections hidden, dead controls greyed | every control in the §1.4 table has an explicit answer; a test asserting the tone-map preset dropdown and Reset Colors are unreachable in non-flame modes — **built**, see below |
-| 5 | *Separable.* Free the inactive engine on switch | VRAM falls on leaving Escape at high supersample, measured; returning re-renders correctly |
+| 5 | *Separable.* Free the inactive engine on switch | VRAM falls on leaving Escape at high supersample, measured; returning re-renders correctly — **built**, see below |
 | 6 | Update the standing UI documentation (§4.1) | `docs/main/UI.md` describes the mode machinery as built; the doc-links gate stays green |
 
 Phase 4 is where the user-visible win is; phases 1–3 are what make it
@@ -605,7 +605,38 @@ mode, the two flame modes offering everything but the orbit cache, and
 the tone-map presets unreachable where they would black the picture.
 1,062 unit tests and all release gates pass.
 
-**Still open, from §3.4.** In Simulation the Rendering panel now shows
-VSync and the frame cap alone. Both are device preferences rather than
-fractal parameters, so whether that panel is worth showing there, or
-whether those two belong in a preferences home, is still undecided.
+**Settled, 2026-09-09.** In Simulation the Rendering panel shows VSync
+and the frame cap alone, and that is fine as it stands. The panel is
+not moved and those two are not relocated.
+
+### Phase 5 as built, 2026-09-09
+
+`render_mode::keeps_escape_engine` and `keeps_sim_engine` say which
+engine a mode needs resident; `App::release_inactive_engines` drops the
+other on every mode change, hanging off the same frame-loop comparison
+phase 3 added. It mirrors what a synchronous high-res export has always
+done to the escape renderer, and for the same reason.
+
+`EscapeRenderer::resident_bytes` walks the same resource list `destroy`
+frees, so what it reports is what the switch gives back. Measured on a
+fresh renderer: **16.0 bytes per pixel**, identical at 512² and 2048²,
+which extrapolates to **506 MB for a 1080p viewport at 4x
+antialiasing**. That is a floor, not a ceiling — a fresh renderer holds
+only its output texture, and a working one adds the accumulation pair,
+the reference orbits and the bilinear-approximation tables.
+
+**The two engines are not symmetric, and the difference is the one
+thing to know here.** The escape renderer rebuilds itself from the
+config, so returning costs only the re-render — at a deep zoom, that
+means rebuilding reference orbits and a visible wait. The simulation's
+grid **is** its state, so freeing it means returning restarts from the
+seed at step 0. A run that took 200,000 steps to get where it was does
+not come back. That follows from decision 4 as taken, and it is called
+out here rather than buried because the escape framing that decision
+was made under did not imply it. Making the release escape-only is a
+two-line change to `keeps_sim_engine` if the trade reads differently in
+use.
+
+Two tests: each engine resident in its own mode alone and never both,
+and the per-pixel measurement above. 1,064 unit tests and all release
+gates pass.
