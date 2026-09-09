@@ -27,6 +27,22 @@
 
 use crate::config::sim::{SimConfig, SimGrid, MAX_COUPLINGS, MAX_LAYERS};
 
+/// One colour-stack layer as the colour shader reads it; mirrored in
+/// the assembler's `SimColorLayerGpu`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SimColorLayerGpu {
+    source: u32,
+    blend: u32,
+    enabled: u32,
+    pad0: u32,
+    opacity: f32,
+    edge: f32,
+    pad1: f32,
+    pad2: f32,
+    matte: [f32; 4],
+}
+
 /// One coupling as the step shader reads it; mirrored in the
 /// assembler's `SimCouplingGpu`.
 #[repr(C)]
@@ -306,6 +322,9 @@ struct PipelineKey {
     /// The layer map's definitions, or 0 when transforms are not used.
     layer_map: u64,
     coloring: &'static str,
+    /// The colour stack's colourings, in order; empty for the single
+    /// colouring.
+    stack: Vec<&'static str>,
     boundary: crate::config::sim::SimBoundary,
     upscale: crate::config::sim::SimUpscale,
     downscale: crate::config::sim::SimDownscale,
@@ -367,6 +386,8 @@ pub struct SimRenderer {
     /// The flame's transforms as layer maps, once `set_layer_transforms`
     /// has been called.
     layer_map: Option<LayerMap>,
+    /// The colour stack's records (`SimColorLayerGpu` x MAX_COLOR_LAYERS).
+    color_layers_buffer: Buffer,
     /// The convolution table for the large-kernel models, rebuilt and
     /// uploaded with the parameters. Sized once for the largest
     /// kernel the engine allows, so it never resizes.
@@ -456,7 +477,14 @@ impl SimRenderer {
         });
         let coloring_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Sim Coloring Params"),
-            contents: bytemuck::cast_slice(&[0.0f32; 16]),
+            contents: bytemuck::cast_slice(&[0.0f32; 16 * crate::config::sim::MAX_COLOR_LAYERS]),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        });
+        let color_layers_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Sim Colour Layers"),
+            contents: bytemuck::cast_slice(
+                &[<SimColorLayerGpu as bytemuck::Zeroable>::zeroed(); crate::config::sim::MAX_COLOR_LAYERS],
+            ),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
@@ -541,6 +569,7 @@ impl SimRenderer {
             layers: layers as u32,
             coupling_buffer,
             layer_map: None,
+            color_layers_buffer,
             steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
             seeded_as: None,
@@ -757,9 +786,33 @@ impl SimRenderer {
     }
 
     fn wants_sdf(cfg: &SimConfig) -> bool {
+        if !cfg.color_layers.is_empty() {
+            return Self::sdf_layer(cfg).is_some();
+        }
         !cfg.matte.is_off()
             && (cfg.matte.uses_distance()
                 || coloring_or_default(&cfg.coloring).has(ColoringFeature::NeedsDistance))
+    }
+
+    /// Which colour layer this frame's distance field belongs to: the
+    /// FIRST whose matte is on and either has a Distance edge or whose
+    /// colouring reads the distance. One field per frame; the plan
+    /// says so and the other layers read it as it is.
+    fn sdf_layer(cfg: &SimConfig) -> Option<usize> {
+        cfg.color_layers.iter().position(|l| {
+            !l.matte.is_off()
+                && (l.matte.uses_distance()
+                    || coloring_or_default(&l.coloring).has(ColoringFeature::NeedsDistance))
+        })
+    }
+
+    /// The matte and source the jump flood seeds from: the single
+    /// colouring's, or the stack's distance layer's.
+    fn sdf_matte(cfg: &SimConfig) -> (crate::config::sim::SimMatte, usize) {
+        match Self::sdf_layer(cfg).and_then(|k| cfg.color_layers.get(k)) {
+            Some(l) => (l.matte, l.source.min(cfg.layer_count().saturating_sub(1))),
+            None => (cfg.matte, 0),
+        }
     }
 
     /// Allocate the jump flood's textures when the matte asks for a
@@ -814,7 +867,10 @@ impl SimRenderer {
         let stride = self.params_stride as usize;
         let mut bytes = vec![0u8; stride * (jumps.len() + 1)];
         for (i, slot) in std::iter::once(0u32).chain(jumps.iter().copied()).enumerate() {
-            let mut p = self.params_for(cfg, self.step_index);
+            let (matte, source) = Self::sdf_matte(cfg);
+            let mut p = self.params_for_layer(cfg, self.step_index, source);
+            p.matte = matte.packed();
+            p.matte_b[0] = if matte.uses_distance() { 1.0 } else { 0.0 };
             p.kernel_radius = slot;
             let at = i * stride;
             bytes[at..at + std::mem::size_of::<SimParamsGpu>()]
@@ -1077,6 +1133,7 @@ impl SimRenderer {
                 0
             },
             coloring: coloring_or_default(&cfg.coloring).name,
+            stack: cfg.color_layers.iter().map(|l| coloring_or_default(&l.coloring).name).collect(),
             boundary: cfg.boundary,
             upscale: cfg.upscale,
             downscale: cfg.downscale,
@@ -1133,13 +1190,17 @@ impl SimRenderer {
         let agent_layer = models.iter().position(|m| m.agents.is_some());
         let agent_model = agent_layer.map(|l| models[l]);
         let warp_src = assembler::assemble_warp(cfg.boundary);
-        let color_src = assembler::assemble_color(
-            coloring,
-            cfg.boundary,
-            cfg.upscale,
-            cfg.downscale,
-            key.magnifying,
-        );
+        let color_src = if cfg.color_layers.is_empty() {
+            assembler::assemble_color(coloring, cfg.boundary, cfg.upscale, cfg.downscale, key.magnifying)
+        } else {
+            let stack: Vec<&'static SimColoringDef> = cfg
+                .color_layers
+                .iter()
+                .take(crate::config::sim::MAX_COLOR_LAYERS)
+                .map(|l| coloring_or_default(&l.coloring))
+                .collect();
+            assembler::assemble_color_stack(&stack, cfg.boundary, cfg.upscale, cfg.downscale, key.magnifying)
+        };
         let pyramid_src = any_pyramid.then(|| assembler::assemble_pyramid(cfg.boundary));
         let reduce_src = any_minmax.then(assembler::assemble_reduce);
         let agent_srcs: Vec<String> = match agent_model.and_then(|m| m.agents.map(|a| (m, a))) {
@@ -1323,6 +1384,8 @@ impl SimRenderer {
                 sampled_tex(5, false),
                 // The distance field, or its dummy.
                 sampled_tex(6, true),
+                // The colour stack's layer records.
+                storage_ro(7),
             ],
         });
         // The jump flood: the shared uniform and param buffers (its
@@ -1745,8 +1808,39 @@ impl SimRenderer {
             mp.extend_from_slice(&block);
         }
         mp.resize(MODEL_PARAM_SLOTS * MAX_LAYERS, 0.0);
-        let mut cp = coloring.pack_params(cfg);
-        cp.resize(16, 0.0);
+        // The colour stack: each layer's parameters in its own block
+        // of 16, and its record. Without a stack, the single
+        // colouring's block 0, as before.
+        let mut cp: Vec<f32> = Vec::new();
+        if cfg.color_layers.is_empty() {
+            cp = coloring.pack_params(cfg);
+            cp.resize(16, 0.0);
+        } else {
+            let sdf_of = Self::sdf_layer(cfg);
+            let mut records: Vec<SimColorLayerGpu> = Vec::new();
+            for (k, l) in cfg.color_layers.iter().take(crate::config::sim::MAX_COLOR_LAYERS).enumerate() {
+                let c = coloring_or_default(&l.coloring);
+                let mut block: Vec<f32> =
+                    c.parameters.iter().map(|p| l.coloring_params.get(p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.default)).collect();
+                block.resize(16, 0.0);
+                cp.extend_from_slice(&block);
+                records.push(SimColorLayerGpu {
+                    source: l.source.min(cfg.layer_count().saturating_sub(1)) as u32,
+                    blend: l.blend.code(),
+                    enabled: u32::from(l.enabled),
+                    pad0: 0,
+                    opacity: l.opacity.clamp(0.0, 1.0),
+                    // Its matte's edge: distance only when this frame's
+                    // distance field is this layer's.
+                    edge: if l.matte.uses_distance() && sdf_of == Some(k) { 1.0 } else { 0.0 },
+                    pad1: 0.0,
+                    pad2: 0.0,
+                    matte: l.matte.packed(),
+                });
+            }
+            queue.write_buffer(&self.color_layers_buffer, 0, bytemuck::cast_slice(&records));
+            cp.resize(16 * crate::config::sim::MAX_COLOR_LAYERS, 0.0);
+        }
         queue.write_buffer(&self.model_params_buffer, 0, bytemuck::cast_slice(&mp));
         queue.write_buffer(&self.coloring_params_buffer, 0, bytemuck::cast_slice(&cp));
 
@@ -2439,6 +2533,7 @@ impl SimRenderer {
                 },
                 BindGroupEntry { binding: 5, resource: BindingResource::TextureView(palette_view) },
                 BindGroupEntry { binding: 6, resource: BindingResource::TextureView(sdf_view) },
+                BindGroupEntry { binding: 7, resource: self.color_layers_buffer.as_entire_binding() },
             ],
         });
         {

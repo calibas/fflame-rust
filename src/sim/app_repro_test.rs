@@ -6383,3 +6383,197 @@ fn a_rotation_transform_equals_the_global_warps_rotation() {
     assert!(moved > 0.05, "the transform should have moved the layer");
     assert!(worst < 5e-5, "the transform's rotation differs from the warp's by up to {worst:.2e}");
 }
+
+/// Phase 4 of the simulation-layers plan: a stack of one Normal layer
+/// at opacity 1, carrying the single colouring's colouring, parameters
+/// and matte, is the single colouring's picture bit for bit -- on a
+/// plain channel colouring, on a matted growth model, and on a
+/// distance-reading colouring.
+#[test]
+fn a_single_normal_colour_layer_is_the_single_colouring() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 96;
+    let palette = test_palette(&device, &queue);
+    let mut cases: Vec<(String, SimConfig, u32)> = Vec::new();
+    {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.steps = 0;
+        cfg.seed = 5;
+        cases.push(("gray-scott channel".into(), cfg, 400));
+    }
+    {
+        let m = crate::sim::model_or_default("dla");
+        let pre = m.preset("cluster").or_else(|| m.presets.first()).unwrap();
+        let mut cfg = SimConfig::default();
+        cfg.model = "dla".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Clamp;
+        cfg.steps = 0;
+        cfg.seed = 5;
+        cfg.init = pre.init.unwrap_or(crate::config::sim::SimInit::Center);
+        for (k, v) in pre.params {
+            cfg.model_params.insert((*k).to_string(), *v);
+        }
+        if let Some(c) = pre.coloring {
+            cfg.coloring = c.into();
+            for (k, v) in pre.coloring_params {
+                cfg.coloring_params.insert((*k).to_string(), *v);
+            }
+        }
+        if let Some(mt) = pre.matte {
+            cfg.matte = mt;
+        }
+        cases.push(("dla matted".into(), cfg, 600));
+    }
+    {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.steps = 0;
+        cfg.seed = 5;
+        cfg.coloring = "distance".into();
+        cfg.coloring_params.insert("mode".into(), 1.0);
+        cfg.coloring_params.insert("scale".into(), 6.0);
+        cfg.matte = crate::config::sim::SimMatte {
+            channel: crate::config::sim::SimMatteChannel::Y,
+            cutoff: 0.15,
+            softness: 0.0,
+            invert: false,
+            edge: crate::config::sim::SimMatteEdge::Threshold,
+        };
+        cases.push(("distance colouring".into(), cfg, 400));
+    }
+    for (label, cfg, steps) in cases {
+        let render = |cfg: &SimConfig| -> Vec<[f32; 4]> {
+            let mut r = SimRenderer::new(&device, cfg, 2 * N, 2 * N);
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, steps);
+            r.color(&device, &queue, cfg, &palette);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            read_rgba32f(&device, &queue, r.output_texture(), 2 * N, 2 * N)
+        };
+        let single = render(&cfg);
+        let mut stacked = cfg.clone();
+        stacked.color_layers = vec![crate::config::sim::SimColorLayer {
+            source: 0,
+            coloring: cfg.coloring.clone(),
+            coloring_params: cfg.coloring_params.clone(),
+            matte: cfg.matte,
+            blend: crate::config::sim::SimBlend::Normal,
+            opacity: 1.0,
+            enabled: true,
+        }];
+        let stack = render(&stacked);
+        let differ = single.iter().zip(&stack).filter(|(a, b)| a != b).count();
+        let lit = single.iter().filter(|p| p[3] > 0.0 && p[0] > 0.01).count();
+        println!("{label}: {differ} pixels differ between the single colouring and a one-layer stack; {lit} lit");
+        assert!(lit > 100, "{label}: the fixture drew nothing");
+        assert_eq!(differ, 0, "{label}: a one-layer Normal stack must be the single colouring");
+    }
+}
+
+/// Each blend mode against a CPU evaluation of its formula on two
+/// read-back layers: a channel colouring of layer 0 below a channel
+/// colouring of layer 1 at opacity 0.7, in a two-layer Gray-Scott.
+#[test]
+fn blend_modes_match_a_cpu_evaluation() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.steps = 0;
+    cfg.seed = 7;
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    let layer = |feed: f32| crate::config::sim::SimLayer {
+        model: "gray_scott".into(),
+        model_params: [("feed", feed), ("kill", 0.062)].into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        enabled: true,
+    };
+    cfg.layers = vec![layer(0.0545), layer(0.037)];
+    let colour = |source: usize| crate::config::sim::SimColorLayer {
+        source,
+        coloring: "channel".into(),
+        coloring_params: [("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        matte: Default::default(),
+        blend: crate::config::sim::SimBlend::Normal,
+        opacity: 1.0,
+        enabled: true,
+    };
+    let render = |cfg: &SimConfig| -> Vec<[f32; 4]> {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 800);
+        r.color(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.output_texture(), N, N)
+    };
+    let mut bottom_cfg = cfg.clone();
+    bottom_cfg.color_layers = vec![colour(0)];
+    let bottom = render(&bottom_cfg);
+    let mut top_cfg = cfg.clone();
+    top_cfg.color_layers = vec![colour(1)];
+    let top = render(&top_cfg);
+    assert!(bottom.iter().zip(&top).any(|(a, b)| a != b), "the two layers should differ");
+    let opacity = 0.7f32;
+    for blend in [
+        crate::config::sim::SimBlend::Normal,
+        crate::config::sim::SimBlend::Lighten,
+        crate::config::sim::SimBlend::Darken,
+        crate::config::sim::SimBlend::Multiply,
+        crate::config::sim::SimBlend::Screen,
+        crate::config::sim::SimBlend::Overlay,
+        crate::config::sim::SimBlend::Add,
+    ] {
+        let mut stacked = cfg.clone();
+        let mut t = colour(1);
+        t.blend = blend;
+        t.opacity = opacity;
+        stacked.color_layers = vec![colour(0), t];
+        let out = render(&stacked);
+        let mut worst = 0.0f32;
+        for k in 0..out.len() {
+            let (b, tp) = (bottom[k], top[k]);
+            let a = (tp[3] * opacity).clamp(0.0, 1.0);
+            let want: [f32; 4] = if b[3] <= 0.0 {
+                [tp[0], tp[1], tp[2], a]
+            } else {
+                let f = |bc: f32, tc: f32| -> f32 {
+                    match blend {
+                        crate::config::sim::SimBlend::Normal => tc,
+                        crate::config::sim::SimBlend::Lighten => bc.max(tc),
+                        crate::config::sim::SimBlend::Darken => bc.min(tc),
+                        crate::config::sim::SimBlend::Multiply => bc * tc,
+                        crate::config::sim::SimBlend::Screen => 1.0 - (1.0 - bc) * (1.0 - tc),
+                        crate::config::sim::SimBlend::Overlay => {
+                            if bc < 0.5 { 2.0 * bc * tc } else { 1.0 - 2.0 * (1.0 - bc) * (1.0 - tc) }
+                        }
+                        crate::config::sim::SimBlend::Add => (bc + tc).min(1.0),
+                    }
+                };
+                let out_a = a + b[3] * (1.0 - a);
+                let mut w = [0.0f32; 4];
+                for c in 0..3 {
+                    let blended = tp[c] + (f(b[c], tp[c]) - tp[c]) * b[3];
+                    w[c] = (blended * a + b[c] * b[3] * (1.0 - a)) / out_a.max(1e-6);
+                }
+                w[3] = out_a;
+                w
+            };
+            for c in 0..4 {
+                worst = worst.max((out[k][c] - want[c]).abs());
+            }
+        }
+        println!("blend {}: worst difference {worst:.2e}", blend.name());
+        assert!(worst < 2e-5, "blend {} differs from its formula by {worst:.2e}", blend.name());
+    }
+}

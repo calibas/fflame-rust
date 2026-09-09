@@ -776,8 +776,253 @@ pub fn render_sim_content(
             });
         });
     });
+
+    // ---- Colouring layers (simulation-layers plan, section 5) ----
+    render_color_layers(ui, config_manager, &config, &sim);
 }
 
+/// The colour stack. A stack overrides the single colouring above it;
+/// the animatable fields (parameters, opacity, the matte's cutoff and
+/// softness) go through ConfigPath, everything else on a layer is a
+/// snapshot edit, which undoes as one step and does not restart the
+/// run.
+fn render_color_layers(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    config: &crate::config::FractalConfig,
+    sim: &SimConfig,
+) {
+    use crate::config::sim::{SimBlend, SimColorLayer, SimMatteChannel, SimMatteEdge, MAX_COLOR_LAYERS};
+    let structural = |config_manager: &mut ConfigManager, edit: &dyn Fn(&mut SimConfig)| {
+        let mut after = config.clone();
+        edit(&mut after.sim);
+        let _ = config_manager.load_config(after, "history.action.sim_color_layers".to_string());
+    };
+    egui::CollapsingHeader::new(t!("sim_panel.color_layers").as_ref())
+        .default_open(!sim.color_layers.is_empty())
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(t!("sim_panel.color_layers_tip")).small().weak());
+            if sim.color_layers.is_empty() {
+                if ui
+                    .button(t!("sim_panel.add_color_layer").as_ref())
+                    .on_hover_text(t!("sim_panel.add_color_layer_first_tip"))
+                    .clicked()
+                {
+                    // The single colouring becomes layer 0 of the stack.
+                    let (coloring, params, matte) = (sim.coloring.clone(), sim.coloring_params.clone(), sim.matte);
+                    structural(config_manager, &|s: &mut SimConfig| {
+                        s.color_layers = vec![SimColorLayer {
+                            source: 0,
+                            coloring: coloring.clone(),
+                            coloring_params: params.clone(),
+                            matte,
+                            ..SimColorLayer::default()
+                        }];
+                    });
+                }
+                return;
+            }
+            let n_sim_layers = sim.layer_count();
+            let count = sim.color_layers.len();
+            // Top of the stack first, as a layer panel reads.
+            for i in (0..count).rev() {
+                let layer = &sim.color_layers[i];
+                let coloring = crate::sim::coloring_or_default(&layer.coloring);
+                let mut action: Option<Box<dyn Fn(&mut SimConfig)>> = None;
+                ui.horizontal(|ui| {
+                    ui.label(t!("sim_panel.color_layer_label", n = i.to_string()).as_ref());
+                    let mut on = layer.enabled;
+                    if ui.checkbox(&mut on, "").on_hover_text(t!("sim_panel.layer_enabled_tip")).changed() {
+                        action = Some(Box::new(move |s: &mut SimConfig| {
+                            if let Some(l) = s.color_layers.get_mut(i) {
+                                l.enabled = on;
+                            }
+                        }));
+                    }
+                    egui::ComboBox::from_id_salt(format!("sim_color_layer_coloring_{i}"))
+                        .selected_text(coloring.display_name)
+                        .show_ui(ui, |ui| {
+                            for c in COLORINGS {
+                                if ui
+                                    .selectable_label(c.name == coloring.name, c.display_name)
+                                    .on_hover_text(c.description)
+                                    .clicked()
+                                    && c.name != coloring.name
+                                {
+                                    let name = c.name.to_string();
+                                    action = Some(Box::new(move |s: &mut SimConfig| {
+                                        if let Some(l) = s.color_layers.get_mut(i) {
+                                            l.coloring = name.clone();
+                                            l.coloring_params.clear();
+                                        }
+                                    }));
+                                }
+                            }
+                        });
+                    if n_sim_layers > 1 {
+                        egui::ComboBox::from_id_salt(format!("sim_color_layer_source_{i}"))
+                            .selected_text(t!("sim_panel.layer_label", n = layer.source.to_string()).as_ref())
+                            .show_ui(ui, |ui| {
+                                for l in 0..n_sim_layers {
+                                    if ui
+                                        .selectable_label(l == layer.source, t!("sim_panel.layer_label", n = l.to_string()).as_ref())
+                                        .clicked()
+                                    {
+                                        action = Some(Box::new(move |s: &mut SimConfig| {
+                                            if let Some(cl) = s.color_layers.get_mut(i) {
+                                                cl.source = l;
+                                            }
+                                        }));
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text(t!("sim_panel.color_layer_source_tip"));
+                    }
+                    if i + 1 < count && ui.small_button("▲").on_hover_text(t!("sim_panel.color_layer_up_tip")).clicked() {
+                        action = Some(Box::new(move |s: &mut SimConfig| s.color_layers.swap(i, i + 1)));
+                    }
+                    if i > 0 && ui.small_button("▼").on_hover_text(t!("sim_panel.color_layer_down_tip")).clicked() {
+                        action = Some(Box::new(move |s: &mut SimConfig| s.color_layers.swap(i, i - 1)));
+                    }
+                    if ui.small_button(t!("sim_panel.remove").as_ref()).clicked() {
+                        action = Some(Box::new(move |s: &mut SimConfig| {
+                            s.color_layers.remove(i);
+                        }));
+                    }
+                });
+                if let Some(edit) = action {
+                    structural(config_manager, &*edit);
+                    return;
+                }
+                ui.indent(format!("sim_color_layer_{i}"), |ui| {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt(format!("sim_color_layer_blend_{i}"))
+                            .selected_text(layer.blend.name())
+                            .show_ui(ui, |ui| {
+                                for name in SimBlend::NAMES {
+                                    if ui.selectable_label(layer.blend.name() == *name, *name).clicked() {
+                                        if let Some(b) = SimBlend::from_name(name) {
+                                            action = Some(Box::new(move |s: &mut SimConfig| {
+                                                if let Some(l) = s.color_layers.get_mut(i) {
+                                                    l.blend = b;
+                                                }
+                                            }));
+                                        }
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text(t!("sim_panel.color_layer_blend_tip"));
+                        let mut opacity = layer.opacity;
+                        if ui
+                            .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text(t!("sim_panel.color_layer_opacity").as_ref()))
+                            .changed()
+                        {
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimColorLayerOpacity { index: i }, opacity.into());
+                        }
+                    });
+                    for p in coloring.parameters {
+                        let mut v = layer.coloring_params.get(p.name).copied().unwrap_or(p.default);
+                        if param_control(ui, &mut v, p, &format!("sim_color_layer_{i}")) {
+                            let _ = config_manager.update_param(
+                                ConfigPath::SimColorLayerParam { index: i, param: p.name.to_string() },
+                                v.into(),
+                            );
+                        }
+                    }
+                    // The layer's matte: channel, invert and edge are
+                    // snapshot edits; cutoff and softness animate.
+                    ui.horizontal(|ui| {
+                        ui.label(t!("sim_panel.matte").as_ref());
+                        let m = layer.matte;
+                        egui::ComboBox::from_id_salt(format!("sim_color_layer_matte_{i}"))
+                            .selected_text(m.channel.name())
+                            .show_ui(ui, |ui| {
+                                for name in SimMatteChannel::NAMES {
+                                    if ui.selectable_label(m.channel.name() == *name, *name).clicked() {
+                                        if let Some(c) = SimMatteChannel::from_name(name) {
+                                            action = Some(Box::new(move |s: &mut SimConfig| {
+                                                if let Some(l) = s.color_layers.get_mut(i) {
+                                                    l.matte.channel = c;
+                                                }
+                                            }));
+                                        }
+                                    }
+                                }
+                            });
+                        if !m.is_off() {
+                            let mut inv = m.invert;
+                            if ui.checkbox(&mut inv, t!("sim_panel.matte_invert").as_ref()).changed() {
+                                action = Some(Box::new(move |s: &mut SimConfig| {
+                                    if let Some(l) = s.color_layers.get_mut(i) {
+                                        l.matte.invert = inv;
+                                    }
+                                }));
+                            }
+                            egui::ComboBox::from_id_salt(format!("sim_color_layer_matte_edge_{i}"))
+                                .selected_text(m.edge.name())
+                                .show_ui(ui, |ui| {
+                                    for name in SimMatteEdge::NAMES {
+                                        if ui.selectable_label(m.edge.name() == *name, *name).clicked() {
+                                            if let Some(e) = SimMatteEdge::from_name(name) {
+                                                action = Some(Box::new(move |s: &mut SimConfig| {
+                                                    if let Some(l) = s.color_layers.get_mut(i) {
+                                                        l.matte.edge = e;
+                                                    }
+                                                }));
+                                            }
+                                        }
+                                    }
+                                });
+                        }
+                    });
+                    if !layer.matte.is_off() {
+                        let mut cutoff = layer.matte.cutoff;
+                        if ui
+                            .add(egui::Slider::new(&mut cutoff, 0.0..=1.0).text(t!("sim_panel.matte_cutoff").as_ref()))
+                            .changed()
+                        {
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimColorLayerMatteCutoff { index: i }, cutoff.into());
+                        }
+                        let mut soft = layer.matte.softness;
+                        if ui
+                            .add(egui::Slider::new(&mut soft, 0.0..=4.0).text(t!("sim_panel.matte_softness").as_ref()))
+                            .changed()
+                        {
+                            let _ = config_manager
+                                .update_param(ConfigPath::SimColorLayerMatteSoftness { index: i }, soft.into());
+                        }
+                    }
+                });
+                if let Some(edit) = action {
+                    structural(config_manager, &*edit);
+                    return;
+                }
+            }
+            if count < MAX_COLOR_LAYERS && ui.button(t!("sim_panel.add_color_layer").as_ref()).clicked() {
+                structural(config_manager, &|s: &mut SimConfig| {
+                    s.color_layers.push(SimColorLayer::default());
+                });
+            }
+            if ui.small_button(t!("sim_panel.color_layers_flatten").as_ref())
+                .on_hover_text(t!("sim_panel.color_layers_flatten_tip"))
+                .clicked()
+            {
+                // Back to the single colouring: the bottom layer's.
+                structural(config_manager, &|s: &mut SimConfig| {
+                    if let Some(first) = s.color_layers.first().cloned() {
+                        s.coloring = first.coloring;
+                        s.coloring_params = first.coloring_params;
+                        s.matte = first.matte;
+                    }
+                    s.color_layers.clear();
+                });
+            }
+        });
+}
 
 /// The Layers and Couplings lists. Per-field edits go through
 /// ConfigPath; adding or removing a layer or a coupling is a

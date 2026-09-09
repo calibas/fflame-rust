@@ -416,6 +416,13 @@ pub enum ConfigPath {
     SimCouplingChannels { index: usize },
     /// Use the flame's transforms as the layers' maps. Bool.
     SimUseTransforms,
+    /// Colouring layer `index`: one of its colouring's parameters, its
+    /// opacity, its matte's cutoff and softness. All animatable; the
+    /// layer's other fields are snapshot edits.
+    SimColorLayerParam { index: usize, param: String },
+    SimColorLayerOpacity { index: usize },
+    SimColorLayerMatteCutoff { index: usize },
+    SimColorLayerMatteSoftness { index: usize },
     /// One colouring parameter, by name.
     SimColoringParam { param: String },
     /// Escape radius squared.
@@ -986,6 +993,10 @@ impl Display for ConfigPath {
             ConfigPath::SimCouplingStrength { index } => write!(f, "Simulation Coupling {index} Strength"),
             ConfigPath::SimCouplingChannels { index } => write!(f, "Simulation Coupling {index} Channels"),
             ConfigPath::SimUseTransforms => write!(f, "Simulation Use Transforms"),
+            ConfigPath::SimColorLayerParam { index, param } => write!(f, "Simulation Colour Layer {index} {param}"),
+            ConfigPath::SimColorLayerOpacity { index } => write!(f, "Simulation Colour Layer {index} Opacity"),
+            ConfigPath::SimColorLayerMatteCutoff { index } => write!(f, "Simulation Colour Layer {index} Matte Cutoff"),
+            ConfigPath::SimColorLayerMatteSoftness { index } => write!(f, "Simulation Colour Layer {index} Matte Softness"),
             ConfigPath::SimColoringParam { param } => write!(f, "Simulation Color {param}"),
             ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
             ConfigPath::EscapeDownsample => write!(f, "Escape Downsample"),
@@ -1283,6 +1294,16 @@ impl ConfigPath {
                 I18nKey::with_params("history.param.sim_coupling", vec![("index", index.to_string())])
             }
             ConfigPath::SimUseTransforms => I18nKey::simple("history.param.sim_use_transforms"),
+            ConfigPath::SimColorLayerParam { index, param } => I18nKey::with_params(
+                "history.param.sim_color_layer_param",
+                vec![("index", index.to_string()), ("param", param.clone())],
+            ),
+            ConfigPath::SimColorLayerOpacity { index }
+            | ConfigPath::SimColorLayerMatteCutoff { index }
+            | ConfigPath::SimColorLayerMatteSoftness { index } => I18nKey::with_params(
+                "history.param.sim_color_layer",
+                vec![("index", index.to_string())],
+            ),
             ConfigPath::SimColoringParam { param } => I18nKey::with_params(
                 "history.param.sim_coloring_param",
                 vec![("param", param.clone())],
@@ -2689,6 +2710,10 @@ impl ConfigPath {
             | ConfigPath::SimCouplingStrength { .. }
             | ConfigPath::SimCouplingChannels { .. }
             | ConfigPath::SimUseTransforms
+            | ConfigPath::SimColorLayerParam { .. }
+            | ConfigPath::SimColorLayerOpacity { .. }
+            | ConfigPath::SimColorLayerMatteCutoff { .. }
+            | ConfigPath::SimColorLayerMatteSoftness { .. }
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
             // A bound grid's scale change resamples the live field
@@ -2999,6 +3024,10 @@ impl ConfigPath {
             ConfigPath::SimCouplingStrength { index } => format!("Sim.Coupling.{index}.Strength"),
             ConfigPath::SimCouplingChannels { index } => format!("Sim.Coupling.{index}.Channels"),
             ConfigPath::SimUseTransforms => "Sim.UseTransforms".to_string(),
+            ConfigPath::SimColorLayerParam { index, param } => format!("Sim.ColorLayer.{index}.Param.{param}"),
+            ConfigPath::SimColorLayerOpacity { index } => format!("Sim.ColorLayer.{index}.Opacity"),
+            ConfigPath::SimColorLayerMatteCutoff { index } => format!("Sim.ColorLayer.{index}.MatteCutoff"),
+            ConfigPath::SimColorLayerMatteSoftness { index } => format!("Sim.ColorLayer.{index}.MatteSoftness"),
             ConfigPath::SimColoringParam { param } => format!("Sim.ColoringParam.{param}"),
             ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
             ConfigPath::EscapeDownsample => "Escape.Downsample".to_string(),
@@ -3291,6 +3320,21 @@ impl ConfigPath {
                     })
                 }
                 ["UseTransforms"] => return Some(ConfigPath::SimUseTransforms),
+                ["ColorLayer", index, "Param", param] => {
+                    return Some(ConfigPath::SimColorLayerParam {
+                        index: index.parse().ok()?,
+                        param: param.to_string(),
+                    })
+                }
+                ["ColorLayer", index, field] => {
+                    let index = index.parse().ok()?;
+                    return match *field {
+                        "Opacity" => Some(ConfigPath::SimColorLayerOpacity { index }),
+                        "MatteCutoff" => Some(ConfigPath::SimColorLayerMatteCutoff { index }),
+                        "MatteSoftness" => Some(ConfigPath::SimColorLayerMatteSoftness { index }),
+                        _ => None,
+                    };
+                }
                 ["Coupling", index, field] => {
                     let index = index.parse().ok()?;
                     return match *field {
@@ -3930,6 +3974,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimModelParam { .. }
         | ConfigPath::SimLayerParam { .. }
         | ConfigPath::SimCouplingStrength { .. }
+        | ConfigPath::SimColorLayerParam { .. }
+        | ConfigPath::SimColorLayerOpacity { .. }
+        | ConfigPath::SimColorLayerMatteCutoff { .. }
+        | ConfigPath::SimColorLayerMatteSoftness { .. }
         | ConfigPath::SimColoringParam { .. } => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }

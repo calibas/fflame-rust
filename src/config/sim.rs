@@ -876,7 +876,113 @@ pub struct SimConfig {
     /// asked.
     #[serde(default, skip_serializing_if = "is_false")]
     pub use_transforms: bool,
+
+    /// The colouring stack (plan section 5), bottom first. Empty is
+    /// today's single `coloring` / `coloring_params` / `matte` on layer
+    /// 0; with layers, they are ignored and the stack is the picture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_layers: Vec<SimColorLayer>,
 }
+
+/// One colouring of the stack: a colouring of one simulation layer,
+/// with its own parameters and matte, blended over what is below.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimColorLayer {
+    /// Which simulation layer it reads.
+    #[serde(default)]
+    pub source: usize,
+    pub coloring: String,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub coloring_params: std::collections::BTreeMap<String, f32>,
+    #[serde(default, skip_serializing_if = "is_default_matte")]
+    pub matte: SimMatte,
+    #[serde(default)]
+    pub blend: SimBlend,
+    #[serde(default = "opacity_one")]
+    pub opacity: f32,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+}
+
+fn opacity_one() -> f32 {
+    1.0
+}
+
+impl Default for SimColorLayer {
+    fn default() -> Self {
+        SimColorLayer {
+            source: 0,
+            coloring: "channel".to_string(),
+            coloring_params: Default::default(),
+            matte: SimMatte::default(),
+            blend: SimBlend::Normal,
+            opacity: 1.0,
+            enabled: true,
+        }
+    }
+}
+
+/// How a colouring layer combines with what is below it. Separable
+/// formulas on straight RGB; the layer's coverage times its opacity
+/// is its alpha, and coverage accumulates as "over".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimBlend {
+    #[default]
+    Normal,
+    Lighten,
+    Darken,
+    Multiply,
+    Screen,
+    Overlay,
+    Add,
+}
+
+impl SimBlend {
+    pub const NAMES: &'static [&'static str] =
+        &["normal", "lighten", "darken", "multiply", "screen", "overlay", "add"];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimBlend::Normal => "normal",
+            SimBlend::Lighten => "lighten",
+            SimBlend::Darken => "darken",
+            SimBlend::Multiply => "multiply",
+            SimBlend::Screen => "screen",
+            SimBlend::Overlay => "overlay",
+            SimBlend::Add => "add",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "normal" => SimBlend::Normal,
+            "lighten" => SimBlend::Lighten,
+            "darken" => SimBlend::Darken,
+            "multiply" => SimBlend::Multiply,
+            "screen" => SimBlend::Screen,
+            "overlay" => SimBlend::Overlay,
+            "add" => SimBlend::Add,
+            _ => return None,
+        })
+    }
+
+    /// The word the shader switches on.
+    pub fn code(&self) -> u32 {
+        match self {
+            SimBlend::Normal => 0,
+            SimBlend::Lighten => 1,
+            SimBlend::Darken => 2,
+            SimBlend::Multiply => 3,
+            SimBlend::Screen => 4,
+            SimBlend::Overlay => 5,
+            SimBlend::Add => 6,
+        }
+    }
+}
+
+/// The most colouring layers a stack may carry.
+pub const MAX_COLOR_LAYERS: usize = 8;
 
 /// One coupling: layer `from` drives layer `to` by `form`, at
 /// `strength`, on the channels in the mask.
@@ -1029,6 +1135,7 @@ impl Default for SimConfig {
             layers: Vec::new(),
             couplings: Vec::new(),
             use_transforms: false,
+            color_layers: Vec::new(),
         }
     }
 }
@@ -1199,6 +1306,10 @@ mod tests {
             ConfigPath::SimCouplingStrength { index: 2 },
             ConfigPath::SimCouplingChannels { index: 0 },
             ConfigPath::SimUseTransforms,
+            ConfigPath::SimColorLayerParam { index: 1, param: "scale".into() },
+            ConfigPath::SimColorLayerOpacity { index: 0 },
+            ConfigPath::SimColorLayerMatteCutoff { index: 2 },
+            ConfigPath::SimColorLayerMatteSoftness { index: 0 },
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
         ];
@@ -1381,6 +1492,9 @@ mod tests {
         }
         for n in SimCouplingForm::NAMES {
             assert_eq!(SimCouplingForm::from_name(n).unwrap().name(), *n);
+        }
+        for n in SimBlend::NAMES {
+            assert_eq!(SimBlend::from_name(n).unwrap().name(), *n);
         }
         for n in SimMatteChannel::NAMES {
             assert_eq!(SimMatteChannel::from_name(n).unwrap().name(), *n);

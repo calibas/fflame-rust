@@ -1903,6 +1903,23 @@ impl ConfigManager {
                 config.sim.couplings.get(*index).map(|c| c.channels as i32).unwrap_or(15),
             )),
             ConfigPath::SimUseTransforms => Ok(ConfigValue::Bool(config.sim.use_transforms)),
+            ConfigPath::SimColorLayerParam { index, param } => Ok(ConfigValue::Float(
+                config
+                    .sim
+                    .color_layers
+                    .get(*index)
+                    .and_then(|l| l.coloring_params.get(param).copied())
+                    .unwrap_or(0.0),
+            )),
+            ConfigPath::SimColorLayerOpacity { index } => Ok(ConfigValue::Float(
+                config.sim.color_layers.get(*index).map(|l| l.opacity).unwrap_or(1.0),
+            )),
+            ConfigPath::SimColorLayerMatteCutoff { index } => Ok(ConfigValue::Float(
+                config.sim.color_layers.get(*index).map(|l| l.matte.cutoff).unwrap_or(0.5),
+            )),
+            ConfigPath::SimColorLayerMatteSoftness { index } => Ok(ConfigValue::Float(
+                config.sim.color_layers.get(*index).map(|l| l.matte.softness).unwrap_or(0.0),
+            )),
             ConfigPath::SimColoringParam { param } => Ok(ConfigValue::Float(
                 config.sim.coloring_params.get(param).copied().unwrap_or(0.0),
             )),
@@ -3113,6 +3130,30 @@ impl ConfigManager {
             }
             ConfigPath::SimUseTransforms => {
                 self.current.sim.use_transforms = bool::try_from(value)?;
+            }
+            ConfigPath::SimColorLayerParam { index, param } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.coloring_params.insert(param.clone(), v);
+                }
+            }
+            ConfigPath::SimColorLayerOpacity { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.opacity = if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 };
+                }
+            }
+            ConfigPath::SimColorLayerMatteCutoff { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.matte.cutoff = if v.is_finite() { v } else { 0.5 };
+                }
+            }
+            ConfigPath::SimColorLayerMatteSoftness { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.matte.softness = if v.is_finite() { v.max(0.0) } else { 0.0 };
+                }
             }
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;
