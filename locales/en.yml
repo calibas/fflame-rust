@@ -11,6 +11,9 @@ visibility:
   three_d_only: "3D flame mode only: occlusion and the shade pass need the depth the 3D chaos game writes."
   other_engine: "Belongs to the other engine. A fractal is in exactly one mode at a time, so switch modes to use this."
   makes_a_flame: "Generates flames. Using it here would replace what you have and leave the current mode."
+  log_only: "Only the logarithmic tone mapping reads this. The active mode writes a unit-range image and renders through the linear mapping."
+  linear_only: "Linear is the only mapping that behaves here: the other two divide by a sample density that only the chaos game produces."
+  alpha_blend_inert: "Blends between two alpha curves that are identical under the linear mapping, so it has no effect in this mode."
 
 # The four render modes, named once. Used by the mode picker and by
 # anything that has to say which engine is running.

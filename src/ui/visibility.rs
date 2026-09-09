@@ -47,6 +47,12 @@ const THREE_D_ONLY: &str = "visibility.three_d_only";
 const OTHER_ENGINE: &str = "visibility.other_engine";
 /// Produces a flame, so using it would leave this mode.
 const MAKES_A_FLAME: &str = "visibility.makes_a_flame";
+/// Only the logarithmic tone mapping reads it.
+const LOG_ONLY: &str = "visibility.log_only";
+/// Only the linear tone mapping behaves in this mode.
+const LINEAR_ONLY: &str = "visibility.linear_only";
+/// Mixes between two values that are equal here.
+const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
 
 /// Is this panel meaningful in this mode?
 ///
@@ -124,6 +130,125 @@ pub fn panel(p: PanelType, m: RenderMode) -> Vis {
             M::TwoD | M::ThreeD | M::Simulation => Vis::Show,
             M::Escape => Vis::Grey(OTHER_ENGINE),
         },
+    }
+}
+
+/// A control, or a group of controls that share a fate.
+///
+/// Grouped rather than one variant per widget: the answer is the same
+/// for every slider the logarithmic branch alone reads, and a variant
+/// each would be nine ways to get the same decision wrong. The
+/// groupings come from measuring what the shaders actually read --
+/// `docs/projects/ui-render-modes.md` sections 1.4 and 3.4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// Everything driven by the chaos game: pause, reset accumulation,
+    /// max iterations, iterations per thread, burn-in, deterministic
+    /// RNG, the blend controls, and the Rendering menu that repeats
+    /// them. `should_iterate` is false in both non-flame modes, so
+    /// none of it runs there.
+    ChaosGame,
+    /// The deep-zoom reference orbit cache: escape's alone.
+    OrbitCache,
+    /// The tone-map preset dropdown, and Reset Colors. Not merely
+    /// dead in a non-flame mode but HARMFUL: every preset is
+    /// Log-calibrated, so applying one re-blacks a unit-range image --
+    /// the exact thing entering the mode resets the tone mapping to
+    /// prevent.
+    TonemapPresets,
+    /// The tone-map mode selector. Both non-flame engines write a
+    /// unit-range image and no sample density, so Logarithmic and
+    /// Density divide by a floor of 1e-6 and Linear is the only
+    /// setting that behaves.
+    TonemapMode,
+    /// Read only by the logarithmic branch: gamma threshold,
+    /// brightness, vibrancy, highlights.
+    LogOnlyTone,
+    /// Alpha blend low/high. Under the linear mapping the two values
+    /// it mixes between are computed by the same expression, so it is
+    /// an exact no-op. (It is one in flame modes on Linear too --
+    /// that is a bug, filed in the plan's section 5, not a mode
+    /// matter.)
+    AlphaBlendCurve,
+    /// The spatial filter and its blur-edges companion, which run
+    /// inside the compute pass the non-flame modes never dispatch.
+    SpatialFilter,
+    /// The density levels section: histogram, enable, low/high/gamma.
+    /// Hard-off for both non-flame modes in the frame loop, and inert
+    /// even if it were not.
+    DensityLevels,
+    /// Colour mode, and what hangs off it: speed blend, path style,
+    /// path capture and tracking. Neither generator reads the mode,
+    /// and choosing PathMap allocates a path buffer, forces a flame
+    /// shader recompile, and hides the palette controls both modes
+    /// genuinely use.
+    ColorMode,
+}
+
+/// Is this control meaningful in this mode?
+///
+/// Exhaustive, like `panel`, and for the same reason.
+pub fn control(c: Control, m: RenderMode) -> Vis {
+    use Control as C;
+    let flame = !matches!(m, RenderMode::Escape | RenderMode::Simulation);
+    match c {
+        C::ChaosGame | C::TonemapPresets | C::SpatialFilter | C::DensityLevels | C::ColorMode => {
+            if flame {
+                Vis::Show
+            } else {
+                Vis::Hide
+            }
+        }
+        C::OrbitCache => {
+            if matches!(m, RenderMode::Escape) {
+                Vis::Show
+            } else {
+                Vis::Hide
+            }
+        }
+        C::TonemapMode => {
+            if flame {
+                Vis::Show
+            } else {
+                Vis::Grey(LINEAR_ONLY)
+            }
+        }
+        C::LogOnlyTone => {
+            if flame {
+                Vis::Show
+            } else {
+                Vis::Grey(LOG_ONLY)
+            }
+        }
+        C::AlphaBlendCurve => {
+            if flame {
+                Vis::Show
+            } else {
+                Vis::Grey(ALPHA_BLEND_INERT)
+            }
+        }
+    }
+}
+
+/// Draw `body` under a control's policy: normally, disabled with a
+/// hover that explains itself, or not at all.
+///
+/// Returns `None` when the control is hidden, so a caller can skip a
+/// separator or a heading that would otherwise be left behind.
+pub fn gated<R>(
+    ui: &mut egui::Ui,
+    c: Control,
+    m: RenderMode,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    match control(c, m) {
+        Vis::Show => Some(body(ui)),
+        Vis::Grey(reason) => {
+            let inner = ui.add_enabled_ui(false, body);
+            inner.response.on_disabled_hover_text(rust_i18n::t!(reason));
+            Some(inner.inner)
+        }
+        Vis::Hide => None,
     }
 }
 
@@ -259,20 +384,95 @@ mod tests {
         assert_eq!(ALL_PANELS.len(), 29, "a panel was added; decide what it means per mode");
     }
 
-    /// Every reason a control is greyed names a string that exists.
-    /// `t!` returns the key itself when it is missing, which is how
-    /// this catches a typo.
+    /// Every control this build knows about.
+    const ALL_CONTROLS: &[Control] = &[
+        Control::ChaosGame,
+        Control::OrbitCache,
+        Control::TonemapPresets,
+        Control::TonemapMode,
+        Control::LogOnlyTone,
+        Control::AlphaBlendCurve,
+        Control::SpatialFilter,
+        Control::DensityLevels,
+        Control::ColorMode,
+    ];
+
+    /// Every reason a panel or control is greyed names a string that
+    /// exists. `t!` returns the key itself when it is missing, which
+    /// is how this catches a typo.
     #[test]
     fn every_reason_resolves_to_real_text() {
-        for p in ALL_PANELS {
-            for m in RenderMode::ALL {
+        let mut checked = 0;
+        for m in RenderMode::ALL {
+            for p in ALL_PANELS {
                 if let Vis::Grey(key) = panel(*p, *m) {
                     let text = t!(key);
                     assert_ne!(text.as_ref(), key, "{p:?}/{m:?}: missing locale key {key}");
                     assert!(text.len() > 10, "{key} is too terse to explain anything");
+                    checked += 1;
+                }
+            }
+            for c in ALL_CONTROLS {
+                if let Vis::Grey(key) = control(*c, *m) {
+                    let text = t!(key);
+                    assert_ne!(text.as_ref(), key, "{c:?}/{m:?}: missing locale key {key}");
+                    assert!(text.len() > 10, "{key} is too terse to explain anything");
+                    checked += 1;
                 }
             }
         }
+        assert!(checked > 0, "the scan found nothing to check");
+    }
+
+    /// Every control is available in both flame modes, except the
+    /// orbit cache, which is escape's alone and does nothing in a
+    /// flame.
+    #[test]
+    fn the_flame_modes_offer_every_control_but_the_orbit_cache() {
+        for m in [RenderMode::TwoD, RenderMode::ThreeD] {
+            for c in ALL_CONTROLS {
+                let want = *c != Control::OrbitCache;
+                assert_eq!(control(*c, m).is_show(), want, "{c:?} in {m:?}");
+            }
+        }
+    }
+
+    /// The two traps are gone from the non-flame modes: the tone-map
+    /// preset dropdown and Reset Colors both set Logarithmic, which
+    /// renders a unit-range image black. Neither is merely greyed --
+    /// they are not drawn at all, because there is nothing a user
+    /// could want from them here.
+    #[test]
+    fn the_tone_map_presets_are_unreachable_in_the_non_flame_modes() {
+        for m in [RenderMode::Escape, RenderMode::Simulation] {
+            assert_eq!(
+                control(Control::TonemapPresets, m),
+                Vis::Hide,
+                "{m:?}: the preset dropdown must not be reachable"
+            );
+        }
+    }
+
+    /// Each non-flame mode's controls, pinned. Same reasoning as the
+    /// panel table: a control quietly changing status is the failure
+    /// this module exists to prevent.
+    #[test]
+    fn the_non_flame_modes_gate_exactly_their_documented_controls() {
+        for m in [RenderMode::Escape, RenderMode::Simulation] {
+            let hidden = |c: Control| control(c, m) == Vis::Hide;
+            let greyed = |c: Control| matches!(control(c, m), Vis::Grey(_));
+            assert!(hidden(Control::ChaosGame), "{m:?} chaos game");
+            assert!(hidden(Control::TonemapPresets), "{m:?} presets");
+            assert!(hidden(Control::SpatialFilter), "{m:?} spatial filter");
+            assert!(hidden(Control::DensityLevels), "{m:?} levels");
+            assert!(hidden(Control::ColorMode), "{m:?} colour mode");
+            assert!(greyed(Control::TonemapMode), "{m:?} tone map mode");
+            assert!(greyed(Control::LogOnlyTone), "{m:?} log-only tone");
+            assert!(greyed(Control::AlphaBlendCurve), "{m:?} alpha blend");
+        }
+        // The orbit cache is the one control a non-flame mode gains.
+        assert!(control(Control::OrbitCache, RenderMode::Escape).is_show());
+        assert_eq!(control(Control::OrbitCache, RenderMode::Simulation), Vis::Hide);
     }
 
     /// The flame modes offer everything except the two that are not
