@@ -1126,6 +1126,82 @@ impl SimConfig {
         }
     }
 
+    /// Make layer 0 explicit: move the flat `model` / `model_params`
+    /// into `layers[0]`.
+    ///
+    /// The panel shows one list whose entry 0 is the model, and this
+    /// is the moment that presentation becomes the storage — it runs
+    /// when a second layer is added. Idempotent, and exactly inverted
+    /// by `demote_single_layer`, which is what makes the seam safe to
+    /// leave invisible.
+    pub fn promote_model_to_layers(&mut self) {
+        if !self.layers.is_empty() {
+            return;
+        }
+        self.layers = vec![SimLayer {
+            model: std::mem::take(&mut self.model),
+            model_params: std::mem::take(&mut self.model_params),
+            enabled: true,
+        }];
+        // `model` is a named default, not an empty string: a config
+        // whose layers are later removed has to still name a model.
+        self.model = self.layers[0].model.clone();
+        self.model_params = self.layers[0].model_params.clone();
+    }
+
+    /// The inverse: with exactly one layer left, fold it back into the
+    /// flat fields so the file stops mentioning layers at all.
+    ///
+    /// Couplings go with it — a single layer has nothing to couple to,
+    /// and a coupling naming a layer that no longer exists would be
+    /// read as one aimed at layer 0.
+    pub fn demote_single_layer(&mut self) {
+        if self.layers.len() != 1 {
+            return;
+        }
+        let only = self.layers.remove(0);
+        self.model = only.model;
+        self.model_params = only.model_params;
+        self.couplings.clear();
+    }
+
+    /// The tightest static dt ceiling over every layer.
+    ///
+    /// The renderer already steps at the minimum over the layers
+    /// (`SimRenderer` picks it per batch); this is the same question
+    /// asked where the value is offered and clamped, so the panel
+    /// cannot show a step one layer will not survive.
+    #[cfg(feature = "engine-sim")]
+    pub fn max_dt_ceiling(&self) -> f32 {
+        (0..self.layer_count())
+            .map(|l| crate::sim::model_or_default(self.layer_model_name(l)).max_dt)
+            .fold(f32::INFINITY, f32::min)
+    }
+
+    /// The tightest cap at the layers' current parameters -- what the
+    /// solver will actually run at.
+    #[cfg(feature = "engine-sim")]
+    pub fn effective_max_dt(&self) -> f32 {
+        (0..self.layer_count())
+            .map(|l| {
+                crate::sim::model_or_default(self.layer_model_name(l))
+                    .max_dt_for(self.layer_model_params(l))
+            })
+            .fold(f32::INFINITY, f32::min)
+    }
+
+    /// Does any layer's rule advance by dt at all?
+    ///
+    /// An automaton advances by a generation. With layers, the slider
+    /// is worth showing if ANY of them reads it.
+    #[cfg(feature = "engine-sim")]
+    pub fn any_layer_has_a_time_step(&self) -> bool {
+        (0..self.layer_count()).any(|l| {
+            !crate::sim::model_or_default(self.layer_model_name(l))
+                .has(crate::sim::ModelFeature::NoTimeStep)
+        })
+    }
+
     /// Whether layer `l` is stepped.
     pub fn layer_enabled(&self, l: usize) -> bool {
         self.layers.get(l).is_none_or(|layer| layer.enabled)
@@ -1183,6 +1259,66 @@ mod tests {
     /// The whole point of the skip-if-default discipline: a config that
     /// has never entered simulation mode must serialise to nothing, so
     /// every existing flame and escape file is byte-identical.
+
+    /// Making layer 0 explicit and folding it back returns the config
+    /// to exactly what it was.
+    ///
+    /// This is what lets the panel show one list without telling the
+    /// user where the data lives. Run over every registered model with
+    /// its own parameters set, because the flat map and a layer's map
+    /// are different fields and a merge that dropped one would still
+    /// look right for a model whose parameters are all defaults.
+    #[test]
+    #[cfg(feature = "engine-sim")]
+    fn promotion_then_demotion_round_trips_the_config() {
+        for m in crate::sim::MODELS {
+            let mut before = SimConfig::default();
+            before.model = m.name.to_string();
+            for p in m.parameters {
+                // Something other than the default, so a lost map shows.
+                before.model_params.insert(p.name.to_string(), p.default + 0.125);
+            }
+            let mut after = before.clone();
+            after.promote_model_to_layers();
+            assert_eq!(after.layers.len(), 1, "{}: promotion makes exactly one layer", m.name);
+            assert_eq!(after.layer_model_name(0), m.name, "{}: layer 0 is the model", m.name);
+            assert_eq!(
+                after.layer_model_params(0),
+                &before.model_params,
+                "{}: layer 0 carries the parameters",
+                m.name
+            );
+            after.demote_single_layer();
+            assert_eq!(after, before, "{}: promote then demote must be identity", m.name);
+        }
+    }
+
+    /// Promotion is idempotent, so a second "add layer" cannot bury
+    /// layer 0 inside another one.
+    #[test]
+    #[cfg(feature = "engine-sim")]
+    fn promotion_is_idempotent() {
+        let mut cfg = SimConfig::default();
+        cfg.model_params.insert("feed".into(), 0.037);
+        cfg.promote_model_to_layers();
+        let once = cfg.clone();
+        cfg.promote_model_to_layers();
+        assert_eq!(cfg, once, "promoting twice must change nothing");
+    }
+
+    /// Demotion only fires at exactly one layer: with two it would
+    /// silently discard the second.
+    #[test]
+    #[cfg(feature = "engine-sim")]
+    fn demotion_leaves_a_real_stack_alone() {
+        let mut cfg = SimConfig::default();
+        cfg.promote_model_to_layers();
+        cfg.layers.push(cfg.layers[0].clone());
+        let before = cfg.clone();
+        cfg.demote_single_layer();
+        assert_eq!(cfg, before, "two layers must survive a demotion attempt");
+    }
+
     #[test]
     fn default_serialises_to_an_empty_object() {
         let json = serde_json::to_string(&SimConfig::default()).unwrap();
