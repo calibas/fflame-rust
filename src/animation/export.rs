@@ -848,6 +848,26 @@ fn apply_config_value(
                 c.strength = *v;
             }
         }
+        (ConfigPath::SimColorLayerParam { index, param }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.coloring_params.insert(param.clone(), *v);
+            }
+        }
+        (ConfigPath::SimColorLayerOpacity { index }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.opacity = v.clamp(0.0, 1.0);
+            }
+        }
+        (ConfigPath::SimColorLayerMatteCutoff { index }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.matte.cutoff = *v;
+            }
+        }
+        (ConfigPath::SimColorLayerMatteSoftness { index }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.matte.softness = v.max(0.0);
+            }
+        }
         (ConfigPath::SimColoringParam { param }, ConfigValue::Float(v)) => {
             config.sim.coloring_params.insert(param.clone(), *v);
         }

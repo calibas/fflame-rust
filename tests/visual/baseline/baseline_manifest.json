@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "eec85eb2",
+  "git_hash": "874862a8",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -661,6 +661,10 @@
     "sim-layers-brusselator-spots.png": {
       "bytes": 21891,
       "sha256": "83a2b35a7bf83564b93600b24acca93bd866ed3577149d8a445feb052a80a75b"
+    },
+    "sim-layers-colour-stack.png": {
+      "bytes": 29317,
+      "sha256": "07e13da4a941f4fac446b477faa53ee7f6ed9ee8772c94fe7eba93582986d051"
     },
     "sim-layers-two-gray-scotts.png": {
       "bytes": 22401,

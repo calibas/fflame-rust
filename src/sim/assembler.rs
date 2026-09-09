@@ -100,8 +100,12 @@ fn mparam(i: u32) -> f32 {
 }
 
 // The slice of the field this dispatch owns.
+// The colour stack (simulation-layers plan, section 5) points each
+// colouring at its source layer through this; every other pass leaves
+// it at zero.
+var<private> sim_layer_offset: i32 = 0;
 fn sim_layer() -> i32 {
-    return i32(params.layer);
+    return i32(params.layer) + sim_layer_offset;
 }
 fn cparam(i: u32) -> f32 {
     return coloring_params[i];
@@ -854,29 +858,35 @@ fn sim_sdf(p: vec2<i32>) -> f32 {
 }
 
 fn sim_matte(s: vec4<f32>, d: f32) -> f32 {
-    let mode = params.matte.y;
+    return sim_matte_of(s, d, params.matte, params.matte_b.x);
+}
+
+// The same, for a matte given as a value: the colour stack's layers
+// each carry their own.
+fn sim_matte_of(s: vec4<f32>, d: f32, matte: vec4<f32>, edge: f32) -> f32 {
+    let mode = matte.y;
     if (mode < 0.5) {
         return 1.0;
     }
-    if (params.matte_b.x >= 0.5) {
+    if (edge >= 0.5) {
         // Distance: the jump flood already folded the channel, the
         // cutoff and the direction into which side is inside, so d is
         // signed toward the figure and the feather is a width in
         // cells, centred on the edge.
-        let soft = params.matte.w;
+        let soft = matte.w;
         if (soft <= 0.0) {
             return select(0.0, 1.0, d >= 0.0);
         }
         return clamp(d / soft + 0.5, 0.0, 1.0);
     }
-    let which = i32(round(clamp(params.matte.x, 0.0, 3.0)));
+    let which = i32(round(clamp(matte.x, 0.0, 3.0)));
     var v = s.x;
     if (which == 1) { v = s.y; }
     else if (which == 2) { v = s.z; }
     else if (which == 3) { v = s.w; }
 
-    let cutoff = params.matte.z;
-    let soft = params.matte.w;
+    let cutoff = matte.z;
+    let soft = matte.w;
     var a: f32;
     if (soft <= 0.0) {
         a = select(0.0, 1.0, v >= cutoff);
@@ -970,16 +980,7 @@ fn sim_sample_lerp(a: SimSample, b: SimSample, t: f32) -> SimSample {
 // declares ReadsCell -- a test in app_repro_test greps for it, so one
 // that starts to will fail there rather than draw subtly wrong
 // pictures at 8x.
-fn sim_shade_from(x: SimSample, p: vec2<i32>) -> vec4<f32> {
-    var col = sim_color(x, p);
-    col.a = col.a * sim_matte(x.s, x.dist);
-    return col;
-}
-
-// One cell, as itself.
-fn sim_shade(p: vec2<i32>) -> vec4<f32> {
-    return sim_shade_from(sim_sample(p), p);
-}
+//__SHADE__
 
 // Catmull-Rom weights for the four taps at -1, 0, +1, +2 around a
 // sample at fraction t past tap 0. They sum to 1 for every t, so a
@@ -1793,21 +1794,36 @@ pub fn assemble_color(
     // bilinear resolve calls sim_shade four times. A colouring that
     // never reads `grad` gets a constant instead; the compiler then
     // has nothing to keep.
-    let gradient = if coloring.has(ColoringFeature::NeedsGradient) {
-        r#"    // Central-difference gradient of every channel: the same four
+    let (gradient, tensor) = sample_splices(&[coloring]);
+    splice(
+        COLOR_TEMPLATE,
+        boundary,
+        &[
+            ("//__COLORING__", coloring.wgsl),
+            ("//__SHADE__", SINGLE_SHADE),
+            ("//__RESOLVE__", &resolve),
+            ("//__GRADIENT__", gradient),
+            ("//__TENSOR__", tensor),
+        ],
+    )
+}
+
+
+/// The gradient splice of `sim_sample`: four reads giving every
+/// channel's gradient, or zero.
+const GRADIENT_ON: &str = r#"    // Central-difference gradient of every channel: the same four
     // reads give all four.
     let gr = sim_read(p + vec2<i32>(1, 0));
     let gl = sim_read(p - vec2<i32>(1, 0));
     let gu = sim_read(p + vec2<i32>(0, 1));
     let gd = sim_read(p - vec2<i32>(0, 1));
     x.gx = (gr - gl) * 0.5;
-    x.gy = (gu - gd) * 0.5;"#
-    } else {
-        r#"    x.gx = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    x.gy = vec4<f32>(0.0, 0.0, 0.0, 0.0);"#
-    };
-    let tensor = if coloring.has(ColoringFeature::NeedsStructure) {
-        r#"    // Structure tensor of .x: the gradient's outer product, summed
+    x.gy = (gu - gd) * 0.5;"#;
+const GRADIENT_OFF: &str = r#"    x.gx = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    x.gy = vec4<f32>(0.0, 0.0, 0.0, 0.0);"#;
+/// The structure-tensor splice: a 3x3 binomial window of gradient
+/// outer products, or zero.
+const TENSOR_ON: &str = r#"    // Structure tensor of .x: the gradient's outer product, summed
     // over a 3x3 window with binomial weights (1 2 1)/4 each way. The
     // smoothing is what makes it a tensor of the TEXTURE rather than
     // of one cell's slope.
@@ -1827,16 +1843,191 @@ pub fn assemble_color(
             jyy = jyy + w * g.y * g.y;
         }
     }
-    x.tensor = vec3<f32>(jxx, jxy, jyy);"#
+    x.tensor = vec3<f32>(jxx, jxy, jyy);"#;
+const TENSOR_OFF: &str = "    x.tensor = vec3<f32>(0.0, 0.0, 0.0);";
+
+/// The single colouring's shade: colour, then the config's matte.
+const SINGLE_SHADE: &str = r#"fn sim_shade_from(x: SimSample, p: vec2<i32>) -> vec4<f32> {
+    var col = sim_color(x, p);
+    col.a = col.a * sim_matte(x.s, x.dist);
+    return col;
+}
+
+// One cell, as itself.
+fn sim_shade(p: vec2<i32>) -> vec4<f32> {
+    return sim_shade_from(sim_sample(p), p);
+}"#;
+
+/// The gradient and tensor splices for a set of colourings: computed
+/// when ANY of them declares the feature.
+fn sample_splices(colorings: &[&SimColoringDef]) -> (&'static str, &'static str) {
+    let gradient = if colorings.iter().any(|c| c.has(ColoringFeature::NeedsGradient)) {
+        GRADIENT_ON
     } else {
-        "    x.tensor = vec3<f32>(0.0, 0.0, 0.0);"
+        GRADIENT_OFF
     };
+    let tensor = if colorings.iter().any(|c| c.has(ColoringFeature::NeedsStructure)) {
+        TENSOR_ON
+    } else {
+        TENSOR_OFF
+    };
+    (gradient, tensor)
+}
+
+/// Replace every whole-word occurrence of `word` with `with` (WGSL
+/// identifier characters on neither side).
+fn replace_word(src: &str, word: &str, with: &str) -> String {
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len() + 64);
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(word.as_bytes())
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && (i + word.len() == bytes.len() || !is_ident(bytes[i + word.len()]))
+        {
+            out.push_str(with);
+            i += word.len();
+        } else {
+            let ch = src[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+/// A colouring's WGSL with every function it defines -- and its
+/// `cparam` -- suffixed `_k`, so K colourings share one shader, and
+/// one colouring can appear in the stack twice.
+fn suffix_coloring(wgsl: &str, k: usize) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for line in wgsl.lines() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("fn ") {
+            if let Some(end) = rest.find('(') {
+                let name = rest[..end].trim();
+                if !name.is_empty() && !names.iter().any(|n| n == name) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    let mut out = wgsl.to_string();
+    for name in &names {
+        out = replace_word(&out, name, &format!("{name}_{k}"));
+    }
+    replace_word(&out, "cparam", &format!("cparam_{k}"))
+}
+
+/// The colour stack: K colourings, each of its own source layer, with
+/// its own parameters and matte, composited bottom to top.
+pub fn assemble_color_stack(
+    colorings: &[&SimColoringDef],
+    boundary: SimBoundary,
+    up: SimUpscale,
+    down: SimDownscale,
+    magnifying: bool,
+) -> String {
+    let resolve = resolve_body(up, down, magnifying);
+    let (gradient, tensor) = sample_splices(colorings);
+    let mut defs = String::from(
+        r#"// One colouring layer of the stack (simulation-layers plan,
+// section 5): which simulation layer it reads, how it blends, its
+// opacity, its matte.
+struct SimColorLayerGpu {
+    source: u32,
+    blend: u32,
+    enabled: u32,
+    pad0: u32,
+    opacity: f32,
+    edge: f32,
+    pad1: f32,
+    pad2: f32,
+    matte: vec4<f32>,
+};
+@group(0) @binding(7) var<storage, read> color_layers: array<SimColorLayerGpu>;
+
+// Composite `top` over `base` by `mode`: separable formulas on
+// straight RGB, the layer's coverage times its opacity as its alpha,
+// coverage accumulating as "over". A bottom layer over nothing is
+// itself, exactly -- so a stack of one Normal layer at opacity 1 is
+// the single colouring's picture bit for bit.
+fn sim_blend(base: vec4<f32>, top: vec4<f32>, mode: u32, opacity: f32) -> vec4<f32> {
+    let a = clamp(top.a * opacity, 0.0, 1.0);
+    if (base.a <= 0.0) {
+        return vec4<f32>(top.rgb, a);
+    }
+    var f = top.rgb;
+    if (mode == 1u) {
+        f = max(base.rgb, top.rgb);
+    } else if (mode == 2u) {
+        f = min(base.rgb, top.rgb);
+    } else if (mode == 3u) {
+        f = base.rgb * top.rgb;
+    } else if (mode == 4u) {
+        f = vec3<f32>(1.0, 1.0, 1.0) - (vec3<f32>(1.0, 1.0, 1.0) - base.rgb) * (vec3<f32>(1.0, 1.0, 1.0) - top.rgb);
+    } else if (mode == 5u) {
+        let lo = 2.0 * base.rgb * top.rgb;
+        let hi = vec3<f32>(1.0, 1.0, 1.0) - 2.0 * (vec3<f32>(1.0, 1.0, 1.0) - base.rgb) * (vec3<f32>(1.0, 1.0, 1.0) - top.rgb);
+        f = select(hi, lo, base.rgb < vec3<f32>(0.5, 0.5, 0.5));
+    } else if (mode == 6u) {
+        f = min(base.rgb + top.rgb, vec3<f32>(1.0, 1.0, 1.0));
+    }
+    let blended = mix(top.rgb, f, base.a);
+    let out_a = a + base.a * (1.0 - a);
+    let rgb = (blended * a + base.rgb * base.a * (1.0 - a)) / max(out_a, 1.0e-6);
+    return vec4<f32>(rgb, out_a);
+}
+"#,
+    );
+    for (k, c) in colorings.iter().enumerate() {
+        defs.push_str(&format!(
+            "
+// ---- colouring layer {k}: {} ----
+fn cparam_{k}(i: u32) -> f32 {{
+    return coloring_params[{k}u * 16u + i];
+}}
+",
+            c.name
+        ));
+        defs.push_str(&suffix_coloring(c.wgsl, k));
+        defs.push_str(&format!(
+            r#"
+fn sim_shade_from_{k}(x: SimSample, p: vec2<i32>) -> vec4<f32> {{
+    var col = sim_color_{k}(x, p);
+    col.a = col.a * sim_matte_of(x.s, x.dist, color_layers[{k}].matte, color_layers[{k}].edge);
+    return col;
+}}
+fn sim_shade_{k}(p: vec2<i32>) -> vec4<f32> {{
+    return sim_shade_from_{k}(sim_sample(p), p);
+}}
+fn sim_resolve_{k}(gf: vec2<f32>, g: vec2<i32>, fit: f32) -> vec4<f32> {{
+{}
+    return col;
+}}
+"#,
+            replace_word(&replace_word(&resolve, "sim_shade", &format!("sim_shade_{k}")), "sim_shade_from", &format!("sim_shade_from_{k}"))
+        ));
+    }
+    let mut composite = String::from("    var col = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+");
+    for k in 0..colorings.len() {
+        composite.push_str(&format!(
+            "    if (color_layers[{k}].enabled != 0u) {{
+        sim_layer_offset = i32(color_layers[{k}].source);
+        col = sim_blend(col, sim_resolve_{k}(gf, g, fit), color_layers[{k}].blend, color_layers[{k}].opacity);
+    }}
+"
+        ));
+    }
     splice(
         COLOR_TEMPLATE,
         boundary,
         &[
-            ("//__COLORING__", coloring.wgsl),
-            ("//__RESOLVE__", &resolve),
+            ("//__COLORING__", &defs),
+            ("//__SHADE__", ""),
+            ("//__RESOLVE__", &composite),
             ("//__GRADIENT__", gradient),
             ("//__TENSOR__", tensor),
         ],
@@ -1947,6 +2138,25 @@ mod tests {
         }
         println!("{count} variations validate in the layer warp");
         assert!(count > 100);
+    }
+
+
+    /// The colour stack validates: every colouring stacked with itself
+    /// (the renaming must let one colouring appear twice) and all of
+    /// them at once.
+    #[test]
+    fn every_colouring_validates_in_a_stack() {
+        for c in COLORINGS {
+            validate(
+                &assemble_color_stack(&[c, c], SimBoundary::Periodic, SimUpscale::Bicubic, SimDownscale::Box, true),
+                &format!("stack {} x2", c.name),
+            );
+        }
+        let all: Vec<&SimColoringDef> = COLORINGS.iter().copied().collect();
+        validate(
+            &assemble_color_stack(&all, SimBoundary::Clamp, SimUpscale::Nearest, SimDownscale::Box, false),
+            "stack of every colouring",
+        );
     }
 
     #[test]
