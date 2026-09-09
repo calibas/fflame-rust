@@ -1149,6 +1149,45 @@ impl SimConfig {
         self.model_params = self.layers[0].model_params.clone();
     }
 
+    /// Make colour layer 0 explicit: move the flat `coloring` /
+    /// `coloring_params` / `matte` into `color_layers[0]`.
+    ///
+    /// The same seam as `promote_model_to_layers`, with one difference
+    /// worth knowing: the renderer picks a DIFFERENT SHADER on
+    /// `color_layers.is_empty()` — `assemble_color` against
+    /// `assemble_color_stack`. A one-layer Normal stack at opacity 1
+    /// is the single colouring's picture bit for bit
+    /// (`a_single_normal_colour_layer_is_the_single_colouring`), which
+    /// is what makes promoting safe, but it is a real switch rather
+    /// than a relabelling.
+    pub fn promote_coloring_to_layers(&mut self) {
+        if !self.color_layers.is_empty() {
+            return;
+        }
+        self.color_layers = vec![SimColorLayer {
+            source: 0,
+            gather: false,
+            coloring: self.coloring.clone(),
+            coloring_params: self.coloring_params.clone(),
+            matte: self.matte,
+            blend: SimBlend::Normal,
+            opacity: 1.0,
+            enabled: true,
+        }];
+    }
+
+    /// The inverse: with exactly one colour layer, fold it back into
+    /// the flat fields so the file stops mentioning a stack.
+    pub fn demote_single_color_layer(&mut self) {
+        if self.color_layers.len() != 1 {
+            return;
+        }
+        let only = self.color_layers.remove(0);
+        self.coloring = only.coloring;
+        self.coloring_params = only.coloring_params;
+        self.matte = only.matte;
+    }
+
     /// The inverse: with exactly one layer left, fold it back into the
     /// flat fields so the file stops mentioning layers at all.
     ///
@@ -1317,6 +1356,60 @@ mod tests {
         let before = cfg.clone();
         cfg.demote_single_layer();
         assert_eq!(cfg, before, "two layers must survive a demotion attempt");
+    }
+
+
+    /// The colour seam round-trips too, over every registered
+    /// colouring with non-default parameters and a matte set.
+    ///
+    /// The matte matters here: it lives on the flat config AND on each
+    /// colour layer, so a promotion that forgot it would leave a
+    /// growth model's figure uncut and still pass a check that only
+    /// looked at the colouring's name.
+    #[test]
+    #[cfg(feature = "engine-sim")]
+    fn colour_promotion_then_demotion_round_trips_the_config() {
+        for c in crate::sim::COLORINGS {
+            let mut before = SimConfig::default();
+            before.coloring = c.name.to_string();
+            for p in c.parameters {
+                before.coloring_params.insert(p.name.to_string(), p.default + 0.25);
+            }
+            before.matte = SimMatte {
+                channel: SimMatteChannel::Y,
+                cutoff: 0.15,
+                softness: 0.5,
+                invert: true,
+                edge: SimMatteEdge::Distance,
+            };
+            let mut after = before.clone();
+            after.promote_coloring_to_layers();
+            assert_eq!(after.color_layers.len(), 1, "{}: one layer", c.name);
+            assert_eq!(after.color_layers[0].matte, before.matte, "{}: matte carried", c.name);
+            assert_eq!(
+                after.color_layers[0].coloring_params, before.coloring_params,
+                "{}: parameters carried", c.name
+            );
+            after.demote_single_color_layer();
+            assert_eq!(after, before, "{}: promote then demote must be identity", c.name);
+        }
+    }
+
+    /// Colour promotion is idempotent and demotion refuses a real
+    /// stack, for the same reasons as the model side.
+    #[test]
+    #[cfg(feature = "engine-sim")]
+    fn colour_promotion_is_idempotent_and_demotion_spares_a_stack() {
+        let mut cfg = SimConfig::default();
+        cfg.promote_coloring_to_layers();
+        let once = cfg.clone();
+        cfg.promote_coloring_to_layers();
+        assert_eq!(cfg, once, "promoting twice must change nothing");
+
+        cfg.color_layers.push(cfg.color_layers[0].clone());
+        let two = cfg.clone();
+        cfg.demote_single_color_layer();
+        assert_eq!(cfg, two, "two colour layers must survive a demotion attempt");
     }
 
     #[test]
