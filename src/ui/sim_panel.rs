@@ -166,268 +166,276 @@ pub fn render_sim_content(
         .id_salt("sim_panel_body")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            // ---- Model: one list whose entry 0 IS the model ----
-            render_model_section(ui, config_manager, &config, &sim, state.reseed);
+            egui::CollapsingHeader::new(t!("sim_panel.section_model").as_ref())
+                .default_open(true)
+                .show(ui, |ui| {
+                // ---- Model: one list whose entry 0 IS the model ----
+                render_model_section(ui, config_manager, &config, &sim, state.reseed);
 
-            ui.separator();
-
-            // ---- Grid ----
-            // The control that most needs explaining, so it says what it will
-            // do rather than only what it is: a bound grid re-simulates on
-            // resize and on export at a different size.
-            let mut bound = sim.grid.is_bound();
-            if ui
-                .checkbox(&mut bound, t!("sim_panel.bind_grid").as_ref())
-                .on_hover_text(t!("sim_panel.bind_grid_tip"))
-                .changed()
-            {
-                let _ = config_manager.update_param(
-                    ConfigPath::SimGridMode,
-                    if bound { "viewport" } else { "fixed" }.to_string().into(),
-                );
-                *state.reseed = true;
-            }
-            match sim.grid {
-                SimGrid::Viewport { scale } => {
-                    let mut v = scale;
-                    if ui
-                        .add(egui::Slider::new(&mut v, 0.125..=4.0).text(t!("sim_panel.grid_scale").as_ref()))
-                        .on_hover_text(t!("sim_panel.grid_scale_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::SimGridScale, v.into());
-                    }
-                }
-                SimGrid::Fixed { width, height } => {
-                    ui.horizontal(|ui| {
-                        let mut w = width;
-                        let mut h = height;
-                        ui.label(t!("sim_panel.grid_size").as_ref());
-                        if ui.add(egui::DragValue::new(&mut w).range(16..=8192)).changed() {
-                            let _ = config_manager.update_param(ConfigPath::SimGridWidth, w.into());
-                            *state.reseed = true;
-                        }
-                        ui.label("x");
-                        if ui.add(egui::DragValue::new(&mut h).range(16..=8192)).changed() {
-                            let _ = config_manager.update_param(ConfigPath::SimGridHeight, h.into());
-                            *state.reseed = true;
-                        }
-                    });
-                }
-            }
-
-            // ---- Resolve filters ----
-            ui.horizontal(|ui| {
-                ui.label(t!("sim_panel.upscale").as_ref());
-                egui::ComboBox::from_id_salt("sim_upscale")
-                    .selected_text(sim.upscale.name())
-                    .show_ui(ui, |ui| {
-                        for n in SimUpscale::NAMES {
-                            if ui.selectable_label(sim.upscale.name() == *n, *n).clicked() {
-                                let _ = config_manager
-                                    .update_param(ConfigPath::SimUpscale, (*n).to_string().into());
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(t!("sim_panel.upscale_tip"));
-                ui.label(t!("sim_panel.fit").as_ref());
-                egui::ComboBox::from_id_salt("sim_fit")
-                    .selected_text(sim.fit.name())
-                    .show_ui(ui, |ui| {
-                        for n in crate::config::sim::SimFit::NAMES {
-                            if ui.selectable_label(sim.fit.name() == *n, *n).clicked() {
-                                let _ = config_manager
-                                    .update_param(ConfigPath::SimFit, (*n).to_string().into());
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(t!("sim_panel.fit_tip"));
-                ui.label(t!("sim_panel.downscale").as_ref());
-                egui::ComboBox::from_id_salt("sim_downscale")
-                    .selected_text(sim.downscale.name())
-                    .show_ui(ui, |ui| {
-                        for n in SimDownscale::NAMES {
-                            if ui.selectable_label(sim.downscale.name() == *n, *n).clicked() {
-                                let _ = config_manager
-                                    .update_param(ConfigPath::SimDownscale, (*n).to_string().into());
-                            }
-                        }
-                    });
+                ui.separator();
             });
 
-            ui.separator();
-
-            // ---- Seed, init, boundary: everything that restarts the run ----
-            ui.horizontal(|ui| {
-                let mut seed = sim.seed as u32;
-                ui.label(t!("sim_panel.seed").as_ref());
-                if ui.add(egui::DragValue::new(&mut seed)).changed() {
-                    let _ = config_manager.update_param(ConfigPath::SimSeed, seed.into());
-                    *state.reseed = true;
-                }
-                if ui.small_button(t!("sim_panel.randomize").as_ref()).clicked() {
-                    let n: u32 = rand::random();
-                    let _ = config_manager.update_param(ConfigPath::SimSeed, n.into());
-                    *state.reseed = true;
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(t!("sim_panel.init").as_ref());
-                egui::ComboBox::from_id_salt("sim_init")
-                    .selected_text(sim.init.kind_name())
-                    .show_ui(ui, |ui| {
-                        for k in SimInit::KINDS {
-                            if ui.selectable_label(sim.init.kind_name() == *k, *k).clicked() {
-                                let _ = config_manager
-                                    .update_param(ConfigPath::SimInitKind, (*k).to_string().into());
-                                *state.reseed = true;
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(t!("sim_panel.init_tip"));
-            });
-            // Only the fields this init kind actually has. Phase 0 measured why
-            // the radius matters: 12-cell blobs die where 24-cell blobs live.
-            match sim.init {
-                SimInit::Noise { amplitude } => {
-                    let mut a = amplitude;
-                    if ui
-                        .add(egui::Slider::new(&mut a, 0.0..=1.0).text(t!("sim_panel.amplitude").as_ref()))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::SimInitAmplitude, a.into());
-                        *state.reseed = true;
-                    }
-                }
-                SimInit::Blob { radius } | SimInit::Ring { radius } => {
-                    let mut r = radius;
-                    if ui
-                        .add(egui::Slider::new(&mut r, 1..=256).text(t!("sim_panel.radius").as_ref()))
-                        .on_hover_text(t!("sim_panel.radius_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::SimInitRadius, r.into());
-                        *state.reseed = true;
-                    }
-                }
-                SimInit::Blobs { count, radius } => {
-                    let mut r = radius;
-                    if ui
-                        .add(egui::Slider::new(&mut r, 1..=256).text(t!("sim_panel.radius").as_ref()))
-                        .on_hover_text(t!("sim_panel.radius_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::SimInitRadius, r.into());
-                        *state.reseed = true;
-                    }
-                    let mut c = count;
-                    if ui
-                        .add(egui::Slider::new(&mut c, 1..=64).text(t!("sim_panel.count").as_ref()))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::SimInitCount, c.into());
-                        *state.reseed = true;
-                    }
-                }
-                // No sizes to offer: these shapes are defined by the grid.
-                SimInit::Line | SimInit::Center | SimInit::BrokenWave => {}
-            }
-
-            ui.horizontal(|ui| {
-                ui.label(t!("sim_panel.boundary").as_ref());
-                egui::ComboBox::from_id_salt("sim_boundary")
-                    .selected_text(sim.boundary.name())
-                    .show_ui(ui, |ui| {
-                        for n in SimBoundary::NAMES {
-                            if ui.selectable_label(sim.boundary.name() == *n, *n).clicked() {
-                                let _ = config_manager
-                                    .update_param(ConfigPath::SimBoundary, (*n).to_string().into());
-                                *state.reseed = true;
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(t!("sim_panel.boundary_tip"));
-            });
-
-            ui.separator();
-
-            // ---- Stepping ----
-            let mut steps = sim.steps;
-            // From 0, which is the no-cap sentinel: an integer slider sets
-            // `smallest_positive` to 1, and egui's logarithmic sliders take a
-            // zero bound, so the leftmost stop is 0 and the next is 1.
-            if ui
-                .add(
-                    // Ten million: the coupled-Brusselator and Rossler papers
-                    // settle over 10^5 to 10^6 steps at their dt.
-                    egui::Slider::new(&mut steps, 0..=10_000_000)
-                        .text(t!("sim_panel.steps").as_ref())
-                        .logarithmic(true),
-                )
-                .on_hover_text(t!("sim_panel.steps_tip"))
-                .changed()
-            {
-                let _ = config_manager.update_param(ConfigPath::SimSteps, steps.into());
-            }
-            if sim.steps == 0 {
-                // An export runs `steps` from the seed, so at 0 it is the
-                // seed. Saying it here beats finding out from a blank PNG.
-                ui.label(egui::RichText::new(t!("sim_panel.steps_uncapped")).small().weak())
-                    .on_hover_text(t!("sim_panel.steps_uncapped_tip"));
-            }
-            let mut spf = sim.steps_per_frame;
-            if ui
-                .add(
-                    egui::Slider::new(&mut spf, 1..=2048)
-                        .text(t!("sim_panel.steps_per_frame").as_ref())
-                        .logarithmic(true),
-                )
-                .on_hover_text(t!("sim_panel.steps_per_frame_tip"))
-                .changed()
-            {
-                let _ = config_manager.update_param(ConfigPath::SimStepsPerFrame, spf.into());
-            }
-            // An automaton advances by a generation, not by dt: showing the
-            // slider would be a control that does nothing.
-            let mut dt = sim.dt;
-            if sim.any_layer_has_a_time_step() {
-                // The range is the model's STATIC ceiling, never the
-                // parameter-dependent stability cap. A range that moved with
-                // the other sliders moved this slider's handle -- and, once
-                // egui clamped the value into it, the stored dt too -- so
-                // dragging Mobility appeared to edit the time step.
+            egui::CollapsingHeader::new(t!("sim_panel.section_settings").as_ref())
+                .default_open(false)
+                .show(ui, |ui| {
+                // ---- Grid ----
+                // The control that most needs explaining, so it says what it will
+                // do rather than only what it is: a bound grid re-simulates on
+                // resize and on export at a different size.
+                let mut bound = sim.grid.is_bound();
                 if ui
-                    .add(
-                        egui::Slider::new(&mut dt, 0.001..=sim.max_dt_ceiling())
-                            .text(t!("sim_panel.dt").as_ref()),
-                    )
-                    .on_hover_text(t!("sim_panel.dt_tip"))
+                    .checkbox(&mut bound, t!("sim_panel.bind_grid").as_ref())
+                    .on_hover_text(t!("sim_panel.bind_grid_tip"))
                     .changed()
                 {
-                    let _ = config_manager.update_param(ConfigPath::SimDt, dt.into());
+                    let _ = config_manager.update_param(
+                        ConfigPath::SimGridMode,
+                        if bound { "viewport" } else { "fixed" }.to_string().into(),
+                    );
+                    *state.reseed = true;
                 }
-                // What the solver will actually use. Capping silently would
-                // leave the panel claiming a step the run does not take.
-                let effective = sim.effective_max_dt();
-                if sim.dt > effective * 1.001 {
-                    ui.label(
-                        egui::RichText::new(t!(
-                            "sim_panel.dt_capped",
-                            dt = format!("{effective:.4}")
-                        ))
-                        .small()
-                        .weak(),
-                    )
-                    .on_hover_text(t!("sim_panel.dt_capped_tip"));
+                match sim.grid {
+                    SimGrid::Viewport { scale } => {
+                        let mut v = scale;
+                        if ui
+                            .add(egui::Slider::new(&mut v, 0.125..=4.0).text(t!("sim_panel.grid_scale").as_ref()))
+                            .on_hover_text(t!("sim_panel.grid_scale_tip"))
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(ConfigPath::SimGridScale, v.into());
+                        }
+                    }
+                    SimGrid::Fixed { width, height } => {
+                        ui.horizontal(|ui| {
+                            let mut w = width;
+                            let mut h = height;
+                            ui.label(t!("sim_panel.grid_size").as_ref());
+                            if ui.add(egui::DragValue::new(&mut w).range(16..=8192)).changed() {
+                                let _ = config_manager.update_param(ConfigPath::SimGridWidth, w.into());
+                                *state.reseed = true;
+                            }
+                            ui.label("x");
+                            if ui.add(egui::DragValue::new(&mut h).range(16..=8192)).changed() {
+                                let _ = config_manager.update_param(ConfigPath::SimGridHeight, h.into());
+                                *state.reseed = true;
+                            }
+                        });
+                    }
                 }
-            }
 
-            ui.separator();
+                // ---- Resolve filters ----
+                ui.horizontal(|ui| {
+                    ui.label(t!("sim_panel.upscale").as_ref());
+                    egui::ComboBox::from_id_salt("sim_upscale")
+                        .selected_text(sim.upscale.name())
+                        .show_ui(ui, |ui| {
+                            for n in SimUpscale::NAMES {
+                                if ui.selectable_label(sim.upscale.name() == *n, *n).clicked() {
+                                    let _ = config_manager
+                                        .update_param(ConfigPath::SimUpscale, (*n).to_string().into());
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("sim_panel.upscale_tip"));
+                    ui.label(t!("sim_panel.fit").as_ref());
+                    egui::ComboBox::from_id_salt("sim_fit")
+                        .selected_text(sim.fit.name())
+                        .show_ui(ui, |ui| {
+                            for n in crate::config::sim::SimFit::NAMES {
+                                if ui.selectable_label(sim.fit.name() == *n, *n).clicked() {
+                                    let _ = config_manager
+                                        .update_param(ConfigPath::SimFit, (*n).to_string().into());
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("sim_panel.fit_tip"));
+                    ui.label(t!("sim_panel.downscale").as_ref());
+                    egui::ComboBox::from_id_salt("sim_downscale")
+                        .selected_text(sim.downscale.name())
+                        .show_ui(ui, |ui| {
+                            for n in SimDownscale::NAMES {
+                                if ui.selectable_label(sim.downscale.name() == *n, *n).clicked() {
+                                    let _ = config_manager
+                                        .update_param(ConfigPath::SimDownscale, (*n).to_string().into());
+                                }
+                            }
+                        });
+                });
+
+                ui.separator();
+
+                // ---- Seed, init, boundary: everything that restarts the run ----
+                ui.horizontal(|ui| {
+                    let mut seed = sim.seed as u32;
+                    ui.label(t!("sim_panel.seed").as_ref());
+                    if ui.add(egui::DragValue::new(&mut seed)).changed() {
+                        let _ = config_manager.update_param(ConfigPath::SimSeed, seed.into());
+                        *state.reseed = true;
+                    }
+                    if ui.small_button(t!("sim_panel.randomize").as_ref()).clicked() {
+                        let n: u32 = rand::random();
+                        let _ = config_manager.update_param(ConfigPath::SimSeed, n.into());
+                        *state.reseed = true;
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(t!("sim_panel.init").as_ref());
+                    egui::ComboBox::from_id_salt("sim_init")
+                        .selected_text(sim.init.kind_name())
+                        .show_ui(ui, |ui| {
+                            for k in SimInit::KINDS {
+                                if ui.selectable_label(sim.init.kind_name() == *k, *k).clicked() {
+                                    let _ = config_manager
+                                        .update_param(ConfigPath::SimInitKind, (*k).to_string().into());
+                                    *state.reseed = true;
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("sim_panel.init_tip"));
+                });
+                // Only the fields this init kind actually has. Phase 0 measured why
+                // the radius matters: 12-cell blobs die where 24-cell blobs live.
+                match sim.init {
+                    SimInit::Noise { amplitude } => {
+                        let mut a = amplitude;
+                        if ui
+                            .add(egui::Slider::new(&mut a, 0.0..=1.0).text(t!("sim_panel.amplitude").as_ref()))
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(ConfigPath::SimInitAmplitude, a.into());
+                            *state.reseed = true;
+                        }
+                    }
+                    SimInit::Blob { radius } | SimInit::Ring { radius } => {
+                        let mut r = radius;
+                        if ui
+                            .add(egui::Slider::new(&mut r, 1..=256).text(t!("sim_panel.radius").as_ref()))
+                            .on_hover_text(t!("sim_panel.radius_tip"))
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(ConfigPath::SimInitRadius, r.into());
+                            *state.reseed = true;
+                        }
+                    }
+                    SimInit::Blobs { count, radius } => {
+                        let mut r = radius;
+                        if ui
+                            .add(egui::Slider::new(&mut r, 1..=256).text(t!("sim_panel.radius").as_ref()))
+                            .on_hover_text(t!("sim_panel.radius_tip"))
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(ConfigPath::SimInitRadius, r.into());
+                            *state.reseed = true;
+                        }
+                        let mut c = count;
+                        if ui
+                            .add(egui::Slider::new(&mut c, 1..=64).text(t!("sim_panel.count").as_ref()))
+                            .changed()
+                        {
+                            let _ = config_manager.update_param(ConfigPath::SimInitCount, c.into());
+                            *state.reseed = true;
+                        }
+                    }
+                    // No sizes to offer: these shapes are defined by the grid.
+                    SimInit::Line | SimInit::Center | SimInit::BrokenWave => {}
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label(t!("sim_panel.boundary").as_ref());
+                    egui::ComboBox::from_id_salt("sim_boundary")
+                        .selected_text(sim.boundary.name())
+                        .show_ui(ui, |ui| {
+                            for n in SimBoundary::NAMES {
+                                if ui.selectable_label(sim.boundary.name() == *n, *n).clicked() {
+                                    let _ = config_manager
+                                        .update_param(ConfigPath::SimBoundary, (*n).to_string().into());
+                                    *state.reseed = true;
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("sim_panel.boundary_tip"));
+                });
+
+                ui.separator();
+
+                // ---- Stepping ----
+                let mut steps = sim.steps;
+                // From 0, which is the no-cap sentinel: an integer slider sets
+                // `smallest_positive` to 1, and egui's logarithmic sliders take a
+                // zero bound, so the leftmost stop is 0 and the next is 1.
+                if ui
+                    .add(
+                        // Ten million: the coupled-Brusselator and Rossler papers
+                        // settle over 10^5 to 10^6 steps at their dt.
+                        egui::Slider::new(&mut steps, 0..=10_000_000)
+                            .text(t!("sim_panel.steps").as_ref())
+                            .logarithmic(true),
+                    )
+                    .on_hover_text(t!("sim_panel.steps_tip"))
+                    .changed()
+                {
+                    let _ = config_manager.update_param(ConfigPath::SimSteps, steps.into());
+                }
+                if sim.steps == 0 {
+                    // An export runs `steps` from the seed, so at 0 it is the
+                    // seed. Saying it here beats finding out from a blank PNG.
+                    ui.label(egui::RichText::new(t!("sim_panel.steps_uncapped")).small().weak())
+                        .on_hover_text(t!("sim_panel.steps_uncapped_tip"));
+                }
+                let mut spf = sim.steps_per_frame;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut spf, 1..=2048)
+                            .text(t!("sim_panel.steps_per_frame").as_ref())
+                            .logarithmic(true),
+                    )
+                    .on_hover_text(t!("sim_panel.steps_per_frame_tip"))
+                    .changed()
+                {
+                    let _ = config_manager.update_param(ConfigPath::SimStepsPerFrame, spf.into());
+                }
+                // An automaton advances by a generation, not by dt: showing the
+                // slider would be a control that does nothing.
+                let mut dt = sim.dt;
+                if sim.any_layer_has_a_time_step() {
+                    // The range is the model's STATIC ceiling, never the
+                    // parameter-dependent stability cap. A range that moved with
+                    // the other sliders moved this slider's handle -- and, once
+                    // egui clamped the value into it, the stored dt too -- so
+                    // dragging Mobility appeared to edit the time step.
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut dt, 0.001..=sim.max_dt_ceiling())
+                                .text(t!("sim_panel.dt").as_ref()),
+                        )
+                        .on_hover_text(t!("sim_panel.dt_tip"))
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(ConfigPath::SimDt, dt.into());
+                    }
+                    // What the solver will actually use. Capping silently would
+                    // leave the panel claiming a step the run does not take.
+                    let effective = sim.effective_max_dt();
+                    if sim.dt > effective * 1.001 {
+                        ui.label(
+                            egui::RichText::new(t!(
+                                "sim_panel.dt_capped",
+                                dt = format!("{effective:.4}")
+                            ))
+                            .small()
+                            .weak(),
+                        )
+                        .on_hover_text(t!("sim_panel.dt_capped_tip"));
+                    }
+                }
+
+                ui.separator();
+            });
 
             // ---- Warp ----
             // Per-step rates about the centre. The ranges are narrow on
@@ -554,8 +562,13 @@ pub fn render_sim_content(
 
             ui.separator();
 
-            // ---- Colouring: one list whose entry 0 IS the colouring ----
-            render_coloring_section(ui, config_manager, &config, &sim);
+            egui::CollapsingHeader::new(t!("sim_panel.section_coloring").as_ref())
+                .default_open(true)
+                .show(ui, |ui| {
+                // ---- Colouring: one list whose entry 0 IS the colouring ----
+                render_coloring_section(ui, config_manager, &config, &sim);
+            });
+
     });
 }
 
@@ -1076,6 +1089,18 @@ fn render_model_section(
     let layered = !sim.layers.is_empty();
     let count = sim.layer_count();
 
+    // What makes the flame's transforms the layers' per-layer warps.
+    // It lived inside the old Layers header and was dropped when that
+    // header was merged away; `the_panel_writes_every_sim_path` is the
+    // test that found it.
+    let mut use_transforms = sim.use_transforms;
+    if ui
+        .checkbox(&mut use_transforms, t!("sim_panel.use_transforms").as_ref())
+        .on_hover_text(t!("sim_panel.use_transforms_tip"))
+        .changed()
+    {
+        let _ = config_manager.update_param(ConfigPath::SimUseTransforms, use_transforms.into());
+    }
     ui.horizontal(|ui| {
         ui.label(t!("sim_panel.layered_presets").as_ref());
         egui::ComboBox::from_id_salt("sim_layered_preset")
