@@ -96,6 +96,28 @@ pub fn layout_for(
     }
 }
 
+/// Does this mode need the escape engine's GPU state resident?
+///
+/// Both non-flame renderers are created lazily and, before this, were
+/// dropped only on device loss or before a synchronous high-res
+/// export -- so leaving a mode left everything allocated. That was
+/// tolerable while switching was buried inside two panel buttons; a
+/// Mode menu invites it constantly (ui-render-modes plan, section 2,
+/// decision 4).
+pub fn keeps_escape_engine(mode: RenderMode) -> bool {
+    matches!(mode, RenderMode::Escape)
+}
+
+/// The same for the simulation's grid.
+///
+/// Note what this costs, which the escape case does not: the escape
+/// renderer rebuilds itself deterministically from the config, so
+/// returning costs only time, but the simulation's grid IS its state.
+/// Freeing it means returning restarts from the seed at step 0.
+pub fn keeps_sim_engine(mode: RenderMode) -> bool {
+    matches!(mode, RenderMode::Simulation)
+}
+
 /// The i18n key describing what a mode renders, for a menu hover.
 pub fn mode_tip_key(mode: RenderMode) -> &'static str {
     match mode {
@@ -258,6 +280,23 @@ mod tests {
             "these write the render mode directly instead of calling \
              switch_render_mode, so they skip the tone-map rescue: {offenders:?}"
         );
+    }
+
+    /// Each engine is resident in its own mode and no other.
+    #[test]
+    fn each_engine_is_resident_in_its_own_mode_alone() {
+        for m in RenderMode::ALL {
+            assert_eq!(keeps_escape_engine(*m), *m == RenderMode::Escape, "escape in {m:?}");
+            assert_eq!(keeps_sim_engine(*m), *m == RenderMode::Simulation, "sim in {m:?}");
+        }
+        // And no mode keeps both, which is the property that makes
+        // freeing on switch worth doing at all.
+        for m in RenderMode::ALL {
+            assert!(
+                !(keeps_escape_engine(*m) && keeps_sim_engine(*m)),
+                "{m:?} would hold both engines"
+            );
+        }
     }
 
     /// Fly mode belongs to 3D alone.
