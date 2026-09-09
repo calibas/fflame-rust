@@ -651,6 +651,11 @@ pub struct SimLayeredPreset {
     pub init: crate::config::sim::SimInit,
     pub coloring: &'static str,
     pub coloring_params: &'static [(&'static str, f32)],
+    /// Steps per frame the preset asks for: a run at dt 0.001 that
+    /// needs 200,000 steps to show its pattern sits at a uniform fixed
+    /// point for the first several thousand, and at the default
+    /// per-frame count that is a long grey wait.
+    pub steps_per_frame: u32,
 }
 
 impl SimLayeredPreset {
@@ -676,10 +681,20 @@ impl SimLayeredPreset {
         sim.model = self.layers[0].0.to_string();
         sim.model_params.clear();
         sim.steps = self.steps;
+        sim.steps_per_frame = self.steps_per_frame;
         sim.dt = self.dt;
         sim.init = self.init;
         sim.coloring = self.coloring.to_string();
         sim.coloring_params = self.coloring_params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect();
+        // A preset is the whole picture: whatever the last one left --
+        // a growth model's matte, a colour stack, a warp -- would cut
+        // or move it. The single-model presets reset these the same
+        // way; found when this preset showed nothing after one that
+        // matted.
+        sim.matte = Default::default();
+        sim.color_layers.clear();
+        sim.warp = Default::default();
+        sim.use_transforms = false;
     }
 }
 
@@ -702,6 +717,7 @@ pub static LAYERED_PRESETS: &[SimLayeredPreset] = &[
         ],
         steps: 6000,
         dt: 1.0,
+        steps_per_frame: 16,
         init: crate::config::sim::SimInit::Blobs { count: 6, radius: 24 },
         coloring: "channel",
         coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -723,6 +739,7 @@ pub static LAYERED_PRESETS: &[SimLayeredPreset] = &[
         ],
         steps: 200000,
         dt: 0.001,
+        steps_per_frame: 1024,
         init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
         coloring: "channel",
         coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],

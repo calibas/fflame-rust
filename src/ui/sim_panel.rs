@@ -200,6 +200,13 @@ pub fn render_sim_content(
                         })
                         .collect();
                     changes.push((ConfigPath::SimSteps, pre.steps.into()));
+                    // And a per-frame count that reaches the preset's
+                    // picture in about two hundred frames: at the
+                    // default of 4 a 200,000-step run at dt 0.001 was
+                    // fourteen minutes of the uniform fixed point.
+                    if pre.steps > 0 {
+                        changes.push((ConfigPath::SimStepsPerFrame, (pre.steps / 200).clamp(4, 2048).into()));
+                    }
                     // And the model's time step. A preset is a whole
                     // recipe -- parameters, steps, initial field,
                     // colouring -- and a dt the user had dragged
