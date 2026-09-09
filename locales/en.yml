@@ -160,7 +160,7 @@ help:
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
-  play_pause_animation: "  Space    - Play/pause animation"
+  play_pause_animation: "  Space    - Play/pause animation (run/pause the grid in Simulation mode)"
   exit_fullscreen_hint: "Press F or Esc to exit fullscreen"
   mouse_controls: "Mouse Controls:"
   drag_pan: "  Drag     - Pan view"
@@ -1279,9 +1279,11 @@ animation_panel:
   duration_format: "(%{duration}s)"
 
   # Playback controls
-  pause: "⏸ Pause (Space)"
+  pause: "⏸ Pause"
+  pause_space: "⏸ Pause (Space)"
   resume: "▶ Resume"
-  play: "▶ Play (Space)"
+  play: "▶ Play"
+  play_space: "▶ Play (Space)"
   stop: "⏹ Stop"
   go_to_start: "Go to start"
   go_to_end: "Go to end"

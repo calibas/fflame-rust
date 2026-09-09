@@ -145,6 +145,21 @@ pub fn keeps_sim_engine(mode: RenderMode) -> bool {
     matches!(mode, RenderMode::Simulation)
 }
 
+/// Does the spacebar drive the simulation's transport in this mode?
+///
+/// Everywhere else it keeps the video-editor convention and plays or
+/// pauses the animation. In Simulation the transport is the control
+/// you reach for constantly -- the grid is always mid-run -- and the
+/// animation is the rarer thing.
+///
+/// Typing safety needs no guard here: the app only sees a key that
+/// egui did not consume, and egui consumes keyboard input whenever any
+/// widget has focus, so a space typed into one of the panel's numeric
+/// fields never reaches the shortcut.
+pub fn space_runs_the_simulation(mode: RenderMode) -> bool {
+    matches!(mode, RenderMode::Simulation)
+}
+
 /// The i18n key describing what a mode renders, for a menu hover.
 pub fn mode_tip_key(mode: RenderMode) -> &'static str {
     match mode {
@@ -322,6 +337,20 @@ mod tests {
             assert!(
                 !(keeps_escape_engine(*m) && keeps_sim_engine(*m)),
                 "{m:?} would hold both engines"
+            );
+        }
+    }
+
+    /// The spacebar drives the simulation in Simulation mode and the
+    /// animation everywhere else. Tabled over every mode so a fifth
+    /// one cannot be added without an answer.
+    #[test]
+    fn the_spacebar_drives_the_simulation_in_simulation_mode_alone() {
+        for m in RenderMode::ALL {
+            assert_eq!(
+                space_runs_the_simulation(*m),
+                *m == RenderMode::Simulation,
+                "{m:?}"
             );
         }
     }

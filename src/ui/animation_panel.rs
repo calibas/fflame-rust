@@ -156,6 +156,10 @@ pub fn render_animation_content(
     ui: &mut Ui,
     controller: &mut AnimationController,
     _export_settings: &mut AnimationExportSettings, // Will be used in Phase 5 Export panel
+    // Whether the spacebar reaches this transport. It does not in
+    // Simulation mode, where it runs and pauses the grid instead, and
+    // a tooltip that promised it there would be wrong.
+    space_plays: bool,
 ) -> AnimationPanelResponse {
     let mut response = AnimationPanelResponse::default();
 
@@ -165,7 +169,7 @@ pub fn render_animation_content(
     // ═══════════════════════════════════════════════════════════════════════════
     // TOP SECTION: Playback (left) | File & Export (right)
     // ═══════════════════════════════════════════════════════════════════════════
-    render_playback_controls(ui, controller, &mut response);
+    render_playback_controls(ui, controller, &mut response, space_plays);
 
     ui.separator();
 
@@ -185,7 +189,12 @@ pub fn render_animation_content(
 
 
 /// Render playback controls (left side of top section)
-fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, response: &mut AnimationPanelResponse) {
+fn render_playback_controls(
+    ui: &mut Ui,
+    controller: &mut AnimationController,
+    response: &mut AnimationPanelResponse,
+    space_plays: bool,
+) {
     let has_animation = controller.animation.is_some();
 
     // Row 1: Play/Pause/Stop and Step buttons. Wrapped for narrow
@@ -194,7 +203,11 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, r
         // Play button
         let is_playing = controller.state == PlaybackState::Playing;
         if ui.add_enabled(has_animation && !is_playing, egui::Button::new("▶"))
-            .on_hover_text(t!("animation_panel.play"))
+            .on_hover_text(if space_plays {
+                t!("animation_panel.play_space")
+            } else {
+                t!("animation_panel.play")
+            })
             .clicked()
         {
             controller.play();
@@ -202,7 +215,11 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, r
 
         // Pause button
         if ui.add_enabled(has_animation && is_playing, egui::Button::new("⏸"))
-            .on_hover_text(t!("animation_panel.pause"))
+            .on_hover_text(if space_plays {
+                t!("animation_panel.pause_space")
+            } else {
+                t!("animation_panel.pause")
+            })
             .clicked()
         {
             controller.pause();

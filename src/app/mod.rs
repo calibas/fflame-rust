@@ -1403,7 +1403,6 @@ impl App {
 
     fn follow_loaded_render_mode(&mut self) {
         use crate::ui::workspace::{PanelType, WorkspaceLayout};
-        use crate::scene::transforms::RenderMode;
         let mode = self.config_manager.active_config().render_mode;
         let compact = self
             .config_manager
