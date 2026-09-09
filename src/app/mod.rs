@@ -564,6 +564,10 @@ pub struct App {
     /// `load_config_silent` / `load_config_with_explicit_before` and
     /// deliberately do not.
     last_load_generation: u64,
+    /// The render mode as of the last frame, so a change -- from the
+    /// Mode menu, a panel, a script or an undo -- brings the workspace
+    /// with it.
+    last_render_mode: crate::scene::transforms::RenderMode,
 
     // Audio system
     pub(super) audio_manager: crate::audio::AudioManager,
@@ -828,6 +832,7 @@ impl App {
             // Whatever the config manager starts at, so a boot does
             // not fight the layout the user left the app in.
             last_load_generation: initial_load_generation,
+            last_render_mode: initial_config.render_mode,
             window_fullscreen: false,
             ui_hidden: false,
             fly_mode: false,
@@ -1375,19 +1380,16 @@ impl App {
         // than nested ifs because a third mode made the branching the
         // part most likely to gain a hole -- "leaving" has to cover
         // every layout that is not the one being entered.
-        let want: Option<(WorkspaceLayout, PanelType)> = match mode {
-            RenderMode::Escape => Some((WorkspaceLayout::EscapeTime, PanelType::Escape)),
-            RenderMode::Simulation => Some((WorkspaceLayout::Simulation, PanelType::Simulation)),
-            RenderMode::TwoD | RenderMode::ThreeD => None,
-        };
+        let want: Option<(WorkspaceLayout, PanelType)> =
+            crate::ui::render_mode::layout_for(mode);
         match want {
             Some((layout, panel)) => {
                 if compact {
                     let ctx = self.egui_layer.ctx.clone();
                     self.workspace.open_compact_panel(panel, &ctx);
                 } else if self.workspace.current_layout != layout {
-                    log::info!("Loaded a {mode:?} fractal: switching to its workspace");
-                    self.workspace.apply_layout(layout);
+                    log::info!("A {mode:?} fractal: switching to its workspace");
+                    self.workspace.switch_layout(layout);
                 }
             }
             None => {
@@ -1397,9 +1399,9 @@ impl App {
                         WorkspaceLayout::EscapeTime | WorkspaceLayout::Simulation
                     )
                 {
-                    log::info!("Loaded a flame: leaving the {:?} workspace",
+                    log::info!("A flame: leaving the {:?} workspace",
                         self.workspace.current_layout);
-                    self.workspace.apply_layout(WorkspaceLayout::Standard);
+                    self.workspace.switch_layout(WorkspaceLayout::Standard);
                 }
             }
         }
@@ -1639,6 +1641,16 @@ impl App {
             self.last_load_generation = load_gen;
             self.follow_loaded_render_mode();
             self.log_wasm_memory_after_load(load_gen);
+        }
+        // The workspace follows the mode WHENEVER it changes, not only
+        // when a file brought it: a Mode menu switch and an undo of one
+        // both land here (ui-render-modes plan, section 3.3). It used
+        // to hang off the load generation alone, so a manual switch out
+        // of Escape left the Escape workspace up.
+        let mode_now = self.config_manager.active_config().render_mode;
+        if self.last_render_mode != mode_now {
+            self.last_render_mode = mode_now;
+            self.follow_loaded_render_mode();
         }
 
         // Consume fly-mode responses produced by the UI this frame.

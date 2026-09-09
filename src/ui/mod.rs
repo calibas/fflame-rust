@@ -2191,7 +2191,7 @@ impl EguiLayer {
         // Every mode change goes through the one helper, so the
         // tone-map rescue is not a property of WHICH control you used
         // (ui-render-modes plan, section 3.1).
-        if let Some(mode) = menu_actions.view.set_mode {
+        if let Some(mode) = menu_actions.set_mode {
             if let Err(e) = render_mode::switch_render_mode(config_manager, mode) {
                 log::error!("Failed to switch render mode: {e}");
             }

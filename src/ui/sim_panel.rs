@@ -89,30 +89,24 @@ pub fn render_sim_content(
     let sim = config.sim.clone();
     let active = config.render_mode == RenderMode::Simulation;
 
-    // ---- One toggle, not a mode picker ----
-    // Same reasoning as the escape panel: 2D/3D is meaningless here,
-    // and offering it alongside would read as Simulation being a third
-    // kind of flame. Leaving returns to 3D unconditionally.
-    let label = if active {
-        t!("sim_panel.toggle_off")
-    } else {
-        t!("sim_panel.toggle_on")
-    };
-    if ui
-        .add(egui::Button::new(label.as_ref()).selected(active))
-        .on_hover_text(t!("sim_panel.toggle_tip"))
-        .clicked()
-    {
-        let target = if active { RenderMode::ThreeD } else { RenderMode::Simulation };
-        if let Err(e) = super::render_mode::switch_render_mode(config_manager, target) {
-            log::error!("Failed to switch render mode: {e}");
-        } else if !active {
-            *state.reseed = true;
-            workspace_request.replace(super::workspace::WorkspaceLayout::Simulation);
-        }
-    }
-
+    // ---- A way in, not a toggle ----
+    // Same as the escape panel: the Mode menu owns switching, so this
+    // only enters.
     if !active {
+        if ui
+            .add(egui::Button::new(t!("sim_panel.toggle_on").as_ref()))
+            .on_hover_text(t!("sim_panel.toggle_tip"))
+            .clicked()
+        {
+            if let Err(e) =
+                super::render_mode::switch_render_mode(config_manager, RenderMode::Simulation)
+            {
+                log::error!("Failed to switch render mode: {e}");
+            } else {
+                *state.reseed = true;
+                workspace_request.replace(super::workspace::WorkspaceLayout::Simulation);
+            }
+        }
         ui.separator();
         ui.label(t!("sim_panel.inactive_hint"));
         return;

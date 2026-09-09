@@ -139,24 +139,24 @@ pub fn render_menu_bar(
                     menu_actions.view.zoom_out = true;
                 }
 
-                ui.separator();
+            });
 
-                // The flame's two modes. Escape and Simulation join
-                // them in the Mode menu (plan phase 3); until then this
-                // row at least tells the truth about which is active.
-                let mode = menu_state.render_mode;
-                if ui
-                    .selectable_label(mode == RenderMode::TwoD, t!("menu.mode_2d").as_ref())
-                    .clicked()
-                {
-                    menu_actions.view.set_mode = Some(RenderMode::TwoD);
-                }
-
-                if ui
-                    .selectable_label(mode == RenderMode::ThreeD, t!("menu.mode_3d").as_ref())
-                    .clicked()
-                {
-                    menu_actions.view.set_mode = Some(RenderMode::ThreeD);
+            // Mode Menu — the four engines as peers. The View menu used
+            // to carry a 2D/3D pair, which could not name the other two
+            // and claimed "3D" was selected while you were in Escape.
+            // The View PANEL keeps its 2D/3D switch: choosing between
+            // the flame's two projections is a view-level decision and
+            // belongs next to the camera.
+            ui.menu_button(t!("menu.mode"), |ui| {
+                for m in RenderMode::ALL {
+                    let label = t!(super::render_mode::mode_label_key(*m));
+                    if ui
+                        .selectable_label(menu_state.render_mode == *m, label.as_ref())
+                        .on_hover_text(t!(super::render_mode::mode_tip_key(*m)))
+                        .clicked()
+                    {
+                        menu_actions.set_mode = Some(*m);
+                    }
                 }
             });
 
