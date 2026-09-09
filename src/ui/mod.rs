@@ -16,6 +16,7 @@ mod compact_menu;
 mod menu_bar;
 mod menu_context;
 pub mod render_mode;
+pub mod visibility;
 mod palette_editor;
 mod rhai_highlight;
 mod palette_library;
