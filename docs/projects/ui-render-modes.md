@@ -303,11 +303,37 @@ what a user expects a restarted app to look like.
 
 ### 3.4 What the Rendering panel becomes
 
-Max iterations, iterations per thread, burn-in and deterministic RNG
-hide in Escape and Simulation. The orbit-cache block stays in Escape
-and hides elsewhere. VSync and target FPS are global and stay. The same
-policy removes the Iterations-per-Thread submenu and Reset Accumulation
-from the Rendering menu in non-flame modes.
+Verified control by control against `src/ui/settings.rs`, 2026-09-09.
+Almost nothing in this panel survives a non-flame mode.
+
+| Control | `settings.rs` | Esc | Sim |
+|---|---|---|---|
+| Pause / Resume | `:19` | hide | hide |
+| Reset Accumulation | `:24` | hide | hide |
+| Max iterations + progress | `:36-62` | hide | hide |
+| Iterations per thread | `:73` | hide | hide |
+| Advanced ▸ burn-in | `:90` | hide | hide |
+| Advanced ▸ orbit cache | `:100-136` | **keep** | hide |
+| Advanced ▸ deterministic RNG | `:139` | hide | hide |
+| Dynamic blend, fixed blend rate | `:152,168` | hide | hide |
+| VSync, target FPS | `:185,201` | **keep** | **keep** |
+
+Pause deserves the note. It looks universal, but both readers already
+exclude the non-flame modes: `should_iterate` ands it with
+`!is_non_flame` (`src/app/mod.rs:2665`), and the redraw check excludes
+Escape and Simulation explicitly (`src/app/mod.rs:1190-1193`). So the
+button is inert in both, and the Simulation panel's own Run/Step/Reset
+transport is the real control there.
+
+That leaves the panel showing **VSync and target FPS alone in
+Simulation**, plus the orbit cache in Escape. Since both are
+`SystemSettings` device preferences rather than fractal parameters,
+phase 4 should decide whether the panel is worth showing at all in
+Simulation or whether those two move to a preferences home. Recorded as
+an open question, not settled here.
+
+The same policy removes the Iterations-per-Thread submenu and Reset
+Accumulation from the Rendering menu in non-flame modes.
 
 ## 4. Phases and gates
 
@@ -315,7 +341,7 @@ Each phase leaves the app working and every existing test green.
 
 | # | Builds | Gate |
 |---|---|---|
-| 1 | `RenderMode` replaces the boolean; `switch_render_mode` moves to `src/ui/render_mode.rs`; all five switch sites route through it; coalescing off | a switch from every mode to every other lands in the right mode with one undo entry; Fly Mode enabled in 3D alone — a table test over all four modes |
+| 1 | `RenderMode` replaces the boolean; `switch_render_mode` moves to `src/ui/render_mode.rs`; all five switch sites route through it; coalescing off | a switch from every mode to every other lands in the right mode with one undo entry; Fly Mode enabled in 3D alone — a table test over all four modes — **built**, see below |
 | 2 | `src/ui/visibility.rs` with the panel table; dispatcher and both menus consult it; per-case hint text | every `PanelType` × `RenderMode` has an explicit answer (exhaustive match, no `_` arm); no menu row opens onto a stub; the existing layout tests stay green |
 | 3 | The Mode menu; View/compact/View-panel toggles deleted | the menu offers exactly `RenderMode::ALL`; a test that no other site writes `ConfigPath::RenderMode` |
 | 4 | Control-level policy in Colors, Rendering, Effects per §1.4; dead sections hidden, dead controls greyed | every control in the §1.4 table has an explicit answer; a test asserting the tone-map preset dropdown and Reset Colors are unreachable in non-flame modes |
@@ -323,6 +349,35 @@ Each phase leaves the app working and every existing test green.
 
 Phase 4 is where the user-visible win is; phases 1–3 are what make it
 expressible in one place instead of forty.
+
+### Phase 1 as built, 2026-09-09
+
+`src/ui/render_mode.rs` holds `switch_render_mode` (moved out of
+`escape_panel.rs`, where it was an odd tenant), plus `is_non_flame`,
+`fly_mode_available` and `mode_label_key`. `MenuState.render_mode_2d`
+became `render_mode: RenderMode`, and `ViewMenuActions`' two booleans
+became one `set_mode: Option<RenderMode>` — with four modes, a flag per
+mode would have been four booleans that must not disagree.
+
+All five switch sites now route through the helper, so the tone-map
+rescue stopped being a property of *which control you used*. Fly Mode's
+gate is `fly_mode_available`, so it is offered in 3D alone rather than
+in everything that is not 2D. Coalescing is off for
+`ConfigPath::RenderMode`.
+
+One behaviour added rather than moved: switching to the mode you are
+already in now returns early instead of writing an undo entry. A Mode
+menu shows a row for the active mode, and clicking it must cost
+nothing.
+
+Six tests in the new module, all table-driven over `RenderMode::ALL` so
+a fifth mode cannot be added without answering for it. The undo test
+was checked against the unfixed code and does fail there — one entry
+where two are needed — so it is load-bearing rather than decorative.
+1,046 unit tests and all release gates pass.
+
+The four locale keys `mode.two_d`, `mode.three_d`, `mode.escape` and
+`mode.simulation` name the modes once, ready for phase 3.
 
 ## 5. Bugs found, filed not fixed
 

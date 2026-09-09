@@ -167,7 +167,10 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimCouplingChannels { .. }
         | ConfigPath::SimUseTransforms
         | ConfigPath::SimMatteEdge => false,
-        // ConfigPath::RenderMode => false,
+        // A mode change is its own undo entry: coalescing merged
+        // consecutive switches, so two changes of mind cost one undo
+        // and landed you two modes back (ui-render-modes plan, 3.1).
+        ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
         // ConfigPath::ColorMode => false,
         _ => true,  // Default: all parameters support coalescing

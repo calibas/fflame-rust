@@ -205,13 +205,25 @@ fn render_compact_menu_items(
             ui.close();
         }
 
-        let is_2d = menu_state.render_mode_2d;
-        if ui.selectable_label(is_2d, t!("menu.mode_2d").as_ref()).clicked() {
-            menu_actions.view.set_mode_2d = true;
+        let mode = menu_state.render_mode;
+        if ui
+            .selectable_label(
+                mode == crate::scene::transforms::RenderMode::TwoD,
+                t!("menu.mode_2d").as_ref(),
+            )
+            .clicked()
+        {
+            menu_actions.view.set_mode = Some(crate::scene::transforms::RenderMode::TwoD);
             ui.close();
         }
-        if ui.selectable_label(!is_2d, t!("menu.mode_3d").as_ref()).clicked() {
-            menu_actions.view.set_mode_3d = true;
+        if ui
+            .selectable_label(
+                mode == crate::scene::transforms::RenderMode::ThreeD,
+                t!("menu.mode_3d").as_ref(),
+            )
+            .clicked()
+        {
+            menu_actions.view.set_mode = Some(crate::scene::transforms::RenderMode::ThreeD);
             ui.close();
         }
     });

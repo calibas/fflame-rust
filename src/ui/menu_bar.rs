@@ -1,4 +1,5 @@
 use super::menu_context::{MenuActions, MenuState};
+use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
 
 /// Render the top menu bar with window visibility toggles
@@ -140,14 +141,22 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Radio buttons for render mode
-                let is_2d = menu_state.render_mode_2d;
-                if ui.selectable_label(is_2d, t!("menu.mode_2d").as_ref()).clicked() {
-                    menu_actions.view.set_mode_2d = true;
+                // The flame's two modes. Escape and Simulation join
+                // them in the Mode menu (plan phase 3); until then this
+                // row at least tells the truth about which is active.
+                let mode = menu_state.render_mode;
+                if ui
+                    .selectable_label(mode == RenderMode::TwoD, t!("menu.mode_2d").as_ref())
+                    .clicked()
+                {
+                    menu_actions.view.set_mode = Some(RenderMode::TwoD);
                 }
 
-                if ui.selectable_label(!is_2d, t!("menu.mode_3d").as_ref()).clicked() {
-                    menu_actions.view.set_mode_3d = true;
+                if ui
+                    .selectable_label(mode == RenderMode::ThreeD, t!("menu.mode_3d").as_ref())
+                    .clicked()
+                {
+                    menu_actions.view.set_mode = Some(RenderMode::ThreeD);
                 }
             });
 
@@ -495,7 +504,7 @@ pub fn render_menu_bar(
                     .gap(2.0);
                 ui.style_mut().spacing.button_padding = egui::vec2(5.0, 0.0);
                 // Fly mode is 3D-only — disabled (greyed) in 2D.
-                let fly_enabled = !menu_state.render_mode_2d;
+                let fly_enabled = super::render_mode::fly_mode_available(menu_state.render_mode);
                 let resp = ui.add_enabled(fly_enabled, fly_button);
                 let resp = if fly_enabled {
                     resp.on_hover_text(t!("view.tooltip_fly_mode"))
