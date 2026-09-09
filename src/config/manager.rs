@@ -2948,8 +2948,12 @@ impl ConfigManager {
                 // when an unrelated slider did -- see the note on
                 // `SimModelParam` below. The cap is applied to the
                 // value the solver runs at, in `SimRenderer`.
+                // Over every layer, not the flat model: a layered
+                // config runs at the tightest of them, and reading
+                // `sim.model` here let the clamp accept a dt one layer
+                // could not survive.
                 #[cfg(feature = "engine-sim")]
-                let ceiling = crate::sim::model_or_default(&self.current.sim.model).max_dt;
+                let ceiling = self.current.sim.max_dt_ceiling();
                 #[cfg(not(feature = "engine-sim"))]
                 let ceiling = 10.0f32;
                 self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, ceiling) } else { 1.0 };

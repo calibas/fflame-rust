@@ -166,143 +166,8 @@ pub fn render_sim_content(
         .id_salt("sim_panel_body")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            // ---- Model ----
-            let model = crate::sim::model_or_default(&sim.model);
-            ui.horizontal(|ui| {
-                ui.label(t!("sim_panel.model").as_ref());
-                egui::ComboBox::from_id_salt("sim_model")
-                    .selected_text(model.display_name)
-                    .show_ui(ui, |ui| {
-                        for m in MODELS {
-                            if ui
-                                .selectable_label(m.name == model.name, m.display_name)
-                                .on_hover_text(m.description)
-                                .clicked()
-                                && m.name != model.name
-                            {
-                                let _ = config_manager
-                                    .update_param(ConfigPath::SimModel, m.name.to_string().into());
-                            }
-                        }
-                    });
-            });
-
-            if !model.presets.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(t!("sim_panel.presets").as_ref());
-                    for pre in model.presets {
-                        if ui.small_button(pre.display_name).clicked() {
-                            // A preset is its parameters AND its measured step
-                            // count together: applying the numbers without the
-                            // steps shows the pattern half-formed.
-                            let mut changes: Vec<(ConfigPath, crate::config::delta::ConfigValue)> = pre
-                                .params
-                                .iter()
-                                .map(|(k, v)| {
-                                    (
-                                        ConfigPath::SimModelParam { param: (*k).to_string() },
-                                        (*v).into(),
-                                    )
-                                })
-                                .collect();
-                            changes.push((ConfigPath::SimSteps, pre.steps.into()));
-                            // And a per-frame count that reaches the preset's
-                            // picture in about two hundred frames: at the
-                            // default of 4 a 200,000-step run at dt 0.001 was
-                            // fourteen minutes of the uniform fixed point.
-                            if pre.steps > 0 {
-                                changes.push((ConfigPath::SimStepsPerFrame, (pre.steps / 200).clamp(4, 2048).into()));
-                            }
-                            // And the model's time step. A preset is a whole
-                            // recipe -- parameters, steps, initial field,
-                            // colouring -- and a dt the user had dragged
-                            // somewhere else would show a different picture
-                            // from the one the preset is named for. Lenia is
-                            // the sharp case: it runs at 0.1 and dies at 1.
-                            if !model.has(crate::sim::ModelFeature::NoTimeStep) {
-                                changes.push((ConfigPath::SimDt, model.default_dt.into()));
-                            }
-                            // A preset that names an initial field brings it:
-                            // FitzHugh-Nagumo's constants give spirals from a
-                            // cut wavefront and a flat field from noise, so
-                            // applying only the numbers would ship a picture of
-                            // nothing.
-                            if let Some(init) = pre.init {
-                                changes.push((
-                                    ConfigPath::SimInitKind,
-                                    init.kind_name().to_string().into(),
-                                ));
-                            }
-                            // And the colouring it is meant to be seen
-                            // through, with all of that colouring's
-                            // parameters. Which colouring a model wants is a
-                            // property of its state layout, not a taste the
-                            // user should have to acquire: a sandpile's
-                            // heights want 1/3, the snowfake's crystal is
-                            // channel .z, DLA reads as a cluster only through
-                            // arrival order.
-                            if let Some(c) = pre.coloring {
-                                changes.push((ConfigPath::SimColoring, c.to_string().into()));
-                                for (k, v) in pre.coloring_params {
-                                    changes.push((
-                                        ConfigPath::SimColoringParam { param: (*k).to_string() },
-                                        (*v).into(),
-                                    ));
-                                }
-                            }
-                            // And what the model calls empty space. A growth
-                            // model without this is illegible: `age` cannot
-                            // tell a cell that never grew from one that grew
-                            // long ago, so the two ends of the palette are
-                            // "background" and "oldest" at once. Set either
-                            // way, so choosing a preset that wants no matte
-                            // clears one the last preset set.
-                            let matte = pre.matte.unwrap_or_default();
-                            changes.push((
-                                ConfigPath::SimMatteChannel,
-                                matte.channel.name().to_string().into(),
-                            ));
-                            changes.push((ConfigPath::SimMatteCutoff, matte.cutoff.into()));
-                            changes.push((ConfigPath::SimMatteSoftness, matte.softness.into()));
-                            changes.push((ConfigPath::SimMatteInvert, matte.invert.into()));
-                            // And the warp, for the presets whose subject is
-                            // an inflating space. Set either way, as the
-                            // matte is, so a preset that wants no warp clears
-                            // one the last preset set.
-                            let warp = pre.warp.unwrap_or_default();
-                            changes.push((ConfigPath::SimWarpZoom, warp.zoom.into()));
-                            changes.push((ConfigPath::SimWarpRotation, warp.rotation.into()));
-                            changes.push((ConfigPath::SimWarpPanX, warp.pan_x.into()));
-                            changes.push((ConfigPath::SimWarpPanY, warp.pan_y.into()));
-                            changes.push((ConfigPath::SimWarpFlow, warp.flow.into()));
-                            changes.push((ConfigPath::SimWarpFilter, warp.filter.name().to_string().into()));
-                            changes.push((ConfigPath::SimWarpMode, warp.mode.name().to_string().into()));
-                            changes.push((ConfigPath::SimWarpCull, warp.cull.into()));
-                            changes.push((ConfigPath::SimWarpLayers, (warp.layers as i32).into()));
-                            let _ = config_manager
-                                .update_batch(changes, "history.action.sim_preset".to_string());
-                            *state.reseed = true;
-                        }
-                    }
-                });
-            }
-
-            for (i, p) in model.parameters.iter().enumerate() {
-                let _ = i;
-                let mut v = sim.model_param(p.name, p.default);
-                if param_control(ui, &mut v, p, "sim_model") {
-                    let _ = config_manager.update_param(
-                        ConfigPath::SimModelParam { param: p.name.to_string() },
-                        v.into(),
-                    );
-                }
-            }
-
-
-            ui.separator();
-
-            // ---- Layers and couplings (simulation-layers plan, sections 2-3) ----
-            render_layers(ui, config_manager, &config, &sim);
+            // ---- Model: one list whose entry 0 IS the model ----
+            render_model_section(ui, config_manager, &config, &sim, state.reseed);
 
             ui.separator();
 
@@ -530,7 +395,7 @@ pub fn render_sim_content(
             // An automaton advances by a generation, not by dt: showing the
             // slider would be a control that does nothing.
             let mut dt = sim.dt;
-            if !model.has(crate::sim::ModelFeature::NoTimeStep) {
+            if sim.any_layer_has_a_time_step() {
                 // The range is the model's STATIC ceiling, never the
                 // parameter-dependent stability cap. A range that moved with
                 // the other sliders moved this slider's handle -- and, once
@@ -538,7 +403,7 @@ pub fn render_sim_content(
                 // dragging Mobility appeared to edit the time step.
                 if ui
                     .add(
-                        egui::Slider::new(&mut dt, 0.001..=model.max_dt)
+                        egui::Slider::new(&mut dt, 0.001..=sim.max_dt_ceiling())
                             .text(t!("sim_panel.dt").as_ref()),
                     )
                     .on_hover_text(t!("sim_panel.dt_tip"))
@@ -548,7 +413,7 @@ pub fn render_sim_content(
                 }
                 // What the solver will actually use. Capping silently would
                 // leave the panel claiming a step the run does not take.
-                let effective = model.max_dt_for(&sim.model_params);
+                let effective = sim.effective_max_dt();
                 if sim.dt > effective * 1.001 {
                     ui.label(
                         egui::RichText::new(t!(
@@ -1054,144 +919,269 @@ fn render_color_layers(
 /// ConfigPath; adding or removing a layer or a coupling is a
 /// structural edit and goes through a full-config snapshot, which
 /// undoes as one step.
-fn render_layers(
+/// Where a layer's controls write.
+///
+/// `SimConfig` keeps a flat `model` / `model_params` pair AND a
+/// `layers` list, and `layer_model_name(0)` already falls back from
+/// one to the other -- so layer 0 has always *been* the model, the
+/// panel just did not say so. This names the two homes for one row of
+/// controls, which is what lets the merged list draw entry 0 the same
+/// way whichever holds it.
+#[derive(Clone, Copy, PartialEq)]
+enum LayerSlot {
+    /// No `layers` list: layer 0 is the flat `model` fields.
+    Flat,
+    /// `layers[i]`.
+    At(usize),
+}
+
+impl LayerSlot {
+    fn model_path(self) -> ConfigPath {
+        match self {
+            LayerSlot::Flat => ConfigPath::SimModel,
+            LayerSlot::At(layer) => ConfigPath::SimLayerModel { layer },
+        }
+    }
+
+    fn param_path(self, param: &str) -> ConfigPath {
+        match self {
+            LayerSlot::Flat => ConfigPath::SimModelParam { param: param.to_string() },
+            LayerSlot::At(layer) => ConfigPath::SimLayerParam { layer, param: param.to_string() },
+        }
+    }
+
+    fn salt(self) -> String {
+        match self {
+            LayerSlot::Flat => "sim_model".to_string(),
+            LayerSlot::At(i) => format!("sim_layer_{i}"),
+        }
+    }
+}
+
+/// Everything a model preset sets, aimed at one slot.
+///
+/// A preset is a whole recipe, not a parameter set: its measured step
+/// count, its per-frame count, the model's dt, the initial field, the
+/// colouring it is meant to be seen through and what it calls empty
+/// space. Only the model parameters are per-layer; the rest are the
+/// simulation's, which is why applying layer 1's preset restyles the
+/// whole picture. That is accepted -- a preset that set only numbers
+/// would show the pattern half-formed.
+fn preset_changes(
+    model: &'static crate::sim::ModelDef,
+    pre: &'static crate::sim::SimPreset,
+    slot: LayerSlot,
+) -> Vec<(ConfigPath, crate::config::delta::ConfigValue)> {
+    let mut changes: Vec<(ConfigPath, crate::config::delta::ConfigValue)> = pre
+        .params
+        .iter()
+        .map(|(k, v)| (slot.param_path(k), (*v).into()))
+        .collect();
+    changes.push((ConfigPath::SimSteps, pre.steps.into()));
+    // A per-frame count that reaches the preset's picture in about two
+    // hundred frames: at the default of 4 a 200,000-step run at dt
+    // 0.001 was fourteen minutes of the uniform fixed point.
+    if pre.steps > 0 {
+        changes.push((ConfigPath::SimStepsPerFrame, (pre.steps / 200).clamp(4, 2048).into()));
+    }
+    // Lenia is the sharp case: it runs at 0.1 and dies at 1.
+    if !model.has(crate::sim::ModelFeature::NoTimeStep) {
+        changes.push((ConfigPath::SimDt, model.default_dt.into()));
+    }
+    // FitzHugh-Nagumo's constants give spirals from a cut wavefront and
+    // a flat field from noise, so applying only the numbers would ship
+    // a picture of nothing.
+    if let Some(init) = pre.init {
+        changes.push((ConfigPath::SimInitKind, init.kind_name().to_string().into()));
+    }
+    // Which colouring a model wants is a property of its state layout,
+    // not a taste the user should have to acquire.
+    if let Some(c) = pre.coloring {
+        changes.push((ConfigPath::SimColoring, c.to_string().into()));
+        for (k, v) in pre.coloring_params {
+            changes.push((ConfigPath::SimColoringParam { param: (*k).to_string() }, (*v).into()));
+        }
+    }
+    // And what the model calls empty space. Set either way, so a preset
+    // that wants no matte clears one the last preset set.
+    let matte = pre.matte.unwrap_or_default();
+    changes.push((ConfigPath::SimMatteChannel, matte.channel.name().to_string().into()));
+    changes.push((ConfigPath::SimMatteCutoff, matte.cutoff.into()));
+    changes.push((ConfigPath::SimMatteSoftness, matte.softness.into()));
+    changes.push((ConfigPath::SimMatteInvert, matte.invert.into()));
+    // And the warp, for the presets whose subject is an inflating
+    // space. Set either way, as the matte is.
+    let warp = pre.warp.unwrap_or_default();
+    changes.push((ConfigPath::SimWarpZoom, warp.zoom.into()));
+    changes.push((ConfigPath::SimWarpRotation, warp.rotation.into()));
+    changes.push((ConfigPath::SimWarpPanX, warp.pan_x.into()));
+    changes.push((ConfigPath::SimWarpPanY, warp.pan_y.into()));
+    changes.push((ConfigPath::SimWarpFlow, warp.flow.into()));
+    changes.push((ConfigPath::SimWarpFilter, warp.filter.name().to_string().into()));
+    changes.push((ConfigPath::SimWarpMode, warp.mode.name().to_string().into()));
+    changes.push((ConfigPath::SimWarpCull, warp.cull.into()));
+    changes.push((ConfigPath::SimWarpLayers, (warp.layers as i32).into()));
+    changes
+}
+
+/// The Model section: one list whose entry 0 is the primary model.
+///
+/// "Model" and "Layers" used to be separate sections that each did
+/// nothing in the other's case -- Model was ignored once layers
+/// existed, Layers was empty until they did. They are one list now.
+/// Entry 0 reads the flat fields until a second layer is added, which
+/// promotes it into `layers[0]`; removing back to one demotes it. The
+/// seam is invisible, undoes as one step, and
+/// `promotion_then_demotion_round_trips_the_config` is what keeps it
+/// exact.
+fn render_model_section(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     config: &crate::config::FractalConfig,
     sim: &SimConfig,
+    reseed: &mut bool,
 ) {
-    use crate::config::sim::{SimCoupling, SimCouplingForm, SimLayer, MAX_COUPLINGS, MAX_LAYERS};
+    use crate::config::sim::{
+        SimCoupling, SimCouplingForm, SimLayer, MAX_COUPLINGS, MAX_LAYERS,
+    };
     let structural = |config_manager: &mut ConfigManager, edit: &dyn Fn(&mut SimConfig)| {
         let mut after = config.clone();
         edit(&mut after.sim);
         let _ = config_manager.load_config(after, "history.action.sim_layers".to_string());
     };
-    egui::CollapsingHeader::new(t!("sim_panel.layers").as_ref())
-        .default_open(!sim.layers.is_empty())
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(t!("sim_panel.layers_tip")).small().weak());
-            let mut use_transforms = sim.use_transforms;
-            if ui
-                .checkbox(&mut use_transforms, t!("sim_panel.use_transforms").as_ref())
-                .on_hover_text(t!("sim_panel.use_transforms_tip"))
-                .changed()
-            {
-                let _ = config_manager.update_param(ConfigPath::SimUseTransforms, use_transforms.into());
-            }
-            ui.horizontal(|ui| {
-                ui.label(t!("sim_panel.layered_presets").as_ref());
-                egui::ComboBox::from_id_salt("sim_layered_preset")
-                    .selected_text(t!("sim_panel.layered_preset_pick").as_ref())
-                    .show_ui(ui, |ui| {
-                        for p in crate::sim::LAYERED_PRESETS {
-                            if ui.selectable_label(false, p.display_name).on_hover_text(p.description).clicked() {
-                                structural(config_manager, &|s: &mut SimConfig| p.apply(s));
-                            }
-                        }
-                    });
+    let layered = !sim.layers.is_empty();
+    let count = sim.layer_count();
+
+    ui.horizontal(|ui| {
+        ui.label(t!("sim_panel.layered_presets").as_ref());
+        egui::ComboBox::from_id_salt("sim_layered_preset")
+            .selected_text(t!("sim_panel.layered_preset_pick").as_ref())
+            .show_ui(ui, |ui| {
+                for p in crate::sim::LAYERED_PRESETS {
+                    if ui.selectable_label(false, p.display_name).on_hover_text(p.description).clicked() {
+                        structural(config_manager, &|s: &mut SimConfig| p.apply(s));
+                    }
+                }
             });
-            if sim.layers.is_empty() {
-                // One system today. Splitting into layers keeps it as
-                // layer 0 and adds a second of the same model.
+    });
+
+    for i in 0..count {
+        let slot = if layered { LayerSlot::At(i) } else { LayerSlot::Flat };
+        let model = crate::sim::model_or_default(sim.layer_model_name(i));
+        let mut remove = false;
+        ui.horizontal(|ui| {
+            // With one layer this is the Model row it has always been;
+            // with several it is entry i of a list.
+            let label = if count > 1 {
+                t!("sim_panel.layer_label", n = i.to_string())
+            } else {
+                t!("sim_panel.model")
+            };
+            ui.label(label.as_ref());
+            egui::ComboBox::from_id_salt(format!("{}_model", slot.salt()))
+                .selected_text(model.display_name)
+                .show_ui(ui, |ui| {
+                    for m in MODELS {
+                        if ui
+                            .selectable_label(m.name == model.name, m.display_name)
+                            .on_hover_text(m.description)
+                            .clicked()
+                            && m.name != model.name
+                        {
+                            let _ = config_manager
+                                .update_param(slot.model_path(), m.name.to_string().into());
+                        }
+                    }
+                });
+            if count > 1 {
+                let mut on = sim.layer_enabled(i);
                 if ui
-                    .button(t!("sim_panel.add_layer").as_ref())
-                    .on_hover_text(t!("sim_panel.add_layer_tip"))
-                    .clicked()
+                    .checkbox(&mut on, t!("sim_panel.layer_enabled").as_ref())
+                    .on_hover_text(t!("sim_panel.layer_enabled_tip"))
+                    .changed()
                 {
-                    let (model, params) = (sim.model.clone(), sim.model_params.clone());
-                    structural(config_manager, &|s: &mut SimConfig| {
-                        s.layers = vec![
-                            SimLayer { model: model.clone(), model_params: params.clone(), enabled: true },
-                            SimLayer { model: model.clone(), model_params: Default::default(), enabled: true },
-                        ];
-                    });
+                    let _ = config_manager
+                        .update_param(ConfigPath::SimLayerEnabled { layer: i }, on.into());
                 }
-                return;
-            }
-            for (i, layer) in sim.layers.iter().enumerate() {
-                let model = crate::sim::model_or_default(&layer.model);
-                let mut remove = false;
-                ui.horizontal(|ui| {
-                    ui.label(t!("sim_panel.layer_label", n = i.to_string()).as_ref());
-                    egui::ComboBox::from_id_salt(format!("sim_layer_model_{i}"))
-                        .selected_text(model.display_name)
-                        .show_ui(ui, |ui| {
-                            for m in MODELS {
-                                if ui
-                                    .selectable_label(m.name == model.name, m.display_name)
-                                    .on_hover_text(m.description)
-                                    .clicked()
-                                    && m.name != model.name
-                                {
-                                    let _ = config_manager.update_param(
-                                        ConfigPath::SimLayerModel { layer: i },
-                                        m.name.to_string().into(),
-                                    );
-                                }
-                            }
-                        });
-                    let mut on = layer.enabled;
-                    if ui
-                        .checkbox(&mut on, t!("sim_panel.layer_enabled").as_ref())
-                        .on_hover_text(t!("sim_panel.layer_enabled_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager
-                            .update_param(ConfigPath::SimLayerEnabled { layer: i }, on.into());
-                    }
-                    if ui.small_button(t!("sim_panel.remove").as_ref()).clicked() {
-                        remove = true;
-                    }
-                });
-                if remove {
-                    structural(config_manager, &|s: &mut SimConfig| {
-                        s.layers.remove(i);
-                        // Couplings that named the layer go; the rest
-                        // renumber past it.
-                        s.couplings.retain(|c| c.from != i && c.to != i);
-                        for c in &mut s.couplings {
-                            if c.from > i {
-                                c.from -= 1;
-                            }
-                            if c.to > i {
-                                c.to -= 1;
-                            }
-                        }
-                        if s.layers.len() == 1 {
-                            // Back to one system: the layer becomes it.
-                            let only = s.layers.remove(0);
-                            s.model = only.model;
-                            s.model_params = only.model_params;
-                            s.couplings.clear();
-                        }
-                    });
-                    return;
+                if ui.small_button(t!("sim_panel.remove").as_ref()).clicked() {
+                    remove = true;
                 }
-                ui.indent(format!("sim_layer_params_{i}"), |ui| {
-                    for p in model.parameters.iter() {
-                        let mut v = layer.model_params.get(p.name).copied().unwrap_or(p.default);
-                        if param_control(ui, &mut v, p, &format!("sim_layer_{i}")) {
-                            let _ = config_manager.update_param(
-                                ConfigPath::SimLayerParam { layer: i, param: p.name.to_string() },
-                                v.into(),
-                            );
-                        }
-                    }
-                });
-            }
-            if sim.layers.len() < MAX_LAYERS
-                && ui
-                    .button(t!("sim_panel.add_layer").as_ref())
-                    .on_hover_text(t!("sim_panel.add_layer_tip"))
-                    .clicked()
-            {
-                let model = sim.layers.last().map(|l| l.model.clone()).unwrap_or_else(|| sim.model.clone());
-                structural(config_manager, &|s: &mut SimConfig| {
-                    s.layers.push(SimLayer { model: model.clone(), model_params: Default::default(), enabled: true });
-                });
             }
         });
+        if remove {
+            structural(config_manager, &|s: &mut SimConfig| {
+                s.layers.remove(i);
+                // Couplings that named the layer go; the rest renumber
+                // past it.
+                s.couplings.retain(|c| c.from != i && c.to != i);
+                for c in &mut s.couplings {
+                    if c.from > i {
+                        c.from -= 1;
+                    }
+                    if c.to > i {
+                        c.to -= 1;
+                    }
+                }
+                // Back to one system: fold the layer into the flat
+                // fields, the exact inverse of promotion.
+                s.demote_single_layer();
+            });
+            return;
+        }
+        let mut body = |ui: &mut egui::Ui, config_manager: &mut ConfigManager| {
+            if !model.presets.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(t!("sim_panel.presets").as_ref());
+                    for pre in model.presets {
+                        if ui.small_button(pre.display_name).clicked() {
+                            let _ = config_manager.update_batch(
+                                preset_changes(model, pre, slot),
+                                "history.action.sim_preset".to_string(),
+                            );
+                            *reseed = true;
+                        }
+                    }
+                });
+            }
+            let params = sim.layer_model_params(i);
+            for p in model.parameters.iter() {
+                let mut v = params.get(p.name).copied().unwrap_or(p.default);
+                if param_control(ui, &mut v, p, &slot.salt()) {
+                    let _ = config_manager.update_param(slot.param_path(p.name), v.into());
+                }
+            }
+        };
+        if count > 1 {
+            ui.indent(format!("{}_body", slot.salt()), |ui| body(ui, config_manager));
+        } else {
+            body(ui, config_manager);
+        }
+    }
 
+    if count < MAX_LAYERS
+        && ui
+            .button(t!("sim_panel.add_layer").as_ref())
+            .on_hover_text(t!("sim_panel.add_layer_tip"))
+            .clicked()
+    {
+        let model = sim.model.clone();
+        let last = sim.layers.last().map(|l| l.model.clone());
+        structural(config_manager, &|s: &mut SimConfig| {
+            // Make entry 0 explicit, then add one after it. The new
+            // layer takes the same model but the registry's default
+            // parameters -- a copy of layer 0 would step identically
+            // and look like nothing had happened.
+            s.promote_model_to_layers();
+            let next = last.clone().unwrap_or_else(|| model.clone());
+            s.layers.push(SimLayer {
+                model: next,
+                model_params: Default::default(),
+                enabled: true,
+            });
+        });
+    }
+
+    // ---- Couplings: only meaningful between two layers or more ----
     if sim.layers.len() < 2 {
         return;
     }
