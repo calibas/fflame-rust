@@ -1080,10 +1080,14 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_controller.load(new_anim);
         }
 
+        let space_plays = !super::render_mode::space_runs_the_simulation(
+            self.context.config_manager.active_config().render_mode,
+        );
         let mut response = super::animation_panel::render_animation_content(
             ui,
             self.context.animation_controller,
             self.context.animation_export_settings,
+            space_plays,
         );
 
         // Handle timeline scrubbing (from render_animation_content)

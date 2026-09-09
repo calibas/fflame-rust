@@ -153,10 +153,14 @@ mod tests {
     /// Catches a typo'd key or a deleted base string.
     #[test]
     fn every_rendered_shortcut_resolves() {
+        // Every key `render_keyboard_shortcuts_content` renders. It
+        // missed `play_pause_animation`, which is the one the
+        // simulation transport work changed -- so the shortcut most
+        // likely to be edited was the one nothing checked.
         for key in [
             "pan_view", "zoom_plus_minus", "zoom_numpad", "full_screen",
             "fly_mode", "undo_shortcut", "redo_shortcut", "drag_pan",
-            "wheel_zoom", "alt_drag_rotate",
+            "wheel_zoom", "alt_drag_rotate", "play_pause_animation",
         ] {
             let s = shortcut(key);
             assert!(!s.contains("help."), "`{key}` does not resolve: {s}");
