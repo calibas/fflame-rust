@@ -153,6 +153,56 @@ struct SimParamsGpu {
     /// Which channels the warp moves, 1 or 0 per channel. Continuous
     /// mode only; all four in octave mode.
     warp_mask: [f32; 4],
+    /// x: the layer map's rate for this layer (simulation-layers plan,
+    /// section 4); 0 when the config does not use transforms.
+    xform: [f32; 4],
+}
+
+/// The flame's transforms as the layers' maps: the definitions the
+/// shader builder produced for this flame, the buffers the flame
+/// kernel would bind, and each layer's rate.
+struct LayerMap {
+    /// What the definitions were built from: the active variation
+    /// names in order, the transform count, the post-affine and
+    /// attachment flags.
+    key: LayerMapKey,
+    defs: String,
+    transforms: Buffer,
+    variation_params: Buffer,
+    flame_params: Buffer,
+    attachments: Buffer,
+    subflame_meta: Buffer,
+    /// Per transform, its weight clamped to [0, 1].
+    rates: Vec<f32>,
+    bind_group: Option<BindGroup>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct LayerMapKey {
+    variations: Vec<String>,
+    transforms: usize,
+    post_affine: bool,
+    attachments: bool,
+    attachment_cap: usize,
+}
+
+impl LayerMapKey {
+    fn of(flame: &crate::scene::transforms::Flame) -> Self {
+        LayerMapKey {
+            variations: flame.active_variation_names_ordered(&crate::variations::global_registry()),
+            transforms: flame.transforms.len(),
+            post_affine: flame.has_post_affine(),
+            attachments: flame.has_attachments(),
+            attachment_cap: flame.attachment_cap(),
+        }
+    }
+
+    fn hash64(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish()
+    }
 }
 
 /// The part of a `SimConfig` the FIELD's meaning depends on.
@@ -212,6 +262,11 @@ struct Pipelines {
     agent_layer: Option<usize>,
     /// Per layer, its model's seed pipeline.
     layer_seeds: Vec<ComputePipeline>,
+    /// The layer-map warp -- group 0 the step layout, group 1 the
+    /// flame's buffers -- built when the config uses transforms and a
+    /// map has been set.
+    layer_warp: Option<ComputePipeline>,
+    flame_layout: Option<BindGroupLayout>,
     /// The warp stage: a resample of the field through the per-step
     /// affine, first in the step. Built with every set (it depends on
     /// the boundary alone) and dispatched only when the config's warp
@@ -248,6 +303,8 @@ struct PipelineKey {
     layers: Vec<&'static str>,
     /// Whether the step shaders carry the coupling.
     coupled: bool,
+    /// The layer map's definitions, or 0 when transforms are not used.
+    layer_map: u64,
     coloring: &'static str,
     boundary: crate::config::sim::SimBoundary,
     upscale: crate::config::sim::SimUpscale,
@@ -307,6 +364,9 @@ pub struct SimRenderer {
     layers: u32,
     /// The coupling table (`SimCouplingGpu` x MAX_COUPLINGS).
     coupling_buffer: Buffer,
+    /// The flame's transforms as layer maps, once `set_layer_transforms`
+    /// has been called.
+    layer_map: Option<LayerMap>,
     /// The convolution table for the large-kernel models, rebuilt and
     /// uploaded with the parameters. Sized once for the largest
     /// kernel the engine allows, so it never resizes.
@@ -480,6 +540,7 @@ impl SimRenderer {
             kernel_offsets: Vec::new(),
             layers: layers as u32,
             coupling_buffer,
+            layer_map: None,
             steps_per_submit: FIRST_SUBMIT,
             needs_seed: true,
             seeded_as: None,
@@ -1010,6 +1071,11 @@ impl SimRenderer {
         PipelineKey {
             layers: layer_models(cfg).iter().map(|m| m.name).collect(),
             coupled: !cfg.couplings.is_empty(),
+            layer_map: if cfg.use_transforms {
+                self.layer_map.as_ref().map(|m| m.key.hash64()).unwrap_or(0)
+            } else {
+                0
+            },
             coloring: coloring_or_default(&cfg.coloring).name,
             boundary: cfg.boundary,
             upscale: cfg.upscale,
@@ -1308,7 +1374,54 @@ impl SimRenderer {
         let lookup_steps = |name: &str| -> Vec<ComputePipeline> {
             step_pipelines.iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone()).unwrap_or_default()
         };
+        // The layer map: the flame's definitions in the warp template,
+        // with the flame's bindings at group 1.
+        let (layer_warp, flame_layout) = match (&self.layer_map, key.layer_map != 0) {
+            (Some(map), true) => {
+                let src = assembler::assemble_layer_warp(cfg.boundary, &map.defs);
+                let module = make("Sim Layer Warp", &src);
+                let flame_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                    label: Some("Sim Flame Layout"),
+                    entries: &[
+                        storage_ro(0),
+                        BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: ShaderStages::COMPUTE,
+                            ty: BindingType::Buffer {
+                                ty: BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        storage_ro(5),
+                        storage_ro(10),
+                        storage_ro(12),
+                    ],
+                });
+                let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Sim Layer Warp"),
+                    bind_group_layouts: &[Some(&step_layout), Some(&flame_layout)],
+                    immediate_size: 0,
+                });
+                let pipe = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some("Sim Layer Warp"),
+                    layout: Some(&pl),
+                    module: &module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                (Some(pipe), Some(flame_layout))
+            }
+            _ => (None, None),
+        };
+        if let Some(map) = self.layer_map.as_mut() {
+            map.bind_group = None;
+        }
         self.pipelines = Some(Pipelines {
+            layer_warp,
+            flame_layout,
             seed: seed_pipelines[0].1.clone(),
             layer_seeds: models.iter().map(|m| {
                 seed_pipelines.iter().find(|(n, _)| *n == m.name).map(|(_, p)| p.clone()).expect("built above")
@@ -1444,7 +1557,107 @@ impl SimRenderer {
                 };
                 [0, 1, 2, 3].map(|b| if m & (1 << b) != 0 { 1.0 } else { 0.0 })
             },
+            xform: [self.layer_rate(cfg, layer), 0.0, 0.0, 0.0],
         }
+    }
+
+    /// The layer map's rate for a layer: its transform's weight, when
+    /// the config uses transforms and a map is set; 0 otherwise.
+    fn layer_rate(&self, cfg: &SimConfig, layer: usize) -> f32 {
+        if !cfg.use_transforms {
+            return 0.0;
+        }
+        self.layer_map
+            .as_ref()
+            .and_then(|m| m.rates.get(layer).copied())
+            .unwrap_or(0.0)
+    }
+
+    /// Give the renderer the flame whose transforms are the layers'
+    /// maps (simulation-layers plan, section 4). Called by whoever
+    /// drives a frame -- the app, the headless renderer, the animation
+    /// export -- before the step. Cheap when nothing changed: the
+    /// definitions rebuild only when the flame's active variation set,
+    /// transform count or flags change; the buffers are rewritten each
+    /// call, and they are small (the normal transforms only).
+    pub fn set_layer_transforms(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) {
+        use crate::gpu::buffers::{pack_gpu_transforms, pack_gpu_variation_params};
+        let key = LayerMapKey::of(flame);
+        let n = flame.transforms.len().max(1);
+        let transforms = pack_gpu_transforms(flame, crate::scene::transforms::RenderMode::TwoD);
+        let vparams = pack_gpu_variation_params(flame);
+        let t_bytes: &[u8] = bytemuck::cast_slice(&transforms[..n.min(transforms.len())]);
+        let v_bytes: &[u8] = bytemuck::cast_slice(&vparams[..n.min(vparams.len())]);
+        let rates: Vec<f32> = flame.transforms.iter().map(|t| t.weight.clamp(0.0, 1.0)).collect();
+        let rebuild = match &self.layer_map {
+            Some(m) => m.key != key,
+            None => true,
+        };
+        if rebuild {
+            let builder = crate::shader_builder_v2::ShaderBuilder::new(crate::variations::global_registry().clone());
+            let defs = builder.build_layer_map(flame);
+            let make = |label: &str, bytes: &[u8]| {
+                device.create_buffer_init(&util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytes,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                })
+            };
+            let flame_params = device.create_buffer_init(&util::BufferInitDescriptor {
+                label: Some("Sim Flame Params"),
+                contents: bytemuck::bytes_of(&<crate::gpu::buffers::GpuParams as bytemuck::Zeroable>::zeroed()),
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            });
+            let attachments = vec![
+                <crate::gpu::buffers::GpuAttachmentList as bytemuck::Zeroable>::zeroed();
+                crate::gpu::buffers::MAX_TRANSFORMS
+            ];
+            let metas = crate::gpu::buffers::build_subflame_metas(&[]).unwrap_or_else(|_| {
+                [<crate::gpu::buffers::SubflameMeta as bytemuck::Zeroable>::zeroed(); crate::gpu::buffers::MAX_SUBFLAMES]
+            });
+            self.layer_map = Some(LayerMap {
+                key,
+                defs,
+                transforms: make("Sim Flame Transforms", t_bytes),
+                variation_params: make("Sim Flame Variation Params", v_bytes),
+                flame_params,
+                attachments: make("Sim Flame Attachments", bytemuck::cast_slice(&attachments)),
+                subflame_meta: make("Sim Flame Subflame Meta", bytemuck::cast_slice(&metas)),
+                rates,
+                bind_group: None,
+            });
+            // The pipeline key carries the map; the next ensure rebuilds.
+            return;
+        }
+        let map = self.layer_map.as_mut().expect("set above");
+        map.rates = rates;
+        // Same shape (the key matched), so the buffers hold: rewrite.
+        if (t_bytes.len() as u64) <= map.transforms.size() && (v_bytes.len() as u64) <= map.variation_params.size() {
+            queue.write_buffer(&map.transforms, 0, t_bytes);
+            queue.write_buffer(&map.variation_params, 0, v_bytes);
+        }
+    }
+
+    /// The group-1 bind group for the layer warp, built once per
+    /// pipeline set.
+    fn ensure_flame_bind_group(&mut self, device: &Device) {
+        let Some(p) = self.pipelines.as_ref() else { return };
+        let Some(layout) = p.flame_layout.as_ref() else { return };
+        let Some(map) = self.layer_map.as_mut() else { return };
+        if map.bind_group.is_some() {
+            return;
+        }
+        map.bind_group = Some(device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Sim Flame BG"),
+            layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: map.transforms.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: map.flame_params.as_entire_binding() },
+                BindGroupEntry { binding: 5, resource: map.variation_params.as_entire_binding() },
+                BindGroupEntry { binding: 10, resource: map.attachments.as_entire_binding() },
+                BindGroupEntry { binding: 12, resource: map.subflame_meta.as_entire_binding() },
+            ],
+        }));
     }
 
     /// Write ring slot 0, for the passes that run once (seed, colour).
@@ -1944,6 +2157,7 @@ impl SimRenderer {
         self.ensure_agents(device, cfg);
         self.ensure_step_bind_groups(device);
         self.ensure_stage_bind_groups(device);
+        self.ensure_flame_bind_group(device);
         let agent_groups = self.agent_capacity.div_ceil(64);
         let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
         let stride = self.params_stride as u32;
@@ -2032,6 +2246,11 @@ impl SimRenderer {
                     .step_bind_groups
                     .as_ref()
                     .expect("built by ensure_step_bind_groups");
+                let flame_bg = if p.layer_warp.is_some() && self.layer_map.iter().any(|m| m.rates.iter().any(|r| *r > 0.0)) {
+                    self.layer_map.as_ref().and_then(|m| m.bind_group.as_ref())
+                } else {
+                    None
+                };
                 let mut pass = enc.begin_compute_pass(&ComputePassDescriptor {
                     label: Some("Sim Steps"),
                     timestamp_writes: None,
@@ -2054,6 +2273,23 @@ impl SimRenderer {
                         pass.set_pipeline(&p.warp);
                         for l in 0..layers {
                             pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                            pass.dispatch_workgroups(gx, gy, 1);
+                        }
+                        self.current = 1 - self.current;
+                    }
+                    // The layer map: each layer read through its own
+                    // transform at its rate; a layer at rate 0 is
+                    // carried across. One stage, one flip.
+                    if let (Some(lw), Some(fbg)) = (p.layer_warp.as_ref(), flame_bg) {
+                        for l in 0..layers {
+                            if self.layer_rate(cfg, l) > 0.0 {
+                                pass.set_pipeline(lw);
+                                pass.set_bind_group(0, &groups[self.current], &[slot(l, 0) * stride]);
+                                pass.set_bind_group(1, fbg, &[]);
+                            } else {
+                                pass.set_pipeline(&p.warp);
+                                pass.set_bind_group(0, &groups[self.current], &[slot(l, VARIANT_COPY) * stride]);
+                            }
                             pass.dispatch_workgroups(gx, gy, 1);
                         }
                         self.current = 1 - self.current;

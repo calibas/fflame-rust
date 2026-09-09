@@ -234,11 +234,16 @@ numerous. Renders in `output/lattice4/layers/png/`. Gate: with mask
 channels by 0.26 RMS and the still ones by 0.024, one reaction step
 (`the_warp_moves_only_the_channels_it_is_told_to`).
 
-This is the cheap half of "an IFS on Turing layers": one map per
-layer. The other half — more than four layers, and flame variations
-as the map — needs a texture array for the state and the variation's
-WGSL as the warp's source coordinate; both are scoped in the catalog's
-cross-cutting notes, not built.
+That was the cheap half of "an IFS on Turing layers". The other half
+is built (simulation-layers plan, phases 1–3, 2026-09-08): the state
+is a texture array with one slice per layer, and **the flame's
+transforms are the layers' maps** when `use_transforms` is on —
+transform *i* moves layer *i* by its affine, variations and post
+affine, at a rate that is its weight, through `flame_map` in the
+layer warp. The Transforms, Triangle Editor and Variations panels
+stay open in Simulation mode for it. A pure rotation through a
+transform equals this stage's rotation to 1.7e-6; every registered
+variation validates in the layer warp.
 
 What the doubling looks like from the reaction's side: the pattern is
 suddenly at twice its intrinsic scale and refines back. At the coupled

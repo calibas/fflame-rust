@@ -6311,3 +6311,75 @@ fn two_brusselator_layers_are_the_two_layer_brusselator() {
         assert!(*err < 1e-3, "channel {i} differs by rms {err:.2e}");
     }
 }
+
+/// A flame whose one transform is a rotation by `theta` and nothing
+/// else: `linear` at weight 1 on a rotation affine.
+fn rotation_flame(theta: f32) -> crate::scene::transforms::Flame {
+    let mut flame = crate::scene::transforms::Flame::default();
+    flame.transforms.clear();
+    let mut t = crate::scene::transforms::Transform::default();
+    let (s, c) = theta.sin_cos();
+    // x' = a x + b y, y' = c x + d y (affine.wgsl): a rotation matrix.
+    t.a = c;
+    t.b = s;
+    t.c = -s;
+    t.d = c;
+    t.e = 0.0;
+    t.f = 0.0;
+    t.weight = 1.0;
+    t.variations.clear();
+    t.variations.insert("linear".into(), 1.0);
+    flame.transforms.push(t);
+    flame
+}
+
+/// Phase 3 of the simulation-layers plan: a transform that is a pure
+/// rotation, at weight 1, moves a layer exactly as the global warp's
+/// rotation does -- the same backward map through the same bilinear
+/// sampler -- to the warp mirror's tolerance.
+#[test]
+fn a_rotation_transform_equals_the_global_warps_rotation() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let theta = 0.3f32;
+    let settle = |cfg: &SimConfig| -> SimRenderer {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 200);
+        r
+    };
+    let mut base = lattice4_config("ring", N, 8);
+    // Through the global warp.
+    let mut r_warp = settle(&base);
+    let mut cfg_warp = base.clone();
+    cfg_warp.warp = crate::config::sim::SimWarp { rotation: theta, ..Default::default() };
+    r_warp.run_steps(&device, &queue, &cfg_warp, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let by_warp = read_rgba32f(&device, &queue, r_warp.field_texture(), N, N);
+    // Through the transform. The warp rotates the SOURCE by theta about
+    // the centre; the transform is applied to the point as the source,
+    // so the same matrix gives the same map.
+    base.use_transforms = true;
+    let mut r_map = settle(&base);
+    r_map.set_layer_transforms(&device, &queue, &rotation_flame(theta));
+    r_map.run_steps(&device, &queue, &base, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let by_map = read_rgba32f(&device, &queue, r_map.field_texture(), N, N);
+    let n = by_warp.len() as f32;
+    let rms = (by_warp.iter().zip(&by_map).map(|(a, b)| (a[0] - b[0]).powi(2)).sum::<f32>() / n).sqrt();
+    let worst = by_warp.iter().zip(&by_map).map(|(a, b)| (a[0] - b[0]).abs()).fold(0.0f32, f32::max);
+    // And both moved: against a run with no warp at all.
+    let mut r_still = settle(&base);
+    let mut cfg_still = base.clone();
+    cfg_still.use_transforms = false;
+    r_still.run_steps(&device, &queue, &cfg_still, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let still = read_rgba32f(&device, &queue, r_still.field_texture(), N, N);
+    let moved = (still.iter().zip(&by_map).map(|(a, b)| (a[0] - b[0]).powi(2)).sum::<f32>() / n).sqrt();
+    println!("rotation by transform vs by warp: rms {rms:.2e}, worst {worst:.2e}; the map moved the layer by rms {moved:.3}");
+    assert!(moved > 0.05, "the transform should have moved the layer");
+    assert!(worst < 5e-5, "the transform's rotation differs from the warp's by up to {worst:.2e}");
+}

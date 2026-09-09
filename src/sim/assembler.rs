@@ -71,6 +71,8 @@ struct SimParams {
     view: vec4<f32>,
     // Which channels the warp moves, 1 or 0 each.
     warp_mask: vec4<f32>,
+    // The layer map's rate (x), for the transform-warp stage.
+    xform: vec4<f32>,
 };
 
 // The scale from grid cells to output pixels, by the fit: the smaller
@@ -425,13 +427,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// where in the source did it come from. Content moves forward by
 /// zoom, rotation and pan; a destination cell undoes the pan, the
 /// zoom, and then the rotation the swirl adds to at its own radius.
-const WARP_TEMPLATE: &str = r#"
-//__COMMON__
-@group(0) @binding(3) var field_out: texture_storage_2d_array<rgba32float, write>;
-@group(0) @binding(4) var field_in: texture_2d_array<f32>;
-
-//__BOUNDARY__
-
+/// The warp's samplers -- bilinear, Catmull-Rom, bicubic -- through
+/// sim_read, so every tap honours the boundary. Shared by the global
+/// warp and the layer map.
+const WARP_SAMPLERS: &str = r#"
 // Four taps, weighted -- through sim_read, so every tap honours the
 // boundary.
 fn warp_bilinear(src: vec2<f32>) -> vec4<f32> {
@@ -470,6 +469,17 @@ fn warp_bicubic(src: vec2<f32>) -> vec4<f32> {
     }
     return acc;
 }
+
+"#;
+
+const WARP_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var field_out: texture_storage_2d_array<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
+
+//__BOUNDARY__
+
+//__SAMPLERS__
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1265,7 +1275,71 @@ pub fn assemble_jfa_final() -> String {
 
 /// The warp stage. Depends on the boundary alone.
 pub fn assemble_warp(boundary: SimBoundary) -> String {
-    splice(WARP_TEMPLATE, boundary, &[])
+    splice(WARP_TEMPLATE, boundary, &[("//__SAMPLERS__", WARP_SAMPLERS)])
+}
+
+/// The layer map (simulation-layers plan, section 4): each layer read
+/// through the flame's transform of the same index, at the layer's
+/// rate. The flame's definitions come from
+/// `ShaderBuilder::build_layer_map` -- bound at group 1, its `params`
+/// renamed -- and the simulation's own `ff_atan2` is dropped from the
+/// prelude, since the flame's utilities define the same function.
+const LAYER_WARP_TEMPLATE: &str = r#"
+//__COMMON__
+@group(0) @binding(3) var field_out: texture_storage_2d_array<rgba32float, write>;
+@group(0) @binding(4) var field_in: texture_2d_array<f32>;
+
+//__BOUNDARY__
+
+//__SAMPLERS__
+
+//__FLAME__
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = sim_grid();
+    let p = vec2<i32>(gid.xy);
+    if (p.x >= g.x || p.y >= g.y) {
+        return;
+    }
+    // The grid on the unit plane: the centre at the origin, the short
+    // axis spanning [-1, 1], as a flame's default view.
+    let gf = vec2<f32>(g);
+    let half = min(gf.x, gf.y) * 0.5;
+    let centre = (gf - vec2<f32>(1.0, 1.0)) * 0.5;
+    let q = vec2<f32>(p);
+    let u = (q - centre) / half;
+    // A stream per (cell, step, seed), for the variations that draw.
+    let seed = u32(p.x) * 7919u + u32(p.y) * 104729u + params.step_index * 65537u + params.seed_lo;
+    let mapped = centre + flame_map(u32(sim_layer()), u, seed) * half;
+    // The rate: how much of the map is applied per step; the source
+    // coordinate is a backward resample, so the map says where this
+    // cell reads FROM.
+    let src = mix(q, mapped, params.xform.x);
+    var v: vec4<f32>;
+    if (params.warp_b.y >= 1.5) {
+        v = warp_bicubic(src);
+    } else if (params.warp_b.y >= 0.5) {
+        v = sim_read(vec2<i32>(floor(src + vec2<f32>(0.5, 0.5))));
+    } else {
+        v = warp_bilinear(src);
+    }
+    textureStore(field_out, p, sim_layer(), v);
+}
+"#;
+
+/// The layer-map warp for one flame: `flame_defs` is what
+/// `ShaderBuilder::build_layer_map` produced.
+pub fn assemble_layer_warp(boundary: SimBoundary, flame_defs: &str) -> String {
+    let src = splice(
+        LAYER_WARP_TEMPLATE,
+        boundary,
+        &[("//__SAMPLERS__", WARP_SAMPLERS), ("//__FLAME__", flame_defs)],
+    );
+    // Drop the prelude's ff_atan2: the flame's utilities carry one.
+    let start = src.find("fn ff_atan2(y: f32, x: f32) -> f32 {").expect("the prelude defines ff_atan2");
+    let end = src[start..].find("\n}\n").expect("ff_atan2 closes") + start + 3;
+    format!("{}{}", &src[..start], &src[end..])
 }
 
 /// The seeding pass: config init shape → initial field.
@@ -1849,6 +1923,30 @@ mod tests {
                 );
             }
         }
+    }
+
+
+    /// Every registered variation validates in the layer-map warp:
+    /// one flame per variation, its transform carrying that variation
+    /// alone, through `build_layer_map` and `assemble_layer_warp`.
+    #[test]
+    fn every_variation_validates_in_the_layer_warp() {
+        let registry = crate::variations::global_registry();
+        let builder = crate::shader_builder_v2::ShaderBuilder::new(registry.clone());
+        let mut count = 0;
+        for name in registry.names() {
+            let mut flame = crate::scene::transforms::Flame::default();
+            flame.transforms.clear();
+            let mut t = crate::scene::transforms::Transform::default();
+            t.variations.clear();
+            t.variations.insert(name.to_string(), 1.0);
+            flame.transforms.push(t);
+            let defs = builder.build_layer_map(&flame);
+            validate(&assemble_layer_warp(SimBoundary::Periodic, &defs), &format!("layer warp {name}"));
+            count += 1;
+        }
+        println!("{count} variations validate in the layer warp");
+        assert!(count > 100);
     }
 
     #[test]

@@ -771,7 +771,18 @@ impl<'a> PanelViewer<'a> {
             crate::scene::transforms::RenderMode::Escape
                 | crate::scene::transforms::RenderMode::Simulation
         );
+        // In Simulation mode the flame's transforms are the layers'
+        // maps (simulation-layers plan, section 4), so the panels that
+        // edit them stay: Transforms, the Triangle Editor and
+        // Variations. The rest of the flame's panels have nothing to
+        // show there.
+        let is_sim = matches!(mode, crate::scene::transforms::RenderMode::Simulation);
+        let transform_editor = matches!(
+            tab,
+            PanelType::Transforms | PanelType::TriangleEditor | PanelType::Variations
+        );
         if non_flame
+            && !(is_sim && transform_editor)
             && matches!(
                 tab,
                 PanelType::Transforms

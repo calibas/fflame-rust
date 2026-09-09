@@ -707,6 +707,9 @@ async fn render_sim(
     let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
 
     let mut sim = crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
+    if job.config.sim.use_transforms {
+        sim.set_layer_transforms(device, queue, &job.config.flame);
+    }
     sim.seed(device, queue, &job.config.sim);
     // run_steps submits in watchdog-sized batches internally, so the
     // driver never sees an unbounded pass however large `steps` is.

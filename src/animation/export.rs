@@ -2327,6 +2327,9 @@ pub async fn export_animation_fast(
                     export_config.height,
                 )
             });
+            if frame_config.sim.use_transforms {
+                sim.set_layer_transforms(&device, &queue, &frame_config.flame);
+            }
             let target = frame_config.sim.steps;
             if target < sim.step_index() {
                 sim.request_seed();
