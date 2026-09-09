@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "874862a8",
+  "git_hash": "aca5748d",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 34406,
@@ -665,6 +665,14 @@
     "sim-layers-colour-stack.png": {
       "bytes": 29317,
       "sha256": "07e13da4a941f4fac446b477faa53ee7f6ed9ee8772c94fe7eba93582986d051"
+    },
+    "sim-layers-turing-ring.png": {
+      "bytes": 27811,
+      "sha256": "3146bd052da08cdc625791e114c1d03abb37fa3ec8dfc2b8fcb24fe32037321f"
+    },
+    "sim-layers-turing-scales.png": {
+      "bytes": 31844,
+      "sha256": "b95a189a97beafc60a8218952f0ee968d3b8b11db88917b383d2070a20101148"
     },
     "sim-layers-two-gray-scotts.png": {
       "bytes": 22401,

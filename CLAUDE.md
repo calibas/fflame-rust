@@ -95,9 +95,10 @@
 - **Pan/rotation**: both render modes compose pan → rotate → zoom (Apophysis convention); all pan inputs share `FractalConfig::screen_delta_to_pan_frame`
 
 ### UI Architecture (egui_dock)
-- **Docking system**: all UI is dockable panels (`src/ui/workspace.rs` defines `PanelType` — 25+ panels)
-- Main editing panels: Fractal Viewport, Transforms, Triangle Editor, View, Colors/Tone Mapping, Palette Editor/Library, Fractal Browser, History, Animation, Effects, Xaos Editor, Random Generator, Variations, Subflames
-- **Menu bar**: File, Edit, View, Fractal, Rendering, Window, Help (`src/ui/menu_bar.rs`)
+- **Docking system**: all UI is dockable panels (`src/ui/workspace.rs` defines `PanelType` — 29 panels)
+- Main editing panels: Fractal Viewport, Transforms, Triangle Editor, View, Colors/Tone Mapping, Palette Editor/Library, Fractal Browser, History, Animation, Effects, Xaos Editor, Random Generator, Variations, Subflames, Escape Fractal, Simulation
+- **Menu bar**: File, Edit, View, Mode, Rendering, Window, Help (`src/ui/menu_bar.rs`); `src/ui/compact_menu.rs` is the mobile equivalent
+- **The render mode gates the UI.** `src/ui/render_mode.rs` is the only writer of `ConfigPath::RenderMode` (a source-scanning test enforces it) and holds the mode→workspace and engine-lifetime policy; `src/ui/visibility.rs` is the only answer to "is this panel/control available in this mode", exhaustive over both. **Add a case there, never a `matches!(render_mode, ...)` inside a panel.** Both Window menus draw their rows from `visibility::WINDOW_MENU`. See [docs/projects/ui-render-modes.md](docs/archive/projects/ui-render-modes.md)
 - Per-panel code lives in its own `src/ui/*.rs` file; `src/ui/mod.rs` coordinates docking and bubbles responses through `UiResponse`
 
 ### Palette Library System

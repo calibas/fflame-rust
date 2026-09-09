@@ -6675,3 +6675,256 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // Under the cap at defaults, 0.96 * 0.002.
     default_dt: 0.0018,
 };
+
+
+// ---------------------------------------------------------------------
+// One Turing field, as a layer.
+
+/// The activator and inhibitor discs of a difference-of-discs Turing
+/// field: two normalised blocks, anti-aliased over a one-cell band,
+/// the shader subtracting them per tap. `lattice4` and `turing` share
+/// it, which is what lets a Signal coupling read a lattice field and
+/// a `turing` layer alike.
+pub(crate) fn difference_of_discs(p: &super::Params) -> crate::sim::SimKernel {
+    let ra = p.get("radius").clamp(1.0, 15.0);
+    let rb = ra * p.get("ratio").clamp(1.2, 4.0);
+    let r = ((rb.ceil() as u32) + 1).clamp(1, MAX_KERNEL_RADIUS);
+    let w = 2 * r as usize + 1;
+    let mut a = vec![0.0f32; w * w];
+    let mut b = vec![0.0f32; w * w];
+    let (mut sa, mut sb) = (0.0f64, 0.0f64);
+    for iy in 0..w {
+        for ix in 0..w {
+            let dx = ix as f32 - r as f32;
+            let dy = iy as f32 - r as f32;
+            let d = (dx * dx + dy * dy).sqrt();
+            let wa = (ra + 0.5 - d).clamp(0.0, 1.0);
+            let wb = (rb + 0.5 - d).clamp(0.0, 1.0);
+            a[iy * w + ix] = wa;
+            b[iy * w + ix] = wb;
+            sa += wa as f64;
+            sb += wb as f64;
+        }
+    }
+    for x in a.iter_mut() {
+        *x = (*x as f64 / sa.max(1e-12)) as f32;
+    }
+    for x in b.iter_mut() {
+        *x = (*x as f64 / sb.max(1e-12)) as f32;
+    }
+    a.extend_from_slice(&b);
+    crate::sim::SimKernel { radius: r, weights: a }
+}
+
+/// One field of the coupled Turing lattice (`lattice4`), as a layer
+/// (simulation-layers plan, section 9).
+///
+/// The rule is a lattice field's, on `.x`: the field's own
+/// activator-minus-inhibitor signal times `self`, plus the drive --
+/// the Signal couplings aimed at this layer, each the driving layer's
+/// signal at the coupling's strength -- then gain, the even term, the
+/// soft saturation `x / (1 + |x|)`, the decay and the fluctuations.
+/// Two passes: the first convolves once and publishes the signal in
+/// `.y`, the second steps, so a field driving three others is
+/// convolved once, not four times (measured: the ring as layers ran
+/// 5.5x the lattice's time when every coupling re-convolved). Four of
+/// these under the lattice's eight ring couplings are the lattice's
+/// ring, to the tolerance of a changed summation order
+/// (`four_turing_layers_are_the_lattices_ring`).
+///
+/// The fluctuations are drawn as the lattice drew them: field A with
+/// salt 0x41 on layer 0's stream, B with 0x42, and so on -- here salt
+/// `0x41 + layer` on an UNSALTED stream, so four layers draw exactly
+/// the lattice's four fields' noise. The seed's own draw likewise,
+/// from 0x51; the init MASK it is scaled by is the template's, whose
+/// noise is salted by layer, so a layered run's seed is not the
+/// lattice's (the gate copies the lattice's seed in) while every
+/// step after it is.
+///
+/// What the lattice has that this does not: the memory column, whose
+/// amplitude term reads the three other fields at once. What this
+/// has that the lattice does not: any number of fields, a radius per
+/// field, a transform per field through the layer map, and each
+/// field coloured on its own in the stack.
+pub static TURING: ModelDef = ModelDef {
+    name: "turing",
+    display_name: "Turing Field",
+    description: "One difference-of-discs Turing field, made to be a layer: coupled to other \
+                  Turing fields through Signal couplings it is one field of the coupled \
+                  lattice, with its own radius, and its own transform.",
+    features: &[ModelFeature::TakesDrive, ModelFeature::PublishesSignal],
+    parameters: &[
+        SimParamDef {
+            name: "self",
+            display_name: "Self",
+            default: 1.0,
+            min: -3.0,
+            max: 3.0,
+            tooltip: "How much the field follows its own Turing signal (activator minus \
+                      inhibitor). 1 is a plain Turing pattern; the other fields' signals \
+                      arrive through Signal couplings at their strengths.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "radius",
+            display_name: "Activator radius",
+            default: 4.0,
+            min: 1.0,
+            max: 15.0,
+            tooltip: "The averaging radius of the activator, in cells: the size of the \
+                      pattern. Differs per layer, so coupled fields can be multi-scale.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "ratio",
+            display_name: "Inhibitor ratio",
+            default: 2.0,
+            min: 1.2,
+            max: 4.0,
+            tooltip: "Inhibitor radius over activator radius. McCabe's 2.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "amount",
+            display_name: "Step",
+            default: 0.05,
+            min: 0.001,
+            max: 0.5,
+            tooltip: "How far the field moves per step, in a range of 2. Larger is faster and \
+                      coarser-grained in time.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "noise",
+            display_name: "Fluctuations",
+            default: 0.01,
+            min: 0.0,
+            max: 0.5,
+            tooltip: "Random perturbation every step — the microscopic fluctuations. Under \
+                      inflation these are what grow into structure.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "gain",
+            display_name: "Gain",
+            default: 4.0,
+            min: 0.5,
+            max: 50.0,
+            tooltip: "Multiplies the drive before it saturates. High gain is an all-or-nothing \
+                      step and a hard-edged picture; low gain is graded, with amplitude \
+                      falling to nothing where activator and inhibitor cancel.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "decay",
+            display_name: "Decay",
+            default: 1.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Pulls the field back toward zero each step, as a fraction of the step \
+                      amount. With decay the amplitude settles where the drive balances it; \
+                      without it the field saturates at its bounds.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "quadratic",
+            display_name: "Quadratic",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "An even term in the saturation, x + q·x². An odd nonlinearity selects \
+                      stripes, an even one selects spots.",
+            choices: &[],
+        },
+    ],
+    presets: &[
+        SimPreset {
+            name: "pattern",
+            display_name: "One pattern",
+            params: &[("self", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0)],
+            steps: 2000,
+            init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+            coloring: Some("channel"),
+            coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+            matte: None,
+            warp: None,
+        },
+    ],
+    wgsl: r#"
+// The lattice's streams: salt + layer on layer 0's stream, so layer
+// k draws what the lattice's field k drew.
+fn tu_rand(p: vec2<i32>, salt: u32) -> f32 {
+    let g = sim_grid();
+    let idx = u32(p.y * g.x + p.x);
+    var h = sim_pcg(idx ^ params.seed_lo);
+    h = sim_pcg(h ^ params.seed_hi ^ (salt + params.layer));
+    h = sim_pcg(h ^ params.step_index);
+    return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
+// Pass 1: the field's own signal, published in .y. The table holds
+// the activator disc and then the inhibitor disc, each normalised, so
+// one read weighted by their difference is act - inh. Every layer
+// runs this before any runs pass 2, so a coupling reading .y in pass
+// 2 reads the signal of the field pass 2 steps from.
+fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let r = sim_kernel_radius();
+    let w = 2 * r + 1;
+    let taps = sim_kernel_taps();
+    var t = 0.0;
+    for (var dy = -r; dy <= r; dy = dy + 1) {
+        for (var dx = -r; dx <= r; dx = dx + 1) {
+            let i = u32((dy + r) * w + (dx + r));
+            t = t + (klut(i) - klut(taps + i)) * sim_read(p + vec2<i32>(dx, dy)).x;
+        }
+    }
+    return vec4<f32>(s.x, t, 0.0, 0.0);
+}
+
+// Pass 2: the step. The drive is the own signal from pass 1 and the
+// other fields' through their Signal couplings; .y keeps the signal
+// the step used, so a channel colouring can show it.
+fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let kself = mparam(0u);
+    let amount = mparam(3u);
+    let noise = mparam(4u);
+    let gain = mparam(5u);
+    let decay = mparam(6u);
+    let quad = mparam(7u);
+    let drive = kself * s.y + sim_drive(p).x;
+    let xi = tu_rand(p, 0x41u) - 0.5;
+    var x = drive * gain;
+    x = x + quad * x * x;
+    let sat = x / (1.0 + abs(x));
+    let n = s.x * (1.0 - amount * decay) + amount * sat + xi * noise;
+    return vec4<f32>(clamp(n, -1.0, 1.0), s.y, 0.0, 0.0);
+}
+"#,
+    wgsl_seed: r#"
+// The seed module carries only this text, so the stream is written
+// again here: salt + layer on layer 0's stream, as in the step.
+fn tu_rand(p: vec2<i32>, salt: u32) -> f32 {
+    let g = sim_grid();
+    let idx = u32(p.y * g.x + p.x);
+    var h = sim_pcg(idx ^ params.seed_lo);
+    h = sim_pcg(h ^ params.seed_hi ^ (salt + params.layer));
+    h = sim_pcg(h ^ params.step_index);
+    return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
+fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
+    // One draw in [-0.5, 0.5], scaled by the init mask, as the lattice
+    // seeds each field.
+    return vec4<f32>((tu_rand(p, 0x51u) - 0.5) * inside, 0.0, 0.0, 0.0);
+}
+"#,
+    default_steps: 2000,
+    passes: 2,
+    repeat: None,
+    agents: None,
+    kernel: Some(difference_of_discs),
+    dt_bound: None,
+    diffusion: &[],
+    max_dt: 1.0,
+    default_dt: 1.0,
+};

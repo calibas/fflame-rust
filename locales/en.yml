@@ -3,12 +3,36 @@ _version: 1
 app:
   title: "Fractal Flame Renderer"
 
+# Why a panel or control is offered but disabled. One string per
+# reason, so nothing has to claim a panel "edits the flame" when it
+# does not.
+visibility:
+  flame_only: "Edits the flame. The active mode renders a different engine, so this has nothing to act on."
+  three_d_only: "3D flame mode only: occlusion and the shade pass need the depth the 3D chaos game writes."
+  other_engine: "Belongs to the other engine. A fractal is in exactly one mode at a time, so switch modes to use this."
+  makes_a_flame: "Generates flames. Using it here would replace what you have and leave the current mode."
+  log_only: "Only the logarithmic tone mapping reads this. The active mode writes a unit-range image and renders through the linear mapping."
+  linear_only: "Linear is the only mapping that behaves here: the other two divide by a sample density that only the chaos game produces."
+  alpha_blend_inert: "Blends between two alpha curves that are identical under the linear mapping, so it has no effect in this mode."
+
+# The four render modes, named once. Used by the mode picker and by
+# anything that has to say which engine is running.
+mode:
+  two_d: "2D Flame"
+  three_d: "3D Flame"
+  escape: "Escape Time"
+  simulation: "Simulation"
+  two_d_tip: "The classic fractal flame: a chaos game over your transforms, drawn flat."
+  three_d_tip: "The same chaos game tracking depth, with perspective, a movable camera and optional solid shading."
+  escape_tip: "Escape-time fractals (Mandelbrot and kin): one pass per pixel, with deep-zoom support. Transforms do not apply."
+  simulation_tip: "A stepped grid — reaction-diffusion, cellular automata, growth. Runs over time rather than converging."
+
 # Menu Bar
 menu:
   file: "File"
   edit: "Edit"
   view: "View"
-  fractal: "Fractal"
+  mode: "Mode"
   rendering: "Rendering"
   fly_mode: "Fly Mode"
   fly_mode_requires_3d: "Fly Mode requires 3D render mode"
@@ -155,8 +179,6 @@ panels:
   colors: "Colors"
   palette_editor: "Palette Editor"
   palette_library: "Palette Library"
-  preset_library: "Preset Library"
-  file_browser: "File Browser"
   view: "View"
   rendering: "Rendering"
   history: "History"
@@ -169,8 +191,6 @@ panels:
   export: "Export"
   random_generator: "Random Generator"
   effects: "Effects"
-  settings: "Settings"
-  tone_mapping: "Tone Mapping"
   xaos_editor: "Xaos Editor"
   signal: "Signals"
   solid_lighting: "Solid & Lighting"
@@ -1965,9 +1985,8 @@ login:
   remember_me: "Remember me"
 
 sim_panel:
-  toggle_on: "Enable Simulation Mode"
-  toggle_off: "Disable Simulation Mode"
-  toggle_tip: "Replace the flame engine with a neighbour-coupled simulation (reaction-diffusion, cellular automata, growth)."
+  toggle_on: "Switch to Simulation mode"
+  toggle_tip: "Replace the flame engine with a neighbour-coupled simulation (reaction-diffusion, cellular automata, growth). Use the Mode menu to come back."
   inactive_hint: "Simulation mode is off. The controls appear once it is enabled."
   run: "▶ Run"
   pause: "⏸ Pause"
@@ -1991,7 +2010,7 @@ sim_panel:
   couplings: "Couplings"
   couplings_tip: "Each coupling adds strength × form(mine, theirs) × dt to the driven layer after its own rule, channel by channel: x to x, y to y. Linear is diffusion between layers (Yang et al.); cubic is an active middle layer (Kyttä et al.), where the strength selects the pattern; quadratic and product are further forms."
   add_coupling: "Add coupling"
-  coupling_form_tip: "Linear: theirs − mine. Cubic: mine × theirs × (theirs − mine). Quadratic: theirs² − mine². Product: mine × theirs."
+  coupling_form_tip: "Linear: theirs − mine. Cubic: mine × theirs × (theirs − mine). Quadratic: theirs² − mine². Product: mine × theirs. Signal: their Turing signal — their field through their own kernel, activator minus inhibitor — which a Turing field folds into its drive before it saturates, and any other model adds after its rule."
   coupling_strength: "Strength"
   coupling_strength_tip: "The coupling's strength. Under cubic coupling small values (0.01–0.3) are where the complex patterns are; strong coupling leaves only the longest wavelength."
   coupling_channels_tip: "Which channels the term is added to."
@@ -2064,6 +2083,8 @@ sim_panel:
   add_color_layer_first_tip: "Starts a stack from the single colouring above: it becomes layer 0."
   color_layer_label: "Colour %{n}"
   color_layer_source_tip: "Which simulation layer this colouring reads."
+  color_layer_gather: "Four layers"
+  color_layer_gather_tip: "Read the first channel of four consecutive layers, this one onward, as the colouring's four channels — four Turing fields seen by Species as the coupled lattice's fields are. Past the last layer the last repeats."
   color_layer_up_tip: "Move up the stack (drawn later, over more)."
   color_layer_down_tip: "Move down the stack."
   color_layer_blend_tip: "How this layer combines with what is below: normal replaces, lighten and darken take the extreme, multiply and screen darken and brighten, overlay does both by the base, add sums. The layer's coverage times its opacity is its alpha."
@@ -2125,7 +2146,6 @@ escape_panel:
   tooltip_shading_strength: "How far toward the blended result to travel. 0 leaves the image exactly untouched; past 1 the layer saturates sooner rather than going further. Values above 1 are for DARK images, where a pixel sits close to black and so moves much less toward black than toward white — that gap is the image's dynamic range, not the blend, and this is the control that compensates."
   tooltip_shading_blend: "How the layer composites: Multiply only darkens, Screen only lightens, Overlay keeps the palette's own contrast, Mix tints flatly."
   not_active_hint: "Switch to Escape mode above to edit the escape-time fractal."
-  flame_only_hint: "This panel edits the flame and is inactive in Escape mode."
   open_escape_panel: "Open Escape Fractal panel"
   formula: "Formula"
   reference_section: "Reference orbit (engine)"
@@ -2171,9 +2191,8 @@ escape_panel:
   preset_tip: "A known-good starting point for this formula: view, iteration budget, coloring and all parameters together. Switching formulas applies the first one, because a view chosen for another formula rarely means anything here."
   coloring_mismatch: "%{coloring} cannot draw %{formula} — it would render black."
   coloring_use: "Use %{name}"
-  toggle_on: "Turn on Escape mode"
-  toggle_off: "Leave Escape mode"
-  toggle_tip: "Escape-time fractals (Mandelbrot and kin) use a different engine from flames: the transform list, triangle editor and 2D/3D choice do not apply. Leaving returns to 3D flame rendering."
+  toggle_on: "Switch to Escape mode"
+  toggle_tip: "Escape-time fractals (Mandelbrot and kin) use a different engine from flames: the transform list, triangle editor and 2D/3D choice do not apply. Use the Mode menu to come back."
   auto_scale: "Auto scale"
   auto_scale_tip: "Set the colour scale to {value}, a starting point for this iteration count. The useful value depends on how long pixels actually take to escape, which is not visible from the panel."
   auto_scale_hint: "suggested: {value}"

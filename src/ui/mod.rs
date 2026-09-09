@@ -15,6 +15,8 @@ pub mod histogram;
 mod compact_menu;
 mod menu_bar;
 mod menu_context;
+pub mod render_mode;
+pub mod visibility;
 mod palette_editor;
 mod rhai_highlight;
 mod palette_library;
@@ -1461,7 +1463,8 @@ impl EguiLayer {
             can_undo,
             can_redo,
             is_paused: *paused,
-            render_mode_2d: config_manager.config().render_mode == crate::scene::transforms::RenderMode::TwoD,
+            render_mode: config_manager.config().render_mode,
+            tonemap_mode: config_manager.config().tonemap_mode,
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_state.flame_id.is_some(),
             api_flame_id: api_state.flame_id.clone(),
@@ -2186,18 +2189,13 @@ impl EguiLayer {
             let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom / 1.2).into());
         }
 
-        if menu_actions.view.set_mode_2d {
-            let _ = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::TwoD.into()
-            );
-        }
-
-        if menu_actions.view.set_mode_3d {
-            let _ = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::ThreeD.into()
-            );
+        // Every mode change goes through the one helper, so the
+        // tone-map rescue is not a property of WHICH control you used
+        // (ui-render-modes plan, section 3.1).
+        if let Some(mode) = menu_actions.set_mode {
+            if let Err(e) = render_mode::switch_render_mode(config_manager, mode) {
+                log::error!("Failed to switch render mode: {e}");
+            }
         }
 
         // Sync flame from ConfigManager AFTER UI updates

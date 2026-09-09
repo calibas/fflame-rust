@@ -1063,6 +1063,15 @@ pub struct TonemapParams {
     pub _pad_levels: [u32; 2],  // Pad trailing chunk to 16 bytes for std140 alignment
 }
 
+/// Mirrored by `TonemapParams` in `shaders/tonemap.wgsl`, whose
+/// `vec3<f32>` gives it 16-byte alignment and so rounds its size up to
+/// a multiple of 16. Add or remove a field HERE only and wgpu rejects
+/// the binding size, so you find out at once. Do it in the WGSL only
+/// and the padding absorbs the change, the shader still validates, and
+/// every field after it reads its neighbour's bytes. This pins the
+/// Rust half so at least one end of that pair cannot drift unnoticed.
+const _: () = assert!(std::mem::size_of::<TonemapParams>() == 144);
+
 impl Default for TonemapParams {
     fn default() -> Self {
         use crate::config::defaults::*;

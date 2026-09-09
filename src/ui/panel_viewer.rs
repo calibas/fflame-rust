@@ -478,6 +478,19 @@ pub fn pan_fractal_view(
         escape_pan_view(config_manager, drag_delta, panel_size);
         return;
     }
+    // Simulation has no view to move (see `Control::ViewNavigation`).
+    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
+    // which the simulation ignores -- an invisible gesture that still
+    // drifted the flame view and filled the history.
+    if super::visibility::control(
+        super::visibility::Control::ViewNavigation,
+        config.render_mode,
+        config.tonemap_mode,
+    ) == super::visibility::Vis::Hide
+    {
+        return;
+    }
+
 
     // Convert screen pixel delta to fractal space.
     // Use the smaller dimension for both axes so drag speed is consistent
@@ -524,6 +537,19 @@ pub fn zoom_fractal_view(
         escape_zoom_view(config_manager, scroll_delta, mouse_pos, panel_rect, panel_size, zoom_to_cursor);
         return;
     }
+    // Simulation has no view to move (see `Control::ViewNavigation`).
+    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
+    // which the simulation ignores -- an invisible gesture that still
+    // drifted the flame view and filled the history.
+    if super::visibility::control(
+        super::visibility::Control::ViewNavigation,
+        config.render_mode,
+        config.tonemap_mode,
+    ) == super::visibility::Vis::Hide
+    {
+        return;
+    }
+
 
     // Use power-based zoom for smooth scrolling (matches original code)
     let zoom_factor = if scroll_delta.abs() > 0.1 {
@@ -760,55 +786,16 @@ fn escape_zoom_view(
 
 impl<'a> PanelViewer<'a> {
     fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
-        // Escape mode hides the flame-only editing panels rather than
-        // teaching them a second vocabulary (plan §3). Shared-tail
-        // panels (Colors, Palette, Effects, History, Animation,
-        // Export, ...) keep working — they edit state escape mode
-        // actually consumes.
+        // What the mode makes available lives in one place
+        // (ui-render-modes plan, section 3.2). A panel that is not
+        // available says WHY, in words chosen for its own case -- this
+        // used to be one shared string that claimed every panel
+        // "edits the flame and is inactive in Escape mode", including
+        // in Simulation, and including for the two engine panels,
+        // which edit no flame at all.
         let mode = self.context.config_manager.active_config().render_mode;
-        let non_flame = matches!(
-            mode,
-            crate::scene::transforms::RenderMode::Escape
-                | crate::scene::transforms::RenderMode::Simulation
-        );
-        // In Simulation mode the flame's transforms are the layers'
-        // maps (simulation-layers plan, section 4), so the panels that
-        // edit them stay: Transforms, the Triangle Editor and
-        // Variations. The rest of the flame's panels have nothing to
-        // show there.
-        let is_sim = matches!(mode, crate::scene::transforms::RenderMode::Simulation);
-        let transform_editor = matches!(
-            tab,
-            PanelType::Transforms | PanelType::TriangleEditor | PanelType::Variations
-        );
-        if non_flame
-            && !(is_sim && transform_editor)
-            && matches!(
-                tab,
-                PanelType::Transforms
-                    | PanelType::TriangleEditor
-                    | PanelType::View
-                    | PanelType::XaosEditor
-                    | PanelType::Variations
-                    | PanelType::Subflames
-                    | PanelType::SolidLighting
-                    | PanelType::PathEditor
-            )
-        {
-            ui.label(t!("escape_panel.flame_only_hint"));
-            return;
-        }
-        // The two non-flame engines hide EACH OTHER's editor as well.
-        // Both panels lead with a mode toggle, so leaving them both
-        // visible would offer two ways to leave the current mode and
-        // read as though they compose. They do not: a config is one
-        // mode.
-        if (mode == crate::scene::transforms::RenderMode::Simulation
-            && matches!(tab, PanelType::Escape))
-            || (mode == crate::scene::transforms::RenderMode::Escape
-                && matches!(tab, PanelType::Simulation))
-        {
-            ui.label(t!("escape_panel.flame_only_hint"));
+        if let super::visibility::Vis::Grey(reason) = super::visibility::panel(*tab, mode) {
+            ui.label(t!(reason));
             return;
         }
         match tab {
@@ -1598,6 +1585,16 @@ impl<'a> PanelViewer<'a> {
                     "history.action.wheel_zoom".to_string(),
                 );
             }
+            return;
+        }
+
+        // Same refusal as the drag and wheel paths.
+        if super::visibility::control(
+            super::visibility::Control::ViewNavigation,
+            config.render_mode,
+            config.tonemap_mode,
+        ) == super::visibility::Vis::Hide
+        {
             return;
         }
 
