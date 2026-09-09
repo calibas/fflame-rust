@@ -564,6 +564,10 @@ pub struct App {
     /// `load_config_silent` / `load_config_with_explicit_before` and
     /// deliberately do not.
     last_load_generation: u64,
+    /// The render mode as of the last frame, so a change -- from the
+    /// Mode menu, a panel, a script or an undo -- brings the workspace
+    /// with it.
+    last_render_mode: crate::scene::transforms::RenderMode,
 
     // Audio system
     pub(super) audio_manager: crate::audio::AudioManager,
@@ -828,6 +832,7 @@ impl App {
             // Whatever the config manager starts at, so a boot does
             // not fight the layout the user left the app in.
             last_load_generation: initial_load_generation,
+            last_render_mode: initial_config.render_mode,
             window_fullscreen: false,
             ui_hidden: false,
             fly_mode: false,
@@ -1361,6 +1366,41 @@ impl App {
     /// Only ever called when `load_generation` moved, so an explicit
     /// layout choice survives everything except loading a fractal of
     /// the other kind.
+    /// Give back the GPU state of whichever engine the new mode does
+    /// not use (ui-render-modes plan, phase 5).
+    ///
+    /// Both engines are created lazily and were previously dropped
+    /// only on device loss or before a synchronous export, so leaving
+    /// a mode left everything allocated. The escape renderer alone
+    /// holds gigabytes at a high antialiasing factor -- the same
+    /// reason a high-res export already frees it.
+    ///
+    /// The two cases are not symmetric, and the comment is here so
+    /// nobody has to rediscover it: the escape renderer rebuilds
+    /// itself from the config, so returning costs only the re-render,
+    /// but the simulation's grid IS its state, so returning restarts
+    /// it from the seed.
+    fn release_inactive_engines(&mut self, mode: crate::scene::transforms::RenderMode) {
+        if !crate::ui::render_mode::keeps_escape_engine(mode) {
+            if let Some(esc) = self.escape_renderer.take() {
+                let mb = esc.resident_bytes() as f64 / (1024.0 * 1024.0);
+                esc.destroy();
+                log::info!("Left escape mode: freed {mb:.0} MB of escape renderer state");
+            }
+            // Rebuilt lazily; the flag makes the first frame back render.
+            self.escape_dirty = true;
+        }
+        #[cfg(feature = "engine-sim")]
+        if !crate::ui::render_mode::keeps_sim_engine(mode) {
+            if self.sim_renderer.take().is_some() {
+                log::info!("Left simulation mode: freed the simulation grid");
+                // The grid was the state; coming back starts from the
+                // seed rather than from an uninitialised field.
+                self.sim_reseed = true;
+            }
+        }
+    }
+
     fn follow_loaded_render_mode(&mut self) {
         use crate::ui::workspace::{PanelType, WorkspaceLayout};
         use crate::scene::transforms::RenderMode;
@@ -1375,19 +1415,16 @@ impl App {
         // than nested ifs because a third mode made the branching the
         // part most likely to gain a hole -- "leaving" has to cover
         // every layout that is not the one being entered.
-        let want: Option<(WorkspaceLayout, PanelType)> = match mode {
-            RenderMode::Escape => Some((WorkspaceLayout::EscapeTime, PanelType::Escape)),
-            RenderMode::Simulation => Some((WorkspaceLayout::Simulation, PanelType::Simulation)),
-            RenderMode::TwoD | RenderMode::ThreeD => None,
-        };
+        let want: Option<(WorkspaceLayout, PanelType)> =
+            crate::ui::render_mode::layout_for(mode);
         match want {
             Some((layout, panel)) => {
                 if compact {
                     let ctx = self.egui_layer.ctx.clone();
                     self.workspace.open_compact_panel(panel, &ctx);
                 } else if self.workspace.current_layout != layout {
-                    log::info!("Loaded a {mode:?} fractal: switching to its workspace");
-                    self.workspace.apply_layout(layout);
+                    log::info!("A {mode:?} fractal: switching to its workspace");
+                    self.workspace.switch_layout(layout);
                 }
             }
             None => {
@@ -1397,9 +1434,9 @@ impl App {
                         WorkspaceLayout::EscapeTime | WorkspaceLayout::Simulation
                     )
                 {
-                    log::info!("Loaded a flame: leaving the {:?} workspace",
+                    log::info!("A flame: leaving the {:?} workspace",
                         self.workspace.current_layout);
-                    self.workspace.apply_layout(WorkspaceLayout::Standard);
+                    self.workspace.switch_layout(WorkspaceLayout::Standard);
                 }
             }
         }
@@ -1640,6 +1677,17 @@ impl App {
             self.follow_loaded_render_mode();
             self.log_wasm_memory_after_load(load_gen);
         }
+        // The workspace follows the mode WHENEVER it changes, not only
+        // when a file brought it: a Mode menu switch and an undo of one
+        // both land here (ui-render-modes plan, section 3.3). It used
+        // to hang off the load generation alone, so a manual switch out
+        // of Escape left the Escape workspace up.
+        let mode_now = self.config_manager.active_config().render_mode;
+        if self.last_render_mode != mode_now {
+            self.last_render_mode = mode_now;
+            self.follow_loaded_render_mode();
+            self.release_inactive_engines(mode_now);
+        }
 
         // Consume fly-mode responses produced by the UI this frame.
         if let Some((dx, dy)) = ui_response.fly_mouse_drag {
@@ -1761,12 +1809,10 @@ impl App {
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.white_level, resize_config.saturation, resize_config.hue_shift,
                         resize_config.alpha_blend_low, resize_config.alpha_blend_high,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false,
-                        // Same escape-mode Levels gate as the live path.
-                        if resize_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            false
-                        } else {
-                            resize_config.levels_enabled
-                        },
+                        // Same Levels gate as every other path. This
+                        // one used to test Escape alone, so a resize in
+                        // Simulation let the flag through.
+                        resize_config.effective_levels_enabled(),
                         resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
@@ -1840,15 +1886,29 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            // Escape mode: the flame accumulator is empty; re-tonemap
-                            // from the escape output like the frame loop does.
-                            match self.escape_renderer.as_ref() {
-                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
-                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                        // A non-flame engine has already rendered its
+                        // image and the flame accumulator is empty, so
+                        // re-tonemap from that image like the frame
+                        // loop does. Each of these sites used to name
+                        // Escape alone, so a transparent PNG in
+                        // Simulation encoded the empty accumulator.
+                        // Written as field access rather than a helper
+                        // because `renderer` above holds
+                        // `&mut self.flame_renderer`, and only
+                        // field-level borrows are disjoint from it.
+                        let non_flame_view = match export_config.render_mode {
+                            crate::scene::transforms::RenderMode::Escape => {
+                                self.escape_renderer.as_ref().map(|e| e.output_view())
                             }
-                        } else {
-                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                            #[cfg(feature = "engine-sim")]
+                            crate::scene::transforms::RenderMode::Simulation => {
+                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                            }
+                            _ => None,
+                        };
+                        match non_flame_view {
+                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
+                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
                         }
 
                         // Re-run color effects if enabled (they need to process the new tonemapped output)
@@ -1936,15 +1996,29 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Restore Normal Tonemap"),
                         });
-                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            // Escape mode: the flame accumulator is empty; re-tonemap
-                            // from the escape output like the frame loop does.
-                            match self.escape_renderer.as_ref() {
-                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
-                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                        // A non-flame engine has already rendered its
+                        // image and the flame accumulator is empty, so
+                        // re-tonemap from that image like the frame
+                        // loop does. Each of these sites used to name
+                        // Escape alone, so a transparent PNG in
+                        // Simulation encoded the empty accumulator.
+                        // Written as field access rather than a helper
+                        // because `renderer` above holds
+                        // `&mut self.flame_renderer`, and only
+                        // field-level borrows are disjoint from it.
+                        let non_flame_view = match export_config.render_mode {
+                            crate::scene::transforms::RenderMode::Escape => {
+                                self.escape_renderer.as_ref().map(|e| e.output_view())
                             }
-                        } else {
-                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                            #[cfg(feature = "engine-sim")]
+                            crate::scene::transforms::RenderMode::Simulation => {
+                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                            }
+                            _ => None,
+                        };
+                        match non_flame_view {
+                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
+                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
                         }
 
                         // Re-run color effects with normal tonemap output
@@ -2279,15 +2353,29 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            // Escape mode: the flame accumulator is empty; re-tonemap
-                            // from the escape output like the frame loop does.
-                            match self.escape_renderer.as_ref() {
-                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
-                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                        // A non-flame engine has already rendered its
+                        // image and the flame accumulator is empty, so
+                        // re-tonemap from that image like the frame
+                        // loop does. Each of these sites used to name
+                        // Escape alone, so a transparent PNG in
+                        // Simulation encoded the empty accumulator.
+                        // Written as field access rather than a helper
+                        // because `renderer` above holds
+                        // `&mut self.flame_renderer`, and only
+                        // field-level borrows are disjoint from it.
+                        let non_flame_view = match export_config.render_mode {
+                            crate::scene::transforms::RenderMode::Escape => {
+                                self.escape_renderer.as_ref().map(|e| e.output_view())
                             }
-                        } else {
-                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                            #[cfg(feature = "engine-sim")]
+                            crate::scene::transforms::RenderMode::Simulation => {
+                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                            }
+                            _ => None,
+                        };
+                        match non_flame_view {
+                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
+                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
                         }
 
                         // Re-run color effects if enabled
@@ -2890,7 +2978,7 @@ impl App {
                 // the escape image's density is a constant 1/px, so the
                 // remap has no statistic to act on. Hard-off (the
                 // panel says so too).
-                if is_non_flame { false } else { final_config.levels_enabled },
+                final_config.effective_levels_enabled(),
                 final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
             // Reset effect slot counter for this frame (allows multiple effects with unique params)

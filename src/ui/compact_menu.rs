@@ -82,35 +82,25 @@ fn render_compact_menu_items(
 ) {
     // --- Window submenu ---
     ui.menu_button(t!("menu.window"), |ui| {
-        let panel_items: &[(PanelType, &str)] = &[
-            (PanelType::Transforms, "menu.window_transforms"),
-            (PanelType::TriangleEditor, "menu.window_triangle_editor"),
-            (PanelType::Colors, "menu.window_colors"),
-            (PanelType::View, "menu.window_view"),
-            (PanelType::Rendering, "menu.window_rendering"),
-            (PanelType::SolidLighting, "menu.window_solid_lighting"),
-            // Palette Editor / Palette Library deliberately absent: both
-            // are reachable from the Colors panel, and on a phone this
-            // menu must fit on screen — it was scrolling off the bottom.
-            (PanelType::FractalBrowser, "menu.window_fractal_browser"),
-            (PanelType::Variations, "menu.window_variations"),
-            (PanelType::Subflames, "menu.window_subflames"),
-            (PanelType::Scripts, "menu.window_scripts"),
-            (PanelType::Escape, "menu.window_escape"),
-            (PanelType::Simulation, "menu.window_simulation"),
-            (PanelType::History, "menu.window_history"),
-            (PanelType::Effects, "menu.window_effects"),
-            (PanelType::XaosEditor, "menu.window_xaos_editor"),
-            (PanelType::Animation, "menu.window_animation"),
-            (PanelType::Signal, "menu.window_signal"),
-            (PanelType::Performance, "menu.window_performance"),
-        ];
-
-        for &(panel_type, key) in panel_items {
-            let is_open = workspace.panel_exists(panel_type);
-            if ui.selectable_label(is_open, t!(key).as_ref()).clicked() {
-                workspace.open_compact_panel(panel_type, ctx);
-                ui.close();
+        // Order is this menu's own -- touch priority, transforms
+        // first -- but the labels and the mode policy come from the
+        // shared table, so the two menus cannot drift apart.
+        let mode = menu_state.render_mode;
+        for panel_type in super::visibility::COMPACT_WINDOW_MENU {
+            let is_open = workspace.panel_exists(*panel_type);
+            let label = t!(super::visibility::label_key_of(*panel_type));
+            match super::visibility::panel(*panel_type, mode) {
+                super::visibility::Vis::Show => {
+                    if ui.selectable_label(is_open, label.as_ref()).clicked() {
+                        workspace.open_compact_panel(*panel_type, ctx);
+                        ui.close();
+                    }
+                }
+                super::visibility::Vis::Grey(reason) => {
+                    ui.add_enabled(false, egui::Button::new(label.as_ref()))
+                        .on_disabled_hover_text(t!(reason));
+                }
+                super::visibility::Vis::Hide => {}
             }
         }
     });
@@ -205,14 +195,22 @@ fn render_compact_menu_items(
             ui.close();
         }
 
-        let is_2d = menu_state.render_mode_2d;
-        if ui.selectable_label(is_2d, t!("menu.mode_2d").as_ref()).clicked() {
-            menu_actions.view.set_mode_2d = true;
-            ui.close();
-        }
-        if ui.selectable_label(!is_2d, t!("menu.mode_3d").as_ref()).clicked() {
-            menu_actions.view.set_mode_3d = true;
-            ui.close();
+    });
+
+    // --- Mode submenu ---
+    // The same four rows as the desktop Mode menu. Without this the
+    // only way into Escape or Simulation on a phone would be the
+    // panels' own buttons.
+    ui.menu_button(t!("menu.mode"), |ui| {
+        for m in crate::scene::transforms::RenderMode::ALL {
+            let label = t!(super::render_mode::mode_label_key(*m));
+            if ui
+                .selectable_label(menu_state.render_mode == *m, label.as_ref())
+                .clicked()
+            {
+                menu_actions.set_mode = Some(*m);
+                ui.close();
+            }
         }
     });
 

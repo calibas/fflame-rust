@@ -35,7 +35,8 @@ struct SimColorLayerGpu {
     source: u32,
     blend: u32,
     enabled: u32,
-    pad0: u32,
+    /// 1 to read four layers' first channels from `source` onward.
+    gather: u32,
     opacity: f32,
     edge: f32,
     pad1: f32,
@@ -53,7 +54,16 @@ struct SimCouplingGpu {
     form: u32,
     mask: u32,
     strength: f32,
-    pad: [f32; 3],
+    /// The driving layer's kernel table, for the Signal form: offset
+    /// into the shared LUT, half-width, length in floats. Length 0
+    /// with `signal_channel` below 4: the driver publishes its signal
+    /// in that channel (`ModelFeature::PublishesSignal`), read
+    /// instead of convolved.
+    k_offset: u32,
+    k_radius: u32,
+    k_len: u32,
+    signal_channel: u32,
+    pad: [u32; 3],
 }
 
 /// Floats in the model-parameter buffer. Sixteen was every model until
@@ -379,6 +389,8 @@ pub struct SimRenderer {
     /// its block starts in `kernel_buffer`.
     kernel_radii: Vec<u32>,
     kernel_offsets: Vec<u32>,
+    /// Each layer's table length in floats; 0 for a model without one.
+    kernel_lens: Vec<u32>,
     /// How many slices the field arrays carry.
     layers: u32,
     /// The coupling table (`SimCouplingGpu` x MAX_COUPLINGS).
@@ -566,6 +578,7 @@ impl SimRenderer {
             reduce_bind_groups: None,
             kernel_radii: Vec::new(),
             kernel_offsets: Vec::new(),
+            kernel_lens: Vec::new(),
             layers: layers as u32,
             coupling_buffer,
             layer_map: None,
@@ -1828,7 +1841,7 @@ impl SimRenderer {
                     source: l.source.min(cfg.layer_count().saturating_sub(1)) as u32,
                     blend: l.blend.code(),
                     enabled: u32::from(l.enabled),
-                    pad0: 0,
+                    gather: u32::from(l.gather),
                     opacity: l.opacity.clamp(0.0, 1.0),
                     // Its matte's edge: distance only when this frame's
                     // distance field is this layer's.
@@ -1854,15 +1867,20 @@ impl SimRenderer {
         let mut lut: Vec<f32> = Vec::new();
         self.kernel_radii.clear();
         self.kernel_offsets.clear();
+        self.kernel_lens.clear();
         for l in 0..layers {
             let m = model_or_default(cfg.layer_model_name(l));
             self.kernel_offsets.push(lut.len() as u32);
             match m.kernel_for(cfg.layer_model_params(l)) {
                 Some(k) => {
                     self.kernel_radii.push(k.radius);
+                    self.kernel_lens.push(k.weights.len() as u32);
                     lut.extend_from_slice(&k.weights);
                 }
-                None => self.kernel_radii.push(0),
+                None => {
+                    self.kernel_radii.push(0);
+                    self.kernel_lens.push(0);
+                }
             }
         }
         if !lut.is_empty() {
@@ -1875,13 +1893,21 @@ impl SimRenderer {
                 .couplings
                 .iter()
                 .take(MAX_COUPLINGS)
-                .map(|c| SimCouplingGpu {
-                    to: c.to.min(layers.saturating_sub(1)) as u32,
-                    from: c.from.min(layers.saturating_sub(1)) as u32,
-                    form: c.form.code(),
-                    mask: c.channels & 15,
-                    strength: if c.strength.is_finite() { c.strength } else { 0.0 },
-                    pad: [0.0; 3],
+                .map(|c| {
+                    let from = c.from.min(layers.saturating_sub(1));
+                    let publishes = model_or_default(cfg.layer_model_name(from)).has(ModelFeature::PublishesSignal);
+                    SimCouplingGpu {
+                        to: c.to.min(layers.saturating_sub(1)) as u32,
+                        from: from as u32,
+                        form: c.form.code(),
+                        mask: c.channels & 15,
+                        strength: if c.strength.is_finite() { c.strength } else { 0.0 },
+                        k_offset: self.kernel_offsets.get(from).copied().unwrap_or(0),
+                        k_radius: self.kernel_radii.get(from).copied().unwrap_or(0),
+                        k_len: if publishes { 0 } else { self.kernel_lens.get(from).copied().unwrap_or(0) },
+                        signal_channel: if publishes { 1 } else { 4 },
+                        pad: [0; 3],
+                    }
                 })
                 .collect();
             queue.write_buffer(&self.coupling_buffer, 0, bytemuck::cast_slice(&table));

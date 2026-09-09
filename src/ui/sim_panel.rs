@@ -89,30 +89,24 @@ pub fn render_sim_content(
     let sim = config.sim.clone();
     let active = config.render_mode == RenderMode::Simulation;
 
-    // ---- One toggle, not a mode picker ----
-    // Same reasoning as the escape panel: 2D/3D is meaningless here,
-    // and offering it alongside would read as Simulation being a third
-    // kind of flame. Leaving returns to 3D unconditionally.
-    let label = if active {
-        t!("sim_panel.toggle_off")
-    } else {
-        t!("sim_panel.toggle_on")
-    };
-    if ui
-        .add(egui::Button::new(label.as_ref()).selected(active))
-        .on_hover_text(t!("sim_panel.toggle_tip"))
-        .clicked()
-    {
-        let target = if active { RenderMode::ThreeD } else { RenderMode::Simulation };
-        if let Err(e) = super::escape_panel::switch_render_mode(config_manager, target) {
-            log::error!("Failed to switch render mode: {e}");
-        } else if !active {
-            *state.reseed = true;
-            workspace_request.replace(super::workspace::WorkspaceLayout::Simulation);
-        }
-    }
-
+    // ---- A way in, not a toggle ----
+    // Same as the escape panel: the Mode menu owns switching, so this
+    // only enters.
     if !active {
+        if ui
+            .add(egui::Button::new(t!("sim_panel.toggle_on").as_ref()))
+            .on_hover_text(t!("sim_panel.toggle_tip"))
+            .clicked()
+        {
+            if let Err(e) =
+                super::render_mode::switch_render_mode(config_manager, RenderMode::Simulation)
+            {
+                log::error!("Failed to switch render mode: {e}");
+            } else {
+                *state.reseed = true;
+                workspace_request.replace(super::workspace::WorkspaceLayout::Simulation);
+            }
+        }
         ui.separator();
         ui.label(t!("sim_panel.inactive_hint"));
         return;
@@ -200,6 +194,13 @@ pub fn render_sim_content(
                         })
                         .collect();
                     changes.push((ConfigPath::SimSteps, pre.steps.into()));
+                    // And a per-frame count that reaches the preset's
+                    // picture in about two hundred frames: at the
+                    // default of 4 a 200,000-step run at dt 0.001 was
+                    // fourteen minutes of the uniform fixed point.
+                    if pre.steps > 0 {
+                        changes.push((ConfigPath::SimStepsPerFrame, (pre.steps / 200).clamp(4, 2048).into()));
+                    }
                     // And the model's time step. A preset is a whole
                     // recipe -- parameters, steps, initial field,
                     // colouring -- and a dt the user had dragged
@@ -878,6 +879,18 @@ fn render_color_layers(
                             })
                             .response
                             .on_hover_text(t!("sim_panel.color_layer_source_tip"));
+                        let mut gather = layer.gather;
+                        if ui
+                            .checkbox(&mut gather, t!("sim_panel.color_layer_gather").as_ref())
+                            .on_hover_text(t!("sim_panel.color_layer_gather_tip"))
+                            .changed()
+                        {
+                            action = Some(Box::new(move |s: &mut SimConfig| {
+                                if let Some(cl) = s.color_layers.get_mut(i) {
+                                    cl.gather = gather;
+                                }
+                            }));
+                        }
                     }
                     if i + 1 < count && ui.small_button("▲").on_hover_text(t!("sim_panel.color_layer_up_tip")).clicked() {
                         action = Some(Box::new(move |s: &mut SimConfig| s.color_layers.swap(i, i + 1)));

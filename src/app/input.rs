@@ -125,6 +125,31 @@ impl App {
             // Space/F/Escape etc. fall through to the shared handling.
         }
 
+        // Simulation has no view to move (`ui::visibility::Control::
+        // ViewNavigation`). Swallow the navigation keys rather than
+        // letting them write a flame pan/zoom nothing will read; every
+        // other key still falls through.
+        if crate::ui::visibility::control(
+            crate::ui::visibility::Control::ViewNavigation,
+            config.render_mode,
+            config.tonemap_mode,
+        ) == crate::ui::visibility::Vis::Hide
+        {
+            if matches!(
+                event.physical_key,
+                PhysicalKey::Code(KeyCode::ArrowUp)
+                    | PhysicalKey::Code(KeyCode::ArrowDown)
+                    | PhysicalKey::Code(KeyCode::ArrowLeft)
+                    | PhysicalKey::Code(KeyCode::ArrowRight)
+                    | PhysicalKey::Code(KeyCode::Equal)
+                    | PhysicalKey::Code(KeyCode::NumpadAdd)
+                    | PhysicalKey::Code(KeyCode::Minus)
+                    | PhysicalKey::Code(KeyCode::NumpadSubtract)
+            ) {
+                return;
+            }
+        }
+
         match event.physical_key {
             PhysicalKey::Code(KeyCode::ArrowUp) => {
                 // Up in screen space: (0, -1), convert to pan frame

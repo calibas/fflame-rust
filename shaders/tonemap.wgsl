@@ -32,7 +32,12 @@ struct TonemapParams {
     height: u32,  // Texture height for path buffer indexing
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
     burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
-    num_transforms: u32,  // Number of transforms (for path coloring entropy)
+    // Uploaded from `flame.transforms.len()`, currently read by
+    // nothing. Kept because removing it would shift every field below
+    // it by four bytes, and a WGSL-only edit would still validate --
+    // the struct's 16-byte alignment absorbs the loss -- while
+    // silently reading `palette_size` out of this slot.
+    num_transforms: u32,
     palette_size: u32,  // Palette texture size (256-4096), for shader index calculations
     // Levels controls (histogram-based density remapping)
     // Note: density = background/transparent, NOT black/dark!
@@ -180,22 +185,17 @@ fn get_suffix(path: PathEntry) -> u32 {
 
 // Path coloring for style 0 (Prefix) and style 1 (Suffix)
 // Similar paths produce similar colors - smooth hue gradient based on path value
-fn path_to_color_smooth(value: u32, num_transforms: u32) -> vec3<f32> {
-    // Calculate the effective bit width based on num_transforms
-    // With N transforms, each 4-bit slot can only have values 0 to N-1
-    // We want to normalize so full range of possible paths maps to full hue range
-
-    // For 8 iterations × 4 bits = 32 bits total
-    // If num_transforms <= 16, all values fit in 4 bits per slot
-    // Max possible value depends on num_transforms
-
-    // Calculate max possible value for this number of transforms
-    // Each of 8 slots can have values 0 to (num_transforms-1)
-    // Treated as a base-N number: max = N^8 - 1
-    // But we have it packed as 4-bit slots, so we need to interpret differently
-
-    // Simpler approach: treat the 32-bit value as a direct hue mapping
-    // Use golden ratio for good distribution without full scrambling
+// Normalising the hue by the transform count was tried and abandoned:
+// the path is packed as 4-bit slots rather than base-N digits, so the
+// reachable range is not N^8, and the arithmetic to recover it was
+// worth less than the even spread the golden ratio gives for free.
+// `num_transforms` used to be threaded in here for that and was read
+// by nothing -- the uniform is still uploaded and still available if
+// anyone wants to try again.
+fn path_to_color_smooth(value: u32) -> vec3<f32> {
+    // Treat the 32-bit value as a direct hue mapping. The golden ratio
+    // distributes without fully scrambling, so similar paths stay
+    // similar colours.
     let golden_ratio = 0.618033988749895;
 
     // For smooth coloring, we want similar values to produce similar hues
@@ -235,7 +235,7 @@ fn path_to_color_prefix_distinct(value: u32, iteration_count: u32) -> vec3<f32> 
 
 // Main path-to-color function that handles all 4 hash-based styles
 // style 0 = Prefix (smooth), 1 = Suffix (smooth), 2 = PrefixDistinct, 3 = SuffixDistinct
-fn path_to_color(path: PathEntry, style: u32, num_transforms: u32) -> vec3<f32> {
+fn path_to_color(path: PathEntry, style: u32) -> vec3<f32> {
     // Get the relevant path data based on prefix/suffix
     var value: u32;
     if (style == 0u || style == 2u) {
@@ -249,7 +249,7 @@ fn path_to_color(path: PathEntry, style: u32, num_transforms: u32) -> vec3<f32> 
     // Apply smooth or distinct coloring
     if (style <= 1u) {
         // Smooth: similar paths → similar colors
-        return path_to_color_smooth(value, num_transforms);
+        return path_to_color_smooth(value);
     } else if (style == 2u) {
         // Prefix Distinct: include iteration_count to distinguish same-prefix paths
         return path_to_color_prefix_distinct(value, path.iteration_count);
@@ -646,7 +646,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
             if (style <= 3u) {
                 // Hash-based coloring: Prefix, Suffix, PrefixDistinct, SuffixDistinct
-                fractal_color = path_to_color(path, style, tonemap_params.num_transforms);
+                fractal_color = path_to_color(path, style);
             } else {
                 // Gradient-based coloring using palette
                 var t: f32 = 0.0;

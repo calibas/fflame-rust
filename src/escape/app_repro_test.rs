@@ -8832,6 +8832,49 @@ fn main() {
         );
     }
 
+    /// What leaving escape mode gives back (ui-render-modes plan,
+    /// phase 5).
+    ///
+    /// `resident_bytes` walks the same resource list `destroy` frees,
+    /// so what it reports is what the switch releases. Measured at two
+    /// sizes because the quantity that matters is per PIXEL: the
+    /// renderer's state scales with the supersampled area, which is
+    /// why a high antialiasing factor is where this stops being
+    /// bookkeeping. The app already frees it before a synchronous
+    /// high-res export for exactly that reason.
+    #[test]
+    fn the_escape_renderer_holds_state_worth_freeing() {
+        let (device, _queue) = repro_device();
+        let small = crate::escape::EscapeRenderer::new(&device, 512, 512);
+        let large = crate::escape::EscapeRenderer::new(&device, 2048, 2048);
+        let (a, b) = (small.resident_bytes(), large.resident_bytes());
+        let per_px_small = a as f64 / (512.0 * 512.0);
+        let per_px_large = b as f64 / (2048.0 * 2048.0);
+        println!(
+            "escape renderer: {:.1} MB at 512x512 ({per_px_small:.1} B/px), \
+             {:.1} MB at 2048x2048 ({per_px_large:.1} B/px)",
+            a as f64 / (1024.0 * 1024.0),
+            b as f64 / (1024.0 * 1024.0)
+        );
+        // A 1080p viewport at 4x antialiasing is 7680x4320.
+        let at_1080p_4x = per_px_large * 7680.0 * 4320.0 / (1024.0 * 1024.0);
+        println!("extrapolated: {at_1080p_4x:.0} MB at 1080p with 4x antialiasing");
+        assert!(per_px_large >= 16.0, "at least the Rgba32Float output: {per_px_large} B/px");
+        // Per-pixel, not total: the two differ only by a fixed
+        // params-buffer overhead, which is why comparing totals at a
+        // 16x area ratio is off by that constant.
+        assert!(
+            (per_px_large - per_px_small).abs() < 0.5,
+            "state must scale with area: {per_px_small} B/px vs {per_px_large} B/px"
+        );
+        assert!(
+            at_1080p_4x > 400.0,
+            "the freed state at a high antialiasing factor should be hundreds of MB, got {at_1080p_4x:.0}"
+        );
+        small.destroy();
+        large.destroy();
+    }
+
     /// Device + queue with the repro tests' standard setup.
     fn repro_device() -> (wgpu::Device, wgpu::Queue) {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

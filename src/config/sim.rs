@@ -891,6 +891,13 @@ pub struct SimColorLayer {
     /// Which simulation layer it reads.
     #[serde(default)]
     pub source: usize,
+    /// Read the FIRST channel of four consecutive layers, `source`
+    /// onward, as this colouring's four channels (simulation-layers
+    /// plan, section 9): four `turing` layers seen by `species` the
+    /// way the coupled lattice's four fields are. Past the last layer
+    /// the last layer repeats.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gather: bool,
     pub coloring: String,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub coloring_params: std::collections::BTreeMap<String, f32>,
@@ -912,6 +919,7 @@ impl Default for SimColorLayer {
     fn default() -> Self {
         SimColorLayer {
             source: 0,
+            gather: false,
             coloring: "channel".to_string(),
             coloring_params: Default::default(),
             matte: SimMatte::default(),
@@ -1023,10 +1031,18 @@ pub enum SimCouplingForm {
     Quadratic,
     /// `u·v`: one layer gates another's growth.
     Product,
+    /// The driving layer's Turing SIGNAL: its field convolved with its
+    /// own kernel table -- a two-block table as the difference of its
+    /// blocks (activator minus inhibitor), a one-block table as itself.
+    /// A model that takes a drive (`ModelFeature::TakesDrive`) folds
+    /// these into its rule before its nonlinearity, which is how the
+    /// coupled Turing lattice's matrix enters; any other model adds
+    /// them after its rule like the forms above.
+    Signal,
 }
 
 impl SimCouplingForm {
-    pub const NAMES: &'static [&'static str] = &["linear", "cubic", "quadratic", "product"];
+    pub const NAMES: &'static [&'static str] = &["linear", "cubic", "quadratic", "product", "signal"];
 
     pub fn name(&self) -> &'static str {
         match self {
@@ -1034,6 +1050,7 @@ impl SimCouplingForm {
             SimCouplingForm::Cubic => "cubic",
             SimCouplingForm::Quadratic => "quadratic",
             SimCouplingForm::Product => "product",
+            SimCouplingForm::Signal => "signal",
         }
     }
 
@@ -1043,6 +1060,7 @@ impl SimCouplingForm {
             "cubic" => SimCouplingForm::Cubic,
             "quadratic" => SimCouplingForm::Quadratic,
             "product" => SimCouplingForm::Product,
+            "signal" => SimCouplingForm::Signal,
             _ => return None,
         })
     }
@@ -1054,6 +1072,7 @@ impl SimCouplingForm {
             SimCouplingForm::Cubic => 1,
             SimCouplingForm::Quadratic => 2,
             SimCouplingForm::Product => 3,
+            SimCouplingForm::Signal => 4,
         }
     }
 }

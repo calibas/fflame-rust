@@ -1,7 +1,9 @@
 # Simulation layers: N coupled systems, per-layer transforms, colouring layers
 
 **Status:** plan of record, 2026-09-08. **Phases 1–4 built and gated
-the same day** (section 7); phase 5, the panel split, to follow. Phases are ordered so
+the same day** (section 7); phase 5, the panel split, to follow; phase
+6, the lattice as layers (section 9), **built and gated 2026-09-09**.
+Phases are ordered so
 that each one ships with every existing baseline byte-identical, and
 the decision points a reader should argue with are marked
 **decision**.
@@ -225,9 +227,83 @@ transform UI by construction (§4).
 | 3 | `build_definitions`, flame buffers bound to the warp, weight = rate, panels un-gated in Simulation mode | rotation-only transform equals the global warp; every variation validates — **built**: `ShaderBuilder::build_definitions` is the old builder's first sixteen steps, split at one line (the canonical shader dumps are unchanged), and `build_layer_map` adds `flame_map(xform_id, u, seed)` — affine, variations, post affine — with the flame's bindings moved to group 1 and its `params` renamed `flame_params`; `assemble_layer_warp` puts that in the warp template with the simulation's own `ff_atan2` dropped (the flame's utilities define one). The renderer takes the flame through `set_layer_transforms` from the app, the headless renderer and the animation export; the map's definitions rebuild only when the active variation set, transform count or flags change, and the buffers (the normal transforms only) rewrite each call. The stage runs after the global warp: a layer at rate 0 is carried across, one flip. Gates: a rotation-only transform at weight 1 equals the global warp's rotation to 1.7e-6 worst-case; all 647 registered variations validate in the layer warp; 89/89 baselines byte-identical. **One decision changed:** the map is behind `SimConfig::use_transforms` (off by default, a checkbox in the Layers section) rather than always on — every config carries a flame, and a default flame's transform happens to be the identity only by luck (0.5 scale × `linear` 2). Seen: layer 0 of two Gray–Scotts under `swirl` at rate 0.03 dragged into a spiral, its contrast softened by the per-step resample as section 8 said; a 0.995 affine at rate 1 is the inflation through the flame's own affine. The grid's short axis spans [−1, 1], a flame's default view. |
 | 4 | `color_layers`, K colourings spliced, blend modes | single Normal layer byte-identical; blend modes vs CPU — **built**: `assemble_color_stack` splices K colourings with every function they define suffixed `_k` (so one colouring can appear twice), a `cparam_k` per layer at its own 16-slot block, a shade and a resolve per layer, and composites bottom to top through `sim_blend` (separable formulas on straight RGB, coverage × opacity as alpha, coverage accumulating as "over"; a bottom layer over nothing is itself exactly, which is what makes a one-layer stack the single colouring bit for bit). Each layer's record — source, blend, opacity, matte — is a storage buffer at binding 7; `sim_layer()` gained a private offset the stack sets per layer so `sim_sample` reads the layer's source; `sim_sample`'s gradient and tensor splices are the union over the stack. The single-colouring template is untouched. Gates: a one-layer Normal stack is byte-identical to the single colouring on a channel colouring, a matted growth model and a distance-reading colouring; all seven blend modes match a CPU evaluation to 2e-41 (denormal) worst-case; every colouring validates stacked with itself and all together; 89/89 baselines byte-identical and one new stacked baseline. **Two decisions made here:** per-field paths only for the animatable fields (a layer's parameters, opacity, matte cutoff and softness); source, colouring, blend, enabled, the matte's channel / invert / edge, and add / remove / reorder are snapshot edits, which undo as one step and do not restart the run (the app restarts only on `SimRestart` paths). And one distance field per frame, the first layer whose matte is on with a Distance edge or whose colouring reads the distance; the other layers read it as it is, said on the tooltip. |
 | 5 | Simulation panel split | — |
+| 6 | `turing` layer model, `Signal` coupling, the pre-rule drive (section 9) | four `turing` layers under Signal couplings reproduce `lattice4`'s ring and independent presets; every model validates with Signal spliced; every baseline byte-identical — **built**: ring 5.7e-7 worst after 200 steps from the lattice's seed, independent 1.2e-7, the `species` colouring of a gathered colour layer 6.3e-7 (catalog §31a); 92/92 sim baselines byte-identical, two new. **Two things changed from the plan:** the seed is copied in for the gate rather than drawn alike, because the init mask's noise is salted by layer (the step's fluctuations do match by construction); and `turing` runs two passes, the first publishing its signal in `.y` for the couplings to read (`PublishesSignal`), after the single-pass form measured 5.5x the lattice's time — 2.0x now. **Added beyond the plan:** a colour layer's `gather` flag, the cross-layer colouring the plan deferred, small enough to take: four layers' first channels as one colouring's four channels. |
 
 Phase 1 is the one with no visible feature and the most files; it is
 first because every later phase reads the array.
+
+## 9. Phase 6: the lattice as layers
+
+**Why.** `lattice4` is four Turing fields on one grid, each with its
+own activator-minus-inhibitor signal, driven through a 4×4 matrix and
+then gain, the even term, the soft saturation and the decay. That is
+a layer model plus couplings — except that today's couplings enter
+*after* the rule, on values, times dt (section 3), and the lattice's
+matrix enters *inside* the rule, on signals, before the saturation.
+McCabe's multi-scale model, by contrast, does not decompose: it is
+one field whose scales are competing measurements chosen by a
+per-cell argmin, and nothing pairwise expresses that. This phase
+takes the lattice apart and leaves McCabe as it is.
+
+**What is built.**
+
+- **`turing`**, a single-field layer model: `radius`, `ratio`,
+  `amount`, `noise`, `gain`, `decay`, `quadratic`, and `self` (how
+  much the field follows its own signal; `kaa` of the lattice). Its
+  rule is one field of `lattice4`'s, with the drive `self · t_own +
+  sim_drive(p).x`. No memory column: the lattice's memory reads all
+  three other fields at once (their amplitude), which is not a
+  pairwise term; it stays in `lattice4`.
+- **`Signal`**, a fifth coupling form: the driving layer's field
+  convolved with *the driving layer's own kernel table* — a two-block
+  table as the difference of its blocks (activator minus inhibitor),
+  a one-block table as itself. The coupling record carries the
+  driver's table offset, radius and length (three words that were
+  padding), so any model's step can read any layer's signal. A model
+  without a kernel binds the table too when it is coupled, so a
+  Signal coupling aimed at, say, a Gray–Scott is legal: it adds the
+  signal after the rule like any other form.
+- **`sim_drive(p)`**, the pre-rule hook: a model that declares
+  `ModelFeature::TakesDrive` gets a function returning the sum of the
+  Signal couplings aimed at its layer (strength × signal, masked), no
+  dt; those couplings are then left out of the post-rule sum. For a
+  model without the feature the uncoupled shader is byte-for-byte
+  what it was; for `turing` uncoupled, the hook returns zero.
+- **Noise.** The lattice draws field A's fluctuations with salt 0x41,
+  B's with 0x42 and so on, all on layer 0's stream; `turing` draws
+  its own with salt `0x41 + layer` on an *unsalted* stream (and seeds
+  with `0x51 + layer`), so four `turing` layers draw exactly what the
+  lattice's four fields drew. That is what makes the gate a
+  trajectory comparison with the presets' noise on, not a noise-free
+  special case.
+- **Colouring.** The lattice's `species` colouring reads four
+  channels of one layer; four layers are coloured by a stack of four
+  `channel` layers. A colouring that reads across layers is a later
+  extension, noted, not built here.
+- **Presets:** the ring as four `turing` layers with its eight
+  couplings (the gate), and one that the lattice cannot do — fields
+  at different radii — measured before it ships.
+
+**Decision:** the drive is a sum of Signal couplings only. Linear,
+cubic, quadratic and product stay post-rule for every model; a
+pre-rule value coupling has no source in the papers this catalogue
+follows and is not offered.
+
+**Gate.** `lattice4`'s `ring` preset against four `turing` layers
+with the same parameters and its eight non-zero off-diagonal
+couplings as Signal at those strengths, 64², 200 steps, noise on:
+RMS and worst-case difference measured and asserted at what a change
+of summation order costs (the lattice's `dot` against the layers'
+running sum — the two cannot be bit-identical, and the tolerance says
+so). The `independent` preset the same way with no couplings. Every
+model's step validates with the Signal form spliced, including the
+models without a kernel; every uncoupled shader unchanged; every
+baseline byte-identical.
+
+**What it buys.** Any number of fields instead of four; a radius per
+field, so the fields can be multi-scale; a transform per field
+through the layer map; and each field coloured on its own in the
+stack.
 
 ## 8. Risks, stated
 

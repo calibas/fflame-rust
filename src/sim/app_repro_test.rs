@@ -6459,6 +6459,7 @@ fn a_single_normal_colour_layer_is_the_single_colouring() {
         let mut stacked = cfg.clone();
         stacked.color_layers = vec![crate::config::sim::SimColorLayer {
             source: 0,
+            gather: false,
             coloring: cfg.coloring.clone(),
             coloring_params: cfg.coloring_params.clone(),
             matte: cfg.matte,
@@ -6499,6 +6500,7 @@ fn blend_modes_match_a_cpu_evaluation() {
     cfg.layers = vec![layer(0.0545), layer(0.037)];
     let colour = |source: usize| crate::config::sim::SimColorLayer {
         source,
+        gather: false,
         coloring: "channel".into(),
         coloring_params: [("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)]
             .into_iter()
@@ -6575,5 +6577,149 @@ fn blend_modes_match_a_cpu_evaluation() {
         }
         println!("blend {}: worst difference {worst:.2e}", blend.name());
         assert!(worst < 2e-5, "blend {} differs from its formula by {worst:.2e}", blend.name());
+    }
+}
+
+/// Four `turing` layers carrying a `lattice4` preset: each layer that
+/// field's parameters, and each non-zero off-diagonal of the matrix a
+/// Signal coupling at its strength.
+fn turing_layers_of(lattice: &SimConfig) -> SimConfig {
+    use crate::config::sim::{SimCoupling, SimCouplingForm, SimLayer};
+    let get = |k: &str| lattice.model_params.get(k).copied().unwrap();
+    let names = ["a", "b", "c", "d"];
+    let mut cfg = lattice.clone();
+    cfg.model = "turing".into();
+    cfg.model_params.clear();
+    cfg.layers = (0..4)
+        .map(|i| SimLayer {
+            model: "turing".into(),
+            model_params: [
+                ("self", get(&format!("k{}{}", names[i], names[i]))),
+                ("radius", get("radius")),
+                ("ratio", get("ratio")),
+                ("amount", get("amount")),
+                ("noise", get("noise")),
+                ("gain", get("gain")),
+                ("decay", get("decay")),
+                ("quadratic", get("quadratic")),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+            enabled: true,
+        })
+        .collect();
+    cfg.couplings.clear();
+    for to in 0..4 {
+        for from in 0..4 {
+            if to == from {
+                continue;
+            }
+            let k = get(&format!("k{}{}", names[to], names[from]));
+            if k != 0.0 {
+                cfg.couplings.push(SimCoupling { from, to, form: SimCouplingForm::Signal, strength: k, channels: 1 });
+            }
+        }
+    }
+    cfg
+}
+
+/// Phase 6 of the simulation-layers plan: four `turing` layers under
+/// Signal couplings are the coupled Turing lattice. The ring preset
+/// with its eight couplings, and the independent preset with none,
+/// against the `lattice4` model from the lattice's own seed (the init
+/// mask's noise is salted by layer, so the layers' seed is copied in
+/// rather than drawn), the step's fluctuations on and matching by
+/// construction, 200 steps; the only difference left is the order the
+/// drive is summed in, and the tolerance is what that costs.
+#[test]
+fn four_turing_layers_are_the_lattices_ring() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let steps: u32 = std::env::var("TU_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    // Measured: ring 5.7e-7 worst at 200 steps (6.5e-6 at 2,000, the
+    // cycle carrying the rounding round), independent 1.2e-7.
+    for (preset, tol) in [("ring", 4e-6f32), ("independent", 1e-6)] {
+        let lattice = lattice4_config(preset, N, 8);
+        let layered = turing_layers_of(&lattice);
+        assert_eq!(layered.couplings.len(), if preset == "ring" { 8 } else { 0 });
+        // The lattice, seeded and read back before it runs.
+        let mut r_l = SimRenderer::new(&device, &lattice, N, N);
+        r_l.seed(&device, &queue, &lattice);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let seed = read_rgba32f(&device, &queue, r_l.field_texture(), N, N);
+        r_l.run_steps(&device, &queue, &lattice, steps);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let a = read_rgba32f(&device, &queue, r_l.field_texture(), N, N);
+        // The layers, each slice given the lattice's field.
+        let mut r_t = SimRenderer::new(&device, &layered, N, N);
+        r_t.seed(&device, &queue, &layered);
+        for field in 0..4u32 {
+            let texels: Vec<f32> = seed.iter().flat_map(|c| [c[field as usize], 0.0, 0.0, 0.0]).collect();
+            queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: r_t.field_texture(),
+                    mip_level: 0,
+                    origin: Origin3d { x: 0, y: 0, z: field },
+                    aspect: TextureAspect::All,
+                },
+                bytemuck::cast_slice(&texels),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(N * 16), rows_per_image: Some(N) },
+                Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+            );
+        }
+        r_t.run_steps(&device, &queue, &layered, steps);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let mut worst = 0.0f32;
+        let mut sq = 0.0f64;
+        let mut amp = 0.0f32;
+        for field in 0..4 {
+            let b = read_rgba32f_layer(&device, &queue, r_t.field_texture(), N, N, field as u32);
+            if std::env::var("TU_DUMP").is_ok() {
+                println!("field {field}: lattice {:?} layer {:?}", &a[..3].iter().map(|c| c[field]).collect::<Vec<_>>(), &b[..3].iter().map(|c| c[0]).collect::<Vec<_>>());
+            }
+            for (x, y) in a.iter().zip(&b) {
+                let d = (x[field] - y[0]).abs();
+                worst = worst.max(d);
+                sq += (d as f64).powi(2);
+                amp = amp.max(x[field].abs());
+            }
+        }
+        let rms = (sq / (4.0 * (N * N) as f64)).sqrt();
+        println!("{preset}: four turing layers vs lattice4 after {steps} steps: rms {rms:.2e}, worst {worst:.2e}, amplitude {amp:.3}");
+        assert!(amp > 0.3, "{preset}: the lattice did nothing");
+        assert!(worst < tol, "{preset}: worst difference {worst:.2e} exceeds {tol:.0e}");
+
+        // And coloured: the lattice's `species` against one gathered
+        // colour layer of the four `turing` layers.
+        let palette = test_palette(&device, &queue);
+        let mut lattice_c = lattice.clone();
+        lattice_c.coloring = "species".into();
+        lattice_c.coloring_params = [("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        r_l.color(&device, &queue, &lattice_c, &palette);
+        let mut layered_c = layered.clone();
+        layered_c.color_layers = vec![crate::config::sim::SimColorLayer {
+            source: 0,
+            gather: true,
+            coloring: "species".into(),
+            coloring_params: lattice_c.coloring_params.clone(),
+            matte: Default::default(),
+            blend: crate::config::sim::SimBlend::Normal,
+            opacity: 1.0,
+            enabled: true,
+        }];
+        r_t.color(&device, &queue, &layered_c, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ca = read_rgba32f(&device, &queue, r_l.output_texture(), N, N);
+        let cb = read_rgba32f(&device, &queue, r_t.output_texture(), N, N);
+        let worst_c = ca.iter().zip(&cb).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+        let lit = ca.iter().filter(|p| p[3] > 0.0 && (p[0] + p[1] + p[2]) > 0.05).count();
+        println!("{preset}: species of the lattice vs a gathered colour layer: worst {worst_c:.2e}, {lit} lit");
+        assert!(lit > 1000, "{preset}: the colouring drew nothing");
+        // Measured 6.3e-7 (ring) and 1.2e-7 (independent).
+        assert!(worst_c < 1e-5, "{preset}: the gathered colouring differs by {worst_c:.2e}");
     }
 }
