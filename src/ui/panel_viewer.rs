@@ -432,6 +432,13 @@ impl<'a> TabViewer for PanelViewer<'a> {
     fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
         if matches!(tab, PanelType::FractalViewport) {
             [false, false]
+        } else if matches!(tab, PanelType::Simulation) {
+            // The Simulation panel pins its transport row and scrolls
+            // its own body, so egui_dock must not scroll this tab
+            // vertically -- its ScrollArea wraps the whole body and
+            // would drag the pinned row out of view. Above the compact
+            // arm so it holds in both layouts.
+            [true, false]
         } else if self.context.compact_mode {
             // In compact mode, disable egui_dock's vertical ScrollArea.
             // We wrap panel content in our own ScrollArea with AlwaysVisible
@@ -447,7 +454,12 @@ impl<'a> TabViewer for PanelViewer<'a> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        if self.context.compact_mode && !matches!(tab, PanelType::FractalViewport) {
+        // Simulation is excluded for the same reason as the viewport:
+        // it owns its scrolling, and this wrapper would put the pinned
+        // transport row inside the scrolled region again.
+        if self.context.compact_mode
+            && !matches!(tab, PanelType::FractalViewport | PanelType::Simulation)
+        {
             egui::ScrollArea::vertical()
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                 .show(ui, |ui| {
