@@ -191,53 +191,68 @@ pub fn render_colors_content(
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
+    // Which of these controls mean anything depends on the engine
+    // (ui-render-modes plan, section 1.4). Both non-flame engines
+    // write a unit-range image in the flame accumulator's layout and
+    // go through this same tonemap, so most of the panel applies --
+    // but the logarithmic branch never runs, the levels are hard-off
+    // in the frame loop, the spatial filter lives inside a compute
+    // pass that is never dispatched, and the preset dropdown would
+    // re-black the picture.
+    use super::visibility::{control, gated, Control, Vis};
+    let mode = config_manager.active_config().render_mode;
+    let show_presets = control(Control::TonemapPresets, mode) != Vis::Hide;
+    let show_color_mode = control(Control::ColorMode, mode) != Vis::Hide;
+
     // Section 1: Tone Mapping
     egui::CollapsingHeader::new(t!("tonemap.title"))
         .default_open(true)
         .show(ui, |ui| {
-            // Preset dropdown — snaps brightness/curve fields to a named
-            // "look" without touching the flame, palette, or background.
-            // Each selection is one batch update (single undo step).
-            ui.horizontal(|ui| {
-                ui.label(t!("tonemap.preset"));
-                egui::ComboBox::from_id_salt("tonemap_preset_combo")
-                    .selected_text(t!("tonemap.preset_pick"))
-                    .show_ui(ui, |ui| {
-                        for preset in crate::scene::tonemap_presets::TONEMAP_PRESETS {
-                            if ui.selectable_label(false, preset.name).clicked() {
-                                let changes = vec![
-                                    (ConfigPath::Exposure, preset.exposure.into()),
-                                    (ConfigPath::Gamma, preset.gamma.into()),
-                                    (ConfigPath::GammaThreshold, preset.gamma_threshold.into()),
-                                    (ConfigPath::Brightness, preset.brightness.into()),
-                                    (ConfigPath::Vibrancy, preset.vibrancy.into()),
-                                    (ConfigPath::WhiteLevel, preset.white_level.into()),
-                                    (ConfigPath::Saturation, preset.saturation.into()),
-                                    (ConfigPath::HueShift, preset.hue_shift.into()),
-                                    (ConfigPath::TonemapMode, preset.tonemap_mode.into()),
-                                    (ConfigPath::HighlightMode, preset.highlight_mode.into()),
-                                    (ConfigPath::UseCurve, preset.use_curve.into()),
-                                    // Tone curve SHAPE (constructor called here);
-                                    // a preset fully owns the curve.
-                                    (ConfigPath::TonemapCurve, (preset.tone_curve)().into()),
-                                    (ConfigPath::LevelsEnabled, preset.levels_enabled.into()),
-                                    (ConfigPath::LevelsLow, preset.levels_low.into()),
-                                    (ConfigPath::LevelsHigh, preset.levels_high.into()),
-                                    (ConfigPath::LevelsGamma, preset.levels_gamma.into()),
-                                    (ConfigPath::AlphaBlendLow, preset.alpha_blend_low.into()),
-                                    (ConfigPath::AlphaBlendHigh, preset.alpha_blend_high.into()),
-                                    (ConfigPath::DensityScale, preset.density_scale.into()),
-                                ];
-                                match config_manager.update_batch(changes, format!("Apply tonemap preset: {}", preset.name)) {
-                                    Ok(update) => max_update = max_update.max(update),
-                                    Err(e) => log::error!("Failed to apply tonemap preset '{}': {}", preset.name, e),
+            if show_presets {
+                // Preset dropdown — snaps brightness/curve fields to a named
+                // "look" without touching the flame, palette, or background.
+                // Each selection is one batch update (single undo step).
+                ui.horizontal(|ui| {
+                    ui.label(t!("tonemap.preset"));
+                    egui::ComboBox::from_id_salt("tonemap_preset_combo")
+                        .selected_text(t!("tonemap.preset_pick"))
+                        .show_ui(ui, |ui| {
+                            for preset in crate::scene::tonemap_presets::TONEMAP_PRESETS {
+                                if ui.selectable_label(false, preset.name).clicked() {
+                                    let changes = vec![
+                                        (ConfigPath::Exposure, preset.exposure.into()),
+                                        (ConfigPath::Gamma, preset.gamma.into()),
+                                        (ConfigPath::GammaThreshold, preset.gamma_threshold.into()),
+                                        (ConfigPath::Brightness, preset.brightness.into()),
+                                        (ConfigPath::Vibrancy, preset.vibrancy.into()),
+                                        (ConfigPath::WhiteLevel, preset.white_level.into()),
+                                        (ConfigPath::Saturation, preset.saturation.into()),
+                                        (ConfigPath::HueShift, preset.hue_shift.into()),
+                                        (ConfigPath::TonemapMode, preset.tonemap_mode.into()),
+                                        (ConfigPath::HighlightMode, preset.highlight_mode.into()),
+                                        (ConfigPath::UseCurve, preset.use_curve.into()),
+                                        // Tone curve SHAPE (constructor called here);
+                                        // a preset fully owns the curve.
+                                        (ConfigPath::TonemapCurve, (preset.tone_curve)().into()),
+                                        (ConfigPath::LevelsEnabled, preset.levels_enabled.into()),
+                                        (ConfigPath::LevelsLow, preset.levels_low.into()),
+                                        (ConfigPath::LevelsHigh, preset.levels_high.into()),
+                                        (ConfigPath::LevelsGamma, preset.levels_gamma.into()),
+                                        (ConfigPath::AlphaBlendLow, preset.alpha_blend_low.into()),
+                                        (ConfigPath::AlphaBlendHigh, preset.alpha_blend_high.into()),
+                                        (ConfigPath::DensityScale, preset.density_scale.into()),
+                                    ];
+                                    match config_manager.update_batch(changes, format!("Apply tonemap preset: {}", preset.name)) {
+                                        Ok(update) => max_update = max_update.max(update),
+                                        Err(e) => log::error!("Failed to apply tonemap preset '{}': {}", preset.name, e),
+                                    }
                                 }
                             }
-                        }
-                    });
-            }).response.on_hover_text(t!("tonemap.tooltip_preset").as_ref());
+                        });
+                }).response.on_hover_text(t!("tonemap.tooltip_preset").as_ref());
 
-            ui.separator();
+                ui.separator();
+            }
 
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.001..=10.0, t!("tonemap.exposure").as_ref(), Some(t!("tonemap.tooltip_exposure").as_ref())) {
                 max_update = max_update.max(result.update_type);
@@ -247,21 +262,23 @@ pub fn render_colors_content(
                 max_update = max_update.max(result.update_type);
             }
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::GammaThreshold, 0.0..=1000.0, t!("tonemap.gamma_threshold").as_ref(), Some(t!("tonemap.tooltip_gamma_threshold").as_ref())) {
-                max_update = max_update.max(result.update_type);
-            }
+            gated(ui, Control::LogOnlyTone, mode, |ui| {
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::GammaThreshold, 0.0..=1000.0, t!("tonemap.gamma_threshold").as_ref(), Some(t!("tonemap.tooltip_gamma_threshold").as_ref())) {
+                    max_update = max_update.max(result.update_type);
+                }
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Brightness, 0.001..=100.0, t!("tonemap.brightness").as_ref(), Some(t!("tonemap.tooltip_brightness").as_ref())) {
-                max_update = max_update.max(result.update_type);
-            }
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Brightness, 0.001..=100.0, t!("tonemap.brightness").as_ref(), Some(t!("tonemap.tooltip_brightness").as_ref())) {
+                    max_update = max_update.max(result.update_type);
+                }
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=30.0, t!("tonemap.vibrancy").as_ref(), Some(t!("tonemap.tooltip_vibrancy").as_ref())) {
-                max_update = max_update.max(result.update_type);
-            }
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=30.0, t!("tonemap.vibrancy").as_ref(), Some(t!("tonemap.tooltip_vibrancy").as_ref())) {
+                    max_update = max_update.max(result.update_type);
+                }
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::WhiteLevel, 50.0..=1000.0, t!("tonemap.highlights").as_ref(), Some(t!("tonemap.tooltip_highlights").as_ref())) {
-                max_update = max_update.max(result.update_type);
-            }
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::WhiteLevel, 50.0..=1000.0, t!("tonemap.highlights").as_ref(), Some(t!("tonemap.tooltip_highlights").as_ref())) {
+                    max_update = max_update.max(result.update_type);
+                }
+            });
 
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Saturation, 0.0..=3.0, t!("tonemap.saturation").as_ref(), Some(t!("tonemap.tooltip_saturation").as_ref())) {
                 max_update = max_update.max(result.update_type);
@@ -287,54 +304,56 @@ pub fn render_colors_content(
                         ToneMapMode::Logarithmic => t!("tonemap.mode_log"),
                         ToneMapMode::DensityVisualization => t!("tonemap.mode_density"),
                     };
-                    ui.horizontal(|ui| {
-                        ui.label(t!("tonemap.mode"));
-                        egui::ComboBox::from_id_salt("tonemap_mode_combo")
-                            .selected_text(mode_label)
-                            .show_ui(ui, |ui| {
-                                for (mode, label) in [
-                                    (ToneMapMode::Linear, t!("tonemap.mode_linear")),
-                                    (ToneMapMode::Logarithmic, t!("tonemap.mode_log")),
-                                    (ToneMapMode::DensityVisualization, t!("tonemap.mode_density")),
-                                ] {
-                                    if ui.selectable_label(current_tonemap_mode == mode, label).clicked() {
-                                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, mode.into()) {
-                                            max_update = max_update.max(update);
+                    gated(ui, Control::TonemapMode, mode, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(t!("tonemap.mode"));
+                            egui::ComboBox::from_id_salt("tonemap_mode_combo")
+                                .selected_text(mode_label)
+                                .show_ui(ui, |ui| {
+                                    for (mode, label) in [
+                                        (ToneMapMode::Linear, t!("tonemap.mode_linear")),
+                                        (ToneMapMode::Logarithmic, t!("tonemap.mode_log")),
+                                        (ToneMapMode::DensityVisualization, t!("tonemap.mode_density")),
+                                    ] {
+                                        if ui.selectable_label(current_tonemap_mode == mode, label).clicked() {
+                                            if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, mode.into()) {
+                                                max_update = max_update.max(update);
+                                            }
                                         }
                                     }
-                                }
-                            });
-                    });
+                                });
+                        });
 
-                    // Highlight handling — how channels exceeding 1.0 after
-                    // exposure are mapped back into [0,1].
-                    let current_highlight_mode = config_manager.active_config().highlight_mode;
-                    let selected_label = match current_highlight_mode {
-                        HighlightMode::Clip => t!("tonemap.highlight_clip"),
-                        HighlightMode::MaxNorm => t!("tonemap.highlight_maxnorm"),
-                        HighlightMode::Reinhard => t!("tonemap.highlight_reinhard"),
-                        HighlightMode::Filmic => t!("tonemap.highlight_filmic"),
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(t!("tonemap.highlight_mode"));
-                        egui::ComboBox::from_id_salt("tonemap_highlight_mode_combo")
-                            .selected_text(selected_label)
-                            .show_ui(ui, |ui| {
-                                for (mode, label, tooltip) in [
-                                    (HighlightMode::Clip,     t!("tonemap.highlight_clip"),     t!("tonemap.tooltip_highlight_clip")),
-                                    (HighlightMode::MaxNorm,  t!("tonemap.highlight_maxnorm"),  t!("tonemap.tooltip_highlight_maxnorm")),
-                                    (HighlightMode::Reinhard, t!("tonemap.highlight_reinhard"), t!("tonemap.tooltip_highlight_reinhard")),
-                                    (HighlightMode::Filmic,   t!("tonemap.highlight_filmic"),   t!("tonemap.tooltip_highlight_filmic")),
-                                ] {
-                                    let resp = ui.selectable_label(current_highlight_mode == mode, label)
-                                        .on_hover_text(tooltip);
-                                    if resp.clicked() {
-                                        if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, mode.into()) {
-                                            max_update = max_update.max(update);
+                        // Highlight handling — how channels exceeding 1.0 after
+                        // exposure are mapped back into [0,1].
+                        let current_highlight_mode = config_manager.active_config().highlight_mode;
+                        let selected_label = match current_highlight_mode {
+                            HighlightMode::Clip => t!("tonemap.highlight_clip"),
+                            HighlightMode::MaxNorm => t!("tonemap.highlight_maxnorm"),
+                            HighlightMode::Reinhard => t!("tonemap.highlight_reinhard"),
+                            HighlightMode::Filmic => t!("tonemap.highlight_filmic"),
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(t!("tonemap.highlight_mode"));
+                            egui::ComboBox::from_id_salt("tonemap_highlight_mode_combo")
+                                .selected_text(selected_label)
+                                .show_ui(ui, |ui| {
+                                    for (mode, label, tooltip) in [
+                                        (HighlightMode::Clip,     t!("tonemap.highlight_clip"),     t!("tonemap.tooltip_highlight_clip")),
+                                        (HighlightMode::MaxNorm,  t!("tonemap.highlight_maxnorm"),  t!("tonemap.tooltip_highlight_maxnorm")),
+                                        (HighlightMode::Reinhard, t!("tonemap.highlight_reinhard"), t!("tonemap.tooltip_highlight_reinhard")),
+                                        (HighlightMode::Filmic,   t!("tonemap.highlight_filmic"),   t!("tonemap.tooltip_highlight_filmic")),
+                                    ] {
+                                        let resp = ui.selectable_label(current_highlight_mode == mode, label)
+                                            .on_hover_text(tooltip);
+                                        if resp.clicked() {
+                                            if let Ok(update) = config_manager.update_param(ConfigPath::HighlightMode, mode.into()) {
+                                                max_update = max_update.max(update);
+                                            }
                                         }
                                     }
-                                }
-                            });
+                                });
+                        });
                     });
 
                     ui.separator();
@@ -345,37 +364,42 @@ pub fn render_colors_content(
                         .show(ui, |ui| {
                             ui.label(t!("tonemap.alpha_blending_desc"));
 
-                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendLow, 0.0..=1.0, t!("tonemap.alpha_blend_low").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_low").as_ref())) {
-                                max_update = max_update.max(result.update_type);
-                            }
+                            gated(ui, Control::AlphaBlendCurve, mode, |ui| {
+                                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendLow, 0.0..=1.0, t!("tonemap.alpha_blend_low").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_low").as_ref())) {
+                                    max_update = max_update.max(result.update_type);
+                                }
 
-                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendHigh, 0.0..=1.0, t!("tonemap.alpha_blend_high").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_high").as_ref())) {
-                                max_update = max_update.max(result.update_type);
-                            }
+                                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendHigh, 0.0..=1.0, t!("tonemap.alpha_blend_high").as_ref(), Some(t!("tonemap.tooltip_alpha_blend_high").as_ref())) {
+                                    max_update = max_update.max(result.update_type);
+                                }
+                            });
 
                             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, t!("tonemap.density_scale").as_ref(), Some(t!("tonemap.tooltip_density_scale").as_ref())) {
                                 max_update = max_update.max(result.update_type);
                             }
                         });
 
-                    // Spatial Filter — Apo's per-sample Gaussian (filter
-                    // attribute in .flame XML). Applied to the per-batch
-                    // histogram before accumulate, so it smooths
-                    // per-iteration grain in linear color+density space.
-                    // 0 disables. Typical Apo values: 0.3–1.5.
-                    egui::CollapsingHeader::new(t!("tonemap.spatial_filter"))
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterRadius, 0.0..=5.0, "Spatial Filter", Some("Gaussian sigma (pixels) applied to the histogram before accumulation. Apophysis-style per-sample smoothing.")) {
-                                max_update = max_update.max(result.update_type);
-                            }
-                            // Bilateral edge handling for the spatial filter.
-                            // 0 = preserve edges (hot pixels stay sharp), 1 =
-                            // uniform Gaussian (muddies highlights).
-                            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterBlurEdges, 0.0..=1.0, "Blur Edges", Some("0 preserves edges and highlights; 1 blurs uniformly across the spatial filter kernel (muddies highlights).")) {
-                                max_update = max_update.max(result.update_type);
-                            }
-                        });
+                    if control(Control::SpatialFilter, mode) != Vis::Hide {
+                        // Spatial Filter — Apo's per-sample Gaussian (filter
+                        // attribute in .flame XML). Applied to the per-batch
+                        // histogram before accumulate, so it smooths
+                        // per-iteration grain in linear color+density space.
+                        // 0 disables. Typical Apo values: 0.3–1.5.
+                        egui::CollapsingHeader::new(t!("tonemap.spatial_filter"))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterRadius, 0.0..=5.0, "Spatial Filter", Some("Gaussian sigma (pixels) applied to the histogram before accumulation. Apophysis-style per-sample smoothing.")) {
+                                    max_update = max_update.max(result.update_type);
+                                }
+                                // Bilateral edge handling for the spatial filter.
+                                // 0 = preserve edges (hot pixels stay sharp), 1 =
+                                // uniform Gaussian (muddies highlights).
+                                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::FilterBlurEdges, 0.0..=1.0, "Blur Edges", Some("0 preserves edges and highlights; 1 blurs uniformly across the spatial filter kernel (muddies highlights).")) {
+                                    max_update = max_update.max(result.update_type);
+                                }
+                            });
+                    }
+
                 });
         });
 
@@ -436,16 +460,11 @@ pub fn render_colors_content(
     // image is a constant 1 sample/px) — the render path hard-offs
     // the remap there, and the panel says so instead of offering
     // controls wired to stale flame data.
-    let is_escape_mode = config_manager.active_config().render_mode
-        == crate::scene::transforms::RenderMode::Escape;
+    let show_levels = control(Control::DensityLevels, mode) != Vis::Hide;
     let levels_enabled = config_manager.active_config().levels_enabled;
-    let levels_resp = egui::CollapsingHeader::new(t!("tonemap.histogram"))
+    let levels_resp = show_levels.then(|| egui::CollapsingHeader::new(t!("tonemap.histogram"))
         .default_open(false)
         .show(ui, |ui| {
-            if is_escape_mode {
-                ui.label(t!("tonemap.levels_escape_hint"));
-                return;
-            }
             // Render histogram visualization with levels markers from config
             let _response = render_histogram_with_config(ui, histogram, config_manager);
 
@@ -454,55 +473,64 @@ pub fn render_colors_content(
             // Render levels controls using ConfigManager
             let levels_update = render_levels_controls_managed(ui, config_manager, histogram);
             max_update = max_update.max(levels_update);
-        });
+        }));
     // Green dot on a collapsed header = levels are on.
-    if levels_enabled && !is_escape_mode && levels_resp.fully_closed() {
-        paint_enabled_dot(ui, levels_resp.header_response.rect);
+    if let Some(levels_resp) = levels_resp {
+        if levels_enabled && levels_resp.fully_closed() {
+            paint_enabled_dot(ui, levels_resp.header_response.rect);
+        }
     }
 
     // Section 4: Color & Appearance
     egui::CollapsingHeader::new(t!("tonemap.color_appearance"))
         .default_open(true)
         .show(ui, |ui| {
-            let current_mode = config_manager.active_config().color_mode;
-            let selected_text = match current_mode {
-                ColorMode::Palette => t!("tonemap.color_mode_palette"),
-                ColorMode::Speed => t!("tonemap.color_mode_speed"),
-                ColorMode::PathMap => t!("tonemap.color_mode_pathmap"),
-            };
+            if show_color_mode {
+                let current_mode = config_manager.active_config().color_mode;
+                let selected_text = match current_mode {
+                    ColorMode::Palette => t!("tonemap.color_mode_palette"),
+                    ColorMode::Speed => t!("tonemap.color_mode_speed"),
+                    ColorMode::PathMap => t!("tonemap.color_mode_pathmap"),
+                };
 
-            let mut temp_color_mode = current_mode;
-            egui::ComboBox::from_label(t!("tonemap.color_mode"))
-                .selected_text(selected_text)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, t!("tonemap.color_mode_palette"))
-                        .on_hover_text(t!("tonemap.color_mode_palette_tooltip"))
-                        .changed() 
-                    {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
-                            max_update = max_update.max(update);
+                let mut temp_color_mode = current_mode;
+                egui::ComboBox::from_label(t!("tonemap.color_mode"))
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, t!("tonemap.color_mode_palette"))
+                            .on_hover_text(t!("tonemap.color_mode_palette_tooltip"))
+                            .changed() 
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
+                                max_update = max_update.max(update);
+                            }
                         }
-                    }
-                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, t!("tonemap.color_mode_speed"))
-                        .on_hover_text(t!("tonemap.color_mode_speed_tooltip"))
-                        .changed() 
-                    {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
-                            max_update = max_update.max(update);
+                        if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, t!("tonemap.color_mode_speed"))
+                            .on_hover_text(t!("tonemap.color_mode_speed_tooltip"))
+                            .changed() 
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
+                                max_update = max_update.max(update);
+                            }
                         }
-                    }
-                    if ui.selectable_value(&mut temp_color_mode, ColorMode::PathMap, t!("tonemap.color_mode_pathmap"))
-                        .on_hover_text(t!("tonemap.color_mode_pathmap_tooltip"))
-                        .changed()
-                    {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
-                            max_update = max_update.max(update);
+                        if ui.selectable_value(&mut temp_color_mode, ColorMode::PathMap, t!("tonemap.color_mode_pathmap"))
+                            .on_hover_text(t!("tonemap.color_mode_pathmap_tooltip"))
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
+                                max_update = max_update.max(update);
+                            }
                         }
-                    }
-                });
+                    });
+            }
 
             let current_color_mode = config_manager.active_config().color_mode;
-            if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
+            // Neither non-flame generator reads the colour mode, and a
+            // config left on PathMap would otherwise hide the palette
+            // picker they both genuinely use.
+            if !show_color_mode
+                || matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed)
+            {
                 let current_palette_name = config_manager.active_config().palette.name.clone();
 
                 // Build list of palettes from enabled packs
@@ -882,8 +910,11 @@ pub fn render_colors_content(
 
     ui.separator();
 
-    // Reset to Defaults button (excludes palette and background color)
-    if ui.button(t!("tonemap.reset_to_defaults").as_ref()).clicked() {
+    // Reset to Defaults button (excludes palette and background color).
+    // Hidden in a non-flame mode for the same reason as the preset
+    // dropdown: it restores the flame default of Logarithmic, which
+    // renders a unit-range image black.
+    if show_presets && ui.button(t!("tonemap.reset_to_defaults").as_ref()).clicked() {
         let update = super::reset_colors_to_defaults(config_manager);
         max_update = max_update.max(update);
     }

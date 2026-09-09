@@ -160,7 +160,15 @@ pub fn render_menu_bar(
                 }
             });
 
-            // Rendering Menu
+            // Rendering Menu -- every item configures the chaos game
+            // (pause, reset accumulation, iterations per thread), and
+            // "Reset to Defaults" resets exactly those parameters, so
+            // the whole menu is inert in a non-flame mode.
+            if super::visibility::control(
+                super::visibility::Control::ChaosGame,
+                menu_state.render_mode,
+            ) != super::visibility::Vis::Hide
+            {
             ui.menu_button(t!("menu.rendering"), |ui| {
                 // Pause/Resume
                 let pause_text = if menu_state.is_paused {
@@ -195,6 +203,7 @@ pub fn render_menu_bar(
                     menu_actions.rendering.reset_to_defaults = true;
                 }
             });
+            }
 
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {

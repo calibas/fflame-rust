@@ -3,7 +3,14 @@
 **Status:** plan of record, 2026-09-09. Branch `ui-modes`, off
 `simulation-mode`. Surveyed before planning; every claim below carries
 its `file:line` so a reader can argue with the code rather than with
-the prose. **No code written yet.**
+the prose. **Phases 1–4 built and gated** (section 4); phase 5, freeing
+the inactive engine, and phase 6, the standing documentation, to
+follow.
+
+Section 1 describes the code **as it was before this project**, and is
+left in the past tense on purpose: it is the evidence the decisions
+were made from. What each phase actually changed is recorded under
+section 4.
 
 ## 0. What is being asked for
 
@@ -344,7 +351,7 @@ Each phase leaves the app working and every existing test green.
 | 1 | `RenderMode` replaces the boolean; `switch_render_mode` moves to `src/ui/render_mode.rs`; all five switch sites route through it; coalescing off | a switch from every mode to every other lands in the right mode with one undo entry; Fly Mode enabled in 3D alone — a table test over all four modes — **built**, see below |
 | 2 | `src/ui/visibility.rs` with the panel table; dispatcher and both menus consult it; per-case hint text | every `PanelType` × `RenderMode` has an explicit answer (exhaustive match, no `_` arm); no menu row opens onto a stub; the existing layout tests stay green — **built**, see below |
 | 3 | The Mode menu; the two menu-bar 2D/3D pairs deleted (**the View panel keeps its own**); per-mode layout memory | the menu offers exactly `RenderMode::ALL`; a test that no other site writes `ConfigPath::RenderMode`; switching away and back restores the arrangement — **built**, see below |
-| 4 | Control-level policy in Colors, Rendering, Effects per §1.4; dead sections hidden, dead controls greyed | every control in the §1.4 table has an explicit answer; a test asserting the tone-map preset dropdown and Reset Colors are unreachable in non-flame modes |
+| 4 | Control-level policy in Colors, Rendering, Effects per §1.4; dead sections hidden, dead controls greyed | every control in the §1.4 table has an explicit answer; a test asserting the tone-map preset dropdown and Reset Colors are unreachable in non-flame modes — **built**, see below |
 | 5 | *Separable.* Free the inactive engine on switch | VRAM falls on leaving Escape at high supersample, measured; returning re-renders correctly |
 | 6 | Update the standing UI documentation (§4.1) | `docs/main/UI.md` describes the mode machinery as built; the doc-links gate stays green |
 
@@ -557,3 +564,48 @@ for it.
 - **Translations are far behind** — 2,204 English lines against roughly
   270 for each of es, ja and zh-CN. New reason keys are an English-only
   cost in practice, and the greyed arm adds one key per reason.
+
+
+### Phase 4 as built, 2026-09-09
+
+`visibility.rs` gained `Control` and `control(Control, RenderMode)`,
+grouped by shared fate rather than one variant per widget — the answer
+is the same for every slider the logarithmic branch alone reads, and a
+variant each would be nine ways to get one decision wrong. A `gated`
+helper draws a body normally, disabled with a hover, or not at all.
+
+**Hidden** in both non-flame modes: the chaos-game controls, the
+tone-map preset dropdown, Reset Colors, the spatial filter, the density
+levels section, and the colour-mode selector. **Greyed**: the tone-map
+mode selector, the four logarithmic-only sliders, and the alpha-blend
+pair. **Kept**: exposure, gamma, saturation, hue shift, density scale,
+the tone curve, the whole palette group, background, and every effect.
+
+Three consequences worth naming:
+
+- **The Rendering menu is hidden entirely** in Escape and Simulation.
+  Every item configures the chaos game, and `Reset to Defaults` was
+  measured to reset exactly those six parameters, so nothing was left
+  to show.
+- **The palette controls stopped depending on the colour mode** in the
+  non-flame modes. They were gated on it being Palette or Speed, so a
+  config sitting on PathMap hid the palette picker that escape and
+  simulation genuinely use — while the mode itself did nothing.
+- **The density levels section was drawn in Simulation** over the empty
+  flame accumulator, because the panel special-cased Escape alone while
+  the frame loop hard-offs both. Now neither draws it.
+
+**A pre-existing bug fell out.** The Escape branch of the levels
+section printed `t!("tonemap.levels_escape_hint")`, and that key does
+not exist in `locales/en.yml` — so escape mode showed the raw key
+string. The branch is gone, so the bug is moot rather than fixed.
+
+Three new tests, ten in the module: every control answered in every
+mode, the two flame modes offering everything but the orbit cache, and
+the tone-map presets unreachable where they would black the picture.
+1,062 unit tests and all release gates pass.
+
+**Still open, from §3.4.** In Simulation the Rendering panel now shows
+VSync and the frame cap alone. Both are device preferences rather than
+fractal parameters, so whether that panel is worth showing there, or
+whether those two belong in a preferences home, is still undecided.
