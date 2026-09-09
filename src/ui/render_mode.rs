@@ -6,7 +6,7 @@
 //! the compact menu, the View panel, and enter/leave buttons inside
 //! the Escape and Simulation panels -- and only the last two reset the
 //! tone mapping, so leaving Escape by the menu left a flame wearing
-//! escape-calibrated exposure. See `docs/projects/ui-render-modes.md`
+//! escape-calibrated exposure. See `docs/archive/projects/ui-render-modes.md`
 //! section 3.1.
 
 use crate::config::delta::ConfigPath;
