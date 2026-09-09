@@ -195,26 +195,22 @@ fn render_compact_menu_items(
             ui.close();
         }
 
-        let mode = menu_state.render_mode;
-        if ui
-            .selectable_label(
-                mode == crate::scene::transforms::RenderMode::TwoD,
-                t!("menu.mode_2d").as_ref(),
-            )
-            .clicked()
-        {
-            menu_actions.view.set_mode = Some(crate::scene::transforms::RenderMode::TwoD);
-            ui.close();
-        }
-        if ui
-            .selectable_label(
-                mode == crate::scene::transforms::RenderMode::ThreeD,
-                t!("menu.mode_3d").as_ref(),
-            )
-            .clicked()
-        {
-            menu_actions.view.set_mode = Some(crate::scene::transforms::RenderMode::ThreeD);
-            ui.close();
+    });
+
+    // --- Mode submenu ---
+    // The same four rows as the desktop Mode menu. Without this the
+    // only way into Escape or Simulation on a phone would be the
+    // panels' own buttons.
+    ui.menu_button(t!("menu.mode"), |ui| {
+        for m in crate::scene::transforms::RenderMode::ALL {
+            let label = t!(super::render_mode::mode_label_key(*m));
+            if ui
+                .selectable_label(menu_state.render_mode == *m, label.as_ref())
+                .clicked()
+            {
+                menu_actions.set_mode = Some(*m);
+                ui.close();
+            }
         }
     });
 

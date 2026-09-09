@@ -19,12 +19,17 @@ mode:
   three_d: "3D Flame"
   escape: "Escape Time"
   simulation: "Simulation"
+  two_d_tip: "The classic fractal flame: a chaos game over your transforms, drawn flat."
+  three_d_tip: "The same chaos game tracking depth, with perspective, a movable camera and optional solid shading."
+  escape_tip: "Escape-time fractals (Mandelbrot and kin): one pass per pixel, with deep-zoom support. Transforms do not apply."
+  simulation_tip: "A stepped grid — reaction-diffusion, cellular automata, growth. Runs over time rather than converging."
 
 # Menu Bar
 menu:
   file: "File"
   edit: "Edit"
   view: "View"
+  mode: "Mode"
   fractal: "Fractal"
   rendering: "Rendering"
   fly_mode: "Fly Mode"
@@ -1982,9 +1987,8 @@ login:
   remember_me: "Remember me"
 
 sim_panel:
-  toggle_on: "Enable Simulation Mode"
-  toggle_off: "Disable Simulation Mode"
-  toggle_tip: "Replace the flame engine with a neighbour-coupled simulation (reaction-diffusion, cellular automata, growth)."
+  toggle_on: "Switch to Simulation mode"
+  toggle_tip: "Replace the flame engine with a neighbour-coupled simulation (reaction-diffusion, cellular automata, growth). Use the Mode menu to come back."
   inactive_hint: "Simulation mode is off. The controls appear once it is enabled."
   run: "▶ Run"
   pause: "⏸ Pause"
@@ -2189,9 +2193,8 @@ escape_panel:
   preset_tip: "A known-good starting point for this formula: view, iteration budget, coloring and all parameters together. Switching formulas applies the first one, because a view chosen for another formula rarely means anything here."
   coloring_mismatch: "%{coloring} cannot draw %{formula} — it would render black."
   coloring_use: "Use %{name}"
-  toggle_on: "Turn on Escape mode"
-  toggle_off: "Leave Escape mode"
-  toggle_tip: "Escape-time fractals (Mandelbrot and kin) use a different engine from flames: the transform list, triangle editor and 2D/3D choice do not apply. Leaving returns to 3D flame rendering."
+  toggle_on: "Switch to Escape mode"
+  toggle_tip: "Escape-time fractals (Mandelbrot and kin) use a different engine from flames: the transform list, triangle editor and 2D/3D choice do not apply. Use the Mode menu to come back."
   auto_scale: "Auto scale"
   auto_scale_tip: "Set the colour scale to {value}, a starting point for this iteration count. The useful value depends on how long pixels actually take to escape, which is not visible from the panel."
   auto_scale_hint: "suggested: {value}"

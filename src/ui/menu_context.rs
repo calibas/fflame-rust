@@ -35,10 +35,6 @@ pub struct ViewMenuActions {
     pub fit_to_window: bool,
     pub zoom_in: bool,
     pub zoom_out: bool,
-    /// The mode a menu row asked for this frame, if any. One field
-    /// rather than a flag per mode: with four modes the flags were
-    /// about to become four booleans that must not disagree.
-    pub set_mode: Option<RenderMode>,
     pub show_grid: bool,
 }
 
@@ -75,6 +71,10 @@ pub struct MenuActions {
     pub animation: AnimationMenuActions,
     /// Menu-bar Fly Mode toggle button was clicked this frame.
     pub fly_mode_toggle: bool,
+    /// The mode a Mode-menu row asked for this frame, if any. One
+    /// field rather than a flag per mode: with four modes the flags
+    /// were about to become four booleans that must not disagree.
+    pub set_mode: Option<RenderMode>,
 }
 
 /// Read-only state needed by menus to determine enabled/disabled state

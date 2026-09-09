@@ -77,6 +77,35 @@ pub fn fly_mode_available(mode: RenderMode) -> bool {
     matches!(mode, RenderMode::ThreeD)
 }
 
+/// The workspace a mode wants, and the panel that edits it.
+///
+/// `None` for the flame modes: they share the Standard workspace, and
+/// a caller leaving a non-flame mode reads that as "go back to
+/// Standard". Written as a table rather than nested ifs because a
+/// third mode made the branching the part most likely to gain a hole.
+/// The canonical copy -- `app::follow_loaded_render_mode` used to keep
+/// its own.
+pub fn layout_for(
+    mode: RenderMode,
+) -> Option<(super::workspace::WorkspaceLayout, super::workspace::PanelType)> {
+    use super::workspace::{PanelType, WorkspaceLayout};
+    match mode {
+        RenderMode::Escape => Some((WorkspaceLayout::EscapeTime, PanelType::Escape)),
+        RenderMode::Simulation => Some((WorkspaceLayout::Simulation, PanelType::Simulation)),
+        RenderMode::TwoD | RenderMode::ThreeD => None,
+    }
+}
+
+/// The i18n key describing what a mode renders, for a menu hover.
+pub fn mode_tip_key(mode: RenderMode) -> &'static str {
+    match mode {
+        RenderMode::TwoD => "mode.two_d_tip",
+        RenderMode::ThreeD => "mode.three_d_tip",
+        RenderMode::Escape => "mode.escape_tip",
+        RenderMode::Simulation => "mode.simulation_tip",
+    }
+}
+
 /// The i18n key naming a mode, for a picker or a menu row.
 pub fn mode_label_key(mode: RenderMode) -> &'static str {
     match mode {
@@ -172,6 +201,65 @@ mod tests {
         }
     }
 
+    /// `switch_render_mode` is the ONLY thing that writes the mode.
+    ///
+    /// The rescue that keeps a non-flame image from rendering black is
+    /// applied there, so a second writer would be a mode change that
+    /// silently skips it -- which is exactly what the View menu and
+    /// the View panel used to be. A source scan rather than a type
+    /// trick, because `ConfigPath` is an ordinary enum anyone can
+    /// name; if the tree is not present (a packaged build) it passes.
+    #[test]
+    fn nothing_outside_this_module_writes_the_render_mode() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        if !root.is_dir() {
+            eprintln!("no source tree; skipping");
+            return;
+        }
+        // Whole-config load paths legitimately carry a mode in from a
+        // file or a browser row; they are not switches, and the app
+        // follows them through `load_generation`.
+        const LOADS_A_WHOLE_CONFIG: &[&str] = &["ui_handlers.rs", "panel_viewer.rs", "api"];
+        let mut offenders: Vec<String> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if name == "render_mode.rs" || name == "delta.rs" || name == "manager.rs" {
+                    continue;
+                }
+                let rel = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().to_string();
+                if LOADS_A_WHOLE_CONFIG.iter().any(|allow| rel.contains(allow)) {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                for (n, line) in text.lines().enumerate() {
+                    let line = line.trim_start();
+                    if line.starts_with("//") || line.starts_with("///") {
+                        continue;
+                    }
+                    if line.contains("ConfigPath::RenderMode") {
+                        offenders.push(format!("{rel}:{}", n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these write the render mode directly instead of calling \
+             switch_render_mode, so they skip the tone-map rescue: {offenders:?}"
+        );
+    }
+
     /// Fly mode belongs to 3D alone.
     #[test]
     fn fly_mode_is_offered_in_three_d_alone() {
@@ -192,5 +280,46 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), keys.len(), "duplicate label keys: {keys:?}");
+    }
+
+    /// Both keys of every mode resolve to real text. `t!` hands back
+    /// the key itself when it is missing, which is how a typo shows.
+    #[test]
+    fn every_mode_label_and_tip_resolves() {
+        use rust_i18n::t;
+        for m in RenderMode::ALL {
+            for key in [mode_label_key(*m), mode_tip_key(*m)] {
+                let text = t!(key);
+                assert_ne!(text.as_ref(), key, "{m:?}: missing locale key {key}");
+            }
+        }
+    }
+
+    /// Each non-flame mode brings its own workspace and its own
+    /// editor; the flame modes share Standard.
+    #[test]
+    fn only_the_non_flame_modes_bring_a_workspace() {
+        use super::super::workspace::{PanelType, WorkspaceLayout};
+        assert_eq!(layout_for(RenderMode::TwoD), None);
+        assert_eq!(layout_for(RenderMode::ThreeD), None);
+        assert_eq!(
+            layout_for(RenderMode::Escape),
+            Some((WorkspaceLayout::EscapeTime, PanelType::Escape))
+        );
+        assert_eq!(
+            layout_for(RenderMode::Simulation),
+            Some((WorkspaceLayout::Simulation, PanelType::Simulation))
+        );
+        // And each mode's own editor is available in it -- a workspace
+        // that opens a panel the visibility policy greys would be a
+        // contradiction.
+        for m in RenderMode::ALL {
+            if let Some((_, panel)) = layout_for(*m) {
+                assert!(
+                    super::super::visibility::panel(panel, *m).is_show(),
+                    "{m:?} opens a panel it also greys"
+                );
+            }
+        }
     }
 }

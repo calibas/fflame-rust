@@ -343,12 +343,52 @@ Each phase leaves the app working and every existing test green.
 |---|---|---|
 | 1 | `RenderMode` replaces the boolean; `switch_render_mode` moves to `src/ui/render_mode.rs`; all five switch sites route through it; coalescing off | a switch from every mode to every other lands in the right mode with one undo entry; Fly Mode enabled in 3D alone — a table test over all four modes — **built**, see below |
 | 2 | `src/ui/visibility.rs` with the panel table; dispatcher and both menus consult it; per-case hint text | every `PanelType` × `RenderMode` has an explicit answer (exhaustive match, no `_` arm); no menu row opens onto a stub; the existing layout tests stay green — **built**, see below |
-| 3 | The Mode menu; View/compact/View-panel toggles deleted | the menu offers exactly `RenderMode::ALL`; a test that no other site writes `ConfigPath::RenderMode` |
+| 3 | The Mode menu; the two menu-bar 2D/3D pairs deleted (**the View panel keeps its own**); per-mode layout memory | the menu offers exactly `RenderMode::ALL`; a test that no other site writes `ConfigPath::RenderMode`; switching away and back restores the arrangement — **built**, see below |
 | 4 | Control-level policy in Colors, Rendering, Effects per §1.4; dead sections hidden, dead controls greyed | every control in the §1.4 table has an explicit answer; a test asserting the tone-map preset dropdown and Reset Colors are unreachable in non-flame modes |
 | 5 | *Separable.* Free the inactive engine on switch | VRAM falls on leaving Escape at high supersample, measured; returning re-renders correctly |
+| 6 | Update the standing UI documentation (§4.1) | `docs/main/UI.md` describes the mode machinery as built; the doc-links gate stays green |
 
 Phase 4 is where the user-visible win is; phases 1–3 are what make it
 expressible in one place instead of forty.
+
+### 4.1 Phase 6: leave the standing documentation true
+
+This plan is a record of one project. The next person to touch the UI
+will read `docs/main/UI.md`, which is where the architecture is
+supposed to live, and phase 6 is what stops them finding a description
+of a program that no longer exists.
+
+`docs/main/UI.md` is already stale independently of this work: it dates
+from the 2025-11-13 dock migration, says the UI "consists of a menu bar
+plus 7 dockable panels" when there are 29, lists a menu bar with a
+Fractal menu that has never been wired, and documents the render-mode
+switch as a 2D/3D toggle inside the Performance window. What phase 6
+must add or correct:
+
+- The **menu bar list**, including the Mode menu, and the removal of
+  the View menu's 2D/3D pair. Note that the View *panel* keeps its
+  2D/3D switch deliberately, since choosing between the flame's two
+  projections is a view-level decision.
+- **`src/ui/render_mode.rs` as the one way to change mode**, with the
+  rule that nothing else may write `ConfigPath::RenderMode`, and why
+  (the tone-map rescue on entering a non-flame mode).
+- **`src/ui/visibility.rs` as the one answer to "is this available"**,
+  the meaning of `Show` / `Grey(reason)` / `Hide`, the rule that no
+  panel is ever hidden, and the instruction to add a case there rather
+  than a `matches!` in a panel.
+- **`WINDOW_MENU` as the single source** of what the two Window menus
+  offer, so nobody adds a row to one and not the other.
+- **Per-mode layout memory**: `switch_layout` remembers, `apply_layout`
+  forces, and which callers should use which.
+- The **panel-by-mode table** (§1.2 here) belongs in `UI.md` in some
+  form, since it is the thing a UI change most needs to consult.
+
+Also worth a line in `docs/ARCHITECTURE.md`, which routes readers to
+the topic docs, and a check of `CLAUDE.md`'s UI Architecture section,
+which still describes the panel set loosely. The doc-links gate in
+`scripts/release.py check` only verifies that links resolve, not that
+prose is true, so this is a read-and-rewrite job rather than something
+a test will catch.
 
 ### Phase 1 as built, 2026-09-09
 
@@ -429,6 +469,55 @@ find the feature. Telling the user about the flag is a control-level
 job for phase 4. The disagreement noted in section 1.2 — the default
 Simulation layout omits Transforms while the gate keeps it usable — is
 now the deliberate answer: available, not opened for you.
+
+### Phase 3 as built, 2026-09-09
+
+A top-level **Mode** menu sits between View and Rendering, built by
+iterating `RenderMode::ALL` so it cannot fall out of step with the
+enum, each row carrying a one-line description on hover. The compact
+menu gets the same four rows as its own submenu; without it, a phone
+could reach Escape and Simulation only through the panels' own buttons.
+`set_mode` moved off `ViewMenuActions` to the top of `MenuActions`,
+since it is no longer a View concern.
+
+**The View panel keeps its 2D/3D switch, by request.** Choosing between
+the flame's two projections is a view-level decision and belongs beside
+the camera. What went is the *duplication in the menu bar*: the View
+menu's pair and the compact menu's copy of it, both superseded by the
+Mode menu. So the switch exists in two places rather than five, and
+they mean different things — the panel chooses a flame's projection,
+the menu chooses an engine.
+
+**The engine panels became a way in, not a toggle.** Each shows a
+"Switch to … mode" button only when inactive; leaving is the Mode
+menu's job. That retires the hardcoded exit-to-3D, which meant turning
+Escape on from 2D and off again left you somewhere you had never been.
+
+**Per-mode layout memory landed here**, not in a phase of its own —
+the plan's section 3.3 had no phase assigned, and a Mode menu without
+it would throw away your arrangement on every switch, which is worse
+than the buried toggles it replaces. `Workspace::switch_layout`
+stashes the dock state it is leaving and restores the one it is
+entering; `apply_layout` stays the forcing version, so Reset Workspace
+and the Workspace Layout menu still rebuild. Session-only, as section
+3.3 said: persistence still needs `serde` on `DockState`.
+
+**The layout now follows the mode whenever it changes**, closing the
+hole from section 1.1. It used to hang off the load generation alone,
+so a manual switch out of Escape left the Escape workspace up, and an
+undo of a mode change moved nothing. The app compares the mode each
+frame instead. The `RenderMode → (layout, panel)` table moved to
+`render_mode::layout_for`, so `app::follow_loaded_render_mode` no
+longer keeps its own copy.
+
+Four new tests, thirteen in the two modules. The two load-bearing ones
+were both checked against unfixed code: a source scan asserting nothing
+outside `render_mode.rs` writes `ConfigPath::RenderMode` (planted a
+violation in `view.rs`; it was caught and named), and a stash test
+asserting a panel opened in Standard survives a trip through the
+Simulation layout. Whole-config load paths are exempted from the scan
+by name, since they carry a mode in from a file rather than switching.
+1,059 unit tests and all release gates pass.
 
 ## 5. Bugs found, filed not fixed
 
