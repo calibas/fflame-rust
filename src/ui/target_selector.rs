@@ -385,19 +385,64 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SimMatteCutoff, "Matte: cutoff"),
         TargetItem::new(ConfigPath::SimMatteSoftness, "Matte: softness"),
     ];
-    let model = crate::sim::model_or_default(&sim.model);
-    for p in model.parameters {
-        items.push(TargetItem::new(
-            ConfigPath::SimModelParam { param: p.name.to_string() },
-            &format!("{}: {}", model.display_name, p.display_name),
-        ));
+    // The model's parameters, per layer. With no `layers` list there
+    // is one entry and it is the flat `SimModelParam` path -- the same
+    // fallback the panel presents as "layer 0 IS the model" -- so a
+    // single-system config offers exactly what it always did and a
+    // layered one offers each layer separately. Before this the picker
+    // named only the flat paths, so a layered simulation could not
+    // keyframe any of its parameters at all.
+    let layered = !sim.layers.is_empty();
+    for l in 0..sim.layer_count() {
+        let model = crate::sim::model_or_default(sim.layer_model_name(l));
+        for p in model.parameters {
+            let path = if layered {
+                ConfigPath::SimLayerParam { layer: l, param: p.name.to_string() }
+            } else {
+                ConfigPath::SimModelParam { param: p.name.to_string() }
+            };
+            let label = if layered {
+                format!("Layer {l} {}: {}", model.display_name, p.display_name)
+            } else {
+                format!("{}: {}", model.display_name, p.display_name)
+            };
+            items.push(TargetItem::new(path, &label));
+        }
     }
-    let coloring = crate::sim::coloring_or_default(&sim.coloring);
-    for p in coloring.parameters {
-        items.push(TargetItem::new(
-            ConfigPath::SimColoringParam { param: p.name.to_string() },
-            &format!("Coloring: {}", p.display_name),
-        ));
+
+    // And the colouring's, per colour layer, on the same rule. A
+    // colour layer additionally has an opacity and its own matte,
+    // which the flat colouring reaches through the paths above.
+    if sim.color_layers.is_empty() {
+        let coloring = crate::sim::coloring_or_default(&sim.coloring);
+        for p in coloring.parameters {
+            items.push(TargetItem::new(
+                ConfigPath::SimColoringParam { param: p.name.to_string() },
+                &format!("Coloring: {}", p.display_name),
+            ));
+        }
+    } else {
+        for (k, layer) in sim.color_layers.iter().enumerate() {
+            let coloring = crate::sim::coloring_or_default(&layer.coloring);
+            for p in coloring.parameters {
+                items.push(TargetItem::new(
+                    ConfigPath::SimColorLayerParam { index: k, param: p.name.to_string() },
+                    &format!("Colour {k} {}: {}", coloring.display_name, p.display_name),
+                ));
+            }
+            items.push(TargetItem::new(
+                ConfigPath::SimColorLayerOpacity { index: k },
+                &format!("Colour {k}: opacity"),
+            ));
+            items.push(TargetItem::new(
+                ConfigPath::SimColorLayerMatteCutoff { index: k },
+                &format!("Colour {k} matte: cutoff"),
+            ));
+            items.push(TargetItem::new(
+                ConfigPath::SimColorLayerMatteSoftness { index: k },
+                &format!("Colour {k} matte: softness"),
+            ));
+        }
     }
     items
 }

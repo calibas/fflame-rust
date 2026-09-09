@@ -1512,7 +1512,20 @@ mod tests {
     /// does not round-trip is a track that silently stops working.
     #[test]
     fn every_sim_path_round_trips_through_its_string_key() {
-        let paths = vec![
+        for path in all_sim_paths() {
+            let key = path.to_string_key();
+            assert!(key.starts_with("Sim."), "{key} should be namespaced");
+            let back = ConfigPath::from_string_key(&key)
+                .unwrap_or_else(|| panic!("{key} did not parse back"));
+            assert_eq!(back, path, "{key} round-tripped to a different path");
+        }
+    }
+
+    /// Every simulation path there is. One list, shared by the
+    /// round-trip test above and the panel-coverage test below; a
+    /// second copy would drift the first time a path was added.
+    fn all_sim_paths() -> Vec<ConfigPath> {
+        vec![
             ConfigPath::SimModel,
             ConfigPath::SimColoring,
             ConfigPath::SimGridMode,
@@ -1560,14 +1573,57 @@ mod tests {
             ConfigPath::SimColorLayerMatteSoftness { index: 0 },
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
-        ];
-        for path in paths {
-            let key = path.to_string_key();
-            assert!(key.starts_with("Sim."), "{key} should be namespaced");
-            let back = ConfigPath::from_string_key(&key)
-                .unwrap_or_else(|| panic!("{key} did not parse back"));
-            assert_eq!(back, path, "{key} round-tripped to a different path");
+        ]
+    }
+
+    /// The Simulation panel writes every simulation path.
+    ///
+    /// A source scan, because the alternative is driving egui. It
+    /// exists because reorganising the panel dropped a control:
+    /// merging the Model and Layers sections took the
+    /// `use_transforms` checkbox with it, leaving the feature that
+    /// makes the flame's transforms the layers' maps unreachable, with
+    /// nothing failing. A path with no control is a feature the user
+    /// cannot get at; a control removed by accident looks exactly the
+    /// same from here.
+    ///
+    /// If a path is deliberately not on the panel, exempt it BY NAME
+    /// with the reason, so the decision is visible.
+    #[test]
+    #[cfg(feature = "engine-sim")]
+    fn the_panel_writes_every_sim_path() {
+        let panel = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("ui")
+            .join("sim_panel.rs");
+        let Ok(source) = std::fs::read_to_string(&panel) else {
+            eprintln!("no source tree; skipping");
+            return;
+        };
+        // Nothing yet: every simulation path has a control.
+        const NOT_ON_THE_PANEL: &[&str] = &[];
+        let mut missing: Vec<String> = Vec::new();
+        for path in all_sim_paths() {
+            // `SimLayerParam { layer: 0, .. }` -> `SimLayerParam`.
+            let debug = format!("{path:?}");
+            let variant = debug
+                .split(|c: char| c == ' ' || c == '(' || c == '{')
+                .next()
+                .unwrap_or(&debug)
+                .to_string();
+            if NOT_ON_THE_PANEL.contains(&variant.as_str()) {
+                continue;
+            }
+            if !source.contains(&format!("ConfigPath::{variant}")) {
+                missing.push(variant);
+            }
         }
+        missing.sort();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "these simulation paths have no control on the panel: {missing:?}"
+        );
     }
 
     /// The three update types exist to protect a long run from a cheap
