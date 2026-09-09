@@ -1464,6 +1464,7 @@ impl EguiLayer {
             can_redo,
             is_paused: *paused,
             render_mode: config_manager.config().render_mode,
+            tonemap_mode: config_manager.config().tonemap_mode,
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_state.flame_id.is_some(),
             api_flame_id: api_state.flame_id.clone(),

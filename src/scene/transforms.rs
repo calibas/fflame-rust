@@ -1844,9 +1844,6 @@ pub enum RenderMode {
     /// `docs/projects/escape-time-fractals.md`. Wire form `"escape"`.
     /// An older build loading a config with this mode fails the parse
     /// (unknown variant), which is honest: it cannot render it.
-    /// NOTE: the server's Postgres `render_mode` enum does not know
-    /// this value yet — Save Online is guarded client-side until the
-    /// API adds it (see `api::sync`).
     #[serde(rename = "escape")]
     Escape,
     /// Neighbour-coupled simulation (reaction-diffusion, cellular
@@ -1856,9 +1853,6 @@ pub enum RenderMode {
     /// `"simulation"`. An older build loading a config with this mode
     /// fails the parse (unknown variant), which is honest: it cannot
     /// render it.
-    /// NOTE: the server's Postgres `render_mode` enum does not know
-    /// this value yet — Save Online is guarded client-side until the
-    /// API adds it (see `api::sync`).
     #[serde(rename = "simulation")]
     Simulation,
 }
@@ -1882,6 +1876,17 @@ impl RenderMode {
         RenderMode::Escape,
         RenderMode::Simulation,
     ];
+
+    /// Is this one of the two engines that is not the chaos game?
+    ///
+    /// Lives here rather than in `ui` because the headless renderer
+    /// needs it: `ui` is behind the `web-app` feature, and the CLI,
+    /// thumbnail and video paths all compile without it. That split is
+    /// how the interactive and offline paths came to disagree about
+    /// whether Levels applies.
+    pub fn is_non_flame(self) -> bool {
+        matches!(self, RenderMode::Escape | RenderMode::Simulation)
+    }
 }
 
 impl Default for RenderMode {

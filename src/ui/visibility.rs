@@ -8,13 +8,16 @@
 //! one-line stub -- and the stub's text was a single shared string that
 //! was wrong in two of the three places it appeared.
 //!
-//! See `docs/projects/ui-render-modes.md` section 3.2. `RenderMode` is
-//! the only axis here; the signature has room for the skill level that
+//! See `docs/projects/ui-render-modes.md` section 3.2. Panels depend on
+//! the render mode alone; controls also depend on the tone-map mode,
+//! because some of the tonemap's own parameters are read by one branch
+//! of it and not the others. There is room for the skill level that
 //! `ux-improvements.md` section 2 proposes and for the compact flag
 //! already threaded through `PanelViewerContext`, without either being
 //! built.
 
 use super::workspace::PanelType;
+use crate::scene::tonemap::ToneMapMode;
 use crate::scene::transforms::RenderMode;
 
 /// Whether a thing is offered, offered-but-dead, or absent.
@@ -164,11 +167,19 @@ pub enum Control {
     /// Read only by the logarithmic branch: gamma threshold,
     /// brightness, vibrancy, highlights.
     LogOnlyTone,
-    /// Alpha blend low/high. Under the linear mapping the two values
-    /// it mixes between are computed by the same expression, so it is
-    /// an exact no-op. (It is one in flame modes on Linear too --
-    /// that is a bug, filed in the plan's section 5, not a mode
-    /// matter.)
+    /// Alpha blend low/high. It mixes between a gamma-corrected alpha
+    /// and a linear one -- but only the LOGARITHMIC branch of the
+    /// tonemap gamma-corrects alpha, so under the linear mapping the
+    /// two values are computed by the same expression and the mix is
+    /// an exact no-op. That is true in a flame on Linear exactly as it
+    /// is in Escape or Simulation, which is why this asks about the
+    /// tone-map mode and not only the render mode.
+    ///
+    /// The feature was correct when written, before the tonemap grew
+    /// per-mode branches; the Linear branch gamma-corrects colour but
+    /// not alpha. Making it act under Linear would change every
+    /// escape and simulation baseline, so the control is disabled
+    /// rather than the shader changed.
     AlphaBlendCurve,
     /// The spatial filter and its blur-edges companion, which run
     /// inside the compute pass the non-flame modes never dispatch.
@@ -177,6 +188,26 @@ pub enum Control {
     /// Hard-off for both non-flame modes in the frame loop, and inert
     /// even if it were not.
     DensityLevels,
+    /// Panning and zooming the viewport: drag, wheel, pinch, the
+    /// arrow keys, and the View menu's Reset / Zoom In / Zoom Out.
+    ///
+    /// Simulation has no view to move. Flames and escape each have an
+    /// absolute view the renderer reads (`config.zoom`/`pan_*` and the
+    /// escape centre respectively), but the simulation's only spatial
+    /// control is `sim.warp`, which is a PER-STEP transform of the
+    /// field itself -- a velocity applied to the content, not a camera
+    /// over it. Binding a drag to it would advect the field, blur it
+    /// through a resample every step, do nothing at all while paused,
+    /// and do nothing in octave mode. So the gesture is refused rather
+    /// than misdirected: it used to fall through to the flame path and
+    /// write `config.zoom`/`pan_*`, which the simulation ignores --
+    /// invisible, but it drifted the flame view you would see on
+    /// switching back and filled the history with entries that changed
+    /// nothing.
+    ///
+    /// A real display-time view for the simulation is a feature, not a
+    /// bug fix; when it exists this arm becomes `Show`.
+    ViewNavigation,
     /// Colour mode, and what hangs off it: speed blend, path style,
     /// path capture and tracking. Neither generator reads the mode,
     /// and choosing PathMap allocates a path buffer, forces a flame
@@ -187,8 +218,11 @@ pub enum Control {
 
 /// Is this control meaningful in this mode?
 ///
-/// Exhaustive, like `panel`, and for the same reason.
-pub fn control(c: Control, m: RenderMode) -> Vis {
+/// Exhaustive, like `panel`, and for the same reason. `tone` is the
+/// active tone-map mode: a couple of the tonemap's parameters are read
+/// by one of its branches and not the others, which is a fact about
+/// the tone-map mode rather than the render mode.
+pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
     use Control as C;
     let flame = !matches!(m, RenderMode::Escape | RenderMode::Simulation);
     match c {
@@ -197,6 +231,13 @@ pub fn control(c: Control, m: RenderMode) -> Vis {
                 Vis::Show
             } else {
                 Vis::Hide
+            }
+        }
+        C::ViewNavigation => {
+            if matches!(m, RenderMode::Simulation) {
+                Vis::Hide
+            } else {
+                Vis::Show
             }
         }
         C::OrbitCache => {
@@ -221,7 +262,12 @@ pub fn control(c: Control, m: RenderMode) -> Vis {
             }
         }
         C::AlphaBlendCurve => {
-            if flame {
+            // Not a mode question: the linear branch does not
+            // gamma-correct alpha, so there is nothing to blend
+            // between, wherever you are.
+            if tone == ToneMapMode::Linear {
+                Vis::Grey(ALPHA_BLEND_INERT)
+            } else if flame {
                 Vis::Show
             } else {
                 Vis::Grey(ALPHA_BLEND_INERT)
@@ -239,9 +285,10 @@ pub fn gated<R>(
     ui: &mut egui::Ui,
     c: Control,
     m: RenderMode,
+    tone: ToneMapMode,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
-    match control(c, m) {
+    match control(c, m, tone) {
         Vis::Show => Some(body(ui)),
         Vis::Grey(reason) => {
             let inner = ui.add_enabled_ui(false, body);
@@ -395,6 +442,7 @@ mod tests {
         Control::SpatialFilter,
         Control::DensityLevels,
         Control::ColorMode,
+        Control::ViewNavigation,
     ];
 
     /// Every reason a panel or control is greyed names a string that
@@ -413,7 +461,7 @@ mod tests {
                 }
             }
             for c in ALL_CONTROLS {
-                if let Vis::Grey(key) = control(*c, *m) {
+                if let Vis::Grey(key) = control(*c, *m, ToneMapMode::Logarithmic) {
                     let text = t!(key);
                     assert_ne!(text.as_ref(), key, "{c:?}/{m:?}: missing locale key {key}");
                     assert!(text.len() > 10, "{key} is too terse to explain anything");
@@ -424,17 +472,60 @@ mod tests {
         assert!(checked > 0, "the scan found nothing to check");
     }
 
-    /// Every control is available in both flame modes, except the
-    /// orbit cache, which is escape's alone and does nothing in a
-    /// flame.
+    /// Simulation has no viewport navigation; every other mode does.
+    #[test]
+    fn only_simulation_refuses_viewport_navigation() {
+        for m in RenderMode::ALL {
+            let want = *m != RenderMode::Simulation;
+            assert_eq!(
+                control(Control::ViewNavigation, *m, ToneMapMode::Linear).is_show(),
+                want,
+                "{m:?}"
+            );
+        }
+    }
+
+    /// Every control is available in both flame modes under the
+    /// logarithmic mapping, except the orbit cache, which is escape's
+    /// alone and does nothing in a flame.
     #[test]
     fn the_flame_modes_offer_every_control_but_the_orbit_cache() {
         for m in [RenderMode::TwoD, RenderMode::ThreeD] {
             for c in ALL_CONTROLS {
                 let want = *c != Control::OrbitCache;
-                assert_eq!(control(*c, m).is_show(), want, "{c:?} in {m:?}");
+                assert_eq!(
+                    control(*c, m, ToneMapMode::Logarithmic).is_show(),
+                    want,
+                    "{c:?} in {m:?}"
+                );
             }
         }
+    }
+
+    /// The alpha-blend pair is inert under the LINEAR mapping, in a
+    /// flame exactly as in the other engines: the linear branch does
+    /// not gamma-correct alpha, so the mix has identical operands.
+    /// Every other control is unaffected by the tone-map mode.
+    #[test]
+    fn the_alpha_blend_pair_is_dead_under_the_linear_mapping() {
+        for m in RenderMode::ALL {
+            assert!(
+                !control(Control::AlphaBlendCurve, *m, ToneMapMode::Linear).is_show(),
+                "{m:?}: linear must disable the alpha blend pair"
+            );
+            for c in ALL_CONTROLS {
+                if *c == Control::AlphaBlendCurve {
+                    continue;
+                }
+                assert_eq!(
+                    control(*c, *m, ToneMapMode::Linear),
+                    control(*c, *m, ToneMapMode::Logarithmic),
+                    "{c:?} in {m:?} must not depend on the tone-map mode"
+                );
+            }
+        }
+        // And it IS offered where it acts.
+        assert!(control(Control::AlphaBlendCurve, RenderMode::TwoD, ToneMapMode::Logarithmic).is_show());
     }
 
     /// The two traps are gone from the non-flame modes: the tone-map
@@ -446,7 +537,7 @@ mod tests {
     fn the_tone_map_presets_are_unreachable_in_the_non_flame_modes() {
         for m in [RenderMode::Escape, RenderMode::Simulation] {
             assert_eq!(
-                control(Control::TonemapPresets, m),
+                control(Control::TonemapPresets, m, ToneMapMode::Linear),
                 Vis::Hide,
                 "{m:?}: the preset dropdown must not be reachable"
             );
@@ -459,20 +550,31 @@ mod tests {
     #[test]
     fn the_non_flame_modes_gate_exactly_their_documented_controls() {
         for m in [RenderMode::Escape, RenderMode::Simulation] {
-            let hidden = |c: Control| control(c, m) == Vis::Hide;
-            let greyed = |c: Control| matches!(control(c, m), Vis::Grey(_));
+            let hidden = |c: Control| control(c, m, ToneMapMode::Logarithmic) == Vis::Hide;
+            let greyed = |c: Control| matches!(control(c, m, ToneMapMode::Logarithmic), Vis::Grey(_));
             assert!(hidden(Control::ChaosGame), "{m:?} chaos game");
             assert!(hidden(Control::TonemapPresets), "{m:?} presets");
             assert!(hidden(Control::SpatialFilter), "{m:?} spatial filter");
             assert!(hidden(Control::DensityLevels), "{m:?} levels");
             assert!(hidden(Control::ColorMode), "{m:?} colour mode");
+            if m == RenderMode::Simulation {
+                assert!(hidden(Control::ViewNavigation), "sim viewport navigation");
+            } else {
+                assert!(
+                    control(Control::ViewNavigation, m, ToneMapMode::Logarithmic).is_show(),
+                    "escape keeps its own navigation"
+                );
+            }
             assert!(greyed(Control::TonemapMode), "{m:?} tone map mode");
             assert!(greyed(Control::LogOnlyTone), "{m:?} log-only tone");
             assert!(greyed(Control::AlphaBlendCurve), "{m:?} alpha blend");
         }
         // The orbit cache is the one control a non-flame mode gains.
-        assert!(control(Control::OrbitCache, RenderMode::Escape).is_show());
-        assert_eq!(control(Control::OrbitCache, RenderMode::Simulation), Vis::Hide);
+        assert!(control(Control::OrbitCache, RenderMode::Escape, ToneMapMode::Linear).is_show());
+        assert_eq!(
+            control(Control::OrbitCache, RenderMode::Simulation, ToneMapMode::Linear),
+            Vis::Hide
+        );
     }
 
     /// The flame modes offer everything except the two that are not

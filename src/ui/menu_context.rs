@@ -86,6 +86,8 @@ pub struct MenuState {
     /// not tell Escape and Simulation from 3D -- so the View menu drew
     /// "3D Mode" as selected in both, and Fly Mode stayed enabled.
     pub render_mode: RenderMode,
+    /// The active tone-map mode, the visibility policy's second axis.
+    pub tonemap_mode: crate::scene::tonemap::ToneMapMode,
     pub online_mode: bool,
     pub has_api_flame_id: bool,
     pub api_flame_id: Option<String>,
