@@ -1154,13 +1154,42 @@ trunk vanished, so its three presets draw a flat figure over the matte
 instead — which is what the paper's own photograph of a Lichtenberg
 figure looks like.
 
-The rest of the phase, still to do: animation
-targets, video-export semantics, a shipped `sim_sweep.rhai`; the
-script `sim` handle with SCRIPTING.md rows; the API enum (server
-first, then drop the refusal), contract note to the API repository,
-`openapi.json`; `es`/`ja`/`zh-CN` keys; display-only pan/zoom into
-the grid; `wasm/sim` gallery module; docs (CLAUDE.md, ARCHITECTURE,
-RENDERER, CONFIG, UI, EXPORT, WASM, RELEASE).
+**The rest of the phase, re-checked against the code 2026-09-09.**
+The list below was written on 2026-09-06 and had gone stale in both
+directions, so it is split into what has since been built and what
+genuinely remains.
+
+**Since built:** the flat animation targets (`src/ui/target_selector.rs`
+offers the sim parameter categories); video-export semantics
+(`src/animation/export.rs` steps and renders the grid per frame); the
+script `sim` handle with its SCRIPTING.md rows
+(`src/script/api.rs:359,1450`); and the API enum — `src/api/sync.rs`
+now maps both non-flame modes in both directions, and the test that
+pinned the client-side refusal was replaced by one pinning the round
+trip. The UI documentation was rewritten by the render-mode project
+([../archive/projects/ui-render-modes.md](../archive/projects/ui-render-modes.md)).
+
+**Still to do:**
+
+- A shipped `sim_sweep.rhai`. There is no simulation script in
+  `assets/scripts/`.
+- `es` / `ja` / `zh-CN` keys — **zero** simulation keys in all three.
+- A `wasm/sim` gallery module; `wasm/` has flame, escape, render and
+  script.
+- Docs: RENDERER, CONFIG and EXPORT mention simulation **zero** times;
+  CLAUDE.md once, ARCHITECTURE twice. WASM and RELEASE unchecked.
+- Display-only pan/zoom into the grid. Scoped and deliberately not
+  built: the warp is a per-step transform of the field, not a camera,
+  so viewport navigation is currently *refused* in Simulation rather
+  than misdirected (`ui::visibility::Control::ViewNavigation`).
+- **Layer-scoped** animation targets. `SimLayerParam` and
+  `SimColorLayerParam` exist as config paths but the target picker
+  offers only the flat ones, so nothing inside a layer can be
+  keyframed. Folded into
+  [simulation-panel.md](simulation-panel.md) §5.
+
+The panel reorganisation itself is
+[simulation-panel.md](simulation-panel.md).
 
 ---
 
