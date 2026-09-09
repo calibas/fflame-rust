@@ -44,7 +44,7 @@ pub fn render_escape_content(
         .clicked()
     {
         let target = if active { RenderMode::ThreeD } else { RenderMode::Escape };
-        if let Err(e) = switch_render_mode(config_manager, target) {
+        if let Err(e) = super::render_mode::switch_render_mode(config_manager, target) {
             log::error!("Failed to switch render mode: {e}");
         } else if !active {
             // Entering: bring the workspace with it.
@@ -1473,47 +1473,6 @@ pub fn apply_field_preset(
     config_manager
         .update_batch(changes, "history.action.escape_preset".to_string())
         .map(|_| ())
-}
-
-pub fn switch_render_mode(
-    config_manager: &mut ConfigManager,
-    mode: RenderMode,
-) -> Result<(), crate::config::manager::ConfigError> {
-    let config = config_manager.active_config();
-    // Both non-flame engines write a unit-range image, and a flame's
-    // Log-calibrated exposure renders that black. Entering EITHER from
-    // a flame mode resets the tonemap once; switching between the two
-    // does not, because the values are already right.
-    let entering_non_flame = matches!(mode, RenderMode::Escape | RenderMode::Simulation)
-        && !matches!(
-            config.render_mode,
-            RenderMode::Escape | RenderMode::Simulation
-        );
-    let default_tonemap = entering_non_flame
-        && config.tonemap_mode == crate::scene::tonemap::ToneMapMode::Logarithmic;
-    if default_tonemap {
-        config_manager.update_batch(
-            vec![
-                (ConfigPath::RenderMode, mode.into()),
-                (
-                    ConfigPath::TonemapMode,
-                    crate::scene::tonemap::ToneMapMode::Linear.into(),
-                ),
-                (
-                    ConfigPath::Exposure,
-                    crate::config::defaults::DEFAULT_EXPOSURE.into(),
-                ),
-                (
-                    ConfigPath::Gamma,
-                    crate::config::defaults::DEFAULT_GAMMA.into(),
-                ),
-            ],
-            "history.param.render_mode".to_string(),
-        )
-        .map(|_| ())
-    } else {
-        config_manager.update_param(ConfigPath::RenderMode, mode.into()).map(|_| ())
-    }
 }
 
 /// Magnification as a readable factor, formatted FROM THE LOG.

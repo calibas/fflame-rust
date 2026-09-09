@@ -104,7 +104,7 @@ pub fn render_sim_content(
         .clicked()
     {
         let target = if active { RenderMode::ThreeD } else { RenderMode::Simulation };
-        if let Err(e) = super::escape_panel::switch_render_mode(config_manager, target) {
+        if let Err(e) = super::render_mode::switch_render_mode(config_manager, target) {
             log::error!("Failed to switch render mode: {e}");
         } else if !active {
             *state.reseed = true;

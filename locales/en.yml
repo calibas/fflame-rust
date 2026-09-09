@@ -3,6 +3,14 @@ _version: 1
 app:
   title: "Fractal Flame Renderer"
 
+# The four render modes, named once. Used by the mode picker and by
+# anything that has to say which engine is running.
+mode:
+  two_d: "2D Flame"
+  three_d: "3D Flame"
+  escape: "Escape Time"
+  simulation: "Simulation"
+
 # Menu Bar
 menu:
   file: "File"
