@@ -3,7 +3,7 @@
 Quick reference guide to understanding the codebase structure and data flow.
 
 **Detailed Documentation:**
-- [UI.md](main/UI.md) - Windows, panels, input handling, UiResponse system
+- [UI.md](main/UI.md) - Panels, menus, render-mode gating, input handling
 - [BUFFERS.md](main/BUFFERS.md) - GPU layouts, bind groups, data structures
 - [TRANSFORMS.md](main/TRANSFORMS.md) - Flame algorithm, affine math, IFS implementation
 - [RENDERER.md](main/RENDERER.md) - 3-pass pipeline, FlameRenderer, PNG export
@@ -624,40 +624,39 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 ---
 
-## 🖼️ UI Organization (egui_dock - Migrated 2025-11-13)
+## 🖼️ UI Organization (egui + egui_dock)
 
 **Docking System:**
-- Migrated from fixed side panel to flexible docking layout using egui_dock
-- All windows converted to dockable panels (1:1 mapping)
-- Users can rearrange, detach, and dock panels anywhere
-- Future: Save/restore workspace layouts
+- All UI is dockable panels; users can rearrange, detach and dock anywhere
+- `PanelType` in `src/ui/workspace.rs` defines **29 panels**
+- `WorkspaceLayout` holds the presets (Standard, Animation, Scripting,
+  Escape Time, Simulation, Compact). Layouts are session-only —
+  nothing about the dock tree is persisted
 
-**7 Main Panels:**
-1. **Fractal Viewport** - Main rendering display (center, always visible)
-2. **Settings** - File operations, rendering controls, preferences (with language selector)
-3. **Transforms** - Transform list, add/delete, affine parameters
-4. **Triangle Editor** - Visual affine editing with interactive triangles
-5. **View** - Camera controls, zoom, pan, rotation
-6. **Tone Mapping & Colors** - Color mode, palette, tone mapping settings
-7. **History** - Visual undo/redo browser with state preview
+**Render modes drive the UI.** The four modes (2D and 3D flame, Escape
+Time, Simulation) decide which panels, menu items and individual
+controls are available:
+- `src/ui/render_mode.rs` — the only writer of `ConfigPath::RenderMode`,
+  plus the mode → workspace mapping and the engine-lifetime policy
+- `src/ui/visibility.rs` — the only answer to "is this available in
+  this mode", exhaustive over panel × mode and control × mode
+- Add a case there rather than a `matches!` inside a panel
 
 **Menu Bar:**
-- Top-level menus: File, Edit, View, Fractal, Rendering, Window, Help
-- Professional menu structure for feature discoverability
-- Keyboard shortcuts documented in menus
-- Future: Implement all menu actions
+- File, Edit, View, **Mode**, Rendering, Window, Help
+- The Mode menu is built from `RenderMode::ALL`
+- Both Window menus draw their panel rows from `visibility::WINDOW_MENU`
 
-**Internationalization (Added 2025-11-13):**
-- rust-i18n v3.1 with YAML translation files
-- Language selector in Settings → Preferences
-- English (en) complete with 200+ strings
-- Ready for community translations (Spanish, French, German, Japanese, Chinese)
-- See [I18N.md](main/I18N.md) for translation guide
+**Internationalization:**
+- rust-i18n v3.1 with YAML translation files in `locales/`
+- Language selector in the menu bar's right strip
+- English is complete; es, ja and zh-CN are partial
+- See [I18N.md](main/I18N.md) for the translation guide
 
 **See [UI.md](main/UI.md)** for complete UI documentation including:
-- Panel descriptions and controls
+- Panels, workspace layouts and the render-mode machinery
 - Input handling (keyboard, mouse, wheel)
-- UiResponse system (legacy)
+- UiResponse system
 - Common UI modification tasks
 
 ---
