@@ -342,7 +342,7 @@ Each phase leaves the app working and every existing test green.
 | # | Builds | Gate |
 |---|---|---|
 | 1 | `RenderMode` replaces the boolean; `switch_render_mode` moves to `src/ui/render_mode.rs`; all five switch sites route through it; coalescing off | a switch from every mode to every other lands in the right mode with one undo entry; Fly Mode enabled in 3D alone — a table test over all four modes — **built**, see below |
-| 2 | `src/ui/visibility.rs` with the panel table; dispatcher and both menus consult it; per-case hint text | every `PanelType` × `RenderMode` has an explicit answer (exhaustive match, no `_` arm); no menu row opens onto a stub; the existing layout tests stay green |
+| 2 | `src/ui/visibility.rs` with the panel table; dispatcher and both menus consult it; per-case hint text | every `PanelType` × `RenderMode` has an explicit answer (exhaustive match, no `_` arm); no menu row opens onto a stub; the existing layout tests stay green — **built**, see below |
 | 3 | The Mode menu; View/compact/View-panel toggles deleted | the menu offers exactly `RenderMode::ALL`; a test that no other site writes `ConfigPath::RenderMode` |
 | 4 | Control-level policy in Colors, Rendering, Effects per §1.4; dead sections hidden, dead controls greyed | every control in the §1.4 table has an explicit answer; a test asserting the tone-map preset dropdown and Reset Colors are unreachable in non-flame modes |
 | 5 | *Separable.* Free the inactive engine on switch | VRAM falls on leaving Escape at high supersample, measured; returning re-renders correctly |
@@ -378,6 +378,57 @@ where two are needed — so it is load-bearing rather than decorative.
 
 The four locale keys `mode.two_d`, `mode.three_d`, `mode.escape` and
 `mode.simulation` name the modes once, ready for phase 3.
+
+### Phase 2 as built, 2026-09-09
+
+`src/ui/visibility.rs` holds `Vis { Show, Grey(reason_key), Hide }` and
+`panel(PanelType, RenderMode) -> Vis`, written with no `_` arm, so a
+new panel or a new mode does not compile until someone decides what it
+means. The dispatcher's two `matches!` blocks collapse to one consult.
+
+**No panel is ever `Hide`.** Hiding a panel's menu row would make it
+unreachable *and* undiscoverable, so an unavailable panel is greyed in
+the menu with a hover naming the reason, and its body — if it was open
+when you switched — says the same thing. `Hide` stays in the enum for
+whole sections inside a panel, which is phase 4.
+
+Four reasons replace the single shared string that used to claim every
+panel "edits the flame and is inactive in Escape mode", including in
+Simulation and including for the two engine panels, which edit no flame
+at all: `visibility.flame_only`, `three_d_only`, `other_engine` and
+`makes_a_flame`.
+
+**The panel list is hoisted**, closing the section-6 risk. `WINDOW_MENU`
+is the one source of which panels a menu offers and what they are
+called; the desktop menu's 22 hand-written rows became a loop over it.
+`COMPACT_WINDOW_MENU` keeps the compact submenu's own touch-priority
+order but takes its labels from the shared table, and a test asserts it
+is a subset. Palette Editor, Palette Library, Path Editor, Random
+Generator and Account stay out of the compact menu as before.
+
+**Two deliberate behaviour changes** beyond moving the gate:
+
+- **Random Generator is greyed in Escape and Simulation.** It worked
+  there, but everything it produces is a flame, so using it silently
+  replaced your work and left the mode. Greying it says so.
+- **Solid & Lighting is greyed in 2D**, where it previously opened and
+  explained itself. The panel keeps its own guard as a second line of
+  defence; the menu now says it before you open it.
+
+Seven tests. The load-bearing one pins the exact set of greyed panels
+per non-flame mode, because a panel quietly dropping out of a mode is
+the failure this module exists to prevent. Another asserts every reason
+key resolves to real text and is longer than ten characters, since
+`t!` returns the key itself when it is missing. 1,053 unit tests and
+all release gates pass.
+
+**Not changed, deliberately.** The Transforms, Triangle Editor and
+Variations panels stay available in Simulation even though
+`sim.use_transforms` defaults to off, because those panels are how you
+find the feature. Telling the user about the flag is a control-level
+job for phase 4. The disagreement noted in section 1.2 — the default
+Simulation layout omits Transforms while the gate keeps it usable — is
+now the deliberate answer: available, not opened for you.
 
 ## 5. Bugs found, filed not fixed
 
