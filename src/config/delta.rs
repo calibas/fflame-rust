@@ -414,6 +414,8 @@ pub enum ConfigPath {
     SimCouplingForm { index: usize },
     SimCouplingStrength { index: usize },
     SimCouplingChannels { index: usize },
+    /// Use the flame's transforms as the layers' maps. Bool.
+    SimUseTransforms,
     /// One colouring parameter, by name.
     SimColoringParam { param: String },
     /// Escape radius squared.
@@ -983,6 +985,7 @@ impl Display for ConfigPath {
             ConfigPath::SimCouplingForm { index } => write!(f, "Simulation Coupling {index} Form"),
             ConfigPath::SimCouplingStrength { index } => write!(f, "Simulation Coupling {index} Strength"),
             ConfigPath::SimCouplingChannels { index } => write!(f, "Simulation Coupling {index} Channels"),
+            ConfigPath::SimUseTransforms => write!(f, "Simulation Use Transforms"),
             ConfigPath::SimColoringParam { param } => write!(f, "Simulation Color {param}"),
             ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
             ConfigPath::EscapeDownsample => write!(f, "Escape Downsample"),
@@ -1279,6 +1282,7 @@ impl ConfigPath {
             | ConfigPath::SimCouplingChannels { index } => {
                 I18nKey::with_params("history.param.sim_coupling", vec![("index", index.to_string())])
             }
+            ConfigPath::SimUseTransforms => I18nKey::simple("history.param.sim_use_transforms"),
             ConfigPath::SimColoringParam { param } => I18nKey::with_params(
                 "history.param.sim_coloring_param",
                 vec![("param", param.clone())],
@@ -2684,6 +2688,7 @@ impl ConfigPath {
             | ConfigPath::SimCouplingForm { .. }
             | ConfigPath::SimCouplingStrength { .. }
             | ConfigPath::SimCouplingChannels { .. }
+            | ConfigPath::SimUseTransforms
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
             // A bound grid's scale change resamples the live field
@@ -2993,6 +2998,7 @@ impl ConfigPath {
             ConfigPath::SimCouplingForm { index } => format!("Sim.Coupling.{index}.Form"),
             ConfigPath::SimCouplingStrength { index } => format!("Sim.Coupling.{index}.Strength"),
             ConfigPath::SimCouplingChannels { index } => format!("Sim.Coupling.{index}.Channels"),
+            ConfigPath::SimUseTransforms => "Sim.UseTransforms".to_string(),
             ConfigPath::SimColoringParam { param } => format!("Sim.ColoringParam.{param}"),
             ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
             ConfigPath::EscapeDownsample => "Escape.Downsample".to_string(),
@@ -3284,6 +3290,7 @@ impl ConfigPath {
                         param: param.to_string(),
                     })
                 }
+                ["UseTransforms"] => return Some(ConfigPath::SimUseTransforms),
                 ["Coupling", index, field] => {
                     let index = index.parse().ok()?;
                     return match *field {
@@ -3738,7 +3745,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimCouplingFrom { .. }
         | ConfigPath::SimCouplingTo { .. }
         | ConfigPath::SimCouplingForm { .. }
-        | ConfigPath::SimCouplingChannels { .. } => None,
+        | ConfigPath::SimCouplingChannels { .. }
+        | ConfigPath::SimUseTransforms => None,
 
         // Vec2 (pan coordinates)
         ConfigPath::Pan => {

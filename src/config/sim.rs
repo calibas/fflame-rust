@@ -868,6 +868,14 @@ pub struct SimConfig {
     /// template after a layer's own rule. Empty for a single system.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<SimCoupling>,
+
+    /// Use the flame's transforms as the layers' maps (plan section
+    /// 4): transform i moves layer i each step, by its affine and
+    /// variations, at a rate that is its weight. Off by default so a
+    /// config's flame -- every config has one -- moves nothing until
+    /// asked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub use_transforms: bool,
 }
 
 /// One coupling: layer `from` drives layer `to` by `form`, at
@@ -1020,6 +1028,7 @@ impl Default for SimConfig {
             fit: SimFit::default(),
             layers: Vec::new(),
             couplings: Vec::new(),
+            use_transforms: false,
         }
     }
 }
@@ -1189,6 +1198,7 @@ mod tests {
             ConfigPath::SimCouplingForm { index: 1 },
             ConfigPath::SimCouplingStrength { index: 2 },
             ConfigPath::SimCouplingChannels { index: 0 },
+            ConfigPath::SimUseTransforms,
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "scale".into() },
         ];

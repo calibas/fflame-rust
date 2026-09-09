@@ -799,6 +799,14 @@ fn render_layers(
         .default_open(!sim.layers.is_empty())
         .show(ui, |ui| {
             ui.label(egui::RichText::new(t!("sim_panel.layers_tip")).small().weak());
+            let mut use_transforms = sim.use_transforms;
+            if ui
+                .checkbox(&mut use_transforms, t!("sim_panel.use_transforms").as_ref())
+                .on_hover_text(t!("sim_panel.use_transforms_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::SimUseTransforms, use_transforms.into());
+            }
             ui.horizontal(|ui| {
                 ui.label(t!("sim_panel.layered_presets").as_ref());
                 egui::ComboBox::from_id_salt("sim_layered_preset")

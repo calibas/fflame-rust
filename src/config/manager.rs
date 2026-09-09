@@ -165,6 +165,7 @@ fn supports_coalescing(path: &ConfigPath) -> bool {
         | ConfigPath::SimCouplingTo { .. }
         | ConfigPath::SimCouplingForm { .. }
         | ConfigPath::SimCouplingChannels { .. }
+        | ConfigPath::SimUseTransforms
         | ConfigPath::SimMatteEdge => false,
         // ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
@@ -1901,6 +1902,7 @@ impl ConfigManager {
             ConfigPath::SimCouplingChannels { index } => Ok(ConfigValue::Int(
                 config.sim.couplings.get(*index).map(|c| c.channels as i32).unwrap_or(15),
             )),
+            ConfigPath::SimUseTransforms => Ok(ConfigValue::Bool(config.sim.use_transforms)),
             ConfigPath::SimColoringParam { param } => Ok(ConfigValue::Float(
                 config.sim.coloring_params.get(param).copied().unwrap_or(0.0),
             )),
@@ -3108,6 +3110,9 @@ impl ConfigManager {
                 if let Some(c) = self.current.sim.couplings.get_mut(*index) {
                     c.channels = v.clamp(0, 15) as u32;
                 }
+            }
+            ConfigPath::SimUseTransforms => {
+                self.current.sim.use_transforms = bool::try_from(value)?;
             }
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;

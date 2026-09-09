@@ -2597,6 +2597,11 @@ impl App {
                 // resolve ratio (fixed); the renderer decides which and
                 // reports whether the field survived.
                 sim.resize(&self.gpu.device, &final_config.sim, w, h);
+                // The flame's transforms are the layers' maps when the
+                // config asks (simulation-layers plan, section 4).
+                if final_config.sim.use_transforms {
+                    sim.set_layer_transforms(&self.gpu.device, &self.gpu.queue, &final_config.flame);
+                }
                 if self.sim_reseed {
                     sim.request_seed();
                     self.sim_reseed = false;
