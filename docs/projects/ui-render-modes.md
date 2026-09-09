@@ -3,9 +3,9 @@
 **Status:** plan of record, 2026-09-09. Branch `ui-modes`, off
 `simulation-mode`. Surveyed before planning; every claim below carries
 its `file:line` so a reader can argue with the code rather than with
-the prose. **Phases 1–4 built and gated** (section 4); phase 5, freeing
-the inactive engine, and phase 6, the standing documentation, to
-follow.
+the prose. **All six phases built and gated** (section 4), 2026-09-09.
+The bugs found while surveying (section 5) were deliberately left
+unfixed and are still open.
 
 Section 1 describes the code **as it was before this project**, and is
 left in the past tense on purpose: it is the evidence the decisions
@@ -353,7 +353,7 @@ Each phase leaves the app working and every existing test green.
 | 3 | The Mode menu; the two menu-bar 2D/3D pairs deleted (**the View panel keeps its own**); per-mode layout memory | the menu offers exactly `RenderMode::ALL`; a test that no other site writes `ConfigPath::RenderMode`; switching away and back restores the arrangement — **built**, see below |
 | 4 | Control-level policy in Colors, Rendering, Effects per §1.4; dead sections hidden, dead controls greyed | every control in the §1.4 table has an explicit answer; a test asserting the tone-map preset dropdown and Reset Colors are unreachable in non-flame modes — **built**, see below |
 | 5 | *Separable.* Free the inactive engine on switch | VRAM falls on leaving Escape at high supersample, measured; returning re-renders correctly — **built**, see below |
-| 6 | Update the standing UI documentation (§4.1) | `docs/main/UI.md` describes the mode machinery as built; the doc-links gate stays green |
+| 6 | Update the standing UI documentation (§4.1) | `docs/main/UI.md` describes the mode machinery as built; the doc-links gate stays green — **built**, see below |
 
 Phase 4 is where the user-visible win is; phases 1–3 are what make it
 expressible in one place instead of forty.
@@ -640,3 +640,33 @@ use.
 Two tests: each engine resident in its own mode alone and never both,
 and the per-pixel measurement above. 1,064 unit tests and all release
 gates pass.
+
+### Phase 6 as built, 2026-09-09
+
+`docs/main/UI.md` was rewritten where it had gone false and gained a
+**Render modes and the UI** section covering the mode vocabulary, the
+single writer of `ConfigPath::RenderMode`, the visibility policy, the
+shared window-menu table, layout memory and engine lifetimes.
+
+What it had been claiming: 7 dockable panels (there are 29), a Fractal
+menu that has never been wired, the render-mode switch as a 2D/3D
+toggle inside the Performance window, and a Performance window with a
+preset dropdown and camera controls it does not have. Five of its six
+per-panel sections pointed at `src/ui/mod.rs::render_ui()` for code
+that moved to its own file at the 2025-11-13 dock migration. Those are
+replaced by a panel-to-file table taken from the dispatch match, plus
+prose for the three panels with mechanics worth knowing.
+
+The "Add New Window" recipe described the pre-dock design — a show/hide
+boolean and a menu checkbox. It is now "Add a panel", six steps, with
+the `visibility::panel` case and the `WINDOW_MENU` row among them, and
+an explicit "do not write `matches!(config.render_mode, ...)` inside a
+panel". That instruction is the one most likely to keep this design
+intact.
+
+`docs/ARCHITECTURE.md` and `CLAUDE.md` got the same corrections in
+miniature, both pointing here.
+
+Deliberately left alone: the UiResponse, input-handling and
+delta-state sections, which were not surveyed for this project and are
+not this project's to vouch for.
