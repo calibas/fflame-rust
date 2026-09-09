@@ -1380,11 +1380,49 @@ struct SimCouplingGpu {
     form: u32,
     mask: u32,
     strength: f32,
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
+    // The driving layer's kernel table, for the Signal form: where it
+    // starts in the shared LUT, its half-width, and its length in
+    // floats (two blocks or one). Length 0: no table -- the signal is
+    // the driver's channel `signal_channel` if that is below 4 (a
+    // model that publishes its signal), else zero.
+    k_offset: u32,
+    k_radius: u32,
+    k_len: u32,
+    signal_channel: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 @group(0) @binding(17) var<storage, read> couplings: array<SimCouplingGpu>;
+
+// The driving layer's Turing signal (simulation-layers plan, section
+// 9): its field through its own kernel table, a two-block table as
+// the difference of its blocks, a one-block table as itself.
+fn sim_signal_of(c: SimCouplingGpu, p: vec2<i32>) -> vec4<f32> {
+    if (c.k_len == 0u) {
+        if (c.signal_channel < 4u) {
+            let v = sim_read_layer(i32(c.from_layer), p);
+            return vec4<f32>(v[c.signal_channel]);
+        }
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let r = i32(c.k_radius);
+    let w = 2 * r + 1;
+    let taps = u32(w * w);
+    let two = c.k_len >= 2u * taps;
+    var t = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var dy = -r; dy <= r; dy = dy + 1) {
+        for (var dx = -r; dx <= r; dx = dx + 1) {
+            let i = u32((dy + r) * w + (dx + r));
+            var k = kernel_lut[c.k_offset + i];
+            if (two) {
+                k = k - kernel_lut[c.k_offset + taps + i];
+            }
+            t = t + k * sim_read_layer(i32(c.from_layer), p + vec2<i32>(dx, dy));
+        }
+    }
+    return t;
+}
 
 // Another layer's value at this cell, through the boundary rule.
 fn sim_read_layer(l: i32, p: vec2<i32>) -> vec4<f32> {
@@ -1406,6 +1444,7 @@ fn sim_coupling(u: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
         if (c.to_layer != params.layer) {
             continue;
         }
+        //__SIGNAL_POST__
         let v = sim_read_layer(i32(c.from_layer), p);
         var term = v - u;
         if (c.form == 1u) {
@@ -1414,11 +1453,44 @@ fn sim_coupling(u: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
             term = v * v - u * u;
         } else if (c.form == 3u) {
             term = u * v;
+        } else if (c.form == 4u) {
+            term = sim_signal_of(c, p);
         }
         let on = vec4<bool>(
             (c.mask & 1u) != 0u, (c.mask & 2u) != 0u, (c.mask & 4u) != 0u, (c.mask & 8u) != 0u,
         );
         acc = acc + c.strength * select(vec4<f32>(0.0, 0.0, 0.0, 0.0), term, on);
+    }
+    return acc;
+}
+"#;
+
+/// The drive of a model that takes one, uncoupled: nothing.
+const DRIVE_STUB: &str = r#"
+// The drive (simulation-layers plan, section 9): no couplings, so none.
+fn sim_drive(p: vec2<i32>) -> vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+"#;
+
+/// The drive, coupled: the Signal couplings aimed at this layer,
+/// strength times signal on the masked channels, no dt.
+const DRIVE_ACCESSOR: &str = r#"
+// The drive (simulation-layers plan, section 9): the sum of the
+// Signal couplings aimed at this layer, which the rule folds in
+// before its own nonlinearity.
+fn sim_drive(p: vec2<i32>) -> vec4<f32> {
+    var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    let n = params.coupling_count;
+    for (var i = 0u; i < n; i = i + 1u) {
+        let c = couplings[i];
+        if (c.to_layer != params.layer || c.form != 4u) {
+            continue;
+        }
+        let on = vec4<bool>(
+            (c.mask & 1u) != 0u, (c.mask & 2u) != 0u, (c.mask & 4u) != 0u, (c.mask & 8u) != 0u,
+        );
+        acc = acc + c.strength * select(vec4<f32>(0.0, 0.0, 0.0, 0.0), sim_signal_of(c, p), on);
     }
     return acc;
 }
@@ -1500,7 +1572,32 @@ fn sim_kernel_taps() -> u32 {
             "    textureStore(field_out, p, sim_layer(), {entry}(textureLoad(field_in, p, sim_layer(), 0), p));"
         )
     };
-    let coupling = if coupled { COUPLING_ACCESSORS } else { "" };
+    // The Signal form reads the driver's kernel table; a model with no
+    // kernel of its own binds it here (the layout always has it).
+    let table = if coupled && model.kernel.is_none() {
+        "@group(0) @binding(5) var<storage, read> kernel_lut: array<f32>;\n"
+    } else {
+        ""
+    };
+    let takes_drive = model.has(ModelFeature::TakesDrive);
+    // A model that takes a drive folds the Signal couplings in
+    // itself, so the post-rule sum skips them.
+    let signal_post = if takes_drive {
+        "if (c.form == 4u) {\n            continue;\n        }"
+    } else {
+        ""
+    };
+    let drive = match (takes_drive, coupled) {
+        (false, _) => String::new(),
+        (true, false) => DRIVE_STUB.to_string(),
+        (true, true) => DRIVE_ACCESSOR.to_string(),
+    };
+    let coupling = if coupled {
+        format!("{table}{}{drive}", COUPLING_ACCESSORS.replace("//__SIGNAL_POST__", signal_post))
+    } else {
+        drive
+    };
+    let coupling = coupling.as_str();
     splice(
         STEP_TEMPLATE,
         boundary,
@@ -1939,7 +2036,7 @@ struct SimColorLayerGpu {
     source: u32,
     blend: u32,
     enabled: u32,
-    pad0: u32,
+    gather: u32,
     opacity: f32,
     edge: f32,
     pad1: f32,
@@ -2016,12 +2113,13 @@ fn sim_resolve_{k}(gf: vec2<f32>, g: vec2<i32>, fit: f32) -> vec4<f32> {{
         composite.push_str(&format!(
             "    if (color_layers[{k}].enabled != 0u) {{
         sim_layer_offset = i32(color_layers[{k}].source);
+        sim_gather_fields = color_layers[{k}].gather != 0u;
         col = sim_blend(col, sim_resolve_{k}(gf, g, fit), color_layers[{k}].blend, color_layers[{k}].opacity);
     }}
 "
         ));
     }
-    splice(
+    let out = splice(
         COLOR_TEMPLATE,
         boundary,
         &[
@@ -2031,8 +2129,46 @@ fn sim_resolve_{k}(gf: vec2<f32>, g: vec2<i32>, fit: f32) -> vec4<f32> {{
             ("//__GRADIENT__", gradient),
             ("//__TENSOR__", tensor),
         ],
-    )
+    );
+    // The stack's read gathers when the layer asks: the first channel
+    // of four consecutive layers from the source, the last repeating.
+    // Only the stack carries this; the single colouring's read is
+    // untouched.
+    assert!(out.contains(STACK_READ_PLAIN), "the shared read changed under the stack");
+    out.replace(STACK_READ_PLAIN, STACK_READ_GATHER)
 }
+
+/// `sim_read` as the templates share it (`READ_BODY`).
+const STACK_READ_PLAIN: &str = r#"fn sim_read(p: vec2<i32>) -> vec4<f32> {
+    let g = sim_grid();
+    if (sim_outside(p, g)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return textureLoad(field_in, sim_wrap_sized(p, g), sim_layer(), 0);
+}"#;
+
+/// The same, gathering four layers' first channels when the colour
+/// layer asks (simulation-layers plan, section 9).
+const STACK_READ_GATHER: &str = r#"var<private> sim_gather_fields: bool = false;
+fn sim_read(p: vec2<i32>) -> vec4<f32> {
+    let g = sim_grid();
+    if (sim_outside(p, g)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let w = sim_wrap_sized(p, g);
+    if (sim_gather_fields) {
+        // minmax_back carries the layer count.
+        let last = i32(params.minmax_back) - 1;
+        let l0 = sim_layer();
+        return vec4<f32>(
+            textureLoad(field_in, w, min(l0, last), 0).x,
+            textureLoad(field_in, w, min(l0 + 1, last), 0).x,
+            textureLoad(field_in, w, min(l0 + 2, last), 0).x,
+            textureLoad(field_in, w, min(l0 + 3, last), 0).x,
+        );
+    }
+    return textureLoad(field_in, w, sim_layer(), 0);
+}"#;
 
 #[cfg(test)]
 mod tests {
