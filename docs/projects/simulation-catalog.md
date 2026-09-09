@@ -2390,6 +2390,59 @@ a per-layer sub-stepping would be the fix and is not built.
 alone, 0.284 per layer at two, 0.319 at eight; 63 MB of field per
 layer at 1080p.
 
+### 31a. The lattice as layers: `turing` and the Signal coupling
+
+**Sources.** §28's lattice, taken apart (simulation-layers plan,
+section 9). McCabe's multi-scale model (§10) was asked about first
+and does not decompose: it is one field whose scales are competing
+measurements chosen by a per-cell argmin, and nothing pairwise
+expresses that; it stays as it is.
+
+**What it is.** `turing` is one field of the lattice as a layer
+model: `self`, `radius`, `ratio`, `amount`, `noise`, `gain`,
+`decay`, `quadratic`, the same difference-of-discs kernel (shared
+code). Its drive is `self · own signal + sim_drive(p)`, where the
+drive is the sum of the **Signal** couplings aimed at its layer — a
+fifth coupling form, the driving layer's field through the driving
+layer's own kernel table (a two-block table as the difference of its
+blocks, one block as itself), folded in before the saturation by a
+model that declares `TakesDrive`, added after the rule by any
+other. Two passes: the first convolves once and publishes the
+signal in `.y` (`PublishesSignal`), the second steps; a coupling
+from a publishing layer reads `.y` instead of convolving. The
+fluctuations are the lattice's own streams (salt `0x41 + layer` on
+layer 0's stream). What the lattice keeps that this lacks: the
+memory column, whose amplitude term reads three fields at once. What
+this has that the lattice lacks: any number of fields, a radius per
+field, a transform per field, and the colour stack. A colour layer
+may **gather**: read the first channel of four consecutive layers as
+its four channels, so `species` colours four `turing` layers as it
+colours the lattice.
+
+**Gate** (`four_turing_layers_are_the_lattices_ring`). The lattice's
+`ring` and `independent` presets against four `turing` layers from
+the lattice's own seed (the init mask's noise is salted by layer, so
+the seed is copied in; every step after it draws identically), 64²,
+200 steps, noise on. Measured: ring 5.7e-7 worst (5.2e-8 RMS),
+independent 1.2e-7 — the cost of summing the drive in a different
+order; at 2,000 steps the ring's cycle has carried it to 6.5e-6.
+The `species` colouring of the lattice against one gathered colour
+layer of the four: 6.3e-7 worst. Asserted at 4e-6 / 1e-6 on the
+fields and 1e-5 on the colour.
+
+**Cost.** The ring as layers at 256² for 2,000 steps: 11.2 s when
+every Signal coupling re-convolved its driver (twelve scalar
+gathers a step against the lattice's one vec4 gather), 4.0 s with
+the signal published once per layer; the lattice 2.0 s. Four scalar
+gathers against one four-wide one is the remaining factor.
+
+**Presets** (`LAYERED_PRESETS`, run before they shipped):
+
+| preset | layers | couplings | seen |
+|---|---|---|---|
+| `turing_ring` | four `turing`, radius 4 | the ring's eight, Signal ±1.5, channel x | the lattice's ring (gated); `species` over the gathered four |
+| `turing_scales` | four `turing`, radii 3, 5, 8, 12 | the same eight | stripes at the finest field's scale in domains the coarser fields draw, their walls where the coarse fields' phases meet |
+
 ## 32. Cross-cutting notes
 
 - **Determinism.** Every stochastic model draws from the PCG in

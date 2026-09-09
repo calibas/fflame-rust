@@ -172,6 +172,19 @@ pub enum ModelFeature {
     /// same dependency the reference algorithm has, since a step can
     /// only normalise by a range that has already been measured.
     NeedsMinMax,
+    /// The rule takes a DRIVE: the sum of the Signal couplings aimed
+    /// at its layer, through `sim_drive(p)`, which it folds in before
+    /// its own nonlinearity (simulation-layers plan, section 9). Those
+    /// couplings are then left out of the post-rule sum. Uncoupled,
+    /// the hook returns zero.
+    TakesDrive,
+    /// The model PUBLISHES its Turing signal: a pass before its last
+    /// writes the signal of the field it read into `.y`, so a Signal
+    /// coupling from it reads that channel instead of convolving the
+    /// field again. The stage loop runs every layer's pass k before
+    /// any layer's pass k + 1, so the channel a later pass reads is
+    /// the signal of the same field the convolution would have seen.
+    PublishesSignal,
 }
 
 /// A model's agent stage.
@@ -651,6 +664,10 @@ pub struct SimLayeredPreset {
     pub init: crate::config::sim::SimInit,
     pub coloring: &'static str,
     pub coloring_params: &'static [(&'static str, f32)],
+    /// A colour stack, bottom first, each entry (source layer, gather
+    /// four layers' first channels, colouring, its parameters, blend,
+    /// opacity); empty for the single colouring above.
+    pub color_layers: &'static [(usize, bool, &'static str, &'static [(&'static str, f32)], crate::config::sim::SimBlend, f32)],
     /// Steps per frame the preset asks for: a run at dt 0.001 that
     /// needs 200,000 steps to show its pattern sits at a uniform fixed
     /// point for the first several thousand, and at the default
@@ -692,11 +709,53 @@ impl SimLayeredPreset {
         // way; found when this preset showed nothing after one that
         // matted.
         sim.matte = Default::default();
-        sim.color_layers.clear();
+        sim.color_layers = self
+            .color_layers
+            .iter()
+            .map(|&(source, gather, coloring, params, blend, opacity)| crate::config::sim::SimColorLayer {
+                source,
+                gather,
+                coloring: coloring.to_string(),
+                coloring_params: params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+                matte: Default::default(),
+                blend,
+                opacity,
+                enabled: true,
+            })
+            .collect();
         sim.warp = Default::default();
         sim.use_transforms = false;
     }
 }
+
+/// The lattice's ring as four `turing` layers: each field's own
+/// parameters, and its row of the coupling matrix as Signal couplings
+/// from the fields that drive it. Layer `i` is field `i`.
+const TURING_FIELD: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R3: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 3.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R5: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 5.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R8: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 8.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R12: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 12.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+/// The four fields gathered into one `species` colouring, as the
+/// lattice's own preset is coloured.
+const TURING_FIELD_COLOURS: &[(usize, bool, &str, &[(&str, f32)], crate::config::sim::SimBlend, f32)] = &[
+    (0, true, "species", &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)], crate::config::sim::SimBlend::Normal, 1.0),
+];
 
 /// The layered presets, each run before it shipped (catalog section
 /// 31).
@@ -721,6 +780,7 @@ pub static LAYERED_PRESETS: &[SimLayeredPreset] = &[
         init: crate::config::sim::SimInit::Blobs { count: 6, radius: 24 },
         coloring: "channel",
         coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
+        color_layers: &[],
     },
     SimLayeredPreset {
         name: "brusselator_layers",
@@ -743,6 +803,68 @@ pub static LAYERED_PRESETS: &[SimLayeredPreset] = &[
         init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
         coloring: "channel",
         coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+        color_layers: &[],
+    },
+    SimLayeredPreset {
+        name: "turing_ring",
+        display_name: "Four Turing fields, chasing ring",
+        description: "The coupled Turing lattice's ring taken apart: four `turing` layers, each \
+                      following the field before it and opposing the one after through Signal \
+                      couplings of ±1.5. The same run as the `lattice4` ring, which is this \
+                      path's gate; each field coloured on its own in the stack.",
+        layers: &[
+            ("turing", TURING_FIELD),
+            ("turing", TURING_FIELD),
+            ("turing", TURING_FIELD),
+            ("turing", TURING_FIELD),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (3, 0, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (0, 1, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (2, 1, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (1, 2, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (3, 2, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (0, 3, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (2, 3, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+        ],
+        steps: 2000,
+        dt: 1.0,
+        steps_per_frame: 10,
+        init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
+        coloring: "channel",
+        coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+        color_layers: TURING_FIELD_COLOURS,
+    },
+    SimLayeredPreset {
+        name: "turing_scales",
+        display_name: "Four Turing fields, four scales",
+        description: "The chasing ring with a radius per field — 3, 5, 8 and 12 cells — which \
+                      the lattice cannot do: stripes at the finest field's scale in domains \
+                      the coarser fields draw, their walls where the coarse phases meet.",
+        layers: &[
+            ("turing", TURING_FIELD_R3),
+            ("turing", TURING_FIELD_R5),
+            ("turing", TURING_FIELD_R8),
+            ("turing", TURING_FIELD_R12),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (3, 0, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (0, 1, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (2, 1, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (1, 2, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (3, 2, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (0, 3, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (2, 3, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+        ],
+        steps: 2000,
+        dt: 1.0,
+        steps_per_frame: 10,
+        init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
+        coloring: "channel",
+        coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+        color_layers: TURING_FIELD_COLOURS,
     },
 ];
 
@@ -780,6 +902,7 @@ pub static MODELS: &[&ModelDef] = &[
     &models::LATTICE4,
     &models::BRUSSELATOR2,
     &models::ROSSLER,
+    &models::TURING,
 ];
 
 /// Every colouring, in registration order. Append only.

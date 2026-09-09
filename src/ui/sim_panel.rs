@@ -885,6 +885,18 @@ fn render_color_layers(
                             })
                             .response
                             .on_hover_text(t!("sim_panel.color_layer_source_tip"));
+                        let mut gather = layer.gather;
+                        if ui
+                            .checkbox(&mut gather, t!("sim_panel.color_layer_gather").as_ref())
+                            .on_hover_text(t!("sim_panel.color_layer_gather_tip"))
+                            .changed()
+                        {
+                            action = Some(Box::new(move |s: &mut SimConfig| {
+                                if let Some(cl) = s.color_layers.get_mut(i) {
+                                    cl.gather = gather;
+                                }
+                            }));
+                        }
                     }
                     if i + 1 < count && ui.small_button("▲").on_hover_text(t!("sim_panel.color_layer_up_tip")).clicked() {
                         action = Some(Box::new(move |s: &mut SimConfig| s.color_layers.swap(i, i + 1)));
