@@ -2110,6 +2110,16 @@ pub async fn export_animation_fast(
     let is_sim = false;
     #[cfg(feature = "engine-sim")]
     let mut sim_renderer: Option<crate::sim::SimRenderer> = None;
+    // The chaos game, the density renormalisation and the shade pass
+    // are the FLAME generator. A simulation frame reached them anyway:
+    // the escape arm was carved out of the flame path, and the
+    // simulation arm was added after it as a stage on the side, so
+    // every simulation frame first ran the flame's full
+    // `max_iterations` of chaos game into a histogram nothing read,
+    // then advanced the grid. That was the whole of the 10x against
+    // the viewport. The still path (`render.rs`) never had this: it
+    // returns before the flame section starts.
+    let is_flame = !is_escape && !is_sim;
     // Accumulated samples per axis for the frame just rendered (1 =
     // the grid alone); the tail picks the averaged image from it.
     #[cfg(feature = "engine-escape")]
@@ -2289,7 +2299,7 @@ pub async fn export_animation_fast(
                 let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             }
             esc.set_sample_offset([0.0, 0.0]);
-        } else {
+        } else if is_flame {
             render_frame_to_completion(
                 &device,
                 &queue,
@@ -2304,7 +2314,7 @@ pub async fn export_animation_fast(
         // CLI export: exact brightness renormalization for occluded
         // renders, then the shade pass (lighting/SSAO), then tonemap from
         // the shaded output.
-        if !is_escape {
+        if is_flame {
             renderer.apply_exact_density_fraction(&device, &queue);
         }
 
@@ -2312,7 +2322,7 @@ pub async fn export_animation_fast(
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Tonemap"),
         });
-        let shade_ran = !is_escape && renderer.run_shade_pass(
+        let shade_ran = is_flame && renderer.run_shade_pass(
             &device,
             &queue,
             &mut tonemap_encoder,
