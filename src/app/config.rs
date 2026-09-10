@@ -342,25 +342,46 @@ impl App {
         // path yet (escape-native tiling is a plan open item): refuse
         // honestly instead of rendering the wrong thing.
         let escape_mode = config.render_mode == crate::scene::transforms::RenderMode::Escape;
-        if escape_mode && hist_size > max_binding {
-            let msg = format!(
-                "Escape-time export at {}x{} exceeds this GPU's buffer limit; escape tiling isn't implemented yet -- try a smaller size",
-                render_width, render_height
-            );
-            log::error!("{msg}");
-            self.egui_layer.show_api_notification(&msg, true);
-            return;
-        }
-        if !escape_mode && (hist_size > max_binding || long_render) {
-            println!(
-                "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",
-                render_width, render_height,
-                hist_size / (1024 * 1024),
-                config.max_iterations,
-                if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
-            );
-            self.export_high_res_background(transparent, premultiplied, config, meta_config, render_width, render_height, supersample);
-            return;
+        // The rule itself lives in `export::route_custom_size_export`,
+        // with tests, because getting it wrong here is invisible: a
+        // non-flame config sent to the flame-only `HighResExporter`
+        // comes back as a plausible-looking picture of the config's
+        // FLAME rather than as an error.
+        match crate::export::route_custom_size_export(
+            config.render_mode,
+            hist_size,
+            max_binding,
+            long_render,
+        ) {
+            crate::export::CustomSizeRoute::TooLarge => {
+                // Both non-flame engines hit this for the same reason:
+                // the shared `FlameRenderer` whose tail they use
+                // allocates its histogram at the export size whatever
+                // the mode. Say which mode, since the remedy differs --
+                // escape tiling is unimplemented, while a simulation's
+                // grid is independent of the output and can simply be
+                // exported smaller.
+                let what = if escape_mode { "Escape-time" } else { "Simulation" };
+                let msg = format!(
+                    "{what} export at {}x{} exceeds this GPU's buffer limit -- try a smaller size",
+                    render_width, render_height
+                );
+                log::error!("{msg}");
+                self.egui_layer.show_api_notification(&msg, true);
+                return;
+            }
+            crate::export::CustomSizeRoute::HighRes => {
+                println!(
+                    "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",
+                    render_width, render_height,
+                    hist_size / (1024 * 1024),
+                    config.max_iterations,
+                    if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
+                );
+                self.export_high_res_background(transparent, premultiplied, config, meta_config, render_width, render_height, supersample);
+                return;
+            }
+            crate::export::CustomSizeRoute::Direct => {}
         }
 
         // The viewport's own escape renderer is about to compete with
@@ -376,6 +397,12 @@ impl App {
             }
             self.escape_dirty = true;
         }
+        // Deliberately NOT done for the simulation renderer, though it
+        // holds a comparable amount: an escape renderer rebuilds itself
+        // from the config, so freeing it costs a re-render, while the
+        // simulation's field IS the user's run and freeing it would
+        // restart it from the seed. Exporting must not destroy what is
+        // on screen.
 
         // Regular GPU export — runs SYNCHRONOUSLY on the app's own device.
         // The direct path allocates full-resolution buffers (gigabytes at 8K+);
