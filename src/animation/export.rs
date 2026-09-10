@@ -1659,6 +1659,14 @@ pub async fn export_animation(
     let mut stdin = child.stdin.take()
         .ok_or_else(|| AnimationExportError::FfmpegFailed("Failed to open ffmpeg stdin".to_string()))?;
 
+    // Engine state that OUTLIVES the frame. Without it every frame
+    // built a fresh simulation and re-ran it from the seed, so a ramp
+    // to N steps cost the sum of its targets instead of N -- the
+    // quadratic form `simulation-fractals.md` D5 rejects. Escape keeps
+    // its allocations here for the same reason, though it has no run
+    // to lose.
+    let mut engines = crate::renderer::RenderEngines::default();
+
     // Render each frame and pipe to FFmpeg
     for frame in 0..total_frames {
         if reporter.is_cancelled() {
@@ -1688,7 +1696,8 @@ pub async fn export_animation(
 
         // Use unified render API
         let job = crate::renderer::RenderJob::new(&frame_config, export_config.width, export_config.height)
-            .with_iterations_per_thread(export_config.iterations_per_thread);
+            .with_iterations_per_thread(export_config.iterations_per_thread)
+            .with_engines(&mut engines);
 
         let output = crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)
             .await

@@ -10,6 +10,29 @@ use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
 use crate::renderer::effect_chain::EffectChainRunner;
 
+/// Engine state a caller keeps ALIVE across renders.
+///
+/// A still is a complete answer on its own: build an engine, seed it,
+/// run it, throw it away. A video is not -- frame n's picture
+/// continues frame n-1's run, and rebuilding per frame would re-run
+/// the simulation from the seed every time, which is quadratic in the
+/// step count and which `simulation-fractals.md` D5 rejects outright.
+///
+/// So a looping caller owns this and hands it to each job. Without it
+/// every path behaves exactly as it did: the still export, thumbnails
+/// and the gallery pass nothing and get a fresh engine per render.
+#[derive(Default)]
+pub struct RenderEngines {
+    /// The simulation's field and step counter. `render_sim` advances
+    /// this to the frame's `sim.steps` rather than reseeding.
+    #[cfg(feature = "engine-sim")]
+    pub sim: Option<crate::sim::SimRenderer>,
+    /// The escape renderer, kept for its allocations and its warm
+    /// reference orbit; each frame still renders to settlement.
+    #[cfg(feature = "engine-escape")]
+    pub escape: Option<crate::escape::EscapeRenderer>,
+}
+
 /// Configuration for a render job
 pub struct RenderJob<'a> {
     /// Fractal configuration (transforms, colors, view settings)
@@ -34,6 +57,11 @@ pub struct RenderJob<'a> {
     /// Use premultiplied alpha for transparent export (vs the default
     /// straight-alpha reconstruction). Only meaningful when `transparent`.
     pub premultiplied: bool,
+
+    /// Engine state to CONTINUE rather than rebuild (see
+    /// `RenderEngines`). `None` -- the default, and what every still
+    /// path passes -- means a fresh engine for this render.
+    pub engines: Option<&'a mut RenderEngines>,
 }
 
 impl<'a> RenderJob<'a> {
@@ -48,6 +76,7 @@ impl<'a> RenderJob<'a> {
             burn_in: 20,
             transparent: false,
             premultiplied: false,
+            engines: None,
         }
     }
 
@@ -78,6 +107,13 @@ impl<'a> RenderJob<'a> {
     /// Use premultiplied alpha (vs straight-alpha reconstruction) for transparent export
     pub fn with_premultiplied(mut self, premultiplied: bool) -> Self {
         self.premultiplied = premultiplied;
+        self
+    }
+
+    /// Continue a caller-owned engine instead of building a fresh one.
+    /// A video loop passes this; a still render does not.
+    pub fn with_engines(mut self, engines: &'a mut RenderEngines) -> Self {
+        self.engines = Some(engines);
         self
     }
 }
@@ -659,7 +695,7 @@ async fn render_sim(
     renderer: &mut FlameRenderer,
     device: &Device,
     queue: &Queue,
-    job: RenderJob<'_>,
+    mut job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
     start_time: web_time::Instant,
 ) -> Result<RenderOutput, RenderError> {
@@ -706,25 +742,44 @@ async fn render_sim(
 
     let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
 
-    let mut sim = crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
+    // Continue a caller-owned run when there is one, else build a
+    // throwaway. A still export, a thumbnail and the gallery pass no
+    // engines and get exactly what they always did: a fresh field,
+    // seeded, run to `steps`. A video loop passes its own, and frame n
+    // continues frame n-1's run instead of re-running from the seed
+    // (`simulation-fractals.md` D5).
+    let mut owned: Option<crate::sim::SimRenderer> = None;
+    let make = || crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
+    let sim: &mut crate::sim::SimRenderer = match job.engines {
+        Some(ref mut engines) => engines.sim.get_or_insert_with(make),
+        None => owned.insert(make()),
+    };
+    // A persistent renderer may have been built for another size; a
+    // fresh one is already right and this is a no-op.
+    sim.resize(device, &job.config.sim, job.width, job.height);
     if job.config.sim.use_transforms {
         sim.set_layer_transforms(device, queue, &job.config.flame);
     }
-    sim.seed(device, queue, &job.config.sim);
-    // run_steps submits in watchdog-sized batches internally, so the
-    // driver never sees an unbounded pass however large `steps` is.
-    // Progress is reported per batch rather than per step: a 10,000-step
-    // export should move a bar, and polling between batches is also
-    // what keeps the queue from growing without bound.
+    // `advance_steps` owns the seed/step decision (`sim::plan_steps`):
+    // forward from where the field is, restart to go back, and a fresh
+    // renderer is at 0 so it seeds and runs the lot. Batched here for
+    // PROGRESS only -- run_steps already submits in watchdog-sized
+    // pieces internally, so the driver never sees an unbounded pass
+    // however large `steps` is; polling between batches is also what
+    // keeps the queue from growing without bound.
     const PROGRESS_BATCH: u32 = 512;
     let total = job.config.sim.steps;
-    let mut done = 0u32;
-    while done < total {
-        let batch = PROGRESS_BATCH.min(total - done);
-        sim.run_steps(device, queue, &job.config.sim, batch);
+    loop {
+        let reached =
+            sim.advance_steps(device, queue, &job.config.sim, total, Some(PROGRESS_BATCH));
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        done += batch;
-        progress.on_progress(done as u64, total.max(1) as u64);
+        progress.on_progress(sim.step_index() as u64, total.max(1) as u64);
+        if reached {
+            break;
+        }
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
     }
     sim.color(device, queue, &job.config.sim, renderer.palette_view());
 
@@ -834,7 +889,7 @@ async fn render_escape(
     renderer: &mut FlameRenderer,
     device: &Device,
     queue: &Queue,
-    job: RenderJob<'_>,
+    mut job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
     start_time: web_time::Instant,
 ) -> Result<RenderOutput, RenderError> {
@@ -885,7 +940,22 @@ async fn render_escape(
     // where the export shares a device with the viewport's own escape
     // renderer.
     let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let mut escape_renderer = crate::escape::EscapeRenderer::new(device, job.width, job.height);
+    // Continue a caller-owned renderer when there is one. Unlike the
+    // simulation there is no run to lose -- every escape frame renders
+    // to settlement from scratch -- so this is purely about not
+    // rebuilding several hundred megabytes of textures and orbit state
+    // per video frame.
+    // Whose renderer this is decides whether the teardown below may
+    // free it. `destroy` exists because dropping frees nothing on
+    // WebGPU; running it on the CALLER's renderer would hand the next
+    // frame a corpse.
+    let caller_owned = job.engines.is_some();
+    let mut owned: Option<crate::escape::EscapeRenderer> = None;
+    let make = || crate::escape::EscapeRenderer::new(device, job.width, job.height);
+    let escape_renderer: &mut crate::escape::EscapeRenderer = match job.engines {
+        Some(ref mut engines) => engines.escape.get_or_insert_with(make),
+        None => owned.insert(make()),
+    };
     // Config-declared supersampling applies on every path (viewport,
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = job.config.escape.supersample.max(1);
@@ -1026,7 +1096,9 @@ async fn render_escape(
     // scope covers the whole render, the per-sample accumulation
     // passes included.
     if let Some(err) = oom_scope.pop().await {
-        escape_renderer.destroy();
+        if !caller_owned {
+            escape_renderer.destroy();
+        }
         if let Some(chain) = &effect_chain {
             chain.destroy();
         }
@@ -1052,7 +1124,9 @@ async fn render_escape(
     if let Some(chain) = &effect_chain {
         chain.destroy();
     }
-    escape_renderer.destroy();
+    if !caller_owned {
+        escape_renderer.destroy();
+    }
     let (width, height, rgba_data) = pixels?;
 
     progress.on_progress(1, 1);
