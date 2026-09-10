@@ -601,6 +601,10 @@ pub struct EscapeRenderer {
     ifs_buffer: Buffer,
     /// Rows the buffer currently holds, so it only grows.
     ifs_capacity: u32,
+    /// A cheap identity for the packed maps, so a flame edit restarts
+    /// the row-band pass instead of striping the picture (see
+    /// [`Self::band_key`]). Hashed once on `set_ifs`, not per frame.
+    ifs_token: u64,
     /// The analysed flame, or `None` when the loaded one does not
     /// qualify (or mode C is not active). A mode-C render with no maps
     /// draws nothing rather than garbage.
@@ -1407,6 +1411,7 @@ impl EscapeRenderer {
             ifs_bind_group_layout,
             ifs_buffer,
             ifs_capacity: 1,
+            ifs_token: 0,
             ifs: None,
             ifs_uploaded: None,
             pipelines: HashMap::new(),
@@ -3038,6 +3043,41 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
     }
 
+    /// The row-band pass's identity: everything a band's pixels
+    /// depend on.
+    ///
+    /// A band is a complete render of its own rows, dispatched in its
+    /// own frame, so a pass spread over several frames only looks like
+    /// one picture while its inputs hold still. Two of those inputs are
+    /// not in the escape config and so not in [`Self::chunk_key_for`]:
+    ///
+    /// - **the palette**, which lives in the flame renderer's texture.
+    ///   Rotating it part-way through a pass left the rows already
+    ///   drawn in the old colours and the rest in the new ones —
+    ///   reported as horizontal bands of different colours while the
+    ///   render scanned down.
+    /// - **the flame**, which only mode C reads, and which the app
+    ///   re-analyses every frame.
+    ///
+    /// Restarting is the honest answer for both: a band cannot be
+    /// re-coloured after the fact, because the walk that produced it is
+    /// gone. (Mode A escapes this through its recolor cache, which
+    /// keeps per-pixel records and re-colours without re-iterating;
+    /// mode C would need a cache of its own, and that is phase 2's
+    /// business.)
+    fn band_key(&self, escape: &EscapeConfig, palette_generation: u64) -> String {
+        Self::compose_band_key(
+            &self.chunk_key_for(escape, 0, true),
+            palette_generation,
+            self.ifs_token,
+        )
+    }
+
+    /// The composition, split out so it can be tested without a GPU.
+    pub(crate) fn compose_band_key(base: &str, palette_generation: u64, ifs_token: u64) -> String {
+        format!("{base}|pal{palette_generation}|ifs{ifs_token}")
+    }
+
     fn chunk_key_for(&self, escape: &EscapeConfig, orbit_tag: u64, orbit_done: bool) -> String {
         format!(
             "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
@@ -3228,6 +3268,17 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if super::ifs::packed_bytes_eq(self.ifs.as_ref(), packed.as_ref()) {
             return false;
         }
+        self.ifs_token = match packed.as_ref() {
+            None => 0,
+            Some(p) => {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                bytemuck::bytes_of(&p.globals).hash(&mut h);
+                bytemuck::cast_slice::<super::ifs::IfsMapGpu, u8>(&p.rows).hash(&mut h);
+                // 0 means "no flame", so never collide with it.
+                h.finish() | 1
+            }
+        };
         self.ifs = packed;
         true
     }
@@ -5630,6 +5681,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         encoder: &mut CommandEncoder,
         escape: &EscapeConfig,
         palette_view: &TextureView,
+        palette_generation: u64,
     ) -> bool {
         // Relief needs its scalar field and a destination distinct
         // from the colour it reads; both are allocated on demand, so
@@ -6019,7 +6071,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // (direct and field). A band is a complete render of its own
         // rows, so no resume state is needed and the output texture
         // accumulates the frame top to bottom.
-        let key = self.chunk_key_for(escape, 0, true);
+        let key = self.band_key(escape, palette_generation);
         if self.chunk_key.as_deref() != Some(key.as_str()) {
             self.chunk_key = Some(key);
             self.direct_tile_y = 0;
@@ -6272,6 +6324,34 @@ mod tests {
     /// The budget shifts and in-flight flags are process-global, so
     /// the tests that drive them must not run concurrently.
     static BREAKER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A row-band pass must restart when the palette changes.
+    ///
+    /// Bands are dispatched one per frame and each samples the palette
+    /// texture as it goes, so a palette edit part-way through leaves
+    /// the rows already drawn in the old colours and the rest in the
+    /// new ones. Reported from the app as horizontal bands of
+    /// different colours while the render scanned down, on rotating
+    /// the palette over a mode-C view.
+    ///
+    /// The band cursor already restarts when its key changes; the
+    /// palette simply was not in the key, because it lives in the
+    /// flame renderer's texture rather than the escape config. Nor was
+    /// the flame, which only mode C reads.
+    #[test]
+    fn the_band_key_changes_when_the_palette_or_the_flame_does() {
+        let base = "mandelbrot|{}|smooth|0|0|0";
+        let k = |pal, ifs| EscapeRenderer::compose_band_key(base, pal, ifs);
+
+        assert_eq!(k(1, 7), k(1, 7), "the same inputs must not restart a pass");
+        assert_ne!(k(1, 7), k(2, 7), "a palette edit must restart the pass");
+        assert_ne!(k(1, 7), k(1, 8), "a flame edit must restart the pass");
+        // The two fields must not be able to cancel each other out.
+        assert_ne!(k(1, 2), k(2, 1));
+        // And the base still decides: an escape-config edit restarts as
+        // it always did.
+        assert_ne!(k(1, 7), EscapeRenderer::compose_band_key("other", 1, 7));
+    }
 
     #[test]
     fn a_direct_render_is_split_into_bands_it_can_survive() {

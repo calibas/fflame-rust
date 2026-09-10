@@ -659,6 +659,26 @@ A 1080p render of every shipped preset now finishes in about a second,
 in three bands, and there is an end-to-end test that says so — the row
 arithmetic can be gated by a unit test, but a driver reset cannot.
 
+**A pass has to hold still while it runs.** Reported next: rotating the
+palette made horizontal bands of different colours as the render
+scanned down. A band is a complete render of its own rows dispatched in
+its own frame, and it samples the palette texture as it goes — so an
+edit part-way through leaves the rows already drawn in the old colours.
+The band cursor already restarts when its key changes; the palette
+simply was not in that key, because it lives in the flame renderer's
+texture rather than the escape config. Neither was the flame, which
+only mode C reads and which the app re-analyses every frame. Both are
+in the key now, via a palette generation counter bumped at the single
+point the texture is written.
+
+Restarting is the honest answer, because a band cannot be re-coloured
+after the fact: the walk that produced it is gone. Mode A escapes this
+through its recolor cache — per-pixel records that re-colour without
+re-iterating — and it is why mode A's palette editing was never
+affected. Mode C has no such cache, so a palette edit costs it a full
+re-render, and during a slider drag only the top band gets drawn. That
+is the first thing phase 2 fixes.
+
 **One more hazard, found while looking rather than reported.** Mode C
 is the only escape formula that depends on the flame, so the app
 re-analyses it every frame and marks the escape image dirty when the

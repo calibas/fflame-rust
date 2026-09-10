@@ -120,6 +120,8 @@ pub struct FlameRenderer {
 
     pipelines: FlamePipelines,
     buffers: FlameBuffers,
+    /// Bumped on every palette upload — see [`Self::palette_generation`].
+    palette_generation: u64,
     compute_bind_group: BindGroup,
     accumulate_bind_group: BindGroup,
     histogram_blur_h_bind_group: BindGroup,
@@ -350,6 +352,7 @@ impl FlameRenderer {
         Self {
             pipelines,
             buffers,
+            palette_generation: 0,
             compute_bind_group,
             accumulate_bind_group,
             histogram_blur_h_bind_group,
@@ -1145,6 +1148,23 @@ impl FlameRenderer {
     /// mode inherits the whole palette pipeline.
     pub fn palette_view(&self) -> &TextureView {
         &self.buffers.palette_view
+    }
+
+    /// How many times the palette texture has been rewritten.
+    ///
+    /// The escape engine renders large views in ROW BANDS across
+    /// frames, and every band samples this texture at dispatch time —
+    /// so a palette edit part-way through a pass leaves the rows
+    /// already drawn in the old colours and the rest in the new ones,
+    /// as horizontal stripes. The band cursor restarts when its key
+    /// changes, and this is what puts the palette in that key.
+    ///
+    /// A counter rather than a hash of the palette because
+    /// [`Self::update_palette`] is the single place the texture is
+    /// written: anything that can change it goes through here, and
+    /// nothing else has to be remembered.
+    pub fn palette_generation(&self) -> u64 {
+        self.palette_generation
     }
 
     pub fn get_accumulation_view(&self) -> &TextureView {
@@ -2654,6 +2674,7 @@ impl FlameRenderer {
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
+        self.palette_generation = self.palette_generation.wrapping_add(1);
     }
 
     /// Change palette texture size (requires recreating buffers)
