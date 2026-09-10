@@ -769,18 +769,47 @@ and a test pins it.
     2¹⁶⁰** — a deep-zoom gate with no reference to lose precision,
     because it compares the machinery against itself one octave apart.
 
-  Two things it does not yet do, and they are the remaining work:
+  **Connected 2026-09-10, and `DEEP_ZOOM_LIMIT` is 40.** The seeds pack
+  into the `fdata` block the params already carry — four `vec4`s each,
+  fifteen slots for a beam of eight, no new buffer — and the shader
+  takes a pixel's *normalised offset* rather than a position, because
+  at a deep zoom there is no position an f32 could hold. Measured, the
+  same sweep as before:
 
-  - **The shader does not consume the seeds.** Mode C still walks from
-    `params.center`, so `DEEP_ZOOM_LIMIT` is still 20. This half is
-    proved, not connected.
-  - **The centre is still f64.** The deep gate above centres on the
-    origin, which is exactly representable — the same trap the 0.25
-    fixture set earlier. A general centre needs about `zoom + 30` bits,
-    because the walk expands by 2ᵏ and bit j of the centre becomes bit
-    j−k at level k. `FixedPoint::from_decimal` and `limbs_for_view`
-    already exist for the escape engine's own deep zoom, so this is a
-    change of number type in one function rather than new machinery.
+  | zoom | before | after |
+  |---|---|---|
+  | 2²⁰ | 100% | 100% |
+  | 2²⁴ | 82.4% | 100% |
+  | 2³² | chance | 100% |
+  | 2⁴⁴ | chance | 100% |
+
+  A million times deeper, and the gasket at 2⁴⁴ renders clean.
+
+  **The reference/delta split ended up entirely on the CPU, and the
+  shader got simpler for it.** The handover happens exactly where the
+  delta has grown to a quarter of the ball's radius, and at that size
+  f32 holds the sum with nothing left to lose — so the shader carries
+  one combined point instead of a reference and a delta, and the
+  candidate shrank from fourteen registers to twelve. The final
+  transform left the shader too: the seeding walk applies it, so by the
+  time the shader starts there is nothing to send.
+
+  **What limits it now is the f64 centre, not the walk.** Seeding is
+  f64, so the centre is quantised to 5.5e-17 — about 1% of the view by
+  2⁴⁹. `FixedPoint::from_decimal` and `limbs_for_view` are what raise
+  it, and the config already stores the centre as an exact decimal
+  string for exactly that. The same limit caps the *fixture*: a
+  Sierpiński point forty-five maps deep is the deepest an f64 can
+  express, and a shallower one runs out from under the view.
+
+  Two traps this measurement set, both caught only by looking at what
+  the fixture was:
+
+  - the first centre was **0.25**, which agrees at every zoom because
+    it is exactly representable — that version reported no wall at all;
+  - the first deep-zoom gate centred on the **origin**, same thing. It
+    still passes to 2¹⁶⁰ and is still worth having, but what it proves
+    is the walk, not the precision of the centre.
 - ~~The beam (D4, B > 1) and its cost measured~~ — **moved into phase
   1**, because the dragon needed it to render at all (§5, phase 1).
 - **A mode-C recolor cache — built 2026-09-10, and taken first.**
