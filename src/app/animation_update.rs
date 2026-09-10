@@ -29,33 +29,46 @@ impl App {
 
         // Process animation playback.
         //
-        // Escape mode paces differently. A flame frame refines
-        // continuously, so advancing the controller every display
-        // frame looks right; an escape frame is a chunked render that
-        // is not a picture until it SETTLES, so sampling every frame
-        // showed a smear of partial renders of successive configs
-        // (reported as animation "making a mess"). Instead: hold the
-        // controller while a frame renders, then advance it by
-        // everything that elapsed meanwhile. Playback may run at 1 fps
-        // or slower, but every displayed frame is a real frame at a
-        // real timestamp -- and audio, which runs on wall time, stays
-        // in sync to within one settled frame because the controller
-        // jumps to wall time at each sample.
+        // The two STATEFUL engines pace differently. A flame frame
+        // refines continuously, so advancing the controller every
+        // display frame looks right. An escape frame is a chunked
+        // render that is not a picture until it SETTLES, and a
+        // simulation frame is not the picture for its time until the
+        // grid has REACHED that time's step count -- so sampling every
+        // display frame would show a smear of partial renders of
+        // successive configs (reported for escape as animation "making
+        // a mess"), or, for the simulation, a run lagging further
+        // behind the playhead the longer it played.
+        //
+        // Instead: hold the controller while the frame is still coming
+        // into being, then advance it by everything that elapsed
+        // meanwhile. Playback may run at 1 fps or slower, but every
+        // displayed frame is a real frame at a real timestamp -- which
+        // is the whole point, because it is also the frame the export
+        // will render. Audio, which runs on wall time, stays in sync
+        // to within one frame because the controller jumps to wall
+        // time at each sample.
         if is_controller_playing {
-            let is_escape = self.config_manager.active_config().render_mode
-                == crate::scene::transforms::RenderMode::Escape;
-            if is_escape {
+            let mode = self.config_manager.active_config().render_mode;
+            let ready = match mode {
                 // `escape_dirty` is the frame loop's "not settled yet"
                 // flag: it is cleared only when render() reports final.
-                if let Some(dt) = escape_playback_tick(
-                    &mut self.escape_anim_pending,
-                    delta_time,
-                    !self.escape_dirty,
-                ) {
-                    self.advance_animation(dt);
+                crate::scene::transforms::RenderMode::Escape => !self.escape_dirty,
+                // A committed target that has not been cleared means
+                // the grid is still walking toward it.
+                #[cfg(feature = "engine-sim")]
+                crate::scene::transforms::RenderMode::Simulation => {
+                    self.sim_timeline_target.is_none()
                 }
-            } else {
+                _ => true,
+            };
+            if ready && self.paced_anim_pending == 0.0 {
+                // The common case: nothing to wait for, advance now.
                 self.advance_animation(delta_time);
+            } else if let Some(dt) =
+                paced_playback_tick(&mut self.paced_anim_pending, delta_time, ready)
+            {
+                self.advance_animation(dt);
             }
         }
 
@@ -93,7 +106,7 @@ impl App {
             // Escape playback banks wall time against the frame being
             // rendered; on stop that frame is never sampled, so drop
             // it rather than jump by it when playback resumes.
-            self.escape_anim_pending = 0.0;
+            self.paced_anim_pending = 0.0;
             // Disable animation mode before exit so undo entry creation works
             self.config_manager.set_animation_mode(false);
             self.handle_animation_exit();
@@ -116,12 +129,54 @@ impl App {
         }
     }
 
+    /// Hand the timeline's step count to the grid -- or hold it.
+    ///
+    /// Called after track values have been applied to the config,
+    /// from both playback and scrubbing, with how the time that
+    /// produced them was moving. `sim::timeline_target_applies` is the
+    /// rule: forward always, backward only on a discrete event, since
+    /// backward means reseeding and re-running.
+    ///
+    /// Holding leaves the PREVIOUS commitment in place, so the picture
+    /// stays where it was rather than freezing mid-restart.
+    #[cfg(feature = "engine-sim")]
+    pub(super) fn commit_timeline_sim_target(&mut self, motion: crate::sim::Motion) {
+        let config = self.config_manager.active_config();
+        if config.render_mode != crate::scene::transforms::RenderMode::Simulation {
+            return;
+        }
+        let target = config.sim.steps;
+        // Where the field actually is. A renderer that has not been
+        // built yet is at 0, so a first target is always forward.
+        let index = self
+            .sim_renderer
+            .as_ref()
+            .map_or(0, |s| s.step_index());
+        if crate::sim::timeline_target_applies(index, target, motion) {
+            self.sim_timeline_target = Some(target);
+        }
+    }
+
+    #[cfg(not(feature = "engine-sim"))]
+    pub(super) fn commit_timeline_sim_target(&mut self, _motion: crate::sim::Motion) {}
+
     /// Advance animation playback and apply values.
     ///
     /// Updates animation time, checks for auto-stop, and applies animated values to config.
     fn advance_animation(&mut self, delta_time: f64) {
+        // How the clock moved decides whether a BACKWARD simulation
+        // step target is applied or held (`playback_motion`), so it is
+        // sampled around the update rather than after it.
+        let time_before = self.animation_controller.current_time;
+        let dir_before = self.animation_controller.direction();
         // Update animation time
         self.animation_controller.update(delta_time);
+        let motion = playback_motion(
+            time_before,
+            dir_before,
+            self.animation_controller.current_time,
+            self.animation_controller.direction(),
+        );
 
         // Sync audio position with animation time
         if self.animation_controller.sync_audio && self.audio_player.has_audio() {
@@ -131,7 +186,7 @@ impl App {
         // Check if animation auto-stopped (LoopMode::Once reached end)
         let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
         if auto_stopped {
-            self.escape_anim_pending = 0.0;
+            self.paced_anim_pending = 0.0;
             // Disable animation mode before exit so undo entry creation works
             self.config_manager.set_animation_mode(false);
             // Animation finished naturally - exit animation mode and create undo snapshot
@@ -147,6 +202,7 @@ impl App {
         } else {
             // Animation still playing - evaluate all tracks and apply values to ConfigManager
             self.apply_animated_values();
+            self.commit_timeline_sim_target(motion);
         }
     }
 
@@ -189,6 +245,10 @@ impl App {
         if self.animation_controller.animation.is_some() {
             self.animation_controller.current_time = 0.0;
             self.apply_animated_values();
+            // A deliberate landing on one time, so a backward step
+            // target applies here: stopping at t = 0 restarts the run
+            // rather than leaving the grid wherever playback got to.
+            self.commit_timeline_sim_target(crate::sim::Motion::Discrete);
         }
 
         self.use_overwrite_next_frame = true;
@@ -196,14 +256,54 @@ impl App {
     }
 }
 
-/// Escape playback pacing: accumulate wall time while the current
-/// frame is still rendering, and hand it over in one piece once it
-/// settles. Returns the time to advance the controller by, or None
-/// while the frame is still being rendered.
+/// Was this playback tick a CONTINUOUS advance, or a discrete jump?
+///
+/// It decides whether a backward simulation step target is applied or
+/// held (`sim::timeline_target_applies`). Going back means reseeding
+/// and re-running, so applying a falling target on every frame of a
+/// smooth backward run restarts the simulation on every frame -- which
+/// is what ping-pong's whole backward leg would do, and what a track
+/// authored to count DOWN would do under ordinary forward playback.
+///
+/// Two things count as discrete, and they are the two moments where a
+/// restart is the RIGHT picture:
+///
+/// - a `PingPong` turnaround at the start, where the direction flips
+///   from backward to forward. (The turnaround at the END is not: it
+///   begins the backward leg, which is exactly what must be held.)
+/// - a `Loop` wrap, where time falls back to the beginning while still
+///   running forward. One restart per cycle, for a run starting over.
+///
+/// Everything else is continuous, including the whole backward leg.
+pub(super) fn playback_motion(
+    time_before: f64,
+    dir_before: f64,
+    time_after: f64,
+    dir_after: f64,
+) -> crate::sim::Motion {
+    use crate::sim::Motion;
+    let turned_forward = dir_before < 0.0 && dir_after > 0.0;
+    let wrapped = time_after < time_before && dir_after > 0.0;
+    if turned_forward || wrapped {
+        Motion::Discrete
+    } else {
+        Motion::Continuous
+    }
+}
+
+/// Paced playback: accumulate wall time while the current frame is
+/// still coming into being, and hand it over in one piece once it is
+/// ready. Returns the time to advance the controller by, or None while
+/// the frame is not finished.
+///
+/// Serves both stateful engines -- an escape render that has not
+/// settled, and a simulation grid still stepping toward this frame's
+/// target. Named for the behaviour rather than the engine because it
+/// is now shared.
 ///
 /// A free function, not a method: the rule IS the design, and it
 /// deserves a test that needs neither a GPU nor an App.
-pub(super) fn escape_playback_tick(pending: &mut f64, delta: f64, settled: bool) -> Option<f64> {
+pub(super) fn paced_playback_tick(pending: &mut f64, delta: f64, settled: bool) -> Option<f64> {
     *pending += delta.max(0.0);
     if settled && *pending > 0.0 {
         Some(std::mem::take(pending))
@@ -214,7 +314,35 @@ pub(super) fn escape_playback_tick(pending: &mut f64, delta: f64, settled: bool)
 
 #[cfg(test)]
 mod tests {
-    use super::escape_playback_tick;
+    use super::paced_playback_tick;
+
+    /// The two moments a restart is the right picture, and the whole
+    /// backward leg that is not.
+    #[test]
+    fn only_a_turnaround_or_a_wrap_counts_as_a_discrete_jump() {
+        use crate::app::animation_update::playback_motion;
+        use crate::sim::Motion;
+
+        // Ordinary forward playback.
+        assert_eq!(playback_motion(1.0, 1.0, 1.1, 1.0), Motion::Continuous);
+
+        // PingPong hits the END: direction flips to backward and time
+        // starts falling. This BEGINS the backward leg -- the thing
+        // that must be held, not applied.
+        assert_eq!(playback_motion(9.9, 1.0, 9.95, -1.0), Motion::Continuous);
+        // ...and every frame of that leg is continuous too.
+        assert_eq!(playback_motion(5.0, -1.0, 4.9, -1.0), Motion::Continuous);
+        // The turnaround at the START is the discrete one.
+        assert_eq!(playback_motion(0.05, -1.0, 0.05, 1.0), Motion::Discrete);
+
+        // Loop wraps: time falls back while still running forward.
+        assert_eq!(playback_motion(9.95, 1.0, 0.05, 1.0), Motion::Discrete);
+
+        // A backward track under FORWARD playback is continuous --
+        // time is not what is going backwards, the TRACK is, and the
+        // hold rule reads the target rather than the clock.
+        assert_eq!(playback_motion(3.0, 1.0, 3.1, 1.0), Motion::Continuous);
+    }
 
     /// Settle-then-jump: the controller is sampled once per COMPLETED
     /// escape frame, and advanced by everything that elapsed while it
@@ -225,24 +353,24 @@ mod tests {
     fn escape_playback_samples_only_on_settled_frames() {
         let mut pending = 0.0;
         // Frame still rendering: bank the time, do not advance.
-        assert_eq!(escape_playback_tick(&mut pending, 0.016, false), None);
-        assert_eq!(escape_playback_tick(&mut pending, 0.016, false), None);
+        assert_eq!(paced_playback_tick(&mut pending, 0.016, false), None);
+        assert_eq!(paced_playback_tick(&mut pending, 0.016, false), None);
         // It settles: advance by everything banked, in one jump.
-        let dt = escape_playback_tick(&mut pending, 0.016, true).expect("sample");
+        let dt = paced_playback_tick(&mut pending, 0.016, true).expect("sample");
         assert!((dt - 0.048).abs() < 1e-9, "dt = {dt}");
         assert_eq!(pending, 0.0, "the bank empties on sample");
 
         // A settled frame with no elapsed time is not a sample point:
         // advancing by zero would re-render an identical frame.
-        assert_eq!(escape_playback_tick(&mut pending, 0.0, true), None);
+        assert_eq!(paced_playback_tick(&mut pending, 0.0, true), None);
 
         // Long renders keep banking, however many frames they take --
         // playback slows down, it does not skip or blend.
         let mut pending = 0.0;
         for _ in 0..600 {
-            assert_eq!(escape_playback_tick(&mut pending, 0.016, false), None);
+            assert_eq!(paced_playback_tick(&mut pending, 0.016, false), None);
         }
-        let dt = escape_playback_tick(&mut pending, 0.016, true).expect("sample");
+        let dt = paced_playback_tick(&mut pending, 0.016, true).expect("sample");
         assert!((dt - 9.616).abs() < 1e-6, "dt = {dt}");
     }
 }

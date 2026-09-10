@@ -1649,3 +1649,148 @@ mod timeline_rules_tests {
         assert!(timeline_target_applies(900, 0, Motion::Discrete));
     }
 }
+
+#[cfg(test)]
+mod timeline_driver_tests {
+    use super::{plan_steps, timeline_target_applies, Motion};
+
+    /// Walk the interactive driver's decision over a whole playback,
+    /// the way the app does: commit-or-hold, then step within a
+    /// budget, frame after frame.
+    ///
+    /// A tiny simulator of the two rules together, because they are
+    /// only correct in combination -- the hold decides WHETHER a
+    /// target reaches the grid, `plan_steps` decides what the grid
+    /// then does about it, and a mistake in either shows up here as a
+    /// picture at the wrong step.
+    fn run(targets: &[(u32, Motion)], budget: u32) -> Vec<u32> {
+        let mut index = 0u32;
+        let mut committed: Option<u32> = None;
+        let mut seen = Vec::new();
+        for &(target, motion) in targets {
+            if timeline_target_applies(index, target, motion) {
+                committed = Some(target);
+            }
+            // One display frame's worth of catching up.
+            if let Some(t) = committed {
+                let plan = plan_steps(index, t, Some(budget));
+                if plan.reseed {
+                    index = 0;
+                }
+                index += plan.steps;
+                if plan.reached {
+                    committed = None;
+                }
+            }
+            seen.push(index);
+        }
+        seen
+    }
+
+    /// A forward ramp is followed exactly when the budget allows, and
+    /// followed LATE, never wrongly, when it does not.
+    #[test]
+    fn a_forward_ramp_is_followed() {
+        let ramp: Vec<(u32, Motion)> =
+            (0..=10).map(|f| (f * 100, Motion::Continuous)).collect();
+        // Generous budget: the grid is exactly on the track.
+        assert_eq!(
+            run(&ramp, 1000),
+            vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+        );
+        // Tight budget: it lags, but it only ever moves FORWARD and it
+        // never passes the target it was given.
+        let lagged = run(&ramp, 40);
+        assert!(
+            lagged.windows(2).all(|w| w[1] >= w[0]),
+            "a forward ramp must never go backwards: {lagged:?}"
+        );
+        assert!(
+            lagged.iter().zip(ramp.iter()).all(|(got, (want, _))| got <= want),
+            "the grid must never be past the target: {lagged:?}"
+        );
+    }
+
+    /// Ping-pong: the backward leg holds the end state, and the run
+    /// restarts ONCE, at the turnaround.
+    #[test]
+    fn a_ping_pong_restarts_once_per_cycle() {
+        let mut frames: Vec<(u32, Motion)> = Vec::new();
+        // Forward leg 0 -> 500.
+        for f in 0..=5 {
+            frames.push((f * 100, Motion::Continuous));
+        }
+        // Backward leg 400 -> 0, all continuous: every one of these is
+        // a falling target, and every one must be REFUSED.
+        for f in (0..5).rev() {
+            frames.push((f * 100, Motion::Continuous));
+        }
+        // The turnaround at t = 0 is the discrete event.
+        frames.push((0, Motion::Discrete));
+
+        let seen = run(&frames, 1000);
+        // The forward leg tracks.
+        assert_eq!(&seen[..6], &[0, 100, 200, 300, 400, 500]);
+        // The backward leg HOLDS at the end state -- not one restart.
+        assert!(
+            seen[6..11].iter().all(|&s| s == 500),
+            "the backward leg must hold the end state, got {:?}",
+            &seen[6..11]
+        );
+        // And the turnaround restarts, once.
+        assert_eq!(seen[11], 0, "the turnaround restarts the run");
+    }
+
+    /// A track authored to count DOWN under forward playback: held,
+    /// for the same reason, and previewable only by a discrete event
+    /// (which is what a scrubber release is).
+    #[test]
+    fn a_backward_track_holds_until_a_discrete_event() {
+        let mut frames: Vec<(u32, Motion)> = vec![(2000, Motion::Discrete)];
+        for f in (0..10).rev() {
+            frames.push((f * 200, Motion::Continuous));
+        }
+        let seen = run(&frames, 100_000);
+        assert_eq!(seen[0], 2000, "the first target applies");
+        assert!(
+            seen[1..].iter().all(|&s| s == 2000),
+            "a falling track under playback holds the highest state: {seen:?}"
+        );
+
+        // The scrubber, released at one time, applies.
+        let scrubbed = run(&[(2000, Motion::Discrete), (600, Motion::Discrete)], 100_000);
+        assert_eq!(scrubbed, vec![2000, 600], "a released scrub applies");
+    }
+
+    /// A budgeted rewind reseeds once and walks forward over the
+    /// following frames -- it must not reseed again on the way.
+    #[test]
+    fn a_budgeted_rewind_restarts_once_and_then_walks() {
+        let frames = vec![
+            // Four frames to climb to 400 at 100 a frame, then one
+            // that arrives.
+            (400, Motion::Discrete),
+            (400, Motion::Continuous),
+            (400, Motion::Continuous),
+            (400, Motion::Continuous),
+            (400, Motion::Continuous),
+            // A scrubber released at a time whose target is BEHIND the
+            // grid, and far enough behind that the rewind cannot be
+            // done in one frame either.
+            (250, Motion::Discrete),
+            (250, Motion::Continuous),
+            (250, Motion::Continuous),
+        ];
+        let seen = run(&frames, 100);
+        assert_eq!(
+            &seen[..5],
+            &[100, 200, 300, 400, 400],
+            "the climb is budgeted, not instant: {seen:?}"
+        );
+        // The rewind reseeds to 0 and takes one budget's worth...
+        assert_eq!(seen[5], 100, "restart, then one budget's worth");
+        // ...then WALKS FORWARD without restarting again. A second
+        // reseed would show here as a drop back to 100.
+        assert_eq!(&seen[6..], &[200, 250], "walks up, no second restart");
+    }
+}

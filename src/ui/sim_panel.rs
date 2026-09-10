@@ -27,6 +27,18 @@ pub struct SimUiState<'a> {
     pub reseed: &'a mut bool,
     /// Steps completed in the live run, for the readout.
     pub step_index: u32,
+    /// The step count the timeline has committed the grid to, when the
+    /// timeline is driving. `Some` greys the transport -- a picture
+    /// that depended on both the playhead and how long Run had been
+    /// held would depend on how long the user looked at it -- and puts
+    /// the target in the readout so a catch-up is visibly progress
+    /// rather than a hang.
+    pub timeline_target: Option<u32>,
+    /// The timeline is asking for a step count BELOW the grid, under
+    /// motion that would restart the run on every frame, so it is
+    /// being held (`sim::timeline_target_applies`). The readout says
+    /// why, since otherwise a held picture looks like a broken one.
+    pub timeline_holding: bool,
     /// Grid actually in use, which a bound grid makes non-obvious.
     pub grid: (u32, u32),
 }
@@ -118,39 +130,70 @@ pub fn render_sim_content(
     // The section escape has no analogue for. A simulation's picture is
     // "the state at step N", so the counter is not decoration: it is
     // what makes a still identifiable.
+    // While the timeline drives the step count the transport is
+    // inert, so it is greyed rather than left looking live.
+    let driven = state.timeline_target.is_some();
     ui.horizontal(|ui| {
-        let run_label = if *state.running {
-            t!("sim_panel.pause")
-        } else {
-            t!("sim_panel.run")
-        };
-        if ui.button(run_label.as_ref()).clicked() {
-            *state.running = !*state.running;
-        }
-        if ui
-            .add_enabled(!*state.running, egui::Button::new(t!("sim_panel.step").as_ref()))
-            .on_hover_text(t!("sim_panel.step_tip"))
-            .clicked()
-        {
-            *state.step_once = true;
-        }
-        if ui
-            .button(t!("sim_panel.reset").as_ref())
-            .on_hover_text(t!("sim_panel.reset_tip"))
-            .clicked()
-        {
-            *state.reseed = true;
+        ui.add_enabled_ui(!driven, |ui| {
+            let run_label = if *state.running {
+                t!("sim_panel.pause")
+            } else {
+                t!("sim_panel.run")
+            };
+            if ui.button(run_label.as_ref()).clicked() {
+                *state.running = !*state.running;
+            }
+            if ui
+                .add_enabled(!*state.running, egui::Button::new(t!("sim_panel.step").as_ref()))
+                .on_hover_text(t!("sim_panel.step_tip"))
+                .clicked()
+            {
+                *state.step_once = true;
+            }
+            if ui
+                .button(t!("sim_panel.reset").as_ref())
+                .on_hover_text(t!("sim_panel.reset_tip"))
+                .clicked()
+            {
+                *state.reseed = true;
+            }
+        });
+        if driven {
+            ui.label("⏱").on_hover_text(t!("sim_panel.timeline_owns_steps").as_ref());
         }
     });
-    ui.label(
-        t!(
+    // Three readouts, because "step 340" alone cannot tell a run that
+    // has arrived from one still walking toward a target from one that
+    // is deliberately holding.
+    let readout = match state.timeline_target {
+        Some(target) if target < state.step_index => t!(
+            "sim_panel.step_readout_restarting",
+            target = target.to_string(),
+            width = state.grid.0.to_string(),
+            height = state.grid.1.to_string()
+        ),
+        Some(target) if target != state.step_index => t!(
+            "sim_panel.step_readout_seeking",
+            step = state.step_index.to_string(),
+            target = target.to_string(),
+            width = state.grid.0.to_string(),
+            height = state.grid.1.to_string()
+        ),
+        _ => t!(
             "sim_panel.step_readout",
             step = state.step_index.to_string(),
             width = state.grid.0.to_string(),
             height = state.grid.1.to_string()
-        )
-        .as_ref(),
-    );
+        ),
+    };
+    ui.label(readout.as_ref());
+    if state.timeline_holding {
+        ui.label(
+            egui::RichText::new(t!("sim_panel.timeline_holding").as_ref())
+                .small()
+                .italics(),
+        );
+    }
 
     ui.separator();
 
@@ -1315,4 +1358,45 @@ fn render_model_section(
                 });
             }
         });
+}
+
+#[cfg(test)]
+mod locale_tests {
+    /// Every `sim_panel.*` key this file asks for must exist in the
+    /// English table.
+    ///
+    /// `t!` returns the KEY when a translation is missing, so a typo
+    /// or a forgotten locale entry ships as a label reading
+    /// "sim_panel.timeline_holding" and nothing fails. This is also
+    /// the file where an edited translation once did not rebuild the
+    /// crate at all (`build.rs` now watches `locales/`), so the cheap
+    /// check is worth having.
+    #[test]
+    fn every_key_this_panel_asks_for_exists() {
+        let source = include_str!("sim_panel.rs");
+        let mut missing: Vec<String> = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, _) in source.match_indices("t!(\"sim_panel.") {
+            let rest = &source[i + 4..];
+            let Some(end) = rest.find('"') else { continue };
+            let key = &rest[..end];
+            if !seen.insert(key.to_string()) {
+                continue;
+            }
+            // The test's own source contains the prefix; skip the
+            // literal used in this scan.
+            if key == "sim_panel." {
+                continue;
+            }
+            let got = rust_i18n::t!(key, locale = "en");
+            if got == key {
+                missing.push(key.to_string());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these sim_panel keys are missing from locales/en.yml: {missing:#?}"
+        );
+        assert!(seen.len() > 20, "the scan found almost nothing: {}", seen.len());
+    }
 }

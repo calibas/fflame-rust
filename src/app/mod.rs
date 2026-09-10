@@ -429,12 +429,34 @@ pub struct App {
     /// Restart from the seed before the next frame (a reseed-class
     /// edit, a device loss, or a grid the field cannot be carried into).
     pub(super) sim_reseed: bool,
-    /// Wall time accumulated while an escape animation frame is still
-    /// rendering. Escape playback is SETTLE-THEN-JUMP: the controller
-    /// is sampled once per completed frame and advanced by everything
-    /// that elapsed meanwhile, rather than every display frame (see
-    /// `escape_playback_tick`).
-    pub(super) escape_anim_pending: f64,
+    /// The step count the TIMELINE has committed the grid to.
+    ///
+    /// `Some` means the timeline owns the step count: the driver walks
+    /// the field toward this target within a per-frame budget, and
+    /// Run / Pause / Step are inert because a picture that depended on
+    /// both would depend on how long the user looked at it. `None` --
+    /// the ordinary state -- means `sim.steps` is the Max Steps CAP
+    /// and the transport drives the grid, exactly as before.
+    ///
+    /// Cleared when the grid arrives, so playback re-commits each
+    /// frame while a scrub commits once and the run then holds where
+    /// the timeline left it.
+    ///
+    /// Deliberately not the config's `sim.steps`: that field means
+    /// "cap" to the transport and "target" to the timeline, and the
+    /// only honest way to tell them apart is to record which one is
+    /// driving (`docs/projects/video-loop-and-sim-timeline.md` D4).
+    #[cfg(feature = "engine-sim")]
+    pub(super) sim_timeline_target: Option<u32>,
+    /// Wall time accumulated while an animation frame is still coming
+    /// into being -- an escape render that has not settled, or a
+    /// simulation grid still stepping toward this frame's target.
+    /// Playback of both is SETTLE-THEN-JUMP: the controller is sampled
+    /// once per completed frame and advanced by everything that
+    /// elapsed meanwhile, rather than every display frame, so every
+    /// displayed frame is the one the export would render (see
+    /// `paced_playback_tick`).
+    pub(super) paced_anim_pending: f64,
     pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
 
     // UI state (not saved in config)
@@ -784,7 +806,9 @@ impl App {
             sim_running: true,
             sim_step_once: false,
             sim_reseed: true,
-            escape_anim_pending: 0.0,
+            #[cfg(feature = "engine-sim")]
+            sim_timeline_target: None,
+            paced_anim_pending: 0.0,
             flame,
             workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
@@ -1260,7 +1284,15 @@ impl App {
                     // "rendering complete" UI state and its
                     // max_iterations comparison -- neither means
                     // anything here.
-                    let sim_active = app.sim_running
+                    // ...or catching up to a timeline target, which
+                    // is the same need: the grid only advances when
+                    // render() runs, and a scrub that lands mid-jump
+                    // must not stall because the window went to sleep.
+                    #[cfg(feature = "engine-sim")]
+                    let sim_catching_up = app.sim_timeline_target.is_some();
+                    #[cfg(not(feature = "engine-sim"))]
+                    let sim_catching_up = false;
+                    let sim_active = (app.sim_running || sim_catching_up)
                         && app.config_manager.active_config().render_mode
                             == crate::scene::transforms::RenderMode::Simulation;
 
@@ -1575,6 +1607,28 @@ impl App {
         // Read before the call: `config_manager` goes in mutably, so the
         // sign-in check cannot be an argument expression.
         let signed_in = self.config_manager.system_settings().is_signed_in();
+        // Being HELD: the timeline is playing and asking for a step
+        // count BELOW the grid, which would restart the run on every
+        // frame. The panel says so, because a deliberately-held
+        // picture and a stuck one look identical otherwise. Computed
+        // BEFORE the call, which borrows both of these mutably.
+        let sim_timeline_holding = {
+            #[cfg(feature = "engine-sim")]
+            {
+                let cfg = self.config_manager.active_config();
+                cfg.render_mode == crate::scene::transforms::RenderMode::Simulation
+                    && self.animation_controller.is_playing()
+                    && self
+                        .sim_renderer
+                        .as_ref()
+                        .is_some_and(|s| cfg.sim.steps < s.step_index())
+            }
+            #[cfg(not(feature = "engine-sim"))]
+            {
+                false
+            }
+        };
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1635,6 +1689,17 @@ impl App {
                     (0, 0)
                 }
             },
+            {
+                #[cfg(feature = "engine-sim")]
+                {
+                    self.sim_timeline_target
+                }
+                #[cfg(not(feature = "engine-sim"))]
+                {
+                    None
+                }
+            },
+            sim_timeline_holding,
         );
 
         // Simulation transport, back from the panel. `sim_running` is
@@ -2693,45 +2758,82 @@ impl App {
                     sim.request_seed();
                     self.sim_reseed = false;
                 }
-                let steps = if self.sim_running {
-                    final_config.sim.steps_per_frame
-                } else if self.sim_step_once {
-                    1
+                if let Some(target) = self.sim_timeline_target {
+                    // THE TIMELINE OWNS THE STEP COUNT. The picture at
+                    // a given time is the state at that step count, so
+                    // the transport is inert here: a picture that
+                    // depended on both the playhead and how long Run
+                    // had been held would depend on how long the user
+                    // looked at it.
+                    //
+                    // Budgeted, so a jump the grid cannot make in one
+                    // display frame is walked over the next few
+                    // instead of freezing the UI -- and a scrub can
+                    // ask for a two-thousand-step jump on every slider
+                    // event. `steps_in` sizes it from the measured
+                    // cost of a step.
+                    const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
+                    let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
+                    let reached = sim.advance_to(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.sim,
+                        renderer.palette_view(),
+                        target,
+                        Some(budget),
+                    );
+                    if reached {
+                        // Arrived: hand the grid back. Playback
+                        // re-commits next frame; a scrub does not, so
+                        // the run holds where the timeline left it and
+                        // Run / Pause / Step work again from there.
+                        self.sim_timeline_target = None;
+                    } else {
+                        // Still catching up -- keep the frames coming.
+                        self.window.request_redraw();
+                    }
+                    self.sim_step_once = false;
                 } else {
-                    0
-                };
-                self.sim_step_once = false;
-                // Was the run short of Max Steps before this frame?
-                // `render_frame` clamps the batch so it cannot pass
-                // the cap, so crossing it is exactly "was below, is
-                // now at" -- and a frame that reseeds counts as below,
-                // because the index it is about to measure from is 0.
-                let cap = final_config.sim.steps;
-                let was_below = cap > 0 && (sim.will_reseed(&final_config.sim) || sim.step_index() < cap);
-                sim.render_frame(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    &final_config.sim,
-                    renderer.palette_view(),
-                    steps,
-                );
-                // Reaching Max Steps pauses; it does not end the run.
-                // Pressing Run again carries on past the cap, because
-                // `steps_remaining` stops holding it back once the
-                // index is there. A reseed arms the pause again.
-                if self.sim_running
-                    && crate::sim::should_pause_at_limit(cap, was_below, sim.step_index())
-                {
-                    self.sim_running = false;
-                    // THE PANEL FOR THIS FRAME WAS BUILT BEFORE THE
-                    // STEP RAN, so it still says Pause and shows the
-                    // previous step count. Without one more frame the
-                    // window sleeps on that, and the last thing drawn
-                    // is a stale panel over a finished picture.
-                    self.window.request_redraw();
-                }
-                if self.sim_running {
-                    self.window.request_redraw();
+                    let steps = if self.sim_running {
+                        final_config.sim.steps_per_frame
+                    } else if self.sim_step_once {
+                        1
+                    } else {
+                        0
+                    };
+                    self.sim_step_once = false;
+                    // Was the run short of Max Steps before this frame?
+                    // `render_frame` clamps the batch so it cannot pass
+                    // the cap, so crossing it is exactly "was below, is
+                    // now at" -- and a frame that reseeds counts as below,
+                    // because the index it is about to measure from is 0.
+                    let cap = final_config.sim.steps;
+                    let was_below = cap > 0 && (sim.will_reseed(&final_config.sim) || sim.step_index() < cap);
+                    sim.render_frame(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.sim,
+                        renderer.palette_view(),
+                        steps,
+                    );
+                    // Reaching Max Steps pauses; it does not end the run.
+                    // Pressing Run again carries on past the cap, because
+                    // `steps_remaining` stops holding it back once the
+                    // index is there. A reseed arms the pause again.
+                    if self.sim_running
+                        && crate::sim::should_pause_at_limit(cap, was_below, sim.step_index())
+                    {
+                        self.sim_running = false;
+                        // THE PANEL FOR THIS FRAME WAS BUILT BEFORE THE
+                        // STEP RAN, so it still says Pause and shows the
+                        // previous step count. Without one more frame the
+                        // window sleeps on that, and the last thing drawn
+                        // is a stale panel over a finished picture.
+                        self.window.request_redraw();
+                    }
+                    if self.sim_running {
+                        self.window.request_redraw();
+                    }
                 }
             }
 
