@@ -83,6 +83,9 @@ impl TargetCategory {
 struct TargetItem {
     path: ConfigPath,
     label: String,
+    /// Shown on hover. Most targets do not need one -- the label says
+    /// it -- but a few carry a consequence the label cannot.
+    tip: Option<&'static str>,
 }
 
 impl TargetItem {
@@ -90,7 +93,14 @@ impl TargetItem {
         Self {
             path,
             label: label.to_string(),
+            tip: None,
         }
+    }
+
+    /// Attach a hover explanation.
+    fn with_tip(mut self, tip: &'static str) -> Self {
+        self.tip = Some(tip);
+        self
     }
 }
 
@@ -375,7 +385,19 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
 fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
     let sim = &config.sim;
     let mut items = vec![
-        TargetItem::new(ConfigPath::SimSteps, "Steps (animates the run)"),
+        TargetItem::new(ConfigPath::SimSteps, "Steps (animates the run)")
+            .with_tip(
+                "The simulation's progression. Each frame is the state at that step \
+                 count, so a rising track IS the run.\n\n\
+                 A FALLING track means restarting and re-running, which the rule \
+                 cannot avoid. In the app that plays as a still of the highest state \
+                 reached -- drag the scrubber to preview any point of it. Export \
+                 renders every frame correctly, at a cost that grows with the square \
+                 of the step count.\n\n\
+                 A re-run uses the parameters as they are at that frame, so a \
+                 reversed track retraces the forward pictures exactly only when the \
+                 model parameters are not themselves animating.",
+            ),
         TargetItem::new(ConfigPath::SimDt, "Time step (dt)"),
         TargetItem::new(ConfigPath::SimWarpZoom, "Warp: zoom per step"),
         TargetItem::new(ConfigPath::SimWarpRotation, "Warp: rotation per step"),
@@ -492,7 +514,10 @@ fn render_category(
                 let key = item.path.to_string_key();
                 let is_selected = current_selection.map_or(false, |s| s == key);
 
-                let response = ui.selectable_label(is_selected, &item.label);
+                let mut response = ui.selectable_label(is_selected, &item.label);
+                if let Some(tip) = item.tip {
+                    response = response.on_hover_text(tip);
+                }
                 if response.clicked() {
                     selected = Some(item.path.clone());
                 }

@@ -738,16 +738,113 @@ if crate::export::needs_cpu_export(self.export_width, self.export_height) {
 
 ---
 
+## Video Export
+
+**Location:** [src/animation/export.rs](../../src/animation/export.rs)
+— `export_animation`
+
+Raw RGBA is piped straight to FFmpeg's stdin: no PNG encode, no disk
+round-trip, no temp files. FFmpeg must be on `PATH`.
+
+```bash
+FractalArtEditor export-animation \
+  -c config.fflame -a animation.anim -o out.mp4 \
+  -w 1920 -H 1080 --fps 30 --video-codec h265
+```
+
+The same function serves the app's export dialog. **There is one video
+loop, and this is it.** There were two until 2026-09-09 — this one,
+which rendered each frame through the still path, and
+`export_animation_fast`, which kept a copy of the still path's flame
+section inline. The copy is where the bugs lived: written before
+density effects and the solid depth-of-field pass existed, it never
+got either, so an in-app video silently dropped both; the simulation
+arm was added to both loops and gated in only one, so every simulation
+frame ran the flame's full `max_iterations` of chaos game into a
+histogram nothing read. Every stage added to the tail had to be added
+twice, and twice is where they diverged. If you add a pass to the
+render tail, it reaches video for free — do not add a second loop.
+
+### What a frame is
+
+Per frame: evaluate the animation tracks at that time, apply them to a
+copy of the config, call `render_with`, hand the pixels to the writer
+thread. Which passes run is decided by reading that frame's config,
+exactly as a still render decides — that is what makes the video and a
+PNG of the same config identical.
+
+Two things a still render does not need, and the reason this is a loop
+rather than a call in a `for`:
+
+- **`RenderEngines`** — engine state that outlives the frame. The
+  simulation's field continues its run rather than restarting from the
+  seed each frame (restarting per frame is quadratic in the step count
+  — a 100-frame ramp to 20,000 steps costs 1,000,000 steps instead of
+  20,000, measured at 18.3 s against 4.6 s). The escape renderer keeps
+  its allocations and its warm reference orbit. A still path passes no
+  engines and gets a fresh one per render, unchanged.
+- **A writer thread**, fed through a 16-frame bounded channel, so a
+  CPU-starved encoder never stalls the GPU and memory cannot grow
+  without bound.
+
+### Device features
+
+The export device requests `FLOAT32_FILTERABLE` and `TIMESTAMP_QUERY`
+when the adapter advertises them, matching every other export path.
+This is not optional decoration: density effects bilinear-sample the
+`Rgba32Float` accumulation, and without that feature
+`run_density_effects` **skips them silently** — by design, since on an
+adapter that genuinely lacks it the bind group would be invalid. Until
+2026-09-09 this device asked only for `CLEAR_TEXTURE`, so video export
+dropped every density effect on GPUs that support them perfectly well.
+The loop called the stage; the stage declined.
+
+### Progress and cancellation
+
+`FrameProgress` maps a generator's own progress — the simulation
+stepping toward this frame's target, an escape render settling — onto
+the overall bar, so a long first frame is not mistaken for a hang, and
+carries cancellation *into* a frame rather than only between frames.
+
+It is **rate-limited to one report per 100 ms**, and that matters: the
+flame loop reports once per dispatch, about 120 times for a default
+billion-iteration frame, and `ConsoleReporter` prints and flushes on
+every call. Unlimited, that cost 505 ms a frame against 415 ms with no
+reporting at all — an 18% tax for a status line nobody can read at
+that rate.
+
+### Simulation video
+
+`Sim.Steps` is an ordinary animatable track, and a ramp on it **is**
+the simulation progressing. The state at time *t* is a function of *t*,
+not of how many frames preceded it, so the exporter advances the grid
+to each frame's step count (`SimRenderer::advance_to`). A track that
+counts DOWN is rendered correctly — every frame reseeds and re-runs to
+its own target — at a cost that grows with the square of the step
+count. See
+[video-loop-and-sim-timeline.md](../archive/projects/video-loop-and-sim-timeline.md)
+D9 for the ascending-order trick that would make it linear, which is
+recorded and not built.
+
+One caveat inherent to a non-invertible rule: a re-run uses the
+parameters as they are *now*, so a reversed step track retraces the
+forward pictures exactly only when the model parameters are constant.
+
+---
+
 ## Current Limitations
 
 ### Export Formats
 
 **Current:** PNG only (Rgba8)
 
+**Current:** MP4/WebM via FFmpeg for animations (see **Video
+Export** above) — H.264, H.265 or VP9, with optional hardware
+encoders.
+
 **Future possibilities:**
 - EXR/HDR for high dynamic range
 - TIFF for 16-bit per channel
-- Video export for animations
 
 ---
 

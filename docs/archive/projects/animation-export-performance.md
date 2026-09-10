@@ -1,5 +1,15 @@
 # Animation Export Performance Investigation
 
+> **Superseded 2026-09-09.** `export_animation_fast()` and
+> `render_frame_to_completion()` named below no longer exist: the two
+> video loops were merged into one, `export_animation`, built on the
+> shared still-render path. The measurement here still holds — a
+> billion-iteration 1080p frame is ~500 ms and the wait is in the
+> readback, not the dispatch — and the unified loop matches the old
+> one on that workload (431 ms against 430 ms at 640x360). See
+> [video-loop-and-sim-timeline.md](video-loop-and-sim-timeline.md).
+
+
 ## Problem Statement
 
 Animation export is slower than expected. At 1080p with 1 billion iterations per frame, we're seeing ~2 FPS export speed (500ms per frame). The system doesn't appear to be GPU-bound - fans don't spin up, suggesting the GPU is idle most of the time.

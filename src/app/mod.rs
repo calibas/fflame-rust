@@ -445,7 +445,7 @@ pub struct App {
     /// Deliberately not the config's `sim.steps`: that field means
     /// "cap" to the transport and "target" to the timeline, and the
     /// only honest way to tell them apart is to record which one is
-    /// driving (`docs/projects/video-loop-and-sim-timeline.md` D4).
+    /// driving (`docs/archive/projects/video-loop-and-sim-timeline.md` D4).
     #[cfg(feature = "engine-sim")]
     pub(super) sim_timeline_target: Option<u32>,
     /// Wall time accumulated while an animation frame is still coming

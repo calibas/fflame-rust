@@ -1,9 +1,58 @@
 # One video loop, and a simulation that follows the timeline
 
-**Status:** plan of record, 2026-09-09, branch `simulation-mode`. **No
-code written yet.** Follows the two animation fixes of 2026-09-09
-(`ed5e12b9`, an integer track dropped on interpolation; `d80796a9`, a
-simulation video frame running the flame's chaos game first).
+**Status: ARCHIVED 2026-09-09 — done.** All four phases built and
+gated, plus the review pass in §5. Kept as the record of why the video
+path and the simulation timeline are shaped this way. Anything still
+outstanding is under **What is still open** below.
+
+**Was:** plan of record, 2026-09-09, branch `simulation-mode`.
+Follows the two animation fixes of the same day (`ed5e12b9`, an
+integer track dropped on interpolation; `d80796a9`, a simulation video
+frame running the flame's chaos game first).
+
+## What was built
+
+| Phase | Commit | Landed |
+|---|---|---|
+| 1 | `1869600e` | `RenderEngines` on the job; `plan_steps` and `advance_to`; the CLI's simulation export stops being quadratic |
+| 2 | `1d12a4d8` | One video loop for every mode; the fast loop and its copy of the flame section deleted |
+| 3 | `092f9d64` | The timeline drives the grid in-app, budgeted, with the hold rule |
+| review | `58bd910c` | Three defects found by driving the real app (§5) |
+| 4 | this commit | EXPORT.md, UI.md, `simulation-fractals.md` D5; archived |
+
+**Measured, before → after:**
+
+| | before | after |
+|---|---|---|
+| CLI sim video, 0→20,000 steps ×100 frames | 18.3 s | 4.6 s |
+| App sim video, 720p ramp | 17.24 ms/frame | 13.85 ms/frame |
+| Flame video, 1e9 iterations | 430 ms/frame (old fast loop) | 431 ms/frame |
+| Density effects in video | dropped, silently | bit-identical to PNG |
+| Solid depth-of-field in video | dropped, silently | matches PNG within the depth race |
+| `Sim.Steps` track in-app | moved a cap, changed nothing | drives the grid |
+
+**Five things came out that this plan did not predict**, all recorded
+in the commits and in §5 below:
+
+1. **Density effects were dropped for a SECOND reason.** This document
+   said the CLI loop ran them because it goes through the still path.
+   It does call the stage; the stage declined every time, because the
+   export device never requested `FLOAT32_FILTERABLE`. Both loops
+   dropped them, by independent mechanisms, and unifying alone would
+   have fixed one. The gate caught it only because it required the
+   effect-on and effect-off videos to DIFFER rather than trusting the
+   call existed.
+2. **The hold did not hold.** The rule refused falling targets
+   correctly and then the driver fell through to the transport, where
+   Run was still engaged. Found by driving the real app, not by the
+   unit tests — it is about who ELSE may move the grid.
+3. **Ownership was too broad**, and would have frozen a free-running
+   simulation whenever any animation played.
+4. **Per-dispatch progress cost 18% of a flame frame** on the CLI.
+5. **A test error, not a code error, cost the longest detour**: a
+   comparison animation pinned zoom to 1.0 while the config used 1.5,
+   so a solid render looked 42% dark. The lesson is the same one as
+   (1) — a gate is only worth what its inputs are.
 
 ## 0. What is being asked for
 
@@ -104,7 +153,7 @@ paths — recorded as an inconsistency on 2026-09-09 and resolved here
   apply to a copy of the config, `render_with`, send the pixels.
   The app and the CLI call the same function. `export_animation_fast`
   and its copy of the flame section are deleted, not kept "for
-  performance": the measurement in §5 is the gate that says they were
+  performance": the phase-2 gate (§4) is the measurement that says they were
   not needed.
 - **D2 — Untrimmed dispatch.** §1.3.
 - **D3 — Persistent engine state travels on the job.** `RenderJob`
@@ -212,8 +261,9 @@ paths — recorded as an inconsistency on 2026-09-09 and resolved here
     for all of its steps. If a model parameter animates at the same
     time, the forward run's history had it changing along the way and
     the rerun's does not, so a reversed track retraces the forward
-    pictures exactly only when the parameters are constant. Goes in
-    the Animation panel's tooltip for `Sim.Steps` and in EXPORT.md.
+    pictures exactly only when the parameters are constant. *Done:*
+    the Animation panel's `Sim.Steps` hover text (which needed the
+    target picker to gain tooltips at all) and EXPORT.md.
 
   **Considered and not done now:** keeping periodic field snapshots
   so a rewind restores the nearest earlier state and runs forward
@@ -252,7 +302,7 @@ paths — recorded as an inconsistency on 2026-09-09 and resolved here
   wherever the grid is. An animation with no step track leaves the
   transport alone: the run keeps going under it.
 
-## 4. Phases
+## 4. Phases 1–3
 
 Each phase is one commit and leaves the app working.
 
@@ -323,7 +373,9 @@ run of that gate, on the unified loop, still showed zero difference.
   the hold rule (drag, and ping-pong's backward leg); then in-app,
   the scenarios in §3 by hand.
 
-**What the review of phases 1–3 found (2026-09-09).** A startup hook
+## 5. What the review of phases 1–3 found
+
+**(2026-09-09, commit `58bd910c`.)** A startup hook
 drove the real app through four animations and logged the grid every
 frame. Three things fell out, two of them bugs the pure-rule tests
 could not see because they are about who else is allowed to move the
@@ -364,7 +416,7 @@ apply path produces (pre-existing: animation values are `f32`). The
 unified loop renders a billion-iteration flame frame in 431 ms against
 the old fast loop's 430 ms.
 
-### Phase 4 — Record it
+## 6. Phase 4 — Record it
 
 - `simulation-fractals.md` D5 status paragraph: replace the
   2026-09-09 note with the outcome. Add D4–D7 here as the reference.
@@ -373,13 +425,21 @@ the old fast loop's 430 ms.
 - Archive this document with a "what is still open" table (snapshots
   under D7 go there).
 
-## 5. What is still open
+## 7. What is still open
 
 - Whether the app's dialog should offer the trimmed-dispatch behaviour
   as an option. Not planned: D2 says no one wants it.
 - Field snapshots for fast rewinding (D7). Wait for the complaint.
 - Ascending-target frame ordering for reversed tracks in export (D9).
   Same: wait for the complaint.
+- The `f32` apply path. Animation values reach the config as `f32`,
+  so an animated `Escape.ZoomLog2` (an `f64` field) differs from the
+  same number typed into a config by about one part in ten million.
+  Pre-existing, harmless to look at, and confusing exactly once: a
+  video frame will not be bit-identical to a PNG of the "same" config
+  unless that config carries the rounded value. Found while verifying
+  phase 2; not fixed, because widening the animation value type
+  touches every track.
 - The `sim.steps == 0` "uncapped" sentinel outside the timeline is
   unchanged. A control that reads 0 as "no cap" and a track that
   reads 0 as "the seed" share a field; D4 draws the line at "who owns
