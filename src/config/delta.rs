@@ -3635,6 +3635,28 @@ impl AffineParam {
 /// # Returns
 /// * `Some(ConfigValue)` on successful conversion
 /// * `None` if the JSON value cannot be converted to the expected type
+/// A JSON number as a non-negative integer, however it arrived.
+///
+/// Animation interpolation always produces a FLOAT. `lerp_json_value`
+/// tries `as_f64` first and every JSON number answers it, so a track
+/// between two integer keyframes still yields `1000.0` — and
+/// `serde_json`'s `as_u64` returns `None` for that, because it reports
+/// how the number is stored rather than whether it has an integral
+/// value.
+///
+/// Asking `as_u64` alone therefore silently dropped every integer
+/// track. `Sim.Steps` is the one where it showed: a 0→2000 ramp
+/// applied nothing, so every exported frame kept the config's own step
+/// count, the first frame ran the whole simulation and the rest had
+/// nothing left to do — ten seconds of the same final still.
+fn json_as_round_u64(json: &serde_json::Value) -> Option<u64> {
+    // `f64::max` returns the other operand when one is NaN, so a wild
+    // signal lands on 0 rather than an arbitrary cast; `as` saturates
+    // at the bounds for infinities.
+    json.as_u64()
+        .or_else(|| json.as_f64().map(|f| f.max(0.0).round() as u64))
+}
+
 pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Option<ConfigValue> {
     use serde_json::Value;
 
@@ -3842,13 +3864,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
         | ConfigPath::SystemPngStripMetadata => {
-            json.as_u64().map(|u| ConfigValue::UInt(u as u32))
+            json_as_round_u64(json).map(|u| ConfigValue::UInt(u as u32))
         }
 
         // UInt64 parameters
-        ConfigPath::MaxIterations => {
-            json.as_u64().map(ConfigValue::UInt64)
-        }
+        ConfigPath::MaxIterations => json_as_round_u64(json).map(ConfigValue::UInt64),
 
         // Optional usize as Int (-1 = None, 0+ = Some(index))
         ConfigPath::SoloTransform
@@ -3960,7 +3980,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimGridWidth
         | ConfigPath::SimGridHeight
         | ConfigPath::SimInitRadius
-        | ConfigPath::SimInitCount => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+        | ConfigPath::SimInitCount => json_as_round_u64(json).map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::SimDt
         | ConfigPath::SimGridScale
         | ConfigPath::SimInitAmplitude
@@ -3981,7 +4001,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimColoringParam { .. } => {
             json.as_f64().map(|v| ConfigValue::Float(v as f32))
         }
-        ConfigPath::EscapeSupersample => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+        ConfigPath::EscapeSupersample => json_as_round_u64(json).map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::EscapeJulia => json.as_bool().map(ConfigValue::Bool),
         // Relief shading: the continuous controls animate (sweeping the
         // light around a still is the obvious use), the selectors and
@@ -4051,6 +4071,130 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
 
 #[cfg(test)]
 mod tests {
+
+    /// An integer track must survive interpolation.
+    ///
+    /// Animation always hands the apply path a FLOAT -- interpolation
+    /// goes through `as_f64` -- and `serde_json::as_u64` says no to a
+    /// float even when its value is integral. Every integer-valued
+    /// path was therefore silently dropped mid-track.
+    ///
+    /// `Sim.Steps` is the one that made it visible, and it is the one
+    /// with teeth: it IS the simulation's progression, so a ramp that
+    /// applied nothing left every exported frame at the config's own
+    /// step count -- the first frame ran the entire simulation and the
+    /// rest had nothing to do, giving a video of one still.
+    #[test]
+    fn an_integer_track_survives_interpolation() {
+        use serde_json::json;
+        let integer_paths = [
+            ConfigPath::SimSteps,
+            ConfigPath::SimStepsPerFrame,
+            ConfigPath::SimGridWidth,
+            ConfigPath::SimGridHeight,
+            ConfigPath::SimInitRadius,
+            ConfigPath::SimInitCount,
+            ConfigPath::MaxIterations,
+            ConfigPath::PaletteIndex,
+            ConfigPath::EscapeSupersample,
+        ];
+        for path in integer_paths {
+            // What interpolation actually produces halfway between two
+            // integer keyframes.
+            let midpoint = json!(1000.0);
+            let got = json_to_config_value(&midpoint, &path)
+                .unwrap_or_else(|| panic!("{path:?}: a float mid-track was dropped"));
+            let as_num = match got {
+                ConfigValue::UInt(v) => v as u64,
+                ConfigValue::UInt64(v) => v,
+                other => panic!("{path:?}: unexpected {other:?}"),
+            };
+            assert_eq!(as_num, 1000, "{path:?} lost its value");
+            // And a whole number still works, whichever way it arrives.
+            assert!(json_to_config_value(&json!(1000), &path).is_some(), "{path:?}: integer form");
+        }
+    }
+
+    /// The user's case, end to end: a `Sim.Steps` ramp must actually
+    /// ramp.
+    ///
+    /// Zero steps at 0 s, two thousand at 10 s. What the exporter does
+    /// per frame is exactly this -- evaluate the tracks, apply them to
+    /// a copy of the config, then advance the grid to
+    /// `frame_config.sim.steps`. When the apply silently dropped the
+    /// value, every frame kept the config's own step count: the first
+    /// frame ran the whole simulation and every later frame had
+    /// nothing left to do, so the video was one still repeated.
+    ///
+    /// Asserting the ramp is strictly increasing is the part that
+    /// matters. A conversion that failed would leave every frame equal,
+    /// which is precisely what shipped.
+    #[test]
+    fn a_sim_steps_ramp_advances_frame_by_frame() {
+        use crate::animation::{Animation, AnimationController, Keyframe, Track, TrackSource};
+        use crate::config::FractalConfig;
+
+        let mut animation = Animation::new("ramp".to_string(), 10.0);
+        animation.tracks.push(Track {
+            target: "Sim.Steps".to_string(),
+            flame_target: Default::default(),
+            source: TrackSource::Keyframes {
+                keyframes: vec![
+                    Keyframe { time: 0.0, value: serde_json::json!(0), easing: Default::default() },
+                    Keyframe { time: 10.0, value: serde_json::json!(2000), easing: Default::default() },
+                ],
+            },
+            interpolation: Default::default(),
+            bound: Default::default(),
+        });
+        let mut controller = AnimationController::new();
+        controller.load(animation);
+
+        // The config the export starts from carries the END of the
+        // ramp, as a user's would: they set 2000 steps, then animated
+        // it. That is what made the bug invisible at t = 10 and total
+        // at every other time.
+        let mut base = FractalConfig::default();
+        base.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        base.sim.steps = 2000;
+
+        let mut seen: Vec<u32> = Vec::new();
+        for frame in 0..=10 {
+            let time = frame as f64;
+            let values = controller.evaluate_at_time(time);
+            let mut frame_config = base.clone();
+            crate::animation::export::apply_animation_values(&mut frame_config, &values);
+            seen.push(frame_config.sim.steps);
+        }
+        assert_eq!(seen.first().copied(), Some(0), "the ramp must start at 0, got {seen:?}");
+        assert_eq!(seen.last().copied(), Some(2000), "and end at 2000, got {seen:?}");
+        for pair in seen.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "every frame must advance the run; got {seen:?}"
+            );
+        }
+    }
+
+    /// A wild signal must not cast to nonsense: NaN lands on zero and
+    /// the infinities saturate rather than wrapping.
+    #[test]
+    fn a_non_finite_track_value_is_clamped_rather_than_cast() {
+        use serde_json::json;
+        // serde_json cannot hold NaN, so this is the reachable case:
+        // a negative value from an overshooting ease.
+        let got = json_to_config_value(&json!(-5.0), &ConfigPath::SimSteps);
+        assert_eq!(got, Some(ConfigValue::UInt(0)), "a negative step count must floor at 0");
+        assert_eq!(
+            json_to_config_value(&json!(0.4), &ConfigPath::SimSteps),
+            Some(ConfigValue::UInt(0)),
+            "rounds rather than truncating toward the next keyframe"
+        );
+        assert_eq!(
+            json_to_config_value(&json!(0.6), &ConfigPath::SimSteps),
+            Some(ConfigValue::UInt(1))
+        );
+    }
     use super::*;
 
     #[test]
