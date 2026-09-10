@@ -1,8 +1,21 @@
 # Simulation Mode — the GPU pipeline
 
-**Status:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](simulation-fractals.md) (the master plan),
-[simulation-catalog.md](simulation-catalog.md) (every model, with
+**Status: ARCHIVED 2026-09-09 — built.** This is the design the
+engine was built from, and `src/sim/` follows it: the texture-array
+field, the marker-splicing assembler, the pass/stage model, the
+resolve, the warp. Kept as the record of WHY the GPU side is shaped
+this way; where the code and this document disagree, the code is
+right and the master plan's phase notes say what moved.
+
+Two departures worth knowing before reading: layers arrived after
+this was written (the field is a texture ARRAY, one slice per layer —
+[simulation-layers.md](simulation-layers.md)), and the resolve gained
+bicubic and a distance field
+([simulation-derived-fields.md](simulation-derived-fields.md)).
+
+**Was:** Planning, 2026-09-01. No code. Companion to
+[simulation-fractals.md](../../projects/simulation-fractals.md) (the master plan),
+[simulation-catalog.md](../../projects/simulation-catalog.md) (every model, with
 sources) and [simulation-integration.md](simulation-integration.md)
 (the file-by-file checklist).
 

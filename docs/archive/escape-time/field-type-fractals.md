@@ -2,8 +2,8 @@
 > fractal family. The detailed plan it led to lives in four companion
 > documents, which supersede it where they differ:
 > [simulation-fractals.md](../../projects/simulation-fractals.md) (master plan and
-> decision record), [simulation-pipeline.md](../../projects/simulation-pipeline.md)
-> (GPU design), [simulation-integration.md](../../projects/simulation-integration.md)
+> decision record), [simulation-pipeline.md](../projects/simulation-pipeline.md)
+> (GPU design), [simulation-integration.md](../projects/simulation-integration.md)
 > (file-by-file checklist) and [simulation-catalog.md](../../projects/simulation-catalog.md)
 > (every model with sources). Two things changed in planning: the mode is
 > named **Simulation**, not Field, because `src/escape/fields.rs` already

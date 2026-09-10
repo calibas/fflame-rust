@@ -1,9 +1,31 @@
 # Simulation Mode — integration checklist
 
-**Status:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](simulation-fractals.md) (master plan),
+**Status: ARCHIVED 2026-09-09 — worked through.** Every row that
+describes engine, config, UI, export or API integration is done. Kept
+as the map of what a render mode has to touch — it is the document to
+re-read before adding a FOURTH one, and its **gap** marks (things
+escape got wrong that the new mode should not copy) are the useful
+part.
+
+**What it flagged that is now fixed:** CLI export routing by render
+mode rather than by flame histogram size (§7,
+`src/app/export.rs:192`); loading a `.fflame` switching to the mode's
+workspace (§8, `src/app/mod.rs:1450`); the render-mode bool that made
+"3D" read selected in escape mode (§8).
+
+**What it flagged that is still open**, all pre-existing with escape
+and tracked in the master plan's §5 tail: the online browser's
+render-mode filter has no non-flame option (§8); `es` / `ja` /
+`zh-CN` carry no keys for either mode (§12); and the topic-doc row
+(§13) is only partly done — UI, EXPORT, SCRIPTING and ARCHITECTURE
+cover simulation, RENDERER, CONFIG, BUFFERS, SHADERS, COLOR, RELEASE,
+WASM and TESTING-GUIDE do not, and CLAUDE.md still has no `src/sim/`
+entry beside `src/escape/`.
+
+**Was:** Planning, 2026-09-01. No code. Companion to
+[simulation-fractals.md](../../projects/simulation-fractals.md) (master plan),
 [simulation-pipeline.md](simulation-pipeline.md) (GPU design) and
-[simulation-catalog.md](simulation-catalog.md) (models and sources).
+[simulation-catalog.md](../../projects/simulation-catalog.md) (models and sources).
 
 This is the file-by-file list of everything a third render mode has to
 touch, derived by mapping every place `RenderMode::Escape` reaches

@@ -1,12 +1,20 @@
 # Simulation layers: N coupled systems, per-layer transforms, colouring layers
 
-**Status:** plan of record, 2026-09-08. **Phases 1–4 built and gated
-the same day** (section 7); phase 5, the panel split, to follow; phase
-6, the lattice as layers (section 9), **built and gated 2026-09-09**.
-Phases are ordered so
-that each one ships with every existing baseline byte-identical, and
-the decision points a reader should argue with are marked
-**decision**.
+**Status: ARCHIVED 2026-09-09 — done.** All six phases built and
+gated: 1–4 on 2026-09-08 (section 7), phase 6, the lattice as layers
+(section 9), on 2026-09-09, and phase 5 — the panel split — as its own
+project,
+[simulation-panel.md](../archive/projects/simulation-panel.md).
+Phases were ordered so each shipped with every existing baseline
+byte-identical, and the decision points a reader should argue with are
+marked **decision**.
+
+**One thing noted here and not built:** a colouring that reads ACROSS
+layers. The colour stack draws layers separately and blends; a single
+colouring taking several layers as its inputs is a later extension
+(section 7's colouring note). The `gather` mode added in phase 4 is
+the narrow version of it — four consecutive layers' first channels as
+one colouring's four channels.
 
 ## 0. What is being asked for
 
