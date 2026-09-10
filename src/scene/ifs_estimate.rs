@@ -60,7 +60,7 @@
 //! is MEASURED rather than proved: `estimate_never_exceeds_a_sampled_upper_bound`
 //! checks the walk against a dense sample of a real attractor.
 
-use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, IfsMap};
+use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, Ifs2, IfsMap};
 
 /// What the walk needs of one map. Implemented for the affine cases
 /// now; §8's ladder adds the nonlinear ones by making the inverse and
@@ -335,6 +335,363 @@ fn mean_sigma_min<A>(maps: &[IfsMap<A>]) -> f64 {
         return 0.5;
     }
     maps.iter().map(|m| m.sigma_min).sum::<f64>() / maps.len() as f64
+}
+
+// ============================================================ seeding
+//
+// §2.5's reference orbit, and the continuation that consumes it.
+//
+// The split the walk already carries — a reference half and a delta
+// half — is exact for affine maps, so the two can be advanced apart.
+// What that buys is precision where it is needed and nowhere else: the
+// delta is exact and f32 holds it to a zoom around 2¹²⁰, while the
+// reference needs real precision but only until the deltas grow past
+// its own rounding. So the CPU walks the levels every pixel shares,
+// in whatever precision it likes, and hands over.
+//
+// 2D only. Phase 3's 3D walk wants the same shape with a 3×3 basis;
+// making this generic over dimension now would mean an associated
+// basis type on [`IfsSpace`] for one caller, so it waits.
+
+/// One beam candidate, handed from the CPU's walk to the shader's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Seed {
+    /// Where this candidate has got to. Always O(1) — seeding stops
+    /// before anything leaves the ball — so f32 holds it.
+    pub position: [f64; 2],
+    /// The accumulated inverse-linear map **composed with the view
+    /// basis**: it takes a pixel's normalised offset straight to this
+    /// candidate's delta.
+    ///
+    /// Composed rather than kept apart because each half is the
+    /// other's reciprocal in size — the map grows like σ⁻ᵏ, the view
+    /// shrinks like the zoom — and only the product is a number a
+    /// shader can hold.
+    pub basis: [[f64; 2]; 2],
+    /// Product of the σ_min applied so far, **per pixel width**. The
+    /// distance is reported in pixels for the same reason the basis is
+    /// composed: in world units it underflows f32 long before the
+    /// delta does.
+    pub sigma_per_px: f64,
+    /// Branch history so far, which the address colouring continues.
+    pub address: Vec<u32>,
+    /// σ_min of the last map applied, for the annulus residual.
+    pub last_sigma: f64,
+    /// Running maximum of `σ·(r − R)`, in the same pixel units.
+    pub bound_per_px: f64,
+    /// Where this candidate left the ball, if it already has, and the
+    /// point it left at.
+    ///
+    /// Carried rather than recomputed because the continuation cannot
+    /// know it: a candidate that escaped at level 3 of a fifty-level
+    /// prefix would be reported as escaping at level 50, which is a
+    /// constant shift through the whole exterior of the picture.
+    pub escape: Option<(f64, [f64; 2])>,
+    /// Past [`FAR`] already: converged, and not expanded further.
+    pub done: bool,
+}
+
+/// The beam's state at the level the CPU hands over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Seeds {
+    /// Levels the CPU walked. The continuation's reported level is its
+    /// own count plus this.
+    pub level: u32,
+    pub cands: Vec<Seed>,
+}
+
+/// How large a delta may grow before the CPU stops and hands over.
+///
+/// The handover is sound only while every pixel in the view still
+/// follows the centre — while no pixel's branch choice can differ from
+/// the reference's. A quarter of the ball's radius is well inside
+/// that, and close enough to O(1) for f32 to take over.
+const HANDOVER_FRACTION: f64 = 0.25;
+
+/// Walk the beam from the view centre and stop while the whole view
+/// still behaves as one point.
+///
+/// `view_basis` maps a normalised pixel offset — the screen spanning
+/// [-½, ½] on each axis — to a world offset from the centre. `px` is
+/// the world width of one pixel.
+pub fn seed_beam(
+    ifs: &Ifs2,
+    centre: [f64; 2],
+    view_basis: [[f64; 2]; 2],
+    px: f64,
+    max_levels: u32,
+    beam: u32,
+) -> Seeds {
+    let ball = ifs.ball.centre;
+    let radius = ifs.ball.radius;
+    let beam = beam.max(1) as usize;
+    let cap = radius * HANDOVER_FRACTION;
+    let scale = if px > 0.0 { 1.0 / px } else { 1.0 };
+
+    let (q0, sigma0, basis0) = match &ifs.final_map {
+        Some(f) => (
+            f.inverse.apply(centre),
+            f.sigma_min,
+            compose_basis(&f.inverse, view_basis),
+        ),
+        None => (centre, 1.0, view_basis),
+    };
+
+    let mut live = vec![Cand {
+        q: q0,
+        sigma: sigma0,
+        bound: f64::NEG_INFINITY,
+        r: Affine2::distance(q0, ball),
+        address: Vec::new(),
+        escape: None,
+        done: false,
+    }];
+    let mut bases = vec![basis0];
+    let mut level = 0u32;
+
+    let mean = mean_sigma_min(&ifs.maps);
+    let far = radius.max(1.0) * FAR;
+
+    for _ in 0..max_levels {
+        // Score exactly as the walk does, so the prefix is a prefix
+        // and not an approximation of one.
+        let mut all_done = true;
+        for c in live.iter_mut() {
+            if c.done {
+                continue;
+            }
+            c.bound = c.bound.max(c.sigma * (c.r - radius));
+            if c.r > radius && c.escape.is_none() {
+                let last = c
+                    .address
+                    .last()
+                    .map(|&i| ifs.maps[i as usize].sigma_min)
+                    .unwrap_or(mean);
+                c.escape = Some((
+                    level as f64 + escape_residual(c.r, radius, last),
+                    c.address.clone(),
+                    c.q,
+                ));
+            }
+            if !c.r.is_finite() || c.r > far {
+                c.done = true;
+            } else {
+                all_done = false;
+            }
+        }
+        if all_done {
+            break;
+        }
+
+        // Stop once a delta could start separating pixels onto
+        // different branches. A candidate that has ALREADY left the
+        // ball is not a reason to stop -- it is state, and it is
+        // carried; stopping on it ends the prefix at level 1, because
+        // a beam wider than the branching factor prunes nothing and so
+        // keeps every escapee from the first level onward.
+        if bases.iter().any(|b| basis_reach(*b) >= cap) {
+            break;
+        }
+
+        let mut next: Vec<Cand<[f64; 2]>> = Vec::with_capacity(live.len() * ifs.maps.len());
+        let mut next_bases: Vec<[[f64; 2]; 2]> = Vec::with_capacity(next.capacity());
+        for (c, basis) in live.iter().zip(&bases) {
+            if c.done {
+                next.push(c.clone());
+                next_bases.push(*basis);
+                continue;
+            }
+            for (i, m) in ifs.maps.iter().enumerate() {
+                let q = m.inverse.apply(c.q);
+                let sigma = c.sigma * m.sigma_min;
+                let r = Affine2::distance(q, ball);
+                let mut child = c.clone();
+                child.q = q;
+                child.sigma = sigma;
+                child.bound = c.bound.max(sigma * (r - radius));
+                child.r = r;
+                child.address.push(i as u32);
+                next.push(child);
+                next_bases.push(compose_basis(&m.inverse, *basis));
+            }
+        }
+        // The same ranking the walk uses — and the bases have to
+        // follow their candidates through the sort, or every delta
+        // ends up attached to the wrong path.
+        let mut order: Vec<usize> = (0..next.len()).collect();
+        order.sort_by(|&a, &b| by_rank(&next[a], &next[b]));
+        order.truncate(beam);
+        live = order.iter().map(|&i| next[i].clone()).collect();
+        bases = order.iter().map(|&i| next_bases[i]).collect();
+        level += 1;
+    }
+
+    Seeds {
+        level,
+        cands: live
+            .into_iter()
+            .zip(bases)
+            .map(|(c, basis)| Seed {
+                position: c.q,
+                basis,
+                sigma_per_px: c.sigma * scale,
+                last_sigma: c
+                    .address
+                    .last()
+                    .map(|&i| ifs.maps[i as usize].sigma_min)
+                    .unwrap_or(mean),
+                bound_per_px: if c.bound.is_finite() {
+                    c.bound * scale
+                } else {
+                    f64::NEG_INFINITY
+                },
+                escape: c.escape.map(|(lvl, _, p)| (lvl, p)),
+                done: c.done,
+                address: c.address,
+            })
+            .collect(),
+    }
+}
+
+/// Continue a seeded walk for one pixel — the reference for what the
+/// shader does after the handover.
+///
+/// `uv` is the pixel's normalised offset, the screen spanning [-½, ½].
+/// The distance returned is **in pixels**, which is the only form that
+/// survives a deep zoom.
+pub fn estimate_seeded(
+    ifs: &Ifs2,
+    seeds: &Seeds,
+    uv: [f64; 2],
+    max_levels: u32,
+    beam: u32,
+) -> Estimate<[f64; 2]> {
+    let centre = ifs.ball.centre;
+    let radius = ifs.ball.radius;
+    let far = radius.max(1.0) * FAR;
+    let beam = beam.max(1) as usize;
+
+    let mut live: Vec<Cand<[f64; 2]>> = seeds
+        .cands
+        .iter()
+        .map(|s| {
+            let d = apply_basis(s.basis, uv);
+            let q = [s.position[0] + d[0], s.position[1] + d[1]];
+            Cand {
+                q,
+                // σ per pixel, so the bound comes out in pixels too.
+                sigma: s.sigma_per_px,
+                bound: s.bound_per_px,
+                r: Affine2::distance(q, centre),
+                address: s.address.clone(),
+                escape: s.escape.map(|(lvl, p)| (lvl, s.address.clone(), p)),
+                done: s.done,
+            }
+        })
+        .collect();
+
+    let mut best_escape: Option<(f64, Vec<u32>, [f64; 2])> = None;
+    let sigma_of = |c: &Cand<[f64; 2]>| {
+        c.address
+            .last()
+            .map(|&i| ifs.maps[i as usize].sigma_min)
+            .unwrap_or_else(|| mean_sigma_min(&ifs.maps))
+    };
+
+    for k in 0..max_levels {
+        let mut all_done = true;
+        for c in live.iter_mut() {
+            if c.done {
+                continue;
+            }
+            let r = Affine2::distance(c.q, centre);
+            c.r = r;
+            c.bound = c.bound.max(c.sigma * (r - radius));
+            if r > radius && c.escape.is_none() {
+                let level = (seeds.level + k) as f64
+                    + escape_residual(r, radius, sigma_of(c));
+                c.escape = Some((level, c.address.clone(), c.q));
+            }
+            if !r.is_finite() || r > far {
+                c.done = true;
+            } else {
+                all_done = false;
+            }
+        }
+        if all_done || k + 1 >= max_levels {
+            break;
+        }
+
+        let mut next: Vec<Cand<[f64; 2]>> = Vec::with_capacity(live.len() * ifs.maps.len());
+        for c in &live {
+            if c.done {
+                next.push(c.clone());
+                continue;
+            }
+            for (i, m) in ifs.maps.iter().enumerate() {
+                let q = m.inverse.apply(c.q);
+                let sigma = c.sigma * m.sigma_min;
+                let r = Affine2::distance(q, centre);
+                let mut child = c.clone();
+                child.q = q;
+                child.sigma = sigma;
+                child.bound = c.bound.max(sigma * (r - radius));
+                child.r = r;
+                child.address.push(i as u32);
+                next.push(child);
+            }
+        }
+        next.sort_by(by_rank);
+        next.truncate(beam);
+        live = next;
+    }
+
+    let best = live
+        .into_iter()
+        .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
+        .expect("the beam is never empty");
+    let _ = &mut best_escape;
+    let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
+    match best.escape {
+        Some((level, address, point)) => {
+            Estimate { distance, level, address, point, escaped: true }
+        }
+        None => Estimate {
+            distance,
+            level: (seeds.level + max_levels) as f64,
+            address: best.address,
+            point: best.q,
+            escaped: false,
+        },
+    }
+}
+
+/// The furthest a normalised offset can be carried by this basis —
+/// the screen's corner, which is what bounds the whole view.
+fn basis_reach(b: [[f64; 2]; 2]) -> f64 {
+    let x = (b[0][0].abs() + b[0][1].abs()) * 0.5;
+    let y = (b[1][0].abs() + b[1][1].abs()) * 0.5;
+    (x * x + y * y).sqrt()
+}
+
+fn apply_basis(b: [[f64; 2]; 2], uv: [f64; 2]) -> [f64; 2] {
+    [b[0][0] * uv[0] + b[0][1] * uv[1], b[1][0] * uv[0] + b[1][1] * uv[1]]
+}
+
+/// Compose an inverse map's LINEAR part onto a delta basis. The
+/// translation is carried entirely by the reference, which is what
+/// makes the split exact for affine maps.
+fn compose_basis(inv: &Affine2, b: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
+    [
+        [
+            inv.m[0][0] * b[0][0] + inv.m[0][1] * b[1][0],
+            inv.m[0][0] * b[0][1] + inv.m[0][1] * b[1][1],
+        ],
+        [
+            inv.m[1][0] * b[0][0] + inv.m[1][1] * b[1][0],
+            inv.m[1][0] * b[0][1] + inv.m[1][1] * b[1][1],
+        ],
+    ]
 }
 
 /// The address as a base-N fraction in `[0, 1)`, most significant
@@ -625,6 +982,210 @@ mod tests {
             "the shipped beam speckles {missed} of {} attractor points",
             pts.len()
         );
+    }
+
+    /// A seeded walk must answer exactly what a direct one does.
+    ///
+    /// The whole point of the split is that it changes WHERE the work
+    /// happens, not what it computes: the CPU walks the levels every
+    /// pixel shares, the shader continues from the handover, and the
+    /// answer is the same. If it is not, deep zoom is not a longer
+    /// version of the shallow picture — it is a different picture, and
+    /// nothing downstream could tell.
+    #[test]
+    fn a_seeded_walk_answers_what_a_direct_one_does() {
+        for (name, ifs) in [("sierpinski", sierpinski()), ("dragon", dragon())] {
+            // A point on the attractor to zoom into, so the view keeps
+            // finding structure.
+            let mut target = ifs.ball.centre;
+            for k in 0..30u32 {
+                target = ifs.maps[(k as usize) % ifs.maps.len()].forward.apply(target);
+            }
+
+            // Only as deep as the DIRECT path can still be trusted
+            // as a reference. It forms `C + delta` at full magnitude,
+            // so f64's ulp at 0.28 (5.5e-17) is a fraction of the view
+            // that grows with the zoom: about 1.5e-8 of it at 2^30,
+            // but 1.5% at 2^50. Past there the seeded walk is the more
+            // accurate of the two and disagreement would mean nothing.
+            // `a_deep_zoom_sees_the_same_figure` is the gate that goes
+            // deeper.
+            for &zoom in &[0.0f64, 6.0, 12.0, 20.0, 30.0] {
+                let span_y = 4.0 / 2f64.powf(zoom);
+                let span_x = span_y; // square view
+                let view_basis = [[span_x, 0.0], [0.0, -span_y]];
+                let px = span_y / 96.0;
+                let seeds = seed_beam(&ifs, target, view_basis, px, 200, 8);
+
+                let total = 60u32;
+                let after = total.saturating_sub(seeds.level).max(1);
+
+                for &uv in &[
+                    [0.0f64, 0.0],
+                    [0.3, -0.2],
+                    [-0.45, 0.45],
+                    [0.5, 0.5],
+                    [-0.1, 0.37],
+                ] {
+                    let d = apply_basis(view_basis, uv);
+                    let p = [target[0] + d[0], target[1] + d[1]];
+
+                    let direct = estimate(&ifs, p, total, 8);
+                    let seeded = estimate_seeded(&ifs, &seeds, uv, after, 8);
+
+                    // The direct answer is in world units, the seeded
+                    // one in pixels: that is the point, not a
+                    // discrepancy.
+                    let direct_px = direct.distance / px;
+                    // Relative, and loose enough for two different
+                    // orders of the same f64 arithmetic. A basis
+                    // composed wrongly, or attached to the wrong
+                    // candidate through the sort, is off by O(1) --
+                    // which this still catches by a wide margin.
+                    let tol = 1e-4 * direct_px.max(1.0);
+                    assert!(
+                        (seeded.distance - direct_px).abs() <= tol,
+                        "{name} zoom 2^{zoom} at {uv:?}: seeded {} px, direct {direct_px} px \
+                         (handover at level {})",
+                        seeded.distance,
+                        seeds.level
+                    );
+                    assert!(
+                        (seeded.level - direct.level).abs() < 1e-3,
+                        "{name} zoom 2^{zoom} at {uv:?}: seeded level {}, direct {}",
+                        seeded.level,
+                        direct.level
+                    );
+                    assert_eq!(
+                        seeded.escaped, direct.escaped,
+                        "{name} zoom 2^{zoom} at {uv:?}: escape disagrees"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A deep zoom must see the same figure — which is the whole claim
+    /// §2.5 makes about what a zoom into an IFS shows.
+    ///
+    /// Near the fixed point of a half-scale map, the attractor is
+    /// EXACTLY invariant under halving: `S₀(A) ⊆ A` and `S₀` is `p ↦ p/2`,
+    /// so the gasket around the origin is its own image at every
+    /// scale of two. Rendering the distance field in PIXELS at zoom Z
+    /// and at Z+1 must therefore give the same field, at any depth.
+    ///
+    /// That makes this a deep-zoom gate with no reference to lose
+    /// precision: it compares the machinery against itself one octave
+    /// apart, and only a walk that is actually resolving the view can
+    /// pass it. A direct f64 walk fails it past about 2^50; this runs
+    /// to 2^160.
+    #[test]
+    fn a_deep_zoom_sees_the_same_figure() {
+        let ifs = sierpinski();
+        // Map 0 is `p -> p/2`, so its fixed point is the origin.
+        let origin = [0.0f64, 0.0];
+
+        let field_at = |zoom: f64| -> Vec<f64> {
+            let span = 4.0 / 2f64.powf(zoom);
+            let basis = [[span, 0.0], [0.0, -span]];
+            let px = span / 32.0;
+            let seeds = seed_beam(&ifs, origin, basis, px, 600, 8);
+            let mut out = Vec::new();
+            for i in 0..17 {
+                for j in 0..17 {
+                    let uv = [i as f64 / 16.0 - 0.5, j as f64 / 16.0 - 0.5];
+                    out.push(estimate_seeded(&ifs, &seeds, uv, 64, 8).distance);
+                }
+            }
+            out
+        };
+
+        for &zoom in &[4.0f64, 20.0, 60.0, 120.0, 159.0] {
+            let here = field_at(zoom);
+            let octave = field_at(zoom + 1.0);
+            let mut worst: f64 = 0.0;
+            for (a, b) in here.iter().zip(&octave) {
+                // Both are in pixels, and the figure is the same, so
+                // the fields are the same.
+                worst = worst.max((a - b).abs() / a.max(*b).max(1.0));
+            }
+            println!("  zoom 2^{zoom} vs 2^{}: worst relative difference {worst:.3e}", zoom + 1.0);
+            assert!(
+                worst < 1e-3,
+                "at zoom 2^{zoom} the picture is not self-similar one octave down \
+                 (worst {worst:.3e}) -- the walk has stopped resolving the view"
+            );
+            // And it must not have collapsed to a flat field, which
+            // would be trivially self-similar and completely wrong.
+            let spread = here.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                - here.iter().cloned().fold(f64::INFINITY, f64::min);
+            assert!(
+                spread > 1.0,
+                "at zoom 2^{zoom} the distance field is flat (spread {spread:.3} px)"
+            );
+        }
+    }
+
+    /// The handover must happen where it is worth happening: deep
+    /// enough that the shader's f32 is left an O(1) problem, and not
+    /// so deep that a pixel's own branch could already have differed
+    /// from the centre's.
+    #[test]
+    fn the_handover_level_tracks_the_zoom() {
+        let ifs = sierpinski();
+        let mut target = ifs.ball.centre;
+        for k in 0..30u32 {
+            target = ifs.maps[(k as usize) % 3].forward.apply(target);
+        }
+
+        let level_at = |zoom: f64| {
+            let span = 4.0 / 2f64.powf(zoom);
+            seed_beam(&ifs, target, [[span, 0.0], [0.0, -span]], span / 96.0, 400, 8).level
+        };
+
+        // At sigma = 1/2 each level doubles the delta, so the handover
+        // should sit about one level deeper per bit of zoom.
+        let shallow = level_at(0.0);
+        let deep = level_at(60.0);
+        println!("  handover level: zoom 0 -> {shallow}, zoom 60 -> {deep}");
+        assert!(shallow <= 3, "a home view should hand over almost at once, got {shallow}");
+        assert!(
+            (deep as i64 - shallow as i64 - 60).abs() <= 4,
+            "handover moved {} levels for 60 bits of zoom",
+            deep as i64 - shallow as i64
+        );
+
+        // A seed MAY have left the ball -- a beam wider than the
+        // branching factor prunes nothing, so escapees ride along from
+        // the first level. What matters is that such a candidate
+        // carries its escape record: recomputing it after the handover
+        // would report it escaping at the handover level instead of
+        // where it actually did, shifting the whole exterior.
+        for zoom in [0.0, 20.0, 60.0, 120.0] {
+            let span = 4.0 / 2f64.powf(zoom);
+            let seeds =
+                seed_beam(&ifs, target, [[span, 0.0], [0.0, -span]], span / 96.0, 400, 8);
+            assert!(!seeds.cands.is_empty(), "zoom 2^{zoom}: handed over nothing");
+            for c in &seeds.cands {
+                let r = Affine2::distance(c.position, ifs.ball.centre);
+                if r > ifs.ball.radius {
+                    let (lvl, _) = c.escape.expect("an escaped seed must carry its escape");
+                    // The level carries a fractional residual across
+                    // the annulus, so an escape at integer level k
+                    // reads as k + something under one.
+                    assert!(
+                        lvl < seeds.level as f64 + 1.0,
+                        "zoom 2^{zoom}: escape recorded at level {lvl}, past the                          handover at {}",
+                        seeds.level
+                    );
+                }
+                // And a live one must be somewhere f32 can hold.
+                assert!(
+                    r.is_finite(),
+                    "zoom 2^{zoom}: handed over a non-finite position"
+                );
+            }
+        }
     }
 
     fn box_distance(p: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> f64 {

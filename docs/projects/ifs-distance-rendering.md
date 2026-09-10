@@ -748,6 +748,39 @@ and a test pins it.
   **pixel-relative** rather than world-absolute, or it underflows f32
   long before the delta does. That also makes the contour bands
   zoom-invariant, which they are not today.
+
+  **The CPU half is built, 2026-09-10** — `seed_beam` and
+  `estimate_seeded` in [ifs_estimate.rs](../../src/scene/ifs_estimate.rs).
+  The seeding walk is a faithful PREFIX of the walk, not an
+  approximation of one: same ranking, same bound, same escape
+  recording, stopping only when a delta reaches a quarter of the ball's
+  radius. Three gates:
+
+  - a seeded walk answers what a direct one does, over two IFSs, five
+    pixels and zooms to 2³⁰ — as far as the direct walk can be trusted
+    as a reference, since it forms `C + δ` at full magnitude and f64's
+    ulp is 1.5% of the view by 2⁵⁰;
+  - the handover level tracks the zoom, one level per bit at σ = ½
+    (measured: level 0 at the home view, 56 at 2⁶⁰);
+  - **a deep zoom sees the same figure.** Around the fixed point of a
+    half-scale map the attractor is exactly invariant under halving,
+    so the distance field in PIXELS at zoom Z and at Z+1 must be the
+    same field. It is, to **zero difference, at every zoom up to
+    2¹⁶⁰** — a deep-zoom gate with no reference to lose precision,
+    because it compares the machinery against itself one octave apart.
+
+  Two things it does not yet do, and they are the remaining work:
+
+  - **The shader does not consume the seeds.** Mode C still walks from
+    `params.center`, so `DEEP_ZOOM_LIMIT` is still 20. This half is
+    proved, not connected.
+  - **The centre is still f64.** The deep gate above centres on the
+    origin, which is exactly representable — the same trap the 0.25
+    fixture set earlier. A general centre needs about `zoom + 30` bits,
+    because the walk expands by 2ᵏ and bit j of the centre becomes bit
+    j−k at level k. `FixedPoint::from_decimal` and `limbs_for_view`
+    already exist for the escape engine's own deep zoom, so this is a
+    change of number type in one function rather than new machinery.
 - ~~The beam (D4, B > 1) and its cost measured~~ — **moved into phase
   1**, because the dragon needed it to render at all (§5, phase 1).
 - **A mode-C recolor cache — built 2026-09-10, and taken first.**
