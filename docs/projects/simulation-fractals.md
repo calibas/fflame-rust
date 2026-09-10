@@ -1226,15 +1226,28 @@ already fixed (see *Closed* below):
   mode can be filtered for. Pre-existing with escape; the integration
   checklist §8 flagged it for both.
 
-**And one that turned out not to exist.** This list carried "the IFS
-phase — the field used as a transform inside the flame renderer" from
-[simulation-derived-fields.md](../archive/projects/simulation-derived-fields.md).
-The direction that was actually wanted is the OTHER one — the flame's
-transforms used as the field's per-step maps — and that has been built
-since layers phase 3 (`sim.use_transforms`: transform *i* warps layer
-*i* by its affine and its variations, at a rate that is its weight).
-A texture-sampling variation that reads a simulation field inside the
-chaos game remains unbuilt and unrequested.
+**Two directions, one built.** The flame's transforms as the FIELD's
+per-step maps has existed since layers phase 3 — `sim.use_transforms`:
+transform *i* warps layer *i* by its affine and its variations, at a
+rate that is its weight.
+
+The other direction — **the field as a transform inside the FLAME**, the
+IFS phase of
+[simulation-derived-fields.md](../archive/projects/simulation-derived-fields.md)
+— is wanted and **not scheduled** (confirmed 2026-09-10). What it needs,
+so the work above builds toward it rather than away: a variation that
+samples a texture (a bind group entry in the flame compute shader and a
+`Feature` for variations that read one); the simulation renderer kept
+alive beside the flame renderer, which `RenderEngines` now makes
+routine; and a decision about the field's coordinate frame, its
+behaviour past the grid edge, and whether it is frozen at a step or
+live. The natural reading of a texel is a **local affine** — the flame's
+own `(a, b, c, d)` — so the field becomes a spatially varying transform,
+and the derived-field texture phases A–D produce is exactly what such a
+variation would sample.
+
+Note this couples `engine-flame` and `engine-sim`, so it belongs in the
+main renderer rather than in either single-engine WASM module.
 
 **Closed since this list was written:**
 
