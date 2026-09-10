@@ -1011,6 +1011,7 @@ async fn render_escape(
             &mut encoder,
             &job.config.escape,
             renderer.palette_view(),
+            renderer.palette_generation(),
         );
         let mut guard = 0u32;
         while !settled {
@@ -1025,6 +1026,7 @@ async fn render_escape(
                 &mut encoder,
                 &job.config.escape,
                 renderer.palette_view(),
+            renderer.palette_generation(),
             );
             guard += 1;
             if guard > 4_000_000 {
