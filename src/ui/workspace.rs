@@ -4,6 +4,7 @@
 //! for different workflows (Beginner, Standard, Advanced, Export).
 
 use egui_dock::{DockState};
+use std::collections::HashMap;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +67,8 @@ pub enum PanelType {
     Subflames,
     /// Escape-time fractal editing surface (formula, view, coloring)
     Escape,
+    /// Simulation editing surface (model, grid, transport, coloring)
+    Simulation,
 }
 
 impl std::fmt::Display for PanelType {
@@ -99,13 +102,14 @@ impl std::fmt::Display for PanelType {
             PanelType::Subflames => t!("panels.subflames"),
             PanelType::Scripts => t!("panels.scripts"),
             PanelType::Escape => t!("panels.escape"),
+            PanelType::Simulation => t!("panels.simulation"),
         };
         write!(f, "{}", title)
     }
 }
 
 /// Workspace layout presets
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkspaceLayout {
     /// Standard: Fractal + Transform Editor + Appearance + View
     Standard,
@@ -120,6 +124,8 @@ pub enum WorkspaceLayout {
     /// the right, since coloring is most of the work once a formula
     /// and a view are chosen.
     EscapeTime,
+    /// Simulation: the sim panel left, viewport centre, colours right.
+    Simulation,
     /// Compact: Full-screen viewport only (mobile / small screens)
     Compact,
 }
@@ -134,6 +140,14 @@ pub struct Workspace {
     /// window size — the first frame that does know it applies the
     /// side-dock minimums (`apply_startup_dock_minimums`).
     needs_startup_dock_widths: bool,
+    /// What each layout looked like when it was last left, so that
+    /// returning to a render mode restores the arrangement instead of
+    /// rebuilding it from code (ui-render-modes plan, section 3.3).
+    ///
+    /// Session-only: nothing is persisted, so a restart still opens on
+    /// the built-in layouts. Keyed by layout rather than by mode
+    /// because 2D and 3D share the Standard workspace.
+    stashed: HashMap<WorkspaceLayout, DockState<PanelType>>,
 }
 
 impl Workspace {
@@ -149,6 +163,7 @@ impl Workspace {
             dock_state: Self::create_standard_layout(),
             current_layout: WorkspaceLayout::Standard,
             needs_startup_dock_widths: true,
+            stashed: HashMap::new(),
         }
     }
 
@@ -231,6 +246,9 @@ impl Workspace {
             PanelType::Subflames => egui::vec2(320.0, 360.0),
             PanelType::Scripts => egui::vec2(420.0, 560.0),
             PanelType::Escape => egui::vec2(350.0, 520.0),
+            // Taller than escape's: the transport row and the init
+            // controls sit above the parameters.
+            PanelType::Simulation => egui::vec2(350.0, 560.0),
         }
     }
 
@@ -241,11 +259,35 @@ impl Workspace {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Animation => Self::create_animation_layout(help_was_open),
             WorkspaceLayout::EscapeTime => Self::create_escape_layout(help_was_open),
+            WorkspaceLayout::Simulation => Self::create_simulation_layout(help_was_open),
             WorkspaceLayout::Scripting => Self::create_scripting_layout(help_was_open),
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
         self.current_layout = layout;
         self.needs_startup_dock_widths = true;
+    }
+
+    /// Move to another layout, keeping what this one looked like.
+    ///
+    /// What a mode switch calls. `apply_layout` is the FORCING version
+    /// -- "Reset Workspace" and the Workspace Layout menu mean "build
+    /// it fresh" -- and this one is the remembering version, so that
+    /// switching away and back does not throw away a panel you moved.
+    pub fn switch_layout(&mut self, layout: WorkspaceLayout) {
+        if self.current_layout == layout {
+            return;
+        }
+        self.stashed.insert(self.current_layout, self.dock_state.clone());
+        match self.stashed.remove(&layout) {
+            Some(saved) => {
+                self.dock_state = saved;
+                self.current_layout = layout;
+                // Widths came back with it; the startup minimums would
+                // undo whatever the user dragged.
+                self.needs_startup_dock_widths = false;
+            }
+            None => self.apply_layout(layout),
+        }
     }
 
     /// Whether the workspace is in compact (mobile) layout
@@ -501,6 +543,30 @@ impl Workspace {
         state
     }
 
+    /// Simulation layout: the same shape as the escape one, because
+    /// the job is the same -- one editing surface, the picture, and the
+    /// colour controls. Deliberately not a new arrangement to learn.
+    fn create_simulation_layout(preserve_help: bool) -> DockState<PanelType> {
+        let mut state = DockState::new(vec![PanelType::FractalViewport]);
+
+        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
+            egui_dock::NodeIndex::root(),
+            0.28,
+            vec![PanelType::Simulation],
+        );
+
+        let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.72,
+            vec![PanelType::Colors, PanelType::History],
+        );
+
+        if preserve_help {
+            state.add_window(vec![PanelType::Help]);
+        }
+        state
+    }
+
     /// Create Compact layout: Full-screen viewport only (mobile / small screens)
     fn create_compact_layout() -> DockState<PanelType> {
         DockState::new(vec![PanelType::FractalViewport])
@@ -610,6 +676,15 @@ mod layout_tests {
                     PanelType::History,
                 ],
             ),
+            (
+                WorkspaceLayout::Simulation,
+                &[
+                    PanelType::FractalViewport,
+                    PanelType::Simulation,
+                    PanelType::Colors,
+                    PanelType::History,
+                ],
+            ),
             (WorkspaceLayout::Compact, &[PanelType::FractalViewport]),
         ];
         for (layout, panels) in cases {
@@ -655,6 +730,57 @@ mod layout_tests {
         );
     }
 
+    /// Switching away from a layout and back restores what it looked
+    /// like, rather than rebuilding it from code.
+    ///
+    /// This is what makes a Mode menu usable: without it every switch
+    /// threw away any panel the user had opened or moved, and with a
+    /// four-way picker in the menu bar that would happen constantly.
+    #[test]
+    fn switching_away_and_back_restores_the_arrangement() {
+        let mut ws = Workspace::default();
+        assert!(!ws.panel_exists(PanelType::Signal), "fixture assumption");
+        // Stand in for "the user arranged something": put a panel in
+        // the Standard layout that its default does not carry.
+        ws.dock_state.push_to_focused_leaf(PanelType::Signal);
+        assert!(ws.panel_exists(PanelType::Signal));
+
+        ws.switch_layout(WorkspaceLayout::Simulation);
+        assert!(ws.panel_exists(PanelType::Simulation), "the sim layout arrived");
+        assert!(!ws.panel_exists(PanelType::Signal), "and it is its own layout");
+
+        ws.switch_layout(WorkspaceLayout::Standard);
+        assert!(
+            ws.panel_exists(PanelType::Signal),
+            "returning to a layout must restore the arrangement, not rebuild it"
+        );
+    }
+
+    /// `apply_layout` is still the forcing version: Reset Workspace
+    /// and the Workspace Layout menu mean "build it fresh", and must
+    /// not hand back a stashed arrangement.
+    #[test]
+    fn apply_layout_still_rebuilds_from_scratch() {
+        let mut ws = Workspace::default();
+        ws.dock_state.push_to_focused_leaf(PanelType::Signal);
+        ws.switch_layout(WorkspaceLayout::Simulation);
+        ws.apply_layout(WorkspaceLayout::Standard);
+        assert!(
+            !ws.panel_exists(PanelType::Signal),
+            "apply_layout must rebuild, not restore"
+        );
+    }
+
+    /// Switching to the layout already up changes nothing -- and in
+    /// particular must not stash over what is on screen.
+    #[test]
+    fn switching_to_the_current_layout_is_a_no_op() {
+        let mut ws = Workspace::default();
+        ws.dock_state.push_to_focused_leaf(PanelType::Signal);
+        ws.switch_layout(WorkspaceLayout::Standard);
+        assert!(ws.panel_exists(PanelType::Signal));
+    }
+
     /// The Escape layout must not carry the flame-only editors.
     ///
     /// Their presence is exactly the confusion this layout exists to
@@ -672,6 +798,27 @@ mod layout_tests {
         }
     }
 
+    /// The simulation layout drops the flame-only editors for the same
+    /// reason the escape one does: none of them edits anything a
+    /// simulation consumes, and a panel that silently does nothing is
+    /// worse than an absent one.
+    #[test]
+    fn simulation_layout_omits_the_flame_only_editors() {
+        let mut ws = Workspace::new();
+        ws.apply_layout(WorkspaceLayout::Simulation);
+        for p in [
+            PanelType::Transforms,
+            PanelType::TriangleEditor,
+            PanelType::View,
+            PanelType::Escape,
+        ] {
+            assert!(
+                !ws.panel_exists(p),
+                "{p:?} must not be in the Simulation layout"
+            );
+        }
+    }
+
     /// Help stays open across a layout switch — the layouts that
     /// preserve it re-add it as a floating window.
     #[test]
@@ -680,6 +827,7 @@ mod layout_tests {
             WorkspaceLayout::Animation,
             WorkspaceLayout::Scripting,
             WorkspaceLayout::EscapeTime,
+            WorkspaceLayout::Simulation,
         ] {
             let mut ws = Workspace::new();
             ws.dock_state.add_window(vec![PanelType::Help]);

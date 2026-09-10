@@ -1,8 +1,21 @@
 # Simulation Mode — the GPU pipeline
 
-**Status:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](simulation-fractals.md) (the master plan),
-[simulation-catalog.md](simulation-catalog.md) (every model, with
+**Status: ARCHIVED 2026-09-09 — built.** This is the design the
+engine was built from, and `src/sim/` follows it: the texture-array
+field, the marker-splicing assembler, the pass/stage model, the
+resolve, the warp. Kept as the record of WHY the GPU side is shaped
+this way; where the code and this document disagree, the code is
+right and the master plan's phase notes say what moved.
+
+Two departures worth knowing before reading: layers arrived after
+this was written (the field is a texture ARRAY, one slice per layer —
+[simulation-layers.md](simulation-layers.md)), and the resolve gained
+bicubic and a distance field
+([simulation-derived-fields.md](simulation-derived-fields.md)).
+
+**Was:** Planning, 2026-09-01. No code. Companion to
+[simulation-fractals.md](../../projects/simulation-fractals.md) (the master plan),
+[simulation-catalog.md](../../projects/simulation-catalog.md) (every model, with
 sources) and [simulation-integration.md](simulation-integration.md)
 (the file-by-file checklist).
 
@@ -127,15 +140,18 @@ SmoothLife, and the reduction used for settle detection):
   transform ×2 per field per step, and it needs its own precision
   work. Parked, as the seed doc says; the pyramid dissolves the cost
   question first.
-- The pyramid's box average is not a disc. McCabe's paper averages
-  over a **disc**; the pyramid gives a square-ish, level-blended
-  kernel. The prototype in §9 used exact discs; the plan's first
-  McCabe implementation should A/B the pyramid look against an
-  exact-disc reference at one radius set before committing, because
-  the "electron microscope" look may depend on the isotropy. Fallback
-  if it does: 5-tap Gaussian separable blur per scale (k scales ×
-  2 passes), still O(1) in radius when run on the pyramid level
-  nearest the radius.
+- ~~The pyramid's box average is not a disc.~~ **Measured
+  (2026-09-05): it does depend on the isotropy, and the box is out.**
+  The A/B was run (`proto_mccabe_pyramid.py`): the box pyramid's
+  McCabe texture is visibly axis-aligned with a spectrum half as
+  peaked as the disc reference's. The shipped pyramid is **Gaussian**
+  — each level is a separable [1 4 6 4 1]/16 blur then decimate, one
+  25-tap dispatch per level — which is isotropic, and with the level
+  mapping calibrated to `log2(0.55 r)` it reproduces the disc
+  reference's feature size and amplitude. The fallback sketched here
+  (a blur per scale) was not needed: blurring once per LEVEL is the
+  same cost paid once rather than per scale. Cost: ~8 taps a cell for
+  the whole pyramid, and McCabe at 1080p runs 5.25 ms/step.
 
 ### 3.3 Agents and deposit
 
@@ -164,7 +180,92 @@ Each stage is one compute pass, `@workgroup_size(8, 8, 1)`, one uniform slot (dy
 
 Resamples `field[read]` into `field[write]` through a per-step affine about the grid centre — zoom `s`, rotation `θ`, translation `(tx, ty)` — or through a flow field (a second texture, or an analytic swirl). Bilinear via four `textureLoad`s; boundary mode wrap / clamp / mirror / zero. The same kernel, run once at a fixed grid-to-grid affine, is the resampler §7 uses when a viewport-bound grid changes size (nearest for integer channels).
 
-This is the seed doc's "expanding space" resample promoted to a stage. It buys the zooming-BZ look (`s < 1` each step), McCabe's rotate-and-average symmetry when combined with the pyramid stage (§4.2 handles symmetry directly, cheaper), and the demoscene feedback-zoom family. It reuses nothing from the flame affine machinery in code — the maths is a 2×3 matrix — but it reuses the *vocabulary* the View panel already has (zoom, rotation, pan), which is what the panel exposes.
+This is the seed doc's "expanding space" resample promoted to a stage. It buys the zooming-BZ look (`s < 1` each step), McCabe's rotate-and-average symmetry when combined with the pyramid stage (§4.2 handles symmetry directly, cheaper), and the demoscene feedback-zoom family.
+
+**Built 2026-09-05, and measured (master plan, phase 6):** a fractional-pixel bilinear resample is a blur of variance f(1−f) per axis, and a step applies one, so over thousands of steps the stage erases a reaction–diffusion pattern rather than moving it — the "zooming BZ" at 0.4 %/step for 4,000 steps is a dot. Nearest at a rate under half a cell is the identity. The stage therefore ships with a `filter` the spec did not have, and the regimes that work are nearest at rates that move whole cells, integer pans, and bilinear over short runs. It reuses nothing from the flame affine machinery in code — the maths is a 2×3 matrix — but it reuses the *vocabulary* the View panel already has (zoom, rotation, pan), which is what the panel exposes.
+
+**Octave mode, 2026-09-07.** The blur above has a second face: a
+bilinear read at fractional offset f blurs by f(1−f) *per axis*, and
+on the two central axes one offset is zero, so the field there is
+blurred along one axis only — a cross, visible in any run long enough,
+and a radial gradient of blur with it. Both are properties of
+resampling the state by a small factor every step, so `SimWarpMode::
+Octaves` never does that: the per-step zoom accumulates as a *view*
+magnification m in [1, 2) that the colour pass applies about the grid
+centre (`params.view`), and the field is resampled once, by exactly 2,
+each time m reaches 2 — a 2× resample has the same fractional offset
+everywhere, so its blur is uniform and isotropic. The old grid at 2×
+is the new grid at 1×, so the doubling is invisible: measured, the
+frame change across a doubling step is 0.048 against 0.049 across an
+ordinary step. m and the doubling steps are a function of the step
+index alone (`SimWarp::octave`, f64: 2^doublings · m = zoom^n to 1e-4
+over 5,000 steps, unit-tested), so a run is batch invariant — 300
+steps in one call and in three are bit-identical with four doublings
+inside. The axis cross measured as the ratio of gradient energy on the
+central lines to off them: 1.12 continuous, 1.05 octaves. A `bicubic`
+filter (Catmull–Rom, sixteen taps, CPU-mirrored to 1.5e-5) was added
+for the doubling. Rotation, pan and flow are not applied in octave
+mode; the outer ring of the grid beyond the view is simulated and then
+cropped away at the next doubling, up to three quarters of the cells
+at m ≈ 2.
+
+**The frame, found in the app the same day.** The first version
+tested the *magnified* coordinate against the grid, so a pixel in a
+letterbox bar — outside the grid at 1× — mapped inside it once the
+view divided its distance from the centre by m: with a fixed square
+grid in a wide viewport the picture widened into the bars over each
+octave and snapped back at the doubling. The frame is now decided
+before the view (`the_letterbox_frame_holds_at_every_view_magnification`:
+0 bar pixels drawn at view 1.92). With it came `SimFit`, letterbox or
+**cover** — fill the output and crop the grid along the axis that
+does not fit — which is what an inflating run wants in a viewport of
+another aspect: the frame stays the frame and the content zooms
+inside it. And `SimWarp::cull`, octave mode only: cells outside the
+visible window plus a halo (kernel radius + 24 cells) are carried
+across unchanged instead of stepped. They are cropped away at the
+next doubling; measured over 5.7 octaves in a 16:9 cover view, the
+shown image differs from the uncalled run by 0.008 RMS while the
+field differs everywhere
+(`culling_off_screen_cells_does_not_change_what_is_shown`). Up to
+three quarters of a step saved near the end of an octave.
+
+**Layer-selective warps, 2026-09-08.** `SimWarp::layers` is a bit
+mask of the channels the warp moves; the others keep their own value
+(`mix(stay, warped, mask)` in the warp shader, continuous mode only —
+the octave view is one view of all four channels). Moving one layer
+past layers that sit still is differential advection, a
+pattern-forming instability in its own right (Rovinsky & Menzinger,
+1992), and the experiment on the coupled Turing lattice bore that
+out: at 0.002 rad/step on one of four ring layers the random
+labyrinth becomes long parallel bands; on two layers the bands wrap
+into arcs about the rotation centre; a swirl on one layer organises
+the stripes radially with a seam; a pan of 0.05 cells/step on one
+layer aligns the stripes with the drift; and on the cells presets,
+inflating only the memory channel makes the cells smaller and more
+numerous. Renders in `output/lattice4/layers/png/`. Gate: with mask
+0101, one 0.3 rad rotation from a settled field changes the moved
+channels by 0.26 RMS and the still ones by 0.024, one reaction step
+(`the_warp_moves_only_the_channels_it_is_told_to`).
+
+That was the cheap half of "an IFS on Turing layers". The other half
+is built (simulation-layers plan, phases 1–3, 2026-09-08): the state
+is a texture array with one slice per layer, and **the flame's
+transforms are the layers' maps** when `use_transforms` is on —
+transform *i* moves layer *i* by its affine, variations and post
+affine, at a rate that is its weight, through `flame_map` in the
+layer warp. The Transforms, Triangle Editor and Variations panels
+stay open in Simulation mode for it. A pure rotation through a
+transform equals this stage's rotation to 1.7e-6; every registered
+variation validates in the layer warp.
+
+What the doubling looks like from the reaction's side: the pattern is
+suddenly at twice its intrinsic scale and refines back. At the coupled
+lattice's step 0.05 and zoom 1.002 (an octave every 347 steps) that is
+a burst — the cells have split within ~60 steps and then grow with the
+view for the rest of the octave. The ratio of the reaction's time
+constant (1 / step) to the octave period (log 2 / log zoom) decides
+whether refinement is a burst or continuous; a step near 0.003 makes
+it continuous at that zoom.
 
 ### 4.2 Pyramid build (optional)
 

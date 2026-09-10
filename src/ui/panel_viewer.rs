@@ -372,6 +372,25 @@ pub struct PanelContext<'a> {
     /// A panel asking for a different workspace layout (the Escape
     /// toggle brings its own layout with it).
     pub workspace_layout_requested: &'a mut Option<super::workspace::WorkspaceLayout>,
+    /// Simulation transport, owned by App. It is view state rather than
+    /// config -- like the playhead, not like a parameter -- so it is
+    /// passed through rather than stored in the FractalConfig, and a
+    /// saved file never starts moving on its own when opened.
+    pub sim_running: &'a mut bool,
+    pub sim_step_once: &'a mut bool,
+    pub sim_reseed: &'a mut bool,
+    /// Steps completed and the grid in use, for the panel's readout.
+    pub sim_step_index: u32,
+    pub sim_grid: (u32, u32),
+    /// The step count the timeline has committed the grid to, if it is
+    /// driving, and whether a backward target is being held. Both are
+    /// readout/greying only -- the panel never writes them.
+    pub sim_timeline_target: Option<u32>,
+    pub sim_timeline_holding: bool,
+    /// The timeline owns the grid -- playing, or still walking to a
+    /// target. Greys the transport. Wider than `sim_timeline_target`,
+    /// which is `None` while a backward target is being held.
+    pub sim_timeline_driven: bool,
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
@@ -422,6 +441,13 @@ impl<'a> TabViewer for PanelViewer<'a> {
     fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
         if matches!(tab, PanelType::FractalViewport) {
             [false, false]
+        } else if matches!(tab, PanelType::Simulation) {
+            // The Simulation panel pins its transport row and scrolls
+            // its own body, so egui_dock must not scroll this tab
+            // vertically -- its ScrollArea wraps the whole body and
+            // would drag the pinned row out of view. Above the compact
+            // arm so it holds in both layouts.
+            [true, false]
         } else if self.context.compact_mode {
             // In compact mode, disable egui_dock's vertical ScrollArea.
             // We wrap panel content in our own ScrollArea with AlwaysVisible
@@ -437,7 +463,12 @@ impl<'a> TabViewer for PanelViewer<'a> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        if self.context.compact_mode && !matches!(tab, PanelType::FractalViewport) {
+        // Simulation is excluded for the same reason as the viewport:
+        // it owns its scrolling, and this wrapper would put the pinned
+        // transport row inside the scrolled region again.
+        if self.context.compact_mode
+            && !matches!(tab, PanelType::FractalViewport | PanelType::Simulation)
+        {
             egui::ScrollArea::vertical()
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                 .show(ui, |ui| {
@@ -468,6 +499,19 @@ pub fn pan_fractal_view(
         escape_pan_view(config_manager, drag_delta, panel_size);
         return;
     }
+    // Simulation has no view to move (see `Control::ViewNavigation`).
+    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
+    // which the simulation ignores -- an invisible gesture that still
+    // drifted the flame view and filled the history.
+    if super::visibility::control(
+        super::visibility::Control::ViewNavigation,
+        config.render_mode,
+        config.tonemap_mode,
+    ) == super::visibility::Vis::Hide
+    {
+        return;
+    }
+
 
     // Convert screen pixel delta to fractal space.
     // Use the smaller dimension for both axes so drag speed is consistent
@@ -514,6 +558,19 @@ pub fn zoom_fractal_view(
         escape_zoom_view(config_manager, scroll_delta, mouse_pos, panel_rect, panel_size, zoom_to_cursor);
         return;
     }
+    // Simulation has no view to move (see `Control::ViewNavigation`).
+    // Falling through to the flame path wrote `config.zoom`/`pan_*`,
+    // which the simulation ignores -- an invisible gesture that still
+    // drifted the flame view and filled the history.
+    if super::visibility::control(
+        super::visibility::Control::ViewNavigation,
+        config.render_mode,
+        config.tonemap_mode,
+    ) == super::visibility::Vis::Hide
+    {
+        return;
+    }
+
 
     // Use power-based zoom for smooth scrolling (matches original code)
     let zoom_factor = if scroll_delta.abs() > 0.1 {
@@ -750,26 +807,16 @@ fn escape_zoom_view(
 
 impl<'a> PanelViewer<'a> {
     fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
-        // Escape mode hides the flame-only editing panels rather than
-        // teaching them a second vocabulary (plan §3). Shared-tail
-        // panels (Colors, Palette, Effects, History, Animation,
-        // Export, ...) keep working — they edit state escape mode
-        // actually consumes.
-        if self.context.config_manager.active_config().render_mode
-            == crate::scene::transforms::RenderMode::Escape
-            && matches!(
-                tab,
-                PanelType::Transforms
-                    | PanelType::TriangleEditor
-                    | PanelType::View
-                    | PanelType::XaosEditor
-                    | PanelType::Variations
-                    | PanelType::Subflames
-                    | PanelType::SolidLighting
-                    | PanelType::PathEditor
-            )
-        {
-            ui.label(t!("escape_panel.flame_only_hint"));
+        // What the mode makes available lives in one place
+        // (ui-render-modes plan, section 3.2). A panel that is not
+        // available says WHY, in words chosen for its own case -- this
+        // used to be one shared string that claimed every panel
+        // "edits the flame and is inactive in Escape mode", including
+        // in Simulation, and including for the two engine panels,
+        // which edit no flame at all.
+        let mode = self.context.config_manager.active_config().render_mode;
+        if let super::visibility::Vis::Grey(reason) = super::visibility::panel(*tab, mode) {
+            ui.label(t!(reason));
             return;
         }
         match tab {
@@ -866,6 +913,23 @@ impl<'a> PanelViewer<'a> {
                     ui,
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
+                );
+            }
+            PanelType::Simulation => {
+                super::sim_panel::render_sim_content(
+                    ui,
+                    self.context.config_manager,
+                    self.context.workspace_layout_requested,
+                    super::sim_panel::SimUiState {
+                        running: self.context.sim_running,
+                        step_once: self.context.sim_step_once,
+                        reseed: self.context.sim_reseed,
+                        step_index: self.context.sim_step_index,
+                        grid: self.context.sim_grid,
+                        timeline_target: self.context.sim_timeline_target,
+                        timeline_holding: self.context.sim_timeline_holding,
+                        timeline_driven: self.context.sim_timeline_driven,
+                    },
                 );
             }
             PanelType::Subflames => {
@@ -1040,10 +1104,14 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_controller.load(new_anim);
         }
 
+        let space_plays = !super::render_mode::space_runs_the_simulation(
+            self.context.config_manager.active_config().render_mode,
+        );
         let mut response = super::animation_panel::render_animation_content(
             ui,
             self.context.animation_controller,
             self.context.animation_export_settings,
+            space_plays,
         );
 
         // Handle timeline scrubbing (from render_animation_content)
@@ -1545,6 +1613,16 @@ impl<'a> PanelViewer<'a> {
                     "history.action.wheel_zoom".to_string(),
                 );
             }
+            return;
+        }
+
+        // Same refusal as the drag and wheel paths.
+        if super::visibility::control(
+            super::visibility::Control::ViewNavigation,
+            config.render_mode,
+            config.tonemap_mode,
+        ) == super::visibility::Vis::Hide
+        {
             return;
         }
 

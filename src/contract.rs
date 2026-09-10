@@ -375,7 +375,7 @@ mod tests {
     /// checks its own Postgres enum against that list.
     ///
     /// The exhaustive match is the enforcement: Rust cannot iterate a
-    /// plain enum, so a fourth mode instead fails to compile HERE, and
+    /// plain enum, so a fifth mode instead fails to compile HERE, and
     /// the count assertion then makes whoever adds it put the value in
     /// `ALL` rather than deleting a match arm to get green.
     ///
@@ -388,12 +388,15 @@ mod tests {
         use crate::scene::transforms::RenderMode;
         for mode in RenderMode::ALL {
             match mode {
-                RenderMode::TwoD | RenderMode::ThreeD | RenderMode::Escape => {}
+                RenderMode::TwoD
+                | RenderMode::ThreeD
+                | RenderMode::Escape
+                | RenderMode::Simulation => {}
             }
         }
         assert_eq!(
             RenderMode::ALL.len(),
-            3,
+            4,
             "a render mode was added: put it in RenderMode::ALL, and tell the API \
              (their conformance test reads the contract's render_modes.known)"
         );

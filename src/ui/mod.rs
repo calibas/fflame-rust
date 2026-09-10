@@ -15,6 +15,8 @@ pub mod histogram;
 mod compact_menu;
 mod menu_bar;
 mod menu_context;
+pub mod render_mode;
+pub mod visibility;
 mod palette_editor;
 mod rhai_highlight;
 mod palette_library;
@@ -42,6 +44,7 @@ mod undo_history;
 mod variation_params;
 mod view;
 mod escape_panel;
+mod sim_panel;
 pub mod workspace;
 mod palette_generate;
 mod script_params;
@@ -1225,6 +1228,16 @@ impl EguiLayer {
         script_cloud: &crate::app::script_cloud::ScriptCloudState,
         effect_catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
         signed_in: bool,
+        // Simulation transport and readout from the App: whether Run
+        // is engaged, how many steps the live run has taken, and the
+        // grid actually in use (which a viewport-bound grid makes
+        // non-obvious).
+        sim_running: bool,
+        sim_step_index: u32,
+        sim_grid: (u32, u32),
+        sim_timeline_target: Option<u32>,
+        sim_timeline_holding: bool,
+        sim_timeline_driven: bool,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -1416,6 +1429,11 @@ impl EguiLayer {
         let mut load_api_animation_id: Option<String> = None;
         let mut clear_variation_cache_requested = false;
         let mut workspace_layout_requested: Option<workspace::WorkspaceLayout> = None;
+        // Mutated by the simulation panel; copied into the response
+        // below so the App owns the authoritative state.
+        let mut sim_running_local = sim_running;
+        let mut sim_step_once_local = false;
+        let mut sim_reseed_local = false;
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
@@ -1448,7 +1466,8 @@ impl EguiLayer {
             can_undo,
             can_redo,
             is_paused: *paused,
-            render_mode_2d: config_manager.config().render_mode == crate::scene::transforms::RenderMode::TwoD,
+            render_mode: config_manager.config().render_mode,
+            tonemap_mode: config_manager.config().tonemap_mode,
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_state.flame_id.is_some(),
             api_flame_id: api_state.flame_id.clone(),
@@ -1776,6 +1795,14 @@ impl EguiLayer {
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
                         workspace_layout_requested: &mut workspace_layout_requested,
+                        sim_running: &mut sim_running_local,
+                        sim_step_once: &mut sim_step_once_local,
+                        sim_reseed: &mut sim_reseed_local,
+                        sim_step_index,
+                        sim_grid,
+                        sim_timeline_target,
+                        sim_timeline_holding,
+                        sim_timeline_driven,
                         variation_update_requested: &mut variation_update_requested,
                         script_cloud,
                         effect_catalog,
@@ -2168,18 +2195,13 @@ impl EguiLayer {
             let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom / 1.2).into());
         }
 
-        if menu_actions.view.set_mode_2d {
-            let _ = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::TwoD.into()
-            );
-        }
-
-        if menu_actions.view.set_mode_3d {
-            let _ = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::ThreeD.into()
-            );
+        // Every mode change goes through the one helper, so the
+        // tone-map rescue is not a property of WHICH control you used
+        // (ui-render-modes plan, section 3.1).
+        if let Some(mode) = menu_actions.set_mode {
+            if let Err(e) = render_mode::switch_render_mode(config_manager, mode) {
+                log::error!("Failed to switch render mode: {e}");
+            }
         }
 
         // Sync flame from ConfigManager AFTER UI updates
@@ -2385,6 +2407,12 @@ impl EguiLayer {
             load_api_animation_id,
             clear_variation_cache_requested,
             workspace_layout_requested,
+            // Only report Run when the mode is actually simulation, so
+            // a stale toggle from another session cannot start a run
+            // the user cannot see.
+            sim_running: Some(sim_running_local),
+            sim_step_once: sim_step_once_local,
+            sim_reseed: sim_reseed_local,
             variation_update_requested,
             script_cloud_request,
         }

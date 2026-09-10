@@ -1,9 +1,20 @@
 # Simulation Mode — model catalogue
 
-**Status:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](simulation-fractals.md) (master plan),
-[simulation-pipeline.md](simulation-pipeline.md) (GPU design) and
-[simulation-integration.md](simulation-integration.md) (file checklist).
+**Status: LIVE REFERENCE**, started 2026-09-01 as a plan and kept as
+the catalogue it became. **31 of these models ship**; the sections
+that describe something not implemented say so in place (Lenia's
+multi-ring kernels, the hexagon preset that was refuted, the
+`stop_at_span` condition). This is where a model's governing rule, its
+source, its discretisation and what bit it are recorded — read it
+before touching `src/sim/models.rs`, and add a section here when
+adding a model.
+
+Companion to [simulation-fractals.md](simulation-fractals.md) (master
+plan), and to the archived
+[simulation-pipeline.md](../archive/projects/simulation-pipeline.md)
+(GPU design) and
+[simulation-integration.md](../archive/projects/simulation-integration.md)
+(file checklist).
 
 Every model the seed document ([field-type-fractals.md](../archive/escape-time/field-type-fractals.md))
 mentions, plus the few its sources lead to directly. For each: the
@@ -23,7 +34,7 @@ person or paper the session could not confirm.
 
 Pipeline stage names (`warp`, `pyramid`, `update`, `agents`, `color`,
 `resolve`, `settle`) are those of
-[simulation-pipeline.md §4](simulation-pipeline.md).
+[simulation-pipeline.md §4](../archive/projects/simulation-pipeline.md).
 
 ---
 
@@ -188,6 +199,10 @@ or D_w = D_v/… for Turing patterns. Clamp v to [−3, 3].
   relax to the rest state (sd 0.0014, a flat field). The excitable
   regime needs a cut wavefront, so `seed_kind` must default to
   `broken_wave` for this preset.
+- **Shipped 2026-09-04** as the `spiral` preset, which carries
+  `SimInit::BrokenWave` as well as its numbers — a preset of numbers
+  alone would render the flat field below. The GPU port reproduces the
+  prototype's counter-rotating pair.
 - **The Turing/labyrinth guess DOES NOT WORK and must not ship.**
   D_w = 4 with I = 0 from noise gives a spatial sd of **0.0000** — a
   perfectly flat field after 4000 steps. The catalogue's own
@@ -235,7 +250,9 @@ Clamp X, Y ≥ 0.
 **Measured 2026-09-03**, both presets VERIFIED as patterns:
 
 - **Turing spots** A = 1, B = 3, D_X = 1, D_Y = 8, dt = 0.01 — spots,
-  **settles at 1,180 steps**, spatial sd 1.43. (A first run reported
+  **settles at 1,180 steps**, spatial sd 1.43. Shipped 2026-09-04 as
+  the `turing_spots` preset; the GPU port reproduces the prototype's
+  fine 2–3 cell wavelength. (A first run reported
   4,960: its settle window was counted in 20-step samples but reported
   in steps, so it demanded 4,000 quiet steps and then dated the still
   ~3,800 late. Every settle figure from that run was inflated by about
@@ -286,6 +303,53 @@ reason. Guard u ≥ 0 and the denominator (u + q > 0 always if u ≥ 0).
 **Parameters.** `epsilon`, `q`, `f`, `D_u`, `D_v`, `dt`.
 **Stages.** `update` ×K, `color`. **Colouring.** `two_channel`, `age`.
 
+**Verified 2026-09-05** against the paper (supplied as
+`output/pdf/tyson1980.pdf`), shipped the same day.
+
+- **The equations above are CONFIRMED verbatim** — Tyson & Fife
+  eq. (17), including the `f v (u − q)/(u + q)` term. The paper writes
+  the parameters `(a, b)` where the later literature writes `(q, f)`;
+  its Table I gives the correspondence. It states ε ≪ 1, q ≪ 1, f ~ 1
+  (eq. 16).
+- **No numeric set for a 2-D run exists in the paper** — it is
+  analytic throughout — so ε, q and f had to be measured rather than
+  quoted. The remembered "ε ≈ 0.04, q = 0.002, f ≈ 1–3" is a usable
+  starting point and is what ships.
+- **Sub-stepping is NOT needed.** The catalogue proposed K dispatches
+  per displayed step; a small `dt` and more steps is the same thing,
+  and the engine's step batching already covers it. Shipped as
+  `passes: 1`.
+- **dt bound derived and measured.** The stiff term is the activator
+  threshold: d/du[−f v (u−q)/(u+q)] = −2 f v q/(u+q)², largest near
+  u = q at −f v/(2q). With the Sims diffusion term, both over ε:
+  **dt ≤ 2ε/(f/(2q) + 1.6 D_u)** = 2.3e-4 at the defaults. Measured
+  stable at 5e-4; at 1e-3 the field **collapses to zero rather than
+  diverging**, because the `max(·, 0)` clamp turns the instability
+  into death — the same class of failure the phase-2 review found, and
+  the reason the ladder judges by amplitude and not by `isfinite`.
+- **Spirals are REFUTED at every setting tried.** The remembered
+  "spiral waves for f ≈ 1.4" did not appear. A broken front (the
+  engine's `BrokenWave`, which nucleates FitzHugh–Nagumo's spirals)
+  was run at ε ∈ {0.01, 0.02, 0.04} × f ∈ {1.4 … 3.5}: in every case
+  the free end **retracted** and the front healed into an expanding
+  closed loop. Whether a free end curls or retracts is set by
+  excitability, and no point in the range tried was on the curling
+  side.
+- **Target patterns are OPEN.** The paper's own mechanism — a
+  heterogeneity that is locally oscillatory inside an excitable bulk —
+  was implemented as a disc at a lower `f`. It fires and emits one
+  ring, but no sustained train appeared within the 1.5 time units
+  tested, and a first attempt produced nothing at all because
+  u = v = 0 is an **exact fixed point** of the reaction, so a field
+  seeded there never moves. Not shipped; a spatially varying `f` needs
+  a mask channel the model does not currently carry.
+- **What ships** is what was measured: each seed fires one excitation
+  wave that travels at **constant speed** and annihilates on
+  collision. The GPU test measures the front radius at 6k/12k/18k
+  steps — 20.8, 38.3, 56.1 cells, increment ratio **1.018** — which
+  separates a travelling wave from diffusion (0.41) unambiguously.
+  Preset `waves`, 15,000 steps at dt = 1e-4.
+
 ---
 
 ## 5. Schnakenberg
@@ -308,7 +372,9 @@ with D_v/D_u ≈ 40 `[verify by prototype]`.
 `color`. **Colouring.** `channel` on u.
 
 **Measured 2026-09-03.** a = 0.1, b = 0.9, D_u = 1, D_v = 40,
-dt = 0.01 **VERIFIED**: Turing spots, **settles at 4,900 steps**,
+dt = 0.01 **VERIFIED**, shipped 2026-09-04 as the `turing_spots`
+preset; the GPU port reproduces the prototype's ~6-cell wavelength.
+Turing spots, **settles at 4,900 steps**,
 spatial sd 1.17 (an independent run of the same parameters in the
 wavelength sweep gave 5,100; a first run reported 8,680 through the
 settle-window bug described under the Brusselator). **dt cap 0.02**, with every rung run: 0.01 and 0.02
@@ -395,6 +461,51 @@ the FFT (pipeline §3). Tier 2, and honest about it in the tooltip.
 **Stages.** `update` ×2, `color`. **Colouring.** `channel` (diverging
 palette about 0), `hillshade`.
 
+**Measured 2026-09-04** (`proto_pde.py`, 256², 5-point Laplacian),
+shipped 2026-09-05. Three of the four things above were wrong.
+
+- **The dt bound is CONFIRMED**: 2/(8 − q₀²)² = 0.0325 at λ = 16, and
+  the ladder is stable at 0.03249 and diverges at 0.03574.
+- **λ = 2π/q₀ is CONFIRMED** — the claim most at risk from the
+  discretisation, since the Sims kernel the other models use is a
+  Laplacian scaled by 0.3 and would have put the wavelength 83% out.
+  Measured 16.5 cells against 16.0, with a spectral peak 21× the mean.
+  This is why the model uses the **5-point** Laplacian; there is a
+  note about it in the source and the prototype.
+- **r = 0.2 is REFUTED and the parameterisation with it.** The
+  band-pass is only as selective as q₀⁴: growth at the band is r,
+  growth at the uniform mode is r − q₀⁴, and q₀⁴ = 0.024 at λ = 16. At
+  r = 0.2 the ratio is 8.4, the uniform mode grows nearly as fast as
+  the pattern, and the cubic quenches the field into ~100-cell blobs
+  with no pattern at all — an attractive picture, and not this model.
+  Every ratio from 0.1 to 4 gives a clean 16.5-cell pattern. The
+  textbook q₀ = 1 hides the problem because q₀⁴ = 1 swamps any
+  sensible r. **So the shipped model exposes `wavelength` (cells) and
+  a RELATIVE `drive` = r/q₀⁴**, which is the same equation with the
+  drive measured in units of the band's own selectivity — one slider
+  position then means the same thing at every wavelength, which a
+  literal r cannot (at λ = 64, q₀⁴ = 9.3e-5).
+- **The hexagon preset is REFUTED and not shipped.** g = 1.0 does not
+  give hexagons; it gives a uniform field. The quadratic g·u² competes
+  with the cubic at the pattern's own amplitude ~√r, so against
+  r = 0.05 a g of 1 is not a symmetry-breaking nudge but the dominant
+  term, and it drives the field to the uniform fixed point near u = g.
+  Sweeping g at two drives: skew (the discriminator — a hexagonal
+  lattice's three modes at 120° give a skewed one-point distribution,
+  stripes give 0) runs 0.00 → −0.04 → −0.11 → −0.23 → −0.43 → −1.85
+  for g = 0 … 0.3, and past ~0.35 the field goes uniform (sd 0.0000).
+  A focused hunt near onset — eight (drive, g) pairs at 16,000 steps —
+  produced spots-and-worms mixtures, never an ordered hexagonal
+  lattice. SH's hexagons are subcritical: they coexist with the flat
+  state and need nucleation or a far longer anneal, not a noise seed.
+  **Shipped as `spots` (g = 0.25, skew −1.02), named for what it
+  actually produces**, alongside `labyrinth` (g = 0). The slider stops
+  at 0.35.
+- Settles at 4,600 steps (labyrinth) and 5,900 (spots) at 256².
+  Wavelength costs steps steeply: r ∝ q₀⁴, so doubling the wavelength
+  is 16× the steps — at 12,000 steps λ = 10 reaches sd 0.45 and
+  λ = 32 only 0.012, still seed noise.
+
 ---
 
 ## 7. Cahn–Hilliard
@@ -425,6 +536,35 @@ guard; the dynamics should never need it.
 `Noise` about `mean`.
 **Stages.** `update` ×2, `color`. **Colouring.** `channel` (two-tone),
 `hillshade` (the interfaces read as relief).
+
+**Measured 2026-09-04** (`proto_pde.py`, 256²), shipped 2026-09-05.
+
+- **The dt bound above is REFUTED, and it fails slowly enough to look
+  right.** dt ≤ 1/(32 D γ) = 0.0625 keeps only the γ∇⁴ term; the
+  cubic's contribution is the same order. Linearising about |c| = 1
+  gives the symbol `D L (3c² − 1 − γL)` over L ∈ [−8, 0], most
+  negative at the checkerboard: **dt ≤ 2/(D(16 + 64γ))** = 0.0417 at
+  the defaults. Measured: stable at 0.041667, diverges at 0.045833 —
+  the formula is exact. The old bound's failure is what makes this
+  worth writing down: at dt = 0.05625 the run is **finite for 400
+  steps and infinite by 1,000**, so a short ladder calls it stable.
+  The first version of this prototype used a 400-step ladder and did
+  exactly that; the ladder now runs 4,000.
+- **Mean composition conserved**: 1.2e-16 over 40,000 steps in f64,
+  and 3e-9 on the GPU in f32 over 4,000. The update is a discrete
+  divergence, so this is a property no picture can fake — a field that
+  slowly gains material still separates into plausible domains. It is
+  the model's GPU test.
+- **Coarsening measured**, domain size (first moment of the structure
+  factor) at mean 0: 6.2 cells at step 200, 8.5 at 1,000, 13.2 at
+  5,000, 18.6 at 20,000, 22.4 at 40,000 — an exponent of **0.25**
+  against the Lifshitz–Slyozov 1/3. The shortfall is expected at this
+  size (22 cells in a 256 box is into finite-size effects) and is
+  recorded rather than explained away. Droplets coarsen more slowly
+  still, 0.14 over the same range.
+- Never stills: it coarsens forever, so `steps` is a choice of how
+  coarse. Shipped presets use 20,000. c stays inside [−1.03, 1.02], so
+  the ±4 clamp in the kernel is a NaN guard that never binds.
 
 ---
 
@@ -490,6 +630,36 @@ ship it as a `Pattern` init variant later, not in phase 1.
 **Stages.** `update` (LUT gather), `color`. **Colouring.** `channel`
 with the Lenia-style palette, `age`.
 
+**Measured 2026-09-05** (`proto_large_kernel.py`, 256², 600 steps),
+shipped the same day. No paper was available for this one, so what was
+checked is that the formulas AS RECORDED above produce the behaviour
+claimed for them.
+
+- **σ is the parameter that decides whether there is anything to look
+  at.** R = 13, μ = 0.15, σ = 0.015 — the constants recorded for
+  Orbium — give a living filamentary field, still moving at 600 steps,
+  with 3.6% of cells on a soft edge. Widening σ freezes it: 0.03 gives
+  1.5% edge, and 0.05 and 0.07 less still, all saturated. The exact σ
+  is still `[verify]` against Chan's table; what is now established is
+  that 0.015 works and that the neighbourhood of 0.03+ does not.
+- **Orbium itself is NOT shipped**, as the entry anticipated: the
+  creature needs its specific 20×20 array, which is a `Pattern` init
+  the engine does not have. What ships is the soup those constants
+  make from noise, under the preset name `soup`.
+- **Multi-ring kernels and the polynomial and rectangular cores are
+  not implemented.** Their formulas are marked `[verify]` here and
+  nothing has verified them; shipping a `rings` slider that had never
+  been run would break the catalogue's own rule.
+- **The seed must carry structure at the kernel's scale.** A per-cell
+  random field is averaged flat by a radius-13 ring before anything
+  can grow, so both the prototype and the shader seed in patches of
+  R cells.
+- **Cost, measured on the GPU**: R = 13 at 512² is 729 taps a cell,
+  1.91e8 taps a step, at **3.36 ms/step — 298 steps/s**, against
+  phase 3's gate of 60. The direct gather is enough; the shared-memory
+  tile held in reserve is not needed. See the gate note in
+  `simulation-fractals.md`.
+
 ---
 
 ## 9. SmoothLife
@@ -528,6 +698,26 @@ accumulators. Periodic.
 **Presets.** Rafler's glider set (above). **Seeds.** `Noise` at 0.5
 density with blobs; the soup organises itself within ~100 steps.
 **Stages.** `update`, `color`. **Colouring.** `channel`, `age`.
+
+**Measured 2026-09-05** (`proto_large_kernel.py`, 256², 400 steps),
+shipped the same day.
+
+- **Rafler's glider set produces the characteristic smooth
+  labyrinth**, with ~10% of cells on a soft edge, at dt 0.1 and 0.3
+  alike and at both rᵢ = 7 and rᵢ = 4. The soup organises by ~100
+  steps as the entry says.
+- **Only the smooth time form ships** (`f' = f + dt(s − f)`), which is
+  the one that stays in [0, 1]; the discrete form is a `mode` the
+  model does not expose. Setting dt = 1 recovers it.
+- **Both averages come from ONE gather** with two accumulators, so the
+  kernel table carries two blocks — the disc, then the annulus —
+  rather than two tables. Reading the field twice would double the
+  only expensive part.
+- **This model is what caught the periodic-wrap bug.** Its annulus
+  carries its weight at the OUTER radius, so a wrap that does not wrap
+  is 23% of the gather; its CPU mirror disagreed by 0.228 at the edges
+  while the interior was bit-exact. Lenia hid the same bug even at
+  radius 6. See `simulation-fractals.md`.
 
 ---
 
@@ -596,6 +786,69 @@ falloff), `symmetry` (0–8, integer), `variation_blur` (0–2).
 **Colouring.** `scale_mix` (hue = winning scale, value = f — the
 Softology look), `channel`, `hillshade`.
 
+**Measured 2026-09-05** (`proto_mccabe_pyramid.py`, 256², 200 steps),
+shipped the same day. The open item above is settled, and not the way
+the plan assumed.
+
+- **The box pyramid is REFUTED.** The same rule on the same seed, with
+  the averages taken three ways: exact FFT discs (the reference),
+  a 2×2 box pyramid read trilinearly (the plan), and a Gaussian
+  pyramid read the same way. The box pyramid's render shows plainly
+  axis-aligned, rectangular structure — the kernel's square symmetry
+  showing through — and its spectral peak is half as sharp as the
+  disc's (5.3 against 11.3). A box downsample converges to a square of
+  side 2ˡ however many levels it has; it never becomes round.
+- **The Gaussian pyramid is adopted.** A separable [1 4 6 4 1]/16 blur
+  then decimate, per level — one 25-tap dispatch per level, ~8 taps a
+  cell in total. Its reads are isotropic and give the nested texture.
+  The remaining difference from the disc is SCALE: a Gaussian of
+  pyramid scale 2ˡ is broader than a disc of radius r, and the plain
+  `log2(r)` mapping came out 1.8× too coarse. Calibrated as
+  **`level = log2(0.55 r)`**, the Gaussian pyramid reproduces the
+  disc reference's feature size (56.9 against 56.9 cells) and
+  amplitude (sd 0.2695 against 0.2665). That constant is in the
+  shader, so the shipped radius ladder means what the paper's does.
+- **A sampling-phase bug, fixed 2026-09-06.** The decimation centres
+  level texel p on source cell 2p, so texel i of level l is centred on
+  base cell i·2ˡ; the reader assumed (i + ½)·2ˡ. The error is
+  (2ˡ − 1)/2 cells along both axes, growing with the level, so an
+  activator read at one level and an inhibitor at the next were
+  averaged about points a cell or more apart on the diagonal. Nothing
+  in this model's own tests could see it (its mirror mirrored the same
+  formula); the coupled Turing lattice (§28) found it, because a
+  phase-locked ring amplifies any such bias into stripes that all run
+  one way and travel — measured (3, 2) cells per 50 steps before, (0, 0)
+  after. The four `mccabe-*` baselines were re-promoted; the rosette's
+  rings are more concentric and the field's specks sharper. The
+  0.55 calibration above was measured on the biased reader and has
+  not been re-run.
+- **The stage is pinned by three mirrors.** Each pyramid level against
+  a CPU decimation of the level below it (6e-8, so a wrong per-level
+  size in the wrap would fail at the edges); the min/max reduce
+  against the CPU's min and max of the same field, **bit-exact**; and
+  the whole McCabe step — pyramid, trilinear reads, scale selection,
+  renormalisation — against a CPU mirror from the GPU's own seed:
+  **all 4,096 cells to 1.2e-7, with zero tie disagreements**. The
+  mirror allows for ties (two scales' variations within rounding) and
+  found none.
+- **Renormalisation runs one step behind, and that is the reference's
+  own dependency**: a step can only normalise by a range that has been
+  measured, so the reduce measures each step's output and the next
+  step normalises its input by it — the same order the prototype does
+  it in. The field holds values in roughly [−1 − s, 1 + s].
+- **GATE MET: 1080p at 5 scales is 5.25 ms/step (191 steps/s)**,
+  against the 8 ms fallback threshold. It was 7.78 before hoisting the
+  per-level size computation out of the four loads of each bilinear
+  read. The pipeline doc's "well under 2 ms" was for a 4-tap box
+  pyramid; the Gaussian one costs six times that per level and the
+  step reads five scales at sixteen loads each.
+- **Contrast is the reference's.** With the ladder calibrated to the
+  disc, the field's sd is ~0.27 and the texture is fine and subtle;
+  the striking high-contrast look of an uncalibrated pyramid was a
+  coarser ladder in disguise. So a coarser ladder ships too: measured
+  at `base_radius` 3, the nested contour texture is unmistakable, and
+  the `coarse` and `rosette` presets use it.
+
 ---
 
 ## 11. Hodgepodge machine (Belousov–Zhabotinsky CA)
@@ -624,6 +877,47 @@ infected rule `[verify]`. Spirals reported for q = 200, k₁ = 2,
 k₂ = 3, g = 70 `[verify — secondary source]`. Seed: uniform random
 states.
 
+**Verified 2026-09-05 against the paper** (supplied as
+`output/pdf/gerhardt1989.pdf`). **The rule above is NOT the paper's**,
+and the `[verify]` flag it carried since 2026-09-03 was right to be
+there. Gerhardt & Schuster's eqs. (3)–(9) define, with K the count of
+ILL neighbours (eq. 3), I the count of INFECTED ones (eq. 4) and S the
+sum of the states of the infected cells only (eq. 6):
+
+```
+healthy:   s' = ⌊K/k₁⌋ + ⌊I/k₂⌋          (eq. 5)  — ill over k₁
+infected:  s' = min(⌊S/I⌋ + g, V)        (eq. 7)  — infected only
+ill:       s' = 0                        (eq. 8)
+```
+
+So the circulated version differs in **three** places: k₁ and k₂ are
+swapped, S runs over every cell rather than the infected ones, and the
+divisor is A + B + 1 rather than I. Figure 2's caption — "the center
+cell is always considered as a neighbour of itself" — is what keeps
+I ≥ 1 for an infected cell and the division defined; it is easy to
+miss and it is the reason the paper needs no guard there.
+
+Every one of those three still renders a plausible field of BZ
+scrolls, which is why a baseline image could not catch it. **Both
+rules now ship**, selected by a `variant` parameter with the paper's
+as the default, and both are pinned by a GPU test against a CPU mirror
+of their published forms — 0 mismatches in 4,096 cells after 12 steps,
+with the two rules differing in 3,563 of those cells, so a mis-wired
+selector cannot pass.
+
+The paper's own constants are V = 100, k₁ = 2, k₂ = 3 and g between 1
+and 20, but its subject is the *coverage time series* on a 20 × 20
+lattice — four behaviour types against g — not a parameter set for a
+dense spiral field, so the preset values remain ours to measure. They
+differ between the rules: the paper's averages over the infected cells
+alone, so its waves run faster and want **g = 25** where the
+circulated rule wants 70. At 70 the paper's rule gives a fine busy
+texture and at 10 it gives mush; at 25 the scrolls open out with
+visible spiral cores. Both presets run 200 steps.
+
+The "bz2" variant, ⌊S/(A+1)⌋ + g, is still unverified and not
+implemented.
+
 **Discretisation.** Integer state in a u32 channel (bitcast into the
 Rgba32Float, pipeline §3.1) or a float channel holding an integer;
 3×3 gather; the sum S and counts A, B in one pass.
@@ -634,7 +928,8 @@ Rgba32Float, pipeline §3.1) or a float channel holding an integer;
 **Measured 2026-09-03** (`proto_cellular_automata.py`, 256²): the
 secondary-source parameters **q = 200, k₁ = 2, k₂ = 3, g = 70 are
 CONFIRMED** — a dense field of BZ spirals and scrolls from a uniform
-random seed, 129 of 201 states occupied. **Not** developed by step 50
+random seed, 129 of 201 states occupied. Shipped 2026-09-04 as the
+`spirals` preset. **Not** developed by step 50
 (one dominant state with scattered specks — checked, after a first
 draft of this note claimed otherwise without looking); fully spiralled
 by step 200. Never stills (churn plateau 0.97, i.e. almost every cell
@@ -671,7 +966,8 @@ taps). Periodic.
 **Presets.** 1/1/14 von Neumann; 1/3/3 Moore ("313"); R = 2..3
 "turbulent" sets `[verify each on the Wikipedia/MCell lists]`.
 
-**Measured 2026-09-03.** **1/1/14 von Neumann CONFIRMED**: the textbook
+**Measured 2026-09-03**, both shipped 2026-09-04 as presets.
+**1/1/14 von Neumann CONFIRMED**: the textbook
 debris → droplets → spirals sequence, fully spiralised by ~300 steps
 (churn plateau 0.99), giving the characteristic 45° diamond fronts of a
 range-1 von Neumann neighbourhood. All 14 states survive. **1/3/3
@@ -706,7 +1002,8 @@ random-site Monte Carlo of the paper; spirals form either way.
 **Parameters.** `p_sel`, `p_rep`, `mobility`, `species` (3 or 5 —
 five-species RPS-lizard-Spock forms two-level spirals).
 
-**Measured 2026-09-03.** p_sel = p_rep = 1, three species, synchronous
+**Measured 2026-09-03**, shipped 2026-09-04. p_sel = p_rep = 1,
+three species, synchronous
 parallel update: developed by ~27 steps, churn plateau 0.15, and **all
 three species coexist** — the biodiversity the model is about survives
 the synchronous update, which the discretisation note flagged as a
@@ -783,6 +1080,39 @@ sinks).
 **Colouring.** `channel` categorical on h ∈ {0,1,2,3} (the classic
 four-colour picture).
 
+**Shipped 2026-09-05**, and held to the rule by an exact-integer CPU
+mirror of the same parallel schedule.
+
+- **The GPU topples the CPU's pile exactly.** At 2¹² grains on 128²,
+  both neighbourhoods: **0 cells differ**, mass is conserved to the
+  grain (4,096 of 4,096, nothing at the edge), and the round count is
+  tight from both sides — stable after `rounds`, still over-full after
+  `rounds − 1`. Heights are small integers and f32 counts them
+  exactly, so "identical" is the right assertion and any disagreement
+  would be a rule difference rather than rounding.
+- **The prototype's round counts are the shader's**: 787 at 2¹², and
+  12,837 at 2¹⁶ spanning 189 cells. So the preset's step count is a
+  measurement.
+- **The Moore variant measured, not assumed**: 269 rounds at 2¹²,
+  4,652 at 2¹⁶ spanning 133 cells. It holds up to 7 grains per site,
+  so the same mass settles denser, smaller and sooner than von
+  Neumann's — the opposite of the guess that a wider neighbourhood
+  spreads a pile further — and colouring by height wants a scale of
+  1/7 rather than 1/3.
+- **The boundary must be Zero, and the other two are not merely
+  different but wrong.** Under Clamp the outside mirrors the edge
+  cell, so an edge site receives copies of its own topplings and the
+  pile GAINS mass; under Periodic it wraps. Only Zero is the open
+  boundary the model is defined with. Said in the shader, in the
+  description, and asserted in the test.
+- **The 2²⁴ ceiling on the grains slider is f32, not taste**: the
+  field counts integers exactly to 2²⁴ and no further. It coincides
+  with the cost ceiling — 2²⁴ extrapolates to ~3M rounds.
+- **The odometer ships as channel `.y`** — how many times each site has
+  toppled, the discrete superharmonic function the theory is written
+  in terms of. Measured max ≈20,000 at 2¹⁶; wrapped contours every 500
+  draw the limit shape's facets as a topographic map.
+
 ---
 
 ## 15. Wolfram elementary cellular automata
@@ -809,7 +1139,20 @@ number (as an integer track) or the seed density.
 named ones: 30, 90, 110, 184, 54, 22, 126, 150), `seed_kind` (choices:
 single, random), `density`. Periodic in x.
 
-**Verified 2026-09-03** (`proto_wolfram.py`). Nothing to measure here —
+**Verified 2026-09-03** (`proto_wolfram.py`), shipped 2026-09-04 and
+re-verified on the shader: 2,079 of 2,079 cells again, this time with
+the parity taken from Kummer's theorem rather than the binomial itself,
+because C(63, 29)·63 overflows u64 and wraps silently in release.
+
+Two things a user will see and should not mistake for bugs. Rule 90 on
+a PERIODIC lattice of width 2^k self-annihilates at t = 2^k, so at the
+default 256 the diagram empties in its lower half — correct, and a
+property of the rule. And the seed is the centre COLUMN rather than
+the centre cell: the shapes are 2-D but generation 0 is one row, so
+sampling the mask at the cell put a `Center` seed in a row this model
+never writes, and the first render came out entirely black.
+
+Nothing to measure here —
 `steps` = grid height, exactly, by construction. What was checked
 instead is the **bit convention**, which is easy to get backwards while
 still producing something that looks like a cellular automaton: with
@@ -858,6 +1201,60 @@ dendrite at 300² — Tier 2, batched heavily.
 **Colouring.** `channel` on p (the crystal), `two_channel` (T as the
 thermal halo), `hillshade` on p.
 
+**Verified 2026-09-05** against the paper (supplied as
+`output/pdf/Kobayashi_PhysicaD1993.pdf`), shipped the same day. The
+entry said outright that "the paper must be read before any of this
+ships"; it was, and it holds up better than expected.
+
+- **Every equation above is CONFIRMED** — the phase equation, the
+  temperature equation ∂T/∂t = ∇²T + K ∂p/∂t, the anisotropy
+  ε(θ) = ε̄(1 + δ cos(j(θ − θ₀))), and the driving term
+  m(T) = (α/π)·arctan(γ(T_e − T)), which is the paper's own choice
+  precisely because it keeps |m| < ½.
+- **Every remembered constant is CONFIRMED**: ε̄ = 0.01, τ = 0.0003,
+  α = 0.9, γ = 10.0, T_e = 1, dt = 0.0002, and the 300² mesh on a
+  9.0-wide domain, i.e. dx = 0.03. The paper fixes all of these in
+  *every* simulation and varies only K, δ, j and θ₀ — so those four
+  are what the model exposes and the rest are constants in the shader.
+  Two details the entry did not have: a **noise term** a·p(1−p)·χ with
+  a = 0.01 and χ uniform on [−½, ½], which section 1 calls crucial to
+  side branching, and the ice-dendrite figure's **θ₀ = π/2**.
+- **K = 1.6 is in range but not special**: the paper's fig. 8 sweeps
+  K over 0.8 … 2.0 with δ = 0.040, j = 6. Below 1 the whole vessel
+  freezes; above it roughly 1/K solidifies.
+- **THE DISCRETISATION IS THE HARD PART, and the plan's was wrong.**
+  §4.3 proposed "one pass storing ε²∇p and εε'∇p, a second taking
+  their divergence". Done with central differences twice — the obvious
+  reading — that composes to (f[i+2] − 2f[i] + f[i−2])/4dx², a stencil
+  that **skips the immediate neighbour**, so the odd and even
+  sublattices decouple and nothing damps the Nyquist mode. Measured on
+  the CPU mirror it filled the field with a diagonal checkerboard
+  while staying inside [0, 1] and finite, so an `isfinite` ladder
+  called it stable at every dt. The shipped scheme is **staggered**:
+  cell (i,j) stores the flux through its +x and +y faces from a
+  forward difference across that face, and pass 2's backward
+  difference composes to the compact Laplacian. Collecting the whole
+  anisotropic operator into one divergence
+  `J = (ε²p_x − εε'p_y, ε²p_y + εε'p_x)` is also what lets the two
+  scratch channels be exactly two.
+- **dt: the T equation binds, not the phase equation.** Plain
+  diffusion with D = 1 on dx = 0.03 needs dt ≤ dx²/4 = 2.25e-4, three
+  times tighter than the phase equation's ε²/τ = 0.333. The paper used
+  an *implicit* scheme for T for exactly this reason. Measured fully
+  explicit: 1e-4 clean (Nyquist 8e-5), 2e-4 carries a trace (2.8e-3),
+  3e-4 diverges at step 1,389. Ships with a 1e-4 default.
+- **The nucleus must clear the critical radius.** A single-cell seed
+  (`SimInit::Center`) dissolves under surface tension and the render
+  is empty — measured on the GPU, black frame. Both presets seed a
+  `Blob` of radius 4.
+- **The symmetry is pinned by a test, not by eyes.** The crystal's
+  reach as a function of angle is reduced to angular harmonics, and
+  the dominant one must equal j: measured 4-fold at amplitude 11.46
+  against 0.04 for k = 6, and 6-fold at 9.66 against 4.21 for k = 4.
+  Counting solid arcs around a circle was tried first and read "16
+  arms" on a plainly four-fold crystal, because by 4,000 steps the
+  side branches cross any ring that reaches the arms.
+
 ---
 
 ## 17. Packard digital snowflake
@@ -885,7 +1282,16 @@ cheapest way to get a "snowflake" on screen while §18 is being built.
 **Stages.** `update`, `color`. **Colouring.** `age` (freeze time as
 the palette coordinate gives the growth-ring snowflake).
 
-**Measured 2026-09-03** on the offset-row hex lattice the shader will
+**Measured 2026-09-03**, shipped 2026-09-04. The GPU port keeps the
+six neighbour offsets varying with row parity, which is the whole
+awkwardness of an offset-row lattice; a wrong parity is not subtle, as
+the six-fold symmetry collapses to four-fold and the baseline pins it.
+The resolve still samples the offset grid as a square one, shearing
+each cell by half a width — at the scale a snowflake is viewed this
+reads as a clean hexagon, and a true axial-to-pixel resolve is a
+refinement rather than a correctness gap.
+
+Measured on the offset-row hex lattice the shader will
 use (row parity changes the six neighbour offsets — the prototype does
 it that way rather than pretending the lattice is square). Rules
 S = {1}, {1,3} and {1,3,4} all reach the edge of a 256² grid in
@@ -956,6 +1362,98 @@ uses a finite box with the density held at the edge — `[verify]`).
 
 ---
 
+**PART II READ IN FULL AND SHIPPED, 2026-09-05.** Everything above this
+line is Part III's rule standing in for Part II's, and it is wrong in
+five ways. What Part II actually says (revised version, September 2007;
+text at `output/gg2.txt`):
+
+- **Four fields, not three.** ξ(x) = (a, b, c, d): a ∈ {0,1} attached,
+  b boundary mass (the quasi-liquid layer), c CRYSTAL mass (ice), d
+  diffusive mass (vapour). Part III's three-field version has no
+  separate ice field. Four fields is four channels, exactly.
+- **The seed is ONE cell** with a = c = 1, in vapour of density ρ. The
+  hexagon of radius 2 above is Part III's.
+- **Freezing spends all the vapour**: b += (1−κ)d, c += κd, **d = 0**.
+  Part III keeps κd AS vapour. And κ here is a single constant, not a
+  function of the neighbour count.
+- **The neighbour count enters only through the three attachment
+  cases**: 1 or 2 attached neighbours need b ≥ β; 3 need b ≥ 1, or the
+  knife-edge; 4 or more attach unconditionally. So the parameters are
+  **ρ β α θ κ µ γ σ** — eight constants — and the
+  `kappa1..3 / beta1..3 / mu1..3` guessed above was wrong in shape as
+  well as in value.
+- **α and θ have no Part III analogue.** They are the knife-edge
+  instability: a concave site may attach on only α of boundary mass
+  once the vapour summed over its neighbourhood falls below θ. It is
+  what fills the regions between the six main branches long after they
+  have passed, and the paper calls it the most speculative part of the
+  model.
+
+**TWO PASSES, not the four this entry planned for.** Substeps (ii)
+freezing and (iv) melting read no neighbour — freezing needs only the
+vapour diffusion just left at the site itself, melting only the site's
+own masses — so (i)+(ii) are one dispatch and (iii)+(iv) another. The
+pass boundary sits where it must: attachment reads its neighbours'
+vapour after freezing has zeroed it at every boundary site. A CPU
+mirror that keeps all four substeps separate agrees with the shader
+exactly on which cells attach, over 400 steps and 543 attachments, so
+the merge is not an approximation.
+
+**The paper contradicts itself about α and θ, and measurement settles
+it.** Equation (3b) has θ bounding the vapour and α the boundary mass;
+section 5's prose says the reverse. The appendix tabulates every
+figure's parameters as ρ β α θ κ µ γ σ, and for figure 13 left the
+table reads α = .2, θ = .026 where section 6's text reads α = .026,
+θ = .2. **Under the equation with the table's values, all three case
+studies reproduce the morphology the text describes**; under the
+equation with the text's values, figure 13 left grows a featureless
+hexagonal plate at every size and duration tried, up to 40,000 steps
+on a 1024² grid, because a vapour cutoff of 0.2 fires the knife-edge
+everywhere around a large crystal and a threshold of 0.026 then fills
+each concavity as fast as it forms. The table is what ships. (It also
+gives figure 13 right γ = .0006 where the text says .00006.)
+
+**Mass conservation is the paper's own check** — "it also helps in
+debugging code and checking numerical stability" — and it is a test:
+b + c + d over the grid against what it started with. Measured, the
+drift is f32 and not the rule, about 1e-4 after 4,000 steps and in
+either direction (−6.8e-5 at 64² over 400 steps, +1.2e-4 at 256² over
+4,000), because a uniform far field is a fixed point of the exact
+average but not of the rounded one. The CPU mirror in the same
+precision drifts identically, which is what attributes it. Dividing by
+7 rather than multiplying by the f32 reciprocal, which is biased high,
+did not change the measurement.
+
+**Lattice.** The paper works on ℤ² with six of the eight directions
+{N, S, E, W, NE, SW} and maps to the triangular lattice by a 45°
+rotation and a 1/√3 vertical rescale. This uses the offset-row
+addressing §17's Packard snowflake already had — isomorphic, and no
+post-mapping, at the cost of the same vertical stretch by 2/√3.
+
+**Boundary.** The paper uses a periodic box with L at least 1.5× the
+final crystal diameter, twice for slow-growing plates. The shipped
+configs use Clamp: both are closed, measured they give the same mass
+drift to two figures, and a clamp degrades more gracefully when a
+crystal does reach the edge, where a wrap grows it into itself.
+
+**Cost, measured at 512²**: about 0.1 ms a step, so the shipped presets
+are 1 to 4 seconds — 24,000 steps for the primitive case, 12,000 for
+the simple star, 20,000 for the plate with dendrite ends, 40,000 for
+the slow stellar plate (the paper's own figure took "more than
+100,000" at its scale).
+
+**Colouring, as shipped.** `channel` on `.z` is the picture: the
+crystal, with its internal markings where the ice mass varies.
+`two_channel` shows crystal against vapour. **There is no `age`** —
+that colouring reads `.z`, which here is crystal mass, and the four
+fields leave no channel for an attachment time.
+
+**Presets** are four rows of the appendix, unmodified: figure 4's
+primitive case (only ρ and β nonzero — anisotropy alone, and it ferns),
+and figures 13 left, middle and right.
+
+---
+
 ## 19. Diffusion-limited aggregation
 
 **Sources.** T. A. Witten, L. M. Sander, "Diffusion-limited aggregation,
@@ -996,6 +1494,46 @@ Boundary Clamp.
 **Colouring.** `age` (arrival order — the classic DLA rainbow),
 `occupancy` (walker density, a live "vapour" halo), `channel`.
 
+**Measured 2026-09-05**, shipped the same day.
+
+- **A frozen cell stores its DISTANCE from the centre, not a flag**,
+  which is what makes the launch radius free: the maximum of channel
+  `.x` is the cluster's radius plus one, from the min/max reduction
+  phase 3 already had. No separate bounds stage was needed.
+- **The parallel variant's density is the whole problem, and the
+  catalogue's caveat had it backwards.** It says the dimension is
+  preserved "as long as the walker density near the cluster stays
+  low", and the failure it did not anticipate is at the START: a
+  launch circle of radius 5 has 31 cells, so ANY sensible walker
+  count saturates it and freezes a solid disc. Measured: a 4%
+  population grew a 40-cell solid core, and even 0.5% grew a 15-cell
+  one. Reducing the population does not fix it and makes the cluster
+  too small to measure.
+  **The fix is to make the ACTIVE population track the launch
+  circle's circumference** — a walker is dormant, parked on the
+  circle, until the cluster is big enough for it, at `crowding`
+  walkers per cell of circumference. The core is then gone at any
+  setting, and `crowding` is exposed as what it is: the
+  speed-against-fidelity knob, because DLA is what it is only when
+  particles arrive one at a time.
+- **A bug the sweep exposed**: the kill radius was `max(3r, 16)`,
+  which is SMALLER than the launch radius whenever the launch gap
+  exceeds 16 — every walker then died on the step it was born and the
+  run ended with one particle, the seed. The kill radius is now
+  always at least the launch radius plus 16.
+- **Reviewed 2026-09-05**: the walker seed ran before the reduce that
+  measures the seed's radius, so it read the previous run's slot;
+  reordered (no image moved — a fresh slot gives the same answer as a
+  centred seed). `occupancy` draws `.w`, which this model's step does
+  not fill, so the "vapour halo" above is not there yet. Cost at
+  1080p: 0.42 ms/step at 4%, most walkers dormant by design.
+- **GATE MET: box-counting dimension 1.753** at 512² with 39,000
+  particles at a radius of 216 (DLA is ≈1.71). The measurement is
+  sensitive to the cluster's size, and the test says so: a cluster
+  that reaches the wall densifies at the rim and reads 1.79, and the
+  test asserts the cluster stayed clear of the walls before believing
+  the number.
+
 ---
 
 ## 20. Eden model
@@ -1028,8 +1566,8 @@ cluster reaches the edge):
 | 0.05 | point | 1,158 |
 | 0.3 | line | 505 |
 
-So `steps ≈ radius / p` is exact at p = 1 and **overestimates by about
-2× at small p** — at p = 0.05 it predicts 2,560 against 1,158 measured,
+Shipped 2026-09-04. So `steps ≈ radius / p` is exact at p = 1 and
+**overestimates by about 2× at small p** — at p = 0.05 it predicts 2,560 against 1,158 measured,
 because the front is long and many sites get their chance each step.
 The measured range is between radius/(2p) and radius/p; use radius / p
 as the default, since a `steps` that is too generous costs time and one
@@ -1068,7 +1606,11 @@ on/off — off gives random deposition, no correlations).
 **Stages.** `update`, `color`. Periodic in x.
 **Colouring.** `age` (arrival time), `channel`.
 
-**Measured 2026-09-03**, 256 columns, p = 0.5, to fill the grid:
+**Measured 2026-09-03**, shipped 2026-09-04. The GPU port keeps the
+column heights in channel `.y` of ROW 0 and has every cell read the
+three it needs from there, which keeps the rule cell-local — no
+separate height buffer and no second dispatch shape, at the cost of
+three extra reads per cell. 256 columns, p = 0.5, to fill the grid:
 **361 steps with sideways sticking, 452 without** — so "≈ grid height"
 is right to within a factor of 1.4–1.8, and lateral sticking fills
 faster because it builds overhangs.
@@ -1140,6 +1682,64 @@ for exact selection), `color`. Boundary Clamp (φ = 1 on the frame).
 field around the figure is itself a beautiful thing to draw),
 `hillshade` on φ.
 
+**Read in full and shipped 2026-09-05** (the scan is
+`output/pdf/dielectric_break.pdf`). The rule above is right, and the
+"5–50 sweeps" is the paper's own sentence. Four things it did not say:
+
+- **EXACT SELECTION NEEDS NO SCAN.** The plan budgeted a prefix scan
+  for the paper's global weighted choice and proposed shipping a
+  parallel approximation first. It is not needed: draw E ~ Exp(1) per
+  candidate and take the ARGMIN of E/w — the exponential race — and
+  the result is distributed exactly as equation (3). A global minimum
+  is the min/max reduction phase 3 already built. So the shipped model
+  is the paper's rule, one bond per step, at the cost of one extra
+  pass; `dbm_grows_exactly_one_site_per_step` checks the count in six
+  batches, and the same test checks the potential really is a solution
+  of Laplace's equation (residual 1.8e-4 over 9,649 interior cells).
+- **The parallel rule still ships, because it is a different process
+  and not an approximation.** One site per step is a branching
+  DISCHARGE; every candidate advancing at once, at a rate proportional
+  to the field, is a moving INTERFACE. `selection` chooses. The
+  all-sites rate is normalised by the strongest candidate, from the
+  same reduce's maximum — without that, the rate would mean something
+  different at every geometry, since the converged field at an
+  interface 254 cells from the electrode is about 1/254 (measured: 373
+  sites in 3,000 steps before normalising, 10,856 after).
+- **A white point reachable from several black points is likelier**,
+  in proportion, because each bond is a candidate. The paper mentions
+  it in passing for η = 0, and it is what makes that case not quite
+  the Eden model.
+- **THE GATE, measured the paper's own way** (N(r) against r, averaged
+  over three samples of ~5,000 sites at 512², each verified to have
+  stayed clear of the electrode):
+
+  | η | ours | Table I |
+  |---|---|---|
+  | 0 | 1.980 | 2 |
+  | 0.5 | 1.856 | 1.89 ± 0.01 |
+  | 1 | **1.689** | **1.75 ± 0.02** |
+  | 2 | 1.359 | ~1.6 (their ref. 13) |
+
+  We read low, by 0.02, 0.034 and 0.046 as η rises through 0, 0.5 and
+  1. It is not the solver: η = 1 reads 1.704, 1.718 and 1.715 at 20,
+  60 and 150 relaxation sweeps, so 20 is converged and the paper's
+  "5 to 50" is right. **Reviewed 2026-09-05, downward too**: three
+  samples at 3, 5, 10 and 20 sweeps give 1.696, 1.692, 1.707 and
+  1.689 — no trend inside sample noise — while the cost at 1080p is
+  1.8, 5.5 and 12.8 ms a step at 5, 20 and 50 sweeps. The default is
+  now 10: inside the paper's range, twice as fast as 20, and measured
+  indistinguishable. The paper says the same of its own numbers —
+  "the possibility of a larger systematic error due to the finite size
+  of the systems considered cannot be excluded". **η = 2 is not
+  gated**: their value there is quoted from another reference rather
+  than measured, and at this size ours is dominated by sample noise
+  (1.49, 1.63, 1.54 across three runs — a spread of 0.14 with no trend
+  in it). The three gated rows assert to 0.08.
+
+  η = 1 also lands within 0.06 of DLA's 1.753 from phase 4, which is
+  the phase gate: the same dimension by a completely different
+  mechanism.
+
 ---
 
 ## 23. Saffman–Taylor viscous fingering
@@ -1167,6 +1767,93 @@ tooltip.
 
 **Parameters.** DBM's plus `surface_tension` d₀.
 **Stages / colouring.** As §22.
+
+**ATTEMPTED 2026-09-05 AND IT DOES NOT WORK.** The Saffman–Taylor
+paper was read (`output/pdf/saffman1958.pdf`) and gives a sharp target:
+a finger occupying "a little more than half the width of the channel",
+measured λ = 0.485, 0.502, 0.508 and 0.514 at four stations at 1 mm/s,
+and 0.87 at a twentieth of that speed where surface tension matters
+more. So: more surface tension, WIDER finger.
+
+The recipe above — hold the cluster at φ = −d₀κ with κ from the 3×3
+occupancy — was implemented and measured in a 256-wide channel. It
+produces a branched dendrite, not a finger, and it moves the wrong
+way:
+
+| d₀ | sites grown | width at 3 stations |
+|---|---|---|
+| 0 | 7,999 | 0.16 / 0.24 / 0.09 |
+| 0.01 | 5,184 | 0.07 / 0.02 / 0.07 |
+| 0.03 | 2,888 | 0.06 / 0.04 / 0.04 |
+| 0.1 | 113 | growth has stopped |
+
+Raising d₀ narrows the structure where the experiment widens it, and
+above about 0.05 growth stops altogether: a tip held at a negative
+potential drags its neighbourhood below zero and nothing is a
+candidate any more. Growing every candidate at once instead of one per
+step — the right rule for a moving interface, and the reason
+`selection` exists at all — fixed the stalling and not the width
+(0.02–0.23 against 0.5).
+
+**Why, as far as this goes:** a lattice interface advancing by
+independent per-site coin flips stays rough, and smoothing the
+potential it grows into does not make it compact. Reproducing the
+finger looks like it needs a deterministic interface advance with an
+explicit curvature-driven surface energy — a different discretisation,
+not a parameter on this one.
+
+**What shipped instead, in wave 3:** the parameter survives on the
+DBM as `Tip penalty d₀`, named for what it measurably does (it thins
+and straightens the pattern), with its slider capped at 0.1 and its
+tooltip saying it is not Saffman–Taylor.
+
+**RESOLVED IN THE PHASE-5 REVIEW, 2026-09-05, by a different
+discretisation** — the one the paragraph above asked for. E. Holzbecher,
+"Modeling of Viscous Fingering", COMSOL Conference 2009 Milan
+(`output/pdf/Holzbecher.pdf`, read) gives the standard MISCIBLE
+formulation after Zimmerman & Homsy and Coutinho & Alves: Darcy flow
+∇·u = 0, u = −(k/μ)∇p with mobility k/μ = exp(R c), and transport
+∂c/∂t = ∇·(D∇c) − u·∇c, the thin fluid entering at c = 1 with a random
+disturbance near the inlet. That is a PDE, and it is two passes on the
+machinery wave 3 built: the pressure equation relaxed `relax` times
+per step (a Jacobi sweep of div(m ∇p) = 0 with harmonic-mean face
+mobilities), then one upwind advection–diffusion step of c. Shipped
+as the `fingering` model.
+
+Two simplifications, both stated on the model: isotropic diffusion in
+place of his flow-aligned dispersion tensor, and the cell driven at
+constant PEAK SPEED rather than his constant flux — the Darcy field is
+rescaled each step so the fastest cell moves `speed` cells, using the
+maximum the min/max reduce already computes. Darcy flow is linear in
+the pressure drop, so that is the same flow under a time-varying
+drop, and it makes the explicit advection unconditionally stable: the
+Courant number is `speed` by construction, capped at ½.
+
+**The gate is Saffman and Taylor's own sentence** — the interface "is
+liable to be unstable if the driving fluid is the less viscous of the
+two" — and it is a test. The same seeded disturbance, pushed by a
+thinner fluid (R = +2) and by a thicker one (R = −2), for 300 steps at
+128²: both fronts advance about 50 cells, and the interface's
+roughness (the spread of the front's position across the width) goes
+**0 → 6.39 cells** in the unstable case and **0 → 0.59** in the stable
+one. Rendered at 256², R = 2 gives a fingered front with tip-splitting
+and shielding, R = 4 fewer, narrower, faster fingers, and R = −2 a
+smooth diffuse front.
+
+What this does NOT reproduce, and says so: the immiscible single
+finger at λ ≈ 0.5, which needs surface tension and a sharp interface.
+Miscible fingering has many fingers whose spacing is set by diffusion,
+which is what Holzbecher's figure 1 shows and what this draws. His
+Table 1 row "Mobility ratio M log(3)" is ambiguous in the extracted
+text (M = 3, or ln M = 3), so the model exposes R and claims no value
+of his.
+
+**Why the DBM route failed and this one works:** a lattice interface
+advancing by independent per-site coin flips is rough by construction,
+and smoothing the potential it grows into cannot make it compact; a
+concentration advected by a divergence-free flow is smooth by
+construction, and the instability is in the flow. Section 22's tip
+penalty stays as the record of the attempt.
 
 ---
 
@@ -1196,6 +1883,28 @@ distance_from_seed, spanning_only), `lattice` (choices: site, bond).
 **Stages.** `update`, `settle`, `color`. Boundary Zero.
 **Colouring.** `channel` categorical on label (hash → hue), `age` on
 chemical distance.
+
+**Shipped 2026-09-04 with PATH COMPRESSION, which changes the cost
+below by an order of magnitude.** A label is a cell index, so the
+shader reads the cell its own label points at and takes that label
+too — a union-find "find" step, valid because the cell a label came
+from is by construction in the same cluster. Measured against the
+plain-propagation medians below: 53 rounds at 64², 93 at 128²,
+**167 at 256² against 645**, and 491 at 512² against 1,409 — worth
+3.9× and 2.9× at the two sizes there is a comparison for.
+
+The labelling is verified against a CPU flood fill rather than a
+baseline image: same component ⇒ same label and same label ⇒ same
+component, checked both ways over 122 components and 2,455 open cells,
+which catches a label leaking across a closed site or a component
+failing to merge. Neither shows up as anything but plausible coloured
+blobs.
+
+**No settle reduction was needed.** Labels only ever decrease, so extra
+steps are no-ops and over-running is safe — a settle would be an
+optimisation, not a correctness requirement, and the plan's reduction
+stage is deferred on that basis. The presets carry about twice the
+measured count, because of the spread below.
 
 **Measured 2026-09-03, and the estimate above is 3–5× LOW.** Label
 propagation costs the longest *chemical* path in the cluster, which at
@@ -1247,6 +1956,49 @@ order (for colouring) is the step index.
 **Stages.** `update`, `settle`, `color`. **Colouring.** `age`
 (invasion time — the standard picture), `channel` on r.
 
+**Shipped 2026-09-05.** The rising-threshold equivalence above is
+right, and is now checked rather than argued: the invaded set is
+compared against a CPU flood fill of {r < p_max} from the seed,
+through the shader's OWN threshold field read back from the texture —
+so there is no RNG to mirror and the comparison is exact. At the
+shipped preset: **0 sites missing, 0 extra**, with the front finishing
+at step 1,640 of 2,000. A run that ends while the front is still
+moving fails that test, which is what sizes `steps`.
+
+Three things this section did not anticipate, all measured at 256²:
+
+- **A point seed is a lottery.** Flooding to p = 0.60 from one cell
+  gave 8,526, 5,007, 87, 97 and 78 sites over five seeds — three of
+  five landed in a small finite cluster, because near the threshold
+  almost every site belongs to one. So the `seed` parameter is not
+  exposed as point-or-edge; **the presets inject from an edge**, which
+  is Wilkinson and Willemsen's own geometry (a fluid pushed in at one
+  face) and gives the same picture from any seed. The choice of seed
+  SHAPE is the init shape, as it is for Eden — one fewer parameter
+  that means two things.
+- **The interesting window is narrow, and above p_c.** The cluster
+  spans between p = 0.600 and p = 0.610, above the infinite-lattice
+  0.5927 as a finite grid should. Below spanning it is ramified
+  (15,907 sites at 0.600, a quarter of the grid); a few hundredths
+  higher it is half the grid and reads as a solid with holes, which
+  is why there is no "spanning" preset — it was rendered and it looks
+  like noise. The slider is bounded to 0.45–0.80 so the window is
+  reachable.
+- **Box counting at this size does not resolve D = 91/48**, and the
+  entry's "same D ≈ 1.89" should not be read as something a 256²
+  render will show. Measured: 1.66 to 1.77 near the threshold — a
+  finite-size crossover, not a wrong theory — climbing past 1.89 only
+  once the cluster is merely dense. It is kept as a ramification
+  check (a runaway front leaves a disc, which reads 2.0), not as
+  evidence of criticality.
+
+`stop_at_span` is **not implemented**: stopping on a condition needs
+the settle reduction, and the ceiling `p_max` does the same job by
+hand. `dp` defaults slow (0.0005) for a reason beyond accuracy — with
+the threshold rising slowly the front is never the constraint, so
+`age` records the ORDER sites were invaded in, which is the
+sequential model's own picture, rather than distance from the seed.
+
 ---
 
 ## 26. Ising model (Metropolis)
@@ -1281,7 +2033,18 @@ right order with plausible magnitudes:
 
 Ordered below, disordered above, in between at T_c. That validates
 the checkerboard split as implemented (a broken one gives wrong
-statistics at every T). It is **not** an equilibrium measurement at
+statistics at every T).
+
+**The GPU port is checked against Onsager instead (2026-09-04), and
+the observable changed for a reason.** Magnetisation is global and
+equilibrates by domain coarsening, so on a 128² lattice at 600 sweeps
+it measured 0.090 for T = 1.5 — *below* its own critical value, purely
+because the lattice sat in a multi-domain state; left running it
+reaches 0.985. The nearest-neighbour correlation is local, flat from
+~100 sweeps, monotonic in T, and has an **exact** value at T_c:
+1/√2 = 0.7071. Measured on the GPU at 100 sweeps: **0.952 / 0.691 /
+0.332** for T = 1.5 / T_c / 3.5. That is a quantitative check against
+an analytic result rather than against a previous run. It is **not** an equilibrium measurement at
 T_c: 600 sweeps from a random start grows the correlation length to
 ~t^(1/z) ≈ 19 cells against L = 256, so the 0.33 is a coarsening
 snapshot and should not be quoted as the critical magnetisation. The
@@ -1339,9 +2102,359 @@ ring, centre, edges), `wrap` (boolean).
 (agent density — a different, grainier image of the same network),
 `age`.
 
+**Verified 2026-09-05** against the paper (supplied as
+`output/pdf/Physarum.2010.16.2.pdf`), shipped the same day. The
+`[verify]` above is discharged.
+
+- **Every remembered value is CONFIRMED by Table 1**: SA 22.5 or 45°,
+  RA 45°, SO 9 px, SS 1 px/step, depT 5, decayT 0.1, a 3×3 diffusion
+  kernel, periodic boundaries, and a population of 3–15% of the image
+  area. The table adds two the entry did not have: SW 1 px (sensor
+  width) and pCD 0 (probability of a random direction change), both of
+  which the shipped model takes as given. The paper also names which
+  parameters matter — SA, RA and SO among the agent parameters, %p and
+  decayT among the framework ones — and those are the ones exposed.
+- **THE EXCLUSION IS NOT OPTIONAL**, and the discretisation above
+  dropped it. Section 2.1: a cell holds one agent, and an agent whose
+  target is occupied stays put, deposits nothing, and takes a random
+  new heading. Measured on the CPU prototype, both ways, same seed and
+  parameters: **without exclusion the population collapses onto a
+  handful of thick arcs; with it, the same parameters give the
+  polygonal network of the paper's figures.** So the model declares
+  two agent passes — turn and CLAIM, then move if it won — and the
+  claim is an atomic MINIMUM over agent indices, so the winner is the
+  lowest index rather than whoever the hardware ran first and the run
+  still reproduces exactly.
+- **A metric that was backwards.** The prototype scored "how
+  network-like" as the fraction of trail in the brightest 5% of cells.
+  Without exclusion that reads 0.752 and with it 0.358 — the opposite
+  of the truth, because concentration is what a COLLAPSE looks like.
+  The images decided it. Recorded in the prototype so the number is
+  not read the wrong way again.
+- **Reproducibility measured at the gate's scale**: 1,048,576 agents
+  on a 2048² grid, 40 steps, two independent renderers — **0 of
+  4,194,304 cells differ**.
+- **Reviewed 2026-09-05**, and now held to the paper by a CPU mirror
+  of the whole step (sense, turn, claim-by-minimum, move, deposit,
+  diffuse, decay, with the shader's PCG mirrored): 819 agents, two
+  steps, headings and trail bit-exact, positions within 1e-5. The
+  review found the turn rule turning toward the stronger side where
+  figure 3 turns at random, and walls that were not walls (positions
+  wrapped under every boundary); fixing the walls took three tries,
+  each caught by a test — see the plan's review note. The deposit is
+  diffused one step later than the paper's order, measured immaterial
+  (sd 3.58 vs 3.67, same network) and recorded in the model. Cost at
+  1080p: 1.39 ms/step at 5%, 2.72 at 15%.
+
 ---
 
-## 28. Cross-cutting notes
+## 28. Coupled Turing lattice (McCabe's inflating space)
+
+**Sources.** Jonathan McCabe's own descriptions of his inflating-space
+pieces, quoted by the user `[not a paper; no rule or values published]`:
+"Dynamics like a Belousov–Zhabotinsky reaction in an inflating space
+… A lattice model of 4 variables with 16 couplings is perturbed by
+inflated fluctuations from previous time steps, giving different
+dynamics in areas leading to what looks like membrane bound
+structures", and "Three interacting Turing patterns equals one
+Belousov–Zhabotinsky reaction!" Everything below is a construction
+from those two sentences in the terms of §10, and says so.
+
+**Rule** (four fields u ∈ [−1, 1]⁴, one per channel):
+
+```
+t_j = disc(u_j, r) − disc(u_j, r·ratio)                 each field's Turing signal
+u_i ← clamp(u_i·(1 − amount·decay) + amount·sat(gain·Σ_j K_ij t_j) + ξ_i, −1, 1)
+sat(x) = x / (1 + |x|)
+```
+
+K is the 4×4 coupling matrix — the sixteen couplings — as sixteen
+parameters. The identity is four independent single-scale Turing
+patterns. The coupling that cycles is an **antisymmetric ring**: each
+field follows the previous field's signal (+1.5) and is pushed against
+the next one's (−1.5), so where A leads B rises and D falls, and B's
+rise then pushes A down — a rotation A → B → C → D → A at every cell.
+That is the "three interacting Turing patterns = one BZ" in a matrix.
+The inflation is the warp stage's zoom (§6 of the derived-fields plan),
+carried by the preset; the fluctuations are ξ, which is what an
+inflating space magnifies.
+
+**What was tried and measured on the way** — each of these is a
+different picture, and two of them were bugs elsewhere:
+
+| attempt | measured | verdict |
+|---|---|---|
+| one-sided ring (each field pushed against the previous only) | 0.001 turns / 1000 steps | frozen: no rotation in a one-sided coupling |
+| antisymmetric ring, `sign()` step (McCabe's own) | 7 turns / 1000 steps, every field at ±1 | cycles, but saturated fields have no amplitude and so no membranes |
+| hard clamp on a gain | still ±1 | below the clamp the system is linear; its only equilibria are 0 and the rails |
+| soft `x/(1+\|x\|)` against a decay of 1 | mean lead 0.5, graded | amplitude settles where drive meets decay |
+| on the pyramid | stripes all on one diagonal, travelling (3, 2) cells / 50 steps | the §10 sampling-phase bug, amplified |
+| pyramid fixed | axis-aligned mesh at every radius | the low levels are one separable [1 4 6 4 1] pass — square — and the ring grows the most unstable mode |
+| **difference-of-discs gather** (shipped) | isotropic labyrinth, (0, 0) drift | one table, both discs anti-aliased over a one-cell band, all four channels per read |
+| a uniform bias for spots | dark noise | the ring's rows sum to 1, so a uniform push moves all four fields together and the difference vector sees nothing; removed |
+
+**The two leads, followed the next session (2026-09-07):**
+
+| lead | tried | seen | verdict |
+|---|---|---|---|
+| spots: an even term | `quadratic`: x + q·x² before the saturation (Turing theory: odd nonlinearities select stripes, even ones spots) | at q = ±0.7 dark boundary lines between the colour bands; at 1.5 a connected dark net enclosing elongated cells, carried outward under inflation | **membranes.** The net is where all fields balance |
+| the memory as a slow field | D as an integrator of A at gain 1 against leak 0.05 | high-frequency noise; under inflation a two-colour split with lines on the axes | saturated from the initial noise and pinned the patterns to it; a memory of a CYCLING field is also zero on average |
+| the memory as a moving average of the AMPLITUDE | D ← (1 − a·leak)·D + a·leak·‖(A − ½(B+C), (√3/2)(B − C))‖, column D biasing A by +b and C by −b | b = 0.6: frozen single hue, striped; b = 0.2 with q = 1.5: **blobs with dark membranes, hues shifting over a still geometry, pinched into dumbbells as the inflation stretches them**; b = 0.4: yellow cells with green nuclei, mostly frozen; b = 0: the membrane net again | the memory column is what closes the net into blobs. Shipped as `cells` / `cells_inflating` |
+
+What the memory holds today is nearly uniform (a moving average of the
+amplitude), so what it contributes is a small **per-field asymmetry of
+the ring** — +0.2·D on A, −0.2·D on C — which a uniform bias could not
+be. That is the shape of asymmetry the first commit said was not yet
+found. McCabe's "different dynamics in areas" would need the memory to
+vary in space; the wiring is here (row D can feed on the fields'
+values or their amplitude), the spatial part is unproven.
+
+**Gates** (`lattice4_*`, app_repro_test): the `cells` preset's
+A-leading domains are 27 compact pieces (P²/A 91) where the ring's are
+9 elongated ones (146; a lattice disc counts about 20 by this
+perimeter), and the cells still cycle, 4.7 turns per 1000 steps
+against the ring's 20 — the memory bias slows the ring, it does not
+stop it (`lattice4_cells_are_blobs_that_still_cycle`). The ring turns **20.1 times
+per 1000 steps with 100 % of cells turning the same way**; the identity
+matrix turns 0.001 (`lattice4_cycles_in_place_only_when_the_fields_interact`
+— sampled every 5 steps, because a 50-step gap aliased a 20-turn ring
+to 0.04). Under the inflating preset the membrane map (darkest quarter
+of the lead) moves with the inflation: over 100 steps it differs on
+23.9 % of cells raw and 17.9 % with the inflation undone
+(`lattice4_under_inflation_drifts_rather_than_rearranges`). The
+coupling sweep (`lattice4_coupling_sweep`, ignored) at the shipped
+defaults: 20 turns / 1000 steps against a membrane map that moves
+12 % per 100 steps — two full colour cycles per 100 steps over a
+geometry that barely moves, which is the "still image whose colours
+change as you zoom" the pieces show.
+
+**What it is not yet.** The cells are one scale; his are blobs
+within blobs, which the memory would have to carry as magnified old
+structure and today does not (it is nearly uniform). The axis lines
+seen in the noisy memory run are a warp-stage artefact — cells on the
+lines through the centre are resampled along one axis only — visible
+only when the field is at noise scale; not fixed.
+
+**Parameters.** Sixteen `k??` couplings (−3..3), `radius` (activator,
+1..15 cells; the table's radius is `ratio·radius + 1`, capped at 32),
+`ratio` (1.2..4), `amount`, `noise`, `gain`, `decay`, `quadratic`
+(−2..2), `memory` (D is a Turing pattern / a memory), `leak`.
+**Presets.** `ring`, `independent`, `cells` (a three-ring, q = 1.5,
+D the memory biasing A and C by ±0.2·D), `cells_inflating`,
+`inflating` (zoom 1.002 / step — the first preset to carry a warp;
+`SimPreset.warp` was added for it and the panel applies it, identity
+when absent). Both inflating presets run the warp in **octave mode**
+with the bicubic doubling (pipeline §4.1), which is what removed the
+cross the continuous mode draws along the central axes.
+**Stages.** `update` (kernel gather), `warp` when the preset asks,
+`color`. Periodic.
+**Colouring.** `species`: the angle of (A − C, B − D) as hue, its
+length as brightness, so a cycling cell sweeps the palette in place and
+a balanced cell is dark; `fields = Three` places A, B, C a third of a
+turn apart and ignores D, for the memory presets. Added for this
+model; any four-channel field can use it.
+**Cost.** A (2·(ratio·radius + 1) + 1)² gather per cell: 361 taps at
+the default radius 4, 841 at 6.
+
+## 29. Two-layer Brusselator (Kyttä, Kaski & Barrio)
+
+**Sources.** K. Kyttä, K. Kaski, R. A. Barrio, "Complex Turing
+patterns in non-linearly coupled systems", Physica A 385 (2007)
+105–114 `[read — text at output/complex-turing-2007.txt]`; the linear
+case after L. Yang, M. Dolnik, A. Zhabotinsky, I. Epstein, PRL 88
+(2002) 208303 `[not read; only the diffusion set this paper quotes]`.
+
+**Rule.** Two Brusselator layers, each `∂u = D_u∇²u + a − (b+1)u +
+u²v`, `∂v = D_v∇²v + bu − u²v`, coupled so that morphogen is conserved
+and the fixed point (a, b/a) is kept: linear `q(u_j − u_i)` (eq. 5,
+α = β = q) or cubic `q u_i u_j (u_j − u_i)` (eq. 6, q₁ = q₂ = q).
+Numerics as the paper's: 200×200 periodic, the 5-point Laplacian at
+unit spacing, Euler at dt = 0.001, seeded with small noise about the
+fixed point, u₁ minus its mean plotted.
+
+**Reproduced.** The paper gives every parameter, and the Fig. 3
+sweep came out panel for panel at 200,000 steps (t = 200): q = 0
+layer 1's own labyrinth (3a); 0.05 wide stripes with fine dashes
+inside (3c–d); **0.09 spots with internal structure on a distorted
+hexagonal lattice (3e)**; 0.27 spots giving way to long stripes (3h).
+Fig. 2(a)'s superposition (wide stripes with fine dots, "the eyes
+are not formed") and Fig. 2(c)'s **beans** came out as described; Yang's
+strong linear case (q = 1) gives "small white-eye dots superimposed
+in stripes". Two things did not: the boats at q = 0.15 — we get
+elongated blobs at t = 200 and long stripes with inner structure by
+t = 600, the paper calls its boats an oscillatory state and gives no
+run time, so which of ours is its panel is not settled; and weak
+linear coupling gives layer 1's labyrinth rather than Yang's black-eye
+strings, whose own diffusion set this paper does not give.
+
+**Gates.** A CPU mirror of one step in both couplings (worst 2.4e-7,
+`brusselator2_matches_a_cpu_mirror_in_both_couplings`). The paper's
+own evidence is the Fourier spectrum's two rings; measured on 128² at
+200,000 steps, layer 1 under cubic coupling at q = 0.15 carries 79 %
+of its power at k 0.1–0.4 and 7 % at 0.7–1.4 radians per cell, and
+uncoupled 0 % and 97 % — the coupling hands layer 1 the long
+wavelength and keeps a short-wavelength remainder, as its Fig. 4
+dispersion says (`brusselator2_boats_carry_two_wavelengths`,
+ignored: a minute of GPU).
+
+**Parameters.** `a`, `b`, `du1`, `dv1`, `du2`, `dv2`, `coupling`
+(linear / cubic), `q`. **Presets** are the paper's sets: `boats`,
+`spots_inside`, `superimposed_stripes`, `long_stripes` (Fig. 3),
+`superposition`, `beans` (Fig. 2), `linear_weak`, `linear_strong`.
+**dt.** The 5-point stencil's bound 0.25 / D_max — 0.0013 at
+D_v2 = 186 — as a `dt_bound`; default 0.001. **Cost.** Trivial per
+step; the run is the cost: 200,000 steps at dt 0.001, a minute in
+batch at 200², dispatch-bound. The Max Steps slider was raised to ten
+million and steps-per-frame to 2,048 for this and §30.
+
+## 30. Rössler lattice (Xiao, Li, Yang & Hu)
+
+**Sources.** J.-H. Xiao, H.-H. Li, J.-Z. Yang, G. Hu, "Chaotic Turing
+pattern formation in spatiotemporal systems", Front. Phys. China 2
+(2006) 204–208 `[read — text at output/xiao2006.txt]`.
+
+**Rule.** Diffusively coupled Rössler oscillators, `u̇ = −v − w +
+D_u∇²u`, `v̇ = u + av + D_v∇²v`, `ẇ = b + w(u − c) + D_w∇²w`, a = b =
+0.2, c = 4.5, D_u = D_v, on a 40×40 periodic lattice for a 10×10
+domain (spacing 0.25, so diffusion in cells is D / 0.0625), seeded
+with u = v = w = δ(x, y) random in [0, 0.2]. The paper's point: the
+snapshots are chaos in time and space; the **time maximum** of u at
+each cell over a long window (T = 20,000) is a still, ordered,
+localised pattern, twelve of them from the diffusion pair alone (its
+Fig. 3, D_uv 0.003–0.048, D_w 0.25–2.5). That envelope is the fourth
+channel here, with an optional forgetting rate; the presets are the
+Fig. 3 parameter sets and colour the envelope.
+
+**What the paper does not say, and what was measured.** Its time
+step and integrator are not given. The pure-diffusion bound on this
+stencil is 0.25 / (D_w / 0.0625) = 0.006 at D_w = 2.5, and at dt =
+0.005 the carpet set reaches infinity by t = 4,000 while dt = 0.002
+and 0.001 agree with each other (u within ±40, the envelope to 43):
+the coupled system is stiffer than diffusion alone, and 0.002 is the
+ceiling. The uncoupled lattice's envelope is a uniform 9.25, Rössler's
+own amplitude; with coupling it is spatially structured and settles —
+at the carpet set, 15 % spread across the grid with a drift of a
+fifth of that over the last tenth of a T = 5,000 run
+(`rossler_envelope_settles_into_a_structured_map`, ignored). The
+envelope's RANGE differs by parameter set — asymmetric 10.9–13.9, diagonal 9.0–12.4, translational 9.0–16.1, carpet 13.1–41.7, architecture 9.2–23.0, square 9.1–15.2, conventional 9.1–15.6, at t = 4,000 — so a
+single colour scale cannot serve them; each preset carries the scale
+it was measured with, and a changed diffusion wants the channel
+colouring's scale and offset moved.
+
+**Not claimed.** The paper's twelve symmetric panels are
+lattice-commensurate (translations by L/4, L/5, L/18 on a 40-cell
+box) and depend on its discretisation as much as on the equations;
+this model has the equations, the stencil, the spacing and the seed,
+and which panels come out is a matter of running them. What was seen at
+t = 4,000 (seed 3): the asymmetric set gives diagonal banding with a
+few bright blobs; the carpet set a fine cell-scale texture rather
+than the paper's L/4 carpet; the square and conventional sets a
+roughly 4×4 arrangement of bright blobs, which is the paper's
+description of (l); the Fig. 3(d) set (D_uv = D_w = 0.048)
+synchronises here — a uniform envelope of 9.15 — so it is above the
+Fig. 1(a) threshold at this discretisation and is not a preset.
+
+**Gates.** A CPU mirror of one step, envelope included (worst 4e-9,
+`rossler_matches_a_cpu_mirror`). **Parameters.** `a`, `b`, `c`,
+`duv`, `dw`, `spacing`, `forget`. **Cost.** Trivial per step at 40²;
+a T = 4,000 run is two million steps at dt 0.002, a minute and a half
+in batch.
+
+## 31. Layered simulations
+
+**Sources.** The simulation-layers plan (`docs/projects/simulation-
+layers.md`), phases 1 and 2; the coupling forms from §29's papers.
+
+**What it is.** Any registered model on any slice of a texture-array
+field, coupled by a table the step template applies after the
+layer's own rule: `n = rule(s) + dt · Σ strength · form(mine, theirs)`
+over the couplings aimed at that layer, channel-wise (x to x, y to
+y), forms Linear `v − u`, Cubic `u·v·(v − u)`, Quadratic `v² − u²`,
+Product `u·v`. One dt serves every layer; the tightest stability cap
+wins. Layers sharing a model share compiled pipelines; a layer is
+carried through a stage it has no pass for by the warp with an
+all-zero mask, exactly.
+
+**Gates.** Layer 0 of a two-layer config beside a two-pass model is
+bit-identical to the single-layer run of the same model and seed;
+three mixed layers are batch invariant on every slice; two
+`brusselator` layers on the 5-point stencil under a cubic coupling
+match the `brusselator2` model from an identical seed to 4e-6 RMS
+after 1,000 steps; every model's coupled step shader validates and
+its uncoupled one is unchanged.
+
+**Presets** (`LAYERED_PRESETS`, each run before it shipped):
+
+| preset | layers | coupling | seen |
+|---|---|---|---|
+| `two_gray_scotts` | Gray–Scott coral (0.0545, 0.062) and maze (0.030, 0.057), blob-seeded | linear, 0.02 both ways, channels x y | a coral labyrinth carrying the maze layer's modulation as brightness; at 0.1 a fine labyrinth of thin dark lines; at 0.3 both layers die |
+| `brusselator_layers` | two Brusselators, a = 3, b = 9, D = 1.85/5.66 and 50.6/186, 5-point | cubic, 0.09 both ways, channels x y | §29's spots with internal structure on a distorted hexagonal lattice, through the layered path |
+
+**Not shipped, with the reason.** A Gray–Scott gated by a
+Brusselator through a Product coupling: Gray–Scott runs at dt 1 and
+the Brusselator at 0.01, and one dt serves every layer, so at 0.01
+the Gray–Scott's blobs sat where they were seeded for 6,000 steps.
+Layers whose time scales differ by a hundred cannot share a step;
+a per-layer sub-stepping would be the fix and is not built.
+
+**Cost.** Per-layer cost is flat: Gray–Scott at 1080p 0.290 ms/step
+alone, 0.284 per layer at two, 0.319 at eight; 63 MB of field per
+layer at 1080p.
+
+### 31a. The lattice as layers: `turing` and the Signal coupling
+
+**Sources.** §28's lattice, taken apart (simulation-layers plan,
+section 9). McCabe's multi-scale model (§10) was asked about first
+and does not decompose: it is one field whose scales are competing
+measurements chosen by a per-cell argmin, and nothing pairwise
+expresses that; it stays as it is.
+
+**What it is.** `turing` is one field of the lattice as a layer
+model: `self`, `radius`, `ratio`, `amount`, `noise`, `gain`,
+`decay`, `quadratic`, the same difference-of-discs kernel (shared
+code). Its drive is `self · own signal + sim_drive(p)`, where the
+drive is the sum of the **Signal** couplings aimed at its layer — a
+fifth coupling form, the driving layer's field through the driving
+layer's own kernel table (a two-block table as the difference of its
+blocks, one block as itself), folded in before the saturation by a
+model that declares `TakesDrive`, added after the rule by any
+other. Two passes: the first convolves once and publishes the
+signal in `.y` (`PublishesSignal`), the second steps; a coupling
+from a publishing layer reads `.y` instead of convolving. The
+fluctuations are the lattice's own streams (salt `0x41 + layer` on
+layer 0's stream). What the lattice keeps that this lacks: the
+memory column, whose amplitude term reads three fields at once. What
+this has that the lattice lacks: any number of fields, a radius per
+field, a transform per field, and the colour stack. A colour layer
+may **gather**: read the first channel of four consecutive layers as
+its four channels, so `species` colours four `turing` layers as it
+colours the lattice.
+
+**Gate** (`four_turing_layers_are_the_lattices_ring`). The lattice's
+`ring` and `independent` presets against four `turing` layers from
+the lattice's own seed (the init mask's noise is salted by layer, so
+the seed is copied in; every step after it draws identically), 64²,
+200 steps, noise on. Measured: ring 5.7e-7 worst (5.2e-8 RMS),
+independent 1.2e-7 — the cost of summing the drive in a different
+order; at 2,000 steps the ring's cycle has carried it to 6.5e-6.
+The `species` colouring of the lattice against one gathered colour
+layer of the four: 6.3e-7 worst. Asserted at 4e-6 / 1e-6 on the
+fields and 1e-5 on the colour.
+
+**Cost.** The ring as layers at 256² for 2,000 steps: 11.2 s when
+every Signal coupling re-convolved its driver (twelve scalar
+gathers a step against the lattice's one vec4 gather), 4.0 s with
+the signal published once per layer; the lattice 2.0 s. Four scalar
+gathers against one four-wide one is the remaining factor.
+
+**Presets** (`LAYERED_PRESETS`, run before they shipped):
+
+| preset | layers | couplings | seen |
+|---|---|---|---|
+| `turing_ring` | four `turing`, radius 4 | the ring's eight, Signal ±1.5, channel x | the lattice's ring (gated); `species` over the gathered four |
+| `turing_scales` | four `turing`, radii 3, 5, 8, 12 | the same eight | stripes at the finest field's scale in domains the coarser fields draw, their walls where the coarse fields' phases meet |
+
+## 32. Cross-cutting notes
 
 - **Determinism.** Every stochastic model draws from the PCG in
   `shaders/core/rng.wgsl` seeded by (config seed, cell or agent

@@ -319,6 +319,112 @@ pub enum ConfigPath {
     EscapeDownsample,
     /// Reference-orbit period hint (0 = none). Verified before use.
     EscapeReferencePeriod,
+
+    // ---------------------------------------------------------------
+    // Simulation mode. Routed to one of three update types by how much
+    // of the run survives the change: SimRerender keeps the field,
+    // SimResample interpolates it into a new grid, SimReseed restarts.
+    // ---------------------------------------------------------------
+    /// Which model steps, by registry name.
+    SimModel,
+    /// Which colouring maps the field, by registry name.
+    SimColoring,
+    /// Whether the grid is Fixed or bound to the viewport.
+    SimGridMode,
+    /// Fixed-grid width in cells.
+    SimGridWidth,
+    /// Fixed-grid height in cells.
+    SimGridHeight,
+    /// Bound-grid cells per output pixel.
+    SimGridScale,
+    /// Seed for the initial field and every stochastic model.
+    SimSeed,
+    /// Which initial shape (`noise`, `blob`, `blobs`, `ring`, `line`,
+    /// `center`).
+    SimInitKind,
+    /// Noise init amplitude.
+    SimInitAmplitude,
+    /// Blob/blobs/ring radius, in cells.
+    SimInitRadius,
+    /// How many blobs the `blobs` init places.
+    SimInitCount,
+    /// **The step count, and the animation target that drives the
+    /// simulation's own progression.**
+    ///
+    /// A still is the state at exactly this many steps from the seed,
+    /// so animating it animates the run: the state at time *t* is
+    /// `round(track(t))` steps, which keeps a frame a function of its
+    /// time rather than of how many frames preceded it (master plan
+    /// D5b). A track that decreases costs a reseed and re-run, which is
+    /// the price of a rule that cannot be stepped backwards.
+    SimSteps,
+    /// Free-running speed for the interactive Run button. NOT an
+    /// animation target — the timeline uses `SimSteps`.
+    SimStepsPerFrame,
+    /// Model time step, where the model has one.
+    SimDt,
+    /// What a step reads outside the grid.
+    SimBoundary,
+    /// The warp stage's per-step rates (pipeline section 4.1): scale
+    /// about the centre, radians, cells, cells, and the swirl's rim
+    /// rate. All animatable -- a ramp on the zoom is space beginning
+    /// to expand.
+    SimWarpZoom,
+    SimWarpRotation,
+    SimWarpPanX,
+    SimWarpPanY,
+    SimWarpFlow,
+    /// How the warp samples: bilinear, nearest or bicubic. Not animatable.
+    SimWarpFilter,
+    /// Continuous or octaves (`SimWarpMode`). Not animatable.
+    SimWarpMode,
+    /// Octave mode: freeze the cells outside the visible window. Bool.
+    SimWarpCull,
+    /// Which channels the warp moves, a bit mask 0..15. Int.
+    SimWarpLayers,
+    /// The matte: which cells are figure and which are background
+    /// (`SimMatte`). The channel and the direction are choices; the
+    /// cutoff and the softness are quantities and animate -- a cutoff
+    /// sweeping down is the figure growing into the background.
+    SimMatteChannel,
+    SimMatteCutoff,
+    SimMatteSoftness,
+    SimMatteInvert,
+    /// Threshold or distance field (`SimMatteEdge`). A choice, not
+    /// animatable.
+    SimMatteEdge,
+    /// Resolve filter when the grid is smaller than the output.
+    SimUpscale,
+    /// Resolve filter when the grid is larger than the output.
+    SimDownscale,
+    /// Letterbox or cover (`SimFit`). Not animatable.
+    SimFit,
+    /// One model parameter, by name.
+    SimModelParam { param: String },
+    /// Layer `layer`'s model (`SimLayer::model`). A restart.
+    SimLayerModel { layer: usize },
+    /// Whether layer `layer` is stepped. Bool.
+    SimLayerEnabled { layer: usize },
+    /// One of layer `layer`'s model parameters. Animatable.
+    SimLayerParam { layer: usize, param: String },
+    /// Coupling `index`: the driving layer, the driven layer, the form
+    /// (`SimCouplingForm`), the strength (animatable), the channels.
+    SimCouplingFrom { index: usize },
+    SimCouplingTo { index: usize },
+    SimCouplingForm { index: usize },
+    SimCouplingStrength { index: usize },
+    SimCouplingChannels { index: usize },
+    /// Use the flame's transforms as the layers' maps. Bool.
+    SimUseTransforms,
+    /// Colouring layer `index`: one of its colouring's parameters, its
+    /// opacity, its matte's cutoff and softness. All animatable; the
+    /// layer's other fields are snapshot edits.
+    SimColorLayerParam { index: usize, param: String },
+    SimColorLayerOpacity { index: usize },
+    SimColorLayerMatteCutoff { index: usize },
+    SimColorLayerMatteSoftness { index: usize },
+    /// One colouring parameter, by name.
+    SimColoringParam { param: String },
     /// Escape radius squared.
     EscapeBailout,
     /// Mann-iteration damping α (complex): `z ← (1−α)z + α·f(z)`.
@@ -845,6 +951,53 @@ impl Display for ConfigPath {
             ConfigPath::EscapeZoomLog2 => write!(f, "Escape Zoom"),
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
+            ConfigPath::SimModel => write!(f, "Simulation Model"),
+            ConfigPath::SimColoring => write!(f, "Simulation Coloring"),
+            ConfigPath::SimGridMode => write!(f, "Simulation Grid Mode"),
+            ConfigPath::SimGridWidth => write!(f, "Simulation Grid Width"),
+            ConfigPath::SimGridHeight => write!(f, "Simulation Grid Height"),
+            ConfigPath::SimGridScale => write!(f, "Simulation Grid Scale"),
+            ConfigPath::SimSeed => write!(f, "Simulation Seed"),
+            ConfigPath::SimInitKind => write!(f, "Simulation Init"),
+            ConfigPath::SimInitAmplitude => write!(f, "Simulation Init Amplitude"),
+            ConfigPath::SimInitRadius => write!(f, "Simulation Init Radius"),
+            ConfigPath::SimInitCount => write!(f, "Simulation Init Count"),
+            ConfigPath::SimSteps => write!(f, "Simulation Steps"),
+            ConfigPath::SimStepsPerFrame => write!(f, "Simulation Steps Per Frame"),
+            ConfigPath::SimDt => write!(f, "Simulation dt"),
+            ConfigPath::SimBoundary => write!(f, "Simulation Boundary"),
+            ConfigPath::SimWarpZoom => write!(f, "Simulation Warp Zoom"),
+            ConfigPath::SimWarpRotation => write!(f, "Simulation Warp Rotation"),
+            ConfigPath::SimWarpPanX => write!(f, "Simulation Warp Pan X"),
+            ConfigPath::SimWarpPanY => write!(f, "Simulation Warp Pan Y"),
+            ConfigPath::SimWarpFlow => write!(f, "Simulation Warp Flow"),
+            ConfigPath::SimWarpFilter => write!(f, "Simulation Warp Filter"),
+            ConfigPath::SimWarpMode => write!(f, "Simulation Warp Mode"),
+            ConfigPath::SimWarpCull => write!(f, "Simulation Warp Cull"),
+            ConfigPath::SimWarpLayers => write!(f, "Simulation Warp Layers"),
+            ConfigPath::SimMatteChannel => write!(f, "Simulation Matte Channel"),
+            ConfigPath::SimMatteCutoff => write!(f, "Simulation Matte Cutoff"),
+            ConfigPath::SimMatteSoftness => write!(f, "Simulation Matte Softness"),
+            ConfigPath::SimMatteInvert => write!(f, "Simulation Matte Invert"),
+            ConfigPath::SimMatteEdge => write!(f, "Simulation Matte Edge"),
+            ConfigPath::SimUpscale => write!(f, "Simulation Upscale"),
+            ConfigPath::SimDownscale => write!(f, "Simulation Downscale"),
+            ConfigPath::SimFit => write!(f, "Simulation Fit"),
+            ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
+            ConfigPath::SimLayerModel { layer } => write!(f, "Simulation Layer {layer} Model"),
+            ConfigPath::SimLayerEnabled { layer } => write!(f, "Simulation Layer {layer} Enabled"),
+            ConfigPath::SimLayerParam { layer, param } => write!(f, "Simulation Layer {layer} {param}"),
+            ConfigPath::SimCouplingFrom { index } => write!(f, "Simulation Coupling {index} From"),
+            ConfigPath::SimCouplingTo { index } => write!(f, "Simulation Coupling {index} To"),
+            ConfigPath::SimCouplingForm { index } => write!(f, "Simulation Coupling {index} Form"),
+            ConfigPath::SimCouplingStrength { index } => write!(f, "Simulation Coupling {index} Strength"),
+            ConfigPath::SimCouplingChannels { index } => write!(f, "Simulation Coupling {index} Channels"),
+            ConfigPath::SimUseTransforms => write!(f, "Simulation Use Transforms"),
+            ConfigPath::SimColorLayerParam { index, param } => write!(f, "Simulation Colour Layer {index} {param}"),
+            ConfigPath::SimColorLayerOpacity { index } => write!(f, "Simulation Colour Layer {index} Opacity"),
+            ConfigPath::SimColorLayerMatteCutoff { index } => write!(f, "Simulation Colour Layer {index} Matte Cutoff"),
+            ConfigPath::SimColorLayerMatteSoftness { index } => write!(f, "Simulation Colour Layer {index} Matte Softness"),
+            ConfigPath::SimColoringParam { param } => write!(f, "Simulation Color {param}"),
             ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
             ConfigPath::EscapeDownsample => write!(f, "Escape Downsample"),
             ConfigPath::EscapeReferencePeriod => write!(f, "Escape Reference Period"),
@@ -1087,6 +1240,74 @@ impl ConfigPath {
             ConfigPath::EscapeZoomLog2 => I18nKey::simple("history.param.escape_zoom"),
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
+            ConfigPath::SimModel => I18nKey::simple("history.param.sim_model"),
+            ConfigPath::SimColoring => I18nKey::simple("history.param.sim_coloring"),
+            ConfigPath::SimGridMode => I18nKey::simple("history.param.sim_grid_mode"),
+            ConfigPath::SimGridWidth => I18nKey::simple("history.param.sim_grid_width"),
+            ConfigPath::SimGridHeight => I18nKey::simple("history.param.sim_grid_height"),
+            ConfigPath::SimGridScale => I18nKey::simple("history.param.sim_grid_scale"),
+            ConfigPath::SimSeed => I18nKey::simple("history.param.sim_seed"),
+            ConfigPath::SimInitKind => I18nKey::simple("history.param.sim_init_kind"),
+            ConfigPath::SimInitAmplitude => I18nKey::simple("history.param.sim_init_amplitude"),
+            ConfigPath::SimInitRadius => I18nKey::simple("history.param.sim_init_radius"),
+            ConfigPath::SimInitCount => I18nKey::simple("history.param.sim_init_count"),
+            ConfigPath::SimSteps => I18nKey::simple("history.param.sim_steps"),
+            ConfigPath::SimStepsPerFrame => I18nKey::simple("history.param.sim_steps_per_frame"),
+            ConfigPath::SimDt => I18nKey::simple("history.param.sim_dt"),
+            ConfigPath::SimBoundary => I18nKey::simple("history.param.sim_boundary"),
+            ConfigPath::SimWarpZoom => I18nKey::simple("history.param.sim_warp_zoom"),
+            ConfigPath::SimWarpRotation => I18nKey::simple("history.param.sim_warp_rotation"),
+            ConfigPath::SimWarpPanX => I18nKey::simple("history.param.sim_warp_pan_x"),
+            ConfigPath::SimWarpPanY => I18nKey::simple("history.param.sim_warp_pan_y"),
+            ConfigPath::SimWarpFlow => I18nKey::simple("history.param.sim_warp_flow"),
+            ConfigPath::SimWarpFilter => I18nKey::simple("history.param.sim_warp_filter"),
+            ConfigPath::SimWarpMode => I18nKey::simple("history.param.sim_warp_mode"),
+            ConfigPath::SimWarpCull => I18nKey::simple("history.param.sim_warp_cull"),
+            ConfigPath::SimWarpLayers => I18nKey::simple("history.param.sim_warp_layers"),
+            ConfigPath::SimMatteChannel => I18nKey::simple("history.param.sim_matte_channel"),
+            ConfigPath::SimMatteCutoff => I18nKey::simple("history.param.sim_matte_cutoff"),
+            ConfigPath::SimMatteSoftness => I18nKey::simple("history.param.sim_matte_softness"),
+            ConfigPath::SimMatteInvert => I18nKey::simple("history.param.sim_matte_invert"),
+            ConfigPath::SimMatteEdge => I18nKey::simple("history.param.sim_matte_edge"),
+            ConfigPath::SimUpscale => I18nKey::simple("history.param.sim_upscale"),
+            ConfigPath::SimDownscale => I18nKey::simple("history.param.sim_downscale"),
+            ConfigPath::SimFit => I18nKey::simple("history.param.sim_fit"),
+            ConfigPath::SimModelParam { param } => I18nKey::with_params(
+                "history.param.sim_model_param",
+                vec![("param", param.clone())],
+            ),
+            ConfigPath::SimLayerModel { layer } => {
+                I18nKey::with_params("history.param.sim_layer_model", vec![("layer", layer.to_string())])
+            }
+            ConfigPath::SimLayerEnabled { layer } => {
+                I18nKey::with_params("history.param.sim_layer_enabled", vec![("layer", layer.to_string())])
+            }
+            ConfigPath::SimLayerParam { layer, param } => I18nKey::with_params(
+                "history.param.sim_layer_param",
+                vec![("layer", layer.to_string()), ("param", param.clone())],
+            ),
+            ConfigPath::SimCouplingFrom { index }
+            | ConfigPath::SimCouplingTo { index }
+            | ConfigPath::SimCouplingForm { index }
+            | ConfigPath::SimCouplingStrength { index }
+            | ConfigPath::SimCouplingChannels { index } => {
+                I18nKey::with_params("history.param.sim_coupling", vec![("index", index.to_string())])
+            }
+            ConfigPath::SimUseTransforms => I18nKey::simple("history.param.sim_use_transforms"),
+            ConfigPath::SimColorLayerParam { index, param } => I18nKey::with_params(
+                "history.param.sim_color_layer_param",
+                vec![("index", index.to_string()), ("param", param.clone())],
+            ),
+            ConfigPath::SimColorLayerOpacity { index }
+            | ConfigPath::SimColorLayerMatteCutoff { index }
+            | ConfigPath::SimColorLayerMatteSoftness { index } => I18nKey::with_params(
+                "history.param.sim_color_layer",
+                vec![("index", index.to_string())],
+            ),
+            ConfigPath::SimColoringParam { param } => I18nKey::with_params(
+                "history.param.sim_coloring_param",
+                vec![("param", param.clone())],
+            ),
             ConfigPath::EscapeSupersample => I18nKey::simple("history.param.escape_supersample"),
             ConfigPath::EscapeDownsample => I18nKey::simple("history.param.escape_downsample"),
             ConfigPath::EscapeReferencePeriod => {
@@ -2208,6 +2429,19 @@ pub enum UpdateType {
     /// set mixing escape and flame paths must still re-render escape,
     /// and the flame flags ride along in UpdateAction's union anyway.
     EscapeRerender,
+    /// Recolour the simulation from its current field: a colouring,
+    /// palette or resolve-filter change that must not disturb the run.
+    SimRerender,
+    /// Resample the running field into a new grid (a bound grid's
+    /// scale changed). Keeps the run; interpolates once.
+    SimResample,
+    /// Restart the run from the seed: model, seed, init, boundary or a
+    /// grid size changed, and none of those can be carried across.
+    ///
+    /// Last in the ordering deliberately. `merge` takes the Ord max, so
+    /// a change set that both recolours and reseeds reseeds — the
+    /// stronger action subsumes the weaker, never the other way round.
+    SimReseed,
 }
 
 impl UpdateType {
@@ -2437,6 +2671,70 @@ impl ConfigPath {
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
             | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
+
+            // Simulation: split by how much of the run survives. This
+            // grouping is the whole reason there are three update types
+            // rather than one -- a colouring tweak must not throw away
+            // a 10,000-step field, and a model change cannot keep it.
+            ConfigPath::SimColoring
+            | ConfigPath::SimUpscale
+            | ConfigPath::SimDownscale
+            | ConfigPath::SimFit
+            | ConfigPath::SimSteps
+            | ConfigPath::SimStepsPerFrame
+            | ConfigPath::SimDt
+            // The warp changes what the NEXT steps do to the field,
+            // not the field: the run continues.
+            | ConfigPath::SimWarpZoom
+            | ConfigPath::SimWarpRotation
+            | ConfigPath::SimWarpPanX
+            | ConfigPath::SimWarpPanY
+            | ConfigPath::SimWarpFlow
+            | ConfigPath::SimWarpFilter
+            | ConfigPath::SimWarpMode
+            | ConfigPath::SimWarpCull
+            | ConfigPath::SimWarpLayers
+            // The matte is a colouring decision: the field is
+            // untouched, only which of it is drawn.
+            | ConfigPath::SimMatteChannel
+            | ConfigPath::SimMatteCutoff
+            | ConfigPath::SimMatteSoftness
+            | ConfigPath::SimMatteInvert
+            | ConfigPath::SimMatteEdge
+            | ConfigPath::SimModelParam { .. }
+            | ConfigPath::SimLayerEnabled { .. }
+            | ConfigPath::SimLayerParam { .. }
+            | ConfigPath::SimCouplingFrom { .. }
+            | ConfigPath::SimCouplingTo { .. }
+            | ConfigPath::SimCouplingForm { .. }
+            | ConfigPath::SimCouplingStrength { .. }
+            | ConfigPath::SimCouplingChannels { .. }
+            | ConfigPath::SimUseTransforms
+            | ConfigPath::SimColorLayerParam { .. }
+            | ConfigPath::SimColorLayerOpacity { .. }
+            | ConfigPath::SimColorLayerMatteCutoff { .. }
+            | ConfigPath::SimColorLayerMatteSoftness { .. }
+            | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
+
+            // A bound grid's scale change resamples the live field
+            // rather than restarting: the run continues at a new
+            // resolution (pipeline section 7).
+            ConfigPath::SimGridScale => UpdateType::SimResample,
+
+            // Nothing here can be carried across: the model's rule, the
+            // field's contents, the lattice size or what a step reads
+            // at the edges all change what the state MEANS.
+            ConfigPath::SimModel
+            | ConfigPath::SimLayerModel { .. }
+            | ConfigPath::SimGridMode
+            | ConfigPath::SimGridWidth
+            | ConfigPath::SimGridHeight
+            | ConfigPath::SimSeed
+            | ConfigPath::SimInitKind
+            | ConfigPath::SimInitAmplitude
+            | ConfigPath::SimInitRadius
+            | ConfigPath::SimInitCount
+            | ConfigPath::SimBoundary => UpdateType::SimReseed,
 
             // Effects (post-processing, just need tonemap re-run)
             ConfigPath::DensityEffectEnabled { .. }
@@ -2684,6 +2982,53 @@ impl ConfigPath {
             ConfigPath::EscapeZoomLog2 => "Escape.ZoomLog2".to_string(),
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
+            ConfigPath::SimModel => "Sim.Model".to_string(),
+            ConfigPath::SimColoring => "Sim.Coloring".to_string(),
+            ConfigPath::SimGridMode => "Sim.GridMode".to_string(),
+            ConfigPath::SimGridWidth => "Sim.GridWidth".to_string(),
+            ConfigPath::SimGridHeight => "Sim.GridHeight".to_string(),
+            ConfigPath::SimGridScale => "Sim.GridScale".to_string(),
+            ConfigPath::SimSeed => "Sim.Seed".to_string(),
+            ConfigPath::SimInitKind => "Sim.InitKind".to_string(),
+            ConfigPath::SimInitAmplitude => "Sim.InitAmplitude".to_string(),
+            ConfigPath::SimInitRadius => "Sim.InitRadius".to_string(),
+            ConfigPath::SimInitCount => "Sim.InitCount".to_string(),
+            ConfigPath::SimSteps => "Sim.Steps".to_string(),
+            ConfigPath::SimStepsPerFrame => "Sim.StepsPerFrame".to_string(),
+            ConfigPath::SimDt => "Sim.Dt".to_string(),
+            ConfigPath::SimBoundary => "Sim.Boundary".to_string(),
+            ConfigPath::SimWarpZoom => "Sim.WarpZoom".to_string(),
+            ConfigPath::SimWarpRotation => "Sim.WarpRotation".to_string(),
+            ConfigPath::SimWarpPanX => "Sim.WarpPanX".to_string(),
+            ConfigPath::SimWarpPanY => "Sim.WarpPanY".to_string(),
+            ConfigPath::SimWarpFlow => "Sim.WarpFlow".to_string(),
+            ConfigPath::SimWarpFilter => "Sim.WarpFilter".to_string(),
+            ConfigPath::SimWarpMode => "Sim.WarpMode".to_string(),
+            ConfigPath::SimWarpCull => "Sim.WarpCull".to_string(),
+            ConfigPath::SimWarpLayers => "Sim.WarpLayers".to_string(),
+            ConfigPath::SimMatteChannel => "Sim.MatteChannel".to_string(),
+            ConfigPath::SimMatteCutoff => "Sim.MatteCutoff".to_string(),
+            ConfigPath::SimMatteSoftness => "Sim.MatteSoftness".to_string(),
+            ConfigPath::SimMatteInvert => "Sim.MatteInvert".to_string(),
+            ConfigPath::SimMatteEdge => "Sim.MatteEdge".to_string(),
+            ConfigPath::SimUpscale => "Sim.Upscale".to_string(),
+            ConfigPath::SimDownscale => "Sim.Downscale".to_string(),
+            ConfigPath::SimFit => "Sim.Fit".to_string(),
+            ConfigPath::SimModelParam { param } => format!("Sim.ModelParam.{param}"),
+            ConfigPath::SimLayerModel { layer } => format!("Sim.Layer.{layer}.Model"),
+            ConfigPath::SimLayerEnabled { layer } => format!("Sim.Layer.{layer}.Enabled"),
+            ConfigPath::SimLayerParam { layer, param } => format!("Sim.Layer.{layer}.Param.{param}"),
+            ConfigPath::SimCouplingFrom { index } => format!("Sim.Coupling.{index}.From"),
+            ConfigPath::SimCouplingTo { index } => format!("Sim.Coupling.{index}.To"),
+            ConfigPath::SimCouplingForm { index } => format!("Sim.Coupling.{index}.Form"),
+            ConfigPath::SimCouplingStrength { index } => format!("Sim.Coupling.{index}.Strength"),
+            ConfigPath::SimCouplingChannels { index } => format!("Sim.Coupling.{index}.Channels"),
+            ConfigPath::SimUseTransforms => "Sim.UseTransforms".to_string(),
+            ConfigPath::SimColorLayerParam { index, param } => format!("Sim.ColorLayer.{index}.Param.{param}"),
+            ConfigPath::SimColorLayerOpacity { index } => format!("Sim.ColorLayer.{index}.Opacity"),
+            ConfigPath::SimColorLayerMatteCutoff { index } => format!("Sim.ColorLayer.{index}.MatteCutoff"),
+            ConfigPath::SimColorLayerMatteSoftness { index } => format!("Sim.ColorLayer.{index}.MatteSoftness"),
+            ConfigPath::SimColoringParam { param } => format!("Sim.ColoringParam.{param}"),
             ConfigPath::EscapeSupersample => "Escape.Supersample".to_string(),
             ConfigPath::EscapeDownsample => "Escape.Downsample".to_string(),
             ConfigPath::EscapeReferencePeriod => "Escape.ReferencePeriod".to_string(),
@@ -2922,6 +3267,92 @@ impl ConfigPath {
                 _ => return None,
             }
         }
+
+        // Simulation paths: Sim.{field} and Sim.{kind}Param.{param}
+        if let Some(rest) = s.strip_prefix("Sim.") {
+            let parts: Vec<&str> = rest.split('.').collect();
+            match parts.as_slice() {
+                ["Model"] => return Some(ConfigPath::SimModel),
+                ["Coloring"] => return Some(ConfigPath::SimColoring),
+                ["GridMode"] => return Some(ConfigPath::SimGridMode),
+                ["GridWidth"] => return Some(ConfigPath::SimGridWidth),
+                ["GridHeight"] => return Some(ConfigPath::SimGridHeight),
+                ["GridScale"] => return Some(ConfigPath::SimGridScale),
+                ["Seed"] => return Some(ConfigPath::SimSeed),
+                ["InitKind"] => return Some(ConfigPath::SimInitKind),
+                ["InitAmplitude"] => return Some(ConfigPath::SimInitAmplitude),
+                ["InitRadius"] => return Some(ConfigPath::SimInitRadius),
+                ["InitCount"] => return Some(ConfigPath::SimInitCount),
+                ["Steps"] => return Some(ConfigPath::SimSteps),
+                ["StepsPerFrame"] => return Some(ConfigPath::SimStepsPerFrame),
+                ["Dt"] => return Some(ConfigPath::SimDt),
+                ["Boundary"] => return Some(ConfigPath::SimBoundary),
+                ["WarpZoom"] => return Some(ConfigPath::SimWarpZoom),
+                ["WarpRotation"] => return Some(ConfigPath::SimWarpRotation),
+                ["WarpPanX"] => return Some(ConfigPath::SimWarpPanX),
+                ["WarpPanY"] => return Some(ConfigPath::SimWarpPanY),
+                ["WarpFlow"] => return Some(ConfigPath::SimWarpFlow),
+                ["WarpFilter"] => return Some(ConfigPath::SimWarpFilter),
+                ["WarpMode"] => return Some(ConfigPath::SimWarpMode),
+                ["WarpCull"] => return Some(ConfigPath::SimWarpCull),
+                ["WarpLayers"] => return Some(ConfigPath::SimWarpLayers),
+                ["MatteChannel"] => return Some(ConfigPath::SimMatteChannel),
+                ["MatteCutoff"] => return Some(ConfigPath::SimMatteCutoff),
+                ["MatteSoftness"] => return Some(ConfigPath::SimMatteSoftness),
+                ["MatteInvert"] => return Some(ConfigPath::SimMatteInvert),
+                ["MatteEdge"] => return Some(ConfigPath::SimMatteEdge),
+                ["Upscale"] => return Some(ConfigPath::SimUpscale),
+                ["Downscale"] => return Some(ConfigPath::SimDownscale),
+                ["Fit"] => return Some(ConfigPath::SimFit),
+                ["ModelParam", param] => {
+                    return Some(ConfigPath::SimModelParam { param: param.to_string() })
+                }
+                ["Layer", layer, "Model"] => {
+                    return Some(ConfigPath::SimLayerModel { layer: layer.parse().ok()? })
+                }
+                ["Layer", layer, "Enabled"] => {
+                    return Some(ConfigPath::SimLayerEnabled { layer: layer.parse().ok()? })
+                }
+                ["Layer", layer, "Param", param] => {
+                    return Some(ConfigPath::SimLayerParam {
+                        layer: layer.parse().ok()?,
+                        param: param.to_string(),
+                    })
+                }
+                ["UseTransforms"] => return Some(ConfigPath::SimUseTransforms),
+                ["ColorLayer", index, "Param", param] => {
+                    return Some(ConfigPath::SimColorLayerParam {
+                        index: index.parse().ok()?,
+                        param: param.to_string(),
+                    })
+                }
+                ["ColorLayer", index, field] => {
+                    let index = index.parse().ok()?;
+                    return match *field {
+                        "Opacity" => Some(ConfigPath::SimColorLayerOpacity { index }),
+                        "MatteCutoff" => Some(ConfigPath::SimColorLayerMatteCutoff { index }),
+                        "MatteSoftness" => Some(ConfigPath::SimColorLayerMatteSoftness { index }),
+                        _ => None,
+                    };
+                }
+                ["Coupling", index, field] => {
+                    let index = index.parse().ok()?;
+                    return match *field {
+                        "From" => Some(ConfigPath::SimCouplingFrom { index }),
+                        "To" => Some(ConfigPath::SimCouplingTo { index }),
+                        "Form" => Some(ConfigPath::SimCouplingForm { index }),
+                        "Strength" => Some(ConfigPath::SimCouplingStrength { index }),
+                        "Channels" => Some(ConfigPath::SimCouplingChannels { index }),
+                        _ => None,
+                    };
+                }
+                ["ColoringParam", param] => {
+                    return Some(ConfigPath::SimColoringParam { param: param.to_string() })
+                }
+                _ => return None,
+            }
+        }
+
         let parts: Vec<&str> = s.split('.').collect();
 
         // Transform paths: Transform.{index}.{field}...
@@ -3204,6 +3635,28 @@ impl AffineParam {
 /// # Returns
 /// * `Some(ConfigValue)` on successful conversion
 /// * `None` if the JSON value cannot be converted to the expected type
+/// A JSON number as a non-negative integer, however it arrived.
+///
+/// Animation interpolation always produces a FLOAT. `lerp_json_value`
+/// tries `as_f64` first and every JSON number answers it, so a track
+/// between two integer keyframes still yields `1000.0` — and
+/// `serde_json`'s `as_u64` returns `None` for that, because it reports
+/// how the number is stored rather than whether it has an integral
+/// value.
+///
+/// Asking `as_u64` alone therefore silently dropped every integer
+/// track. `Sim.Steps` is the one where it showed: a 0→2000 ramp
+/// applied nothing, so every exported frame kept the config's own step
+/// count, the first frame ran the whole simulation and the rest had
+/// nothing left to do — ten seconds of the same final still.
+fn json_as_round_u64(json: &serde_json::Value) -> Option<u64> {
+    // `f64::max` returns the other operand when one is NaN, so a wild
+    // signal lands on 0 rather than an arbitrary cast; `as` saturates
+    // at the bounds for infinities.
+    json.as_u64()
+        .or_else(|| json.as_f64().map(|f| f.max(0.0).round() as u64))
+}
+
 pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Option<ConfigValue> {
     use serde_json::Value;
 
@@ -3332,6 +3785,35 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
 
+        // Simulation paths with no meaningful interpolation: a model
+        // name, a boundary rule or a grid mode has no value "between"
+        // two keyframes, so these get no track rather than a track that
+        // snaps. Listed explicitly instead of falling into a wildcard,
+        // so a future animatable field has to be classified here.
+        ConfigPath::SimModel
+        | ConfigPath::SimColoring
+        | ConfigPath::SimGridMode
+        | ConfigPath::SimSeed
+        | ConfigPath::SimInitKind
+        | ConfigPath::SimBoundary
+        | ConfigPath::SimWarpFilter
+        | ConfigPath::SimWarpMode
+        | ConfigPath::SimWarpCull
+        | ConfigPath::SimWarpLayers
+        | ConfigPath::SimMatteChannel
+        | ConfigPath::SimMatteInvert
+        | ConfigPath::SimMatteEdge
+        | ConfigPath::SimUpscale
+        | ConfigPath::SimDownscale
+        | ConfigPath::SimFit
+        | ConfigPath::SimLayerModel { .. }
+        | ConfigPath::SimLayerEnabled { .. }
+        | ConfigPath::SimCouplingFrom { .. }
+        | ConfigPath::SimCouplingTo { .. }
+        | ConfigPath::SimCouplingForm { .. }
+        | ConfigPath::SimCouplingChannels { .. }
+        | ConfigPath::SimUseTransforms => None,
+
         // Vec2 (pan coordinates)
         ConfigPath::Pan => {
             if let Value::Array(arr) = json {
@@ -3382,13 +3864,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight
         | ConfigPath::SystemPngStripMetadata => {
-            json.as_u64().map(|u| ConfigValue::UInt(u as u32))
+            json_as_round_u64(json).map(|u| ConfigValue::UInt(u as u32))
         }
 
         // UInt64 parameters
-        ConfigPath::MaxIterations => {
-            json.as_u64().map(ConfigValue::UInt64)
-        }
+        ConfigPath::MaxIterations => json_as_round_u64(json).map(ConfigValue::UInt64),
 
         // Optional usize as Int (-1 = None, 0+ = Some(index))
         ConfigPath::SoloTransform
@@ -3488,7 +3968,40 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
         ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
-        ConfigPath::EscapeSupersample => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
+
+        // Simulation. Only the quantities that mean something when
+        // interpolated between two keyframes are here; the rest fall
+        // through to None and cannot be given a track.
+        //
+        // Sim.Steps is the important one: it IS the animation of the
+        // simulation's progression (master plan D5b).
+        ConfigPath::SimSteps
+        | ConfigPath::SimStepsPerFrame
+        | ConfigPath::SimGridWidth
+        | ConfigPath::SimGridHeight
+        | ConfigPath::SimInitRadius
+        | ConfigPath::SimInitCount => json_as_round_u64(json).map(|v| ConfigValue::UInt(v as u32)),
+        ConfigPath::SimDt
+        | ConfigPath::SimGridScale
+        | ConfigPath::SimInitAmplitude
+        | ConfigPath::SimWarpZoom
+        | ConfigPath::SimWarpRotation
+        | ConfigPath::SimWarpPanX
+        | ConfigPath::SimWarpPanY
+        | ConfigPath::SimWarpFlow
+        | ConfigPath::SimMatteCutoff
+        | ConfigPath::SimMatteSoftness
+        | ConfigPath::SimModelParam { .. }
+        | ConfigPath::SimLayerParam { .. }
+        | ConfigPath::SimCouplingStrength { .. }
+        | ConfigPath::SimColorLayerParam { .. }
+        | ConfigPath::SimColorLayerOpacity { .. }
+        | ConfigPath::SimColorLayerMatteCutoff { .. }
+        | ConfigPath::SimColorLayerMatteSoftness { .. }
+        | ConfigPath::SimColoringParam { .. } => {
+            json.as_f64().map(|v| ConfigValue::Float(v as f32))
+        }
+        ConfigPath::EscapeSupersample => json_as_round_u64(json).map(|v| ConfigValue::UInt(v as u32)),
         ConfigPath::EscapeJulia => json.as_bool().map(ConfigValue::Bool),
         // Relief shading: the continuous controls animate (sweeping the
         // light around a still is the obvious use), the selectors and
@@ -3558,6 +4071,130 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
 
 #[cfg(test)]
 mod tests {
+
+    /// An integer track must survive interpolation.
+    ///
+    /// Animation always hands the apply path a FLOAT -- interpolation
+    /// goes through `as_f64` -- and `serde_json::as_u64` says no to a
+    /// float even when its value is integral. Every integer-valued
+    /// path was therefore silently dropped mid-track.
+    ///
+    /// `Sim.Steps` is the one that made it visible, and it is the one
+    /// with teeth: it IS the simulation's progression, so a ramp that
+    /// applied nothing left every exported frame at the config's own
+    /// step count -- the first frame ran the entire simulation and the
+    /// rest had nothing to do, giving a video of one still.
+    #[test]
+    fn an_integer_track_survives_interpolation() {
+        use serde_json::json;
+        let integer_paths = [
+            ConfigPath::SimSteps,
+            ConfigPath::SimStepsPerFrame,
+            ConfigPath::SimGridWidth,
+            ConfigPath::SimGridHeight,
+            ConfigPath::SimInitRadius,
+            ConfigPath::SimInitCount,
+            ConfigPath::MaxIterations,
+            ConfigPath::PaletteIndex,
+            ConfigPath::EscapeSupersample,
+        ];
+        for path in integer_paths {
+            // What interpolation actually produces halfway between two
+            // integer keyframes.
+            let midpoint = json!(1000.0);
+            let got = json_to_config_value(&midpoint, &path)
+                .unwrap_or_else(|| panic!("{path:?}: a float mid-track was dropped"));
+            let as_num = match got {
+                ConfigValue::UInt(v) => v as u64,
+                ConfigValue::UInt64(v) => v,
+                other => panic!("{path:?}: unexpected {other:?}"),
+            };
+            assert_eq!(as_num, 1000, "{path:?} lost its value");
+            // And a whole number still works, whichever way it arrives.
+            assert!(json_to_config_value(&json!(1000), &path).is_some(), "{path:?}: integer form");
+        }
+    }
+
+    /// The user's case, end to end: a `Sim.Steps` ramp must actually
+    /// ramp.
+    ///
+    /// Zero steps at 0 s, two thousand at 10 s. What the exporter does
+    /// per frame is exactly this -- evaluate the tracks, apply them to
+    /// a copy of the config, then advance the grid to
+    /// `frame_config.sim.steps`. When the apply silently dropped the
+    /// value, every frame kept the config's own step count: the first
+    /// frame ran the whole simulation and every later frame had
+    /// nothing left to do, so the video was one still repeated.
+    ///
+    /// Asserting the ramp is strictly increasing is the part that
+    /// matters. A conversion that failed would leave every frame equal,
+    /// which is precisely what shipped.
+    #[test]
+    fn a_sim_steps_ramp_advances_frame_by_frame() {
+        use crate::animation::{Animation, AnimationController, Keyframe, Track, TrackSource};
+        use crate::config::FractalConfig;
+
+        let mut animation = Animation::new("ramp".to_string(), 10.0);
+        animation.tracks.push(Track {
+            target: "Sim.Steps".to_string(),
+            flame_target: Default::default(),
+            source: TrackSource::Keyframes {
+                keyframes: vec![
+                    Keyframe { time: 0.0, value: serde_json::json!(0), easing: Default::default() },
+                    Keyframe { time: 10.0, value: serde_json::json!(2000), easing: Default::default() },
+                ],
+            },
+            interpolation: Default::default(),
+            bound: Default::default(),
+        });
+        let mut controller = AnimationController::new();
+        controller.load(animation);
+
+        // The config the export starts from carries the END of the
+        // ramp, as a user's would: they set 2000 steps, then animated
+        // it. That is what made the bug invisible at t = 10 and total
+        // at every other time.
+        let mut base = FractalConfig::default();
+        base.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        base.sim.steps = 2000;
+
+        let mut seen: Vec<u32> = Vec::new();
+        for frame in 0..=10 {
+            let time = frame as f64;
+            let values = controller.evaluate_at_time(time);
+            let mut frame_config = base.clone();
+            crate::animation::export::apply_animation_values(&mut frame_config, &values);
+            seen.push(frame_config.sim.steps);
+        }
+        assert_eq!(seen.first().copied(), Some(0), "the ramp must start at 0, got {seen:?}");
+        assert_eq!(seen.last().copied(), Some(2000), "and end at 2000, got {seen:?}");
+        for pair in seen.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "every frame must advance the run; got {seen:?}"
+            );
+        }
+    }
+
+    /// A wild signal must not cast to nonsense: NaN lands on zero and
+    /// the infinities saturate rather than wrapping.
+    #[test]
+    fn a_non_finite_track_value_is_clamped_rather_than_cast() {
+        use serde_json::json;
+        // serde_json cannot hold NaN, so this is the reachable case:
+        // a negative value from an overshooting ease.
+        let got = json_to_config_value(&json!(-5.0), &ConfigPath::SimSteps);
+        assert_eq!(got, Some(ConfigValue::UInt(0)), "a negative step count must floor at 0");
+        assert_eq!(
+            json_to_config_value(&json!(0.4), &ConfigPath::SimSteps),
+            Some(ConfigValue::UInt(0)),
+            "rounds rather than truncating toward the next keyframe"
+        );
+        assert_eq!(
+            json_to_config_value(&json!(0.6), &ConfigPath::SimSteps),
+            Some(ConfigValue::UInt(1))
+        );
+    }
     use super::*;
 
     #[test]

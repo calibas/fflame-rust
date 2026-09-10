@@ -25,7 +25,16 @@ Four artifacts, built four different ways, from one repository.
 |---|---|---|---|
 | Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
-| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
+| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
+
+The three single-engine renderer modules (`flame`, `escape`, `sim`) are
+the SAME SOURCE as `wasm/render` built with different Cargo features;
+each drops the engines it does not need, which is roughly half the
+gzipped download. `release.py check` compiles the library at each of
+those feature combinations, because a `#[cfg]` attached to the wrong
+item is invisible in every build that has all three engines on — that
+has happened, and only a build with simulation and no escape caught
+it. See [wasm/README.md](../wasm/README.md).
 | Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |
 
 ### The version problem

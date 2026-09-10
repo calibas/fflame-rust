@@ -22,6 +22,22 @@
 //!   output, and future GPU packing order all read it).
 
 use serde::{Deserialize, Serialize};
+
+/// The most antialiasing an escape render will attempt, as a factor
+/// per axis.
+///
+/// Lives with the CONFIG rather than the renderer because clamping a
+/// saved value is a config concern, and a build without the escape
+/// engine still has to parse and bound an escape config — the mode
+/// round-trips so a file is never silently rewritten. Re-exported from
+/// `escape::renderer` for the code that thinks of it as a renderer
+/// limit.
+///
+/// What the grid cannot actually hold at a given size is made up by
+/// ACCUMULATION rather than refused (see `EscapeRenderer::sample_grid`),
+/// so this is the ceiling on what a user can ask for, not on what a
+/// device can do.
+pub const MAX_SUPERSAMPLE: u32 = 8;
 use std::collections::BTreeMap;
 
 /// Escape-time (fragment mode) settings. See the module docs.

@@ -42,6 +42,7 @@ pub enum TargetCategory {
     LinkedTransform(usize),
     FinalTransform(usize),
     Escape,
+    Simulation,
 }
 
 impl TargetCategory {
@@ -57,6 +58,7 @@ impl TargetCategory {
             TargetCategory::LinkedTransform(i) => format!("Linked {}", i + 1),
             TargetCategory::FinalTransform(i) => format!("Final {}", i + 1),
             TargetCategory::Escape => "Escape".to_string(),
+            TargetCategory::Simulation => "Simulation".to_string(),
         }
     }
 
@@ -72,6 +74,7 @@ impl TargetCategory {
             TargetCategory::LinkedTransform(i) => format!("linked_transform_{}", i),
             TargetCategory::FinalTransform(i) => format!("final_transform_{}", i),
             TargetCategory::Escape => "escape".to_string(),
+            TargetCategory::Simulation => "simulation".to_string(),
         }
     }
 }
@@ -80,6 +83,9 @@ impl TargetCategory {
 struct TargetItem {
     path: ConfigPath,
     label: String,
+    /// Shown on hover. Most targets do not need one -- the label says
+    /// it -- but a few carry a consequence the label cannot.
+    tip: Option<&'static str>,
 }
 
 impl TargetItem {
@@ -87,7 +93,14 @@ impl TargetItem {
         Self {
             path,
             label: label.to_string(),
+            tip: None,
         }
+    }
+
+    /// Attach a hover explanation.
+    fn with_tip(mut self, tip: &'static str) -> Self {
+        self.tip = Some(tip);
+        self
     }
 }
 
@@ -262,6 +275,14 @@ fn render_flame_group(
                 &escape_items, filter, has_filter, local_selection,
             ) { selected = Some(path); }
         }
+        #[cfg(feature = "engine-sim")]
+        if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+            let sim_items = get_sim_items(config);
+            if let Some(path) = render_category(
+                ui, state, flame_target, TargetCategory::Simulation,
+                &sim_items, filter, has_filter, local_selection,
+            ) { selected = Some(path); }
+        }
     }
 
     // Xaos
@@ -347,6 +368,107 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     items
 }
 
+/// Animation targets for simulation mode.
+///
+/// **Steps is first, and it is the one that animates the simulation
+/// itself.** The state at time *t* is `round(track(t))` steps from the
+/// seed, so a ramp on this track is the run progressing; easing it
+/// gives slow-in/slow-out on the simulation, and a hold gives a
+/// freeze-frame that keeps animating colour (master plan D5b).
+///
+/// Deliberately absent, because each keyframe would destroy the run
+/// rather than animate it: the seed and the init (they reseed), the
+/// grid mode and its sizes (they reseed), the grid scale (it
+/// resamples), and steps-per-frame, which is the interactive Run speed
+/// and would make the picture depend on the frame rate.
+#[cfg(feature = "engine-sim")]
+fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
+    let sim = &config.sim;
+    let mut items = vec![
+        TargetItem::new(ConfigPath::SimSteps, "Steps (animates the run)")
+            .with_tip(
+                "The simulation's progression. Each frame is the state at that step \
+                 count, so a rising track IS the run.\n\n\
+                 A FALLING track means restarting and re-running, which the rule \
+                 cannot avoid. In the app that plays as a still of the highest state \
+                 reached -- drag the scrubber to preview any point of it. Export \
+                 renders every frame correctly, at a cost that grows with the square \
+                 of the step count.\n\n\
+                 A re-run uses the parameters as they are at that frame, so a \
+                 reversed track retraces the forward pictures exactly only when the \
+                 model parameters are not themselves animating.",
+            ),
+        TargetItem::new(ConfigPath::SimDt, "Time step (dt)"),
+        TargetItem::new(ConfigPath::SimWarpZoom, "Warp: zoom per step"),
+        TargetItem::new(ConfigPath::SimWarpRotation, "Warp: rotation per step"),
+        TargetItem::new(ConfigPath::SimWarpPanX, "Warp: pan X per step"),
+        TargetItem::new(ConfigPath::SimWarpPanY, "Warp: pan Y per step"),
+        TargetItem::new(ConfigPath::SimWarpFlow, "Warp: swirl per step"),
+        TargetItem::new(ConfigPath::SimMatteCutoff, "Matte: cutoff"),
+        TargetItem::new(ConfigPath::SimMatteSoftness, "Matte: softness"),
+    ];
+    // The model's parameters, per layer. With no `layers` list there
+    // is one entry and it is the flat `SimModelParam` path -- the same
+    // fallback the panel presents as "layer 0 IS the model" -- so a
+    // single-system config offers exactly what it always did and a
+    // layered one offers each layer separately. Before this the picker
+    // named only the flat paths, so a layered simulation could not
+    // keyframe any of its parameters at all.
+    let layered = !sim.layers.is_empty();
+    for l in 0..sim.layer_count() {
+        let model = crate::sim::model_or_default(sim.layer_model_name(l));
+        for p in model.parameters {
+            let path = if layered {
+                ConfigPath::SimLayerParam { layer: l, param: p.name.to_string() }
+            } else {
+                ConfigPath::SimModelParam { param: p.name.to_string() }
+            };
+            let label = if layered {
+                format!("Layer {l} {}: {}", model.display_name, p.display_name)
+            } else {
+                format!("{}: {}", model.display_name, p.display_name)
+            };
+            items.push(TargetItem::new(path, &label));
+        }
+    }
+
+    // And the colouring's, per colour layer, on the same rule. A
+    // colour layer additionally has an opacity and its own matte,
+    // which the flat colouring reaches through the paths above.
+    if sim.color_layers.is_empty() {
+        let coloring = crate::sim::coloring_or_default(&sim.coloring);
+        for p in coloring.parameters {
+            items.push(TargetItem::new(
+                ConfigPath::SimColoringParam { param: p.name.to_string() },
+                &format!("Coloring: {}", p.display_name),
+            ));
+        }
+    } else {
+        for (k, layer) in sim.color_layers.iter().enumerate() {
+            let coloring = crate::sim::coloring_or_default(&layer.coloring);
+            for p in coloring.parameters {
+                items.push(TargetItem::new(
+                    ConfigPath::SimColorLayerParam { index: k, param: p.name.to_string() },
+                    &format!("Colour {k} {}: {}", coloring.display_name, p.display_name),
+                ));
+            }
+            items.push(TargetItem::new(
+                ConfigPath::SimColorLayerOpacity { index: k },
+                &format!("Colour {k}: opacity"),
+            ));
+            items.push(TargetItem::new(
+                ConfigPath::SimColorLayerMatteCutoff { index: k },
+                &format!("Colour {k} matte: cutoff"),
+            ));
+            items.push(TargetItem::new(
+                ConfigPath::SimColorLayerMatteSoftness { index: k },
+                &format!("Colour {k} matte: softness"),
+            ));
+        }
+    }
+    items
+}
+
 /// Render a single category with its items
 fn render_category(
     ui: &mut Ui,
@@ -392,7 +514,10 @@ fn render_category(
                 let key = item.path.to_string_key();
                 let is_selected = current_selection.map_or(false, |s| s == key);
 
-                let response = ui.selectable_label(is_selected, &item.label);
+                let mut response = ui.selectable_label(is_selected, &item.label);
+                if let Some(tip) = item.tip {
+                    response = response.on_hover_text(tip);
+                }
                 if response.clicked() {
                     selected = Some(item.path.clone());
                 }

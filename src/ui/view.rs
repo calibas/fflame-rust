@@ -137,14 +137,16 @@ pub fn render_view_content(
     // 3D Rendering Controls
     ui.label(t!("view.render_mode")).on_hover_text(t!("view.tooltip_render_mode"));
     ui.horizontal(|ui| {
+        // Through the shared helper, so this control resets the tone
+        // mapping on the same terms every other one does.
         let was_2d = matches!(config.render_mode, crate::scene::transforms::RenderMode::TwoD);
         if ui.selectable_label(was_2d, t!("view.mode_2d").as_ref())
             .on_hover_text(t!("view.tooltip_mode_2d"))
             .clicked()
         {
-            if let Err(e) = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::TwoD.into()
+            if let Err(e) = super::render_mode::switch_render_mode(
+                config_manager,
+                crate::scene::transforms::RenderMode::TwoD,
             ) {
                 log::error!("Failed to update render mode: {}", e);
             }
@@ -154,9 +156,9 @@ pub fn render_view_content(
             .on_hover_text(t!("view.tooltip_mode_3d"))
             .clicked()
         {
-            if let Err(e) = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::ThreeD.into()
+            if let Err(e) = super::render_mode::switch_render_mode(
+                config_manager,
+                crate::scene::transforms::RenderMode::ThreeD,
             ) {
                 log::error!("Failed to update render mode: {}", e);
             }

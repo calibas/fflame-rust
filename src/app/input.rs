@@ -125,6 +125,31 @@ impl App {
             // Space/F/Escape etc. fall through to the shared handling.
         }
 
+        // Simulation has no view to move (`ui::visibility::Control::
+        // ViewNavigation`). Swallow the navigation keys rather than
+        // letting them write a flame pan/zoom nothing will read; every
+        // other key still falls through.
+        if crate::ui::visibility::control(
+            crate::ui::visibility::Control::ViewNavigation,
+            config.render_mode,
+            config.tonemap_mode,
+        ) == crate::ui::visibility::Vis::Hide
+        {
+            if matches!(
+                event.physical_key,
+                PhysicalKey::Code(KeyCode::ArrowUp)
+                    | PhysicalKey::Code(KeyCode::ArrowDown)
+                    | PhysicalKey::Code(KeyCode::ArrowLeft)
+                    | PhysicalKey::Code(KeyCode::ArrowRight)
+                    | PhysicalKey::Code(KeyCode::Equal)
+                    | PhysicalKey::Code(KeyCode::NumpadAdd)
+                    | PhysicalKey::Code(KeyCode::Minus)
+                    | PhysicalKey::Code(KeyCode::NumpadSubtract)
+            ) {
+                return;
+            }
+        }
+
         match event.physical_key {
             PhysicalKey::Code(KeyCode::ArrowUp) => {
                 // Up in screen space: (0, -1), convert to pan frame
@@ -187,26 +212,44 @@ impl App {
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::Space) => {
-                // Toggle animation playback (video-editor convention).
                 // Only reachable when egui didn't consume the key, so a
                 // space typed into a text field never lands here.
-                //
-                // Gated on the animation having tracks: rendering the
-                // Animation panel once auto-creates an empty "New
-                // Animation", and playing THAT flips the renderer into
-                // animation mode (single-batch overwrite, grainy) with
-                // nothing moving — a mystery degradation from a global
-                // shortcut. The panel's own Play button stays permissive;
-                // there the user can see what they pressed play on.
-                let has_tracks = self
-                    .animation_controller
-                    .animation
-                    .as_ref()
-                    .is_some_and(|a| !a.tracks.is_empty());
-                if self.animation_controller.is_playing() {
-                    self.animation_controller.pause();
-                } else if has_tracks {
-                    self.animation_controller.play();
+                if crate::ui::render_mode::space_runs_the_simulation(config.render_mode) {
+                    // In Simulation the transport is what you reach for:
+                    // the grid is always mid-run. Written straight to the
+                    // field rather than through `UiResponse::sim_running`,
+                    // which the panel sets unconditionally from its own
+                    // local every frame -- a write into the response
+                    // would be overwritten by that stale value before it
+                    // took effect.
+                    // ...unless the TIMELINE owns the step count, in
+                    // which case the transport is inert (the panel
+                    // greys it). Toggling a flag that does nothing now
+                    // and then takes effect the moment playback stops
+                    // would start the run by surprise.
+                    if !self.timeline_owns_sim() {
+                        self.sim_running = !self.sim_running;
+                    }
+                } else {
+                    // Toggle animation playback (video-editor convention).
+                    //
+                    // Gated on the animation having tracks: rendering the
+                    // Animation panel once auto-creates an empty "New
+                    // Animation", and playing THAT flips the renderer into
+                    // animation mode (single-batch overwrite, grainy) with
+                    // nothing moving — a mystery degradation from a global
+                    // shortcut. The panel's own Play button stays permissive;
+                    // there the user can see what they pressed play on.
+                    let has_tracks = self
+                        .animation_controller
+                        .animation
+                        .as_ref()
+                        .is_some_and(|a| !a.tracks.is_empty());
+                    if self.animation_controller.is_playing() {
+                        self.animation_controller.pause();
+                    } else if has_tracks {
+                        self.animation_controller.play();
+                    }
                 }
             }
             PhysicalKey::Code(KeyCode::KeyF) => {

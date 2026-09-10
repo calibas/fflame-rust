@@ -1844,11 +1844,17 @@ pub enum RenderMode {
     /// `docs/projects/escape-time-fractals.md`. Wire form `"escape"`.
     /// An older build loading a config with this mode fails the parse
     /// (unknown variant), which is honest: it cannot render it.
-    /// NOTE: the server's Postgres `render_mode` enum does not know
-    /// this value yet — Save Online is guarded client-side until the
-    /// API adds it (see `api::sync`).
     #[serde(rename = "escape")]
     Escape,
+    /// Neighbour-coupled simulation (reaction-diffusion, cellular
+    /// automata, growth) — a stateful grid stepped many times per
+    /// frame rather than a function of the pixel's own coordinates;
+    /// see `docs/projects/simulation-fractals.md`. Wire form
+    /// `"simulation"`. An older build loading a config with this mode
+    /// fails the parse (unknown variant), which is honest: it cannot
+    /// render it.
+    #[serde(rename = "simulation")]
+    Simulation,
 }
 
 impl RenderMode {
@@ -1864,8 +1870,23 @@ impl RenderMode {
     /// Keeping it in step with the enum is enforced below by an
     /// exhaustive match plus a length assertion, which is the closest
     /// Rust gets to iterating a plain enum.
-    pub const ALL: &'static [RenderMode] =
-        &[RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Escape];
+    pub const ALL: &'static [RenderMode] = &[
+        RenderMode::TwoD,
+        RenderMode::ThreeD,
+        RenderMode::Escape,
+        RenderMode::Simulation,
+    ];
+
+    /// Is this one of the two engines that is not the chaos game?
+    ///
+    /// Lives here rather than in `ui` because the headless renderer
+    /// needs it: `ui` is behind the `web-app` feature, and the CLI,
+    /// thumbnail and video paths all compile without it. That split is
+    /// how the interactive and offline paths came to disagree about
+    /// whether Levels applies.
+    pub fn is_non_flame(self) -> bool {
+        matches!(self, RenderMode::Escape | RenderMode::Simulation)
+    }
 }
 
 impl Default for RenderMode {

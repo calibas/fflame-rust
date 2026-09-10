@@ -1,5 +1,20 @@
 use super::menu_context::{MenuActions, MenuState};
+use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
+
+/// Stop menu rows wrapping.
+///
+/// egui lays a menu out top-down JUSTIFIED, and the default wrap mode
+/// is "follow the layout", so a row wider than the popup's current
+/// width is broken across two lines rather than widening the popup.
+/// The Window menu has 23 rows; wrapped, it runs off the bottom of the
+/// screen. `Extend` makes each row report its true width, so the popup
+/// sizes to its longest row and flips to the left of its button when
+/// there is no room to the right -- which is what started happening to
+/// Window once the Mode menu pushed it further along the bar.
+pub(super) fn rows_do_not_wrap(ui: &mut egui::Ui) {
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+}
 
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
@@ -19,6 +34,7 @@ pub fn render_menu_bar(
             // so their `selected` is always false; entries that open a
             // panel show that panel's state like Window entries do.
             ui.menu_button(t!("menu.file"), |ui| {
+                rows_do_not_wrap(ui);
                 if ui.selectable_label(false, t!("menu.new").as_ref()).clicked() {
                     menu_actions.file.new_flame = true;
                 }
@@ -109,6 +125,7 @@ pub fn render_menu_bar(
 
             // Edit Menu
             ui.menu_button(t!("menu.edit"), |ui| {
+                rows_do_not_wrap(ui);
                 if ui.add_enabled(menu_state.can_undo, egui::Button::new(t!("menu.undo"))).clicked() {
                     menu_actions.edit.undo = true;
                 }
@@ -122,37 +139,64 @@ pub fn render_menu_bar(
                 ui.add_enabled(false, egui::Button::new(t!("menu.preferences")));
             });
 
-            // View Menu
-            ui.menu_button(t!("menu.view"), |ui| {
-                if ui.button(t!("menu.reset_view")).clicked() {
-                    menu_actions.view.reset_view = true;
-                }
+            // View Menu -- all three rows move a view, which
+            // Simulation does not have, so the whole menu goes there.
+            if super::visibility::control(
+                super::visibility::Control::ViewNavigation,
+                menu_state.render_mode,
+                menu_state.tonemap_mode,
+            ) != super::visibility::Vis::Hide
+            {
+                ui.menu_button(t!("menu.view"), |ui| {
+                    rows_do_not_wrap(ui);
+                    if ui.button(t!("menu.reset_view")).clicked() {
+                        menu_actions.view.reset_view = true;
+                    }
 
-                ui.separator();
+                    ui.separator();
 
-                if ui.button(t!("menu.zoom_in")).clicked() {
-                    menu_actions.view.zoom_in = true;
-                }
+                    if ui.button(t!("menu.zoom_in")).clicked() {
+                        menu_actions.view.zoom_in = true;
+                    }
 
-                if ui.button(t!("menu.zoom_out")).clicked() {
-                    menu_actions.view.zoom_out = true;
-                }
+                    if ui.button(t!("menu.zoom_out")).clicked() {
+                        menu_actions.view.zoom_out = true;
+                    }
+                });
+            }
 
-                ui.separator();
-
-                // Radio buttons for render mode
-                let is_2d = menu_state.render_mode_2d;
-                if ui.selectable_label(is_2d, t!("menu.mode_2d").as_ref()).clicked() {
-                    menu_actions.view.set_mode_2d = true;
-                }
-
-                if ui.selectable_label(!is_2d, t!("menu.mode_3d").as_ref()).clicked() {
-                    menu_actions.view.set_mode_3d = true;
+            // Mode Menu — the four engines as peers. The View menu used
+            // to carry a 2D/3D pair, which could not name the other two
+            // and claimed "3D" was selected while you were in Escape.
+            // The View PANEL keeps its 2D/3D switch: choosing between
+            // the flame's two projections is a view-level decision and
+            // belongs next to the camera.
+            ui.menu_button(t!("menu.mode"), |ui| {
+                rows_do_not_wrap(ui);
+                for m in RenderMode::ALL {
+                    let label = t!(super::render_mode::mode_label_key(*m));
+                    if ui
+                        .selectable_label(menu_state.render_mode == *m, label.as_ref())
+                        .on_hover_text(t!(super::render_mode::mode_tip_key(*m)))
+                        .clicked()
+                    {
+                        menu_actions.set_mode = Some(*m);
+                    }
                 }
             });
 
-            // Rendering Menu
+            // Rendering Menu -- every item configures the chaos game
+            // (pause, reset accumulation, iterations per thread), and
+            // "Reset to Defaults" resets exactly those parameters, so
+            // the whole menu is inert in a non-flame mode.
+            if super::visibility::control(
+                super::visibility::Control::ChaosGame,
+                menu_state.render_mode,
+                menu_state.tonemap_mode,
+            ) != super::visibility::Vis::Hide
+            {
             ui.menu_button(t!("menu.rendering"), |ui| {
+                rows_do_not_wrap(ui);
                 // Pause/Resume
                 let pause_text = if menu_state.is_paused {
                     t!("menu.resume")
@@ -172,6 +216,7 @@ pub fn render_menu_bar(
 
                 // Iterations per Thread submenu
                 ui.menu_button(t!("menu.iterations_per_thread"), |ui| {
+                    rows_do_not_wrap(ui);
                     for &ipt in &[128, 256, 512, 1024, 2048, 4096] {
                         if ui.button(format!("{}", ipt)).clicked() {
                             menu_actions.rendering.set_iterations_per_thread = Some(ipt);
@@ -186,9 +231,11 @@ pub fn render_menu_bar(
                     menu_actions.rendering.reset_to_defaults = true;
                 }
             });
+            }
 
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {
+                rows_do_not_wrap(ui);
                 // Reset Workspace to Standard layout
                 if ui.button(t!("menu.reset_workspace")).clicked() {
                     workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
@@ -200,144 +247,38 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Performance opens as floating window in docking system (only one instance)
-                let performance_open = workspace.panel_exists(super::workspace::PanelType::Performance);
-                if ui.selectable_label(performance_open, t!("menu.window_performance").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Performance, ctx);
-                }
-
-                // Settings opens Rendering panel as floating window (Settings was renamed to Rendering)
-                let rendering_open = workspace.panel_exists(super::workspace::PanelType::Rendering);
-                if ui.selectable_label(rendering_open, t!("menu.window_rendering").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Rendering, ctx);
-                }
-
-                // View opens as floating window in docking system
-                let view_open = workspace.panel_exists(super::workspace::PanelType::View);
-                if ui.selectable_label(view_open, t!("menu.window_view").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::View, ctx);
-                }
-
-                let escape_open = workspace.panel_exists(super::workspace::PanelType::Escape);
-                if ui.selectable_label(escape_open, t!("menu.window_escape").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Escape, ctx);
-                }
-
-                let solid_open = workspace.panel_exists(super::workspace::PanelType::SolidLighting);
-                if ui.selectable_label(solid_open, t!("menu.window_solid_lighting").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::SolidLighting, ctx);
-                }
-
-                // Transforms opens as floating window in docking system
-                let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
-                if ui.selectable_label(transforms_open, t!("menu.window_transforms").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Transforms, ctx);
-                }
-
-                // Triangle Editor opens as floating window in docking system
-                let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
-                if ui.selectable_label(triangle_editor_open, t!("menu.window_triangle_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor, ctx);
-                }
-
-                // Tone Mapping & Colors opens Colors panel as floating window
-                let colors_open = workspace.panel_exists(super::workspace::PanelType::Colors);
-                if ui.selectable_label(colors_open, t!("menu.window_colors").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Colors, ctx);
-                }
-
-                ui.separator();
-
-                // Palette Editor opens as floating window in docking system
-                let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
-                if ui.selectable_label(palette_editor_open, t!("menu.window_palette_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor, ctx);
-                }
-
-                let palette_library_open = workspace.panel_exists(super::workspace::PanelType::PaletteLibrary);
-                if ui.selectable_label(palette_library_open, t!("menu.window_palette_library").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary, ctx);
-                }
-
-                let fractal_browser_open = workspace.panel_exists(super::workspace::PanelType::FractalBrowser);
-                if ui.selectable_label(fractal_browser_open, t!("menu.window_fractal_browser").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser, ctx);
-                }
-
-                // Config Import/Export deliberately absent: it lives in
-                // the File menu, and this menu is long enough already.
-
-                // Undo/Redo History opens as floating window in docking system
-                let history_open = workspace.panel_exists(super::workspace::PanelType::History);
-                if ui.selectable_label(history_open, t!("menu.window_history").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::History, ctx);
-                }
-
-                // Animation panel
-                let animation_open = workspace.panel_exists(super::workspace::PanelType::Animation);
-                if ui.selectable_label(animation_open, t!("menu.window_animation").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Animation, ctx);
-                }
-
-                // Path Editor panel (experimental feature)
-                let path_editor_open = workspace.panel_exists(super::workspace::PanelType::PathEditor);
-                if ui.selectable_label(path_editor_open, t!("menu.window_path_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PathEditor, ctx);
-                }
-
-                // Random Generator panel
-                let random_generator_open = workspace.panel_exists(super::workspace::PanelType::RandomGenerator);
-                if ui.selectable_label(random_generator_open, t!("menu.window_random_generator").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
-                }
-
-                // Effects panel
-                let effects_open = workspace.panel_exists(super::workspace::PanelType::Effects);
-                if ui.selectable_label(effects_open, t!("menu.window_effects").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Effects, ctx);
-                }
-
-                // Variations panel
-                let variations_open = workspace.panel_exists(super::workspace::PanelType::Variations);
-                if ui.selectable_label(variations_open, t!("menu.window_variations").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Variations, ctx);
-                }
-
-                // Scripts panel
-                let scripts_open = workspace.panel_exists(super::workspace::PanelType::Scripts);
-                if ui.selectable_label(scripts_open, t!("menu.window_scripts").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Scripts, ctx);
-                }
-
-                // Subflames panel
-                let subflames_open = workspace.panel_exists(super::workspace::PanelType::Subflames);
-                if ui.selectable_label(subflames_open, t!("menu.window_subflames").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Subflames, ctx);
-                }
-
-                // Xaos Editor panel
-                let xaos_editor_open = workspace.panel_exists(super::workspace::PanelType::XaosEditor);
-                if ui.selectable_label(xaos_editor_open, t!("menu.window_xaos_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::XaosEditor, ctx);
-                }
-
-                // Signal panel
-                let signal_open = workspace.panel_exists(super::workspace::PanelType::Signal);
-                if ui.selectable_label(signal_open, t!("menu.window_signal").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Signal, ctx);
-                }
-
-                // Account / Login
-                if menu_state.online_mode {
-                    ui.separator();
-                    let login_open = workspace.panel_exists(super::workspace::PanelType::LoginDialog);
-                    if ui.selectable_label(login_open, t!("menu.window_account").as_ref()).clicked() {
-                        workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
+                // Every row comes from the shared table, and asks
+                // the visibility policy whether it means anything in
+                // this mode. Before this, the menu offered all 22
+                // unconditionally -- in Escape, eight of them opened
+                // onto a stub with no warning in the menu itself.
+                let mode = menu_state.render_mode;
+                for row in super::visibility::WINDOW_MENU {
+                    if row.online_only {
+                        if !menu_state.online_mode {
+                            continue;
+                        }
+                        ui.separator();
+                    }
+                    let open = workspace.panel_exists(row.panel);
+                    let label = t!(row.label_key);
+                    match super::visibility::panel(row.panel, mode) {
+                        super::visibility::Vis::Show => {
+                            if ui.selectable_label(open, label.as_ref()).clicked() {
+                                workspace.open_floating_panel(row.panel, ctx);
+                            }
+                        }
+                        super::visibility::Vis::Grey(reason) => {
+                            ui.add_enabled(false, egui::Button::new(label.as_ref()))
+                                .on_disabled_hover_text(t!(reason));
+                        }
+                        super::visibility::Vis::Hide => {}
                     }
                 }
 
                 ui.separator();
                 ui.menu_button(t!("menu.workspace_layout"), |ui| {
+                    rows_do_not_wrap(ui);
                     let current = workspace.current_layout;
 
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, t!("menu.layout_beginner").as_ref()).clicked() {
@@ -352,9 +293,14 @@ pub fn render_menu_bar(
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Scripting, t!("menu.layout_scripting").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Scripting);
                     }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::EscapeTime, t!("menu.layout_escape").as_ref()).clicked() {
-                        workspace.apply_layout(super::workspace::WorkspaceLayout::EscapeTime);
-                    }
+                    // The Escape Time and Simulation layouts are NOT
+                    // offered here. They rearranged panels without
+                    // changing the mode, so they read as mode switches
+                    // that did half the job; and since the workspace
+                    // follows the mode on its own, picking the mode is
+                    // now the way to get its layout. The layouts
+                    // themselves still exist -- `render_mode::layout_for`
+                    // is what asks for them.
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
                     //     workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
                     // }
@@ -366,6 +312,7 @@ pub fn render_menu_bar(
 
             // Help Menu
             ui.menu_button(t!("menu.help"), |ui| {
+                rows_do_not_wrap(ui);
                 // Help panel opens as floating window in docking system
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
                 if ui.selectable_label(help_open, t!("menu.help_panel").as_ref()).clicked() {
@@ -395,6 +342,7 @@ pub fn render_menu_bar(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Language selector menu (globe icon) — rightmost
                 ui.menu_button("🌐", |ui| {
+                    rows_do_not_wrap(ui);
                     let locales = crate::i18n::supported_locales();
                     let current_locale = crate::i18n::current_locale();
 
@@ -487,7 +435,7 @@ pub fn render_menu_bar(
                     .gap(2.0);
                 ui.style_mut().spacing.button_padding = egui::vec2(5.0, 0.0);
                 // Fly mode is 3D-only — disabled (greyed) in 2D.
-                let fly_enabled = !menu_state.render_mode_2d;
+                let fly_enabled = super::render_mode::fly_mode_available(menu_state.render_mode);
                 let resp = ui.add_enabled(fly_enabled, fly_button);
                 let resp = if fly_enabled {
                     resp.on_hover_text(t!("view.tooltip_fly_mode"))

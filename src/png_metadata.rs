@@ -84,6 +84,9 @@ impl PngMetadata {
             crate::scene::transforms::RenderMode::Escape => {
                 ("Escape".to_string(), "N/A".to_string())
             }
+            crate::scene::transforms::RenderMode::Simulation => {
+                ("Simulation".to_string(), "N/A".to_string())
+            }
         };
 
         let shader_variations_count = config.flame.extract_active_variations().len();

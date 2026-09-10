@@ -180,6 +180,13 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "super::escape::EscapeConfig::is_default")]
     pub escape: super::escape::EscapeConfig,
 
+    /// Simulation-mode settings — active when `render_mode` selects the
+    /// simulation engine, preserved (but inert) otherwise so switching
+    /// modes round-trips. Skip-if-default keeps every pre-simulation
+    /// `.fflame` byte-stable. See `config::sim`.
+    #[serde(default, skip_serializing_if = "super::sim::SimConfig::is_default")]
+    pub sim: super::sim::SimConfig,
+
     /// Spatial filter — Gaussian blur applied to the per-batch histogram
     /// before accumulation. Mirrors Apophysis's `filter` attribute: a
     /// small per-sample-spread Gaussian that smooths per-iteration grain.
@@ -719,6 +726,7 @@ impl Default for FractalConfig {
             surface_thickness: super::defaults::DEFAULT_SURFACE_THICKNESS,
             solid_shading: SolidShadingSettings::default(),
             escape: super::escape::EscapeConfig::default(),
+            sim: super::sim::SimConfig::default(),
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
@@ -780,6 +788,19 @@ impl Default for FractalConfig {
 }
 
 impl FractalConfig {
+    /// Whether the density Levels remap should run.
+    ///
+    /// Off in Escape and Simulation whatever the config says: Levels
+    /// divides by a sample density that only the chaos game produces,
+    /// and neither engine writes one. The interactive frame loop has
+    /// always suppressed it; this is what lets the offline paths --
+    /// CLI export, thumbnails, video -- agree with it, instead of
+    /// passing the raw flag and relying on the arithmetic happening to
+    /// come out the same.
+    pub fn effective_levels_enabled(&self) -> bool {
+        self.levels_enabled && !self.render_mode.is_non_flame()
+    }
+
     /// Convert a screen-aligned XY delta into the pan coordinate frame.
     ///
     /// Both render pipelines apply pan BEFORE the screen rotation

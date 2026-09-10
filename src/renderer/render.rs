@@ -10,6 +10,29 @@ use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
 use crate::renderer::effect_chain::EffectChainRunner;
 
+/// Engine state a caller keeps ALIVE across renders.
+///
+/// A still is a complete answer on its own: build an engine, seed it,
+/// run it, throw it away. A video is not -- frame n's picture
+/// continues frame n-1's run, and rebuilding per frame would re-run
+/// the simulation from the seed every time, which is quadratic in the
+/// step count and which `simulation-fractals.md` D5 rejects outright.
+///
+/// So a looping caller owns this and hands it to each job. Without it
+/// every path behaves exactly as it did: the still export, thumbnails
+/// and the gallery pass nothing and get a fresh engine per render.
+#[derive(Default)]
+pub struct RenderEngines {
+    /// The simulation's field and step counter. `render_sim` advances
+    /// this to the frame's `sim.steps` rather than reseeding.
+    #[cfg(feature = "engine-sim")]
+    pub sim: Option<crate::sim::SimRenderer>,
+    /// The escape renderer, kept for its allocations and its warm
+    /// reference orbit; each frame still renders to settlement.
+    #[cfg(feature = "engine-escape")]
+    pub escape: Option<crate::escape::EscapeRenderer>,
+}
+
 /// Configuration for a render job
 pub struct RenderJob<'a> {
     /// Fractal configuration (transforms, colors, view settings)
@@ -34,6 +57,11 @@ pub struct RenderJob<'a> {
     /// Use premultiplied alpha for transparent export (vs the default
     /// straight-alpha reconstruction). Only meaningful when `transparent`.
     pub premultiplied: bool,
+
+    /// Engine state to CONTINUE rather than rebuild (see
+    /// `RenderEngines`). `None` -- the default, and what every still
+    /// path passes -- means a fresh engine for this render.
+    pub engines: Option<&'a mut RenderEngines>,
 }
 
 impl<'a> RenderJob<'a> {
@@ -48,6 +76,7 @@ impl<'a> RenderJob<'a> {
             burn_in: 20,
             transparent: false,
             premultiplied: false,
+            engines: None,
         }
     }
 
@@ -78,6 +107,13 @@ impl<'a> RenderJob<'a> {
     /// Use premultiplied alpha (vs straight-alpha reconstruction) for transparent export
     pub fn with_premultiplied(mut self, premultiplied: bool) -> Self {
         self.premultiplied = premultiplied;
+        self
+    }
+
+    /// Continue a caller-owned engine instead of building a fresh one.
+    /// A video loop passes this; a still render does not.
+    pub fn with_engines(mut self, engines: &'a mut RenderEngines) -> Self {
+        self.engines = Some(engines);
         self
     }
 }
@@ -207,6 +243,18 @@ pub async fn render(
         }
     }
 
+    #[cfg(feature = "engine-sim")]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+        if let Some(why) = crate::sim::SimRenderer::allocation_error(
+            device,
+            &job.config.sim,
+            job.width,
+            job.height,
+        ) {
+            return Err(RenderError::OutOfMemory(why));
+        }
+    }
+
     // Create renderer with config's palette size
     let surface_format = TextureFormat::Rgba8Unorm;
     let mut renderer = FlameRenderer::with_palette_size(
@@ -278,6 +326,18 @@ pub async fn render_with(
     #[cfg(not(feature = "engine-escape"))]
     if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
         return Err(RenderError::EngineMissing("escape-time"));
+    }
+
+    // Simulation mode: a third generator on the same tail. Dispatching
+    // here is what gives thumbnails, CLI export, video and the gallery
+    // simulation rendering for free, exactly as it did for escape.
+    #[cfg(feature = "engine-sim")]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+        return render_sim(renderer, device, queue, job, progress, start_time).await;
+    }
+    #[cfg(not(feature = "engine-sim"))]
+    if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+        return Err(RenderError::EngineMissing("simulation"));
     }
 
     let target = job.target_iterations.unwrap_or(job.config.max_iterations);
@@ -609,6 +669,211 @@ pub async fn render_with(
     })
 }
 
+/// Render one simulation still: seed, run exactly `sim.steps`, colour.
+///
+/// The step count is the contract (master plan D5), so this does not
+/// settle or converge — it runs the number the config asks for and
+/// stops. That is what makes a still of a model that never settles
+/// reproducible.
+///
+/// Shares escape's tail verbatim: density effects → tonemap → colour
+/// effects → readback, all fed from an `Rgba32Float` image in the flame
+/// accumulator's layout.
+#[cfg(feature = "engine-sim")]
+async fn render_sim(
+    renderer: &mut FlameRenderer,
+    device: &Device,
+    queue: &Queue,
+    mut job: RenderJob<'_>,
+    progress: &mut dyn RenderProgress,
+    start_time: web_time::Instant,
+) -> Result<RenderOutput, RenderError> {
+    let (grid_w, grid_h) = crate::sim::SimRenderer::grid_for(&job.config.sim, job.width, job.height);
+    log::info!(
+        "Render: simulation {}x{} output, {}x{} grid, model {:?}, coloring {:?}, {} steps",
+        job.width,
+        job.height,
+        grid_w,
+        grid_h,
+        job.config.sim.model,
+        job.config.sim.coloring,
+        job.config.sim.steps
+    );
+    progress.on_progress(0, 1);
+
+    // Full config load, for the same reason escape does it: it is the
+    // one call guaranteed to keep every tail input (palette texture,
+    // tonemap uniform, curve LUT, background, levels) in exact sync
+    // with the flame path.
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Sim Config Encoder"),
+    });
+    renderer.load_config(
+        device,
+        &mut encoder,
+        queue,
+        job.config,
+        &job.config.palette,
+        job.iterations_per_thread,
+        job.burn_in,
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    if job.transparent {
+        renderer.set_transparent_mode(
+            queue,
+            true,
+            job.premultiplied,
+            job.config,
+            job.iterations_per_thread,
+        );
+    }
+
+    let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+
+    // Continue a caller-owned run when there is one, else build a
+    // throwaway. A still export, a thumbnail and the gallery pass no
+    // engines and get exactly what they always did: a fresh field,
+    // seeded, run to `steps`. A video loop passes its own, and frame n
+    // continues frame n-1's run instead of re-running from the seed
+    // (`simulation-fractals.md` D5).
+    let mut owned: Option<crate::sim::SimRenderer> = None;
+    let make = || crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
+    let sim: &mut crate::sim::SimRenderer = match job.engines {
+        Some(ref mut engines) => engines.sim.get_or_insert_with(make),
+        None => owned.insert(make()),
+    };
+    // A persistent renderer may have been built for another size; a
+    // fresh one is already right and this is a no-op.
+    sim.resize(device, &job.config.sim, job.width, job.height);
+    if job.config.sim.use_transforms {
+        sim.set_layer_transforms(device, queue, &job.config.flame);
+    }
+    // `advance_steps` owns the seed/step decision (`sim::plan_steps`):
+    // forward from where the field is, restart to go back, and a fresh
+    // renderer is at 0 so it seeds and runs the lot. Batched here for
+    // PROGRESS only -- run_steps already submits in watchdog-sized
+    // pieces internally, so the driver never sees an unbounded pass
+    // however large `steps` is; polling between batches is also what
+    // keeps the queue from growing without bound.
+    const PROGRESS_BATCH: u32 = 512;
+    let total = job.config.sim.steps;
+    loop {
+        let reached =
+            sim.advance_steps(device, queue, &job.config.sim, total, Some(PROGRESS_BATCH));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        progress.on_progress(sim.step_index() as u64, total.max(1) as u64);
+        if reached {
+            break;
+        }
+        if progress.is_cancelled() {
+            return Err(RenderError::Cancelled);
+        }
+    }
+    sim.color(device, queue, &job.config.sim, renderer.palette_view());
+
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Sim Tail"),
+    });
+
+    // Shared tail: density effects → tonemap → color effects → read.
+    let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
+    let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
+    let mut effect_chain = if has_density_effects || has_color_effects {
+        Some(EffectChainRunner::new(device, job.width, job.height))
+    } else {
+        None
+    };
+    if let Some(chain) = effect_chain.as_mut() {
+        chain.reset_slots();
+    }
+
+    let sim_view = sim.output_view();
+    if has_density_effects {
+        let chain = effect_chain.as_mut().expect("built above: has_density_effects");
+        let density_ran = chain.run_density_effects(
+            device,
+            queue,
+            &mut encoder,
+            sim_view,
+            &job.config.density_effects,
+        );
+        match (density_ran, chain.get_density_output()) {
+            (true, Some(density_output)) => {
+                renderer.tonemap_pass_with_input(device, queue, &mut encoder, density_output)
+            }
+            _ => renderer.tonemap_pass_with_input(device, queue, &mut encoder, sim_view),
+        }
+    } else {
+        renderer.tonemap_pass_with_input(device, queue, &mut encoder, sim_view);
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let color_effects_ran = if has_color_effects {
+        let chain = effect_chain.as_mut().expect("built above: has_color_effects");
+        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Sim Color Effects"),
+        });
+        let ran = chain.run_color_effects(
+            device,
+            queue,
+            &mut color_encoder,
+            renderer.get_fractal_texture_view(),
+            &job.config.color_effects,
+        );
+        queue.submit(std::iter::once(color_encoder.finish()));
+        ran
+    } else {
+        false
+    };
+
+    if let Some(err) = oom_scope.pop().await {
+        if let Some(chain) = &effect_chain {
+            chain.destroy();
+        }
+        return Err(RenderError::OutOfMemory(err.to_string()));
+    }
+
+    let pixels = if color_effects_ran {
+        effect_chain
+            .as_ref()
+            .expect("color_effects_ran implies a chain")
+            .read_color_output_pixels(device, queue)
+            .await
+            .map_err(RenderError::PixelReadFailed)
+    } else {
+        renderer
+            .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
+            .await
+            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
+    };
+
+    if let Some(chain) = &effect_chain {
+        chain.destroy();
+    }
+    let (width, height, rgba_data) = pixels?;
+
+    progress.on_progress(1, 1);
+    let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+    log::info!(
+        "Render: simulation complete - {}x{} in {:.1}ms",
+        width,
+        height,
+        render_time_ms
+    );
+
+    Ok(RenderOutput {
+        width,
+        height,
+        rgba_data,
+        // "Iterations" means the step count here, the way escape reports
+        // its per-pixel ceiling: it is what the PNG metadata should
+        // record to make the picture reproducible.
+        total_iterations: job.config.sim.steps as u64,
+        render_time_ms,
+    })
+}
+
 /// Escape-time render path — the generator swap behind `render_with`.
 ///
 /// Reuses the flame renderer for everything except the generator:
@@ -624,7 +889,7 @@ async fn render_escape(
     renderer: &mut FlameRenderer,
     device: &Device,
     queue: &Queue,
-    job: RenderJob<'_>,
+    mut job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
     start_time: web_time::Instant,
 ) -> Result<RenderOutput, RenderError> {
@@ -675,7 +940,22 @@ async fn render_escape(
     // where the export shares a device with the viewport's own escape
     // renderer.
     let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let mut escape_renderer = crate::escape::EscapeRenderer::new(device, job.width, job.height);
+    // Continue a caller-owned renderer when there is one. Unlike the
+    // simulation there is no run to lose -- every escape frame renders
+    // to settlement from scratch -- so this is purely about not
+    // rebuilding several hundred megabytes of textures and orbit state
+    // per video frame.
+    // Whose renderer this is decides whether the teardown below may
+    // free it. `destroy` exists because dropping frees nothing on
+    // WebGPU; running it on the CALLER's renderer would hand the next
+    // frame a corpse.
+    let caller_owned = job.engines.is_some();
+    let mut owned: Option<crate::escape::EscapeRenderer> = None;
+    let make = || crate::escape::EscapeRenderer::new(device, job.width, job.height);
+    let escape_renderer: &mut crate::escape::EscapeRenderer = match job.engines {
+        Some(ref mut engines) => engines.escape.get_or_insert_with(make),
+        None => owned.insert(make()),
+    };
     // Config-declared supersampling applies on every path (viewport,
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = job.config.escape.supersample.max(1);
@@ -816,7 +1096,9 @@ async fn render_escape(
     // scope covers the whole render, the per-sample accumulation
     // passes included.
     if let Some(err) = oom_scope.pop().await {
-        escape_renderer.destroy();
+        if !caller_owned {
+            escape_renderer.destroy();
+        }
         if let Some(chain) = &effect_chain {
             chain.destroy();
         }
@@ -842,7 +1124,9 @@ async fn render_escape(
     if let Some(chain) = &effect_chain {
         chain.destroy();
     }
-    escape_renderer.destroy();
+    if !caller_owned {
+        escape_renderer.destroy();
+    }
     let (width, height, rgba_data) = pixels?;
 
     progress.on_progress(1, 1);

@@ -56,7 +56,7 @@ impl App {
 
         // Sync all app state from ConfigManager (triggers GPU update)
         let active_config = self.config_manager.active_config().clone();
-        self.import_config(active_config);
+        self.import_config(active_config, true);
 
         // Re-bind animation tracks against the just-loaded config.
         // The new config carries fresh session-local IDs (assigned by
@@ -135,7 +135,18 @@ impl App {
     }
 
     /// Import configuration from FractalConfig
-    pub fn import_config(&mut self, config: FractalConfig) {
+    /// Push a whole config into the renderers.
+    ///
+    /// `restart_sim` is for the difference between REPLACING the
+    /// config and MOVING WITHIN its history. Loading a file or a
+    /// preset is a new picture and the simulation starts over,
+    /// running, from step zero; an undo is a step back through edits
+    /// the user just made, and throwing away a ten-thousand-step run
+    /// because they undid a colour change would be its own bug. Undo
+    /// and redo pass `false` and let `SeedIdentity` decide -- it
+    /// restarts exactly when the config they land on describes a
+    /// different field.
+    pub fn import_config(&mut self, config: FractalConfig, restart_sim: bool) {
         // Sync working copy for renderer (only field not in ConfigManager)
         self.flame = config.flame.clone();
 
@@ -153,6 +164,18 @@ impl App {
 
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
         }
+
+        #[cfg(feature = "engine-sim")]
+        if restart_sim {
+            // The field, the step count and the transport state are
+            // all the old picture's. Nothing here is worth carrying
+            // into a config the user has just chosen.
+            self.sim_reseed = true;
+            self.sim_running = true;
+            self.sim_step_once = false;
+        }
+        #[cfg(not(feature = "engine-sim"))]
+        let _ = restart_sim;
     }
 
     /// Undo to previous state
@@ -164,7 +187,7 @@ impl App {
         if let Ok(_update_type) = self.config_manager.undo() {
             // Sync App working copy and GPU state from ConfigManager
             let config = self.config_manager.config();
-            self.import_config(config.clone());
+            self.import_config(config.clone(), false);
             self.restore_api_state_for_undo(pos_before);
         }
     }
@@ -176,7 +199,7 @@ impl App {
         let pos_before = self.config_manager.position();
         if let Ok(_update_type) = self.config_manager.redo() {
             let config = self.config_manager.config();
-            self.import_config(config.clone());
+            self.import_config(config.clone(), false);
             self.restore_api_state_for_redo(pos_before);
         }
     }
@@ -319,25 +342,46 @@ impl App {
         // path yet (escape-native tiling is a plan open item): refuse
         // honestly instead of rendering the wrong thing.
         let escape_mode = config.render_mode == crate::scene::transforms::RenderMode::Escape;
-        if escape_mode && hist_size > max_binding {
-            let msg = format!(
-                "Escape-time export at {}x{} exceeds this GPU's buffer limit; escape tiling isn't implemented yet -- try a smaller size",
-                render_width, render_height
-            );
-            log::error!("{msg}");
-            self.egui_layer.show_api_notification(&msg, true);
-            return;
-        }
-        if !escape_mode && (hist_size > max_binding || long_render) {
-            println!(
-                "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",
-                render_width, render_height,
-                hist_size / (1024 * 1024),
-                config.max_iterations,
-                if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
-            );
-            self.export_high_res_background(transparent, premultiplied, config, meta_config, render_width, render_height, supersample);
-            return;
+        // The rule itself lives in `export::route_custom_size_export`,
+        // with tests, because getting it wrong here is invisible: a
+        // non-flame config sent to the flame-only `HighResExporter`
+        // comes back as a plausible-looking picture of the config's
+        // FLAME rather than as an error.
+        match crate::export::route_custom_size_export(
+            config.render_mode,
+            hist_size,
+            max_binding,
+            long_render,
+        ) {
+            crate::export::CustomSizeRoute::TooLarge => {
+                // Both non-flame engines hit this for the same reason:
+                // the shared `FlameRenderer` whose tail they use
+                // allocates its histogram at the export size whatever
+                // the mode. Say which mode, since the remedy differs --
+                // escape tiling is unimplemented, while a simulation's
+                // grid is independent of the output and can simply be
+                // exported smaller.
+                let what = if escape_mode { "Escape-time" } else { "Simulation" };
+                let msg = format!(
+                    "{what} export at {}x{} exceeds this GPU's buffer limit -- try a smaller size",
+                    render_width, render_height
+                );
+                log::error!("{msg}");
+                self.egui_layer.show_api_notification(&msg, true);
+                return;
+            }
+            crate::export::CustomSizeRoute::HighRes => {
+                println!(
+                    "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",
+                    render_width, render_height,
+                    hist_size / (1024 * 1024),
+                    config.max_iterations,
+                    if hist_size > max_binding { " — exceeds one binding" } else { " — long render, background + progress" },
+                );
+                self.export_high_res_background(transparent, premultiplied, config, meta_config, render_width, render_height, supersample);
+                return;
+            }
+            crate::export::CustomSizeRoute::Direct => {}
         }
 
         // The viewport's own escape renderer is about to compete with
@@ -353,6 +397,12 @@ impl App {
             }
             self.escape_dirty = true;
         }
+        // Deliberately NOT done for the simulation renderer, though it
+        // holds a comparable amount: an escape renderer rebuilds itself
+        // from the config, so freeing it costs a re-render, while the
+        // simulation's field IS the user's run and freeing it would
+        // restart it from the seed. Exporting must not destroy what is
+        // on screen.
 
         // Regular GPU export — runs SYNCHRONOUSLY on the app's own device.
         // The direct path allocates full-resolution buffers (gigabytes at 8K+);

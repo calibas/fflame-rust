@@ -24,35 +24,28 @@ pub fn render_escape_content(
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
 
-    // ---- One toggle, not a mode picker ----
+    // ---- A way in, not a toggle ----
     //
-    // Escape and flame rendering share almost nothing: a 2D/3D choice
-    // is meaningless here, and offering it alongside Escape invited
-    // the reading that Escape is a third KIND of flame. Leaving turns
-    // the flame engine back on in 3D unconditionally -- there is no
-    // previous-mode state to restore, and pretending otherwise would
-    // mean remembering something the user never set.
+    // The Mode menu owns switching (ui-render-modes plan, section
+    // 3.1), so this button only ENTERS. It used to toggle, and leaving
+    // was hardcoded to 3D -- so turning Escape on from 2D and off
+    // again left you somewhere you had never been.
     let active = config.render_mode == RenderMode::Escape;
-    let label = if active {
-        t!("escape_panel.toggle_off")
-    } else {
-        t!("escape_panel.toggle_on")
-    };
-    if ui
-        .add(egui::Button::new(label.as_ref()).selected(active))
-        .on_hover_text(t!("escape_panel.toggle_tip"))
-        .clicked()
-    {
-        let target = if active { RenderMode::ThreeD } else { RenderMode::Escape };
-        if let Err(e) = switch_render_mode(config_manager, target) {
-            log::error!("Failed to switch render mode: {e}");
-        } else if !active {
-            // Entering: bring the workspace with it.
-            workspace_request.replace(super::workspace::WorkspaceLayout::EscapeTime);
-        }
-    }
-
     if !active {
+        if ui
+            .add(egui::Button::new(t!("escape_panel.toggle_on").as_ref()))
+            .on_hover_text(t!("escape_panel.toggle_tip"))
+            .clicked()
+        {
+            if let Err(e) =
+                super::render_mode::switch_render_mode(config_manager, RenderMode::Escape)
+            {
+                log::error!("Failed to switch render mode: {e}");
+            } else {
+                // Entering: bring the workspace with it.
+                workspace_request.replace(super::workspace::WorkspaceLayout::EscapeTime);
+            }
+        }
         ui.separator();
         ui.label(t!("escape_panel.not_active_hint"));
         return;
@@ -1473,39 +1466,6 @@ pub fn apply_field_preset(
     config_manager
         .update_batch(changes, "history.action.escape_preset".to_string())
         .map(|_| ())
-}
-
-pub fn switch_render_mode(
-    config_manager: &mut ConfigManager,
-    mode: RenderMode,
-) -> Result<(), crate::config::manager::ConfigError> {
-    let config = config_manager.active_config();
-    let entering_escape = mode == RenderMode::Escape && config.render_mode != RenderMode::Escape;
-    let default_tonemap = entering_escape
-        && config.tonemap_mode == crate::scene::tonemap::ToneMapMode::Logarithmic;
-    if default_tonemap {
-        config_manager.update_batch(
-            vec![
-                (ConfigPath::RenderMode, mode.into()),
-                (
-                    ConfigPath::TonemapMode,
-                    crate::scene::tonemap::ToneMapMode::Linear.into(),
-                ),
-                (
-                    ConfigPath::Exposure,
-                    crate::config::defaults::DEFAULT_EXPOSURE.into(),
-                ),
-                (
-                    ConfigPath::Gamma,
-                    crate::config::defaults::DEFAULT_GAMMA.into(),
-                ),
-            ],
-            "history.param.render_mode".to_string(),
-        )
-        .map(|_| ())
-    } else {
-        config_manager.update_param(ConfigPath::RenderMode, mode.into()).map(|_| ())
-    }
 }
 
 /// Magnification as a readable factor, formatted FROM THE LOG.

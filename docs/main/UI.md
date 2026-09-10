@@ -1,346 +1,315 @@
-# UI Architecture (egui_dock - Migrated 2025-11-13)
+# UI Architecture (egui_dock)
 
-**Overview:** The fractal flame renderer uses egui with egui_dock for its flexible docking panel system. All windows have been migrated to dockable panels that can be rearranged, detached, and docked anywhere.
+**Overview:** All UI is dockable panels built on egui + egui_dock. A
+panel can be rearranged, detached, docked to any edge, or closed and
+reopened from the Window menu.
 
 **See also:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design and module organization
 - [I18N.md](I18N.md) - Internationalization support
-- [RENDERER.md](RENDERER.md) - Rendering pipeline (not yet extracted)
-- [TRANSFORMS.md](TRANSFORMS.md) - Transform editing (not yet extracted)
+- [RENDERER.md](RENDERER.md) - Rendering pipeline
+- [TRANSFORMS.md](TRANSFORMS.md) - Transform editing
+- [../archive/projects/ui-render-modes.md](../archive/projects/ui-render-modes.md) - the
+  render-mode project: the survey the current design came from, the
+  decisions, and the bugs it found but did not fix
 
 ---
 
-## Panel Layout (Docking System)
+## Panels
 
-**Migration Status:** ✅ Complete (2025-11-13)
-- All windows converted to dockable panels (1:1 mapping)
-- egui_dock integration complete
-- Users can rearrange, detach, and dock panels anywhere
-- Future: Save/restore workspace layouts
+`PanelType` in [src/ui/workspace.rs](../../src/ui/workspace.rs) defines
+**29 panels**. Each renders from its own `src/ui/*.rs` file;
+`src/ui/mod.rs` coordinates docking and bubbles cross-panel results
+through `UiResponse`.
 
-The UI consists of a menu bar plus 7 dockable panels:
+The Fractal Viewport is the picture and is effectively always present.
+The rest group by what they edit:
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│ Menu Bar: File  Edit  View  Fractal  Rendering  Window  Help  │
-└────────────────────────────────────────────────────────────────┘
-                             │
-                             │  ┌─────────────────────┐
-                             │  │  Fractal Viewport   │
-                             │  │  (always visible)   │
-┌──────────────────┐        │  │                     │
-│    Settings      │◄───────┼─►│  Main rendering     │
-│                  │        │  │  display with live  │
-│ - File & Project │        │  │  fractal output     │
-│ - Rendering      │        │  │                     │
-│ - Export         │        │  └─────────────────────┘
-│ - Preferences 🆕 │        │
-│   └─ Language 🆕 │        │  ┌─────────────────────┐
-└──────────────────┘        │  │    Transforms       │
-                            └─►│                     │
-┌──────────────────┐           │ - Add/Delete        │
-│ Triangle Editor  │           │ - Affine params     │
-│                  │           │ - Variation weights │
-│ - Visual editing │           │ - Parameters        │
-│ - Drag handles   │           └─────────────────────┘
-│ - Real-time      │
-└──────────────────┘           ┌─────────────────────┐
-                               │    View             │
-┌──────────────────┐           │                     │
-│  Tone Mapping    │           │ - Zoom, Pan, Rot    │
-│  & Colors        │           │ - 3D Camera         │
-│                  │           │ - Projection        │
-│ - Color mode     │           └─────────────────────┘
-│ - Palette        │
-│ - Tone curve     │           ┌─────────────────────┐
-│ - Background     │           │  Palette Editor     │
-└──────────────────┘           │                     │
-                               │ - Gradient preview  │
-┌──────────────────┐           │ - Color stops       │
-│  Undo History    │           │ - Import/export     │
-│                  │           └─────────────────────┘
-│ - Visual browser │
-│ - Jump to state  │
-│ - Delta preview  │
-└──────────────────┘
+| Group | Panels |
+|---|---|
+| The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Path Editor, View, Solid & Lighting |
+| The other engines | Escape Fractal, Simulation |
+| Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
+| Workflow, mode-independent | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
 
-All panels can be:
-- Dragged to rearrange
-- Detached into floating windows
-- Docked to any edge
-- Closed/reopened via Window menu
-```
+**Which of these is available depends on the render mode** — see
+[Render modes and the UI](#render-modes-and-the-ui) below. Do not add a
+`matches!(render_mode, ...)` to a panel; add a case to
+`src/ui/visibility.rs`.
 
-### Menu Bar (Enhanced 2025-11-13)
-**Location:** Top of screen
+### Workspace layouts
 
-**Contents:**
-- **File**: New, Open, Save, Import/Export, Recent Files, Quit
-- **Edit**: Undo, Redo, Preferences
-- **View**: Reset View, Fit to Window, Zoom, 2D/3D Mode
-- **Fractal**: Transform operations, Palette operations
-- **Rendering**: Pause/Resume, Reset, Speed, Iterations
-- **Window**: Panel visibility toggles, Layout presets
-- **Help**: Documentation, Keyboard Shortcuts, About
+`WorkspaceLayout` (same file) holds the presets: Standard, Animation,
+Scripting, Escape Time, Simulation, Compact. Two of them are per-mode
+and are applied automatically (below).
 
-**Note:** Most menu actions are future work - currently shows structure
+- `Workspace::apply_layout` **forces** a rebuild from code. This is
+  what "Reset Workspace" and the Window ▸ Workspace Layout menu mean.
+- `Workspace::switch_layout` **remembers**: it stashes the dock state
+  it is leaving and restores the one it is entering, falling back to
+  `apply_layout` the first time a layout is entered. Mode changes use
+  this, so switching modes does not throw away an arrangement.
 
-**Code:** [src/ui/menu_bar.rs](../../src/ui/menu_bar.rs)
+The stash is session-only. Nothing about the dock tree is persisted, so
+a restart opens on the built-in layouts. Persisting would need `serde`
+on `DockState<PanelType>` plus a versioned `SystemSettings` field.
 
-### Performance Window
-**Purpose:** Real-time performance monitoring and global render settings
+---
 
-**Sections:**
-1. **Performance Metrics**
-   - FPS (frames per second)
-   - Frame time (ms)
-   - Total iterations rendered
-   - Iterations per second
+## Menu bar
 
-2. **Preset Selection**
-   - Dropdown list of built-in + loaded presets
-   - Loads complete FractalConfig (flame + view + rendering + colors)
+[src/ui/menu_bar.rs](../../src/ui/menu_bar.rs) draws the desktop bar;
+[src/ui/compact_menu.rs](../../src/ui/compact_menu.rs) draws the mobile
+hamburger equivalent. They share `MenuActions` / `MenuState`
+([menu_context.rs](../../src/ui/menu_context.rs)) — a menu sets a flag
+or an `Option`, and `src/ui/mod.rs` acts on it after the frame is drawn.
 
-3. **Render Mode** (Added 2025-10-21)
-   - Toggle: 2D (classic) / 3D (pseudo-3D with depth)
-   - Dynamically switches compute shader pipeline
+| Menu | Holds |
+|---|---|
+| File | New, Open, Save As, Export Flame XML, preset browser, random flame / batch, Save Online, Export PNG, config import/export, Quit |
+| Edit | Undo, Redo (Preferences is a disabled stub) |
+| View | Reset View, Zoom In / Out |
+| **Mode** | The four render modes as radio rows, built from `RenderMode::ALL` |
+| Rendering | Pause, Reset Accumulation, Iterations per Thread, Reset to Defaults. **Hidden entirely outside the flame modes** — every item configures the chaos game |
+| Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout presets |
+| Help | Help panel, Keyboard Shortcuts, Report a Bug, About |
 
-4. **Camera Controls** (3D mode only)
-   - Camera Pitch slider (-180° to 180°) - Up/down orbit
-   - Camera Yaw slider (-180° to 180°) - Left/right orbit
-   - Reset button (pitch=0, yaw=0)
+Right-aligned, above 500 points of width: the language picker,
+connectivity and account status, and the Fly Mode button (3D only).
 
-5. **Projection Type** (3D mode only)
-   - Toggle: Orthographic (flat) / Perspective (depth-aware)
-   - Perspective Strength slider (0.0 to 10.0)
+**The panel rows in both Window menus come from one table**,
+`visibility::WINDOW_MENU`. The compact menu keeps its own order —
+touch priority, transforms first — in `COMPACT_WINDOW_MENU`, but takes
+its labels from the shared table, and a test asserts it is a subset.
+Add a panel row there, not in either menu.
 
-**Code:** [src/ui/mod.rs](../../src/ui/mod.rs) - `render_ui()` Performance section
+---
 
-### Transforms Window
-**Purpose:** Edit individual transforms (affine + variations + color + weight)
+## Render modes and the UI
 
-**Header:**
-- Transform selector dropdown (Transform 0, Transform 1, etc.)
-- "➕ Add Transform" button - Creates new default transform
-- "🗑 Delete Transform" button - Removes current transform (min 1 required)
+There are four render modes — `RenderMode::{TwoD, ThreeD, Escape,
+Simulation}` in [src/scene/transforms.rs](../../src/scene/transforms.rs)
+— and they are peers, not a flame with two add-ons. `render_mode` lives
+on `FractalConfig`, and the `flame`, `escape` and `sim` sub-configs all
+exist at once, each preserved while inert, so switching modes and back
+round-trips.
 
-**Affine Transform Section:**
-- 6 sliders: a, b, c, d, e, f (2x2 matrix + translation)
-- Range: -2.0 to 2.0
-- Formula: `[x', y'] = [[a, b], [c, d]] * [x, y] + [e, f]`
+`RenderMode::ALL` is the enum in wire order, kept in step by an
+exhaustive match and a length assertion. **Iterate it** rather than
+listing four modes by hand.
 
-**Z Offset Section** (3D mode only):
-- g slider (-2.0 to 2.0) - Offset in Z axis
+### Changing the mode
 
-**Variations Section:**
-- Collapsible categories:
-  - Basic 2D (Linear, Sinusoidal, Spherical, Swirl, Horseshoe)
-  - Advanced 2D (Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia, Bent, Waves)
-  - 3D Depth (Zcone, Flatten, ZScale) - 3D mode only
-  - 3D Full (Hemisphere) - 3D mode only
-  - 3D Rotation (PreRotateX/Y, PostRotateX/Y) - 3D mode only
-- Weight sliders (0.0 to 2.0) for each variation
-- Parameter sliders appear below active variations (Float, Integer, Angle types)
-  - Example: JuliaN shows "Power" (integer) and "Distance" (float)
-  - Example: Blob shows "High", "Low", "Waves" (all floats)
+[src/ui/render_mode.rs](../../src/ui/render_mode.rs) is the only place
+that writes `ConfigPath::RenderMode`, and a test
+(`nothing_outside_this_module_writes_the_render_mode`) scans the source
+tree to keep it that way. Whole-config load paths are exempt by name:
+they carry a mode in from a file rather than switching.
 
-**Color Section:**
-- RGB sliders (0.0 to 1.0)
-- Color speed slider (0.0 to 1.0) - Blend rate with previous color
+`switch_render_mode` exists because the switch is not just a
+field write. Both non-flame engines produce a unit-range image, and a
+flame's Log-calibrated exposure renders that black — so entering
+either from a flame mode resets tone mapping to Linear with default
+exposure and gamma, batched with the mode change into one undo entry.
+Switching between the two non-flame modes does not reset, and **leaving
+does not restore**, which is a known wart recorded in the project doc.
 
-**Weight Section:**
-- Weight slider (0.01 to 10.0) - Transform selection probability
+Also in that module:
 
-**Code:** [src/ui/mod.rs](../../src/ui/mod.rs) - `render_ui()` Transforms section
+- `layout_for(mode)` — the workspace and editor panel a mode wants.
+  `App::follow_loaded_render_mode` consults it; it does not keep a copy.
+- `fly_mode_available(mode)` — 3D alone. It used to be asked as "not
+  2D", which left Fly Mode live in Escape and Simulation.
+- `keeps_escape_engine` / `keeps_sim_engine` — which engine's GPU state
+  a mode needs resident (below).
+- `mode_label_key` / `mode_tip_key` — the `mode.*` locale keys.
 
-### Settings Window
-**Purpose:** Global view, rendering, color, and export settings
+The app compares the mode every frame, so a change from the Mode menu,
+a panel, a script or an **undo** all bring the workspace with them.
 
-**View Controls:**
-- Zoom slider (0.1 to 10.0) with Reset button
-- Pan X/Y sliders (-10.0 to 10.0) with Reset buttons
-- Rotation slider (-180° to 180°) with Reset button
-- Arrow buttons for pan (respects rotation angle)
-- Center View button (zoom=1, pan=0, rotation=0)
+### What each mode makes available
 
-**Rendering Settings:**
-- **System Settings** (device-specific, persist across sessions):
-  - VSync checkbox (desktop only) - Toggle vertical sync (locks FPS to monitor refresh)
-  - Target FPS slider (desktop only, when VSync off) - 10 to 1000 Hz
-  - WASM: VSync always enabled (WebGPU Fifo mode required), controls hidden
-- Workgroups slider (1 to 512) - Parallel compute units
-- Iterations/Thread slider (16 to 4096) - Samples per thread
-- Speed multiplier (1x/2x/4x/8x/16x) - Frame rate or chunking
-- Density Scale slider (0.01 to 10.0) - Alpha multiplier
+[src/ui/visibility.rs](../../src/ui/visibility.rs) is the single
+answer, and it is exhaustive on purpose: there is no `_` arm, so a new
+panel or a new mode will not compile until someone decides what it
+means.
 
-**Accumulation Controls:**
-- Blend Rate slider (0.01 to 1.0) - Exponential blend speed
-- Dynamic Blend Mode toggle - Exponential vs fixed rate
-- Low-Density Smoothing slider (0.0 to 1.0) - Noise reduction
-- Density Compression slider (0.0 to 100.0) - Bright area detail
-- Target Iterations/Pixel slider (0 to 1M) - Per-pixel limit
-
-**Histogram Settings:**
-- Color Scale slider (1.0 to 1000.0) - U32 encoding precision
-
-**Color Settings:**
-- Color Mode: Transform / Palette / Speed
-- Palette dropdown (built-in + loaded palettes)
-- Background color RGB sliders (0.0 to 1.0)
-- Speed Factor slider (0.0 to 2.0) - Speed mode sensitivity
-
-**Tone Mapping:**
-- Tonemap Mode: Logarithmic / Linear
-- Use Curve toggle - Apply S-curve adjustment
-- Tonemap Curve slider (0.0 to 10.0) - S-curve strength
-- Exposure slider (0.1 to 10.0)
-- Gamma slider (0.5 to 3.0)
-
-**Export:**
-- "Export PNG" button - Save current viewport to file
-- "Export Transparent PNG" button - Save with alpha channel
-
-**Config Import/Export:**
-- "Save Config" button - Export .fflame file
-- "Load Config" button - Import .fflame file
-- "Copy Config to Clipboard" button - JSON export
-- "Import Config from Clipboard" button - JSON import
-
-**Undo/Redo:**
-- "Undo" button (Ctrl+Z) - Revert last change
-- "Redo" button (Ctrl+Y) - Restore undone change
-
-**Code:** [src/ui/mod.rs](../../src/ui/mod.rs) - `render_ui()` Settings section
-
-### Triangle Editor Window (Added 2025-10-21)
-**Purpose:** Visual editing of transform affine parameters via dragging triangles
-
-**Display:**
-- 600×600 canvas showing unit square bounds
-- Each transform rendered as colored triangle (3 vertices)
-- Bounding boxes showing transform output range
-- Grid lines at unit intervals
-- Current transform highlighted in red
-
-**Interaction:**
-- **Left-click + drag vertex** - Move triangle point
-  - Updates affine matrix (a,b,c,d,e,f) in real-time
-  - No accumulation reset while dragging (smooth updates)
-- **Release mouse** - Trigger accumulation reset
-- **Hover vertex** - Highlight in white
-- **Click outside** - Deselect
-
-**Smart Accumulation:**
-- Updates GPU params every frame during drag
-- Only resets accumulation when drag completes
-- Provides immediate visual feedback without flickering
-
-**Math:**
 ```rust
-// Identity triangle vertices (before transform)
-v0 = [0.0, 0.0]
-v1 = [1.0, 0.0]
-v2 = [0.5, 0.866]  // equilateral
-
-// After affine transform
-v0' = [e, f]
-v1' = [a + e, c + f]
-v2' = [b/2 + a/2 + e, 0.866*d + c/2 + f]
-
-// Inverse: dragging v' updates [a,b,c,d,e,f]
+pub enum Vis { Show, Grey(&'static str), Hide }
+pub fn panel(p: PanelType, m: RenderMode) -> Vis;
+pub fn control(c: Control, m: RenderMode) -> Vis;
+pub fn gated(ui, c: Control, m: RenderMode, body) -> Option<R>;
 ```
 
-**Code:** [src/ui/mod.rs](../../src/ui/mod.rs) - `render_triangle_editor()`
+The `&'static str` is a locale key naming the **reason**, shown on
+hover, so a user who goes looking for a control learns why it is not
+there instead of wondering whether it exists.
 
-### Palette Editor Window (Added 2025-10-20)
-**Purpose:** Create and edit color palettes with gradient stops
+**No panel is ever `Hide`.** Hiding a panel's menu row would make it
+unreachable *and* undiscoverable, so an unavailable panel is greyed in
+the Window menu and its body says the same thing. `Hide` is for whole
+sections inside a panel.
 
-**Sections:**
+The rule of thumb the tables encode:
 
-1. **Palette Library**
-   - Dropdown list of built-in + loaded palettes
-   - Applies selected palette to current flame
+- **Flame-only** (greyed in both non-flame modes): View, Xaos Editor,
+  Subflames, Path Editor, and Random Generator, whose output would
+  leave the mode.
+- **Transform editors** (Transforms, Triangle Editor, Variations):
+  available in Simulation too, because the flame's transforms are the
+  simulation's per-layer warps when `sim.use_transforms` is on. Greyed
+  in Escape.
+- **3D only**: Solid & Lighting.
+- **Each engine's own panel** hides the other's.
+- **Everything else is available everywhere**, because both non-flame
+  engines write an image in the flame accumulator's layout and go
+  through the same density-effects → tonemap → colour-effects tail.
 
-2. **Gradient Preview**
-   - 400×40 color bar showing interpolated gradient
-   - Visual representation of full 256-color palette
+`Control` groups controls that share a fate rather than naming each
+widget. In the non-flame modes it hides the chaos-game controls, the
+tone-map presets, Reset Colors, the spatial filter, density levels and
+the colour-mode selector, and greys the tone-map mode selector, the
+logarithmic-only sliders and the alpha-blend pair.
 
-3. **Color Stops** (editable)
-   - List of stops with position (0.0-1.0) and RGB color
-   - Position slider for each stop
-   - RGB sliders (0.0 to 1.0) for each stop
-   - "Remove Stop" button (min 2 stops required)
+### Engine lifetimes
 
-4. **Add Stop**
-   - "Add Color Stop" button - Insert new stop at 0.5
+Both non-flame renderers are created lazily and are released when the
+mode changes away from them (`App::release_inactive_engines`). The two
+cases differ, and the difference matters:
 
-5. **Import/Export Palette**
-   - "Export Palette" button - Save .palette file
-   - "Copy Palette to Clipboard" button - JSON export
-   - "Load Palette" button - Import .palette file
-   - "Import Palette from Clipboard" button - JSON import
-   - Imported palettes automatically added to library
+- The **escape** renderer rebuilds itself from the config, so returning
+  costs only the re-render. It holds 16 bytes per pixel of
+  supersampled area at minimum — about 506 MB for a 1080p viewport at
+  4x antialiasing — which is why this is worth doing.
+- The **simulation** grid *is* its state, so returning restarts it from
+  the seed at step 0.
 
-**Palette Format:**
-```json
-{
-  "name": "My Palette",
-  "stops": [
-    { "position": 0.0, "color": [1.0, 0.0, 0.0] },
-    { "position": 0.5, "color": [0.0, 1.0, 0.0] },
-    { "position": 1.0, "color": [0.0, 0.0, 1.0] }
-  ]
-}
-```
+---
 
-**Code:** [src/ui/mod.rs](../../src/ui/mod.rs) - `render_ui()` Palette Editor section
+### The timeline and the simulation grid
 
-### Undo History Window (Added 2025-10-31)
-**Purpose:** Visual browser for undo/redo history with human-readable delta descriptions
+`sim.steps` means two things, and **whoever is driving decides which**.
+To the transport it is Max Steps, a CAP: the run stops there once, and
+`0` means uncapped. To the animation timeline it is a TARGET: the
+picture at a given time is the state at that step count. The exporter
+has always read it the second way; the app read it the first way only,
+which is why a `Sim.Steps` track used to do nothing in the app but
+move a cap.
 
-**Sections:**
+**The timeline owns the step count** when it is playing an animation
+that has a `Sim.Steps` track, or when a target it committed has not
+been reached yet (`App::timeline_owns_sim`). While it does:
 
-1. **Undo Stack**
-   - Scrollable list of all undo states (up to 50)
-   - Each entry shows ConfigPath description (e.g., "Transform 2 → Affine a")
-   - Clickable to jump directly to any past state
-   - Current position highlighted
+- the grid is advanced toward the track's value, **budgeted** per
+  display frame from the measured cost of a step
+  (`SimRenderer::steps_in`), so a two-thousand-step jump is walked
+  over a few frames rather than freezing the window — a scrub can ask
+  for one on every slider event;
+- Run / Pause / Step and the spacebar are inert, and the panel greys
+  them. Run is *disengaged* when playback starts rather than merely
+  ignored: left engaged it would resume the instant the timeline let
+  go, and the run would carry on under a button nobody pressed;
+- playback is **paced by the grid**, as escape playback is by
+  settling — the controller is held while the grid is short of the
+  frame's target, then advanced by everything that elapsed. A heavy
+  model plays slower rather than showing a lagging state, so what
+  plays is what exports.
 
-2. **Redo Stack**
-   - Scrollable list of all redo states
-   - Appears after undoing changes
-   - Cleared when new change is made
+An animation with **no** step track leaves all of this alone: the
+transport keeps working and the run keeps going underneath, so
+animating a colouring parameter over a free-running simulation still
+does what it always did.
 
-**Features:**
-- **Jump to State:** Click any delta to jump directly to that configuration
-- **Visual Indicator:** Current position shown with highlighted entry
-- **Human-Readable:** ConfigPath::Display generates descriptions like:
-  - "Exposure" (simple parameter)
-  - "Transform 2 → Affine a" (indexed affine parameter)
-  - "Transform 1 → Linear variation" (variation weight)
-  - "Transform 3 → JuliaN power" (variation parameter)
-- **Real-Time Updates:** Automatically updates as changes are made
+**Going backwards.** The rule is not invertible, so reaching a lower
+step count means reseeding and re-running. A falling target is
+therefore HELD while the motion is continuous and applied only on a
+discrete event — a scrubber release, a `Loop` wrap, or a `PingPong`
+turnaround at t = 0 (`sim::timeline_target_applies`,
+`app::animation_update::playback_motion`). Without the hold, dragging
+left would restart the run on nearly every slider event, ping-pong
+would restart once per frame for half of every cycle, and a track
+written to count down would do the same.
 
-**Example Display:**
-```
-Undo History
-┌──────────────────────────────────┐
-│ • Transform 2 → Affine a         │ ← Current
-│   Transform 2 → Affine d         │
-│   Transform 1 → Linear variation │
-│   Exposure                       │
-│   Zoom                           │
-│   ...                            │
-└──────────────────────────────────┘
+So a track written 2000 → 0 plays in-app as a still of the highest
+state reached, with the panel saying why and pointing at the
+scrubber; **export renders every frame of it correctly**, because a
+video frame is the state at its time whatever the direction. Both
+rules are pure functions in [src/sim/mod.rs](../../src/sim/mod.rs)
+with tests that need neither a GPU nor an `App`.
 
-Redo Stack
-┌──────────────────────────────────┐
-│   Gamma                          │
-│   Background Color               │
-└──────────────────────────────────┘
-```
+---
 
-**Code:** [src/ui/undo_history.rs](../../src/ui/undo_history.rs)
+## Panel reference
+
+Every panel renders from its own file. `PanelViewer::render_panel`
+([panel_viewer.rs](../../src/ui/panel_viewer.rs)) is the dispatch, and
+it is the authoritative list — the table below is a map, not a
+contract.
+
+| Panel | File |
+|---|---|
+| Fractal Viewport | `panel_viewer.rs` (`render_fractal_viewport`) |
+| Transforms | [transforms.rs](../../src/ui/transforms.rs) |
+| Triangle Editor | [triangle_editor.rs](../../src/ui/triangle_editor.rs) |
+| Variations | [variations.rs](../../src/ui/variations.rs) |
+| Xaos Editor | [xaos_editor.rs](../../src/ui/xaos_editor.rs) |
+| Subflames | [subflames.rs](../../src/ui/subflames.rs) |
+| Path Editor | [path_editor.rs](../../src/ui/path_editor.rs) |
+| View | [view.rs](../../src/ui/view.rs) |
+| Solid & Lighting | [solid_panel.rs](../../src/ui/solid_panel.rs) |
+| Escape Fractal | [escape_panel.rs](../../src/ui/escape_panel.rs) |
+| Simulation | [sim_panel.rs](../../src/ui/sim_panel.rs) |
+| Colors / Tone Mapping | [tone_mapping.rs](../../src/ui/tone_mapping.rs) |
+| Palette Editor | [palette_editor.rs](../../src/ui/palette_editor.rs) |
+| Palette Library | [palette_library.rs](../../src/ui/palette_library.rs) |
+| Effects | [effects_panel.rs](../../src/ui/effects_panel.rs) |
+| Rendering | [settings.rs](../../src/ui/settings.rs) |
+| Performance | [performance.rs](../../src/ui/performance.rs) |
+| History | [undo_history.rs](../../src/ui/undo_history.rs) |
+| Animation | [animation_panel.rs](../../src/ui/animation_panel.rs), [track_editor.rs](../../src/ui/track_editor.rs) |
+| Signals | [signal_panel.rs](../../src/ui/signal_panel.rs) |
+| Scripts | [scripts_panel.rs](../../src/ui/scripts_panel.rs) |
+| Fractal Browser | [fractal_browser.rs](../../src/ui/fractal_browser.rs) |
+| Random Generator | [random_generator.rs](../../src/ui/random_generator.rs) |
+| Export | [export_panel.rs](../../src/ui/export_panel.rs) |
+| Config Import/Export | [config_dialog.rs](../../src/ui/config_dialog.rs) |
+| Help, Keyboard Shortcuts | [help.rs](../../src/ui/help.rs) |
+| Account, Save Online | [login_dialog.rs](../../src/ui/login_dialog.rs), [save_online_dialog.rs](../../src/ui/save_online_dialog.rs) |
+
+Three panels have mechanics worth knowing before editing them.
+
+### Triangle Editor
+
+Visual affine editing: each transform is drawn as a triangle whose
+vertices are the affine basis (O, X, Y). Dragging a vertex converts
+screen space → fractal space → affine coefficients and writes them back.
+
+Its accumulation behaviour is deliberate: GPU parameters update
+*during* the drag for live feedback, and the iteration reset happens
+on release, so a drag does not restart the render on every mouse move.
+In 3D it offers an XY / YZ / ZX plane selector; in 2D there is only XY.
+
+### Rendering
+
+Almost everything here configures the chaos game — max iterations,
+iterations per thread, burn-in, deterministic RNG, the blend controls,
+pause and reset accumulation — so it is hidden outside the flame modes
+(`Control::ChaosGame`). What survives is VSync and the frame cap, which
+are `SystemSettings` device preferences rather than fractal parameters,
+plus escape's deep-zoom orbit cache in Escape mode.
+
+Note that pause is read in two places that both already exclude the
+non-flame modes, so it was inert there long before it was hidden.
+
+### Colors
+
+Four sections: tone mapping, tone curve, density levels, and colour &
+appearance. Both non-flame engines go through this same tail, so most
+of it applies to them — but the logarithmic branch never runs there,
+density levels are suppressed in the frame loop, the spatial filter
+lives inside a compute pass that is never dispatched, and the preset
+dropdown would set a Log-calibrated look that renders a unit-range
+image black. `Control::*` in `visibility.rs` encodes which is which.
 
 ---
 
@@ -415,6 +384,12 @@ if ui_response.preset_changed {
 - **Ctrl+Z** - Undo
 - **Ctrl+Y** - Redo
 - **R** - Reset view (zoom=1, pan=0, rotation=0)
+- **Space** - Play/pause the animation — except in Simulation mode,
+  where it runs and pauses the *grid* (the transport is what you reach
+  for there; `render_mode::space_runs_the_simulation`). Inert while
+  the timeline owns the step count, see **The timeline and the
+  simulation grid** above.
+- **F2** - Toggle fly mode (3D flame only)
 
 **Rotation-Aware Panning (Added 2025-10-24):**
 ```rust
@@ -604,7 +579,7 @@ pub fn reset(&mut self) {
 ## UI Features
 
 ### Key Features (Summary)
-- **Menu Bar** - Toggle window visibility (Added 2025-10-21)
+- **Menu Bar** - File, Edit, View, Mode, Rendering, Window, Help
 - **Collapsible Sections** - All sections can be collapsed to save space
 - **Real-time Updates** - Most changes update immediately without reset
 - **Smart Accumulation** - Triangle editor only resets when dragging stops
@@ -636,14 +611,28 @@ for name in registry.ordered_names() {
 
 ## Common UI Modification Tasks
 
-### Add New Window
-1. Add show/hide boolean to App struct
-2. Add menu bar checkbox in `render_menu_bar()`
-3. Add window rendering in `render_ui()`
-4. Add response fields to `UiResponse` if needed
-5. Handle responses in `app.rs` `render()` function
+### Add a panel
+1. Add a variant to `PanelType` ([workspace.rs](../../src/ui/workspace.rs)) and a title arm in its `Display` impl.
+2. Add a case to `visibility::panel` — the match is exhaustive, so this is not optional.
+3. Add a row to `visibility::WINDOW_MENU` (and to `COMPACT_WINDOW_MENU` if it belongs on a phone).
+4. Add a dispatch arm in `PanelViewer::render_panel` ([panel_viewer.rs](../../src/ui/panel_viewer.rs)).
+5. Add the `menu.window_*` and `panels.*` locale keys.
+6. Update the panel count in the tests that assert it.
 
-### Add New Control/Slider
+### Add a control that only some modes can use
+1. Add a variant to `visibility::Control`, or reuse one that shares its fate.
+2. Answer it in `visibility::control`.
+3. Wrap the widget in `visibility::gated(ui, Control::X, mode, |ui| { ... })`, or check `control(...) != Vis::Hide` for a whole section.
+4. Add the reason's locale key under `visibility.*`.
+
+Do **not** write `matches!(config.render_mode, ...)` inside a panel.
+That is what the policy module replaced, and scattered copies are how
+the menus and the dispatcher came to disagree.
+
+### Add New Control/Slider (cross-panel results only)
+Most controls write straight through `config_manager.update_param`.
+`UiResponse` is for results another part of the app must act on.
+
 1. Add field to `UiResponse` struct
 2. Add UI widget in appropriate window section
 3. Set response field when value changes
@@ -657,24 +646,26 @@ for name in registry.ordered_names() {
 3. Handle flag in next frame's `render()` function
 
 ### Modify Triangle Editor
-1. Edit `render_triangle_editor()` in [src/ui/mod.rs](../../src/ui/mod.rs)
-2. Vertex dragging logic converts screen → fractal space → affine matrix
-3. Smart accumulation: update GPU params during drag, reset on release
+1. Edit [src/ui/triangle_editor.rs](../../src/ui/triangle_editor.rs)
+2. Vertex dragging converts screen space to fractal space to affine coefficients
+3. Smart accumulation: update GPU params during the drag, reset on release
 
 ---
 
-## Internationalization (Added 2025-11-13)
+## Internationalization
 
-**Framework:** rust-i18n v3.1 with YAML translation files
+**Framework:** rust-i18n v3.1 with YAML translation files in `locales/`
 
-**Language Selector:** Settings → Preferences section
-- Dropdown with native language names (e.g., "English (English)")
-- Changes apply immediately (no restart required)
-- Persists via `set_locale()`
+**Language Selector:** the menu bar's right-hand strip (the globe), when
+the window is at least 500 points wide
+- Native language names, applied immediately without a restart
+- Loads the matching font via `ensure_font_for_locale`
 
 **Current Support:**
-- English (en) - Complete with 200+ strings
-- Ready for community translations
+- English (en) is the reference and is complete
+- Spanish, Japanese and Simplified Chinese are partial: roughly 270
+  lines each against English's 2,200, so most new keys are
+  English-only in practice
 
 **Translation Coverage:**
 - All menu items and panel titles

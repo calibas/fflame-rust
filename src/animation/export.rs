@@ -782,13 +782,94 @@ fn apply_config_value(
             // than it previewed. Whatever the grid cannot hold is
             // made up by accumulation in the frame loop below.
             config.escape.supersample =
-                (*v).clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+                (*v).clamp(1, crate::config::escape::MAX_SUPERSAMPLE);
         }
         (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
             config.escape.formula_params.insert(param.clone(), *v);
         }
         (ConfigPath::EscapeColoringParam { param }, ConfigValue::Float(v)) => {
             config.escape.coloring_params.insert(param.clone(), *v);
+        }
+
+        // Simulation. The clamps mirror ConfigManager's write arms so an
+        // exported frame equals the in-app frame at the same time --
+        // the same discipline the escape arms above follow, and the
+        // reason a track cannot drive dt somewhere the solver diverges.
+        //
+        // Sim.Steps is the one that animates the RUN: the state at time
+        // t is that many steps from the seed (master plan D5b), so a
+        // ramp on this track is the simulation progressing. The
+        // exporter reads it off the config it has just built.
+        (ConfigPath::SimSteps, ConfigValue::UInt(v)) => {
+            config.sim.steps = (*v).min(10_000_000);
+        }
+        (ConfigPath::SimStepsPerFrame, ConfigValue::UInt(v)) => {
+            config.sim.steps_per_frame = (*v).clamp(1, 4096);
+        }
+        (ConfigPath::SimDt, ConfigValue::Float(v)) => {
+            // NaN from a wild signal must not make the solver diverge.
+            config.sim.dt = if v.is_finite() { v.clamp(1e-4, 10.0) } else { 1.0 };
+        }
+        // The warp's rates, bounded as the manager bounds them, so a
+        // wild signal cannot ask the resampler for a NaN.
+        (ConfigPath::SimWarpZoom, ConfigValue::Float(v)) => {
+            config.sim.warp.zoom = if v.is_finite() { v.clamp(0.5, 2.0) } else { 1.0 };
+        }
+        (ConfigPath::SimWarpRotation, ConfigValue::Float(v)) => {
+            config.sim.warp.rotation =
+                if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+        }
+        (ConfigPath::SimWarpPanX, ConfigValue::Float(v)) => {
+            config.sim.warp.pan_x = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+        }
+        (ConfigPath::SimWarpPanY, ConfigValue::Float(v)) => {
+            config.sim.warp.pan_y = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+        }
+        (ConfigPath::SimWarpFlow, ConfigValue::Float(v)) => {
+            config.sim.warp.flow =
+                if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+        }
+        (ConfigPath::SimMatteCutoff, ConfigValue::Float(v)) => {
+            config.sim.matte.cutoff = if v.is_finite() { *v } else { 0.5 };
+        }
+        (ConfigPath::SimMatteSoftness, ConfigValue::Float(v)) => {
+            config.sim.matte.softness = if v.is_finite() { v.max(0.0) } else { 0.0 };
+        }
+        (ConfigPath::SimModelParam { param }, ConfigValue::Float(v)) => {
+            config.sim.model_params.insert(param.clone(), *v);
+        }
+        (ConfigPath::SimLayerParam { layer, param }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.layers.get_mut(*layer) {
+                l.model_params.insert(param.clone(), *v);
+            }
+        }
+        (ConfigPath::SimCouplingStrength { index }, ConfigValue::Float(v)) => {
+            if let Some(c) = config.sim.couplings.get_mut(*index) {
+                c.strength = *v;
+            }
+        }
+        (ConfigPath::SimColorLayerParam { index, param }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.coloring_params.insert(param.clone(), *v);
+            }
+        }
+        (ConfigPath::SimColorLayerOpacity { index }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.opacity = v.clamp(0.0, 1.0);
+            }
+        }
+        (ConfigPath::SimColorLayerMatteCutoff { index }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.matte.cutoff = *v;
+            }
+        }
+        (ConfigPath::SimColorLayerMatteSoftness { index }, ConfigValue::Float(v)) => {
+            if let Some(l) = config.sim.color_layers.get_mut(*index) {
+                l.matte.softness = v.max(0.0);
+            }
+        }
+        (ConfigPath::SimColoringParam { param }, ConfigValue::Float(v)) => {
+            config.sim.coloring_params.insert(param.clone(), *v);
         }
 
         // Everything else is per-flame. Resolve the target flame and
@@ -1307,529 +1388,86 @@ impl AnimationExportConfig {
     }
 }
 
+/// Per-frame progress, forwarded into the export reporter.
+///
+/// A generator that reports its own progress -- the simulation
+/// stepping toward this frame's target, an escape render settling --
+/// is otherwise invisible, and the first frame of a long run reads as
+/// a hang. This maps a fraction WITHIN the frame onto the overall bar
+/// and, as a bonus neither old loop had, carries cancellation INTO a
+/// frame rather than only between frames.
+///
+/// Rate-limited, because the flame loop reports once per DISPATCH --
+/// about 120 times for a default billion-iteration frame -- and the
+/// console reporter prints and flushes on every call. Measured on the
+/// CLI: 505 ms a frame reporting every dispatch against 415 ms
+/// reporting none, an 18% tax for a status line nobody can read at
+/// that rate. Forwarding at most every 100 ms keeps a long frame
+/// visibly alive and costs nothing measurable.
+#[cfg(not(target_arch = "wasm32"))]
+struct FrameProgress<'a> {
+    reporter: &'a mut dyn crate::export::ExportReporter,
+    frame: u32,
+    total_frames: u32,
+    last_report: std::time::Instant,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::renderer::RenderProgress for FrameProgress<'_> {
+    fn on_progress(&mut self, current: u64, total: u64) {
+        const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+        if self.last_report.elapsed() < MIN_INTERVAL {
+            return;
+        }
+        self.last_report = std::time::Instant::now();
+        let within = if total > 0 {
+            (current as f32 / total as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let overall = (self.frame as f32 + within) / self.total_frames.max(1) as f32;
+        self.reporter.progress(
+            overall,
+            &format!("Rendering frame {}/{}", self.frame + 1, self.total_frames),
+        );
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.reporter.is_cancelled()
+    }
+}
+
 /// Export animation directly to video via FFmpeg pipe (desktop only)
 ///
-/// This pipes raw RGBA pixel data directly to FFmpeg's stdin, avoiding:
-/// - PNG encoding (CPU-intensive compression)
-/// - Disk I/O (writing/reading thousands of files)
-/// - PNG decoding (FFmpeg decompressing what we just compressed)
-/// - Disk space (no temp files)
+/// Raw RGBA piped straight to FFmpeg's stdin: no PNG encode, no disk
+/// round-trip, no temp files.
+///
+/// **This is the only video loop.** There were two -- this one, which
+/// rendered each frame through the still path, and a faster one that
+/// kept a copy of the still path's flame section inline. The copy is
+/// where the bugs lived: it was made before density effects and the
+/// solid depth-of-field pass existed and never got either, so an
+/// in-app video silently dropped both; the escape arm was added to
+/// both loops; the simulation arm was added to both and gated in only
+/// one, so every simulation frame ran a billion iterations of chaos
+/// game into a histogram nothing read. Each stage added to the tail
+/// had to be added twice, and twice is where they diverge.
+///
+/// What the fast loop had that the still path lacks was real, and is
+/// kept here: state that outlives the frame (`RenderEngines`, phase 1)
+/// and a writer thread so FFmpeg's pipe never stalls the GPU.
+/// Everything else -- which passes run, which are skipped -- the still
+/// path already decides per frame by reading the config, which is what
+/// "exclude unused features dynamically" means. See
+/// `docs/archive/projects/video-loop-and-sim-timeline.md` D1.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation(
     mut export_config: AnimationExportConfig,
     reporter: &mut dyn crate::export::ExportReporter,
 ) -> Result<AnimationExportResult, AnimationExportError> {
     export_config.force_even_dimensions();
-    use std::io::Write;
-    use std::process::Stdio;
-    use std::time::Instant;
-
-    let total_start = Instant::now();
-    let total_frames = export_config.total_frames();
-
-    // Check ffmpeg availability first
-    if !is_ffmpeg_available() {
-        return Err(AnimationExportError::FfmpegNotFound);
-    }
-
-    // Ensure output directory exists
-    if let Some(parent) = export_config.output_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Create GPU resources (reused across frames)
-    let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
-        backends: egui_wgpu::wgpu::Backends::all(),
-        ..egui_wgpu::wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-
-    let adapter = instance
-        .request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions {
-            power_preference: egui_wgpu::wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        })
-        .await
-        .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
-
-    // The adapter's real limits, not wgpu's defaults -- see
-    // export_animation_fast for why (a 4K deep-zoom frame's 398 MB of
-    // iteration state against the 256 MiB default).
-    let adapter_limits = adapter.limits();
-    let mut limits = egui_wgpu::wgpu::Limits::default();
-    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-    limits.max_buffer_size = adapter_limits.max_buffer_size;
-    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-    // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
-    limits.max_storage_buffers_per_shader_stage =
-        adapter_limits.max_storage_buffers_per_shader_stage;
-
-    let (device, queue) = adapter
-        .request_device(
-            &egui_wgpu::wgpu::DeviceDescriptor {
-                label: Some("Animation Export Device"),
-                required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
-                required_limits: limits,
-                memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| AnimationExportError::GpuError(format!("Failed to create device: {:?}", e)))?;
-
-    // Create animation controller for evaluation. Bind tracks against
-    // the export config so the rebind hook (n/a here, but kept for
-    // consistency) and apply path see resolved IDs.
-    let mut controller = AnimationController::new();
-    let mut animation = export_config.animation.clone();
-    animation.bind_to_config(&export_config.config);
-    controller.load(animation);
-
-    // Create signal manager from exported signals for signal track evaluation
-    let mut signal_manager = SignalManager::new();
-    for (_name, signal) in &export_config.signals {
-        signal_manager.insert(signal.clone());
-    }
-    let has_signals = !export_config.signals.is_empty();
-
-    // Build FFmpeg command for piped raw video input
-    let mut ffmpeg = ffmpeg_command();
-
-    // Overwrite output without asking
-    ffmpeg.arg("-y");
-
-    // Input format: raw RGBA video from stdin
-    ffmpeg.arg("-f").arg("rawvideo");
-    ffmpeg.arg("-pix_fmt").arg("rgba");
-    ffmpeg.arg("-s").arg(format!("{}x{}", export_config.width, export_config.height));
-    ffmpeg.arg("-r").arg(export_config.fps.to_string());
-    ffmpeg.arg("-i").arg("-"); // Read from stdin
-
-    // Codec and hardware acceleration settings
-    let settings = &export_config.video_settings;
-    let encoder = settings.hardware_accel.encoder_for_codec(settings.codec)
-        .expect("Invalid hardware accel + codec combination");
-
-    ffmpeg.arg("-c:v").arg(encoder);
-
-    // Quality and codec-specific settings
-    let is_hardware = settings.hardware_accel != HardwareAccel::None;
-
-    match settings.codec {
-        VideoCodec::H264 => {
-            if is_hardware {
-                // Hardware encoders use different quality parameters
-                match settings.hardware_accel {
-                    HardwareAccel::Nvenc => {
-                        // FIX: Use constqp mode for constant quality (like CRF)
-                        ffmpeg.arg("-rc").arg("constqp");
-                        ffmpeg.arg("-qp").arg(settings.quality.to_string());
-
-                        // Apply preset
-                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                        if !preset.is_empty() {
-                            ffmpeg.arg("-preset").arg(preset);
-                        }
-                    }
-                    HardwareAccel::Qsv => {
-                        // FIX: Add look_ahead 0 to force constant QP mode
-                        ffmpeg.arg("-global_quality").arg(settings.quality.to_string());
-                        ffmpeg.arg("-look_ahead").arg("0");
-
-                        // Apply preset
-                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                        if !preset.is_empty() {
-                            ffmpeg.arg("-preset").arg(preset);
-                        }
-                    }
-                    HardwareAccel::Amf => {
-                        // Already correct: constant QP mode
-                        ffmpeg.arg("-rc").arg("cqp");
-                        ffmpeg.arg("-qp").arg(settings.quality.to_string());
-
-                        // Apply preset
-                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                        if !preset.is_empty() {
-                            ffmpeg.arg("-preset").arg(preset);
-                        }
-                    }
-                    HardwareAccel::VideoToolbox => {
-                        // FIX: Correct quality scale conversion (CRF 0-51 → VT 100-1)
-                        let vt_quality = (100 - (settings.quality as i32 * 100 / 51)).clamp(1, 100);
-                        ffmpeg.arg("-q:v").arg(vt_quality.to_string());
-                        // Note: VideoToolbox doesn't support -preset parameter
-                    }
-                    HardwareAccel::None => unreachable!(),
-                }
-            } else {
-                // CPU libx264
-                ffmpeg.arg("-crf").arg(settings.quality.to_string());
-
-                // Apply preset
-                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                ffmpeg.arg("-preset").arg(preset);
-
-                // Apply tune (CPU only)
-                if let Some(tune) = settings.tune.ffmpeg_arg() {
-                    ffmpeg.arg("-tune").arg(tune);
-                }
-            }
-            ffmpeg.arg("-pix_fmt").arg("yuv420p"); // Maximum compatibility
-        }
-        VideoCodec::H265 => {
-            if is_hardware {
-                match settings.hardware_accel {
-                    HardwareAccel::Nvenc => {
-                        // FIX: Use constqp mode for constant quality
-                        ffmpeg.arg("-rc").arg("constqp");
-                        ffmpeg.arg("-qp").arg(settings.quality.to_string());
-
-                        // Apply preset
-                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                        if !preset.is_empty() {
-                            ffmpeg.arg("-preset").arg(preset);
-                        }
-                    }
-                    HardwareAccel::Qsv => {
-                        // FIX: Add look_ahead 0 to force constant QP mode
-                        ffmpeg.arg("-global_quality").arg(settings.quality.to_string());
-                        ffmpeg.arg("-look_ahead").arg("0");
-
-                        // Apply preset
-                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                        if !preset.is_empty() {
-                            ffmpeg.arg("-preset").arg(preset);
-                        }
-                    }
-                    HardwareAccel::Amf => {
-                        // Already correct: constant QP mode
-                        ffmpeg.arg("-rc").arg("cqp");
-                        ffmpeg.arg("-qp").arg(settings.quality.to_string());
-
-                        // Apply preset
-                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                        if !preset.is_empty() {
-                            ffmpeg.arg("-preset").arg(preset);
-                        }
-                    }
-                    HardwareAccel::VideoToolbox => {
-                        // FIX: Correct quality scale conversion
-                        let vt_quality = (100 - (settings.quality as i32 * 100 / 51)).clamp(1, 100);
-                        ffmpeg.arg("-q:v").arg(vt_quality.to_string());
-                    }
-                    HardwareAccel::None => unreachable!(),
-                }
-            } else {
-                // CPU libx265
-                ffmpeg.arg("-crf").arg(settings.quality.to_string());
-
-                // Apply preset
-                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                ffmpeg.arg("-preset").arg(preset);
-
-                // Apply tune (CPU only)
-                if let Some(tune) = settings.tune.ffmpeg_arg() {
-                    ffmpeg.arg("-tune").arg(tune);
-                }
-
-                ffmpeg.arg("-x265-params").arg("log-level=error");
-            }
-            ffmpeg.arg("-pix_fmt").arg("yuv420p");
-        }
-        VideoCodec::VP9 => {
-            // VP9 only supports software or QSV
-            if settings.hardware_accel == HardwareAccel::Qsv {
-                // FIX: Add look_ahead 0 for QSV
-                ffmpeg.arg("-global_quality").arg(settings.quality.to_string());
-                ffmpeg.arg("-look_ahead").arg("0");
-
-                // Apply preset
-                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                if !preset.is_empty() {
-                    ffmpeg.arg("-preset").arg(preset);
-                }
-            } else {
-                // CPU libvpx-vp9
-                ffmpeg.arg("-crf").arg(settings.quality.to_string());
-                ffmpeg.arg("-b:v").arg("0"); // Use CRF mode
-
-                // Apply preset (note: VP9 uses different preset names, but we use CPU presets)
-                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
-                ffmpeg.arg("-speed").arg(preset);  // VP9 uses -speed instead of -preset
-
-                // VP9 doesn't support -tune parameter
-            }
-            ffmpeg.arg("-pix_fmt").arg("yuv420p");
-        }
-    }
-
-    // Output file
-    ffmpeg.arg(&export_config.output_path);
-
-    // Configure stdin pipe
-    ffmpeg.stdin(Stdio::piped());
-    ffmpeg.stdout(Stdio::null());
-    ffmpeg.stderr(Stdio::piped());
-
-    // Spawn FFmpeg process
-    let mut child = ffmpeg.spawn()
-        .map_err(|e| AnimationExportError::FfmpegFailed(format!("Failed to spawn ffmpeg: {}", e)))?;
-
-    let mut stdin = child.stdin.take()
-        .ok_or_else(|| AnimationExportError::FfmpegFailed("Failed to open ffmpeg stdin".to_string()))?;
-
-    // Render each frame and pipe to FFmpeg
-    for frame in 0..total_frames {
-        if reporter.is_cancelled() {
-            // Kill FFmpeg process on cancel
-            let _ = child.kill();
-            return Err(AnimationExportError::Cancelled);
-        }
-
-        let frame_start = Instant::now();
-        let time = export_config.frame_time(frame);
-
-        reporter.progress(
-            frame as f32 / total_frames as f32,
-            &format!("Rendering frame {}/{}", frame + 1, total_frames),
-        );
-
-        // Evaluate animation at this time (with signal support)
-        let values = if has_signals {
-            controller.evaluate_at_time_with_signals(time, Some(&signal_manager))
-        } else {
-            controller.evaluate_at_time(time)
-        };
-
-        // Create config copy and apply animation values
-        let mut frame_config = export_config.config.clone();
-        apply_animation_values(&mut frame_config, &values);
-
-        // Use unified render API
-        let job = crate::renderer::RenderJob::new(&frame_config, export_config.width, export_config.height)
-            .with_iterations_per_thread(export_config.iterations_per_thread);
-
-        let output = crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)
-            .await
-            .map_err(|e| AnimationExportError::GpuError(format!("Failed to render frame: {}", e)))?;
-
-        let rgba_data = output.rgba_data;
-
-        // Write raw RGBA data directly to FFmpeg stdin
-        if let Err(e) = stdin.write_all(&rgba_data) {
-            // Try to get FFmpeg's stderr to understand why it failed
-            drop(stdin); // Close stdin so FFmpeg terminates
-            let output = child.wait_with_output().ok();
-            let stderr = output
-                .as_ref()
-                .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
-                .unwrap_or_default();
-
-            let error_msg = if stderr.is_empty() {
-                format!("Failed to write frame to ffmpeg: {}", e)
-            } else {
-                format!("FFmpeg error: {}", stderr.trim())
-            };
-
-            return Err(AnimationExportError::FfmpegFailed(error_msg));
-        }
-
-        let frame_elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
-        reporter.progress(
-            (frame + 1) as f32 / total_frames as f32,
-            &frame_progress_detail(frame + 1, total_frames, frame_elapsed / 1000.0),
-        );
-    }
-
-    // Close stdin to signal end of input
-    drop(stdin);
-
-    // Wait for FFmpeg to finish
-    let output = child.wait_with_output()
-        .map_err(|e| AnimationExportError::FfmpegFailed(format!("Failed to wait for ffmpeg: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AnimationExportError::FfmpegFailed(format!("FFmpeg error: {}", stderr.trim())));
-    }
-
-    let total_time_ms = total_start.elapsed().as_secs_f64() * 1000.0;
-    let avg_frame_time_ms = total_time_ms / total_frames as f64;
-
-    Ok(AnimationExportResult {
-        total_frames,
-        total_time_ms,
-        avg_frame_time_ms,
-        output_path: export_config.output_path,
-    })
-}
-
-/// How many workgroups to dispatch for the remaining budget.
-///
-/// The per-frame render loop runs whole dispatches, each worth
-/// `workgroups x 64 x iterations_per_thread` samples. Dispatching the
-/// full `max_workgroups` every time overshoots the frame's
-/// `max_iterations` by up to one whole dispatch — which was already
-/// wrong (a 500k-iteration frame rendered 2.1M at ipt 256) and got four
-/// times worse when the export default moved to ipt 1024, since the
-/// quantum scales with ipt. A per-frame budget tuned for fast video
-/// export would have quietly become a 4x longer render.
-///
-/// Workgroups are the right axis to trim: `iterations_per_thread` is
-/// trajectory depth, so shortening IT would shorten the orbits
-/// themselves; workgroup count is pure parallel breadth. Always at
-/// least one, so the loop cannot stall.
-#[cfg(not(target_arch = "wasm32"))]
-fn workgroups_for_remaining(remaining: u64, per_workgroup: u64, max_workgroups: u32) -> u32 {
-    if per_workgroup == 0 {
-        return max_workgroups;
-    }
-    remaining
-        .div_ceil(per_workgroup)
-        .clamp(1, max_workgroups as u64) as u32
-}
-
-/// Render a single frame to completion (until max_iterations reached)
-#[cfg(not(target_arch = "wasm32"))]
-async fn render_frame_to_completion(
-    device: &egui_wgpu::wgpu::Device,
-    queue: &egui_wgpu::wgpu::Queue,
-    renderer: &mut crate::renderer::compute_kernel::FlameRenderer,
-    config: &FractalConfig,
-    iterations_per_thread: u32,
-) {
-    const NUM_WORKGROUPS: u32 = 128;
-    const THREADS_PER_WORKGROUP: u64 = 64;
-    const BATCH_SIZE: u32 = 4;
-
-    let mut total_rendered = 0u64;
-    let target = config.max_iterations;
-    let mut batch_frame_count = 0;
-    let mut batch_samples = 0u64;
-
-    while total_rendered < target {
-        let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-            label: Some("Render Frame"),
-        });
-
-        let clear_histogram = batch_frame_count == 0;
-        // Clear paths only on very first batch of the entire export
-        let clear_paths = total_rendered == 0 && clear_histogram;
-
-        let per_workgroup = THREADS_PER_WORKGROUP * iterations_per_thread as u64;
-        let workgroups =
-            workgroups_for_remaining(target - total_rendered, per_workgroup, NUM_WORKGROUPS);
-
-        renderer.compute_pass(
-            &mut encoder,
-            queue,
-            device,
-            workgroups,
-            iterations_per_thread,
-            20, // burn_in default
-            config.zoom,
-            config.pan_x,
-            config.pan_y,
-            config.rotation,
-            config.camera_rotation_x,
-            config.camera_rotation_y,
-            config.camera_bank,
-
-            config.camera_x,
-
-            config.camera_y,
-
-            config.camera_z,
-            config.speed_factor,
-            clear_histogram,
-            clear_paths,
-        );
-
-        let samples_this_frame = workgroups as u64 * per_workgroup;
-        total_rendered += samples_this_frame;
-        batch_frame_count += 1;
-        // Summed, not `samples_this_frame * BATCH_SIZE`: the trimmed
-        // final dispatch makes the frames in a batch unequal, and the
-        // accumulate pass divides by this to recover mean colour — a
-        // wrong count is a wrong brightness for the frame.
-        batch_samples += samples_this_frame;
-
-        let should_accumulate = batch_frame_count >= BATCH_SIZE;
-        if should_accumulate {
-            renderer.accumulate_pass(&mut encoder, queue, device, batch_samples);
-            batch_frame_count = 0;
-            batch_samples = 0;
-        }
-
-        queue.submit(std::iter::once(encoder.finish()));
-
-        if total_rendered >= target {
-            // Final accumulation if we have partial batch
-            if batch_frame_count > 0 {
-                let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                    label: Some("Final Batch Accumulation"),
-                });
-                renderer.accumulate_pass(&mut final_encoder, queue, device, batch_samples);
-                queue.submit(std::iter::once(final_encoder.finish()));
-            }
-            break;
-        }
-    }
-}
-
-/// Timing statistics for export performance analysis
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Default)]
-pub struct ExportTimingStats {
-    /// Time spent in GPU render dispatch
-    pub render_time_ms: f64,
-    /// Time spent waiting for buffer map
-    pub map_wait_time_ms: f64,
-    /// Time spent copying from mapped buffer
-    pub copy_time_ms: f64,
-    /// Time spent in channel send (waiting for writer thread)
-    pub channel_send_time_ms: f64,
-    /// Total frame time
-    pub total_frame_time_ms: f64,
-    /// Number of frames processed
-    pub frame_count: u32,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ExportTimingStats {
-    pub fn log_summary(&self) {
-        if self.frame_count == 0 {
-            return;
-        }
-        let n = self.frame_count as f64;
-        println!("\n=== Export Timing Summary ({} frames) ===", self.frame_count);
-        println!("  Render dispatch:  {:>8.2} ms avg", self.render_time_ms / n);
-        println!("  Buffer map wait:  {:>8.2} ms avg", self.map_wait_time_ms / n);
-        println!("  Buffer copy:      {:>8.2} ms avg", self.copy_time_ms / n);
-        println!("  Channel send:     {:>8.2} ms avg", self.channel_send_time_ms / n);
-        println!("  Total frame:      {:>8.2} ms avg", self.total_frame_time_ms / n);
-        println!("  Effective FPS:    {:>8.2}", 1000.0 / (self.total_frame_time_ms / n));
-        println!("==========================================");
-    }
-}
-
-/// Export animation with batched frame rendering
-///
-/// Renders multiple frames to separate buffers before reading any back.
-/// This keeps the GPU saturated while we process completed frames.
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn export_animation_fast(
-    mut export_config: AnimationExportConfig,
-    reporter: &mut dyn crate::export::ExportReporter,
-) -> Result<AnimationExportResult, AnimationExportError> {
-    export_config.force_even_dimensions();
     use crate::renderer::compute_kernel::FlameRenderer;
-    use egui_wgpu::wgpu::{
-        self, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
-        Extent3d, MapMode, Origin3d, PollType, TextureAspect,
-        TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo,
-        COPY_BYTES_PER_ROW_ALIGNMENT,
-    };
+    use egui_wgpu::wgpu;
     use std::io::Write;
     use std::process::Stdio;
     use std::sync::mpsc;
@@ -1839,19 +1477,14 @@ pub async fn export_animation_fast(
     let total_frames = export_config.total_frames();
     let mut timing_stats = ExportTimingStats::default();
 
-    // Single buffer approach - simple and reliable
-
-    // Check ffmpeg availability first
     if !is_ffmpeg_available() {
         return Err(AnimationExportError::FfmpegNotFound);
     }
 
-    // Ensure output directory exists
     if let Some(parent) = export_config.output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    // Create GPU resources
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -1867,16 +1500,14 @@ pub async fn export_animation_fast(
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
     // The adapter's real limits, not wgpu's defaults. `Limits::default()`
-    // caps max_buffer_size at 256 MiB (268,435,456) and textures at
-    // 8192 a side, and only the storage-BINDING size used to be raised
-    // here. A 4K deep-zoom frame carries 3840*2160*48 = 398 MB of
-    // per-pixel iteration state, so the exporter asked wgpu for a
-    // buffer past the limit it had itself requested, and wgpu answers
-    // a validation error by panicking -- on this worker thread, which
-    // left the export dialog waiting forever. The number in that panic
-    // was this default, not the GPU. The still-image exporter has
-    // raised all three from the adapter since it hit the same wall
-    // (app/export.rs); this now matches it.
+    // caps max_buffer_size at 256 MiB and textures at 8192 a side, and
+    // only the storage-BINDING size used to be raised here. A 4K
+    // deep-zoom frame carries 3840*2160*48 = 398 MB of per-pixel
+    // iteration state, so the exporter asked wgpu for a buffer past the
+    // limit it had itself requested -- and wgpu answers a validation
+    // error by panicking, on this worker thread, which left the export
+    // dialog waiting forever. The number in that panic was this
+    // default, not the GPU.
     let adapter_limits = adapter.limits();
     let mut limits = wgpu::Limits::default();
     limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
@@ -1886,10 +1517,29 @@ pub async fn export_animation_fast(
     limits.max_storage_buffers_per_shader_stage =
         adapter_limits.max_storage_buffers_per_shader_stage;
 
+    // The features every other export path asks for, which this one
+    // did not. Density effects bilinear-sample the Rgba32Float
+    // accumulation, so without FLOAT32_FILTERABLE the effect chain
+    // SKIPS them -- silently, by design, since on an adapter that
+    // genuinely lacks it the bind group would be invalid. This device
+    // requested only CLEAR_TEXTURE, so a video export dropped every
+    // density effect on a GPU that supports them perfectly well. It
+    // was a second, independent cause of the same symptom as the
+    // missing call in the old fast loop: the CLI loop DID call the
+    // density stage, and the stage declined every time.
+    let mut required_features = wgpu::Features::CLEAR_TEXTURE;
+    if adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
+        required_features |= wgpu::Features::FLOAT32_FILTERABLE;
+    }
+    // Optional GPU-time pacing for escape chunks (see gpu/device.rs).
+    if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        required_features |= wgpu::Features::TIMESTAMP_QUERY;
+    }
+
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Animation Export Device"),
-            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_features,
             required_limits: limits,
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
@@ -1897,41 +1547,59 @@ pub async fn export_animation_fast(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to create device: {:?}", e)))?;
 
-    // Create animation controller
+    // Bind tracks against the export config so the apply path sees
+    // resolved IDs.
     let mut controller = AnimationController::new();
     let mut animation = export_config.animation.clone();
     animation.bind_to_config(&export_config.config);
     controller.load(animation);
 
-    // Create signal manager from exported signals for signal track evaluation
     let mut signal_manager = SignalManager::new();
     for (_name, signal) in &export_config.signals {
         signal_manager.insert(signal.clone());
     }
     let has_signals = !export_config.signals.is_empty();
 
-    // Calculate buffer dimensions
-    let bytes_per_pixel = 4u32; // RGBA8
-    let unpadded_bytes_per_row = export_config.width * bytes_per_pixel;
-    let align = COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
-    let buffer_size = (padded_bytes_per_row * export_config.height) as u64;
-    let output_size = (export_config.width * export_config.height * bytes_per_pixel) as usize;
+    // A deep-zoom frame carries per-pixel resume state (48-72 bytes),
+    // and past a device's buffer limit that allocation is a wgpu
+    // VALIDATION ERROR -- which wgpu answers by panicking. Here that
+    // panic lands on this worker thread, so the app stays responsive
+    // while the export dialog waits forever for a frame that will
+    // never arrive (reported: a 4K Ducks zoom, 398 MB against a
+    // 256 MB limit). The renderer now declines the perturbed path
+    // rather than ask, but declining means the DIRECT path, which
+    // past zoom 14 is mush -- so a whole export would come out
+    // quietly wrong. Refuse it up front instead, with the size that
+    // would work.
+    #[cfg(feature = "engine-escape")]
+    if export_config.config.render_mode == crate::scene::transforms::RenderMode::Escape {
+        let ss = crate::escape::EscapeRenderer::affordable_supersample(
+            &device,
+            export_config.width,
+            export_config.height,
+            export_config.config.escape.supersample,
+        );
+        let (rw, rh) = (
+            export_config.width.saturating_mul(ss),
+            export_config.height.saturating_mul(ss),
+        );
+        if !crate::escape::EscapeRenderer::perturb_state_fits_at(
+            &device,
+            &export_config.config.escape,
+            rw,
+            rh,
+        ) {
+            return Err(AnimationExportError::InvalidConfig(format!(
+                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame.                  Export at a smaller size (or lower the antialiasing): past the                  perturbation threshold every pixel carries its own iteration                  state, and there is no way to render this size without it."
+            )));
+        }
+    }
 
-    // Create single staging buffer
-    let staging_buffer = device.create_buffer(&BufferDescriptor {
-        label: Some("Staging Buffer"),
-        size: buffer_size,
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    // Spawn FFmpeg writer thread
-    // Channel buffer: 16 frames (~31 MB at 800×600×4 bytes) to prevent blocking
-    // Increased from 4 to reduce starvation risk when FFmpeg writer gets CPU-starved
+    // Spawn the FFmpeg writer thread. A frame is handed over and the
+    // GPU moves on; the bounded channel (16 frames) is what keeps a
+    // CPU-starved encoder from stalling the render without letting
+    // memory grow without bound.
     let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(16);
-
-    // Build FFmpeg command
     let ffmpeg_args = build_ffmpeg_args(&export_config);
     let output_path = export_config.output_path.clone();
 
@@ -1979,89 +1647,47 @@ pub async fn export_animation_fast(
         Ok(())
     });
 
-    // Create renderer
-    let surface_format = wgpu::TextureFormat::Rgba8Unorm;
-
-    let values = if has_signals {
+    // One renderer for the whole export. `load_config` is a full reset
+    // point, so it does not need to have been built for any particular
+    // frame's config -- but it does need to be the right SIZE, which is
+    // fixed for a video.
+    //
+    // Sticky off, for the reason `render()` gives its throwaway: the
+    // sticky superset canonically reorders the local index map, an
+    // ULP-class trajectory change that is meaningless interactively and
+    // wrong for an export, which must render exactly the specialized
+    // shader its reproducibility contract was made with.
+    let first_values = if has_signals {
         controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager))
     } else {
         controller.evaluate_at_time(0.0)
     };
-    let mut frame_config = export_config.config.clone();
-    apply_animation_values(&mut frame_config, &values);
+    let mut first_config = export_config.config.clone();
+    apply_animation_values(&mut first_config, &first_values);
 
-    let mut renderer = FlameRenderer::new(
-        &device, &queue, surface_format,
-        export_config.width, export_config.height,
-        &frame_config.flame,
+    let mut renderer = FlameRenderer::with_palette_size(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        export_config.width,
+        export_config.height,
+        &first_config.flame,
+        first_config.palette_size,
     );
+    renderer.set_sticky_enabled(false);
 
-    // Escape-time animation: the generator is the escape renderer --
-    // PERSISTENT across frames so the reference-orbit cache and BLA
-    // table carry from frame to frame (a zoom track re-uses its orbit
-    // instead of recomputing per frame). The flame renderer still
-    // owns the shared tail: load_config keeps palette/tonemap/curve/
-    // levels in sync each frame exactly as the headless single-frame
-    // path does. Before this branch existed the video export ran the
-    // chaos game regardless of render_mode and animated the FLAME
-    // while the app previewed the escape render (field report).
-    // Without the engine there is nothing to draw these frames
-     // with; the flag stays false and the single-frame render call
-     // reports the missing engine rather than this loop exporting a
-     // flame the config never described.
-    #[cfg(feature = "engine-escape")]
-    let is_escape = export_config.config.render_mode
-        == crate::scene::transforms::RenderMode::Escape;
-    #[cfg(not(feature = "engine-escape"))]
-    let is_escape = false;
-    #[cfg(feature = "engine-escape")]
-    let mut escape_renderer: Option<crate::escape::EscapeRenderer> = None;
-    // Accumulated samples per axis for the frame just rendered (1 =
-    // the grid alone); the tail picks the averaged image from it.
-    #[cfg(feature = "engine-escape")]
-    let mut escape_extra: u32 = 1;
+    // The state that OUTLIVES the frame, and the reason a video is not
+    // just a sequence of stills: the simulation's field continues its
+    // run rather than restarting from the seed each frame, and the
+    // escape renderer keeps its allocations and its warm reference
+    // orbit.
+    let mut engines = crate::renderer::RenderEngines::default();
 
-    // A deep-zoom frame carries per-pixel resume state (48-72 bytes),
-    // and past a device's buffer limit that allocation is a wgpu
-    // VALIDATION ERROR -- which wgpu answers by panicking. Here that
-    // panic lands on this worker thread, so the app stays responsive
-    // while the export dialog waits forever for a frame that will
-    // never arrive (reported: a 4K Ducks zoom, 398 MB against a
-    // 256 MB limit). The renderer now declines the perturbed path
-    // rather than ask, but declining means the DIRECT path, which
-    // past zoom 14 is mush -- so a whole export would come out
-    // quietly wrong. Refuse it up front instead, with the size that
-    // would work.
-    #[cfg(feature = "engine-escape")]
-    if is_escape {
-        let ss = crate::escape::EscapeRenderer::affordable_supersample(
-            &device,
-            export_config.width,
-            export_config.height,
-            export_config.config.escape.supersample,
-        );
-        let (rw, rh) = (
-            export_config.width.saturating_mul(ss),
-            export_config.height.saturating_mul(ss),
-        );
-        if !crate::escape::EscapeRenderer::perturb_state_fits_at(
-            &device,
-            &export_config.config.escape,
-            rw,
-            rh,
-        ) {
-            return Err(AnimationExportError::InvalidConfig(format!(
-                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame.                  Export at a smaller size (or lower the antialiasing): past the                  perturbation threshold every pixel carries its own iteration                  state, and there is no way to render this size without it."
-            )));
-        }
-    }
-
-    // Process frames sequentially
+    let mut cancelled = false;
     for frame in 0..total_frames {
         if reporter.is_cancelled() {
-            drop(frame_tx);
-            let _ = writer_handle.join();
-            return Err(AnimationExportError::Cancelled);
+            cancelled = true;
+            break;
         }
 
         let frame_start = Instant::now();
@@ -2071,330 +1697,63 @@ pub async fn export_animation_fast(
             &format!("Rendering frame {}/{}", frame + 1, total_frames),
         );
 
-        // Evaluate animation (with signal support)
         let values = if has_signals {
             controller.evaluate_at_time_with_signals(time, Some(&signal_manager))
         } else {
             controller.evaluate_at_time(time)
         };
-        frame_config = export_config.config.clone();
+        let mut frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
 
-        let current_palette = &frame_config.palette;
-        let bg_color = frame_config.background_color;
-
-        // Setup and render
         let render_start = Instant::now();
-        let mut setup_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Frame Setup"),
-        });
-        renderer.load_config(
-            &device,
-            &mut setup_encoder,
-            &queue,
-            &frame_config,
-            current_palette,
-            export_config.iterations_per_thread,
-            20, // burn_in default
-        );
-        queue.submit(std::iter::once(setup_encoder.finish()));
-
-        #[cfg(feature = "engine-escape")]
-        if is_escape {
-            // Settle loop, mirroring the headless escape path
-            // (render.rs): bounded chunked dispatches, each its own
-            // submission, so the driver never sees an unbounded pass.
-            let esc = escape_renderer.get_or_insert_with(|| {
-                let mut e = crate::escape::EscapeRenderer::new(
-                    &device,
-                    export_config.width,
-                    export_config.height,
-                );
-                // Throughput chunking: no UI to keep responsive.
-                e.set_chunk_time_target(200.0);
-                e
-            });
-            esc.resize(
-                &device,
+        let output = {
+            let mut progress = FrameProgress {
+                reporter,
+                frame,
+                total_frames,
+                // Start "due", so the first report of a frame is not
+                // withheld: the per-frame line above has just been
+                // printed, and the next one is wanted 100 ms on.
+                last_report: Instant::now(),
+            };
+            let job = crate::renderer::RenderJob::new(
+                &frame_config,
                 export_config.width,
                 export_config.height,
-                frame_config.escape.supersample,
-            );
-            // Antialiasing past what the grid can hold is made up by
-            // ACCUMULATION, exactly as the still-image path does
-            // (render.rs): the same sample positions, taken as several
-            // ordinary renders each displaced within a pixel and
-            // averaged. The grid is capped by a render-pixel budget
-            // that 4K reaches at 1x, so before this a 4K video with
-            // antialiasing asked for got none, silently. Same total
-            // iteration work; fixed memory; the reference orbit is
-            // shared by every sample.
-            let want_ss = frame_config
-                .escape
-                .supersample
-                .clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
-            let got_ss = esc.effective_supersample().max(1);
-            let extra = want_ss.div_ceil(got_ss).max(1);
-            escape_extra = extra;
-            if extra > 1 && frame == 0 {
-                log::info!(
-                    "Escape video: {want_ss}x antialiasing = {got_ss}x grid x {extra}x                      accumulated ({} renders per frame)",
-                    extra * extra
-                );
-            }
-            let offsets = if extra > 1 {
-                crate::escape::EscapeRenderer::sample_grid(extra)
-            } else {
-                vec![[0.0f32, 0.0]]
-            };
-            if extra > 1 {
-                esc.begin_accumulation(&device, &queue, extra);
-            }
-            for off in &offsets {
-                esc.set_sample_offset(*off);
-                let mut guard = 0u32;
-                let mut esc_encoder =
-                    device.create_command_encoder(&CommandEncoderDescriptor {
-                        label: Some("Escape Animation Frame"),
-                    });
-                let mut settled = esc.render(
-                    &device,
-                    &queue,
-                    &mut esc_encoder,
-                    &frame_config.escape,
-                    renderer.palette_view(),
-                );
-                while !settled {
-                    queue.submit(std::iter::once(esc_encoder.finish()));
-                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-                    esc_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-                        label: Some("Escape Animation Frame Chunk"),
-                    });
-                    settled = esc.render(
-                        &device,
-                        &queue,
-                        &mut esc_encoder,
-                        &frame_config.escape,
-                        renderer.palette_view(),
-                    );
-                    guard += 1;
-                    if guard > 4_000_000 {
-                        log::error!(
-                            "escape animation frame failed to settle; encoding what we have"
-                        );
-                        break;
-                    }
-                }
-                // Fold this displaced render into the running mean.
-                // Recorded into the encoder that holds the settling
-                // chunk's resolve, so the fold is ordered after it.
-                if extra > 1 {
-                    esc.accumulate_sample(&device, &queue, &mut esc_encoder);
-                }
-                queue.submit(std::iter::once(esc_encoder.finish()));
-                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-            }
-            esc.set_sample_offset([0.0, 0.0]);
-        } else {
-            render_frame_to_completion(
-                &device,
-                &queue,
-                &mut renderer,
-                &frame_config,
-                export_config.iterations_per_thread,
             )
-            .await;
-        }
-
-        // Solid rendering finalize — mirrors the interactive frame and the
-        // CLI export: exact brightness renormalization for occluded
-        // renders, then the shade pass (lighting/SSAO), then tonemap from
-        // the shaded output.
-        if !is_escape {
-            renderer.apply_exact_density_fraction(&device, &queue);
-        }
-
-        // Tonemap
-        let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Tonemap"),
-        });
-        let shade_ran = !is_escape && renderer.run_shade_pass(
-            &device,
-            &queue,
-            &mut tonemap_encoder,
-            frame_config.zoom,
-            frame_config.rotation,
-            frame_config.pan_x,
-            frame_config.pan_y,
-            frame_config.camera_rotation_x,
-            frame_config.camera_rotation_y,
-            frame_config.camera_bank,
-            frame_config.camera_x,
-            frame_config.camera_y,
-            frame_config.camera_z,
-        );
-        // The escape arm resolves to an Option FIRST: a cfg cannot
-        // sit on one arm of an if/else chain, and putting it on the
-        // whole chain would delete the FLAME arms with it -- which
-        // compiles clean and ships frames that were never tone-mapped.
-        #[cfg(feature = "engine-escape")]
-        let escape_view = if is_escape {
-            let esc = escape_renderer
-                .as_ref()
-                .expect("escape renderer exists: created in the generator branch");
-            Some(match esc.accumulated_view() {
-                Some(v) if escape_extra > 1 => v,
-                _ => esc.output_view(),
-            })
-        } else {
-            None
+            .with_iterations_per_thread(export_config.iterations_per_thread)
+            .with_engines(&mut engines);
+            crate::renderer::render_with(&mut renderer, &device, &queue, job, &mut progress).await
         };
-        #[cfg(not(feature = "engine-escape"))]
-        let escape_view: Option<&wgpu::TextureView> = None;
-        if let Some(view) = escape_view {
-            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, view);
-        } else if shade_ran {
-            renderer.tonemap_pass_with_input(&device, &queue, &mut tonemap_encoder, renderer.shade_output_view());
-        } else {
-            renderer.tonemap_pass(&queue, &mut tonemap_encoder);
-        }
-        queue.submit(std::iter::once(tonemap_encoder.finish()));
-
-        // Run color effects if enabled
-        let has_color_effects = crate::renderer::effect_chain::EffectChainRunner::has_enabled_effects(&frame_config.color_effects);
-        let mut effect_chain: Option<crate::renderer::effect_chain::EffectChainRunner> = None;
-        let color_effects_ran = if has_color_effects {
-            let mut chain = crate::renderer::effect_chain::EffectChainRunner::new(
-                &device, export_config.width, export_config.height);
-
-            let mut effect_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Color Effects"),
-            });
-
-            chain.reset_slots();
-            let ran = chain.run_color_effects(
-                &device,
-                &queue,
-                &mut effect_encoder,
-                renderer.get_fractal_texture_view(),
-                &frame_config.color_effects,
-            );
-
-            queue.submit(std::iter::once(effect_encoder.finish()));
-            effect_chain = Some(chain);
-            ran
-        } else {
-            false
-        };
-
-        // Copy to staging buffer - from effect chain output if effects ran, otherwise from renderer
-        let mut copy_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Copy to Staging"),
-        });
-
-        if color_effects_ran {
-            if let Some(ref chain) = effect_chain {
-                chain.copy_color_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
+        let output = match output {
+            Ok(o) => o,
+            Err(crate::renderer::RenderError::Cancelled) => {
+                cancelled = true;
+                break;
             }
-        } else {
-            copy_encoder.copy_texture_to_buffer(
-                TexelCopyTextureInfo {
-                    texture: renderer.fractal_texture(),
-                    mip_level: 0,
-                    origin: Origin3d::ZERO,
-                    aspect: TextureAspect::All,
-                },
-                TexelCopyBufferInfo {
-                    buffer: &staging_buffer,
-                    layout: TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(padded_bytes_per_row),
-                        rows_per_image: Some(export_config.height),
-                    },
-                },
-                Extent3d {
-                    width: export_config.width,
-                    height: export_config.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        queue.submit(std::iter::once(copy_encoder.finish()));
+            Err(e) => {
+                drop(frame_tx);
+                let _ = writer_handle.join();
+                return Err(AnimationExportError::GpuError(format!(
+                    "Failed to render frame {}: {}",
+                    frame, e
+                )));
+            }
+        };
         timing_stats.render_time_ms += render_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Map and read buffer
-        let map_start = Instant::now();
-        let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = futures::channel::oneshot::channel();
-        buffer_slice.map_async(MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-
-        // Wait for mapping to complete (proper blocking with timeout)
-        let _ = device.poll(PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(30)),  // 30s timeout to detect GPU hangs
-        });
-
-        // Await the mapping result
-        rx.await
-            .map_err(|_| AnimationExportError::GpuError(
-                format!("GPU mapping timed out or channel closed (frame {})", frame)
-            ))?
-            .map_err(|e| AnimationExportError::GpuError(
-                format!("Buffer map error on frame {}: {:?}", frame, e)
-            ))?;
-
-        timing_stats.map_wait_time_ms += map_start.elapsed().as_secs_f64() * 1000.0;
-
-        // Copy data
-        let copy_start = Instant::now();
-        let data = buffer_slice.get_mapped_range();
-        let mut rgba_data = Vec::with_capacity(output_size);
-
-        for y in 0..export_config.height {
-            let row_start = (y * padded_bytes_per_row) as usize;
-            let row_end = row_start + (export_config.width * bytes_per_pixel) as usize;
-            let row_data = &data[row_start..row_end];
-
-            for x in 0..export_config.width {
-                let px = (x * bytes_per_pixel) as usize;
-                let r = row_data[px];
-                let g = row_data[px + 1];
-                let b = row_data[px + 2];
-                let a = row_data[px + 3];
-
-                let alpha = a as f32 / 255.0;
-                let bg_r = (bg_color[0] * 255.0) as u8;
-                let bg_g = (bg_color[1] * 255.0) as u8;
-                let bg_b = (bg_color[2] * 255.0) as u8;
-
-                let out_r = ((r as f32 * alpha) + (bg_r as f32 * (1.0 - alpha))) as u8;
-                let out_g = ((g as f32 * alpha) + (bg_g as f32 * (1.0 - alpha))) as u8;
-                let out_b = ((b as f32 * alpha) + (bg_b as f32 * (1.0 - alpha))) as u8;
-
-                rgba_data.extend_from_slice(&[out_r, out_g, out_b, 255]);
-            }
-        }
-        drop(data);
-        staging_buffer.unmap();
-        timing_stats.copy_time_ms += copy_start.elapsed().as_secs_f64() * 1000.0;
-
-        // Send to FFmpeg writer thread
         let send_start = Instant::now();
-        if frame_tx.send(rgba_data).is_err() {
-            // The receiver is gone, so the writer thread has already
-            // returned — and it holds the ONLY copy of ffmpeg's stderr,
-            // which is the thing that actually explains the failure.
-            // Reporting "writer thread died" here and dropping the
-            // handle threw that away and sent people looking at the
-            // pipe instead of at the encoder's complaint.
-            let reason = match writer_handle.join() {
-                Ok(Err(e)) => e,
-                Ok(Ok(())) => "ffmpeg exited before all frames were written".to_string(),
-                Err(_) => "writer thread panicked".to_string(),
-            };
-            return Err(AnimationExportError::FfmpegFailed(reason));
+        if frame_tx.send(output.rgba_data).is_err() {
+            // The writer is gone, which means FFmpeg failed. Its error
+            // is the useful one, so collect it rather than reporting a
+            // closed channel.
+            let why = writer_handle
+                .join()
+                .unwrap_or_else(|_| Err("ffmpeg writer thread panicked".to_string()));
+            return Err(AnimationExportError::FfmpegFailed(match why {
+                Err(e) => e,
+                Ok(()) => "ffmpeg stopped accepting frames".to_string(),
+            }));
         }
         timing_stats.channel_send_time_ms += send_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -2407,27 +1766,23 @@ pub async fn export_animation_fast(
         );
     }
 
-    // Signal writer thread to finish
+    // Closing the channel is what tells FFmpeg the stream ended, so it
+    // must happen before the join -- on the cancel path too, where the
+    // partial video is still finalized rather than left truncated.
     drop(frame_tx);
-
-    // Wait for writer thread
-    writer_handle
+    let writer_result = writer_handle
         .join()
-        .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread panicked".to_string()))?
-        .map_err(AnimationExportError::FfmpegFailed)?;
+        .unwrap_or_else(|_| Err("ffmpeg writer thread panicked".to_string()));
 
-    // Ensure all GPU work is complete before device is dropped
-    // This prevents driver cleanup from interfering with the main device
-    let _ = device.poll(PollType::Wait {
-        submission_index: None,
-        timeout: Some(std::time::Duration::from_secs(5)),
-    });
+    if cancelled {
+        return Err(AnimationExportError::Cancelled);
+    }
+    writer_result.map_err(AnimationExportError::FfmpegFailed)?;
+
+    timing_stats.log_summary();
 
     let total_time_ms = total_start.elapsed().as_secs_f64() * 1000.0;
     let avg_frame_time_ms = total_time_ms / total_frames as f64;
-
-    // Log timing summary
-    timing_stats.log_summary();
 
     Ok(AnimationExportResult {
         total_frames,
@@ -2435,6 +1790,43 @@ pub async fn export_animation_fast(
         avg_frame_time_ms,
         output_path: export_config.output_path,
     })
+}
+
+/// Timing statistics for export performance analysis
+///
+/// Two stages the old fast loop timed separately -- the buffer map
+/// wait and the copy out of it -- are gone, because the render call
+/// owns the readback now. What is left is the split that still tells
+/// you something: time in the render, and time spent BLOCKED handing
+/// the frame to FFmpeg (a non-trivial send time means the encoder is
+/// the bottleneck, not the GPU).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Default)]
+pub struct ExportTimingStats {
+    /// Time spent rendering the frame, readback included
+    pub render_time_ms: f64,
+    /// Time spent blocked in the channel send (waiting for the writer)
+    pub channel_send_time_ms: f64,
+    /// Total frame time
+    pub total_frame_time_ms: f64,
+    /// Number of frames processed
+    pub frame_count: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExportTimingStats {
+    pub fn log_summary(&self) {
+        if self.frame_count == 0 {
+            return;
+        }
+        let n = self.frame_count as f64;
+        println!("\n=== Export Timing Summary ({} frames) ===", self.frame_count);
+        println!("  Render + readback:{:>8.2} ms avg", self.render_time_ms / n);
+        println!("  Channel send:     {:>8.2} ms avg", self.channel_send_time_ms / n);
+        println!("  Total frame:      {:>8.2} ms avg", self.total_frame_time_ms / n);
+        println!("  Effective FPS:    {:>8.2}", 1000.0 / (self.total_frame_time_ms / n));
+        println!("==========================================");
+    }
 }
 
 /// Build FFmpeg command-line arguments from export config
@@ -2483,7 +1875,7 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
     args.push("-c:v".to_string());
     args.push(encoder.to_string());
 
-    // Quality settings (matching export_animation_fast implementation)
+    // Quality settings
     let is_hardware = settings.hardware_accel != HardwareAccel::None;
 
     match settings.codec {
@@ -2736,11 +2128,11 @@ mod tests {
         apply_animation_values(&mut config, &[
             (EditingTarget::Main, "Escape.Supersample".to_string(), json!(8)),
         ]);
-        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE);
+        assert_eq!(config.escape.supersample, crate::config::escape::MAX_SUPERSAMPLE);
         apply_animation_values(&mut config, &[
             (EditingTarget::Main, "Escape.Supersample".to_string(), json!(40)),
         ]);
-        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE,
+        assert_eq!(config.escape.supersample, crate::config::escape::MAX_SUPERSAMPLE,
             "past the maximum still clamps");
     }
 
@@ -2805,63 +2197,9 @@ mod tests {
         assert_eq!(config.escape.zoom_log2, 0.0, "overflowing zoom falls back");
         assert_eq!(
             config.escape.supersample,
-            crate::escape::renderer::MAX_SUPERSAMPLE,
+            crate::config::escape::MAX_SUPERSAMPLE,
             "supersample clamps to the panel's maximum (it used to stop at 3)"
         );
-    }
-
-    /// A video frame must not render meaningfully past the
-    /// `max_iterations` it was given.
-    ///
-    /// The loop dispatches whole quanta of `workgroups x 64 x ipt`, so
-    /// a fixed 128 workgroups overshot by up to one quantum — and the
-    /// quantum scales with ipt, so moving the export default from 256
-    /// to 1024 quadrupled the waste. Small per-frame budgets are the
-    /// normal case for video (they are what keeps an export finishing),
-    /// which is exactly where the overshoot was worst: at ipt 1024 a
-    /// 1M-iteration frame rendered 8.4M, an 8.4x overrun.
-    #[test]
-    fn a_frame_does_not_render_far_past_its_iteration_budget() {
-        const NW: u32 = 128;
-        const TPW: u64 = 64;
-
-        for ipt in [256u64, 1024, 4096] {
-            let per_workgroup = TPW * ipt;
-            for target in [500_000u64, 1_000_000, 5_000_000, 50_000_000, 1_000_000_000] {
-                // Walk the loop the way the renderer does.
-                let mut total = 0u64;
-                let mut dispatches = 0u32;
-                while total < target {
-                    let wg = workgroups_for_remaining(target - total, per_workgroup, NW);
-                    assert!(wg >= 1 && wg <= NW, "workgroups out of range: {wg}");
-                    total += wg as u64 * per_workgroup;
-                    dispatches += 1;
-                    assert!(dispatches < 100_000, "loop failed to terminate");
-                }
-
-                // Overshoot is bounded by ONE workgroup's worth — the
-                // finest grain the dispatch can express — never by a
-                // whole 128-workgroup quantum.
-                let overshoot = total - target;
-                assert!(
-                    overshoot < per_workgroup,
-                    "ipt {ipt}, target {target}: overshot by {overshoot}, \
-                     which is more than one workgroup ({per_workgroup})"
-                );
-            }
-        }
-    }
-
-    /// The trim must not cost throughput on the budgets that dominate:
-    /// anything comfortably larger than a quantum still runs full-width
-    /// dispatches, so the common case is untouched.
-    #[test]
-    fn large_budgets_still_dispatch_full_width() {
-        let per_workgroup = 64 * 1024;
-        assert_eq!(workgroups_for_remaining(1_000_000_000, per_workgroup, 128), 128);
-        // ...and a remainder smaller than one workgroup still runs one.
-        assert_eq!(workgroups_for_remaining(1, per_workgroup, 128), 1);
-        assert_eq!(workgroups_for_remaining(0, per_workgroup, 128), 1);
     }
 
     /// Regression test for the colon-vs-dot variation-param key bug.

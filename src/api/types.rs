@@ -65,6 +65,16 @@ pub enum ApiRenderMode {
     /// alongside 2D flames.
     #[serde(rename = "escape")]
     Escape,
+    /// Neighbour-coupled simulations. Stored as FLAMES on the same
+    /// endpoints and told apart by this value alone, exactly as escape
+    /// is, with the same two consequences: `transform_count` is 0 and
+    /// `variation_names` is empty for these, legitimately.
+    ///
+    /// The server's Postgres `render_mode` enum does NOT know this
+    /// value yet, so `sync` refuses to upload one client-side until it
+    /// does — the same sequence escape went through on 2026-08-29.
+    #[serde(rename = "simulation")]
+    Simulation,
 }
 
 /// Visibility for flames and palettes (private/unlisted/public).

@@ -1,5 +1,7 @@
 //! Context struct for menu bar to reduce parameter count
 
+use crate::scene::transforms::RenderMode;
+
 /// Actions that can be triggered from the File menu
 #[derive(Default)]
 pub struct FileMenuActions {
@@ -33,8 +35,6 @@ pub struct ViewMenuActions {
     pub fit_to_window: bool,
     pub zoom_in: bool,
     pub zoom_out: bool,
-    pub set_mode_2d: bool,
-    pub set_mode_3d: bool,
     pub show_grid: bool,
 }
 
@@ -71,6 +71,10 @@ pub struct MenuActions {
     pub animation: AnimationMenuActions,
     /// Menu-bar Fly Mode toggle button was clicked this frame.
     pub fly_mode_toggle: bool,
+    /// The mode a Mode-menu row asked for this frame, if any. One
+    /// field rather than a flag per mode: with four modes the flags
+    /// were about to become four booleans that must not disagree.
+    pub set_mode: Option<RenderMode>,
 }
 
 /// Read-only state needed by menus to determine enabled/disabled state
@@ -78,7 +82,12 @@ pub struct MenuState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_paused: bool,
-    pub render_mode_2d: bool, // true = 2D, false = 3D
+    /// The active mode. It was a `render_mode_2d: bool`, which could
+    /// not tell Escape and Simulation from 3D -- so the View menu drew
+    /// "3D Mode" as selected in both, and Fly Mode stayed enabled.
+    pub render_mode: RenderMode,
+    /// The active tone-map mode, the visibility policy's second axis.
+    pub tonemap_mode: crate::scene::tonemap::ToneMapMode,
     pub online_mode: bool,
     pub has_api_flame_id: bool,
     pub api_flame_id: Option<String>,

@@ -615,6 +615,7 @@ impl FractalBrowserPanel {
                     crate::api::types::ApiRenderMode::TwoD => "2D",
                     crate::api::types::ApiRenderMode::ThreeD => "3D",
                     crate::api::types::ApiRenderMode::Escape => "Escape",
+                    crate::api::types::ApiRenderMode::Simulation => "Simulation",
                 };
 
                 let variations_summary = if flame.variation_names.len() <= 3 {

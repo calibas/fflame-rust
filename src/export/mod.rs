@@ -56,6 +56,66 @@ pub fn histogram_size_bytes(width: u32, height: u32, solid: bool) -> u64 {
     (width as u64) * (height as u64) * bytes_per_pixel
 }
 
+/// Which engine a custom-size PNG export should use.
+///
+/// This decision has now been got wrong three separate times, always
+/// the same way: by asking "is this escape?" instead of "is this a
+/// flame?". `HighResExporter` is a FLAME-ONLY engine, so routing
+/// anything else to it renders the config's flame — which is a
+/// plausible-looking picture of the wrong thing, not an error.
+///
+/// - The CLI hit it and was fixed (`app/export.rs`, `non_flame_mode`).
+/// - The video loop hit it and was fixed (one loop, `is_flame`).
+/// - The in-app custom-size export hit it and is fixed here. A
+///   simulation exported at a custom size came out as a flame, on
+///   desktop and in the browser both.
+///
+/// What made the last one certain rather than occasional is
+/// `long_render`: it reads `max_iterations`, which a non-flame config
+/// carries and never uses, and a config made in the app has the
+/// default billion. Every in-app simulation tripped it.
+///
+/// A pure function so the rule can be tested without a GPU, an App or
+/// a config file — which is what none of the three previous fixes had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomSizeRoute {
+    /// Render synchronously on the app's own device, through the
+    /// unified `render()` — which dispatches to whichever generator
+    /// the mode names.
+    Direct,
+    /// Hand off to the background `HighResExporter`: tiled, its own
+    /// device, live progress. Flames only.
+    HighRes,
+    /// Refuse. Both non-flame engines share the shared
+    /// `FlameRenderer`'s tail, and it allocates its histogram at the
+    /// export size whatever the mode — so past one storage binding
+    /// there is no path that renders the right thing.
+    TooLarge,
+}
+
+/// Pick the route. `hist_bytes` is the flame histogram this size would
+/// need, `max_binding` the device's limit, `long_render` whether the
+/// flame iteration count justifies a background render with progress.
+pub fn route_custom_size_export(
+    mode: crate::scene::transforms::RenderMode,
+    hist_bytes: u64,
+    max_binding: u64,
+    long_render: bool,
+) -> CustomSizeRoute {
+    if mode.is_non_flame() {
+        // `long_render` is deliberately ignored: it measures flame
+        // iterations, which mean nothing here.
+        if hist_bytes > max_binding {
+            return CustomSizeRoute::TooLarge;
+        }
+        return CustomSizeRoute::Direct;
+    }
+    if hist_bytes > max_binding || long_render {
+        return CustomSizeRoute::HighRes;
+    }
+    CustomSizeRoute::Direct
+}
+
 /// Render strategy chosen at runtime based on resolution + device limits.
 ///
 /// The driver of the choice is whether the full-resolution histogram fits
@@ -328,6 +388,64 @@ mod strategy_tests {
                 }
                 RenderStrategy::Direct => panic!("{}×{} should tile, got Direct", w, h),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod custom_size_route_tests {
+    use super::{route_custom_size_export, CustomSizeRoute};
+    use crate::scene::transforms::RenderMode;
+
+    const BINDING: u64 = 128 * 1024 * 1024;
+
+    /// The reported bug: a simulation at a custom size came out as the
+    /// config's flame.
+    ///
+    /// The trigger is that a config made in the app carries the
+    /// DEFAULT `max_iterations` — a billion — which a simulation never
+    /// uses but which trips `long_render`, and `long_render` sent it to
+    /// the flame-only `HighResExporter`. Both non-flame modes must
+    /// ignore it entirely.
+    #[test]
+    fn a_non_flame_export_never_reaches_the_flame_only_engine() {
+        for mode in [RenderMode::Simulation, RenderMode::Escape] {
+            for long in [false, true] {
+                assert_eq!(
+                    route_custom_size_export(mode, 1024, BINDING, long),
+                    CustomSizeRoute::Direct,
+                    "{mode:?} with long_render={long} must render directly"
+                );
+            }
+            // ...and past one binding it is refused, not mis-rendered.
+            assert_eq!(
+                route_custom_size_export(mode, BINDING + 1, BINDING, false),
+                CustomSizeRoute::TooLarge,
+                "{mode:?} past the binding limit must be refused"
+            );
+        }
+    }
+
+    /// Flames are unchanged, which is the other half of the fix: the
+    /// background engine exists for them and a long render still earns
+    /// its progress bar.
+    #[test]
+    fn a_flame_still_routes_by_size_and_length() {
+        for mode in [RenderMode::TwoD, RenderMode::ThreeD] {
+            assert_eq!(
+                route_custom_size_export(mode, 1024, BINDING, false),
+                CustomSizeRoute::Direct
+            );
+            assert_eq!(
+                route_custom_size_export(mode, 1024, BINDING, true),
+                CustomSizeRoute::HighRes,
+                "a long flame render belongs in the background"
+            );
+            assert_eq!(
+                route_custom_size_export(mode, BINDING + 1, BINDING, false),
+                CustomSizeRoute::HighRes,
+                "a flame past one binding tiles rather than refusing"
+            );
         }
     }
 }

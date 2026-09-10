@@ -414,12 +414,49 @@ pub struct App {
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
     pub(super) escape_dirty: bool,
-    /// Wall time accumulated while an escape animation frame is still
-    /// rendering. Escape playback is SETTLE-THEN-JUMP: the controller
-    /// is sampled once per completed frame and advanced by everything
-    /// that elapsed meanwhile, rather than every display frame (see
-    /// `escape_playback_tick`).
-    pub(super) escape_anim_pending: f64,
+
+    /// The simulation's grid and step state. Lazily created on first
+    /// use so a flame session never allocates it.
+    #[cfg(feature = "engine-sim")]
+    pub(super) sim_renderer: Option<crate::sim::SimRenderer>,
+    /// Whether the Run button is engaged. Deliberately NOT in the
+    /// config: it is a view state like the playhead, not part of the
+    /// picture, and saving it would make a file that starts moving as
+    /// soon as it opens.
+    pub(super) sim_running: bool,
+    /// A single Step was requested this frame.
+    pub(super) sim_step_once: bool,
+    /// Restart from the seed before the next frame (a reseed-class
+    /// edit, a device loss, or a grid the field cannot be carried into).
+    pub(super) sim_reseed: bool,
+    /// The step count the TIMELINE has committed the grid to.
+    ///
+    /// `Some` means the timeline owns the step count: the driver walks
+    /// the field toward this target within a per-frame budget, and
+    /// Run / Pause / Step are inert because a picture that depended on
+    /// both would depend on how long the user looked at it. `None` --
+    /// the ordinary state -- means `sim.steps` is the Max Steps CAP
+    /// and the transport drives the grid, exactly as before.
+    ///
+    /// Cleared when the grid arrives, so playback re-commits each
+    /// frame while a scrub commits once and the run then holds where
+    /// the timeline left it.
+    ///
+    /// Deliberately not the config's `sim.steps`: that field means
+    /// "cap" to the transport and "target" to the timeline, and the
+    /// only honest way to tell them apart is to record which one is
+    /// driving (`docs/archive/projects/video-loop-and-sim-timeline.md` D4).
+    #[cfg(feature = "engine-sim")]
+    pub(super) sim_timeline_target: Option<u32>,
+    /// Wall time accumulated while an animation frame is still coming
+    /// into being -- an escape render that has not settled, or a
+    /// simulation grid still stepping toward this frame's target.
+    /// Playback of both is SETTLE-THEN-JUMP: the controller is sampled
+    /// once per completed frame and advanced by everything that
+    /// elapsed meanwhile, rather than every display frame, so every
+    /// displayed frame is the one the export would render (see
+    /// `paced_playback_tick`).
+    pub(super) paced_anim_pending: f64,
     pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
 
     // UI state (not saved in config)
@@ -549,6 +586,10 @@ pub struct App {
     /// `load_config_silent` / `load_config_with_explicit_before` and
     /// deliberately do not.
     last_load_generation: u64,
+    /// The render mode as of the last frame, so a change -- from the
+    /// Mode menu, a panel, a script or an undo -- brings the workspace
+    /// with it.
+    last_render_mode: crate::scene::transforms::RenderMode,
 
     // Audio system
     pub(super) audio_manager: crate::audio::AudioManager,
@@ -758,7 +799,16 @@ impl App {
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
             escape_dirty: true,
-            escape_anim_pending: 0.0,
+            #[cfg(feature = "engine-sim")]
+            sim_renderer: None,
+            // Runs on entry: a simulation that sits still looks broken,
+            // and the first thing anyone does is press Run anyway.
+            sim_running: true,
+            sim_step_once: false,
+            sim_reseed: true,
+            #[cfg(feature = "engine-sim")]
+            sim_timeline_target: None,
+            paced_anim_pending: 0.0,
             flame,
             workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
@@ -806,6 +856,7 @@ impl App {
             // Whatever the config manager starts at, so a boot does
             // not fight the layout the user left the app in.
             last_load_generation: initial_load_generation,
+            last_render_mode: initial_config.render_mode,
             window_fullscreen: false,
             ui_hidden: false,
             fly_mode: false,
@@ -860,7 +911,7 @@ impl App {
         app.signal_manager.add_producer(app.audio_capture.create_producer());
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
-        app.import_config(initial_config);
+        app.import_config(initial_config, true);
 
         // Detect compact (mobile) mode from logical window size
         {
@@ -1059,6 +1110,14 @@ impl App {
                                 // its channel drops; the reference reloads
                                 // from the disk orbit store.
                                 app.escape_renderer = None;
+                                // The field lives in GPU textures that
+                                // just went away; the run cannot be
+                                // recovered, only restarted.
+                                #[cfg(feature = "engine-sim")]
+                                {
+                                    app.sim_renderer = None;
+                                }
+                                app.sim_reseed = true;
 
                                 match app.gpu.reinit(window.clone()) {
                                     Ok(()) => {
@@ -1161,6 +1220,7 @@ impl App {
                     let max_iterations = Some(config.max_iterations);
                     let is_rendering = !app.paused
                         && config.render_mode != crate::scene::transforms::RenderMode::Escape
+                        && config.render_mode != crate::scene::transforms::RenderMode::Simulation
                         && app.flame_renderer.as_ref().map_or(false, |r| {
                             max_iterations.map_or(true, |max| r.total_iterations() < max)
                         });
@@ -1217,8 +1277,27 @@ impl App {
                     // settled.
                     let fly_active = app.fly_mode && !app.fly_keys_held.is_empty();
 
+                    // A running simulation needs continuous redraws for
+                    // the same reason fly mode does: it only advances
+                    // when render() runs. Deliberately NOT folded into
+                    // `is_rendering`, which drives the flame's
+                    // "rendering complete" UI state and its
+                    // max_iterations comparison -- neither means
+                    // anything here.
+                    // ...or catching up to a timeline target, which
+                    // is the same need: the grid only advances when
+                    // render() runs, and a scrub that lands mid-jump
+                    // must not stall because the window went to sleep.
+                    #[cfg(feature = "engine-sim")]
+                    let sim_catching_up = app.sim_timeline_target.is_some();
+                    #[cfg(not(feature = "engine-sim"))]
+                    let sim_catching_up = false;
+                    let sim_active = (app.sim_running || sim_catching_up)
+                        && app.config_manager.active_config().render_mode
+                            == crate::scene::transforms::RenderMode::Simulation;
+
                     // During export, audio playback, or live capture, keep redrawing to update UI
-                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting || app.viewport_resize_pending || just_finished_rendering || fly_active {
+                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting || app.viewport_resize_pending || just_finished_rendering || fly_active || sim_active {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -1319,26 +1398,78 @@ impl App {
     /// Only ever called when `load_generation` moved, so an explicit
     /// layout choice survives everything except loading a fractal of
     /// the other kind.
+    /// Give back the GPU state of whichever engine the new mode does
+    /// not use (ui-render-modes plan, phase 5).
+    ///
+    /// Both engines are created lazily and were previously dropped
+    /// only on device loss or before a synchronous export, so leaving
+    /// a mode left everything allocated. The escape renderer alone
+    /// holds gigabytes at a high antialiasing factor -- the same
+    /// reason a high-res export already frees it.
+    ///
+    /// The two cases are not symmetric, and the comment is here so
+    /// nobody has to rediscover it: the escape renderer rebuilds
+    /// itself from the config, so returning costs only the re-render,
+    /// but the simulation's grid IS its state, so returning restarts
+    /// it from the seed.
+    fn release_inactive_engines(&mut self, mode: crate::scene::transforms::RenderMode) {
+        if !crate::ui::render_mode::keeps_escape_engine(mode) {
+            if let Some(esc) = self.escape_renderer.take() {
+                let mb = esc.resident_bytes() as f64 / (1024.0 * 1024.0);
+                esc.destroy();
+                log::info!("Left escape mode: freed {mb:.0} MB of escape renderer state");
+            }
+            // Rebuilt lazily; the flag makes the first frame back render.
+            self.escape_dirty = true;
+        }
+        #[cfg(feature = "engine-sim")]
+        if !crate::ui::render_mode::keeps_sim_engine(mode) {
+            if self.sim_renderer.take().is_some() {
+                log::info!("Left simulation mode: freed the simulation grid");
+                // The grid was the state; coming back starts from the
+                // seed rather than from an uninitialised field.
+                self.sim_reseed = true;
+            }
+        }
+    }
+
     fn follow_loaded_render_mode(&mut self) {
         use crate::ui::workspace::{PanelType, WorkspaceLayout};
-        let is_escape = self.config_manager.active_config().render_mode
-            == crate::scene::transforms::RenderMode::Escape;
+        let mode = self.config_manager.active_config().render_mode;
         let compact = self
             .config_manager
             .system_settings()
             .compact_mode
             .unwrap_or(false);
-        if is_escape {
-            if compact {
-                let ctx = self.egui_layer.ctx.clone();
-                self.workspace.open_compact_panel(PanelType::Escape, &ctx);
-            } else if self.workspace.current_layout != WorkspaceLayout::EscapeTime {
-                log::info!("Loaded an escape fractal: switching to the Escape workspace");
-                self.workspace.apply_layout(WorkspaceLayout::EscapeTime);
+        // Each non-flame mode brings its own workspace, and loading a
+        // flame leaves whichever one is up. Written as a table rather
+        // than nested ifs because a third mode made the branching the
+        // part most likely to gain a hole -- "leaving" has to cover
+        // every layout that is not the one being entered.
+        let want: Option<(WorkspaceLayout, PanelType)> =
+            crate::ui::render_mode::layout_for(mode);
+        match want {
+            Some((layout, panel)) => {
+                if compact {
+                    let ctx = self.egui_layer.ctx.clone();
+                    self.workspace.open_compact_panel(panel, &ctx);
+                } else if self.workspace.current_layout != layout {
+                    log::info!("A {mode:?} fractal: switching to its workspace");
+                    self.workspace.switch_layout(layout);
+                }
             }
-        } else if !compact && self.workspace.current_layout == WorkspaceLayout::EscapeTime {
-            log::info!("Loaded a flame: leaving the Escape workspace");
-            self.workspace.apply_layout(WorkspaceLayout::Standard);
+            None => {
+                if !compact
+                    && matches!(
+                        self.workspace.current_layout,
+                        WorkspaceLayout::EscapeTime | WorkspaceLayout::Simulation
+                    )
+                {
+                    log::info!("A flame: leaving the {:?} workspace",
+                        self.workspace.current_layout);
+                    self.workspace.switch_layout(WorkspaceLayout::Standard);
+                }
+            }
         }
     }
 
@@ -1476,6 +1607,33 @@ impl App {
         // Read before the call: `config_manager` goes in mutably, so the
         // sign-in check cannot be an argument expression.
         let signed_in = self.config_manager.system_settings().is_signed_in();
+        // Being HELD: the timeline is playing and asking for a step
+        // count BELOW the grid, which would restart the run on every
+        // frame. The panel says so, because a deliberately-held
+        // picture and a stuck one look identical otherwise. Computed
+        // BEFORE the call, which borrows both of these mutably.
+        // The panel greys the transport on OWNERSHIP, which is wider
+        // than a committed target (see `timeline_owns_sim`): a held
+        // leg has no target and must still be greyed, or Run could be
+        // pressed into the hold. The target itself feeds the readout.
+        let sim_timeline_driven = self.timeline_owns_sim();
+        let sim_timeline_holding = {
+            #[cfg(feature = "engine-sim")]
+            {
+                let cfg = self.config_manager.active_config();
+                cfg.render_mode == crate::scene::transforms::RenderMode::Simulation
+                    && self.animation_controller.is_playing()
+                    && self
+                        .sim_renderer
+                        .as_ref()
+                        .is_some_and(|s| cfg.sim.steps < s.step_index())
+            }
+            #[cfg(not(feature = "engine-sim"))]
+            {
+                false
+            }
+        };
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1515,7 +1673,53 @@ impl App {
             &self.script_cloud,
             self.effect_catalog.as_ref(),
             signed_in,
+            self.sim_running,
+            {
+                #[cfg(feature = "engine-sim")]
+                {
+                    self.sim_renderer.as_ref().map_or(0, |s| s.step_index())
+                }
+                #[cfg(not(feature = "engine-sim"))]
+                {
+                    0
+                }
+            },
+            {
+                #[cfg(feature = "engine-sim")]
+                {
+                    self.sim_renderer.as_ref().map_or((0, 0), |s| s.grid_size())
+                }
+                #[cfg(not(feature = "engine-sim"))]
+                {
+                    (0, 0)
+                }
+            },
+            {
+                #[cfg(feature = "engine-sim")]
+                {
+                    self.sim_timeline_target
+                }
+                #[cfg(not(feature = "engine-sim"))]
+                {
+                    None
+                }
+            },
+            sim_timeline_holding,
+            sim_timeline_driven,
         );
+
+        // Simulation transport, back from the panel. `sim_running` is
+        // the panel's resulting state; the other two are one-shot
+        // requests the frame loop consumes.
+        if let Some(running) = ui_response.sim_running {
+            self.sim_running = running;
+        }
+        if ui_response.sim_step_once {
+            self.sim_step_once = true;
+        }
+        if ui_response.sim_reseed {
+            self.sim_reseed = true;
+        }
 
         // A panel asked for a different workspace. Applied here rather
         // than in the panel because the workspace is borrowed by the
@@ -1542,6 +1746,17 @@ impl App {
             self.last_load_generation = load_gen;
             self.follow_loaded_render_mode();
             self.log_wasm_memory_after_load(load_gen);
+        }
+        // The workspace follows the mode WHENEVER it changes, not only
+        // when a file brought it: a Mode menu switch and an undo of one
+        // both land here (ui-render-modes plan, section 3.3). It used
+        // to hang off the load generation alone, so a manual switch out
+        // of Escape left the Escape workspace up.
+        let mode_now = self.config_manager.active_config().render_mode;
+        if self.last_render_mode != mode_now {
+            self.last_render_mode = mode_now;
+            self.follow_loaded_render_mode();
+            self.release_inactive_engines(mode_now);
         }
 
         // Consume fly-mode responses produced by the UI this frame.
@@ -1664,12 +1879,10 @@ impl App {
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.white_level, resize_config.saturation, resize_config.hue_shift,
                         resize_config.alpha_blend_low, resize_config.alpha_blend_high,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false,
-                        // Same escape-mode Levels gate as the live path.
-                        if resize_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            false
-                        } else {
-                            resize_config.levels_enabled
-                        },
+                        // Same Levels gate as every other path. This
+                        // one used to test Escape alone, so a resize in
+                        // Simulation let the flag through.
+                        resize_config.effective_levels_enabled(),
                         resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
@@ -1743,15 +1956,29 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            // Escape mode: the flame accumulator is empty; re-tonemap
-                            // from the escape output like the frame loop does.
-                            match self.escape_renderer.as_ref() {
-                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
-                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                        // A non-flame engine has already rendered its
+                        // image and the flame accumulator is empty, so
+                        // re-tonemap from that image like the frame
+                        // loop does. Each of these sites used to name
+                        // Escape alone, so a transparent PNG in
+                        // Simulation encoded the empty accumulator.
+                        // Written as field access rather than a helper
+                        // because `renderer` above holds
+                        // `&mut self.flame_renderer`, and only
+                        // field-level borrows are disjoint from it.
+                        let non_flame_view = match export_config.render_mode {
+                            crate::scene::transforms::RenderMode::Escape => {
+                                self.escape_renderer.as_ref().map(|e| e.output_view())
                             }
-                        } else {
-                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                            #[cfg(feature = "engine-sim")]
+                            crate::scene::transforms::RenderMode::Simulation => {
+                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                            }
+                            _ => None,
+                        };
+                        match non_flame_view {
+                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
+                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
                         }
 
                         // Re-run color effects if enabled (they need to process the new tonemapped output)
@@ -1839,15 +2066,29 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Restore Normal Tonemap"),
                         });
-                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            // Escape mode: the flame accumulator is empty; re-tonemap
-                            // from the escape output like the frame loop does.
-                            match self.escape_renderer.as_ref() {
-                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
-                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                        // A non-flame engine has already rendered its
+                        // image and the flame accumulator is empty, so
+                        // re-tonemap from that image like the frame
+                        // loop does. Each of these sites used to name
+                        // Escape alone, so a transparent PNG in
+                        // Simulation encoded the empty accumulator.
+                        // Written as field access rather than a helper
+                        // because `renderer` above holds
+                        // `&mut self.flame_renderer`, and only
+                        // field-level borrows are disjoint from it.
+                        let non_flame_view = match export_config.render_mode {
+                            crate::scene::transforms::RenderMode::Escape => {
+                                self.escape_renderer.as_ref().map(|e| e.output_view())
                             }
-                        } else {
-                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                            #[cfg(feature = "engine-sim")]
+                            crate::scene::transforms::RenderMode::Simulation => {
+                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                            }
+                            _ => None,
+                        };
+                        match non_flame_view {
+                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
+                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
                         }
 
                         // Re-run color effects with normal tonemap output
@@ -1922,7 +2163,16 @@ impl App {
 
                     let is_escape_export = export_config.render_mode
                         == crate::scene::transforms::RenderMode::Escape;
-                    while !is_escape_export && total_rendered < max_iterations {
+                    // The chaos game is the FLAME generator, and this
+                    // loop is gated on the mode for the same reason the
+                    // video loop is: a non-flame frame that runs it
+                    // spends the config's `max_iterations` -- a billion
+                    // by default -- filling a histogram nothing reads.
+                    // Testing for escape alone is what made a
+                    // custom-size SIMULATION export come out as the
+                    // config's flame.
+                    let is_non_flame_export = export_config.render_mode.is_non_flame();
+                    while !is_non_flame_export && total_rendered < max_iterations {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("WASM Export Render Frame"),
                         });
@@ -2046,13 +2296,55 @@ impl App {
                         None
                     };
 
+                    // The simulation generator. `render_still` is the
+                    // export contract: seed, run exactly `sim.steps`,
+                    // colour -- so an exported PNG is the state at the
+                    // step count the config names, and reproducible
+                    // from it. A fresh renderer, deliberately: the
+                    // viewport's own holds the user's RUN, and reusing
+                    // it would advance or restart what is on screen as
+                    // a side effect of exporting.
+                    #[cfg(feature = "engine-sim")]
+                    let sim_export = if export_config.render_mode
+                        == crate::scene::transforms::RenderMode::Simulation
+                    {
+                        let mut sim = crate::sim::SimRenderer::new(
+                            &self.gpu.device,
+                            &export_config.sim,
+                            export_width,
+                            export_height,
+                        );
+                        if export_config.sim.use_transforms {
+                            sim.set_layer_transforms(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &export_config.flame,
+                            );
+                        }
+                        sim.render_still(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &export_config.sim,
+                            temp_renderer.palette_view(),
+                        );
+                        Some(sim)
+                    } else {
+                        None
+                    };
+                    #[cfg(not(feature = "engine-sim"))]
+                    let sim_export: Option<()> = None;
+
                     // Final tonemap pass; the temp renderer supplies the
-                    // palette + tonemap tail for both modes.
+                    // palette + tonemap tail for all three modes.
                     let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("WASM Export Final Tonemap"),
                     });
-                    if let Some(ref esc) = escape_export {
-                        temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, esc.output_view());
+                    #[cfg(feature = "engine-sim")]
+                    let sim_view = sim_export.as_ref().map(|s| s.output_view());
+                    #[cfg(not(feature = "engine-sim"))]
+                    let sim_view: Option<&egui_wgpu::wgpu::TextureView> = None;
+                    if let Some(view) = escape_export.as_ref().map(|e| e.output_view()).or(sim_view) {
+                        temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, view);
                     } else {
                         temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
                     }
@@ -2182,15 +2474,29 @@ impl App {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("Transparent Export Tonemap"),
                         });
-                        if export_config.render_mode == crate::scene::transforms::RenderMode::Escape {
-                            // Escape mode: the flame accumulator is empty; re-tonemap
-                            // from the escape output like the frame loop does.
-                            match self.escape_renderer.as_ref() {
-                                Some(esc) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, esc.output_view()),
-                                None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
+                        // A non-flame engine has already rendered its
+                        // image and the flame accumulator is empty, so
+                        // re-tonemap from that image like the frame
+                        // loop does. Each of these sites used to name
+                        // Escape alone, so a transparent PNG in
+                        // Simulation encoded the empty accumulator.
+                        // Written as field access rather than a helper
+                        // because `renderer` above holds
+                        // `&mut self.flame_renderer`, and only
+                        // field-level borrows are disjoint from it.
+                        let non_flame_view = match export_config.render_mode {
+                            crate::scene::transforms::RenderMode::Escape => {
+                                self.escape_renderer.as_ref().map(|e| e.output_view())
                             }
-                        } else {
-                            renderer.tonemap_pass(&self.gpu.queue, &mut encoder);
+                            #[cfg(feature = "engine-sim")]
+                            crate::scene::transforms::RenderMode::Simulation => {
+                                self.sim_renderer.as_ref().map(|r| r.output_view())
+                            }
+                            _ => None,
+                        };
+                        match non_flame_view {
+                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
+                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
                         }
 
                         // Re-run color effects if enabled
@@ -2306,7 +2612,7 @@ impl App {
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
-                use crate::animation::export::{AnimationExportConfig, export_animation_fast, VideoEncodingSettings};
+                use crate::animation::export::{AnimationExportConfig, export_animation, VideoEncodingSettings};
 
                 // Clone config and override max_iterations from export settings
                 let mut config = self.config_manager.active_config().clone();
@@ -2362,7 +2668,7 @@ impl App {
                 std::thread::spawn(move || {
                     let mut reporter = UiReporter::new(Arc::clone(&status_arc));
 
-                    match pollster::block_on(export_animation_fast(export_config, &mut reporter)) {
+                    match pollster::block_on(export_animation(export_config, &mut reporter)) {
                         Ok(result) => {
                             println!("\nAnimation export complete!");
                             println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
@@ -2421,6 +2727,10 @@ impl App {
         // Determine overwrite mode (smooth transitions during parameter changes)
         // Must be computed before mutable borrow of flame_renderer
         let use_overwrite = self.should_use_overwrite();
+        // Read before the renderer is borrowed: the simulation driver
+        // below needs it and the method takes `&self`.
+        #[cfg(feature = "engine-sim")]
+        let timeline_owns_sim = self.timeline_owns_sim();
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
@@ -2477,6 +2787,139 @@ impl App {
                 }
             }
 
+            // Simulation mode: a stateful grid stepped K times per
+            // frame. Unlike escape there is no "settled" notion — the
+            // picture is whatever step it has reached — so the frame
+            // advances only while Run is engaged or a Step was asked
+            // for, and ALWAYS recolours so a parameter or palette edit
+            // is visible without advancing the simulation. Stepping to
+            // show an edit would make the picture depend on how long
+            // the user looked at it.
+            #[cfg(feature = "engine-sim")]
+            let is_sim = final_config.render_mode
+                == crate::scene::transforms::RenderMode::Simulation;
+            #[cfg(not(feature = "engine-sim"))]
+            let is_sim = false;
+            #[cfg(feature = "engine-sim")]
+            if is_sim {
+                let (w, h) = (renderer.width, renderer.height);
+                let sim = self.sim_renderer.get_or_insert_with(|| {
+                    crate::sim::SimRenderer::new(&self.gpu.device, &final_config.sim, w, h)
+                });
+                // A resize may change the grid (bound) or only the
+                // resolve ratio (fixed); the renderer decides which and
+                // reports whether the field survived.
+                sim.resize(&self.gpu.device, &final_config.sim, w, h);
+                // The flame's transforms are the layers' maps when the
+                // config asks (simulation-layers plan, section 4).
+                if final_config.sim.use_transforms {
+                    sim.set_layer_transforms(&self.gpu.device, &self.gpu.queue, &final_config.flame);
+                }
+                if self.sim_reseed {
+                    sim.request_seed();
+                    self.sim_reseed = false;
+                }
+                if let Some(target) = self.sim_timeline_target {
+                    // THE TIMELINE OWNS THE STEP COUNT. The picture at
+                    // a given time is the state at that step count, so
+                    // the transport is inert here: a picture that
+                    // depended on both the playhead and how long Run
+                    // had been held would depend on how long the user
+                    // looked at it.
+                    //
+                    // Budgeted, so a jump the grid cannot make in one
+                    // display frame is walked over the next few
+                    // instead of freezing the UI -- and a scrub can
+                    // ask for a two-thousand-step jump on every slider
+                    // event. `steps_in` sizes it from the measured
+                    // cost of a step.
+                    const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
+                    let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
+                    let reached = sim.advance_to(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.sim,
+                        renderer.palette_view(),
+                        target,
+                        Some(budget),
+                    );
+                    if reached {
+                        // Arrived: hand the grid back. Playback
+                        // re-commits next frame; a scrub does not, so
+                        // the run holds where the timeline left it and
+                        // Run / Pause / Step work again from there.
+                        self.sim_timeline_target = None;
+                    } else {
+                        // Still catching up -- keep the frames coming.
+                        self.window.request_redraw();
+                    }
+                    self.sim_step_once = false;
+                } else if timeline_owns_sim {
+                    // Playing, but HOLDING: the track asked for a step
+                    // count below the grid under continuous motion, so
+                    // nothing was committed. The picture stays put --
+                    // recoloured, so parameter tracks still show, but
+                    // not stepped. Run is disengaged on playback start
+                    // and the transport is greyed, so nothing else
+                    // moves it either.
+                    sim.render_frame(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.sim,
+                        renderer.palette_view(),
+                        0,
+                    );
+                    self.sim_step_once = false;
+                } else {
+                    let steps = if self.sim_running {
+                        final_config.sim.steps_per_frame
+                    } else if self.sim_step_once {
+                        1
+                    } else {
+                        0
+                    };
+                    self.sim_step_once = false;
+                    // Was the run short of Max Steps before this frame?
+                    // `render_frame` clamps the batch so it cannot pass
+                    // the cap, so crossing it is exactly "was below, is
+                    // now at" -- and a frame that reseeds counts as below,
+                    // because the index it is about to measure from is 0.
+                    let cap = final_config.sim.steps;
+                    let was_below = cap > 0 && (sim.will_reseed(&final_config.sim) || sim.step_index() < cap);
+                    sim.render_frame(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.sim,
+                        renderer.palette_view(),
+                        steps,
+                    );
+                    // Reaching Max Steps pauses; it does not end the run.
+                    // Pressing Run again carries on past the cap, because
+                    // `steps_remaining` stops holding it back once the
+                    // index is there. A reseed arms the pause again.
+                    if self.sim_running
+                        && crate::sim::should_pause_at_limit(cap, was_below, sim.step_index())
+                    {
+                        self.sim_running = false;
+                        // THE PANEL FOR THIS FRAME WAS BUILT BEFORE THE
+                        // STEP RAN, so it still says Pause and shows the
+                        // previous step count. Without one more frame the
+                        // window sleeps on that, and the last thing drawn
+                        // is a stale panel over a finished picture.
+                        self.window.request_redraw();
+                    }
+                    if self.sim_running {
+                        self.window.request_redraw();
+                    }
+                }
+            }
+
+            // Everything below that asks "is this a chaos game?" must
+            // treat both non-flame modes alike: idle the iteration
+            // governor, skip the flame-only post-processing, and take
+            // the generator's own image into the tonemap.
+            let is_non_flame = is_escape || is_sim;
+
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
             // Skip GPU work during any export to avoid GPU contention (the export
@@ -2485,7 +2928,7 @@ impl App {
                 .map(|s| s.active)
                 .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !is_escape && !self.paused && !is_exporting && (
+            let should_iterate = !is_non_flame && !self.paused && !is_exporting && (
                 is_controller_playing ||
                 // Overwrite mode bypasses the max_iterations gate. With
                 // it gated, a cheap flame that hits max during a long
@@ -2713,7 +3156,7 @@ impl App {
                 // the escape image's density is a constant 1/px, so the
                 // remap has no statistic to act on. Hard-off (the
                 // panel says so too).
-                if is_escape { false } else { final_config.levels_enabled },
+                final_config.effective_levels_enabled(),
                 final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
             // Reset effect slot counter for this frame (allows multiple effects with unique params)
@@ -2722,13 +3165,13 @@ impl App {
             // Solid brightness renormalization: measure the accepted
             // density every few frames while occlusion culls (async, EMA-
             // smoothed) so hard solids tone-map at full brightness.
-            if !is_escape {
+            if !is_non_flame {
                 renderer.update_density_stats(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
             }
 
             // Solid-rendering shade pass (lighting/SSAO on the depth buffer)
             // — runs before density effects; both consume HDR pre-tonemap data.
-            let shade_ran = !is_escape && renderer.run_shade_pass(
+            let shade_ran = !is_non_flame && renderer.run_shade_pass(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
@@ -2745,18 +3188,33 @@ impl App {
             );
             // Post-process DoF (solid mode) sits between shade and
             // density effects/tonemap.
-            let dof_ran = !is_escape && renderer.run_dof_pass(
+            let dof_ran = !is_non_flame && renderer.run_dof_pass(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
                 shade_ran,
                 final_config.zoom,
             );
+            #[cfg(feature = "engine-sim")]
+            let sim_view = if is_sim {
+                Some(
+                    self.sim_renderer
+                        .as_ref()
+                        .expect("sim branch above created it")
+                        .output_view(),
+                )
+            } else {
+                None
+            };
+            #[cfg(not(feature = "engine-sim"))]
+            let sim_view: Option<&wgpu::TextureView> = None;
             let pre_tonemap_view = if is_escape {
                 self.escape_renderer
                     .as_ref()
                     .expect("escape branch above created it")
                     .output_view()
+            } else if let Some(v) = sim_view {
+                v
             } else if dof_ran {
                 renderer.dof_output_view()
             } else if shade_ran {
@@ -2779,12 +3237,12 @@ impl App {
             if density_effects_ran {
                 if let Some(density_output) = self.effect_chain.get_density_output() {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
-                } else if is_escape || dof_ran || shade_ran {
+                } else if is_non_flame || dof_ran || shade_ran {
                     renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
                 } else {
                     renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
                 }
-            } else if is_escape || dof_ran || shade_ran {
+            } else if is_non_flame || dof_ran || shade_ran {
                 renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
             } else {
                 renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);

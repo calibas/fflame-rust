@@ -306,6 +306,14 @@ fn copy_shaders_to_target() {
     // Tell cargo to rerun if shaders change
     println!("cargo:rerun-if-changed=shaders");
 
+    // ...or if a translation does. `rust_i18n::i18n!` reads `locales/`
+    // when the macro expands, but cargo does not know that, so without
+    // this an edited string simply does not take: the crate is not
+    // rebuilt, the binary keeps the old text, and the locale-key tests
+    // pass against a stale table. Found by renaming a key and watching
+    // the test that exists to catch exactly that go green.
+    println!("cargo:rerun-if-changed=locales");
+
     embed_windows_icon();
 }
 

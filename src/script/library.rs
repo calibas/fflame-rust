@@ -54,6 +54,10 @@ pub const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../assets/scripts/generators/gnarls.rhai"),
     ),
     (
+        "sim_sweep.rhai",
+        include_str!("../../assets/scripts/generators/sim_sweep.rhai"),
+    ),
+    (
         "escape_deep.rhai",
         include_str!("../../assets/scripts/generators/escape_deep.rhai"),
     ),

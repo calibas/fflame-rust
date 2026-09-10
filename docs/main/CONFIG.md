@@ -30,6 +30,20 @@ All delta migration planning docs have been archived to [archive/delta-migration
 
 ---
 
+## The non-flame engines
+
+`FractalConfig` carries a block per render engine — `escape:
+EscapeConfig` and `sim: SimConfig` — alongside the flame. Both are
+skip-if-default, so a flame file never grows them, and both parse
+**even in a build without that engine**: the mode round-trips so a file
+is never silently rewritten, and the render reports a missing engine
+rather than drawing something the file never described.
+
+`SimConfig` and its `ConfigPath::Sim*` paths are documented in
+[SIMULATION.md](SIMULATION.md). One thing worth knowing here: `sim.steps`
+means Max Steps (a cap) to the panel's transport and a target to the
+animation timeline and the exporter — see [UI.md](UI.md).
+
 ## Overview
 
 The application uses a **simplified delta-based state management system** centered around `ConfigManager`. This system provides:
