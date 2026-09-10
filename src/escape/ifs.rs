@@ -1868,6 +1868,133 @@ mod gpu_tests {
         );
     }
 
+    /// How deep mode C claims to zoom, as a `zoom_log2`.
+    ///
+    /// MEASURED, not chosen: past this the picture is not merely
+    /// coarse, it is somewhere else. The view centre reaches the
+    /// shader as `params.center: vec2<f32>`, so it is quantised to
+    /// about 6e-8 near 0.28 — at zoom 2^22 that is 6% of the view, at
+    /// 2^26 it is the whole view, and the render agrees with the
+    /// reference at chance. §2.5's reference orbit is what moves this,
+    /// and moving it is the deliverable that raises this number.
+    pub(super) const DEEP_ZOOM_LIMIT: f64 = 20.0;
+
+    /// Where the f32 walk stops agreeing with the f64 reference.
+    ///
+    /// §2.5 promises deep zoom, and the shader already carries the
+    /// pixel split into a reference half and a delta half so the
+    /// machinery can be dropped in. This measures what that machinery
+    /// has to buy: the zoom at which the plain f32 path stops drawing
+    /// the same picture the reference does.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn where_the_f32_walk_stops_agreeing_with_the_reference() {
+        let guard = global_registry();
+        let flame = sierpinski_flame();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+
+        // A point ON the attractor, so zooming in keeps finding
+        // structure rather than running off into empty space — and a
+        // DEEP one, reached by forty maps, so its coordinates need
+        // about forty bits. A shallow attractor point of this IFS is a
+        // dyadic rational that f32 holds exactly, which would hide the
+        // precision wall entirely: 0.25 agrees perfectly at any zoom
+        // because there is nothing to round.
+        let target = {
+            let mut p = ifs.ball.centre;
+            for k in 0..40u32 {
+                p = ifs.maps[(k % 3) as usize].forward.apply(p);
+            }
+            p
+        };
+        println!("  target {target:?}");
+
+        let mut worst_agreed = 0.0f64;
+        println!("  zoom  depth  agreement  (interior/exterior pixels)");
+        for &zoom in &[0.0f64, 8.0, 16.0, 20.0, 22.0, 24.0, 26.0, 30.0, 40.0] {
+            // Depth has to keep up with the zoom or the walk cannot
+            // resolve what the view is showing: at sigma = 0.5 each
+            // level buys one bit, so a view 2^z across needs about
+            // z levels before it can tell interior from exterior at
+            // all. This is the FIRST limit, and it is a parameter.
+            let levels = (zoom as u32 + 24).min(160);
+            let mut c = config_for(flame.clone());
+            c.escape.formula_params.insert("levels".to_string(), levels as f32);
+            c.escape.center_re = format!("{:.20}", target[0]);
+            c.escape.center_im = format!("{:.20}", target[1]);
+            c.escape.zoom_log2 = zoom;
+            let rgba = {
+                let (device, queue) = device();
+                let job = crate::renderer::RenderJob::new(&c, W, H);
+                pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render")
+                .rgba_data
+            };
+
+            let span_y = 4.0 / 2f64.powf(zoom);
+            let px = span_y / H as f64;
+            let plane = |x: u32, y: u32| -> [f64; 2] {
+                let span_x = span_y * W as f64 / H as f64;
+                let u = (x as f64 + 0.5) / W as f64 - 0.5;
+                let v = (y as f64 + 0.5) / H as f64 - 0.5;
+                [target[0] + u * span_x, target[1] - v * span_y]
+            };
+
+            let mut inside = Vec::new();
+            let mut outside = Vec::new();
+            for y in 0..H {
+                for x in 0..W {
+                    let d = estimate(&ifs, plane(x, y), levels, BEAM).distance;
+                    let b = brightness(&rgba, x, y);
+                    if d < 0.25 * px {
+                        inside.push(b);
+                    } else if d > 3.0 * px {
+                        outside.push(b);
+                    }
+                }
+            }
+            if inside.len() < 50 || outside.len() < 50 {
+                println!(
+                    "  {zoom:>4}  {levels:>5}  (too few of one class: {} in, {} out)",
+                    inside.len(),
+                    outside.len()
+                );
+                continue;
+            }
+            let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len() as f64;
+            let (mi, mo) = (mean(&inside), mean(&outside));
+            let cut = (mi + mo) * 0.5;
+            let agree = (inside.iter().filter(|&&b| b > cut).count()
+                + outside.iter().filter(|&&b| b <= cut).count())
+                as f64
+                / (inside.len() + outside.len()) as f64;
+            println!(
+                "  {zoom:>4}  {levels:>5}  {:>6.1}%     ({} in, {} out)",
+                agree * 100.0,
+                inside.len(),
+                outside.len()
+            );
+            if zoom <= DEEP_ZOOM_LIMIT {
+                assert!(
+                    agree > 0.99,
+                    "at zoom 2^{zoom} the f32 walk agrees with the reference on only                      {:.1}% of pixels, inside the depth this build claims",
+                    agree * 100.0
+                );
+                worst_agreed = worst_agreed.max(zoom);
+            }
+        }
+        assert!(
+            worst_agreed >= DEEP_ZOOM_LIMIT,
+            "the sweep never reached the claimed limit of 2^{DEEP_ZOOM_LIMIT}"
+        );
+    }
+
     /// A 1080p mode-C render must finish, and finish in bands.
     ///
     /// The arithmetic is gated separately

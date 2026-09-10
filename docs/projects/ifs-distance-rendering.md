@@ -699,6 +699,55 @@ and a test pins it.
   the escape engine's big-number types, K growing with `zoom_log2`.
   Gate: a Sierpiński zoom to 2⁻²⁰⁰ renders the same triangle, and the
   address colouring changes digit by digit down the zoom.
+
+  **The wall is measured, 2026-09-10** — `where_the_f32_walk_stops_agreeing_with_the_reference`
+  renders a Sierpiński centred on a deep attractor point at rising
+  zoom and compares the classes against the f64 reference:
+
+  | zoom | agreement |
+  |---|---|
+  | 0 – 2²⁰ | 100% |
+  | 2²² | 95.6% |
+  | 2²⁴ | 82.4% |
+  | 2²⁶ | 55.7% |
+  | 2³⁰ and past | ~60%, which is chance |
+
+  Two limits, and they are not the same limit:
+
+  - **Depth, which is a parameter.** At `levels = 24` the walk resolves
+    structure down to σ²⁴ only, so past 2²⁶ every pixel reads as
+    interior — on BOTH sides, reference included. Scaling depth with
+    zoom (one level per bit at σ = ½) restores 100% agreement, and the
+    interior/exterior pixel counts then come out *identical* at every
+    zoom, which is the self-similarity §2.5 predicts, seen.
+  - **The f32 centre, which is the real wall.** `params.center` is a
+    `vec2<f32>`, quantised to ~6e-8 near 0.28: at 2²² that is 6% of the
+    view, at 2²⁶ the whole view. The picture is not coarse past there,
+    it is somewhere else.
+
+    A dyadic centre hides this completely — 0.25 agrees at every zoom
+    because there is nothing to round, and the first version of this
+    measurement used 0.25 and reported no wall at all. The fixture is
+    a point reached by forty maps for that reason.
+
+  `DEEP_ZOOM_LIMIT` records the claim as a constant the test enforces,
+  so raising it is what "deep zoom works" means.
+
+  **The design the measurement points at.** The delta half of the split
+  is already exact and f32 holds it to zoom ~2¹²⁰ before underflow; the
+  reference half is what needs precision, and only until δ grows past
+  the reference's own rounding. So the CPU walks the beam from the
+  centre in high precision for k₀ levels — where k₀ ≈ log(R/δ₀)/log(1/σ)
+  — and hands the shader each surviving candidate's position, its
+  accumulated inverse-linear map **scaled by the view** (so it is O(1)
+  rather than σ⁻ᵏ), its σ product and its address. That is about nine
+  floats per candidate, seventy-two for a beam of eight, which fits in
+  the `fdata` block the params already carry: no new buffer.
+
+  One consequence to take with it: the distance has to become
+  **pixel-relative** rather than world-absolute, or it underflows f32
+  long before the delta does. That also makes the contour bands
+  zoom-invariant, which they are not today.
 - ~~The beam (D4, B > 1) and its cost measured~~ — **moved into phase
   1**, because the dragon needed it to render at all (§5, phase 1).
 - **A mode-C recolor cache — built 2026-09-10, and taken first.**
