@@ -3165,7 +3165,7 @@ impl ConfigManager {
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;
                 self.current.escape.supersample =
-                    v.clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+                    v.clamp(1, crate::config::escape::MAX_SUPERSAMPLE);
             }
             ConfigPath::EscapeDownsample => {
                 let v: String = value.try_into()?;

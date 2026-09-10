@@ -1,14 +1,30 @@
 # fflame WASM modules — usage guide
 
-Two standalone WebAssembly modules extracted from the fractal-flame
+Standalone WebAssembly modules extracted from the fractal-flame
 renderer, built to power the Endless Gallery (and any other web
 embedding). This guide is self-contained on purpose — copy it into
 whatever repo consumes the modules.
 
 | module | does | size (raw / gzip) | needs |
 | --- | --- | --- | --- |
-| `fflame-script` | script + seed + params → FractalConfig JSON | 3.98 MB / 1.01 MB | nothing (pure CPU; worker-safe) |
-| `fflame-render` | FractalConfig JSON + dims → RGBA pixels | 3.19 MB / 0.74 MB | WebGPU |
+| `fflame-script` | script + seed + params → FractalConfig JSON | 3.93 MB / 1.01 MB | nothing (pure CPU; worker-safe) |
+| `fflame-render` | FractalConfig JSON + dims → RGBA pixels, **any render mode** | 3.29 MB / 0.80 MB | WebGPU |
+| `fflame-flame` | the same, flames only | 3.12 MB / 0.73 MB | WebGPU |
+| `fflame-escape` | the same, escape-time only | 1.52 MB / 0.46 MB | WebGPU |
+| `fflame-sim` | the same, simulations only | 1.46 MB / 0.43 MB | WebGPU |
+
+**Which renderer to take.** `fflame-render` renders every mode and is
+the one to embed if you do not know what the config will be. The three
+single-engine modules are the SAME SOURCE built with different Cargo
+features, and exist for one reason: download size. Turning off
+`engine-flame` drops the 646-variation catalogue and its 1.1 MB of
+inline WGSL, which is nearly half the gzipped module — an escape or
+simulation gallery has no use for it.
+
+They are not interchangeable. A single-engine module hands a config
+for another engine either a catalogue of one variation (which is not
+the flame the file describes) or a "this build has no X engine" error.
+Serve the right module, or serve `fflame-render`.
 
 **Browser support:** WebGPU is required for rendering — Chrome/Edge
 113+, Firefox 121+; Safari behind a flag. There is no WebGL fallback
@@ -21,7 +37,17 @@ anywhere wasm runs, including Node.
 # from the source repo
 cd wasm/script && wasm-pack build --target web --release
 cd wasm/render && wasm-pack build --target web --release
+# and, if you want a single-engine build:
+cd wasm/flame  && wasm-pack build --target web --release
+cd wasm/escape && wasm-pack build --target web --release
+cd wasm/sim    && wasm-pack build --target web --release
 ```
+
+Each renderer crate carries a native smoke test — `cargo test` in its
+directory — which renders a real config and asserts that the engines it
+is supposed to have dropped really are gone. That check is the point of
+the single-engine crates and cannot be inferred from a file size, so it
+is asserted against the registry directly.
 
 Each produces a `pkg/` directory (ES module + `.wasm`) that is the
 whole deliverable — copy or publish it as-is. The `Cargo.toml`s
