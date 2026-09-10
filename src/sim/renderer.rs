@@ -1159,6 +1159,9 @@ impl SimRenderer {
             self.pyramid_bind_groups = None;
             self.reduce_bind_groups = None;
             self.steps_per_submit = FIRST_SUBMIT;
+            // The measured step cost describes the OLD kernel or grid; the
+            // interactive budget must re-measure with the new one.
+            self.ms_per_step = 0.0;
         }
         true
     }
@@ -1466,6 +1469,9 @@ impl SimRenderer {
         self.reduce_bind_groups = None;
         self.agent_bind_groups = None;
         self.steps_per_submit = FIRST_SUBMIT;
+        // The measured step cost describes the OLD kernel or grid; the
+        // interactive budget must re-measure with the new one.
+        self.ms_per_step = 0.0;
         let seed_pipelines: Vec<(&'static str, ComputePipeline)> = seed_mods
             .iter()
             .map(|(n, m)| (*n, pipeline("Sim Seed", &seed_layout, m)))

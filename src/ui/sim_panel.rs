@@ -39,6 +39,11 @@ pub struct SimUiState<'a> {
     /// being held (`sim::timeline_target_applies`). The readout says
     /// why, since otherwise a held picture looks like a broken one.
     pub timeline_holding: bool,
+    /// The timeline owns the grid: greys the transport. True whenever
+    /// `timeline_target` is `Some`, and ALSO while a backward target is
+    /// being held, when there is no target and the grid must still not
+    /// be moved by a button.
+    pub timeline_driven: bool,
     /// Grid actually in use, which a bound grid makes non-obvious.
     pub grid: (u32, u32),
 }
@@ -132,7 +137,7 @@ pub fn render_sim_content(
     // what makes a still identifiable.
     // While the timeline drives the step count the transport is
     // inert, so it is greyed rather than left looking live.
-    let driven = state.timeline_target.is_some();
+    let driven = state.timeline_driven;
     ui.horizontal(|ui| {
         ui.add_enabled_ui(!driven, |ui| {
             let run_label = if *state.running {
