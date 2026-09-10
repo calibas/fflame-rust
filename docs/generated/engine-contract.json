@@ -260,6 +260,10 @@
         "name": "random_palette"
       },
       {
+        "kind": "generator",
+        "name": "sim_sweep"
+      },
+      {
         "kind": "modifier",
         "name": "turntable"
       },
