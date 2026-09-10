@@ -11,7 +11,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [VARIATIONS.md](main/VARIATIONS.md) - Variation registry, all 26 core variations, parameters
 - [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
 - [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
-- [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode
+- [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode, video export
 - [SCRIPTING.md](main/SCRIPTING.md) - Rhai script API reference (generators, modifiers, animation)
 - [PRESET-BROWSER.md](main/PRESET-BROWSER.md) - Gallery UI system for browsing fractals
 - [TESTING-GUIDE.md](TESTING-GUIDE.md) - Unit tests, regression tests, benchmarks, profiling
@@ -690,6 +690,13 @@ controls are available:
 - **Transparent:** Read from accumulation buffer, apply CPU tone mapping, preserve alpha
 - **Opaque:** Render via tonemap shader, background pre-blended, faster
 - **Metadata:** All PNGs include build info, config JSON, render stats in tEXt chunks
+
+**Video** goes through **one** loop — `animation::export::export_animation`
+— shared by the app's dialog and the CLI, built on the same
+`render_with` a still uses. Add a pass to the render tail and video
+gets it for free; do not add a second loop (the two that existed until
+2026-09-09 silently disagreed about density effects, depth of field and
+which engine was even running).
 
 ---
 

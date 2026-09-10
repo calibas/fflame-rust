@@ -1459,7 +1459,7 @@ impl crate::renderer::RenderProgress for FrameProgress<'_> {
 /// Everything else -- which passes run, which are skipped -- the still
 /// path already decides per frame by reading the config, which is what
 /// "exclude unused features dynamically" means. See
-/// `docs/projects/video-loop-and-sim-timeline.md` D1.
+/// `docs/archive/projects/video-loop-and-sim-timeline.md` D1.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation(
     mut export_config: AnimationExportConfig,

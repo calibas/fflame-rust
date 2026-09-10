@@ -157,21 +157,35 @@ measurements are in the pipeline document.
   per frame (integration §6). Rejected: re-running from the seed every
   frame (quadratic; and it makes "never stills" models impossible to
   export as video).
-  - *Status, 2026-09-09.* There are two video loops. The app's export
-    dialog uses `export_animation_fast`, which does keep the
-    `SimRenderer` alive as this decision says. Until 2026-09-09 that
-    loop ALSO ran the flame's full `max_iterations` of chaos game on
-    every simulation frame, into a histogram nothing read: the escape
-    arm had been carved out of the flame path and the simulation arm
-    added beside it without the same gate. Measured on a 720p ramp,
-    364 ms of a 381 ms frame; gated, the frame is 17 ms. The CLI's
-    `export-animation` uses the older `export_animation`, which
-    renders each frame through the still path (`render_sim`: seed,
-    run `steps`, colour) — exactly the rejected quadratic form. It is
-    correct, only slow; a 300-frame ramp to 2000 steps runs ~300,000
-    steps instead of 2,000. Not yet fixed: the fast loop is not a
-    drop-in for the CLI, since it never ran density effects on any
-    engine.
+  - *Done, 2026-09-09.* Both video paths now work this way, and there
+    is only one of them. Getting there is
+    [video-loop-and-sim-timeline.md](../archive/projects/video-loop-and-sim-timeline.md);
+    the short version:
+    - There were **two** video loops. The app's kept the renderer
+      alive as this decision says, but also ran the flame's full
+      `max_iterations` of chaos game on every simulation frame, into a
+      histogram nothing read — 364 ms of a 381 ms frame at 720p. The
+      CLI's rendered each frame through the still path, which is
+      exactly the quadratic form rejected above: a 100-frame ramp to
+      20,000 steps ran 1,000,000 steps instead of 20,000 (18.3 s
+      against 4.6 s).
+    - The fix is a `RenderEngines` slot on `RenderJob` (engine state
+      the caller keeps across frames) plus one loop built on
+      `render_with`. `SimRenderer::advance_to` owns the
+      seed-or-step decision, so the exporter and the app's frame
+      driver share it.
+    - **Both loops had also been dropping density effects**, by two
+      independent mechanisms: the app's never called the stage, and
+      the export device never requested `FLOAT32_FILTERABLE`, so the
+      stage declined for the CLI's. Video output is now bit-identical
+      to a PNG of the same config.
+  - *And D5b arrived, 2026-09-09.* A `Sim.Steps` track now drives the
+    grid **in the app** as well as in export — the same
+    `advance_to`, budgeted per display frame so it never blocks the
+    UI. Because the rule is not invertible, a falling target is held
+    under continuous motion and applied only on a discrete event; see
+    D4–D9 in the archived plan, and **The timeline and the simulation
+    grid** in [UI.md](../main/UI.md).
 - **D5b — The timeline animates a cumulative STEP COUNT, not a rate**
   (decided 2026-09-04, prompted by asking whether the progression
   itself can be animated — it can, and this is how). A `Sim.StepCount`

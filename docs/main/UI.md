@@ -186,6 +186,59 @@ cases differ, and the difference matters:
 
 ---
 
+### The timeline and the simulation grid
+
+`sim.steps` means two things, and **whoever is driving decides which**.
+To the transport it is Max Steps, a CAP: the run stops there once, and
+`0` means uncapped. To the animation timeline it is a TARGET: the
+picture at a given time is the state at that step count. The exporter
+has always read it the second way; the app read it the first way only,
+which is why a `Sim.Steps` track used to do nothing in the app but
+move a cap.
+
+**The timeline owns the step count** when it is playing an animation
+that has a `Sim.Steps` track, or when a target it committed has not
+been reached yet (`App::timeline_owns_sim`). While it does:
+
+- the grid is advanced toward the track's value, **budgeted** per
+  display frame from the measured cost of a step
+  (`SimRenderer::steps_in`), so a two-thousand-step jump is walked
+  over a few frames rather than freezing the window — a scrub can ask
+  for one on every slider event;
+- Run / Pause / Step and the spacebar are inert, and the panel greys
+  them. Run is *disengaged* when playback starts rather than merely
+  ignored: left engaged it would resume the instant the timeline let
+  go, and the run would carry on under a button nobody pressed;
+- playback is **paced by the grid**, as escape playback is by
+  settling — the controller is held while the grid is short of the
+  frame's target, then advanced by everything that elapsed. A heavy
+  model plays slower rather than showing a lagging state, so what
+  plays is what exports.
+
+An animation with **no** step track leaves all of this alone: the
+transport keeps working and the run keeps going underneath, so
+animating a colouring parameter over a free-running simulation still
+does what it always did.
+
+**Going backwards.** The rule is not invertible, so reaching a lower
+step count means reseeding and re-running. A falling target is
+therefore HELD while the motion is continuous and applied only on a
+discrete event — a scrubber release, a `Loop` wrap, or a `PingPong`
+turnaround at t = 0 (`sim::timeline_target_applies`,
+`app::animation_update::playback_motion`). Without the hold, dragging
+left would restart the run on nearly every slider event, ping-pong
+would restart once per frame for half of every cycle, and a track
+written to count down would do the same.
+
+So a track written 2000 → 0 plays in-app as a still of the highest
+state reached, with the panel saying why and pointing at the
+scrubber; **export renders every frame of it correctly**, because a
+video frame is the state at its time whatever the direction. Both
+rules are pure functions in [src/sim/mod.rs](../../src/sim/mod.rs)
+with tests that need neither a GPU nor an `App`.
+
+---
+
 ## Panel reference
 
 Every panel renders from its own file. `PanelViewer::render_panel`
@@ -331,6 +384,12 @@ if ui_response.preset_changed {
 - **Ctrl+Z** - Undo
 - **Ctrl+Y** - Redo
 - **R** - Reset view (zoom=1, pan=0, rotation=0)
+- **Space** - Play/pause the animation — except in Simulation mode,
+  where it runs and pauses the *grid* (the transport is what you reach
+  for there; `render_mode::space_runs_the_simulation`). Inert while
+  the timeline owns the step count, see **The timeline and the
+  simulation grid** above.
+- **F2** - Toggle fly mode (3D flame only)
 
 **Rotation-Aware Panning (Added 2025-10-24):**
 ```rust
