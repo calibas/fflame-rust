@@ -3,7 +3,7 @@
 Quick reference guide to understanding the codebase structure and data flow.
 
 **Detailed Documentation:**
-- [UI.md](main/UI.md) - Windows, panels, input handling, UiResponse system
+- [UI.md](main/UI.md) - Panels, menus, render-mode gating, input handling
 - [BUFFERS.md](main/BUFFERS.md) - GPU layouts, bind groups, data structures
 - [TRANSFORMS.md](main/TRANSFORMS.md) - Flame algorithm, affine math, IFS implementation
 - [RENDERER.md](main/RENDERER.md) - 3-pass pipeline, FlameRenderer, PNG export
@@ -11,10 +11,40 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [VARIATIONS.md](main/VARIATIONS.md) - Variation registry, all 26 core variations, parameters
 - [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
 - [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
-- [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode
+- [SIMULATION.md](main/SIMULATION.md) - The simulation engine: models, the grid, layers, the resolve
+- [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode, video export
 - [SCRIPTING.md](main/SCRIPTING.md) - Rhai script API reference (generators, modifiers, animation)
 - [PRESET-BROWSER.md](main/PRESET-BROWSER.md) - Gallery UI system for browsing fractals
 - [TESTING-GUIDE.md](TESTING-GUIDE.md) - Unit tests, regression tests, benchmarks, profiling
+
+---
+
+## Three render engines
+
+`RenderMode` on the config picks one, and they are genuinely different
+generators that share one tail.
+
+| mode | generator | lives in | plan |
+| --- | --- | --- | --- |
+| `TwoD` / `ThreeD` | the chaos game — sample, splat, accumulate | `src/renderer/`, `src/variations/` | [RENDERER.md](main/RENDERER.md) |
+| `Escape` | one compute dispatch per pixel, iterated to escape | `src/escape/` | [escape-time-fractals.md](projects/escape-time-fractals.md) |
+| `Simulation` | a grid of cells stepped by a neighbour-coupled rule | `src/sim/` | [SIMULATION.md](main/SIMULATION.md) |
+
+**The tail is shared and that is the point.** Each generator produces an
+`Rgba32Float` image in the flame accumulator's layout, and everything
+after — density effects, tone mapping, the effect chain, readback, PNG
+metadata — is the flame renderer's. `render_with` in
+[src/renderer/render.rs](../src/renderer/render.rs) is where the swap
+happens, so a new pass added to the tail reaches all three modes, and
+CLI export, thumbnails, video and the gallery inherit every engine for
+free.
+
+Each engine is a Cargo feature (`engine-flame`, `engine-escape`,
+`engine-sim`), all on by default. Off, that engine's registry and
+shaders are unreachable and the linker drops them — which is what the
+single-engine WASM modules in [wasm/](../wasm/README.md) are for.
+`release.py check` compiles the library at each combination, because a
+`#[cfg]` on the wrong item is invisible in every other build.
 
 ---
 
@@ -624,40 +654,39 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 ---
 
-## 🖼️ UI Organization (egui_dock - Migrated 2025-11-13)
+## 🖼️ UI Organization (egui + egui_dock)
 
 **Docking System:**
-- Migrated from fixed side panel to flexible docking layout using egui_dock
-- All windows converted to dockable panels (1:1 mapping)
-- Users can rearrange, detach, and dock panels anywhere
-- Future: Save/restore workspace layouts
+- All UI is dockable panels; users can rearrange, detach and dock anywhere
+- `PanelType` in `src/ui/workspace.rs` defines **29 panels**
+- `WorkspaceLayout` holds the presets (Standard, Animation, Scripting,
+  Escape Time, Simulation, Compact). Layouts are session-only —
+  nothing about the dock tree is persisted
 
-**7 Main Panels:**
-1. **Fractal Viewport** - Main rendering display (center, always visible)
-2. **Settings** - File operations, rendering controls, preferences (with language selector)
-3. **Transforms** - Transform list, add/delete, affine parameters
-4. **Triangle Editor** - Visual affine editing with interactive triangles
-5. **View** - Camera controls, zoom, pan, rotation
-6. **Tone Mapping & Colors** - Color mode, palette, tone mapping settings
-7. **History** - Visual undo/redo browser with state preview
+**Render modes drive the UI.** The four modes (2D and 3D flame, Escape
+Time, Simulation) decide which panels, menu items and individual
+controls are available:
+- `src/ui/render_mode.rs` — the only writer of `ConfigPath::RenderMode`,
+  plus the mode → workspace mapping and the engine-lifetime policy
+- `src/ui/visibility.rs` — the only answer to "is this available in
+  this mode", exhaustive over panel × mode and control × mode
+- Add a case there rather than a `matches!` inside a panel
 
 **Menu Bar:**
-- Top-level menus: File, Edit, View, Fractal, Rendering, Window, Help
-- Professional menu structure for feature discoverability
-- Keyboard shortcuts documented in menus
-- Future: Implement all menu actions
+- File, Edit, View, **Mode**, Rendering, Window, Help
+- The Mode menu is built from `RenderMode::ALL`
+- Both Window menus draw their panel rows from `visibility::WINDOW_MENU`
 
-**Internationalization (Added 2025-11-13):**
-- rust-i18n v3.1 with YAML translation files
-- Language selector in Settings → Preferences
-- English (en) complete with 200+ strings
-- Ready for community translations (Spanish, French, German, Japanese, Chinese)
-- See [I18N.md](main/I18N.md) for translation guide
+**Internationalization:**
+- rust-i18n v3.1 with YAML translation files in `locales/`
+- Language selector in the menu bar's right strip
+- English is complete; es, ja and zh-CN are partial
+- See [I18N.md](main/I18N.md) for the translation guide
 
 **See [UI.md](main/UI.md)** for complete UI documentation including:
-- Panel descriptions and controls
+- Panels, workspace layouts and the render-mode machinery
 - Input handling (keyboard, mouse, wheel)
-- UiResponse system (legacy)
+- UiResponse system
 - Common UI modification tasks
 
 ---
@@ -691,6 +720,13 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 - **Transparent:** Read from accumulation buffer, apply CPU tone mapping, preserve alpha
 - **Opaque:** Render via tonemap shader, background pre-blended, faster
 - **Metadata:** All PNGs include build info, config JSON, render stats in tEXt chunks
+
+**Video** goes through **one** loop — `animation::export::export_animation`
+— shared by the app's dialog and the CLI, built on the same
+`render_with` a still uses. Add a pass to the render tail and video
+gets it for free; do not add a second loop (the two that existed until
+2026-09-09 silently disagreed about density effects, depth of field and
+which engine was even running).
 
 ---
 

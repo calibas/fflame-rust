@@ -33,6 +33,32 @@ cargo run --release -- export --input config.fflame --output output.png
 
 ---
 
+## Per-engine tests
+
+Most of what follows is engine-agnostic. Two things are worth knowing
+before you go looking for a simulation or escape failure:
+
+- **GPU tests need `--test-threads=1`.** The heavier simulation tests
+  live in `src/sim/app_repro_test.rs` and replay the app's exact frame
+  call order against a fresh renderer; several are `#[ignore]`d and run
+  deliberately.
+- **The preset probes are the simulation's real safety net, and one of
+  them does not run by default.** `every_preset_draws_something`
+  renders every shipped preset and fails any whose image is flat, but
+  it needs a GPU and is `#[ignore]`d — run it deliberately after
+  touching a model or a preset:
+
+  ```bash
+  cargo test --release every_preset_draws_something -- --ignored --test-threads=1
+  ```
+
+  It has caught a model rendering black that no name check could. See
+  [SIMULATION.md](main/SIMULATION.md).
+- **`release.py check` compiles the library at each single-engine
+  feature combination** (`engine-flame`, `engine-escape`, `engine-sim`
+  alone). Those are what the WASM gallery modules link, and a `#[cfg]`
+  attached to the wrong item compiles fine in every other build.
+
 ## 1. Unit Tests
 
 **What:** Tests embedded in source files (transforms.rs, palette.rs, etc.)

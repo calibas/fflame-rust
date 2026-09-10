@@ -1714,8 +1714,9 @@ impl HighResExporter {
                     RenderMode::TwoD => 0,
                     RenderMode::ThreeD => 1,
                     // Never reached: escape exports go through the
-                    // fragment path, not the tiled chaos-game exporter.
-                    RenderMode::Escape => 0,
+                    // fragment path, not the tiled chaos-game exporter,
+                    // and simulation exports through the grid stepper.
+                    RenderMode::Escape | RenderMode::Simulation => 0,
                 },
                 splat_size: 1.0,
                 zoom: config.zoom,

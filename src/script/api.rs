@@ -97,6 +97,13 @@ pub struct EscapeHandle {
     cfg: Rc<RefCell<FractalConfig>>,
 }
 
+/// The `sim` global: simulation mode from a script.
+#[cfg(feature = "engine-sim")]
+#[derive(Clone)]
+pub struct SimHandle {
+    cfg: Rc<RefCell<FractalConfig>>,
+}
+
 use crate::animation::EasingFunction;
 
 /// The optional animation a script may define alongside its flame.
@@ -348,6 +355,8 @@ pub(crate) fn push_globals(
     scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
     #[cfg(feature = "engine-escape")]
     scope.push("escape", EscapeHandle { cfg: Rc::clone(&cfg) });
+    #[cfg(feature = "engine-sim")]
+    scope.push("sim", SimHandle { cfg: Rc::clone(&cfg) });
     scope.push("config", ConfigHandle { cfg });
     scope.push("anim", AnimHandle { state });
 }
@@ -363,6 +372,8 @@ pub(crate) fn register(
     engine.register_type_with_name::<AnimHandle>("Anim");
     #[cfg(feature = "engine-escape")]
     engine.register_type_with_name::<EscapeHandle>("Escape");
+    #[cfg(feature = "engine-sim")]
+    engine.register_type_with_name::<SimHandle>("Sim");
     register_anim(engine, Rc::clone(&state));
 
     register_meta(engine, Rc::clone(&state));
@@ -372,6 +383,8 @@ pub(crate) fn register(
     register_config(engine, Rc::clone(&state));
     #[cfg(feature = "engine-escape")]
     register_escape(engine);
+    #[cfg(feature = "engine-sim")]
+    register_sim(engine);
     register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
     register_palette_slots(engine);
@@ -1414,6 +1427,226 @@ fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltRes
         )));
     }
     Ok(())
+}
+
+// ------------------------------------------------------------------ simulation
+
+/// The `sim` script surface.
+///
+/// Every setter enters simulation mode first, the way the escape
+/// handle does, so a script that sets only a model produces a picture
+/// rather than a black frame: flame presets carry Log-calibrated tone
+/// mapping, which renders a unit-range simulation field invisible.
+#[cfg(feature = "engine-sim")]
+fn register_sim(engine: &mut Engine) {
+    use crate::scene::transforms::RenderMode;
+
+    fn enter(cfg: &mut FractalConfig) {
+        if cfg.render_mode != RenderMode::Simulation {
+            cfg.render_mode = RenderMode::Simulation;
+            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            cfg.exposure = 1.0;
+            cfg.gamma = 1.0;
+        }
+    }
+
+    engine.register_fn("enter", |e: &mut SimHandle| {
+        enter(&mut e.cfg.borrow_mut());
+    });
+    engine.register_fn(
+        "model",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            if crate::sim::MODELS.iter().all(|m| m.name != name) {
+                return Err(err(format!(
+                    "unknown simulation model `{name}` - see sim.models()"
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.sim.model != name {
+                // Parameters belong to the model that declared them,
+                // and dt/steps are per-model working values.
+                cfg.sim.model_params.clear();
+                let m = crate::sim::model_or_default(name);
+                cfg.sim.dt = m.default_dt;
+                cfg.sim.steps = m.default_steps;
+            }
+            cfg.sim.model = name.to_string();
+            Ok(())
+        },
+    );
+    engine.register_fn("models", |_e: &mut SimHandle| -> rhai::Array {
+        crate::sim::MODELS
+            .iter()
+            .map(|m| rhai::Dynamic::from(m.name.to_string()))
+            .collect()
+    });
+    engine.register_fn(
+        "coloring",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            if crate::sim::COLORINGS.iter().all(|c| c.name != name) {
+                return Err(err(format!(
+                    "unknown simulation coloring `{name}` - see sim.colorings()"
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            if cfg.sim.coloring != name {
+                cfg.sim.coloring_params.clear();
+            }
+            cfg.sim.coloring = name.to_string();
+            Ok(())
+        },
+    );
+    engine.register_fn("colorings", |_e: &mut SimHandle| -> rhai::Array {
+        crate::sim::COLORINGS
+            .iter()
+            .map(|c| rhai::Dynamic::from(c.name.to_string()))
+            .collect()
+    });
+    engine.register_fn("param", |e: &mut SimHandle, name: &str, v: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.model_params.insert(name.to_string(), v as f32);
+    });
+    engine.register_fn("coloring_param", |e: &mut SimHandle, name: &str, v: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.coloring_params.insert(name.to_string(), v as f32);
+    });
+    engine.register_fn("grid", |e: &mut SimHandle, w: i64, h: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.grid = crate::config::sim::SimGrid::Fixed {
+            width: (w.clamp(16, 8192)) as u32,
+            height: (h.clamp(16, 8192)) as u32,
+        };
+    });
+    engine.register_fn("grid_viewport", |e: &mut SimHandle, scale: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        let s = scale as f32;
+        cfg.sim.grid = crate::config::sim::SimGrid::Viewport {
+            scale: if s.is_finite() { s.clamp(0.125, 4.0) } else { 1.0 },
+        };
+    });
+    engine.register_fn("seed", |e: &mut SimHandle, n: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.seed = n.unsigned_abs();
+    });
+    engine.register_fn(
+        "init",
+        |e: &mut SimHandle, kind: &str| -> Result<(), Box<EvalAltResult>> {
+            if !crate::config::sim::SimInit::KINDS.contains(&kind) {
+                return Err(err(format!(
+                    "unknown simulation init `{kind}` - one of {:?}",
+                    crate::config::sim::SimInit::KINDS
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.sim.init = cfg.sim.init.with_kind(kind);
+            Ok(())
+        },
+    );
+    engine.register_fn("steps", |e: &mut SimHandle, n: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.steps = n.clamp(1, 10_000_000) as u32;
+    });
+    engine.register_fn("steps_per_frame", |e: &mut SimHandle, n: i64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        cfg.sim.steps_per_frame = n.clamp(1, 4096) as u32;
+    });
+    engine.register_fn("dt", |e: &mut SimHandle, v: f64| {
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        let d = v as f32;
+        cfg.sim.dt = if d.is_finite() { d.clamp(1e-4, 10.0) } else { 1.0 };
+    });
+    engine.register_fn(
+        "boundary",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            match crate::config::sim::SimBoundary::from_name(name) {
+                Some(b) => {
+                    let mut cfg = e.cfg.borrow_mut();
+                    enter(&mut cfg);
+                    cfg.sim.boundary = b;
+                    Ok(())
+                }
+                None => Err(err(format!(
+                    "unknown simulation boundary `{name}` - one of {:?}",
+                    crate::config::sim::SimBoundary::NAMES
+                ))),
+            }
+        },
+    );
+    engine.register_fn(
+        "preset",
+        |e: &mut SimHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            let model = crate::sim::model_or_default(&cfg.sim.model);
+            match model.preset(name) {
+                Some(p) => {
+                    // A preset is a WHOLE RECIPE, and applying half of
+                    // it produces a picture of nothing. This used to
+                    // set parameters, steps and init only, so a script
+                    // got the previous colouring, matte and warp: a
+                    // Brusselator preset came out uniform because its
+                    // colouring never arrived, and Lenia at another
+                    // model's dt dies. The panel has always applied
+                    // all of it (`sim_panel::preset_changes`); this
+                    // now matches, field for field.
+                    //
+                    // Order matters: dt first, because switching model
+                    // set it to the model default and a preset may
+                    // override; then parameters over the defaults.
+                    cfg.sim.dt = model.default_dt;
+                    for (k, v) in p.params {
+                        cfg.sim.model_params.insert((*k).to_string(), *v);
+                    }
+                    // The measured step count. The numbers without the
+                    // steps show the pattern half-formed.
+                    cfg.sim.steps = p.steps;
+                    if let Some(init) = p.init {
+                        // Not decoration: FitzHugh-Nagumo's constants
+                        // give spirals from a cut wavefront and a FLAT
+                        // FIELD from noise.
+                        cfg.sim.init = init;
+                    }
+                    if let Some(c) = p.coloring {
+                        // Which colouring a model wants is a property
+                        // of its state layout, not a user preference,
+                        // so the preset carries it. Parameters are
+                        // stored by name in one map for whichever
+                        // colouring is current, so the old one's
+                        // values must go or a shared name (`scale`
+                        // belongs to both `channel` and `occupancy`)
+                        // would carry over.
+                        if cfg.sim.coloring != c {
+                            cfg.sim.coloring_params.clear();
+                        }
+                        cfg.sim.coloring = c.to_string();
+                        for (k, v) in p.coloring_params {
+                            cfg.sim.coloring_params.insert((*k).to_string(), *v);
+                        }
+                    }
+                    // Matte and warp are set EITHER WAY, so a preset
+                    // that wants neither clears what the last one set.
+                    cfg.sim.matte = p.matte.unwrap_or_default();
+                    cfg.sim.warp = p.warp.unwrap_or_default();
+                    Ok(())
+                }
+                None => Err(err(format!(
+                    "model `{}` has no preset `{name}`",
+                    model.name
+                ))),
+            }
+        },
+    );
 }
 
 // ------------------------------------------------------------------ escape

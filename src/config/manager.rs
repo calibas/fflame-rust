@@ -139,8 +139,38 @@ const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(500);
 /// Only paths in this exclusion list will create immediate undo points
 fn supports_coalescing(path: &ConfigPath) -> bool {
     match path {
-        // Add paths here that should NOT coalesce (discrete actions):
-        // ConfigPath::RenderMode => false,
+        // Discrete actions, which must NOT coalesce. Coalescing merges
+        // rapid changes into one undo point, which is right for a
+        // slider being dragged and wrong for a choice: reseeding twice
+        // and undoing once should return the first run, not neither.
+        //
+        // The simulation's are the first entries here; the list was
+        // empty until this mode, so the flame examples below stay
+        // commented as the illustrations they were.
+        ConfigPath::SimSeed
+        | ConfigPath::SimModel
+        | ConfigPath::SimColoring
+        | ConfigPath::SimInitKind
+        | ConfigPath::SimGridMode
+        | ConfigPath::SimBoundary
+        | ConfigPath::SimWarpFilter
+        | ConfigPath::SimWarpMode
+        | ConfigPath::SimWarpCull
+        | ConfigPath::SimWarpLayers
+        | ConfigPath::SimMatteChannel
+        | ConfigPath::SimMatteInvert
+        | ConfigPath::SimLayerModel { .. }
+        | ConfigPath::SimLayerEnabled { .. }
+        | ConfigPath::SimCouplingFrom { .. }
+        | ConfigPath::SimCouplingTo { .. }
+        | ConfigPath::SimCouplingForm { .. }
+        | ConfigPath::SimCouplingChannels { .. }
+        | ConfigPath::SimUseTransforms
+        | ConfigPath::SimMatteEdge => false,
+        // A mode change is its own undo entry: coalescing merged
+        // consecutive switches, so two changes of mind cost one undo
+        // and landed you two modes back (ui-render-modes plan, 3.1).
+        ConfigPath::RenderMode => false,
         // ConfigPath::ProjectionType => false,
         // ConfigPath::ColorMode => false,
         _ => true,  // Default: all parameters support coalescing
@@ -219,6 +249,17 @@ pub struct UpdateAction {
     /// change means one whole-frame re-render. Ignored while the
     /// render mode is a flame mode.
     pub rerender_escape: bool,
+
+    /// Recolour the simulation from its current field. The cheap one:
+    /// a colouring or resolve change must not disturb a run that may be
+    /// thousands of steps deep.
+    pub rerender_sim: bool,
+    /// Resample the live field into a new grid, keeping the run.
+    pub resample_sim: bool,
+    /// Restart the simulation from its seed. Subsumes both of the
+    /// above, so `merge` sets them independently and the app checks
+    /// reseed first.
+    pub reseed_sim: bool,
 }
 
 impl UpdateAction {
@@ -267,10 +308,28 @@ impl UpdateAction {
                 update_shading: true, // Full updates refresh shading state too (update_flame carries it)
                 structural_changed: false, // Only set by explicit structural mutation sites
                 rerender_escape: false,
+                // A flame-side full update says nothing about the
+                // simulation; its own update types drive those.
+                rerender_sim: false,
+                resample_sim: false,
+                reseed_sim: false,
             },
 
             UpdateType::EscapeRerender => Self {
                 rerender_escape: true,
+                ..Default::default()
+            },
+
+            UpdateType::SimRerender => Self {
+                rerender_sim: true,
+                ..Default::default()
+            },
+            UpdateType::SimResample => Self {
+                resample_sim: true,
+                ..Default::default()
+            },
+            UpdateType::SimReseed => Self {
+                reseed_sim: true,
                 ..Default::default()
             },
         }
@@ -287,6 +346,9 @@ impl UpdateAction {
         self.update_shading |= other.update_shading;
         self.structural_changed |= other.structural_changed;
         self.rerender_escape |= other.rerender_escape;
+        self.rerender_sim |= other.rerender_sim;
+        self.resample_sim |= other.resample_sim;
+        self.reseed_sim |= other.reseed_sim;
     }
 }
 
@@ -1731,6 +1793,139 @@ impl ConfigManager {
             ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
+
+            // Simulation. The grid is one enum in the config but three
+            // paths in the UI, so each reads the field it controls and
+            // reports the other variant's default rather than failing:
+            // a width box has to show something while the grid is bound
+            // to the viewport.
+            ConfigPath::SimModel => Ok(ConfigValue::String(config.sim.model.clone())),
+            ConfigPath::SimColoring => Ok(ConfigValue::String(config.sim.coloring.clone())),
+            ConfigPath::SimGridMode => Ok(ConfigValue::String(
+                match config.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { .. } => "fixed",
+                    crate::config::sim::SimGrid::Viewport { .. } => "viewport",
+                }
+                .to_string(),
+            )),
+            ConfigPath::SimGridWidth => Ok(ConfigValue::UInt(match config.sim.grid {
+                crate::config::sim::SimGrid::Fixed { width, .. } => width,
+                crate::config::sim::SimGrid::Viewport { .. } => 512,
+            })),
+            ConfigPath::SimGridHeight => Ok(ConfigValue::UInt(match config.sim.grid {
+                crate::config::sim::SimGrid::Fixed { height, .. } => height,
+                crate::config::sim::SimGrid::Viewport { .. } => 512,
+            })),
+            ConfigPath::SimGridScale => Ok(ConfigValue::Float(match config.sim.grid {
+                crate::config::sim::SimGrid::Viewport { scale } => scale,
+                crate::config::sim::SimGrid::Fixed { .. } => 1.0,
+            })),
+            ConfigPath::SimSeed => Ok(ConfigValue::UInt(config.sim.seed as u32)),
+            ConfigPath::SimInitKind => {
+                Ok(ConfigValue::String(config.sim.init.kind_name().to_string()))
+            }
+            ConfigPath::SimInitAmplitude => Ok(ConfigValue::Float(match config.sim.init {
+                crate::config::sim::SimInit::Noise { amplitude } => amplitude,
+                _ => 0.05,
+            })),
+            ConfigPath::SimInitRadius => Ok(ConfigValue::UInt(match config.sim.init {
+                crate::config::sim::SimInit::Blob { radius }
+                | crate::config::sim::SimInit::Blobs { radius, .. }
+                | crate::config::sim::SimInit::Ring { radius } => radius,
+                _ => 24,
+            })),
+            ConfigPath::SimInitCount => Ok(ConfigValue::UInt(match config.sim.init {
+                crate::config::sim::SimInit::Blobs { count, .. } => count,
+                _ => 6,
+            })),
+            ConfigPath::SimSteps => Ok(ConfigValue::UInt(config.sim.steps)),
+            ConfigPath::SimStepsPerFrame => Ok(ConfigValue::UInt(config.sim.steps_per_frame)),
+            ConfigPath::SimDt => Ok(ConfigValue::Float(config.sim.dt)),
+            ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
+            ConfigPath::SimWarpRotation => Ok(ConfigValue::Float(config.sim.warp.rotation)),
+            ConfigPath::SimWarpPanX => Ok(ConfigValue::Float(config.sim.warp.pan_x)),
+            ConfigPath::SimWarpPanY => Ok(ConfigValue::Float(config.sim.warp.pan_y)),
+            ConfigPath::SimWarpFlow => Ok(ConfigValue::Float(config.sim.warp.flow)),
+            ConfigPath::SimWarpFilter => {
+                Ok(ConfigValue::String(config.sim.warp.filter.name().to_string()))
+            }
+            ConfigPath::SimWarpMode => {
+                Ok(ConfigValue::String(config.sim.warp.mode.name().to_string()))
+            }
+            ConfigPath::SimWarpCull => Ok(ConfigValue::Bool(config.sim.warp.cull)),
+            ConfigPath::SimWarpLayers => Ok(ConfigValue::Int(config.sim.warp.layers as i32)),
+            ConfigPath::SimMatteChannel => {
+                Ok(ConfigValue::String(config.sim.matte.channel.name().to_string()))
+            }
+            ConfigPath::SimMatteCutoff => Ok(ConfigValue::Float(config.sim.matte.cutoff)),
+            ConfigPath::SimMatteSoftness => Ok(ConfigValue::Float(config.sim.matte.softness)),
+            ConfigPath::SimMatteInvert => Ok(ConfigValue::Bool(config.sim.matte.invert)),
+            ConfigPath::SimMatteEdge => {
+                Ok(ConfigValue::String(config.sim.matte.edge.name().to_string()))
+            }
+            ConfigPath::SimBoundary => {
+                Ok(ConfigValue::String(config.sim.boundary.name().to_string()))
+            }
+            ConfigPath::SimUpscale => {
+                Ok(ConfigValue::String(config.sim.upscale.name().to_string()))
+            }
+            ConfigPath::SimDownscale => {
+                Ok(ConfigValue::String(config.sim.downscale.name().to_string()))
+            }
+            ConfigPath::SimFit => Ok(ConfigValue::String(config.sim.fit.name().to_string())),
+            ConfigPath::SimModelParam { param } => Ok(ConfigValue::Float(
+                config.sim.model_params.get(param).copied().unwrap_or(0.0),
+            )),
+            ConfigPath::SimLayerModel { layer } => Ok(ConfigValue::String(
+                config.sim.layers.get(*layer).map(|l| l.model.clone()).unwrap_or_default(),
+            )),
+            ConfigPath::SimLayerEnabled { layer } => Ok(ConfigValue::Bool(
+                config.sim.layers.get(*layer).is_none_or(|l| l.enabled),
+            )),
+            ConfigPath::SimLayerParam { layer, param } => Ok(ConfigValue::Float(
+                config
+                    .sim
+                    .layers
+                    .get(*layer)
+                    .and_then(|l| l.model_params.get(param).copied())
+                    .unwrap_or(0.0),
+            )),
+            ConfigPath::SimCouplingFrom { index } => Ok(ConfigValue::Int(
+                config.sim.couplings.get(*index).map(|c| c.from as i32).unwrap_or(0),
+            )),
+            ConfigPath::SimCouplingTo { index } => Ok(ConfigValue::Int(
+                config.sim.couplings.get(*index).map(|c| c.to as i32).unwrap_or(0),
+            )),
+            ConfigPath::SimCouplingForm { index } => Ok(ConfigValue::String(
+                config.sim.couplings.get(*index).map(|c| c.form.name().to_string()).unwrap_or_default(),
+            )),
+            ConfigPath::SimCouplingStrength { index } => Ok(ConfigValue::Float(
+                config.sim.couplings.get(*index).map(|c| c.strength).unwrap_or(0.0),
+            )),
+            ConfigPath::SimCouplingChannels { index } => Ok(ConfigValue::Int(
+                config.sim.couplings.get(*index).map(|c| c.channels as i32).unwrap_or(15),
+            )),
+            ConfigPath::SimUseTransforms => Ok(ConfigValue::Bool(config.sim.use_transforms)),
+            ConfigPath::SimColorLayerParam { index, param } => Ok(ConfigValue::Float(
+                config
+                    .sim
+                    .color_layers
+                    .get(*index)
+                    .and_then(|l| l.coloring_params.get(param).copied())
+                    .unwrap_or(0.0),
+            )),
+            ConfigPath::SimColorLayerOpacity { index } => Ok(ConfigValue::Float(
+                config.sim.color_layers.get(*index).map(|l| l.opacity).unwrap_or(1.0),
+            )),
+            ConfigPath::SimColorLayerMatteCutoff { index } => Ok(ConfigValue::Float(
+                config.sim.color_layers.get(*index).map(|l| l.matte.cutoff).unwrap_or(0.5),
+            )),
+            ConfigPath::SimColorLayerMatteSoftness { index } => Ok(ConfigValue::Float(
+                config.sim.color_layers.get(*index).map(|l| l.matte.softness).unwrap_or(0.0),
+            )),
+            ConfigPath::SimColoringParam { param } => Ok(ConfigValue::Float(
+                config.sim.coloring_params.get(param).copied().unwrap_or(0.0),
+            )),
             ConfigPath::EscapeSupersample => Ok(ConfigValue::UInt(config.escape.supersample)),
             ConfigPath::EscapeDownsample => Ok(ConfigValue::String(
                 config.escape.downsample.as_str().to_string(),
@@ -2638,10 +2833,339 @@ impl ConfigManager {
             ConfigPath::EscapeMaxIter => {
                 self.current.escape.max_iter = value.try_into()?;
             }
+
+            // Simulation. Every bound here is a real one: an unclamped
+            // grid dimension allocates gigabytes, an unclamped dt makes
+            // the explicit solver diverge (phase 0 measured the caps per
+            // model), and a steps_per_frame of zero would make Run do
+            // nothing while looking like it worked.
+            ConfigPath::SimModel => {
+                let name = String::try_from(value)?;
+                if name != self.current.sim.model {
+                    // Parameters belong to the model that declared them,
+                    // and dt/steps are per-model working values --
+                    // Gray-Scott runs at dt 1.0 where Schnakenberg
+                    // diverges above 0.02, so carrying one model's
+                    // settings into another is unusable either way.
+                    self.current.sim.model_params.clear();
+                    #[cfg(feature = "engine-sim")]
+                    {
+                        let m = crate::sim::model_or_default(&name);
+                        self.current.sim.dt = m.default_dt;
+                        self.current.sim.steps = m.default_steps;
+                    }
+                }
+                self.current.sim.model = name;
+            }
+            ConfigPath::SimColoring => {
+                self.current.sim.coloring = String::try_from(value)?;
+            }
+            ConfigPath::SimGridMode => {
+                let mode = String::try_from(value)?;
+                let (w, h) = match self.current.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { width, height } => (width, height),
+                    crate::config::sim::SimGrid::Viewport { .. } => (512, 512),
+                };
+                self.current.sim.grid = if mode == "fixed" {
+                    crate::config::sim::SimGrid::Fixed { width: w, height: h }
+                } else {
+                    crate::config::sim::SimGrid::Viewport { scale: 1.0 }
+                };
+            }
+            ConfigPath::SimGridWidth => {
+                let w: u32 = u32::try_from(value)?;
+                let h = match self.current.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { height, .. } => height,
+                    crate::config::sim::SimGrid::Viewport { .. } => 512,
+                };
+                self.current.sim.grid = crate::config::sim::SimGrid::Fixed {
+                    width: w.clamp(16, 8192),
+                    height: h,
+                };
+            }
+            ConfigPath::SimGridHeight => {
+                let h: u32 = u32::try_from(value)?;
+                let w = match self.current.sim.grid {
+                    crate::config::sim::SimGrid::Fixed { width, .. } => width,
+                    crate::config::sim::SimGrid::Viewport { .. } => 512,
+                };
+                self.current.sim.grid = crate::config::sim::SimGrid::Fixed {
+                    width: w,
+                    height: h.clamp(16, 8192),
+                };
+            }
+            ConfigPath::SimGridScale => {
+                let sc: f32 = f32::try_from(value)?;
+                let sc = if sc.is_finite() { sc.clamp(0.125, 4.0) } else { 1.0 };
+                self.current.sim.grid = crate::config::sim::SimGrid::Viewport { scale: sc };
+            }
+            ConfigPath::SimSeed => {
+                self.current.sim.seed = u32::try_from(value)? as u64;
+            }
+            ConfigPath::SimInitKind => {
+                let kind = String::try_from(value)?;
+                self.current.sim.init = self.current.sim.init.with_kind(&kind);
+            }
+            ConfigPath::SimInitAmplitude => {
+                let a: f32 = f32::try_from(value)?;
+                self.current.sim.init = crate::config::sim::SimInit::Noise {
+                    amplitude: if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.05 },
+                };
+            }
+            ConfigPath::SimInitRadius => {
+                let r = u32::try_from(value)?.clamp(1, 4096);
+                self.current.sim.init = match self.current.sim.init {
+                    crate::config::sim::SimInit::Blob { .. } => {
+                        crate::config::sim::SimInit::Blob { radius: r }
+                    }
+                    crate::config::sim::SimInit::Ring { .. } => {
+                        crate::config::sim::SimInit::Ring { radius: r }
+                    }
+                    crate::config::sim::SimInit::Blobs { count, .. } => {
+                        crate::config::sim::SimInit::Blobs { count, radius: r }
+                    }
+                    other => other,
+                };
+            }
+            ConfigPath::SimInitCount => {
+                let c = u32::try_from(value)?.clamp(1, 64);
+                if let crate::config::sim::SimInit::Blobs { radius, .. } = self.current.sim.init {
+                    self.current.sim.init =
+                        crate::config::sim::SimInit::Blobs { count: c, radius };
+                }
+            }
+            ConfigPath::SimSteps => {
+                self.current.sim.steps = u32::try_from(value)?.min(10_000_000);
+            }
+            ConfigPath::SimStepsPerFrame => {
+                self.current.sim.steps_per_frame = u32::try_from(value)?.clamp(1, 4096);
+            }
+            ConfigPath::SimDt => {
+                let d: f32 = f32::try_from(value)?;
+                // Stored as REQUESTED, bounded only by the model's own
+                // static ceiling. The stability cap depends on the
+                // other parameters, and applying it here made dt move
+                // when an unrelated slider did -- see the note on
+                // `SimModelParam` below. The cap is applied to the
+                // value the solver runs at, in `SimRenderer`.
+                // Over every layer, not the flat model: a layered
+                // config runs at the tightest of them, and reading
+                // `sim.model` here let the clamp accept a dt one layer
+                // could not survive.
+                #[cfg(feature = "engine-sim")]
+                let ceiling = self.current.sim.max_dt_ceiling();
+                #[cfg(not(feature = "engine-sim"))]
+                let ceiling = 10.0f32;
+                self.current.sim.dt = if d.is_finite() { d.clamp(1e-4, ceiling) } else { 1.0 };
+            }
+            ConfigPath::SimBoundary => {
+                let n = String::try_from(value)?;
+                if let Some(b) = crate::config::sim::SimBoundary::from_name(&n) {
+                    self.current.sim.boundary = b;
+                }
+            }
+            // Per-step rates, so the bounds are what one step can
+            // sanely do: a zoom outside [1/2, 2] a step, or a pan of
+            // more than 64 cells a step, is a typo, and a NaN from a
+            // signal must not reach the resampler.
+            ConfigPath::SimWarpZoom => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.zoom = if v.is_finite() { v.clamp(0.5, 2.0) } else { 1.0 };
+            }
+            ConfigPath::SimWarpRotation => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.rotation =
+                    if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+            }
+            ConfigPath::SimWarpPanX => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.pan_x = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+            }
+            ConfigPath::SimWarpPanY => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.pan_y = if v.is_finite() { v.clamp(-64.0, 64.0) } else { 0.0 };
+            }
+            ConfigPath::SimWarpFlow => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.warp.flow =
+                    if v.is_finite() { v.clamp(-std::f32::consts::PI, std::f32::consts::PI) } else { 0.0 };
+            }
+            ConfigPath::SimWarpFilter => {
+                let n = String::try_from(value)?;
+                if let Some(f) = crate::config::sim::SimWarpFilter::from_name(&n) {
+                    self.current.sim.warp.filter = f;
+                }
+            }
+            ConfigPath::SimWarpMode => {
+                let n = String::try_from(value)?;
+                if let Some(m) = crate::config::sim::SimWarpMode::from_name(&n) {
+                    self.current.sim.warp.mode = m;
+                }
+            }
+            ConfigPath::SimWarpCull => {
+                self.current.sim.warp.cull = bool::try_from(value)?;
+            }
+            ConfigPath::SimWarpLayers => {
+                let v: i32 = i32::try_from(value)?;
+                self.current.sim.warp.layers = (v.clamp(0, 15)) as u32;
+            }
+            ConfigPath::SimMatteChannel => {
+                let n = String::try_from(value)?;
+                if let Some(c) = crate::config::sim::SimMatteChannel::from_name(&n) {
+                    self.current.sim.matte.channel = c;
+                }
+            }
+            // The cutoff is in the CHANNEL's units, which a model
+            // decides -- a sandpile's heights run to 3, a crystal
+            // mass past 2 -- so the range is wide and only a
+            // non-finite value is refused.
+            ConfigPath::SimMatteCutoff => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.matte.cutoff = if v.is_finite() { v } else { 0.5 };
+            }
+            ConfigPath::SimMatteSoftness => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.matte.softness =
+                    if v.is_finite() { v.max(0.0) } else { 0.0 };
+            }
+            ConfigPath::SimMatteInvert => {
+                self.current.sim.matte.invert = bool::try_from(value)?;
+            }
+            ConfigPath::SimMatteEdge => {
+                let n = String::try_from(value)?;
+                if let Some(e) = crate::config::sim::SimMatteEdge::from_name(&n) {
+                    self.current.sim.matte.edge = e;
+                }
+            }
+            ConfigPath::SimUpscale => {
+                let n = String::try_from(value)?;
+                if let Some(u) = crate::config::sim::SimUpscale::from_name(&n) {
+                    self.current.sim.upscale = u;
+                }
+            }
+            ConfigPath::SimDownscale => {
+                let n = String::try_from(value)?;
+                if let Some(d) = crate::config::sim::SimDownscale::from_name(&n) {
+                    self.current.sim.downscale = d;
+                }
+            }
+            ConfigPath::SimFit => {
+                let n = String::try_from(value)?;
+                if let Some(v) = crate::config::sim::SimFit::from_name(&n) {
+                    self.current.sim.fit = v;
+                }
+            }
+            ConfigPath::SimModelParam { param } => {
+                // ONE FIELD. Raising a diffusion rate does lower the
+                // stability cap, and an earlier version pulled `dt`
+                // down to meet it here -- which made the Time step
+                // slider move when the user dragged Mobility, and
+                // never move back, because the pull was one-way. A
+                // parameter these models default to sitting exactly at
+                // the cap (Cahn-Hilliard) turned every nudge into a
+                // ratchet.
+                //
+                // The solver is protected where it is actually run:
+                // `SimRenderer` clamps the uniform to
+                // `max_dt_for(params)` on every path, so no
+                // combination of stored values can diverge, and the
+                // effective step stays a pure function of the config
+                // -- which is what reproducibility needs. The panel
+                // says so when the cap binds.
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.model_params.insert(param.clone(), v);
+            }
+            ConfigPath::SimColoringParam { param } => {
+                let v: f32 = f32::try_from(value)?;
+                self.current.sim.coloring_params.insert(param.clone(), v);
+            }
+            ConfigPath::SimLayerModel { layer } => {
+                let name = String::try_from(value)?;
+                if let Some(l) = self.current.sim.layers.get_mut(*layer) {
+                    if l.model != name {
+                        l.model = name;
+                        // As for SimModel: parameters belong to the model
+                        // that declared them.
+                        l.model_params.clear();
+                    }
+                }
+            }
+            ConfigPath::SimLayerEnabled { layer } => {
+                let v = bool::try_from(value)?;
+                if let Some(l) = self.current.sim.layers.get_mut(*layer) {
+                    l.enabled = v;
+                }
+            }
+            ConfigPath::SimLayerParam { layer, param } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.layers.get_mut(*layer) {
+                    l.model_params.insert(param.clone(), v);
+                }
+            }
+            ConfigPath::SimCouplingFrom { index } => {
+                let v: i32 = i32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.from = v.max(0) as usize;
+                }
+            }
+            ConfigPath::SimCouplingTo { index } => {
+                let v: i32 = i32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.to = v.max(0) as usize;
+                }
+            }
+            ConfigPath::SimCouplingForm { index } => {
+                let n = String::try_from(value)?;
+                if let (Some(c), Some(f)) = (
+                    self.current.sim.couplings.get_mut(*index),
+                    crate::config::sim::SimCouplingForm::from_name(&n),
+                ) {
+                    c.form = f;
+                }
+            }
+            ConfigPath::SimCouplingStrength { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.strength = if v.is_finite() { v } else { 0.0 };
+                }
+            }
+            ConfigPath::SimCouplingChannels { index } => {
+                let v: i32 = i32::try_from(value)?;
+                if let Some(c) = self.current.sim.couplings.get_mut(*index) {
+                    c.channels = v.clamp(0, 15) as u32;
+                }
+            }
+            ConfigPath::SimUseTransforms => {
+                self.current.sim.use_transforms = bool::try_from(value)?;
+            }
+            ConfigPath::SimColorLayerParam { index, param } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.coloring_params.insert(param.clone(), v);
+                }
+            }
+            ConfigPath::SimColorLayerOpacity { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.opacity = if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 };
+                }
+            }
+            ConfigPath::SimColorLayerMatteCutoff { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.matte.cutoff = if v.is_finite() { v } else { 0.5 };
+                }
+            }
+            ConfigPath::SimColorLayerMatteSoftness { index } => {
+                let v: f32 = f32::try_from(value)?;
+                if let Some(l) = self.current.sim.color_layers.get_mut(*index) {
+                    l.matte.softness = if v.is_finite() { v.max(0.0) } else { 0.0 };
+                }
+            }
             ConfigPath::EscapeSupersample => {
                 let v: u32 = value.try_into()?;
                 self.current.escape.supersample =
-                    v.clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+                    v.clamp(1, crate::config::escape::MAX_SUPERSAMPLE);
             }
             ConfigPath::EscapeDownsample => {
                 let v: String = value.try_into()?;
@@ -4426,6 +4950,90 @@ mod tests {
     }
 
     /// In the un-swap world add/delete subflame work regardless of
+
+    /// Editing a simulation model parameter must not move `dt`.
+    ///
+    /// It used to. The stability cap depends on the other parameters,
+    /// and the write arm pulled `dt` down to meet it -- one way, never
+    /// back up. Cahn-Hilliard defaults to a `dt` sitting exactly AT
+    /// its cap, so a single nudge of Mobility moved the Time step
+    /// slider, and wiggling Mobility ratcheted it toward zero. The
+    /// same went for the interface width, and for Swift-Hohenberg's
+    /// wavelength.
+    ///
+    /// Every parameter of every model is swept to its extremes here,
+    /// because the bug was not visible at the default of the one
+    /// parameter it was written for.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_sim_model_parameter_never_moves_the_time_step() {
+        for m in crate::sim::MODELS {
+            let mut config = FractalConfig::default();
+            config.sim.model = m.name.to_string();
+            config.sim.dt = m.default_dt;
+            let mut mgr = ConfigManager::new(config);
+            let dt0 = mgr.current.sim.dt;
+
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max, pd.min, pd.max] {
+                    mgr.update_param(
+                        ConfigPath::SimModelParam { param: pd.name.to_string() },
+                        ConfigValue::Float(v),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        mgr.current.sim.dt, dt0,
+                        "{}: setting {} = {v} moved dt from {dt0} to {}",
+                        m.name,
+                        pd.name,
+                        mgr.current.sim.dt
+                    );
+                }
+            }
+        }
+    }
+
+    /// A `dt` the user sets is stored as they set it.
+    ///
+    /// The companion to the test above: the cap belongs to the solver,
+    /// not to the stored value, so the panel and the config keep the
+    /// request. `SimRenderer` applies `max_dt_for` to the uniform on
+    /// every path -- that is what keeps the run stable, and
+    /// `rd_models_stay_stable_at_the_diffusion_slider_maxima` is the
+    /// test which pins it.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_requested_time_step_is_stored_as_requested() {
+        let mut config = FractalConfig::default();
+        config.sim.model = "cahn_hilliard".to_string();
+        let mut mgr = ConfigManager::new(config);
+
+        // Well above the stability cap at these parameters (0.04), and
+        // within the model's static ceiling (0.2).
+        mgr.update_param(ConfigPath::SimDt, ConfigValue::Float(0.15)).unwrap();
+        assert_eq!(mgr.current.sim.dt, 0.15, "the requested dt was not kept");
+
+        // Raising mobility drops the cap a long way; the request still
+        // stands, and the SOLVER is what gets capped.
+        mgr.update_param(
+            ConfigPath::SimModelParam { param: "mobility".to_string() },
+            ConfigValue::Float(4.0),
+        )
+        .unwrap();
+        assert_eq!(mgr.current.sim.dt, 0.15, "a parameter edit rewrote the request");
+        let effective = crate::sim::model_or_default("cahn_hilliard")
+            .max_dt_for(&mgr.current.sim.model_params);
+        assert!(
+            effective < 0.15,
+            "the cap should bind here, or this test proves nothing (got {effective})"
+        );
+
+        // Past the static ceiling is still refused: a hand-edited file
+        // should not carry an absurd step.
+        mgr.update_param(ConfigPath::SimDt, ConfigValue::Float(99.0)).unwrap();
+        assert_eq!(mgr.current.sim.dt, 0.2, "the static ceiling was not applied");
+    }
+
     /// the current editing target. Deleting a subflame either *is*
     /// the active one (target falls back to Main) or has a lower
     /// index than the active one (target index shifts down).

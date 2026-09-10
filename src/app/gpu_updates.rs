@@ -401,6 +401,15 @@ impl App {
             self.escape_dirty = true;
         }
 
+        // Simulation: the three actions differ in how much of the run
+        // survives, and only the strongest needs recording -- the frame
+        // loop recolours every frame regardless, so `rerender_sim`
+        // needs no flag at all. Reseed is checked before resample
+        // because it subsumes it.
+        if actions.reseed_sim {
+            self.sim_reseed = true;
+        }
+
         // Clear pending actions after executing them
         self.config_manager.clear_pending_actions();
 

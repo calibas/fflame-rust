@@ -1,0 +1,6725 @@
+//! GPU tests: the renderer driven exactly as the app drives it.
+//!
+//! Twin of `src/escape/app_repro_test.rs`. Everything here needs a real
+//! device, so it is `#[cfg(test)]` and desktop-only; the assembler's
+//! naga tests cover what can be checked without one.
+//!
+//! What these are for, in order of how much they would hurt to lose:
+//!
+//! * **The rule is what the model says it is.** `gray_scott_matches_a_cpu_mirror`
+//!   runs one step on the GPU and the same step in Rust and compares.
+//!   A shader that produces a plausible-looking field with the wrong
+//!   arithmetic is exactly the failure the phase-0 prototypes exist to
+//!   prevent, and it would otherwise reach a baseline image unnoticed.
+//! * **Batching does not change the result.** An export runs 10,000
+//!   steps in submissions of 256; the viewport runs 4 at a time. If
+//!   those diverged, a still would not be reproducible.
+//! * **A run is a function of its seed.** Two renderers from one config
+//!   must agree bit for bit.
+
+use crate::config::sim::{SimBoundary, SimConfig, SimGrid, SimInit};
+use crate::sim::{model_or_default, SimRenderer};
+use wgpu::*;
+
+fn repro_device() -> Option<(Device, Queue)> {
+    let instance = Instance::new(InstanceDescriptor {
+        backends: Backends::all(),
+        ..InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
+        power_preference: PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+    }))
+    .ok()?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+        label: Some("sim repro"),
+        required_features: Features::empty(),
+        required_limits: adapter.limits(),
+        memory_hints: MemoryHints::Performance,
+        experimental_features: Default::default(),
+        trace: Default::default(),
+    }))
+    .ok()?;
+    device.on_uncaptured_error(std::sync::Arc::new(|e| panic!("wgpu error during sim repro: {e}")));
+    Some((device, queue))
+}
+
+/// A greyscale ramp, standing in for the flame renderer's palette.
+fn test_palette(device: &Device, queue: &Queue) -> TextureView {
+    let tex = device.create_texture(&TextureDescriptor {
+        label: Some("sim test palette"),
+        size: Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut data = vec![0u8; 256 * 4];
+    for (i, px) in data.chunks_exact_mut(4).enumerate() {
+        px[0] = i as u8;
+        px[1] = i as u8;
+        px[2] = i as u8;
+        px[3] = 255;
+    }
+    queue.write_texture(
+        TexelCopyTextureInfo {
+            texture: &tex,
+            mip_level: 0,
+            origin: Origin3d::ZERO,
+            aspect: TextureAspect::All,
+        },
+        &data,
+        TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 4), rows_per_image: Some(1) },
+        Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+    );
+    tex.create_view(&TextureViewDescriptor::default())
+}
+
+/// Read an `Rgba32Float` texture back as `[f32; 4]` per texel.
+fn read_rgba32f(device: &Device, queue: &Queue, tex: &Texture, w: u32, h: u32) -> Vec<[f32; 4]> {
+    read_rgba32f_layer(device, queue, tex, w, h, 0)
+}
+
+/// One slice of a layered field.
+fn read_rgba32f_layer(device: &Device, queue: &Queue, tex: &Texture, w: u32, h: u32, layer: u32) -> Vec<[f32; 4]> {
+    // Copy rows are 256-byte aligned, so a padded staging buffer is
+    // required and the padding has to be stripped after mapping.
+    let unpadded = (w * 16) as usize;
+    let padded = unpadded.div_ceil(256) * 256;
+    let buf = device.create_buffer(&BufferDescriptor {
+        label: Some("sim readback"),
+        size: (padded * h as usize) as u64,
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+    enc.copy_texture_to_buffer(
+        TexelCopyTextureInfo {
+            texture: tex,
+            mip_level: 0,
+            origin: Origin3d { x: 0, y: 0, z: layer },
+            aspect: TextureAspect::All,
+        },
+        TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(h),
+            },
+        },
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit(std::iter::once(enc.finish()));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    buf.slice(..).map_async(MapMode::Read, move |r| {
+        let _ = tx.send(r.is_ok());
+    });
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    assert!(rx.recv().unwrap_or(false), "readback map failed");
+
+    let view = buf.slice(..).get_mapped_range();
+    let mut out = Vec::with_capacity((w * h) as usize);
+    for y in 0..h as usize {
+        let row = &view[y * padded..y * padded + unpadded];
+        for px in row.chunks_exact(16) {
+            out.push([
+                f32::from_le_bytes(px[0..4].try_into().unwrap()),
+                f32::from_le_bytes(px[4..8].try_into().unwrap()),
+                f32::from_le_bytes(px[8..12].try_into().unwrap()),
+                f32::from_le_bytes(px[12..16].try_into().unwrap()),
+            ]);
+        }
+    }
+    drop(view);
+    buf.unmap();
+    out
+}
+
+fn small_config() -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: 64, height: 64 };
+    cfg.init = SimInit::Blob { radius: 8 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 7;
+    cfg
+}
+
+/// The field after a real run is a Gray–Scott field: finite, inside
+/// [0, 1], and actually patterned rather than uniform.
+#[test]
+fn a_run_produces_a_finite_non_uniform_field() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let cfg = small_config();
+    let mut r = SimRenderer::new(&device, &cfg, 64, 64);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 400);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let out = read_rgba32f(&device, &queue, r.output_texture(), 64, 64);
+    assert_eq!(out.len(), 64 * 64);
+    assert!(
+        out.iter().all(|p| p.iter().all(|v| v.is_finite())),
+        "the coloured output must be finite everywhere"
+    );
+    // Coverage is 1.0 for every cell in the `channel` colouring.
+    assert!(out.iter().all(|p| (p[3] - 1.0).abs() < 1e-6), "alpha must be coverage = 1");
+    let lo = out.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+    let hi = out.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        hi - lo > 0.05,
+        "a 400-step Gray-Scott blob should not be a flat image (range {lo}..{hi})"
+    );
+}
+
+/// The rule the shader runs is the rule the model documents.
+///
+/// One step, on a field this test seeds itself, against a Rust mirror
+/// of Karl Sims' scheme. This is the test that would catch a swapped
+/// weight or a missing clamp — the class of bug that still renders a
+/// plausible picture.
+#[test]
+fn gray_scott_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let cfg = small_config();
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    // Read the seeded field, mirror one step on the CPU from exactly
+    // that, then take one step on the GPU and compare. Starting from
+    // the GPU's own seed keeps this a test of the STEP rule rather than
+    // of the seeding shape.
+    let before = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let after = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let m = model_or_default(&cfg.model);
+    let p = m.pack_params(&cfg);
+    let (f, k, da, db) = (p[0], p[1], p[2], p[3]);
+    let at = |x: i32, y: i32| -> [f32; 4] {
+        let xi = ((x % N as i32) + N as i32) % N as i32;
+        let yi = ((y % N as i32) + N as i32) % N as i32;
+        before[yi as usize * N + xi as usize]
+    };
+    let mut worst = 0.0f32;
+    for y in 0..N as i32 {
+        for x in 0..N as i32 {
+            let s = at(x, y);
+            let lap = |c: usize| {
+                -s[c]
+                    + 0.2 * (at(x, y - 1)[c] + at(x, y + 1)[c] + at(x - 1, y)[c] + at(x + 1, y)[c])
+                    + 0.05
+                        * (at(x - 1, y - 1)[c]
+                            + at(x + 1, y - 1)[c]
+                            + at(x - 1, y + 1)[c]
+                            + at(x + 1, y + 1)[c])
+            };
+            let (a, b) = (s[0], s[1]);
+            let abb = a * b * b;
+            let na = (a + (da * lap(0) - abb + f * (1.0 - a)) * cfg.dt).clamp(0.0, 1.0);
+            let nb = (b + (db * lap(1) + abb - (k + f) * b) * cfg.dt).clamp(0.0, 1.0);
+            let got = after[y as usize * N + x as usize];
+            worst = worst.max((got[0] - na).abs()).max((got[1] - nb).abs());
+        }
+    }
+    // Float arithmetic, not bit-exactness: the GPU may contract a
+    // multiply-add the CPU does not. A tolerance this tight still
+    // catches a wrong weight, a missing clamp or a swapped channel,
+    // which are the mistakes worth catching.
+    assert!(
+        worst < 1e-6,
+        "GPU Gray-Scott step differs from the CPU mirror by {worst}"
+    );
+}
+
+/// Batching must not change the sequence: an export submits 256 steps
+/// at a time and the viewport submits four, and a still has to be the
+/// same picture either way.
+#[test]
+fn steps_are_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let cfg = small_config();
+    let n = 300; // deliberately more than one STEPS_PER_SUBMIT batch
+
+    let mut a = SimRenderer::new(&device, &cfg, 64, 64);
+    a.seed(&device, &queue, &cfg);
+    a.run_steps(&device, &queue, &cfg, n);
+
+    let mut b = SimRenderer::new(&device, &cfg, 64, 64);
+    b.seed(&device, &queue, &cfg);
+    for _ in 0..n {
+        b.run_steps(&device, &queue, &cfg, 1);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let fa = read_rgba32f(&device, &queue, a.field_texture(), 64, 64);
+    let fb = read_rgba32f(&device, &queue, b.field_texture(), 64, 64);
+    assert_eq!(a.step_index(), b.step_index());
+    // EVERY channel, not just the concentration. An earlier version of
+    // this compared channel 0 alone and passed while the age channel
+    // (.z, which reads the step index from the uniform) was wrong in
+    // every batched run -- queue.write_buffer is staged before the
+    // command buffer executes, so all the steps in one submission saw
+    // the same index. Comparing the whole texel is what catches that.
+    let differing = fa
+        .iter()
+        .zip(&fb)
+        .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+        .count();
+    assert_eq!(
+        differing, 0,
+        "one batch of {n} and {n} batches of one must give identical fields;          {differing} texels differ"
+    );
+}
+
+/// A run is a function of its config. Two renderers from one config
+/// must agree bit for bit, which is what makes a visual baseline
+/// meaningful at all.
+#[test]
+fn two_runs_from_one_seed_are_byte_identical() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let cfg = small_config();
+    let mut a = SimRenderer::new(&device, &cfg, 96, 72);
+    let mut b = SimRenderer::new(&device, &cfg, 96, 72);
+    a.render_still(&device, &queue, &cfg, &palette);
+    b.render_still(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let ia = read_rgba32f(&device, &queue, a.output_texture(), 96, 72);
+    let ib = read_rgba32f(&device, &queue, b.output_texture(), 96, 72);
+    let differing = ia
+        .iter()
+        .zip(&ib)
+        .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.to_bits() != q.to_bits()))
+        .count();
+    assert_eq!(differing, 0, "{differing} texels differ between two identical runs");
+}
+
+/// A different seed must actually produce a different picture —
+/// otherwise `seed` is decoration and the reproducibility test above
+/// proves nothing.
+#[test]
+fn a_different_seed_gives_a_different_picture() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let mut cfg = small_config();
+    cfg.init = SimInit::Blobs { count: 6, radius: 8 };
+    let mut a = SimRenderer::new(&device, &cfg, 64, 64);
+    a.render_still(&device, &queue, &cfg, &palette);
+    cfg.seed = 12345;
+    let mut b = SimRenderer::new(&device, &cfg, 64, 64);
+    b.render_still(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let ia = read_rgba32f(&device, &queue, a.output_texture(), 64, 64);
+    let ib = read_rgba32f(&device, &queue, b.output_texture(), 64, 64);
+    let differing = ia.iter().zip(&ib).filter(|(x, y)| x[0] != y[0]).count();
+    assert!(differing > 100, "only {differing} texels differ between two seeds");
+}
+
+/// The grid is not the output: a fixed grid rendered to two different
+/// output sizes is the same simulation, resolved twice.
+#[test]
+fn a_fixed_grid_is_the_same_run_at_any_output_size() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let cfg = small_config();
+    let mut a = SimRenderer::new(&device, &cfg, 64, 64);
+    let mut b = SimRenderer::new(&device, &cfg, 256, 256);
+    a.render_still(&device, &queue, &cfg, &palette);
+    b.render_still(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    assert_eq!(a.grid_size(), (64, 64));
+    assert_eq!(b.grid_size(), (64, 64), "a Fixed grid must ignore the output size");
+
+    let fa = read_rgba32f(&device, &queue, a.field_texture(), 64, 64);
+    let fb = read_rgba32f(&device, &queue, b.field_texture(), 64, 64);
+    assert_eq!(
+        fa.iter().map(|p| p[1].to_bits()).collect::<Vec<_>>(),
+        fb.iter().map(|p| p[1].to_bits()).collect::<Vec<_>>(),
+        "the same Fixed grid must simulate identically regardless of output size"
+    );
+}
+
+/// An absurd grid is refused with a message rather than aborting the
+/// process inside wgpu.
+#[test]
+fn an_impossible_grid_is_refused_before_allocation() {
+    let Some((device, _queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut cfg = SimConfig::default();
+    // 32768^2 exceeds every device's max texture dimension, and its
+    // field pair would be 64 GiB, so this is refused whichever check
+    // fires first -- the test asserts the refusal, not which one.
+    cfg.grid = SimGrid::Fixed { width: 32768, height: 32768 };
+    let err = SimRenderer::allocation_error(&device, &cfg, 3840, 2160);
+    assert!(err.is_some(), "an unallocatable grid must be refused");
+    let msg = err.unwrap();
+    assert!(
+        msg.contains("grid") || msg.contains("memory"),
+        "the refusal should say what to change, got {msg:?}"
+    );
+
+    // A large but genuinely allocatable grid is NOT refused: the check
+    // exists to stop the impossible, not to second-guess the user.
+    cfg.grid = SimGrid::Fixed { width: 2048, height: 2048 };
+    assert!(
+        SimRenderer::allocation_error(&device, &cfg, 1920, 1080).is_none(),
+        "a 2048 grid is ordinary and must be allowed"
+    );
+
+    cfg.grid = SimGrid::Fixed { width: 256, height: 256 };
+    assert!(
+        SimRenderer::allocation_error(&device, &cfg, 1920, 1080).is_none(),
+        "an ordinary config must not be refused"
+    );
+}
+
+/// PHASE-1 GATE: the interactive budget at 1080p.
+///
+/// The plan's gate is "1080p at >= 60 fps with >= 4 steps per frame".
+/// Phase 0 measured the bare stencil at 0.495 ms/step on this card;
+/// this measures the SHIPPED path instead -- a real SimRenderer, the
+/// real assembled shaders, and the colour+resolve pass that runs every
+/// frame whether or not the simulation advanced.
+///
+/// Reported rather than asserted tightly: the number depends on the
+/// machine, and a hard threshold here would fail on a laptop for
+/// reasons that are not a regression. The assertion is only that the
+/// gate's own bar is cleared.
+///
+/// **RUN WITH `--test-threads=1`.** cargo runs tests in parallel, and
+/// the 4K gate below is 13 seconds of solid GPU work. Sharing a device
+/// with it turned 1.38 ms/frame into 72.64 -- a 50x error that looks
+/// exactly like a real regression, and which cost a round of
+/// investigation before the cause was measured. Any GPU TIMING test
+/// has this hazard; correctness tests do not care.
+#[test]
+#[ignore = "manual: GPU timing, phase-1 gate"]
+fn phase1_gate_interactive_budget_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = crate::config::sim::SimGrid::Viewport { scale: 1.0 };
+    cfg.init = crate::config::sim::SimInit::Blobs { count: 6, radius: 24 };
+    let (w, h) = (1920u32, 1080u32);
+    let mut r = SimRenderer::new(&device, &cfg, w, h);
+    r.seed(&device, &queue, &cfg);
+    // Warm up: first frame pays pipeline creation and allocation.
+    for _ in 0..3 {
+        r.render_frame(&device, &queue, &cfg, &palette, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    const FRAMES: u32 = 60;
+    for spf in [1u32, 4, 8, 16] {
+        let t0 = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            r.render_frame(&device, &queue, &cfg, &palette, spf);
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+        println!(
+            "1920x1080, {spf:>2} steps/frame: {ms:6.2} ms/frame  ({:5.1} fps)",
+            1000.0 / ms
+        );
+        if spf == 4 {
+            assert!(
+                ms < 16.7,
+                "PHASE-1 GATE FAILED: 4 steps/frame at 1080p took {ms:.2} ms, over the 16.7 ms \
+                 budget for 60 fps"
+            );
+        }
+    }
+}
+
+/// PHASE-1 GATE: a 4K export of 10,000 steps completes.
+///
+/// The risk is the ~2 s GPU watchdog: an export that submits its whole
+/// run as one pass resets the device. `run_steps` batches internally,
+/// and this is the test that the batching is actually sized for it.
+#[test]
+#[ignore = "manual: GPU timing, phase-1 gate"]
+fn phase1_gate_4k_ten_thousand_steps() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: 3840, height: 2160 };
+    cfg.init = crate::config::sim::SimInit::Blobs { count: 6, radius: 24 };
+    cfg.steps = 10_000;
+    if let Some(why) = SimRenderer::allocation_error(&device, &cfg, 3840, 2160) {
+        eprintln!("device cannot hold a 4K grid, skipping: {why}");
+        return;
+    }
+    let t0 = std::time::Instant::now();
+    let mut r = SimRenderer::new(&device, &cfg, 3840, 2160);
+    r.render_still(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let secs = t0.elapsed().as_secs_f64();
+    println!("4K grid, 10,000 steps: {secs:.1} s ({:.2} ms/step)", secs * 1000.0 / 10_000.0);
+    assert_eq!(r.step_index(), 10_000, "every step must have run");
+
+    // The field must still be a field: a watchdog reset or a lost
+    // device shows up here as NaN or a uniform image, not as an error.
+    let out = read_rgba32f(&device, &queue, r.output_texture(), 3840, 2160);
+    assert!(
+        out.iter().all(|p| p.iter().all(|v| v.is_finite())),
+        "4K export produced non-finite pixels"
+    );
+    let lo = out.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+    let hi = out.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+    assert!(hi - lo > 0.05, "4K export is a flat image ({lo}..{hi})");
+}
+
+/// Where an interactive frame's time actually goes.
+#[test]
+#[ignore = "diagnostic"]
+fn frame_cost_breakdown_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = crate::config::sim::SimGrid::Viewport { scale: 1.0 };
+    let (w, h) = (1920u32, 1080u32);
+    let mut r = SimRenderer::new(&device, &cfg, w, h);
+    r.seed(&device, &queue, &cfg);
+    for _ in 0..3 {
+        r.render_frame(&device, &queue, &cfg, &palette, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let mut report = |label: &str, n: f64, secs: f64| {
+        println!("{label:<38} {:8.3} ms", secs * 1000.0 / n);
+    };
+
+    let t = std::time::Instant::now();
+    r.run_steps(&device, &queue, &cfg, 240);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("240 steps, one call, per step", 240.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.run_steps(&device, &queue, &cfg, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("4 steps x 60 calls, per step", 240.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.color(&device, &queue, &cfg, &palette);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("colour pass alone, per call", 60.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.render_frame(&device, &queue, &cfg, &palette, 0);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("render_frame with 0 steps, per frame", 60.0, t.elapsed().as_secs_f64());
+
+    let t = std::time::Instant::now();
+    for _ in 0..60 {
+        r.render_frame(&device, &queue, &cfg, &palette, 4);
+    }
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    report("render_frame with 4 steps, per frame", 60.0, t.elapsed().as_secs_f64());
+}
+
+/// Does the boundary mode's address arithmetic cost anything?
+///
+/// Periodic does four integer modulos per neighbour read -- 32 per
+/// cell -- and an interior fast-path would remove them for every cell
+/// not on the border. Whether that is worth its complexity depends on
+/// whether the modulos are visible at all against a bandwidth-bound
+/// kernel, which is a measurement rather than an argument.
+#[test]
+#[ignore = "diagnostic"]
+fn boundary_mode_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    let (w, h) = (1920u32, 1080u32);
+    for boundary in [
+        SimBoundary::Clamp,
+        SimBoundary::Periodic,
+        SimBoundary::Zero,
+        SimBoundary::Mirror,
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.grid = crate::config::sim::SimGrid::Viewport { scale: 1.0 };
+        cfg.boundary = boundary;
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 64);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let t = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, 1000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        println!(
+            "{:<10} {:7.4} ms/step",
+            format!("{boundary:?}"),
+            t.elapsed().as_secs_f64() * 1000.0 / 1000.0
+        );
+    }
+}
+
+/// The Ising model must reproduce the phase transition quantitatively,
+/// and it is checked against an EXACT result rather than a screenshot.
+///
+/// The observable is the nearest-neighbour correlation, not the
+/// magnetisation. Magnetisation is the obvious choice and the wrong
+/// one: it is a global quantity that equilibrates by domain
+/// coarsening, so at 600 sweeps on a 128 lattice it was measured at
+/// 0.090 for T = 1.5 -- below its own critical value, purely because
+/// the lattice was sitting in a multi-domain state. Left running it
+/// reaches 0.985, so the dynamics were right and the observable was
+/// slow. Correlation is local, equilibrates within ~100 sweeps, and is
+/// monotonic in temperature.
+///
+/// At T_c the 2-D square-lattice correlation is exactly 1/sqrt(2)
+/// (Onsager), which is a real reference to check against. Measured
+/// here across 100-20,000 sweeps: 0.679-0.728, centred on 0.707.
+///
+/// A broken checkerboard -- updating both sublattices at once -- still
+/// renders plausible domains while giving the wrong statistics, so a
+/// baseline image cannot catch it and this can.
+#[test]
+fn ising_matches_onsagers_correlation_across_the_transition() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    // 100 sweeps: the correlation is flat from there to 20,000.
+    const STEPS: u32 = 200;
+
+    let correlation = |t: f32| -> f64 {
+        let mut cfg = SimConfig::default();
+        cfg.model = "ising".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.model_params.insert("temperature".into(), t);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        for px in &f {
+            assert!(
+                px[0] == 1.0 || px[0] == -1.0,
+                "spin {} is not +/-1 at T = {t}",
+                px[0]
+            );
+        }
+        let n = N as usize;
+        let mut corr = 0.0f64;
+        for y in 0..n {
+            for x in 0..n {
+                let sc = f[y * n + x][0] as f64;
+                corr += sc * f[y * n + (x + 1) % n][0] as f64;
+                corr += sc * f[((y + 1) % n) * n + x][0] as f64;
+            }
+        }
+        corr / (2 * n * n) as f64
+    };
+
+    let cold = correlation(1.5);
+    let critical = correlation(2.269);
+    let hot = correlation(3.5);
+    const ONSAGER: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    println!(
+        "Ising <s_i s_j>: T=1.5 {cold:.3}   T_c {critical:.3} (exact {ONSAGER:.3})   \
+         T=3.5 {hot:.3}"
+    );
+
+    assert!(cold > 0.90, "T = 1.5 should be strongly correlated, got {cold:.3}");
+    assert!(
+        (critical - ONSAGER).abs() < 0.05,
+        "at T_c the correlation should be Onsager's {ONSAGER:.4}, got {critical:.3}"
+    );
+    assert!(
+        (0.25..0.45).contains(&hot),
+        "T = 3.5 should be weakly correlated but not free, got {hot:.3}"
+    );
+    assert!(
+        cold > critical && critical > hot,
+        "correlation must fall monotonically with temperature: \
+         {cold:.3} / {critical:.3} / {hot:.3}"
+    );
+}
+
+/// A cyclic CA must actually cycle: every state occupied, and the
+/// field still changing after it has developed.
+///
+/// Cheap, and it catches the two ways this rule dies silently -- a
+/// wrong modulo freezes it on one state, and a wrong threshold
+/// comparison makes every cell advance every step, which looks like
+/// motion but is just a global counter.
+#[test]
+fn cyclic_ca_occupies_every_state_and_keeps_moving() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let mut cfg = SimConfig::default();
+    cfg.model = "cyclic_ca".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.seed = 5;
+    let states = 14usize;
+
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let a = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let mut seen = vec![0usize; states];
+    for px in &a {
+        let v = px[0];
+        assert!(
+            v >= 0.0 && v < states as f32 && v.fract() == 0.0,
+            "state {v} is outside 0..{states} or not an integer"
+        );
+        seen[v as usize] += 1;
+    }
+    assert!(
+        seen.iter().all(|&c| c > 0),
+        "every state should be occupied after 300 steps: {seen:?}"
+    );
+
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let b = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let changed = a.iter().zip(&b).filter(|(x, y)| x[0] != y[0]).count();
+    assert!(changed > 0, "a spiralled cyclic CA must keep advancing");
+    // NOT an upper bound on `changed`. A first version asserted that
+    // fewer than all cells advance, reasoning that a threshold which
+    // always passed would advance everything -- but phase 0 measured
+    // the churn plateau for 1/1/14 at 0.986, so a mature spiral field
+    // really does advance almost every cell every step. That is what
+    // makes the spirals rotate, and the assertion was encoding an
+    // expectation the measurement had already contradicted.
+    //
+    // The discriminator against a rule that always fires is the STATE
+    // distribution checked above: it would turn the lattice into one
+    // global counter, so every cell would hold the same value.
+    let first = a[0][0];
+    assert!(
+        a.iter().any(|px| px[0] != first),
+        "every cell holds the same state -- the rule has become a global counter"
+    );
+}
+
+/// Is the Ising lattice coarsening, or stuck?
+#[test]
+#[ignore = "diagnostic"]
+fn ising_coarsening_curve() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 128;
+    for t in [1.5f32, 2.269, 3.5] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "ising".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.model_params.insert("temperature".into(), t);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let mut line = format!("T={t:<6}");
+        for target in [200u32, 600, 1200, 4000, 12000, 40000] {
+            let have = r.step_index();
+            r.run_steps(&device, &queue, &cfg, target - have);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+            let n = N as usize;
+            let mut corr = 0.0f64;
+            for y in 0..n {
+                for x in 0..n {
+                    let sc = f[y * n + x][0] as f64;
+                    corr += sc * f[y * n + (x + 1) % n][0] as f64;
+                    corr += sc * f[((y + 1) % n) * n + x][0] as f64;
+                }
+            }
+            corr /= (2 * n * n) as f64;
+            line.push_str(&format!("  {}:{:.3}", target / 2, corr));
+        }
+        println!("{line}");
+    }
+}
+
+/// Rule 90 must be Pascal's triangle mod 2, checked against
+/// independently computed binomials.
+///
+/// The bit convention -- next state is bit (4*left + 2*self + right) --
+/// is easy to get backwards, and a reversed one still produces
+/// something that looks like a cellular automaton. The CPU prototype
+/// checked this on 2,079 cells; this is the same check on the shader.
+///
+/// Only the first 64 generations are compared: rule 90 on a PERIODIC
+/// lattice of width 2^k self-annihilates at t = 2^k, so past the point
+/// where the triangle reaches the edge the diagram is the wrapped sum
+/// rather than the binomial one. That is correct behaviour, not a bug,
+/// and the comparison simply stops before the wrap.
+#[test]
+fn wolfram_rule_90_matches_binomials_mod_two() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+    const GENS: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "wolfram_eca".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Center;
+    cfg.model_params.insert("rule".into(), 90.0);
+
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, GENS as u32);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let n = N as usize;
+    let centre = n / 2;
+    let mut checked = 0usize;
+    for t in 1..GENS {
+        for d in -(t as i64)..=(t as i64) {
+            if (t as i64 + d) % 2 != 0 {
+                continue;
+            }
+            // C(t, k) mod 2 by Kummer's theorem: the binomial is odd
+            // exactly when k's bits are a subset of t's. Computing the
+            // binomial itself overflowed here -- C(63, 29) times 63 is
+            // past u64, and in release that wraps silently, so the test
+            // failed at generation 63 while the shader was right.
+            let k = ((t as i64 + d) / 2) as u64;
+            let want = if (t as u64 & k) == k { 1.0f32 } else { 0.0f32 };
+            let x = (centre as i64 + d).rem_euclid(n as i64) as usize;
+            let got = f[t * n + x][0];
+            assert_eq!(
+                got, want,
+                "rule 90 at generation {t}, offset {d}: got {got}, binomial says {want}"
+            );
+            checked += 1;
+        }
+    }
+    println!("rule 90: {checked} cells match C(t, k) mod 2");
+    assert!(checked > 2000, "expected a few thousand comparisons, made {checked}");
+}
+
+/// Lateral sticking must actually change the physics, not just the
+/// picture.
+///
+/// Ballistic deposition and random deposition are different
+/// universality classes: without lateral sticking the columns are
+/// independent and the interface width grows as sqrt(t); with it the
+/// columns correlate and the width grows more slowly. Measured on the
+/// CPU prototype at the same point, 2.84 against 10.59.
+///
+/// Getting the toggle backwards would still render a rough surface, so
+/// this compares the two widths rather than eyeballing either.
+#[test]
+fn lateral_sticking_correlates_the_interface() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+
+    let width = |sideways: f32| -> f64 {
+        let mut cfg = SimConfig::default();
+        cfg.model = "ballistic_deposition".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Center;
+        cfg.seed = 11;
+        cfg.model_params.insert("sideways".into(), sideways);
+        cfg.model_params.insert("p_drop".into(), 0.5);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        // Column heights live in .y of row 0.
+        let h: Vec<f64> = (0..N as usize).map(|x| f[x][1] as f64).collect();
+        let mean = h.iter().sum::<f64>() / h.len() as f64;
+        (h.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / h.len() as f64).sqrt()
+    };
+
+    let ballistic = width(1.0);
+    let random = width(0.0);
+    println!("interface width: ballistic {ballistic:.2}   random {random:.2}");
+    assert!(
+        ballistic > 0.0 && random > 0.0,
+        "both variants must produce a rough interface, got {ballistic} and {random}"
+    );
+    assert!(
+        random > ballistic * 1.5,
+        "random deposition should be markedly rougher than ballistic at the same time \
+         (uncorrelated columns): got {random:.2} against {ballistic:.2}"
+    );
+}
+
+/// Percolation must label CONNECTED COMPONENTS, checked against a CPU
+/// flood fill rather than against a previous run.
+///
+/// Two open cells must share a label exactly when they are connected
+/// through open cells. That is a property no baseline image can check:
+/// a labelling that leaks across a closed site, or that stops short of
+/// converging, still renders as plausible coloured blobs.
+///
+/// It also measures how many steps convergence took, because the count
+/// is the model's headline cost and phase 0 found it is NOT
+/// self-averaging: at p_c a critical cluster's longest chemical path
+/// varies four-fold between samples at one size.
+#[test]
+fn percolation_labels_match_a_cpu_flood_fill() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "percolation".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Zero;
+    cfg.seed = 9;
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+
+    // Run until the labels stop moving, and report how long that took.
+    let mut prev: Vec<u32> = Vec::new();
+    let mut converged_at = None;
+    for round in 1..=400u32 {
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let now: Vec<u32> = f.iter().map(|px| px[0].to_bits()).collect();
+        if now == prev {
+            converged_at = Some(round - 1);
+            break;
+        }
+        prev = now;
+    }
+    let rounds = converged_at.expect("labels should stop changing within 400 rounds");
+    println!("percolation at p_c converged in {rounds} rounds on {N}x{N} (with path compression)");
+
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    let open: Vec<bool> = f.iter().map(|px| px[1] > 0.5).collect();
+    let label: Vec<f32> = f.iter().map(|px| px[0]).collect();
+
+    // CPU connected components, four-neighbour, on the SAME open field
+    // the GPU generated -- so this tests the labelling, not the RNG.
+    let mut comp = vec![usize::MAX; N * N];
+    let mut next = 0usize;
+    for start in 0..N * N {
+        if !open[start] || comp[start] != usize::MAX {
+            continue;
+        }
+        let id = next;
+        next += 1;
+        let mut stack = vec![start];
+        comp[start] = id;
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % N, i / N);
+            let mut push = |nx: usize, ny: usize, st: &mut Vec<usize>, c: &mut Vec<usize>| {
+                let j = ny * N + nx;
+                if open[j] && c[j] == usize::MAX {
+                    c[j] = id;
+                    st.push(j);
+                }
+            };
+            if x > 0 { push(x - 1, y, &mut stack, &mut comp); }
+            if x + 1 < N { push(x + 1, y, &mut stack, &mut comp); }
+            if y > 0 { push(x, y - 1, &mut stack, &mut comp); }
+            if y + 1 < N { push(x, y + 1, &mut stack, &mut comp); }
+        }
+    }
+    println!("  {next} components over {} open cells", open.iter().filter(|o| **o).count());
+
+    // Same component => same label, and different component => different
+    // label. Checked through a pair of maps so a single leak or a single
+    // failure to merge is caught.
+    use std::collections::HashMap;
+    let mut comp_to_label: HashMap<usize, f32> = HashMap::new();
+    let mut label_to_comp: HashMap<u32, usize> = HashMap::new();
+    for i in 0..N * N {
+        if !open[i] {
+            continue;
+        }
+        let c = comp[i];
+        let l = label[i];
+        match comp_to_label.get(&c) {
+            Some(&seen) => assert_eq!(
+                seen.to_bits(),
+                l.to_bits(),
+                "component {c} has two labels ({seen} and {l}): it did not fully merge"
+            ),
+            None => {
+                comp_to_label.insert(c, l);
+            }
+        }
+        match label_to_comp.get(&l.to_bits()) {
+            Some(&seen) => assert_eq!(
+                seen, c,
+                "label {l} spans components {seen} and {c}: it leaked across a closed site"
+            ),
+            None => {
+                label_to_comp.insert(l.to_bits(), c);
+            }
+        }
+    }
+    assert!(next > 20, "expected many clusters at p_c, found {next}");
+}
+
+/// What path compression is worth, measured rather than asserted.
+///
+/// Plain propagation moves a label one cell per step, so it costs the
+/// cluster's longest chemical path -- phase 0 measured a median 645
+/// rounds at 256² and 1,409 at 512². Reading the cell a label points at
+/// short-circuits that.
+#[test]
+#[ignore = "diagnostic"]
+fn percolation_convergence_against_grid_size() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    for n in [64u32, 128, 256, 512] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "percolation".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: n, height: n };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Zero;
+        cfg.seed = 9;
+        let mut r = SimRenderer::new(&device, &cfg, n, n);
+        r.seed(&device, &queue, &cfg);
+        let mut prev: Vec<u32> = Vec::new();
+        let mut rounds = 0;
+        for round in 1..=3000u32 {
+            r.run_steps(&device, &queue, &cfg, 1);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let f = read_rgba32f(&device, &queue, r.field_texture(), n, n);
+            let now: Vec<u32> = f.iter().map(|px| px[0].to_bits()).collect();
+            if now == prev {
+                rounds = round - 1;
+                break;
+            }
+            prev = now;
+        }
+        println!("{n}x{n}: converged in {rounds} rounds");
+    }
+}
+
+/// Review probe: every model's step cost at 1080p, at its defaults,
+/// plus the two heavy kernels at their slider extremes. Diagnostic --
+/// run with `--test-threads=1` or the numbers are contaminated.
+///
+/// `SIM_PROBE_ONLY=<name prefix>` / `SIM_PROBE_SKIP=<prefix>` select
+/// cases and `SIM_PROBE_STEPS=<n>` overrides the step count. Those
+/// knobs are how the watchdog bug was bisected: the poll time is
+/// printed because a run that takes the SAME time at 256 and 512
+/// steps has been cut off by the 2 s GPU watchdog, and the ms/step it
+/// reports is then fiction (R = 5 read 4.7 that way; it is 9.7).
+#[test]
+#[ignore = "diagnostic"]
+fn phase2_review_step_cost_per_model() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    const W: u32 = 1920;
+    const H: u32 = 1080;
+    let steps: u32 = std::env::var("SIM_PROBE_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(512);
+    let mut cases: Vec<(String, SimConfig)> = Vec::new();
+    for m in crate::sim::MODELS {
+        let mut cfg = SimConfig::default();
+        cfg.model = m.name.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: W, height: H };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cases.push((m.name.to_string(), cfg));
+    }
+    {
+        let mut cfg = SimConfig::default();
+        cfg.model = "cyclic_ca".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: W, height: H };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.model_params.insert("range".into(), 5.0);
+        cfg.model_params.insert("neighbourhood".into(), 1.0);
+        cases.push(("cyclic_ca R=5 Moore".into(), cfg));
+    }
+    let only = std::env::var("SIM_PROBE_ONLY").ok();
+    let skip = std::env::var("SIM_PROBE_SKIP").ok();
+    for (name, cfg) in cases {
+        if let Some(o) = &only { if !name.starts_with(o.as_str()) { continue; } }
+        if let Some(k) = &skip { if name.starts_with(k.as_str()) { continue; } }
+        let mut r = SimRenderer::new(&device, &cfg, W, H);
+        r.seed(&device, &queue, &cfg);
+        // Warm: compile + first batch.
+        r.run_steps(&device, &queue, &cfg, steps.min(64));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let t0 = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, steps);
+        let polled = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        eprintln!("poll after {steps} steps: {polled:?} ({:.3} s)", t0.elapsed().as_secs_f64());
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / steps as f64;
+        println!("{name:<24} {ms:.4} ms/step at 1080p");
+    }
+}
+
+/// Every reaction-diffusion model must stay stable with its diffusion
+/// sliders at their MAXIMA and dt at the cap the engine enforces there.
+///
+/// The cap used to be `max_dt` alone, measured at the default diffusion
+/// rates. Explicit Euler's diffusion bound scales as 1/D, and the
+/// sliders reach 4-5x the defaults: at Brusselator D_Y = 40 under the
+/// 0.04 cap, dt·D·1.6 = 2.56 > 2. Measured before the fix, on 128²
+/// after 200 steps: Brusselator infinite in 8,172 of 16,384 cells,
+/// Schnakenberg in 8,137, and FitzHugh-Nagumo railed at ±3 by its
+/// clamp with a checkerboard of rms 5.1 -- a lattice of rails rather
+/// than a NaN, so nothing else catches it. Gray-Scott's slider maximum
+/// IS its default, and at exactly the bound (dt·D·1.6 = 2.00) it held
+/// a 0.445-rms checkerboard in its [0,1] clamp; that is why the cap
+/// carries a 0.96 margin.
+///
+/// A diffusion-only cap (`1.2 / D`) was tried first and FitzHugh-Nagumo
+/// still railed under it (rms 3.08 at dt = 0.3, D = 4): the reaction
+/// term's stiffness adds to the stencil's, which is what the cap now
+/// accounts for.
+///
+/// The observable is the checkerboard (Nyquist) mode's AMPLITUDE, the
+/// alternating-sign mean of the field, sampled at 200 and 400 steps.
+/// It is the eigenvector explicit Euler amplifies first, so a run past
+/// the bound grows it geometrically whatever the reaction terms; a
+/// stable run leaves it at rounding level. Neighbour-difference rms was
+/// tried first and rejected as the observable: a legitimate Turing
+/// pattern at high D has fine structure too, and the Brusselator at
+/// D_Y = 40 read 0.38 on that measure while being stable -- the
+/// alternating mean distinguishes the two, a pattern's cancels.
+#[test]
+fn rd_models_stay_stable_at_the_diffusion_slider_maxima() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let mut checked = 0;
+    for m in crate::sim::MODELS {
+        if m.diffusion.is_empty() {
+            continue;
+        }
+        let mut cfg = SimConfig::default();
+        cfg.model = m.name.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        for name in m.diffusion {
+            let def = m.parameters.iter().find(|p| p.name == *name).unwrap();
+            cfg.model_params.insert(def.name.into(), def.max);
+        }
+        // Ask for far more than the cap; the engine must clamp.
+        cfg.dt = m.max_dt;
+        let cap = m.max_dt_for(&cfg.model_params);
+        assert!(cap > 0.0 && cap <= m.max_dt, "{}: cap {cap} vs declared {}", m.name, m.max_dt);
+
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let n = N as usize;
+        // Nyquist amplitude of channel x, and the field's scale to
+        // judge it against.
+        let nyquist = |f: &[[f32; 4]]| -> (f64, f64, usize) {
+            let mut alt = 0.0f64;
+            let mut mag = 0.0f64;
+            let mut nonfinite = 0;
+            for y in 0..n {
+                for x in 0..n {
+                    let v = f[y * n + x][0] as f64;
+                    if !v.is_finite() || !f[y * n + x][1].is_finite() {
+                        nonfinite += 1;
+                        continue;
+                    }
+                    alt += if (x + y) % 2 == 0 { v } else { -v };
+                    mag += v.abs();
+                }
+            }
+            (alt / (n * n) as f64, mag / (n * n) as f64, nonfinite)
+        };
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let (a200, mag, nf200) = nyquist(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let (a400, _, nf400) = nyquist(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        // A third sample, because a Turing pattern forming from noise
+        // also raises the alternating mean a little (the Brusselator
+        // read 2e-6 -> 4e-4 between 200 and 400 while stable); an
+        // unstable mode at even 2% a step would be at the rails by 800.
+        r.run_steps(&device, &queue, &cfg, 400);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let (a800, mag800, nf800) =
+            nyquist(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        println!(
+            "{:<14} cap {:.4} (declared {})  nonfinite {}  |x| {:.3}  nyquist {:.2e} -> {:.2e} -> {:.2e}",
+            m.name,
+            cap,
+            m.max_dt,
+            nf200 + nf400 + nf800,
+            mag,
+            a200,
+            a400,
+            a800
+        );
+        assert_eq!(nf200 + nf400 + nf800, 0, "{}: non-finite cells at the slider maxima", m.name);
+        // Rounding level relative to the field, and not growing.
+        assert!(
+            a800.abs() < 1e-3 * mag800.max(1e-6),
+            "{}: Nyquist amplitude {a800:.2e} against a field of {mag800:.3} -- the cap is not a cap",
+            m.name
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 4, "expected the four reaction-diffusion models");
+}
+
+/// A slow kernel must never lose the device to the GPU watchdog.
+///
+/// Cyclic CA at range 5 is 121 reads a cell and 9.7 ms a step at
+/// 1080p. With a fixed 256-step submission that was 2.5 s in one
+/// command buffer, past Windows' 2 s watchdog: the device reset, the
+/// fence signalled anyway, and the shipped binary's `export` of this
+/// config failed with "Parent device is lost". The submission size is
+/// now measured; this runs the reproduction and asks the device
+/// whether it survived.
+///
+/// About 2.5 s of GPU time on the card this was measured on.
+#[test]
+fn a_slow_kernel_never_trips_the_gpu_watchdog() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let lost = Arc::new(AtomicBool::new(false));
+    {
+        let lost = lost.clone();
+        device.set_device_lost_callback(Box::new(move |reason, msg| {
+            eprintln!("device lost: {reason:?}: {msg}");
+            lost.store(true, Ordering::SeqCst);
+        }));
+    }
+    const W: u32 = 1920;
+    const H: u32 = 1080;
+    let mut cfg = SimConfig::default();
+    cfg.model = "cyclic_ca".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: W, height: H };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.model_params.insert("range".into(), 5.0);
+    cfg.model_params.insert("neighbourhood".into(), 1.0);
+
+    let mut r = SimRenderer::new(&device, &cfg, W, H);
+    r.seed(&device, &queue, &cfg);
+    let started = std::time::Instant::now();
+    // The count that lost the device: one fixed-size submission's worth.
+    r.run_steps(&device, &queue, &cfg, 256);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let secs = started.elapsed().as_secs_f64();
+    let f = read_rgba32f(&device, &queue, r.field_texture(), W, H);
+    let bad = f.iter().filter(|px| !(px[0] >= 0.0 && px[0] < 14.0)).count();
+    println!("256 steps of range-5 cyclic CA at 1080p: {secs:.2} s, {bad} invalid cells");
+    assert!(!lost.load(Ordering::SeqCst), "the device was lost: the submissions are too long");
+    assert_eq!(bad, 0, "invalid states after the run");
+}
+
+/// The two-pass machinery itself, against a CPU mirror of one step.
+///
+/// A fourth-order model is two dispatches, and the thing that can go
+/// wrong is the ORDERING: if pass 2 read the field pass 1 was written
+/// from rather than the one it wrote, the result is still a smooth
+/// evolving field that looks like a PDE. This mirrors both passes on
+/// the CPU -- including the intermediate stored in `.y` -- so a
+/// ping-pong that lost a swap cannot pass.
+#[test]
+fn cahn_hilliard_matches_a_cpu_mirror_through_both_passes() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "cahn_hilliard".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 5;
+    cfg.dt = 0.04;
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let start = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // Three steps: enough that a one-step-late read would drift well
+    // past tolerance, few enough that f32 rounding has not compounded.
+    const STEPS: u32 = 3;
+    r.run_steps(&device, &queue, &cfg, STEPS);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let (d, gamma) = (1.0f32, 0.5f32);
+    let dt = 0.04f32;
+    let mut c: Vec<f32> = start.iter().map(|px| px[0]).collect();
+    let lap = |f: &[f32], x: usize, y: usize| -> f32 {
+        let l = f[y * N + (x + N - 1) % N];
+        let rr = f[y * N + (x + 1) % N];
+        let u = f[((y + N - 1) % N) * N + x];
+        let dn = f[((y + 1) % N) * N + x];
+        l + rr + u + dn - 4.0 * f[y * N + x]
+    };
+    for _ in 0..STEPS {
+        // Pass 1: the chemical potential, into its own array -- which
+        // is exactly what the .y channel is on the GPU.
+        let mut mu = vec![0.0f32; N * N];
+        for y in 0..N {
+            for x in 0..N {
+                let v = c[y * N + x];
+                mu[y * N + x] = v * v * v - v - gamma * lap(&c, x, y);
+            }
+        }
+        // Pass 2: reads the potential every cell just wrote.
+        let mut next = vec![0.0f32; N * N];
+        for y in 0..N {
+            for x in 0..N {
+                next[y * N + x] = (c[y * N + x] + dt * d * lap(&mu, x, y)).clamp(-4.0, 4.0);
+            }
+        }
+        c = next;
+    }
+
+    let mut worst = 0.0f32;
+    for i in 0..N * N {
+        worst = worst.max((c[i] - got[i][0]).abs());
+    }
+    println!("Cahn-Hilliard {STEPS} steps vs CPU mirror: worst |delta| = {worst:.3e}");
+    assert!(
+        worst < 1e-5,
+        "GPU and CPU disagree by {worst:.3e} after {STEPS} two-pass steps"
+    );
+}
+
+/// Cahn-Hilliard must conserve the mean composition EXACTLY.
+///
+/// The update is a discrete divergence: a Laplacian sums to zero over
+/// a periodic lattice, so the mean cannot move except by rounding.
+/// That is the equation's physical content -- material is transported,
+/// not created -- and it is invisible in a picture, because a field
+/// that slowly gains material still separates into plausible domains.
+/// The CPU prototype holds it to 1.2e-16 in f64 over 40,000 steps;
+/// f32 on the GPU is looser, and the tolerance below is against the
+/// per-step rounding rather than against zero.
+#[test]
+fn cahn_hilliard_conserves_the_mean_composition() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    for mean in [0.0f32, 0.4] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "cahn_hilliard".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 5;
+        cfg.model_params.insert("mean".into(), mean);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let m0 = {
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+            f.iter().map(|px| px[0] as f64).sum::<f64>() / f.len() as f64
+        };
+        r.run_steps(&device, &queue, &cfg, 4000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let m1 = f.iter().map(|px| px[0] as f64).sum::<f64>() / f.len() as f64;
+        let sd = {
+            let mu = m1;
+            (f.iter().map(|px| (px[0] as f64 - mu).powi(2)).sum::<f64>() / f.len() as f64).sqrt()
+        };
+        println!(
+            "Cahn-Hilliard mean {mean}: {m0:.6} -> {m1:.6}, drift {:.2e}, sd {sd:.4}",
+            (m1 - m0).abs()
+        );
+        // It must have actually separated, or conservation is trivial.
+        assert!(sd > 0.5, "mean {mean}: the field did not separate (sd {sd:.4})");
+        assert!(
+            (m1 - m0).abs() < 2e-4,
+            "mean {mean}: composition drifted by {:.2e} over 4,000 steps -- the update \
+             is not in divergence form",
+            (m1 - m0).abs()
+        );
+    }
+}
+
+/// Swift-Hohenberg must select the wavelength it advertises.
+///
+/// `lambda = 2*pi/q0` is the model's whole claim and the thing the
+/// discretisation is most likely to break: the Sims kernel the other
+/// models use is a Laplacian scaled by 0.3, which would move the
+/// selected wavelength by 1/sqrt(0.3) -- 83% wrong, and still a
+/// perfectly attractive picture. So this measures the wavelength and
+/// checks it TRACKS the parameter.
+///
+/// The observable is zero crossings along rows: a band-limited field
+/// crosses its mean twice per wavelength, so a line scan gives
+/// `2 * length / crossings` with no FFT and no sensitivity to
+/// amplitude. A line scan of an ISOTROPIC 2-D pattern reads long,
+/// because a row cuts most of the pattern's wavefronts obliquely and
+/// sees `k cos(theta)` rather than `k` -- sqrt(2) for a Gaussian
+/// random field, and measured at 1.58-1.72 here across the wavelengths
+/// where the field has converged. The test pins that band, which is
+/// what makes it discriminating: the Sims kernel would multiply every
+/// wavelength by 1/sqrt(0.3) = 1.83 and put the ratio near 2.9.
+///
+/// Only short wavelengths are checked, and that is not arbitrary. The
+/// pattern grows on a 1/r timescale and r is `drive * q0^4`, so
+/// doubling the wavelength costs SIXTEEN times the steps: measured at
+/// 12,000 steps, lambda = 10 reaches sd 0.45 and lambda = 32 only
+/// 0.012 -- still seed noise, and its apparent wavelength is the
+/// noise's, not the model's.
+#[test]
+fn swift_hohenberg_selects_the_wavelength_it_advertises() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+    let mut measured = Vec::new();
+    for target in [10.0f32, 12.0, 16.0] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "swift_hohenberg".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 7;
+        cfg.model_params.insert("wavelength".into(), target);
+        cfg.model_params.insert("drive".into(), 2.0);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        // Long wavelengths grow on a 1/r timescale and r falls as the
+        // fourth power of 1/lambda, so the slower one sets the count.
+        r.run_steps(&device, &queue, &cfg, 12000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+        let n = N as usize;
+        let mean = f.iter().map(|px| px[0] as f64).sum::<f64>() / f.len() as f64;
+        let sd = (f.iter().map(|px| (px[0] as f64 - mean).powi(2)).sum::<f64>()
+            / f.len() as f64)
+            .sqrt();
+        let mut crossings = 0usize;
+        for y in 0..n {
+            for x in 0..n {
+                let a = f[y * n + x][0] as f64 - mean;
+                let b = f[y * n + (x + 1) % n][0] as f64 - mean;
+                if (a < 0.0) != (b < 0.0) {
+                    crossings += 1;
+                }
+            }
+        }
+        let lambda = 2.0 * (n * n) as f64 / crossings.max(1) as f64;
+        println!(
+            "Swift-Hohenberg wavelength {target}: line-scan {lambda:.2} cells, \
+             ratio {:.3}, sd {sd:.4}",
+            lambda / target as f64
+        );
+        assert!(
+            sd > 0.15,
+            "wavelength {target}: the field has not converged (sd {sd:.4}) -- the \
+             measurement below would be reading seed noise"
+        );
+        let ratio = lambda / target as f64;
+        assert!(
+            (1.35..1.95).contains(&ratio),
+            "wavelength {target}: line-scan/advertised is {ratio:.3}, outside the \
+             measured 1.6 line-scan bias -- the Laplacian or its scale is wrong \
+             (the Sims kernel would put this near 2.9)"
+        );
+        measured.push(lambda);
+    }
+    // And it must TRACK the parameter, not merely sit in the band:
+    // a model that ignored the slider entirely would pass every check
+    // above at one wavelength and fail this one.
+    let tracked = measured[2] / measured[0];
+    println!("Swift-Hohenberg tracking: 16/10 measured as {tracked:.3} (advertised 1.6)");
+    assert!(
+        (tracked - 1.6).abs() < 0.32,
+        "the selected wavelength does not track the parameter: 16/10 came out {tracked:.3}"
+    );
+}
+
+/// Kobayashi's anisotropy must set the crystal's SYMMETRY, and the
+/// six-fold preset must actually be six-fold.
+///
+/// That is the model's whole visual claim and the thing a wrong `j`, a
+/// wrong `theta0` or a broken `eps'` term would silently change --
+/// every one of those still grows a confident-looking crystal.
+///
+/// The observable is the crystal's REACH as a function of angle,
+/// reduced to its angular harmonics. Counting solid arcs around a
+/// circle was tried first and rejected: by 4,000 steps the arms have
+/// side branches, and a circle at any radius large enough to reach the
+/// arms cuts through those too -- it read 16 "arms" on a crystal that
+/// is plainly four-fold. The harmonics do not care, because side
+/// branches are high-frequency detail riding on a low-frequency shape,
+/// and the dominant low harmonic IS the symmetry.
+#[test]
+fn kobayashi_grows_the_symmetry_its_parameter_asks_for() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 300;
+    // (mode index, theta0, expected symmetry)
+    for (mode, theta0, want) in [(1.0f32, 0.0f32, 4usize), (2.0, std::f32::consts::FRAC_PI_2, 6)] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "kobayashi".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+        cfg.init = crate::config::sim::SimInit::Blob { radius: 4 };
+        cfg.boundary = SimBoundary::Clamp;
+        cfg.seed = 7;
+        cfg.dt = 1.0e-4;
+        cfg.model_params.insert("latent_heat".into(), 1.6);
+        cfg.model_params.insert("delta".into(), 0.04);
+        cfg.model_params.insert("mode".into(), mode);
+        cfg.model_params.insert("theta0".into(), theta0);
+
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 4000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+        let n = N as usize;
+        let c = (n / 2) as f64;
+        // How far the solid reaches in each angular bin.
+        const BINS: usize = 360;
+        let mut reach = [0.0f64; BINS];
+        for y in 0..n {
+            for x in 0..n {
+                if f[y * n + x][0] <= 0.5 {
+                    continue;
+                }
+                let (dx, dy) = (x as f64 - c, y as f64 - c);
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < 1.0 {
+                    continue;
+                }
+                let a = dy.atan2(dx).rem_euclid(std::f64::consts::TAU);
+                let b = ((a / std::f64::consts::TAU) * BINS as f64) as usize % BINS;
+                if d > reach[b] {
+                    reach[b] = d;
+                }
+            }
+        }
+        // NOT "solid in every direction": a four-fold crystal's
+        // diagonals are liquid all the way to the centre, and a zero
+        // there is the shape rather than a failure. What must hold is
+        // that a crystal grew at all.
+        let lit = reach.iter().filter(|r| **r > 2.0).count();
+        let far = reach.iter().cloned().fold(0.0f64, f64::max);
+        assert!(
+            lit > BINS / 3 && far > 20.0,
+            "mode {mode}: no crystal to measure ({lit} of {BINS} directions occupied,              furthest reach {far:.1})"
+        );
+
+        // Angular harmonics of the reach. Harmonic k is a k-fold shape.
+        let mut best = (0usize, 0.0f64);
+        let mut amps = Vec::new();
+        for k in 1..=12usize {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (b, rad) in reach.iter().enumerate() {
+                let a = b as f64 / BINS as f64 * std::f64::consts::TAU * k as f64;
+                re += rad * a.cos();
+                im += rad * a.sin();
+            }
+            let amp = (re * re + im * im).sqrt() / BINS as f64;
+            amps.push(amp);
+            if amp > best.1 {
+                best = (k, amp);
+            }
+        }
+        println!(
+            "Kobayashi mode index {mode}: dominant angular harmonic {} (amplitude {:.2}); \
+             k=4 {:.2}, k=6 {:.2}",
+            best.0, best.1, amps[3], amps[5]
+        );
+        assert_eq!(
+            best.0, want,
+            "expected {want}-fold symmetry, the dominant harmonic is {}-fold -- the \
+             anisotropy is not doing what its symmetry parameter says",
+            best.0
+        );
+    }
+}
+
+/// Kobayashi must not checkerboard, which pins the staggered
+/// discretisation.
+///
+/// The obvious two-pass reading -- a central-difference gradient, then
+/// a central-difference divergence -- composes to a stencil that skips
+/// the immediate neighbour, so the odd and even sublattices decouple
+/// and nothing damps the Nyquist mode. Measured on the CPU mirror,
+/// that version filled the field with a diagonal checkerboard while
+/// staying inside [0, 1] and finite: an `isfinite` check called it
+/// stable and it produced a confident-looking picture. The staggered
+/// forward/backward pair composes to the compact Laplacian instead.
+#[test]
+fn kobayashi_stays_free_of_the_checkerboard_mode() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let mut cfg = SimConfig::default();
+    cfg.model = "kobayashi".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Blob { radius: 4 };
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 7;
+    cfg.dt = 1.0e-4;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 3000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let n = N as usize;
+    let mut alt = 0.0f64;
+    let mut solid = 0usize;
+    for y in 0..n {
+        for x in 0..n {
+            let v = f[y * n + x][0] as f64;
+            assert!(v.is_finite(), "non-finite phase at ({x}, {y})");
+            alt += if (x + y) % 2 == 0 { v } else { -v };
+            if v > 0.5 {
+                solid += 1;
+            }
+        }
+    }
+    let nyquist = (alt / (n * n) as f64).abs();
+    println!(
+        "Kobayashi Nyquist amplitude {nyquist:.2e}, {:.1}% solid",
+        solid as f64 / (n * n) as f64 * 100.0
+    );
+    assert!(solid > 100, "nothing grew, so there is nothing to check");
+    assert!(
+        nyquist < 1.0e-3,
+        "Nyquist amplitude {nyquist:.2e}: the odd and even sublattices have decoupled"
+    );
+}
+
+/// The Oregonator must carry a travelling WAVE, not a diffusing blob.
+///
+/// This is the discriminating measurement, because both look like an
+/// expanding bright ring in a still image. A reaction-diffusion wave
+/// front moves at constant speed, so its radius grows linearly in
+/// time; pure diffusion spreads as sqrt(t). Measuring the radius at
+/// three times separates them with no ambiguity, and it would catch a
+/// reaction term that had been dropped or mis-signed -- which is
+/// exactly the failure that still renders a plausible picture.
+#[test]
+fn the_oregonator_front_travels_at_constant_speed() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 256;
+    let mut cfg = SimConfig::default();
+    cfg.model = "oregonator".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Blob { radius: 5 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 7;
+    cfg.dt = 1.0e-4;
+
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    let n = N as usize;
+    let c = (n / 2) as f64;
+
+    // Radius of the outermost excited cell, sampled as the wave runs.
+    let mut radii = Vec::new();
+    for _ in 0..3 {
+        r.run_steps(&device, &queue, &cfg, 6000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let mut far = 0.0f64;
+        for y in 0..n {
+            for x in 0..n {
+                if f[y * n + x][0] > 0.3 {
+                    let d = ((x as f64 - c).powi(2) + (y as f64 - c).powi(2)).sqrt();
+                    far = far.max(d);
+                }
+            }
+        }
+        radii.push(far);
+    }
+    println!(
+        "Oregonator front radius at 6k/12k/18k steps: {:.1}, {:.1}, {:.1} cells",
+        radii[0], radii[1], radii[2]
+    );
+    assert!(radii[0] > 6.0, "the seed never fired (radius {:.1})", radii[0]);
+    // Linear growth: equal increments. Diffusion would give sqrt(t),
+    // whose second increment is 0.41 of the first.
+    let first = radii[1] - radii[0];
+    let second = radii[2] - radii[1];
+    assert!(first > 5.0, "the front is not advancing ({first:.1} cells in 6,000 steps)");
+    let ratio = second / first;
+    println!("   increment ratio {ratio:.3} (a wave gives 1.0; diffusion gives 0.41)");
+    assert!(
+        (0.75..1.25).contains(&ratio),
+        "the front's increments are {first:.1} then {second:.1} (ratio {ratio:.2}): \
+         that is not a wave travelling at constant speed"
+    );
+}
+
+/// Both hodgepodge rules, against a CPU mirror of the equations as
+/// published.
+///
+/// The shipped rule was taken from a secondary source and carried a
+/// `[verify]` flag for a year; reading Gerhardt and Schuster's own
+/// paper showed it differs from theirs in THREE places -- k1 and k2
+/// swapped, the sum taken over every cell rather than the infected
+/// ones, and the divisor A + B + 1 rather than the infected count.
+/// Every one of those still produces a field of plausible BZ scrolls,
+/// which is exactly why a baseline image could not catch it and this
+/// can.
+///
+/// The states are integers held in f32 and exact to 2^24, so the
+/// comparison is for EQUALITY, not a tolerance.
+#[test]
+fn both_hodgepodge_rules_match_a_cpu_mirror_of_their_papers() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    const STEPS: u32 = 12;
+    const Q: i64 = 200;
+    const K1: i64 = 2;
+    const K2: i64 = 3;
+    const G: i64 = 70;
+
+    let run = |variant: f32| -> (Vec<i64>, Vec<i64>) {
+        let mut cfg = SimConfig::default();
+        cfg.model = "hodgepodge".into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 4;
+        cfg.model_params.insert("states".into(), Q as f32);
+        cfg.model_params.insert("k1".into(), K1 as f32);
+        cfg.model_params.insert("k2".into(), K2 as f32);
+        cfg.model_params.insert("g".into(), G as f32);
+        cfg.model_params.insert("variant".into(), variant);
+
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let start: Vec<i64> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+            .iter()
+            .map(|px| px[0] as i64)
+            .collect();
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let end: Vec<i64> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+            .iter()
+            .map(|px| px[0] as i64)
+            .collect();
+        (start, end)
+    };
+
+    // `paper` selects Gerhardt-Schuster eqs. (3)-(9); otherwise the
+    // circulated variant.
+    let mirror = |start: &[i64], paper: bool| -> Vec<i64> {
+        let mut s = start.to_vec();
+        for _ in 0..STEPS {
+            let mut next = vec![0i64; N * N];
+            for y in 0..N {
+                for x in 0..N {
+                    let cur = s[y * N + x];
+                    let (mut ill, mut infected, mut all_sum, mut inf_sum) = (0i64, 0i64, cur, 0i64);
+                    for dy in -1i64..=1 {
+                        for dx in -1i64..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let nx = (x as i64 + dx).rem_euclid(N as i64) as usize;
+                            let ny = (y as i64 + dy).rem_euclid(N as i64) as usize;
+                            let n = s[ny * N + nx];
+                            all_sum += n;
+                            if n >= Q {
+                                ill += 1;
+                            } else if n > 0 {
+                                infected += 1;
+                                inf_sum += n;
+                            }
+                        }
+                    }
+                    next[y * N + x] = if cur >= Q {
+                        0
+                    } else if cur <= 0 {
+                        if paper {
+                            ill / K1 + infected / K2
+                        } else {
+                            infected / K1 + ill / K2
+                        }
+                    } else if paper {
+                        // The cell is its own neighbour (fig. 2), and
+                        // it is infected in this branch, so the
+                        // divisor is at least one.
+                        (inf_sum + cur) / (infected + 1) + G
+                    } else {
+                        all_sum / (infected + ill + 1) + G
+                    }
+                    .clamp(0, Q);
+                }
+            }
+            s = next;
+        }
+        s
+    };
+
+    let (start_gs, gpu_gs) = run(0.0);
+    let (start_dw, gpu_dw) = run(1.0);
+    assert_eq!(start_gs, start_dw, "the two runs must start from the same field");
+
+    let cpu_gs = mirror(&start_gs, true);
+    let cpu_dw = mirror(&start_dw, false);
+    let bad_gs = (0..N * N).filter(|&i| cpu_gs[i] != gpu_gs[i]).count();
+    let bad_dw = (0..N * N).filter(|&i| cpu_dw[i] != gpu_dw[i]).count();
+    println!(
+        "hodgepodge after {STEPS} steps: Gerhardt-Schuster {bad_gs} mismatches, \
+         Dewdney {bad_dw}, of {} cells",
+        N * N
+    );
+    assert_eq!(bad_gs, 0, "the Gerhardt-Schuster rule does not match the paper");
+    assert_eq!(bad_dw, 0, "the Dewdney rule does not match its published form");
+
+    // And the two must actually be different rules: a mis-wired enum
+    // that ran one of them twice would pass both mirrors above only if
+    // the mirror were wired the same wrong way, but it would sail
+    // through a baseline image either way.
+    let differing = (0..N * N).filter(|&i| gpu_gs[i] != gpu_dw[i]).count();
+    println!("   the two rules differ in {differing} of {} cells", N * N);
+    assert!(
+        differing > N * N / 10,
+        "the two variants produced nearly the same field ({differing} cells differ): \
+         the selector is not selecting"
+    );
+}
+
+/// Both large-kernel gathers, against a CPU mirror using the SAME
+/// table the GPU was handed.
+///
+/// The kernel path has more places to be silently wrong than a stencil
+/// does: the table's row-major order, the sign of the offset, the
+/// radius the uniform carries, the second block's offset, the
+/// normalisation. Every one of those still produces a smooth evolving
+/// field that looks like the model -- Lenia with a transposed kernel
+/// is still Lenia-shaped -- so the mirror compares numbers.
+///
+/// The kernel comes from `ModelDef::kernel_for`, which is the exact
+/// `Vec<f32>` uploaded, so this checks the SHADER's use of it rather
+/// than re-deriving the weights and testing two implementations of the
+/// same formula against each other.
+#[test]
+fn the_large_kernel_gathers_match_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 96;
+    const STEPS: u32 = 3;
+
+    for model_name in ["lenia", "smoothlife"] {
+        let mut cfg = SimConfig::default();
+        cfg.model = model_name.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 11;
+        let model = crate::sim::model_or_default(model_name);
+        cfg.dt = model.default_dt;
+        // A small radius keeps the mirror quick; the machinery is the
+        // same at any size.
+        if model_name == "lenia" {
+            cfg.model_params.insert("radius".into(), 6.0);
+        } else {
+            cfg.model_params.insert("inner_radius".into(), 2.0);
+        }
+
+        let k = model.kernel_for(&cfg.model_params).expect("declares a kernel");
+        let r = k.radius as i64;
+        let w = (2 * r + 1) as usize;
+        let taps = w * w;
+
+        let mut sim = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        sim.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let start = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+        sim.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let got = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+
+        let mut f: Vec<f32> = start.iter().map(|px| px[0]).collect();
+        let dt = cfg.dt;
+        for _ in 0..STEPS {
+            let mut next = vec![0.0f32; N * N];
+            for y in 0..N {
+                for x in 0..N {
+                    let (mut a, mut b) = (0.0f32, 0.0f32);
+                    for dy in -r..=r {
+                        for dx in -r..=r {
+                            let i = ((dy + r) as usize) * w + (dx + r) as usize;
+                            let nx = (x as i64 + dx).rem_euclid(N as i64) as usize;
+                            let ny = (y as i64 + dy).rem_euclid(N as i64) as usize;
+                            let v = f[ny * N + nx];
+                            a += k.weights[i] * v;
+                            if k.weights.len() > taps {
+                                b += k.weights[taps + i] * v;
+                            }
+                        }
+                    }
+                    let cur = f[y * N + x];
+                    next[y * N + x] = if model_name == "lenia" {
+                        let (mu, sg) = (0.15f32, 0.015f32);
+                        let d = a - mu;
+                        let g = 2.0 * (-(d * d) / (2.0 * sg * sg)).exp() - 1.0;
+                        (cur + dt * g).clamp(0.0, 1.0)
+                    } else {
+                        // a is the inner disc, b the annulus.
+                        let sig = |x: f32, c: f32, al: f32| 1.0 / (1.0 + (-(x - c) * 4.0 / al).exp());
+                        let pick = sig(a, 0.5, 0.147);
+                        let lo = 0.278 + (0.267 - 0.278) * pick;
+                        let hi = 0.365 + (0.445 - 0.365) * pick;
+                        let alive = sig(b, lo, 0.028) * (1.0 - sig(b, hi, 0.028));
+                        (cur + dt * (alive - cur)).clamp(0.0, 1.0)
+                    };
+                }
+            }
+            f = next;
+        }
+
+        let mut worst = 0.0f32;
+        for i in 0..N * N {
+            worst = worst.max((f[i] - got[i][0]).abs());
+        }
+        println!(
+            "{model_name}: radius {r}, {taps} taps, {STEPS} steps vs CPU mirror: \
+             worst |delta| = {worst:.3e}"
+        );
+        assert!(
+            worst < 2e-4,
+            "{model_name}: GPU and CPU disagree by {worst:.3e} -- the gather does not \
+             match the table it was given"
+        );
+    }
+}
+
+/// Phase 3's gate: Lenia at R = 13 must run 512² at 60 steps a second.
+///
+/// 729 taps a cell over 262,144 cells is 1.9e8 texture reads a step,
+/// and the budget is 16.7 ms. This is the measurement the phase's
+/// plan named, and it decides whether the large-kernel models need the
+/// shared-memory tile that was held back as a fallback.
+///
+/// Run with `--test-threads=1`: a GPU timing test sharing the device
+/// with another one measures the other one too.
+#[test]
+fn lenia_meets_the_phase_3_interactive_budget() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 512;
+    const STEPS: u32 = 120;
+    let mut cfg = SimConfig::default();
+    cfg.model = "lenia".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.model_params.insert("radius".into(), 13.0);
+
+    let mut sim = SimRenderer::new(&device, &cfg, N, N);
+    sim.seed(&device, &queue, &cfg);
+    // Warm: shader compile and the first submission's sizing.
+    sim.run_steps(&device, &queue, &cfg, 20);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let t0 = std::time::Instant::now();
+    sim.run_steps(&device, &queue, &cfg, STEPS);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+    let taps = 27.0 * 27.0 * (N as f64) * (N as f64);
+    println!(
+        "Lenia R=13 at {N}²: {ms:.3} ms/step ({:.1} steps/s), {:.2e} taps/step, \
+         {:.2e} taps/s",
+        1e3 / ms,
+        taps,
+        taps / (ms / 1e3)
+    );
+    assert!(
+        ms < 16.67,
+        "phase 3's gate is 60 steps/s at 512² and this is {:.1} ({ms:.2} ms/step)",
+        1e3 / ms
+    );
+}
+
+/// Diagnostic: what the gather costs as the radius grows, for both
+/// models, at the size the gate uses.
+#[test]
+#[ignore = "diagnostic"]
+fn large_kernel_cost_against_radius() {
+    let Some((device, queue)) = repro_device() else {
+        return;
+    };
+    const N: u32 = 512;
+    const STEPS: u32 = 60;
+    for (model, param, values) in [
+        ("lenia", "radius", vec![6.0f32, 13.0, 21.0, 32.0]),
+        ("smoothlife", "inner_radius", vec![2.0, 4.0, 7.0, 10.0]),
+    ] {
+        for v in values {
+            let mut cfg = SimConfig::default();
+            cfg.model = model.into();
+            cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+            cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+            cfg.model_params.insert(param.into(), v);
+            let k = crate::sim::model_or_default(model)
+                .kernel_for(&cfg.model_params)
+                .unwrap();
+            let mut sim = SimRenderer::new(&device, &cfg, N, N);
+            sim.seed(&device, &queue, &cfg);
+            sim.run_steps(&device, &queue, &cfg, 20);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let t0 = std::time::Instant::now();
+            sim.run_steps(&device, &queue, &cfg, STEPS);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+            let w = 2.0 * k.radius as f64 + 1.0;
+            println!(
+                "{model:<11} {param}={v:<5} kernel radius {:<3} {:>5.0} taps  \
+                 {ms:>7.3} ms/step  {:.2e} taps/s",
+                k.radius,
+                w * w,
+                w * w * (N as f64) * (N as f64) / (ms / 1e3)
+            );
+        }
+    }
+}
+
+/// Read `count` u32s from a storage buffer, starting at `offset`
+/// bytes. The buffer must carry COPY_SRC.
+fn read_u32s(device: &Device, queue: &Queue, src: &Buffer, offset: u64, count: usize) -> Vec<u32> {
+    let bytes = (count * 4) as u64;
+    let buf = device.create_buffer(&BufferDescriptor {
+        label: Some("sim u32 readback"),
+        size: bytes,
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+    enc.copy_buffer_to_buffer(src, offset, &buf, 0, bytes);
+    queue.submit(std::iter::once(enc.finish()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    buf.slice(..).map_async(MapMode::Read, move |r| {
+        let _ = tx.send(r.is_ok());
+    });
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    assert!(rx.recv().unwrap_or(false), "buffer readback map failed");
+    let view = buf.slice(..).get_mapped_range();
+    view.chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect()
+}
+
+/// The reduce pass's ordering map, inverted -- a mirror of
+/// `minmax_unord` in the WGSL.
+fn minmax_unord(e: u32) -> f32 {
+    if e >> 31 != 0 {
+        f32::from_bits(e ^ 0x8000_0000)
+    } else {
+        f32::from_bits(!e)
+    }
+}
+
+/// CPU mirror of one pyramid level from the one below it: the 5x5
+/// [1 4 6 4 1]/16 blur at stride 2, periodic at the SOURCE size.
+fn cpu_pyramid_level(src: &[f32], sw: usize, sh: usize) -> (Vec<f32>, usize, usize) {
+    const G: [f32; 5] = [0.0625, 0.25, 0.375, 0.25, 0.0625];
+    let (dw, dh) = (sw.div_ceil(2), sh.div_ceil(2));
+    let mut out = vec![0.0f32; dw * dh];
+    for y in 0..dh {
+        for x in 0..dw {
+            let mut acc = 0.0f32;
+            for dy in -2i64..=2 {
+                for dx in -2i64..=2 {
+                    let sx = (2 * x as i64 + dx).rem_euclid(sw as i64) as usize;
+                    let sy = (2 * y as i64 + dy).rem_euclid(sh as i64) as usize;
+                    acc += G[(dy + 2) as usize] * G[(dx + 2) as usize] * src[sy * sw + sx];
+                }
+            }
+            out[y * dw + x] = acc;
+        }
+    }
+    (out, dw, dh)
+}
+
+fn mccabe_config(n: u32) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "mccabe".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: n, height: n };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 7;
+    cfg
+}
+
+/// The pyramid stage, level by level, against a CPU mirror.
+///
+/// Level 1 is compared against the decimation of the field the GPU
+/// built it from, and level 2 against the decimation of the GPU's
+/// OWN level 1 -- so each dispatch is checked on its own inputs and a
+/// wrong level uniform (the source size the wrap uses) would fail at
+/// the edges.
+#[test]
+fn the_pyramid_levels_match_a_cpu_gaussian_decimation() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 96;
+    let cfg = mccabe_config(N);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f0: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N, N)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    // One step builds the pyramid of f0 before it moves the field.
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+    let (l1_cpu, w1, h1) = cpu_pyramid_level(&f0, N as usize, N as usize);
+    let l1_gpu: Vec<f32> = read_rgba32f(&device, &queue, r.pyramid_texture(1).unwrap(), w1 as u32, h1 as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    let worst1 = l1_cpu.iter().zip(&l1_gpu).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+
+    let (l2_cpu, w2, h2) = cpu_pyramid_level(&l1_gpu, w1, h1);
+    let l2_gpu: Vec<f32> = read_rgba32f(&device, &queue, r.pyramid_texture(2).unwrap(), w2 as u32, h2 as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    let worst2 = l2_cpu.iter().zip(&l2_gpu).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    println!("pyramid: level 1 ({w1}x{h1}) worst {worst1:.3e}, level 2 ({w2}x{h2}) worst {worst2:.3e}");
+    assert!(worst1 < 1e-5, "level 1 differs from the CPU decimation by {worst1:.3e}");
+    assert!(worst2 < 1e-5, "level 2 differs from the CPU decimation by {worst2:.3e}");
+}
+
+/// The reduce pass, against the CPU's min and max of the same field.
+///
+/// Exact, not a tolerance: the ordering map is a bijection on the
+/// bits, so the decoded slot must equal the CPU's f32 min and max to
+/// the bit. It would catch a workgroup reduction that dropped a lane,
+/// an atomic on the wrong slot, or a ring that was cleared after being
+/// written.
+#[test]
+fn the_reduce_matches_the_cpu_min_and_max_exactly() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 100; // deliberately not a multiple of 8
+    let cfg = mccabe_config(N);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    // The seed's reduce writes the slot before step 0.
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let seed_field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let seed_slot = (crate::sim::MINMAX_RING - 1) as u64;
+    let enc = read_u32s(&device, &queue, r.minmax_buffer(), seed_slot * 8, 2);
+    let (lo, hi) = (minmax_unord(enc[0]), minmax_unord(enc[1]));
+    let cpu_lo = seed_field.iter().map(|px| px[0]).fold(f32::INFINITY, f32::min);
+    let cpu_hi = seed_field.iter().map(|px| px[0]).fold(f32::NEG_INFINITY, f32::max);
+    println!("reduce after seed: gpu [{lo}, {hi}]  cpu [{cpu_lo}, {cpu_hi}]");
+    assert_eq!(lo.to_bits(), cpu_lo.to_bits(), "seed min");
+    assert_eq!(hi.to_bits(), cpu_hi.to_bits(), "seed max");
+
+    // And after three steps, the slot of the last step holds the range
+    // of the field as it now stands.
+    r.run_steps(&device, &queue, &cfg, 3);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let enc = read_u32s(&device, &queue, r.minmax_buffer(), 2 * 8, 2);
+    let (lo, hi) = (minmax_unord(enc[0]), minmax_unord(enc[1]));
+    let cpu_lo = field.iter().map(|px| px[0]).fold(f32::INFINITY, f32::min);
+    let cpu_hi = field.iter().map(|px| px[0]).fold(f32::NEG_INFINITY, f32::max);
+    println!("reduce after step 2: gpu [{lo}, {hi}]  cpu [{cpu_lo}, {cpu_hi}]");
+    assert_eq!(lo.to_bits(), cpu_lo.to_bits(), "step-2 min");
+    assert_eq!(hi.to_bits(), cpu_hi.to_bits(), "step-2 max");
+
+    // And across the ring's wrap. The ring has 257 slots and the
+    // clearing write splits into two when a batch straddles the end;
+    // nothing else exercises that branch, and if it cleared the wrong
+    // slots the range would silently fall back to [-1, 1] and the
+    // picture would drift rather than fail. 600 steps cross the wrap
+    // twice, in batches whose size the renderer chooses itself.
+    r.run_steps(&device, &queue, &cfg, 600);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let last = 3 + 600 - 1;
+    let slot = (last as u64) % (crate::sim::MINMAX_RING as u64);
+    let enc = read_u32s(&device, &queue, r.minmax_buffer(), slot * 8, 2);
+    let (lo, hi) = (minmax_unord(enc[0]), minmax_unord(enc[1]));
+    let cpu_lo = field.iter().map(|px| px[0]).fold(f32::INFINITY, f32::min);
+    let cpu_hi = field.iter().map(|px| px[0]).fold(f32::NEG_INFINITY, f32::max);
+    println!("reduce after step {last} (slot {slot}): gpu [{lo}, {hi}]  cpu [{cpu_lo}, {cpu_hi}]");
+    assert_eq!(lo.to_bits(), cpu_lo.to_bits(), "post-wrap min");
+    assert_eq!(hi.to_bits(), cpu_hi.to_bits(), "post-wrap max");
+}
+
+/// McCabe's whole step -- pyramid, trilinear reads, scale selection,
+/// renormalisation -- against a CPU mirror from the GPU's own seed.
+///
+/// The one place a mirror can legitimately disagree is a TIE: when
+/// two scales' variations are within rounding of each other, the
+/// trilinear arithmetic can pick either, and the cell moves by one
+/// amount rather than another. Those cells differ by a known quantum;
+/// everything else must match to float precision. So the test counts
+/// both, and demands the tie fraction be small.
+#[test]
+fn mccabe_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let cfg = mccabe_config(N as u32);
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f0: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+        .iter()
+        .map(|px| px[0])
+        .collect();
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // The CPU pyramid, same rule as the renderer's.
+    let levels = crate::sim::pyramid_levels(N as u32, N as u32) as usize;
+    let mut pyr: Vec<(Vec<f32>, usize, usize)> = vec![(f0.clone(), N, N)];
+    for _ in 1..levels {
+        let (src, w, h) = pyr.last().unwrap();
+        let next = cpu_pyramid_level(src, *w, *h);
+        pyr.push(next);
+    }
+    let load = |l: usize, qx: i64, qy: i64| -> f32 {
+        let (ref d, w, h) = pyr[l];
+        d[(qy.rem_euclid(h as i64) as usize) * w + qx.rem_euclid(w as i64) as usize]
+    };
+    let level_avg = |l: usize, px: f32, py: f32| -> f32 {
+        let s = (1u32 << l) as f32;
+        // Texel i of level l is centred on base cell i * 2^l: see
+        // pyr_level_avg in the assembler for why this is not px / s - 0.5.
+        let (fx, fy) = ((px - 0.5) / s, (py - 0.5) / s);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let (ix, iy) = (x0 as i64, y0 as i64);
+        let a = load(l, ix, iy);
+        let b = load(l, ix + 1, iy);
+        let c = load(l, ix, iy + 1);
+        let d = load(l, ix + 1, iy + 1);
+        (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty
+    };
+    let sample = |level: f32, px: f32, py: f32| -> f32 {
+        let top = (levels - 1) as f32;
+        let lf = level.clamp(0.0, top);
+        let l0 = lf.floor() as usize;
+        let l1 = (l0 + 1).min(levels - 1);
+        let t = lf - lf.floor();
+        let a = level_avg(l0, px, py);
+        let b = level_avg(l1, px, py);
+        a + (b - a) * t
+    };
+    let level_for = |r: f32| (0.55f32 * r).max(1.0).log2();
+
+    let lo = f0.iter().cloned().fold(f32::INFINITY, f32::min);
+    let hi = f0.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let (n_scales, base, ratio, amount, amount_min) = (5usize, 1.0f32, 2.0f32, 0.05f32, 0.01f32);
+    let (mut exact, mut ties, mut other) = (0usize, 0usize, 0usize);
+    let mut worst_exact = 0.0f32;
+    for y in 0..N {
+        for x in 0..N {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let mut best_var = f32::MAX;
+            let mut best_dir = 0.0f32;
+            for i in 0..n_scales {
+                let ra = base * (1u32 << i) as f32;
+                let rb = ra * ratio;
+                let act = sample(level_for(ra), px, py);
+                let inh = sample(level_for(rb), px, py);
+                let v = (act - inh).abs();
+                let t = i as f32 / (n_scales - 1) as f32;
+                let amt = amount + (amount_min - amount) * t;
+                if v < best_var {
+                    best_var = v;
+                    best_dir = if act > inh { amt } else { -amt };
+                }
+            }
+            let f = (f0[y * N + x] - lo) / (hi - lo).max(1e-6) * 2.0 - 1.0;
+            let want = f + best_dir;
+            let d = (want - got[y * N + x][0]).abs();
+            if d < 1e-4 {
+                exact += 1;
+                worst_exact = worst_exact.max(d);
+            } else if d < 0.2 {
+                // A different scale fired: the difference is the gap
+                // between two amounts.
+                ties += 1;
+            } else {
+                other += 1;
+            }
+        }
+    }
+    println!(
+        "McCabe vs CPU mirror: {exact} cells match (worst {worst_exact:.2e}), {ties} chose a \
+         different scale at a tie, {other} disagree outright"
+    );
+    assert_eq!(other, 0, "{other} cells disagree by more than any amount difference");
+    assert!(
+        ties * 200 < N * N,
+        "{ties} of {} cells picked a different scale -- far more than rounding ties",
+        N * N
+    );
+}
+
+/// Phase 3's other gate: McCabe at 1080p inside the interactive budget.
+///
+/// The pipeline doc expected "well under 2 ms" for a box pyramid and
+/// named 8 ms as the point past which the fallbacks kick in. The
+/// shipped pyramid is Gaussian (25 taps a level rather than 4), and
+/// the step reads five scales at 16 loads each.
+#[test]
+fn mccabe_meets_the_interactive_budget_at_1080p() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let (w, h) = (1920u32, 1080u32);
+    let mut cfg = mccabe_config(256);
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
+    let mut r = SimRenderer::new(&device, &cfg, w, h);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 16);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    // The best of five trials, not one mean: the suite runs its GPU
+    // tests in parallel, and a single batch measures whatever else was
+    // on the device -- 9.1 ms under load against 4.7 alone, measured
+    // the day the lattice tests joined the suite. The minimum is the
+    // machine; the mean is the load.
+    const STEPS: u32 = 20;
+    let mut best = f64::MAX;
+    for _ in 0..5 {
+        let t0 = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        best = best.min(t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64);
+    }
+    let ms = best;
+    println!("McCabe 5 scales at 1080p: {ms:.3} ms/step ({:.1} steps/s), best of 5", 1e3 / ms);
+    assert!(ms < 8.0, "McCabe at 1080p is {ms:.2} ms/step, past the 8 ms fallback threshold");
+}
+
+/// Review probe: what the per-frame kernel rebuild costs on the CPU.
+/// `write_param_arrays` runs `kernel_for` on every `run_steps` and
+/// every `color`, so twice a frame.
+#[test]
+#[ignore = "diagnostic"]
+fn kernel_rebuild_cost() {
+    for (model, param, v) in [("lenia", "radius", 13.0f32), ("lenia", "radius", 32.0),
+                              ("smoothlife", "inner_radius", 7.0), ("smoothlife", "inner_radius", 10.0)] {
+        let m = crate::sim::model_or_default(model);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(param.to_string(), v);
+        let t0 = std::time::Instant::now();
+        let mut n = 0usize;
+        for _ in 0..200 { n += m.kernel_for(&map).unwrap().weights.len(); }
+        let us = t0.elapsed().as_secs_f64() * 1e6 / 200.0;
+        let floats = n / 200;
+        println!("{model:<11} {param}={v:<5} {floats:>5} floats  {us:>8.1} us per build");
+    }
+}
+
+/// Phase 4's first gate: an agent model must be REPRODUCIBLE, with a
+/// million agents piling into the same cells.
+///
+/// This is the property the whole deposit design exists for. Thousands
+/// of agents land in one cell in an order the hardware chooses; the
+/// deposit is an integer atomicAdd, which is associative and
+/// commutative, so the total does not depend on that order. An f32
+/// accumulation would give a different field every run. The exclusion
+/// is resolved the same way -- an atomic MINIMUM over agent indices,
+/// so the winner is the lowest index rather than whoever ran first.
+///
+/// Two independent renderers, same config, compared BIT for BIT.
+#[test]
+fn an_agent_run_reproduces_bit_for_bit_with_a_million_agents() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    // 2048^2 at the population slider's maximum of 25% is 1,048,576
+    // agents -- the gate's million, on a grid big enough that the
+    // model's own clamp does not cap it first.
+    const N: u32 = 2048;
+    let mut cfg = SimConfig::default();
+    cfg.model = "physarum".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N, height: N };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 0.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 5;
+    cfg.model_params.insert("population".into(), 25.0);
+
+    let model = crate::sim::model_or_default("physarum");
+    let agents = (model.agents.unwrap().count)(&model.params_view(&cfg.model_params), N, N);
+    assert!(agents >= 1_000_000, "wanted a million agents, got {agents}");
+
+    let run = || -> Vec<[f32; 4]> {
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 40);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.field_texture(), N, N)
+    };
+    let a = run();
+    let b = run();
+    let differing = (0..a.len()).filter(|&i| a[i][0].to_bits() != b[i][0].to_bits()).count();
+    let lit = a.iter().filter(|px| px[0] > 0.0).count();
+    println!(
+        "Physarum, {agents} agents, 40 steps at {N}²: {differing} of {} cells differ between \
+         runs, {lit} carry trail",
+        a.len()
+    );
+    assert!(lit > a.len() / 100, "the run deposited almost nothing ({lit} cells)");
+    assert_eq!(differing, 0, "two runs of the same config disagree: the deposit is not \
+                              order-independent");
+}
+
+/// Phase 4's second gate: DLA's cluster must have the fractal
+/// dimension DLA has, about 1.71.
+///
+/// The parallel variant here advances many walkers at once, which is
+/// not Witten and Sander's sequential process, so the dimension is
+/// something to MEASURE rather than assume -- crowding near the
+/// cluster thickens branches and drives it toward 2, and relaunching
+/// walkers inside the fjords would do the same.
+///
+/// Box counting on the frozen cells: the count of occupied boxes of
+/// side s scales as s^-D, so the slope of log N against log(1/s) is
+/// the dimension. Measured over the box sizes that sit inside the
+/// cluster, away from the single-cell and whole-cluster ends where
+/// box counting always bends.
+#[test]
+fn dla_grows_a_cluster_of_the_right_fractal_dimension() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 512;
+    let mut cfg = SimConfig::default();
+    cfg.model = "dla".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 3;
+    cfg.model_params.insert("walkers".into(), 4.0);
+    cfg.model_params.insert("p_stick".into(), 1.0);
+    cfg.model_params.insert("crowding".into(), 2.0);
+    cfg.model_params.insert("launch_gap".into(), 5.0);
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    // The cluster's size is what decides whether this reads a
+    // dimension at all: a cluster that reaches the wall densifies at
+    // the rim and reads the wall's shape rather than its own.
+    r.run_steps(&device, &queue, &cfg, 1200);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    let frozen: Vec<bool> = f.iter().map(|px| px[0] > 0.0).collect();
+    let stuck = frozen.iter().filter(|b| **b).count();
+    // The cluster's extent, for choosing the box range.
+    let mut radius = 0.0f64;
+    for y in 0..N {
+        for x in 0..N {
+            if frozen[y * N + x] {
+                let d = (((x as f64) - 256.0).powi(2) + ((y as f64) - 256.0).powi(2)).sqrt();
+                radius = radius.max(d);
+            }
+        }
+    }
+    println!("DLA at {N}²: {stuck} particles stuck, cluster radius {radius:.0} cells");
+    assert!(stuck > 3000, "only {stuck} particles stuck; nothing to measure");
+    assert!(
+        radius < 240.0,
+        "the cluster reached the wall at {radius:.0} cells; the dimension would be the wall's"
+    );
+    assert!(radius > 60.0, "the cluster is only {radius:.0} cells across");
+
+    // Box counting.
+    let mut pts = Vec::new();
+    for s in [2usize, 4, 8, 16, 32] {
+        let mut seen = std::collections::HashSet::new();
+        for y in 0..N {
+            for x in 0..N {
+                if frozen[y * N + x] {
+                    seen.insert((x / s, y / s));
+                }
+            }
+        }
+        pts.push(((1.0 / s as f64).ln(), (seen.len() as f64).ln()));
+        println!("   box {s:>3}: {} occupied", seen.len());
+    }
+    // Least squares slope.
+    let n = pts.len() as f64;
+    let sx: f64 = pts.iter().map(|p| p.0).sum();
+    let sy: f64 = pts.iter().map(|p| p.1).sum();
+    let sxx: f64 = pts.iter().map(|p| p.0 * p.0).sum();
+    let sxy: f64 = pts.iter().map(|p| p.0 * p.1).sum();
+    let d = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    println!("   box-counting dimension {d:.3} (DLA is about 1.71)");
+    assert!(
+        (1.55..1.90).contains(&d),
+        "box-counting dimension {d:.3}, which is not DLA's ~1.71 -- a cluster that is too \
+         dense reads toward 2 and one that is too sparse toward 1"
+    );
+}
+
+/// Review probe: what an agent step costs at 1080p, with the agent
+/// passes and the field pass separated.
+#[test]
+#[ignore = "diagnostic"]
+fn agent_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    for (model, param, v, boundary) in [
+        ("physarum", "population", 5.0f32, SimBoundary::Periodic),
+        ("physarum", "population", 15.0, SimBoundary::Periodic),
+        ("dla", "walkers", 4.0, SimBoundary::Clamp),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = model.into();
+        cfg.grid = crate::config::sim::SimGrid::Fixed { width: w, height: h };
+        cfg.init = if model == "dla" { crate::config::sim::SimInit::Center }
+                   else { crate::config::sim::SimInit::Noise { amplitude: 0.0 } };
+        cfg.boundary = boundary;
+        cfg.model_params.insert(param.into(), v);
+        let m = crate::sim::model_or_default(model);
+        let agents = (m.agents.unwrap().count)(&m.params_view(&cfg.model_params), w, h);
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 30);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const STEPS: u32 = 120;
+        let t0 = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+        println!("{model:<9} {param}={v:<5} {agents:>8} agents  {ms:>7.3} ms/step  ({:.0} steps/s)", 1e3 / ms);
+    }
+}
+
+/// The shader's PCG, mirrored: WGSL u32 arithmetic wraps.
+fn sim_pcg(v: u32) -> u32 {
+    let state = v.wrapping_mul(747796405).wrapping_add(2891336453);
+    let word = ((state >> ((state >> 28) + 4)) ^ state).wrapping_mul(277803737);
+    (word >> 22) ^ word
+}
+
+/// `agent_rand(i, salt)` as the shader computes it for a given step.
+fn agent_rand(seed: u64, step: u32, i: u32, salt: u32) -> f32 {
+    let mut h = sim_pcg(i ^ (seed as u32));
+    h = sim_pcg(h ^ ((seed >> 32) as u32) ^ salt);
+    h = sim_pcg(h ^ step);
+    (h >> 8) as f32 * (1.0 / 16777216.0)
+}
+
+/// The agent buffer, as (pos.x, pos.y, heading, state) per agent.
+fn read_agents(device: &Device, queue: &Queue, buf: &Buffer, n: usize) -> Vec<[f32; 4]> {
+    read_u32s(device, queue, buf, 0, n * 4)
+        .chunks_exact(4)
+        .map(|c| [f32::from_bits(c[0]), f32::from_bits(c[1]), f32::from_bits(c[2]), f32::from_bits(c[3])])
+        .collect()
+}
+
+/// Physarum's whole step -- sense, turn, claim, move, deposit, diffuse,
+/// decay -- against a CPU mirror of Jones' rule from the GPU's own
+/// seeded population, for two steps so the turn rule sees a trail.
+///
+/// This is the test the wave lacked. Its gates checked that a run
+/// REPRODUCES and that DLA's dimension is right; nothing checked that
+/// the rule was Jones'. The phase-4 review found the shader turning
+/// toward the stronger side when both sides beat the front, where the
+/// paper's figure 3 (and the prototype that validated every
+/// parameter) turns at random. That still builds a network. This
+/// would have failed on it.
+///
+/// The claim is mirrored as the atomic minimum it is, and the random
+/// draws through a mirror of the shader's PCG, so agents and field are
+/// compared to float precision rather than statistically.
+#[test]
+fn physarum_matches_a_cpu_mirror_of_jones_rule() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "physarum".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 0.0 };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 7;
+    // Dense, so claims collide and the exclusion is exercised.
+    cfg.model_params.insert("population".into(), 20.0);
+    let model = crate::sim::model_or_default("physarum");
+    let count = (model.agents.unwrap().count)(&model.params_view(&cfg.model_params), N as u32, N as u32) as usize;
+    let p = model.pack_params(&cfg);
+    let (sa, ra, so, ss, dep, decay) = (
+        p[1] * std::f32::consts::PI / 180.0,
+        p[2] * std::f32::consts::PI / 180.0,
+        p[3], p[4], p[5], p[6],
+    );
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let mut agents = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+    let mut trail: Vec<f32> = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32)
+        .iter().map(|px| px[0]).collect();
+
+    const STEPS: u32 = 2;
+    r.run_steps(&device, &queue, &cfg, STEPS);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let got_agents = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+    let got_field = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let n = N as i64;
+    let g = N as f32;
+    let mut lost = 0usize;
+    let cell_of = |x: f32, y: f32| -> (usize, usize) {
+        let cx = ((x + 0.5).floor() as i64).rem_euclid(n) as usize;
+        let cy = ((y + 0.5).floor() as i64).rem_euclid(n) as usize;
+        (cx, cy)
+    };
+    for step in 0..STEPS {
+        // Pass 1: sense, turn, claim.
+        let mut claim = vec![u32::MAX; N * N];
+        let mut turned: Vec<[f32; 4]> = agents.clone();
+        for (i, a) in agents.iter().enumerate() {
+            let sense = |off: f32| -> f32 {
+                let h = a[2] + off;
+                let (cx, cy) = cell_of(a[0] + h.cos() * so, a[1] + h.sin() * so);
+                trail[cy * N + cx]
+            };
+            let (f, l, rr) = (sense(0.0), sense(sa), sense(-sa));
+            let turn = if f >= l && f >= rr {
+                0.0
+            } else if f < l && f < rr {
+                if agent_rand(cfg.seed, step, i as u32, 0x14) < 0.5 { ra } else { -ra }
+            } else if l > rr {
+                ra
+            } else if rr > l {
+                -ra
+            } else {
+                0.0
+            };
+            turned[i][2] = a[2] + turn;
+            let h = turned[i][2];
+            let (cx, cy) = cell_of(a[0] + h.cos() * ss, a[1] + h.sin() * ss);
+            let slot = &mut claim[cy * N + cx];
+            *slot = (*slot).min(i as u32);
+        }
+        // Pass 2: move if won, else a new heading. Deposits.
+        let mut deposit = vec![0.0f32; N * N];
+        let mut moved = turned.clone();
+        for (i, a) in turned.iter().enumerate() {
+            let h = a[2];
+            let (dx, dy) = (a[0] + h.cos() * ss, a[1] + h.sin() * ss);
+            let (cx, cy) = cell_of(dx, dy);
+            if claim[cy * N + cx] == i as u32 {
+                let wx = dx - g * (dx / g).floor();
+                let wy = dy - g * (dy / g).floor();
+                moved[i][0] = wx;
+                moved[i][1] = wy;
+                let (px, py) = cell_of(wx, wy);
+                deposit[py * N + px] += dep;
+            } else {
+                lost += 1;
+                moved[i][2] = agent_rand(cfg.seed, step, i as u32, 0x15) * std::f32::consts::TAU;
+            }
+        }
+        // The field: 3x3 mean of the old trail, plus the deposit, decayed.
+        let mut next = vec![0.0f32; N * N];
+        for y in 0..N {
+            for x in 0..N {
+                let mut acc = 0.0f32;
+                for ddy in -1i64..=1 {
+                    for ddx in -1i64..=1 {
+                        let sx = (x as i64 + ddx).rem_euclid(n) as usize;
+                        let sy = (y as i64 + ddy).rem_euclid(n) as usize;
+                        acc += trail[sy * N + sx];
+                    }
+                }
+                next[y * N + x] = (acc / 9.0 + deposit[y * N + x]) * (1.0 - decay);
+            }
+        }
+        agents = moved;
+        trail = next;
+    }
+
+    let mut worst_pos = 0.0f32;
+    let mut worst_head = 0.0f32;
+    for i in 0..count {
+        // Around the torus: the shorter way.
+        let dx = (agents[i][0] - got_agents[i][0]).abs();
+        let dy = (agents[i][1] - got_agents[i][1]).abs();
+        worst_pos = worst_pos.max(dx.min(g - dx)).max(dy.min(g - dy));
+        worst_head = worst_head.max((agents[i][2] - got_agents[i][2]).abs());
+    }
+    let worst_field = (0..N * N)
+        .map(|k| (trail[k] - got_field[k][0]).abs())
+        .fold(0.0f32, f32::max);
+    println!(
+        "Physarum {count} agents, {STEPS} steps vs CPU mirror: positions {worst_pos:.2e}, \
+         headings {worst_head:.2e}, trail {worst_field:.2e}; {lost} moves lost to the exclusion"
+    );
+    assert!(lost > 0, "no agent ever lost a claim, so the exclusion was not exercised");
+    assert!(worst_pos < 1e-4, "agent positions diverge from Jones' rule by {worst_pos:.2e}");
+    assert!(worst_head < 1e-4, "agent headings diverge from Jones' rule by {worst_head:.2e}");
+    assert!(worst_field < 1e-4, "the trail diverges from the mirror by {worst_field:.2e}");
+}
+
+/// A wall is a wall. Under a non-periodic boundary an agent must not
+/// leave the grid, and it must not reappear on the far side.
+///
+/// The first version wrapped every position periodically whatever the
+/// boundary, while the DEPOSIT clamped -- so under Clamp an agent that
+/// walked off the left edge reappeared on the right. An in-range check
+/// cannot catch that (a wrapped position is in range); a per-step
+/// displacement can, because a wrap is a jump of nearly the grid.
+///
+/// The FIX to that had two bugs of its own. This test caught one on
+/// its first run: a destination of x = -0.4 is inside cell 0 and
+/// passes the wall check, and the unconditional float wrap then put
+/// the agent at 63.6 -- so the range assertion below is not redundant
+/// after all. The other was found reading the code while chasing it:
+/// refusing the move in pass 2 but still claiming the clamped edge
+/// cell in pass 1 leaks the claim, since only its owner's check
+/// releases one, and the edge silts up until an agent beside the wall
+/// can never move again. Hence the last assertion: after a run the
+/// claim buffer is empty. Measured with the pass-1 guard removed, it
+/// reads 129 stale cells on this grid, so the assertion does fire.
+#[test]
+fn physarum_agents_do_not_pass_through_a_wall() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.model = "physarum".into();
+    cfg.grid = crate::config::sim::SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 0.0 };
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 11;
+    cfg.model_params.insert("population".into(), 5.0);
+    let model = crate::sim::model_or_default("physarum");
+    let count = (model.agents.unwrap().count)(&model.params_view(&cfg.model_params), N as u32, N as u32) as usize;
+    let ss = model.pack_params(&cfg)[4];
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 100);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let mut prev = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+    let mut worst_jump = 0.0f32;
+    let mut blocked = 0usize;
+    for _ in 0..40 {
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let now = read_agents(&device, &queue, r.agent_buffer().unwrap(), count);
+        for i in 0..count {
+            let d = ((now[i][0] - prev[i][0]).powi(2) + (now[i][1] - prev[i][1]).powi(2)).sqrt();
+            worst_jump = worst_jump.max(d);
+            assert!(
+                now[i][0] >= -0.5 && now[i][0] < N as f32 - 0.5 && now[i][1] >= -0.5 && now[i][1] < N as f32 - 0.5,
+                "agent {i} is outside the grid at ({}, {})", now[i][0], now[i][1]
+            );
+            if d == 0.0 && now[i][2] != prev[i][2] {
+                blocked += 1;
+            }
+        }
+        prev = now;
+    }
+    let stale = read_u32s(&device, &queue, r.claim_buffer(), 0, N * N)
+        .iter()
+        .filter(|&&c| c != u32::MAX)
+        .count();
+    println!(
+        "Physarum under Clamp: largest per-step move {worst_jump:.3} (step size {ss}), \
+         {blocked} blocked moves in 40 steps, {stale} stale claims"
+    );
+    assert!(worst_jump <= ss * 1.001, "an agent jumped {worst_jump:.2} cells in one step: it passed through a wall");
+    assert!(blocked > 0, "no agent was ever blocked, so the wall was never tested");
+    assert_eq!(stale, 0, "{stale} cells still hold a claim after the step: some claim was never checked");
+}
+
+/// Bulk toppling on the CPU: the same parallel schedule the shader
+/// runs, in exact integers. Returns the number of rounds to a stable
+/// configuration and the final heights.
+///
+/// The edges are sinks: a grain sent off the grid is added nowhere.
+fn cpu_sandpile(n: usize, grains: i64, moore: bool) -> (u32, Vec<i64>) {
+    let thresh: i64 = if moore { 8 } else { 4 };
+    let mut h = vec![0i64; n * n];
+    h[(n / 2) * n + n / 2] = grains;
+    let mut fires = vec![0i64; n * n];
+    let mut rounds = 0u32;
+    loop {
+        let mut any = false;
+        for k in 0..n * n {
+            fires[k] = h[k] / thresh;
+            any |= fires[k] > 0;
+        }
+        if !any {
+            return (rounds, h);
+        }
+        for y in 0..n {
+            for x in 0..n {
+                let f = fires[y * n + x];
+                let mut got = 0i64;
+                let mut add = |dx: i64, dy: i64| {
+                    let (sx, sy) = (x as i64 + dx, y as i64 + dy);
+                    if sx >= 0 && sy >= 0 && (sx as usize) < n && (sy as usize) < n {
+                        got += fires[sy as usize * n + sx as usize];
+                    }
+                };
+                add(1, 0);
+                add(-1, 0);
+                add(0, 1);
+                add(0, -1);
+                if moore {
+                    add(1, 1);
+                    add(1, -1);
+                    add(-1, 1);
+                    add(-1, -1);
+                }
+                h[y * n + x] += got - f * thresh;
+            }
+        }
+        rounds += 1;
+    }
+}
+
+fn sandpile_config(n: u32, log2: f32, moore: bool) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "sandpile".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Center;
+    // The edges must be sinks. Under Clamp an edge site would receive
+    // copies of its own topplings and the pile would GAIN mass.
+    cfg.boundary = SimBoundary::Zero;
+    cfg.model_params.insert("grains_log2".into(), log2);
+    cfg.model_params.insert("neighbourhood".into(), if moore { 1.0 } else { 0.0 });
+    cfg
+}
+
+/// The sandpile against an exact-integer CPU mirror of the same
+/// parallel schedule: every cell of the final pile, both
+/// neighbourhoods, and the round count pinned from both sides.
+///
+/// Three things are checked that a picture would not show. The pile is
+/// IDENTICAL, not close -- heights are small integers and f32 counts
+/// them exactly, so any disagreement is a rule difference. MASS IS
+/// CONSERVED: the grid is large enough that nothing reaches the edge,
+/// so the grains are all still there, and a boundary that created or
+/// destroyed any would show up here. And the round count is TIGHT: the
+/// pile is stable after `rounds` and is not after `rounds - 1`, which
+/// is what lets a preset's step count be a measurement rather than a
+/// guess.
+#[test]
+fn sandpile_matches_an_exact_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 128;
+    const LOG2: u32 = 12;
+    let grains = 1i64 << LOG2;
+    for moore in [false, true] {
+        let (rounds, want) = cpu_sandpile(N, grains, moore);
+        let cfg = sandpile_config(N as u32, LOG2 as f32, moore);
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, rounds);
+        let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+        let mut mass = 0i64;
+        let mut differ = 0usize;
+        let mut worst = 0i64;
+        for k in 0..N * N {
+            let h = got[k][0] as i64;
+            mass += h;
+            if h != want[k] {
+                differ += 1;
+                worst = worst.max((h - want[k]).abs());
+            }
+        }
+        let edge: i64 = (0..N)
+            .map(|i| got[i][0] as i64 + got[(N - 1) * N + i][0] as i64 + got[i * N][0] as i64 + got[i * N + N - 1][0] as i64)
+            .sum();
+        // One round short: still over-full somewhere, so the count is
+        // not merely sufficient but exact.
+        let mut r2 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r2.seed(&device, &queue, &cfg);
+        r2.run_steps(&device, &queue, &cfg, rounds - 1);
+        let early = read_rgba32f(&device, &queue, r2.field_texture(), N as u32, N as u32);
+        let thresh = if moore { 8.0 } else { 4.0 };
+        let unstable = early.iter().filter(|p| p[0] >= thresh).count();
+
+        let name = if moore { "Moore" } else { "von Neumann" };
+        println!(
+            "sandpile 2^{LOG2} {name}: {rounds} rounds, {differ} cells differ (worst {worst}), \
+             mass {mass} of {grains}, {unstable} sites still over-full one round earlier"
+        );
+        assert_eq!(differ, 0, "{name}: the shader is not toppling the CPU rule");
+        assert_eq!(edge, 0, "{name}: the pile reached the edge, so mass left the grid");
+        assert_eq!(mass, grains, "{name}: mass is not conserved");
+        assert!(unstable > 0, "{name}: stable a round early, so {rounds} overstates the count");
+    }
+}
+
+/// The round counts the presets are built on, at the size they ship
+/// at, and the confirmation that the shipped `steps` actually finishes
+/// the pile.
+///
+/// The CPU mirror gives the count (the schedule is deterministic, and
+/// `sandpile_matches_an_exact_cpu_mirror` establishes the GPU runs the
+/// same schedule); the GPU then runs the preset's own step count and
+/// must come out stable with its mass intact. 2^16 is a few seconds of
+/// CPU, so this is a diagnostic rather than a gate.
+#[test]
+#[ignore]
+fn sandpile_preset_step_counts() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: usize = 256;
+    for moore in [false, true] {
+        let (rounds, want) = cpu_sandpile(N, 1 << 16, moore);
+        let span = {
+            let occ: Vec<usize> = (0..N * N).filter(|&k| want[k] > 0).collect();
+            let (mut lo, mut hi) = (N, 0usize);
+            for k in occ {
+                lo = lo.min(k % N).min(k / N);
+                hi = hi.max(k % N).max(k / N);
+            }
+            hi + 1 - lo
+        };
+        let model = crate::sim::model_or_default("sandpile");
+        let preset = model.preset(if moore { "moore" } else { "pile" }).unwrap();
+        let cfg = sandpile_config(N as u32, 16.0, moore);
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, preset.steps);
+        let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let thresh = if moore { 8.0 } else { 4.0 };
+        let unstable = got.iter().filter(|p| p[0] >= thresh).count();
+        let mass: i64 = got.iter().map(|p| p[0] as i64).sum();
+        println!(
+            "sandpile 2^16 {}: {rounds} rounds, spans {span} cells; preset runs {} steps -> \
+             {unstable} over-full, mass {mass} of 65536",
+            if moore { "Moore" } else { "von Neumann" },
+            preset.steps
+        );
+        assert_eq!(unstable, 0, "the preset's step count does not finish the pile");
+        assert_eq!(mass, 1 << 16, "mass is not conserved at the preset's size");
+        assert!(span < N, "the pile fills the grid at the shipped size");
+    }
+}
+
+/// Invasion percolation must invade the CLUSTER, not a disc.
+///
+/// The rising-threshold rule is only equal to Wilkinson-Willemsen's
+/// once its one-cell-per-step front has caught up with the threshold.
+/// So this floods the grid on the CPU from the seed, through the
+/// shader's OWN threshold field read back from the texture -- no RNG
+/// to mirror, and the comparison is exact -- and asserts the GPU
+/// reached that connected component and nothing else. A run that ends
+/// while the front is still moving fails, which is what pins the
+/// preset's step count.
+///
+/// It also reports the cluster's box-counting dimension, as a
+/// RAMIFICATION check and not as evidence of criticality: at 256² the
+/// measurement does not resolve the exact 91/48 = 1.896 (it reads
+/// nearer 1.7 close to the threshold, a finite-size crossover, and
+/// climbs past 1.89 once the cluster is merely dense). What it does
+/// catch is the failure that matters -- a front that ran away from
+/// the threshold and left a disc, which reads 2.
+#[test]
+fn invasion_percolation_invades_the_true_component() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 256;
+    // The preset's ceiling, and the value the flood fill must use.
+    const P_MAX: f32 = 0.60;
+    let mut cfg = SimConfig::default();
+    cfg.model = "invasion_percolation".into();
+    cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+    // The preset's own geometry and parameters: injection from an
+    // edge, which is the paper's and, unlike a point seed, the same
+    // picture from any seed.
+    cfg.init = SimInit::Line;
+    cfg.boundary = SimBoundary::Zero;
+    cfg.seed = 3;
+    let model = crate::sim::model_or_default("invasion_percolation");
+    let preset = model.preset("front").unwrap();
+    for (k, v) in preset.params {
+        cfg.model_params.insert((*k).into(), *v);
+    }
+    let steps = preset.steps;
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, steps);
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // The component of {r < p_max} reachable from the injected edge,
+    // by flood fill through the field's OWN thresholds read back from
+    // the texture -- so there is no RNG to mirror and the comparison
+    // is exact. `Line` seeds the top two rows.
+    let mut want = vec![false; N * N];
+    let mut stack: Vec<usize> = Vec::new();
+    for k in (N - 2) * N..N * N {
+        want[k] = true;
+        stack.push(k);
+    }
+    while let Some(k) = stack.pop() {
+        let (x, y) = ((k % N) as i64, (k / N) as i64);
+        for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+            let (sx, sy) = (x + dx, y + dy);
+            if sx < 0 || sy < 0 || sx as usize >= N || sy as usize >= N {
+                continue;
+            }
+            let j = sy as usize * N + sx as usize;
+            if !want[j] && got[j][1] < P_MAX {
+                want[j] = true;
+                stack.push(j);
+            }
+        }
+    }
+
+    let invaded: Vec<bool> = got.iter().map(|p| p[0] > 0.5).collect();
+    let missing = (0..N * N).filter(|&k| want[k] && !invaded[k]).count();
+    let extra = (0..N * N).filter(|&k| !want[k] && invaded[k]).count();
+    let size = invaded.iter().filter(|&&b| b).count();
+    // When did the front finish? The last step any cell was invaded.
+    let last = got
+        .iter()
+        .filter(|p| p[0] > 0.5)
+        .map(|p| p[2] as u32)
+        .max()
+        .unwrap_or(0);
+
+    // Box counting over the cluster's own bounding box.
+    let occ: Vec<(usize, usize)> = (0..N * N).filter(|&k| invaded[k]).map(|k| (k % N, k / N)).collect();
+    let (x0, x1) = (occ.iter().map(|c| c.0).min().unwrap(), occ.iter().map(|c| c.0).max().unwrap());
+    let (y0, y1) = (occ.iter().map(|c| c.1).min().unwrap(), occ.iter().map(|c| c.1).max().unwrap());
+    let side = (x1 - x0).max(y1 - y0) + 1;
+    let mut pts = Vec::new();
+    let mut b = 1usize;
+    while b * 8 <= side {
+        let mut seen = std::collections::HashSet::new();
+        for &(x, y) in &occ {
+            seen.insert(((x - x0) / b, (y - y0) / b));
+        }
+        pts.push(((1.0 / b as f64).ln(), (seen.len() as f64).ln()));
+        b *= 2;
+    }
+    let m = pts.len() as f64;
+    let (sx, sy) = (pts.iter().map(|p| p.0).sum::<f64>(), pts.iter().map(|p| p.1).sum::<f64>());
+    let sxy: f64 = pts.iter().map(|p| p.0 * p.1).sum();
+    let sxx: f64 = pts.iter().map(|p| p.0 * p.0).sum();
+    let dim = (m * sxy - sx * sy) / (m * sxx - sx * sx);
+
+    println!(
+        "invasion percolation at p = {P_MAX}: {size} sites, {missing} missing, {extra} extra; \
+         front finished at step {last} of {steps}; box dimension {dim:.3} (91/48 = 1.896)"
+    );
+    assert_eq!(extra, 0, "the GPU invaded {extra} sites outside the component");
+    assert_eq!(missing, 0, "the front had not finished: {missing} sites of the component missing");
+    assert!(last < steps, "the front was still moving at the last step");
+    assert!(
+        (1.60..1.85).contains(&dim),
+        "box dimension {dim:.3}: the cluster is not ramified (a disc reads 2.0)"
+    );
+    assert!(
+        (0.15..0.35).contains(&(size as f64 / (N * N) as f64)),
+        "{size} sites of {} is not the pre-spanning cluster the preset is set for",
+        N * N
+    );
+}
+
+#[test]
+fn snow_probe_tmp() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: usize = 128;
+    let mut cfg = SimConfig::default();
+    cfg.model = "snowfake".into();
+    cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.init = SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 1;
+    cfg.steps = 4000;
+    let m = crate::sim::model_or_default("snowfake");
+    for (k, v) in m.preset("simple_star").unwrap().params { cfg.model_params.insert((*k).into(), *v); }
+    let count = |f: &Vec<[f32; 4]>| f.iter().filter(|p| p[0] > 0.5).count();
+
+    // (a) exactly what render.rs does: seed, then 512-step batches.
+    let mut r = SimRenderer::new(&device, &cfg, 512, 512);
+    r.seed(&device, &queue, &cfg);
+    let mut done = 0u32;
+    while done < cfg.steps {
+        let batch = 512.min(cfg.steps - done);
+        r.run_steps(&device, &queue, &cfg, batch);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        done += batch;
+    }
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    println!("(a) render.rs loop, out 512: attached {}", count(&f));
+
+    // (b) one call, out = grid.
+    let mut r2 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r2.seed(&device, &queue, &cfg);
+    r2.run_steps(&device, &queue, &cfg, 4000);
+    let f2 = read_rgba32f(&device, &queue, r2.field_texture(), N as u32, N as u32);
+    println!("(b) one 4000-step call, out 128: attached {}", count(&f2));
+
+    // (c) one call, out 512 -- the only difference from (b).
+    let mut r3 = SimRenderer::new(&device, &cfg, 512, 512);
+    r3.seed(&device, &queue, &cfg);
+    r3.run_steps(&device, &queue, &cfg, 4000);
+    let f3 = read_rgba32f(&device, &queue, r3.field_texture(), N as u32, N as u32);
+    println!("(c) one 4000-step call, out 512: attached {}", count(&f3));
+
+    // (d) 512-batches, out = grid.
+    let mut r4 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r4.seed(&device, &queue, &cfg);
+    let mut done = 0u32;
+    while done < cfg.steps {
+        let batch = 512.min(cfg.steps - done);
+        r4.run_steps(&device, &queue, &cfg, batch);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        done += batch;
+    }
+    let f4 = read_rgba32f(&device, &queue, r4.field_texture(), N as u32, N as u32);
+    println!("(d) 512-batches, out 128: attached {}", count(&f4));
+}
+
+/// The Gravner-Griffeath rule on the CPU, in the paper's four substeps
+/// and its own order, against which the two-pass shader is checked.
+///
+/// Channels as the shader stores them: a, b, c, d.
+fn cpu_snowfake(n: usize, p: &[f32; 8], steps: u32) -> Vec<[f32; 4]> {
+    let (rho, beta, alpha, theta, kappa, mu, gamma) =
+        (p[0], p[1], p[2], p[3], p[4], p[5], p[6]);
+    let mut f = vec![[0.0f32, 0.0, 0.0, rho]; n * n];
+    f[(n / 2) * n + n / 2] = [1.0, 0.0, 1.0, 0.0];
+    // Offset-row hex neighbours, clamped at the grid edge exactly as
+    // the Clamp boundary body does.
+    let nb = |x: usize, y: usize, i: usize| -> usize {
+        let k: i64 = if y % 2 == 1 { 0 } else { -1 };
+        let (dx, dy): (i64, i64) = match i {
+            0 => (-1, 0),
+            1 => (1, 0),
+            2 => (k, -1),
+            3 => (k + 1, -1),
+            4 => (k, 1),
+            _ => (k + 1, 1),
+        };
+        let sx = (x as i64 + dx).clamp(0, n as i64 - 1) as usize;
+        let sy = (y as i64 + dy).clamp(0, n as i64 - 1) as usize;
+        sy * n + sx
+    };
+    for _ in 0..steps {
+        // (i) diffusion, then (ii) freezing.
+        let old = f.clone();
+        for y in 0..n {
+            for x in 0..n {
+                let k = y * n + x;
+                if old[k][0] > 0.5 {
+                    continue;
+                }
+                let mut attached = 0;
+                let mut sum = old[k][3];
+                for i in 0..6 {
+                    let q = old[nb(x, y, i)];
+                    if q[0] > 0.5 {
+                        attached += 1;
+                        sum += old[k][3];
+                    } else {
+                        sum += q[3];
+                    }
+                }
+                let mut d = sum * (1.0 / 7.0);
+                let (mut b, mut c) = (old[k][1], old[k][2]);
+                if attached > 0 {
+                    b += (1.0 - kappa) * d;
+                    c += kappa * d;
+                    d = 0.0;
+                }
+                f[k] = [0.0, b, c, d];
+            }
+        }
+        // (iii) attachment, then (iv) melting.
+        let old = f.clone();
+        for y in 0..n {
+            for x in 0..n {
+                let k = y * n + x;
+                if old[k][0] > 0.5 {
+                    continue;
+                }
+                let mut cnt = 0;
+                let mut dsum = old[k][3];
+                for i in 0..6 {
+                    let q = old[nb(x, y, i)];
+                    if q[0] > 0.5 {
+                        cnt += 1;
+                    }
+                    dsum += q[3];
+                }
+                if cnt == 0 {
+                    continue;
+                }
+                let attach = if cnt >= 4 {
+                    true
+                } else if cnt == 3 {
+                    old[k][1] >= 1.0 || (dsum < theta && old[k][1] >= alpha)
+                } else {
+                    old[k][1] >= beta
+                };
+                f[k] = if attach {
+                    [1.0, 0.0, old[k][1] + old[k][2], 0.0]
+                } else {
+                    [
+                        0.0,
+                        (1.0 - mu) * old[k][1],
+                        (1.0 - gamma) * old[k][2],
+                        old[k][3] + mu * old[k][1] + gamma * old[k][2],
+                    ]
+                };
+            }
+        }
+    }
+    f
+}
+
+fn snowfake_config(n: u32, preset: &str) -> (SimConfig, [f32; 8]) {
+    let mut cfg = SimConfig::default();
+    cfg.model = "snowfake".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Center;
+    // Reflecting at the box edge, so no vapour leaves: the paper's own
+    // conservation check only means anything under a closed boundary.
+    // Closed, so no vapour enters or leaves and the paper's
+    // conservation check means something. The paper uses a periodic
+    // box; measured, Clamp gives the same mass drift to two figures,
+    // and it degrades more gracefully when a crystal does reach the
+    // edge -- a wrap grows the crystal into itself.
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 1;
+    let m = crate::sim::model_or_default("snowfake");
+    for (k, v) in m.preset(preset).unwrap().params {
+        cfg.model_params.insert((*k).into(), *v);
+    }
+    let packed = m.pack_params(&cfg);
+    let mut p = [0.0f32; 8];
+    p.copy_from_slice(&packed[..8]);
+    (cfg, p)
+}
+
+/// The snowfake against a CPU mirror of the paper's four substeps, run
+/// in the paper's order.
+///
+/// The shader merges them into two dispatches — freezing needs only the
+/// vapour diffusion just left at the site itself, and melting only the
+/// site's own masses — and this is what says that merge is exact. The
+/// mirror keeps the substeps separate and clones the field between
+/// them, so if (ii) or (iv) secretly read a neighbour, or if the pass
+/// boundary sat in the wrong place, the two would part company.
+///
+/// Run long enough to attach thousands of cells, so the comparison
+/// covers all three attachment cases and the knife-edge, not just the
+/// first ring.
+#[test]
+fn snowfake_matches_a_cpu_mirror_of_the_four_substeps() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    const STEPS: u32 = 400;
+    let (cfg, p) = snowfake_config(N as u32, "simple_star");
+    let want = cpu_snowfake(N, &p, STEPS);
+
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, STEPS);
+    let got = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    let attached = got.iter().filter(|q| q[0] > 0.5).count();
+    let wrong_a = (0..N * N).filter(|&k| (want[k][0] > 0.5) != (got[k][0] > 0.5)).count();
+    // Both machines' mass drift, against the mass they started with.
+    // The point of printing both: the drift is f32 arithmetic, not the
+    // shader. A CPU mirror in the same precision drifts the same way,
+    // so `the_snowfake_conserves_mass` is bounded by what f32 can do
+    // rather than by what the paper's algebra says.
+    let start = p[0] as f64 * (N * N - 1) as f64 + 1.0;
+    let mass = |f: &Vec<[f32; 4]>| -> f64 {
+        f.iter().map(|q| q[1] as f64 + q[2] as f64 + q[3] as f64).sum()
+    };
+    let (dc, dg) = ((mass(&want) - start) / start, (mass(&got) - start) / start);
+    let mut worst = 0.0f32;
+    for k in 0..N * N {
+        for ch in 1..4 {
+            worst = worst.max((want[k][ch] - got[k][ch]).abs());
+        }
+    }
+    println!(
+        "snowfake {STEPS} steps at {N}^2: {attached} attached, {wrong_a} disagree on attachment, \
+         worst mass difference {worst:.2e}; mass drift CPU {dc:.1e} GPU {dg:.1e}"
+    );
+    assert!(attached > 400, "only {attached} cells attached; the run is too short to prove much");
+    assert_eq!(wrong_a, 0, "the shader attaches different cells from the paper's rule");
+    // f32 arithmetic in a different order on the two machines, over
+    // hundreds of steps of a diffusion that mixes every cell.
+    assert!(worst < 1e-3, "masses diverge from the mirror by {worst:.2e}");
+}
+
+/// "Without noise, note that total mass is conserved. Not only is this
+/// property appealing from a physical perspective; it also helps in
+/// debugging code and checking numerical stability." — the paper, §5.
+///
+/// So: b + c + d summed over the grid must still equal the vapour it
+/// started with plus the seed's one unit of ice, after tens of
+/// thousands of steps of a crystal that has eaten most of it. Every
+/// substep moves mass between the three fields and none creates or
+/// destroys any, so a sign or a factor wrong anywhere shows up here
+/// even when the picture still looks like a snowflake.
+#[test]
+fn the_snowfake_conserves_mass() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 256;
+    for preset in ["primitive", "simple_star", "dendrite_ends"] {
+        let (cfg, p) = snowfake_config(N as u32, preset);
+        let rho = p[0] as f64;
+        let want = rho * (N * N - 1) as f64 + 1.0;
+
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 4_000);
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let got: f64 = f.iter().map(|q| q[1] as f64 + q[2] as f64 + q[3] as f64).sum();
+        let attached = f.iter().filter(|q| q[0] > 0.5).count();
+        let rel = (got - want).abs() / want;
+        println!(
+            "snowfake {preset}: {attached} cells attached, mass {got:.1} against {want:.1} \
+             ({:.1e} relative)",
+            rel
+        );
+        assert!(attached > 1_000, "{preset}: barely grew, so this proves little");
+        // Measured on Windows/Vulkan: about 1e-4 after 4,000 steps,
+        // in EITHER direction -- -6.8e-5 at 64^2 over 400 steps,
+        // +1.2e-4 at 256^2 over 4,000 -- because which way half an ulp
+        // falls depends on rho's binary expansion. It is f32, not the
+        // rule: the CPU mirror in
+        // `snowfake_matches_a_cpu_mirror_of_the_four_substeps` drifts
+        // the same way and prints both. A uniform far field is a fixed
+        // point of the exact average but not of the rounded one, so
+        // every untouched cell gains an ulp a step. The
+        // bound is looser than that on purpose -- Metal's fast-math
+        // may turn the division by 7 back into a multiply by the
+        // biased reciprocal, which drifts about 1e-4 over this run --
+        // and it is still three orders inside anything a wrong factor
+        // or sign in one of the four substeps would produce.
+        assert!(rel < 1e-3, "{preset}: mass is not conserved ({rel:.2e} relative)");
+    }
+}
+
+/// The paper's own dimension estimator: the number of pattern sites
+/// within radius r of the seed, against r, on a log-log fit.
+///
+/// "we have plotted the logarithm of the total number of points within
+/// a certain radius as a function of the logarithm of this radius"
+/// — Niemeyer, Pietronero and Wiesmann, on their figure 3.
+///
+/// The fit skips the innermost cells, where the count is a handful and
+/// the lattice shows, and stops before the cluster's own edge, where it
+/// saturates.
+fn radial_dimension(pattern: &[bool], n: usize) -> f64 {
+    let c = (n / 2) as f64;
+    let mut radii: Vec<f64> = pattern
+        .iter()
+        .enumerate()
+        .filter(|(_, &b)| b)
+        .map(|(k, _)| {
+            let (x, y) = ((k % n) as f64 - c, (k / n) as f64 - c);
+            (x * x + y * y).sqrt()
+        })
+        .collect();
+    radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let outer = radii[radii.len() * 9 / 10];
+    let mut pts = Vec::new();
+    let mut r = 6.0;
+    while r <= outer {
+        let cnt = radii.partition_point(|&v| v <= r) as f64;
+        if cnt >= 10.0 {
+            pts.push((r.ln(), cnt.ln()));
+        }
+        r *= 1.25;
+    }
+    let m = pts.len() as f64;
+    let (sx, sy) = (pts.iter().map(|p| p.0).sum::<f64>(), pts.iter().map(|p| p.1).sum::<f64>());
+    let sxy: f64 = pts.iter().map(|p| p.0 * p.1).sum();
+    let sxx: f64 = pts.iter().map(|p| p.0 * p.0).sum();
+    (m * sxy - sx * sy) / (m * sxx - sx * sx)
+}
+
+fn dbm_config(n: u32, eta: f32, steps: u32) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "dbm".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 5;
+    cfg.steps = steps;
+    for (k, v) in [
+        ("eta", eta),
+        ("relax", 20.0),
+        ("surface_tension", 0.0),
+        ("selection", 0.0),
+        ("rate", 0.05),
+        ("electrode", 0.0),
+    ] {
+        cfg.model_params.insert(k.into(), v);
+    }
+    cfg
+}
+
+/// THE GATE for phase 5: the dielectric breakdown model's Hausdorff
+/// dimension against the paper's Table I.
+///
+///   eta   0     0.5          1            2
+///   D     2     1.89±0.01    1.75±0.02    ~1.6
+///
+/// Measured the paper's way (N(r) against r) on its own scale — about
+/// 5,000 sites. The eta = 1 row is also the row the whole phase turns
+/// on: it is the photographed Lichtenberg figure's dimension (≈1.7)
+/// and DLA's, which phase 4 measured at 1.753 by box counting.
+///
+/// Each run also confirms the selection rule is EXACT: one site joins
+/// per step and no more, which is what the exponential race buys over
+/// the parallel approximation the plan expected to ship.
+#[test]
+#[ignore]
+fn dbm_dimension_matches_the_papers_table() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: usize = 512;
+    const STEPS: u32 = 5_000;
+    println!("  eta      D      paper");
+    let mut rows = Vec::new();
+    // The paper averages "over five large samples of about 5000 points
+    // each"; three is enough here to stop one realisation deciding it.
+    // eta = 2 gets fewer sites because the structure is nearly linear
+    // and 5,000 of them reach the electrode, where growth is no longer
+    // free and the radial fit is truncated -- measured, that reads
+    // 1.375 instead of 1.6.
+    // The last column: whether the row is asserted. eta = 2 is not,
+    // twice over. The paper's own value there is quoted from its
+    // reference 13 rather than measured, and at this size our estimate
+    // is dominated by sample noise -- measured, single runs at 1,500
+    // sites gave 1.49, 1.63 and 1.54 for 20, 60 and 150 relaxation
+    // sweeps, a spread of 0.14 with no trend in it. A number that
+    // moves by 0.14 between samples cannot test a claim of 0.05.
+    for (eta, want, label, steps, gated) in [
+        (0.0f32, 2.0f64, "2", STEPS, true),
+        (0.5, 1.89, "1.89 +- 0.01", STEPS, true),
+        (1.0, 1.75, "1.75 +- 0.02", STEPS, true),
+        (2.0, 1.6, "~1.6 (their ref 13)", 1_500, false),
+    ] {
+        let mut ds = Vec::new();
+        let mut sites = 0usize;
+        let mut pattern = Vec::new();
+        for seed in 0..3u64 {
+            let mut cfg = dbm_config(N as u32, eta, steps);
+            cfg.seed = 5 + seed;
+            let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+            r.seed(&device, &queue, &cfg);
+            r.run_steps(&device, &queue, &cfg, steps);
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+            pattern = f.iter().map(|q| q[3] > 0.5).collect();
+            sites = pattern.iter().filter(|&&b| b).count();
+            ds.push(radial_dimension(&pattern, N));
+        }
+        let d = ds.iter().sum::<f64>() / ds.len() as f64;
+        // How close the pattern came to the electrode circle, which is
+        // where growth stops being free.
+        let c = (N / 2) as f64;
+        let reach = (0..N * N)
+            .filter(|&k| pattern[k])
+            .map(|k| (((k % N) as f64 - c).powi(2) + ((k / N) as f64 - c).powi(2)).sqrt())
+            .fold(0.0f64, f64::max);
+        println!(
+            "  {eta:3}   {d:.3}    {label:12}  ({sites} sites, reach {reach:.0} of {:.0})",
+            N as f64 * 0.48
+        );
+        // One site per step, exactly: the seed is one cell and the
+        // first step has no race to read.
+        assert!(
+            sites as u32 >= steps - 2 && sites as u32 <= steps,
+            "eta {eta}: {sites} sites from {steps} steps -- the selection is not one per step"
+        );
+        // Only believe a dimension measured on a cluster that never
+        // touched the electrode. The same discipline DLA's gate uses
+        // for the walls.
+        assert!(
+            reach < N as f64 * 0.48 * 0.85,
+            "eta {eta}: the pattern reached {reach:.0} of {:.0}, so the fit is truncated",
+            N as f64 * 0.48
+        );
+        rows.push((eta, d, want, label, gated));
+    }
+    for (eta, d, want, label, gated) in &rows {
+        if !gated {
+            continue;
+        }
+        // 0.08, against the paper's own 0.01-0.02 statistical bars.
+        // Measured, we read low by 0.02, 0.034 and 0.046 as eta rises
+        // through 0, 0.5 and 1, and the eta = 1 value does not move
+        // when the relaxation goes from 20 sweeps to 150 (1.704,
+        // 1.718, 1.715), so it is not the solver. The paper says the
+        // same of itself: "the possibility of a larger systematic
+        // error due to the finite size of the systems considered
+        // cannot be excluded".
+        assert!(
+            (d - want).abs() < 0.08,
+            "eta {eta}: D = {d:.3}, the paper says {label}"
+        );
+    }
+}
+
+/// One site per step and no more, at the size the visual baselines use
+/// — the cheap always-on half of the gate above.
+///
+/// This is what says the exponential race is the paper's rule rather
+/// than an approximation of it: argmin of E/w with E ~ Exp(1) draws
+/// exactly in proportion to w, and it needs only the global minimum
+/// the reduce stage already computes. The plan had budgeted a prefix
+/// scan for this and planned to ship a parallel approximation first.
+#[test]
+fn dbm_grows_exactly_one_site_per_step() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 128;
+    const STEPS: u32 = 600;
+    let cfg = dbm_config(N as u32, 1.0, STEPS);
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    let mut prev = 1usize;
+    for k in 1..=6 {
+        r.run_steps(&device, &queue, &cfg, STEPS / 6);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        let sites = f.iter().filter(|q| q[3] > 0.5).count();
+        let grown = sites - prev;
+        // The first step has no race behind it, so it grows nothing.
+        let want = STEPS as usize / 6 - usize::from(k == 1);
+        assert_eq!(grown, want, "batch {k}: {grown} sites joined, expected {want}");
+        prev = sites;
+    }
+    // And the field is a solution of Laplace's equation between them:
+    // every site outside the pattern and inside the electrode is the
+    // average of its four neighbours, to the tolerance 20 warm-started
+    // Jacobi sweeps reach.
+    let f = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+    let c = (N as f64 / 2.0, N as f64 / 2.0);
+    let rad = N as f64 * 0.48;
+    let mut worst = 0.0f64;
+    let mut checked = 0;
+    for y in 1..N - 1 {
+        for x in 1..N - 1 {
+            let k = y * N + x;
+            if f[k][3] > 0.5 {
+                continue;
+            }
+            let d = ((x as f64 - c.0).powi(2) + (y as f64 - c.1).powi(2)).sqrt();
+            // Away from both the pattern and the electrode circle.
+            if d > rad - 3.0 {
+                continue;
+            }
+            let nb = [k + 1, k - 1, k + N, k - N];
+            if nb.iter().any(|&j| f[j][3] > 0.5) {
+                continue;
+            }
+            let avg: f64 = nb.iter().map(|&j| f[j][1] as f64).sum::<f64>() / 4.0;
+            worst = worst.max((f[k][1] as f64 - avg).abs());
+            checked += 1;
+        }
+    }
+    println!(
+        "DBM: {prev} sites in {STEPS} steps; Laplace residual {worst:.2e} over {checked} interior cells"
+    );
+    assert!(worst < 1e-3, "the potential is not a solution of Laplace's equation: {worst:.2e}");
+}
+
+/// Phase 5's models at 1080p, ms per step. A diagnostic, not a gate:
+/// run it with `--ignored --nocapture` after touching any of them.
+///
+/// The dielectric breakdown model is the one to watch: a step is
+/// `relax` + 2 dispatches plus the reduce, and one site joins per
+/// step, so a 5,000-site figure is 5,000 of them.
+#[test]
+#[ignore]
+fn phase5_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    for (model, boundary, init, extra) in [
+        ("sandpile", SimBoundary::Zero, SimInit::Center, vec![("grains_log2", 20.0f32)]),
+        ("invasion_percolation", SimBoundary::Zero, SimInit::Line, vec![]),
+        ("snowfake", SimBoundary::Clamp, SimInit::Center, vec![]),
+        ("dbm", SimBoundary::Clamp, SimInit::Center, vec![("relax", 5.0)]),
+        ("dbm", SimBoundary::Clamp, SimInit::Center, vec![("relax", 20.0)]),
+        ("dbm", SimBoundary::Clamp, SimInit::Center, vec![("relax", 50.0)]),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = model.into();
+        cfg.grid = SimGrid::Fixed { width: w, height: h };
+        cfg.init = init;
+        cfg.boundary = boundary;
+        let mut label = String::new();
+        for (k, v) in &extra {
+            cfg.model_params.insert((*k).into(), *v);
+            label = format!("{k}={v}");
+        }
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 20);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const STEPS: u32 = 100;
+        let t0 = std::time::Instant::now();
+        r.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64;
+        println!("{model:<21} {label:<10} {ms:>8.3} ms/step  ({:.0} steps/s)", 1e3 / ms);
+    }
+}
+
+fn fingering_config(n: u32, log_mobility: f32) -> SimConfig {
+    let mut cfg = SimConfig::default();
+    cfg.model = "fingering".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.init = SimInit::Line;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 3;
+    for (k, v) in [
+        ("log_mobility", log_mobility),
+        ("speed", 0.3),
+        ("diffusion", 0.02),
+        ("disturbance", 0.05),
+        ("relax", 20.0),
+    ] {
+        cfg.model_params.insert(k.into(), v);
+    }
+    cfg
+}
+
+/// Where the front is in each column: the first row from the outlet
+/// side where c crosses one half. Returns (mean position, its standard
+/// deviation across columns) -- the roughness of the interface.
+fn front_roughness(f: &[[f32; 4]], n: usize) -> (f64, f64) {
+    let pos: Vec<f64> = (0..n)
+        .map(|x| {
+            for y in 0..n {
+                if f[y * n + x][2] >= 0.5 {
+                    return y as f64;
+                }
+            }
+            n as f64
+        })
+        .collect();
+    let mean = pos.iter().sum::<f64>() / n as f64;
+    let var = pos.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / n as f64;
+    (mean, var.sqrt())
+}
+
+/// Saffman and Taylor, 1958, on the interface between two fluids in a
+/// porous medium or Hele-Shaw cell: it "is liable to be unstable if
+/// the driving fluid is the less viscous of the two". This is that
+/// sentence as a test, on Holzbecher's miscible formulation.
+///
+/// The same seeded disturbance is pushed by a thinner fluid (R > 0)
+/// and by a thicker one (R < 0), and the interface's roughness -- the
+/// spread of the front's position across the width -- must GROW in
+/// the first case and SHRINK in the second. Both fronts advance the
+/// same distance, because the drive is normalised to peak speed; only
+/// their shape differs. A model that fingered both ways, or neither,
+/// would be advecting a random field rather than modelling the
+/// instability.
+#[test]
+fn fingering_is_unstable_only_when_the_driving_fluid_is_less_viscous() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 128;
+    const STEPS: u32 = 300;
+    let mut results = Vec::new();
+    for r in [2.0f32, -2.0] {
+        let cfg = fingering_config(N as u32, r);
+        let mut sim = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        sim.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f0 = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+        sim.run_steps(&device, &queue, &cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f1 = read_rgba32f(&device, &queue, sim.field_texture(), N as u32, N as u32);
+        let (m0, s0) = front_roughness(&f0, N);
+        let (m1, s1) = front_roughness(&f1, N);
+        // Concentration stays a fraction, and every cell has one.
+        assert!(f1.iter().all(|q| (0.0..=1.0).contains(&q[2]) && q[2].is_finite()));
+        println!(
+            "fingering R = {r:+}: front {m0:.1} -> {m1:.1}, roughness {s0:.2} -> {s1:.2} cells"
+        );
+        results.push((r, m0, m1, s0, s1));
+    }
+    let (_, _, adv_u, s0_u, s1_u) = results[0];
+    let (_, _, adv_s, s0_s, s1_s) = results[1];
+    assert!(adv_u < N as f64 - 20.0 && adv_s < N as f64 - 20.0, "both fronts should have advanced");
+    assert!(s1_u > 4.0 * s0_u.max(0.5), "unstable case: roughness {s0_u:.2} -> {s1_u:.2} did not grow");
+    assert!(s1_s < s0_s.max(1.0) * 1.5, "stable case: roughness {s0_s:.2} -> {s1_s:.2} did not stay flat");
+    assert!(s1_u > 3.0 * s1_s, "the two cases should be unmistakably different: {s1_u:.2} vs {s1_s:.2}");
+}
+
+/// The warp's inverse map on the CPU: where destination cell `p` reads
+/// from, in source coordinates. Mirrors the shader exactly.
+fn warp_source(p: (usize, usize), n: usize, w: &crate::config::sim::SimWarp) -> (f32, f32) {
+    let centre = (n as f32 - 1.0) * 0.5;
+    let (dx, dy) = (p.0 as f32 - centre, p.1 as f32 - centre);
+    let rim = (n as f32 * 0.5).max(1.0);
+    let theta = w.rotation + w.flow * ((dx * dx + dy * dy).sqrt() / rim);
+    let (qx, qy) = ((dx - w.pan_x) / w.zoom, (dy - w.pan_y) / w.zoom);
+    let (cs, sn) = (theta.cos(), theta.sin());
+    (centre + cs * qx + sn * qy, centre - sn * qx + cs * qy)
+}
+
+/// A periodic read of channel .y, as the Periodic boundary body does it.
+fn wrap_read(f: &[[f32; 4]], n: usize, x: i64, y: i64) -> f32 {
+    let (x, y) = (x.rem_euclid(n as i64) as usize, y.rem_euclid(n as i64) as usize);
+    f[y * n + x][1]
+}
+
+/// The warp stage against a CPU resample of the same field through
+/// the same affine, in both filters.
+///
+/// The field is invasion percolation's channel .y: a per-cell random
+/// threshold the seed draws and the step NEVER writes, whatever the
+/// step does to the other channels. So after one step that channel is
+/// exactly the warp of what it was, with no assumption about the
+/// model at all. Nearest must match EXACTLY (it moves values, it does
+/// not make new ones); bilinear to float precision. The affine has
+/// every term switched on at once -- zoom, rotation, pan and swirl --
+/// so a wrong sign or a swapped axis anywhere in the inverse map shows
+/// up.
+#[test]
+fn the_warp_matches_a_cpu_resample_of_the_same_field() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    for filter in [
+        crate::config::sim::SimWarpFilter::Nearest,
+        crate::config::sim::SimWarpFilter::Bilinear,
+        crate::config::sim::SimWarpFilter::Bicubic,
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "invasion_percolation".into();
+        cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+        cfg.init = SimInit::Center;
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.seed = 9;
+        cfg.warp = crate::config::sim::SimWarp {
+            zoom: 0.97,
+            rotation: 0.08,
+            pan_x: 1.5,
+            pan_y: -0.75,
+            flow: 0.05,
+            filter,
+            mode: crate::config::sim::SimWarpMode::Continuous,
+            cull: false,
+            layers: 15,
+        };
+        let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+        r.seed(&device, &queue, &cfg);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let before = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let after = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+        let mut worst = 0.0f32;
+        let mut moved = 0usize;
+        let mut wrong = 0usize;
+        for y in 0..N {
+            for x in 0..N {
+                let (sx, sy) = warp_source((x, y), N, &cfg.warp);
+                let want = match filter {
+                    crate::config::sim::SimWarpFilter::Nearest => {
+                        wrap_read(&before, N, (sx + 0.5).floor() as i64, (sy + 0.5).floor() as i64)
+                    }
+                    crate::config::sim::SimWarpFilter::Bilinear => {
+                        let (ix, iy) = (sx.floor(), sy.floor());
+                        let (fx, fy) = (sx - ix, sy - iy);
+                        let (ix, iy) = (ix as i64, iy as i64);
+                        let a = wrap_read(&before, N, ix, iy);
+                        let b = wrap_read(&before, N, ix + 1, iy);
+                        let c = wrap_read(&before, N, ix, iy + 1);
+                        let d = wrap_read(&before, N, ix + 1, iy + 1);
+                        (a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy
+                    }
+                    crate::config::sim::SimWarpFilter::Bicubic => {
+                        let cr = |t: f32| -> [f32; 4] {
+                            let (t2, t3) = (t * t, t * t * t);
+                            [
+                                -0.5 * t3 + t2 - 0.5 * t,
+                                1.5 * t3 - 2.5 * t2 + 1.0,
+                                -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+                                0.5 * t3 - 0.5 * t2,
+                            ]
+                        };
+                        let (ix, iy) = (sx.floor(), sy.floor());
+                        let (wx, wy) = (cr(sx - ix), cr(sy - iy));
+                        let (ix, iy) = (ix as i64, iy as i64);
+                        let mut acc = 0.0f32;
+                        for j in 0..4i64 {
+                            for i in 0..4i64 {
+                                acc += wrap_read(&before, N, ix + i - 1, iy + j - 1)
+                                    * (wx[i as usize] * wy[j as usize]);
+                            }
+                        }
+                        acc
+                    }
+                };
+                let got = after[y * N + x][1];
+                let diff = (got - want).abs();
+                worst = worst.max(diff);
+                if diff > 1e-6 {
+                    wrong += 1;
+                }
+                if (got - before[y * N + x][1]).abs() > 1e-6 {
+                    moved += 1;
+                }
+            }
+        }
+        println!(
+            "warp {filter:?}: worst difference {worst:.2e}, {wrong} cells off, {moved} of {} moved",
+            N * N
+        );
+        assert!(moved > N * N / 2, "{filter:?}: the warp moved almost nothing");
+        match filter {
+            // A source that lands within an ulp of a cell boundary can
+            // round the other way on the GPU; a couple in 4,096 is
+            // rounding, a hundred is a wrong map.
+            crate::config::sim::SimWarpFilter::Nearest => {
+                assert!(wrong <= 4, "{filter:?}: {wrong} cells read from the wrong source cell")
+            }
+            crate::config::sim::SimWarpFilter::Bilinear => {
+                assert!(worst < 2e-5, "{filter:?}: worst difference {worst:.2e}")
+            }
+            crate::config::sim::SimWarpFilter::Bicubic => {
+                assert!(worst < 5e-5, "{filter:?}: worst difference {worst:.2e}")
+            }
+        }
+    }
+}
+
+/// An identity warp is no dispatch at all: the run is bit-identical
+/// to one with no warp configured, which is what lets the field stay
+/// exactly where it was for every model that does not ask.
+#[test]
+fn an_identity_warp_changes_nothing() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: usize = 64;
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N as u32, height: N as u32 };
+    cfg.seed = 4;
+    let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 50);
+    let plain = read_rgba32f(&device, &queue, r.field_texture(), N as u32, N as u32);
+
+    // Identity rates with a non-default filter: still the identity.
+    cfg.warp.filter = crate::config::sim::SimWarpFilter::Nearest;
+    assert!(cfg.warp.is_identity());
+    let mut r2 = SimRenderer::new(&device, &cfg, N as u32, N as u32);
+    r2.seed(&device, &queue, &cfg);
+    r2.run_steps(&device, &queue, &cfg, 50);
+    let with = read_rgba32f(&device, &queue, r2.field_texture(), N as u32, N as u32);
+    assert_eq!(plain, with, "an identity warp altered the run");
+}
+
+/// The matte turns cells below its cutoff into background: the colour
+/// pass reports zero coverage for them, which is the channel the
+/// shared tonemap composites the configured background into (and the
+/// channel a transparent PNG takes its alpha from).
+///
+/// Run at 1:1 with Nearest upscale, so one output pixel is one grid
+/// cell and the resolve filter cannot blur the answer. DLA's `.x` is
+/// the occupancy channel -- 0 in the melt, distance-plus-one in the
+/// cluster -- so a cutoff of 0.5 is exactly "is this cell part of the
+/// dendrite". Both directions are checked, and the soft case in
+/// between.
+#[test]
+fn the_matte_makes_background_of_the_cells_it_cuts() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.model = "dla".into();
+    cfg.coloring = "age".into();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.init = SimInit::Center;
+    cfg.boundary = SimBoundary::Clamp;
+    cfg.seed = 2;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 400);
+    let field = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let frozen = field.iter().filter(|c| c[0] >= 0.5).count();
+    assert!(frozen > 50 && frozen < (N * N) as usize / 2, "{frozen} frozen cells is not a cluster");
+
+    // Off: every cell in the grid is drawn, which is what colourings
+    // did before the matte existed.
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let plain = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    assert!(plain.iter().all(|p| p[3] == 1.0), "with no matte every cell should be figure");
+
+    // On: the cluster is figure, the melt is background.
+    cfg.matte = crate::config::sim::SimMatte {
+        channel: crate::config::sim::SimMatteChannel::X,
+        cutoff: 0.5,
+        softness: 0.0,
+        invert: false,
+        edge: crate::config::sim::SimMatteEdge::Threshold,
+    };
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let matted = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    let wrong = (0..(N * N) as usize)
+        .filter(|&k| {
+            let want = if field[k][0] >= 0.5 { 1.0 } else { 0.0 };
+            matted[k][3] != want
+        })
+        .count();
+    assert_eq!(wrong, 0, "{wrong} cells took the wrong side of the matte");
+    // And the colour of a drawn cell is untouched -- the matte decides
+    // WHETHER a cell is drawn, not what colour it is.
+    let lit = (0..(N * N) as usize).find(|&k| field[k][0] >= 0.5).unwrap();
+    assert_eq!(matted[lit][..3], plain[lit][..3], "the matte changed a figure cell's colour");
+
+    // Inverted: exactly the other cells.
+    cfg.matte.invert = true;
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let inverted = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    let disagree = (0..(N * N) as usize)
+        .filter(|&k| inverted[k][3] != 1.0 - matted[k][3])
+        .count();
+    assert_eq!(disagree, 0, "inverting the matte did not swap exactly the two sides");
+
+    // Soft: the feather is centred on the cutoff, so a cell at the
+    // cutoff is half covered and the edge does not move.
+    cfg.matte.invert = false;
+    cfg.matte.cutoff = 4.0;
+    cfg.matte.softness = 8.0;
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let soft = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    let partial = soft.iter().filter(|p| p[3] > 0.01 && p[3] < 0.99).count();
+    assert!(partial > 20, "a soft matte should feather many cells, not {partial}");
+    let mut worst = 0.0f32;
+    for k in 0..(N * N) as usize {
+        let want = ((field[k][0] - 4.0) / 8.0 + 0.5).clamp(0.0, 1.0);
+        worst = worst.max((soft[k][3] - want).abs());
+    }
+    println!(
+        "matte: {frozen} frozen of {}, {partial} feathered, worst coverage error {worst:.2e}",
+        N * N
+    );
+    assert!(worst < 1e-6, "the feather does not match its own formula: {worst:.2e}");
+}
+
+/// Running to Max Steps in the app gives EXACTLY what exporting the
+/// same config gives — which is the whole reason the cap exists.
+///
+/// The app advances a running simulation `steps_per_frame` at a time,
+/// so a cap that is not a multiple of that would be overshot by part
+/// of a frame. Here 250 is deliberately not a multiple of 100: the
+/// frames run 100, 100, then FIFTY, and the field that leaves is bit
+/// for bit the field `render_still` produces from the seed in one
+/// run of 250.
+///
+/// The rest of the contract is checked around it: an uncapped run
+/// (`steps == 0`) is never held back, a run that has reached the cap
+/// is not stuck there — `steps_remaining` stops holding it, which is
+/// what lets Run resume past — and a reseed arms the cap again.
+#[test]
+fn a_capped_run_stops_on_the_step_an_export_stops_on() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    const CAP: u32 = 250;
+    const PER_FRAME: u32 = 100;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.seed = 6;
+    cfg.steps = CAP;
+    cfg.steps_per_frame = PER_FRAME;
+
+    // The app's loop: frames of `steps_per_frame`, each clamped.
+    let mut app = SimRenderer::new(&device, &cfg, N, N);
+    let mut ran = Vec::new();
+    for _ in 0..3 {
+        let before = app.step_index();
+        app.render_frame(&device, &queue, &cfg, &palette, PER_FRAME);
+        ran.push(app.step_index() - before);
+    }
+    assert_eq!(
+        ran,
+        vec![PER_FRAME, PER_FRAME, CAP - 2 * PER_FRAME],
+        "the cap should cut the third frame short rather than overshoot"
+    );
+    assert_eq!(app.step_index(), CAP);
+    // The app pauses here; the rule that decides so is unit-tested in
+    // `sim::tests`. What this test is for is that the field it pauses
+    // on is the exported one.
+    assert!(crate::sim::should_pause_at_limit(CAP, true, app.step_index()));
+
+    // The export: exactly `steps` from the seed, in one run.
+    let mut export = SimRenderer::new(&device, &cfg, N, N);
+    export.render_still(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    assert_eq!(export.step_index(), CAP);
+
+    let on_screen = read_rgba32f(&device, &queue, app.output_texture(), N, N);
+    let exported = read_rgba32f(&device, &queue, export.output_texture(), N, N);
+    assert_eq!(
+        on_screen, exported,
+        "what the app shows at Max Steps is not what an export of the same config gives"
+    );
+
+    // Past the cap, nothing holds the run back: this is Run resuming.
+    assert_eq!(app.steps_remaining(&cfg), None);
+    app.render_frame(&device, &queue, &cfg, &palette, PER_FRAME);
+    assert_eq!(app.step_index(), CAP + PER_FRAME, "Run should carry on past the cap");
+
+    // A reseed arms it again.
+    app.request_seed();
+    assert!(app.will_reseed(&cfg));
+    app.render_frame(&device, &queue, &cfg, &palette, PER_FRAME);
+    assert_eq!(app.step_index(), PER_FRAME, "a reseed restarts the count");
+
+    // Uncapped: never held back, however many frames.
+    let mut free = cfg.clone();
+    free.steps = 0;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    assert_eq!(r.steps_remaining(&free), None);
+    for _ in 0..3 {
+        r.render_frame(&device, &queue, &free, &palette, PER_FRAME);
+    }
+    assert_eq!(r.step_index(), 3 * PER_FRAME, "an uncapped run should not stop");
+}
+
+/// A field belongs to the config that produced it.
+///
+/// Loading a file does not come through the delta path that decides
+/// `UpdateType::SimReseed` — it replaces the whole config at once —
+/// and before `SeedIdentity` the previous simulation's field, step
+/// count and all simply carried over into the new one. This is that,
+/// at the renderer: hand `render_frame` a config describing a
+/// different field and it must start over, whatever nobody told it.
+///
+/// And the other half, which is just as important: a config that
+/// describes the SAME field must NOT restart. Turning a model's
+/// parameter is what its slider is for, and a reseed on every drag
+/// would make Gray–Scott unusable.
+#[test]
+fn a_config_that_means_a_different_field_restarts_the_run() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let mut a = SimConfig::default();
+    a.grid = SimGrid::Fixed { width: N, height: N };
+    a.seed = 11;
+    a.steps = 0; // uncapped, so only the reseed can move the index
+
+    let mut r = SimRenderer::new(&device, &a, N, N);
+    r.render_frame(&device, &queue, &a, &palette, 120);
+    assert_eq!(r.step_index(), 120);
+    assert!(!r.will_reseed(&a), "nothing changed; the run should continue");
+
+    // Each of these is a different field, and each must restart the
+    // run on its own.
+    for (label, cfg) in [
+        ("model", SimConfig { model: "fitzhugh_nagumo".into(), ..a.clone() }),
+        ("seed", SimConfig { seed: 12, ..a.clone() }),
+        ("init", SimConfig { init: SimInit::Center, ..a.clone() }),
+        ("boundary", SimConfig { boundary: SimBoundary::Zero, ..a.clone() }),
+    ] {
+        let mut r = SimRenderer::new(&device, &a, N, N);
+        r.render_frame(&device, &queue, &a, &palette, 120);
+        assert_eq!(r.step_index(), 120);
+        assert!(r.will_reseed(&cfg), "{label}: should restart");
+        r.render_frame(&device, &queue, &cfg, &palette, 10);
+        assert_eq!(r.step_index(), 10, "{label}: the run did not restart from zero");
+        // And the field is the new config's, not the old one's carried
+        // forward: seeding the same config from scratch gives the same
+        // ten steps.
+        let mut fresh = SimRenderer::new(&device, &cfg, N, N);
+        fresh.render_frame(&device, &queue, &cfg, &palette, 10);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        assert_eq!(
+            read_rgba32f(&device, &queue, r.field_texture(), N, N),
+            read_rgba32f(&device, &queue, fresh.field_texture(), N, N),
+            "{label}: the loaded config inherited the previous run's field"
+        );
+    }
+
+    // A model parameter is NOT a different field: the run continues.
+    let mut tuned = a.clone();
+    tuned.model_params.insert("feed".into(), 0.03);
+    let mut r = SimRenderer::new(&device, &a, N, N);
+    r.render_frame(&device, &queue, &a, &palette, 120);
+    assert!(!r.will_reseed(&tuned), "a parameter change must not throw away the run");
+    r.render_frame(&device, &queue, &tuned, &palette, 10);
+    assert_eq!(r.step_index(), 130, "a parameter change restarted the run");
+
+    // Nor is a colouring, a warp, a matte or the step cap.
+    let mut recoloured = a.clone();
+    recoloured.coloring = "age".into();
+    recoloured.warp.zoom = 0.99;
+    recoloured.matte.channel = crate::config::sim::SimMatteChannel::X;
+    recoloured.steps = 500;
+    assert!(!r.will_reseed(&recoloured), "presentation must not restart the run");
+}
+
+/// Every preset, rendered through the colouring it names, reported as
+/// the contrast of the picture it makes.
+///
+/// A preset's colouring is only right if it DRAWS something: a channel
+/// scale an order of magnitude off, or a channel that holds nothing
+/// for this model, gives a flat frame — one colour everywhere — and no
+/// invariant about names can see that. This one can. Ignored because
+/// it runs every preset to its own step count; run it after touching
+/// any preset's colouring.
+///
+/// The gate is deliberately weak (some coverage, some variation)
+/// because "is this a good picture" is not a number. It catches the
+/// failure that matters: a preset that comes up blank.
+#[test]
+#[ignore]
+fn every_preset_draws_something() {
+    let Some((device, queue)) = repro_device() else { return; };
+    // 256, not 128: several models need room to be themselves —
+    // Lenia's kernel is 13 cells across and its soup dies on a small
+    // grid — and a preset that works at the size a user gets should
+    // not be failed here for a size nobody runs.
+    const N: u32 = 256;
+    let palette = test_palette(&device, &queue);
+    let mut flat = Vec::new();
+    for m in crate::sim::MODELS {
+        for pre in m.presets {
+            let mut cfg = SimConfig::default();
+            cfg.model = m.name.into();
+            cfg.grid = SimGrid::Fixed { width: N, height: N };
+            cfg.seed = 7;
+            cfg.steps = pre.steps;
+            // Selecting a model sets its dt (manager.rs), and so does
+            // applying a preset; Lenia runs at 0.1 and dies at 1.0.
+            cfg.dt = m.default_dt;
+            for (k, v) in pre.params {
+                cfg.model_params.insert((*k).into(), *v);
+            }
+            if let Some(init) = pre.init {
+                cfg.init = init;
+            }
+            if let Some(c) = pre.coloring {
+                cfg.coloring = c.into();
+                for (k, v) in pre.coloring_params {
+                    cfg.coloring_params.insert((*k).into(), *v);
+                }
+            }
+            cfg.matte = pre.matte.unwrap_or_default();
+            let mut r = SimRenderer::new(&device, &cfg, N, N);
+            r.render_still(&device, &queue, &cfg, &palette);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+
+            // Luminance of what is actually drawn, weighted by
+            // coverage: a matte-less sim covers everything, so this is
+            // just the picture.
+            let lum: Vec<f32> = out.iter().map(|p| (p[0] + p[1] + p[2]) / 3.0 * p[3]).collect();
+            let mean = lum.iter().sum::<f32>() / lum.len() as f32;
+            let sd = (lum.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / lum.len() as f32).sqrt();
+            let covered = out.iter().filter(|p| p[3] > 0.5).count() as f32 / lum.len() as f32;
+            assert!(
+                out.iter().all(|p| p.iter().all(|v| v.is_finite())),
+                "{}/{}: the coloured output is not finite",
+                m.name,
+                pre.name
+            );
+            println!(
+                "{:<22} {:<16} {:>6} steps  mean {mean:.3}  sd {sd:.3}  covered {:.0}%",
+                m.name,
+                pre.name,
+                pre.steps,
+                covered * 100.0
+            );
+            if sd < 0.01 {
+                flat.push(format!("{}/{} (sd {sd:.4})", m.name, pre.name));
+            }
+        }
+    }
+    assert!(flat.is_empty(), "these presets draw a flat frame: {flat:#?}");
+}
+
+/// Phase A of the derived-fields plan: the bilinear upscale
+/// interpolates the STATE and colours once, rather than blending four
+/// coloured cells.
+///
+/// The gate is the matte edge, because it is the sharpest thing the
+/// change does. An occupancy field that is 1 on the left half of the
+/// grid and 0 on the right, magnified 8x with a hard matte at 0.5:
+/// blending four half-drawn cells gave a full cell's width -- eight
+/// output pixels -- of partial coverage along the edge; a cutoff on
+/// the interpolated occupancy gives NONE, a hard boundary at the 0.5
+/// isoline. And at 1:1 the two filters must agree byte for byte,
+/// because interpolation at cell centres is the identity.
+#[test]
+fn the_bilinear_upscale_interpolates_state_not_colour() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 32;
+    const MAG: u32 = 8;
+    let palette = test_palette(&device, &queue);
+    // Eden with a Line init occupies a band of rows and nothing else,
+    // and with p_grow at its floor nothing grows in one step: a clean
+    // 0/1 field with a straight edge.
+    let mut cfg = SimConfig::default();
+    cfg.model = "eden".into();
+    cfg.coloring = "channel".into();
+    cfg.grid = SimGrid::Fixed { width: G, height: G };
+    cfg.init = SimInit::Line;
+    cfg.boundary = SimBoundary::Zero;
+    cfg.steps = 1;
+    cfg.model_params.insert("p_grow".into(), 0.01);
+    cfg.coloring_params.insert("channel".into(), 0.0);
+    cfg.coloring_params.insert("scale".into(), 1.0);
+    cfg.matte = crate::config::sim::SimMatte {
+        channel: crate::config::sim::SimMatteChannel::X,
+        cutoff: 0.5,
+        softness: 0.0,
+        invert: false,
+        edge: crate::config::sim::SimMatteEdge::Threshold,
+    };
+
+    let render = |cfg: &SimConfig, out: u32| {
+        let mut r = SimRenderer::new(&device, cfg, out, out);
+        r.render_still(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.output_texture(), out, out)
+    };
+
+    // 8x, bilinear: the edge is hard.
+    cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+    let big = render(&cfg, G * MAG);
+    let partial = big.iter().filter(|p| p[3] > 0.0 && p[3] < 1.0).count();
+    let covered = big.iter().filter(|p| p[3] == 1.0).count();
+    let n = (G * MAG) as usize;
+    println!(
+        "bilinear at {MAG}x: {partial} partial-coverage pixels, {covered} covered of {}",
+        n * n
+    );
+    assert_eq!(partial, 0, "a hard matte on interpolated occupancy must have no half-drawn pixels");
+    assert!(covered > n * n / 20 && covered < n * n / 2, "the band should be a minority of the frame");
+
+    // And the edge is where it belongs: a straight line, so every
+    // column has the same count of covered rows, and that count sits
+    // within one output pixel of where the 0.5 isoline of a linear
+    // ramp between cell centres falls.
+    let per_column: Vec<usize> = (0..n)
+        .map(|x| (0..n).filter(|&y| big[y * n + x][3] == 1.0).count())
+        .collect();
+    assert!(
+        per_column.iter().all(|&c| c == per_column[0]),
+        "the edge of a straight band should be straight: {:?}",
+        &per_column[..8]
+    );
+
+    // 1:1: Bilinear is Nearest exactly.
+    cfg.upscale = crate::config::sim::SimUpscale::Nearest;
+    let one_n = render(&cfg, G);
+    cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+    let one_b = render(&cfg, G);
+    assert_eq!(one_n, one_b, "at 1:1 the two filters must agree byte for byte");
+}
+
+/// Under interpolation the colouring is told it is at the NEAREST
+/// cell, which is only harmless while no colouring reads the cell
+/// coordinate. None does; this makes sure one that starts to fails
+/// here rather than drawing subtly wrong pictures at 8x.
+#[test]
+fn no_colouring_reads_the_cell_coordinate() {
+    for c in crate::sim::COLORINGS {
+        // A colouring that declares ReadsCell has said what it is: a
+        // texture computed at cell resolution and interpolated, which
+        // for a line integral convolution is the only thing it can be.
+        if c.has(crate::sim::ColoringFeature::ReadsCell) {
+            continue;
+        }
+        // The signature names it `p`; a body that uses it would say
+        // `p.x`, `p.y`, or pass `p` on.
+        let body = c.wgsl.split("-> vec4<f32> {").nth(1).unwrap_or("");
+        for needle in ["p.x", "p.y", "(p,", ", p)", "(p)"] {
+            assert!(
+                !body.contains(needle),
+                "colouring {:?} reads the cell coordinate ({needle:?}); under the \
+                 bilinear resolve that is the nearest cell, not the sample point",
+                c.name
+            );
+        }
+    }
+}
+
+/// Phase B of the derived-fields plan: the bicubic upscale
+/// reconstructs a smooth field better than the bilinear one.
+///
+/// A known smooth function is written straight into the field -- a
+/// Gaussian bump on a 32-cell grid, sampled at cell centres -- and
+/// the three upscales render it at 8x through the `channel` colouring
+/// and a linear greyscale palette, which returns the interpolated
+/// value itself. Each output pixel is then compared with the analytic
+/// function at that pixel's centre. Nearest is a staircase, bilinear
+/// has creases at every cell centre, and Catmull-Rom is C1 through
+/// them: the RMS reconstruction errors must fall in that order, with
+/// bicubic's a clear fraction of bilinear's, not a rounding hair.
+///
+/// The bump's width is chosen so the field's curvature is what the
+/// interpolants disagree about: too wide and everything is trivially
+/// right, too narrow and the grid cannot represent it at all.
+#[test]
+fn the_bicubic_upscale_reconstructs_a_smooth_field_better() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 32;
+    const MAG: u32 = 8;
+    const SIGMA: f32 = 2.5;
+    let palette = test_palette(&device, &queue);
+    let bump = |x: f32, y: f32| -> f32 {
+        let c = G as f32 * 0.5;
+        let d2 = (x - c) * (x - c) + (y - c) * (y - c);
+        // 0.9 rather than 1 so an overshoot has headroom before the
+        // colouring's clamp would hide it.
+        0.9 * (-d2 / (2.0 * SIGMA * SIGMA)).exp()
+    };
+
+    let mut cfg = SimConfig::default();
+    cfg.coloring = "channel".into();
+    cfg.grid = SimGrid::Fixed { width: G, height: G };
+    cfg.steps = 0;
+    cfg.coloring_params.insert("channel".into(), 0.0);
+    cfg.coloring_params.insert("scale".into(), 1.0);
+    cfg.coloring_params.insert("offset".into(), 0.0);
+
+    let mut errors = Vec::new();
+    for up in [
+        crate::config::sim::SimUpscale::Nearest,
+        crate::config::sim::SimUpscale::Bilinear,
+        crate::config::sim::SimUpscale::Bicubic,
+    ] {
+        cfg.upscale = up;
+        let out = G * MAG;
+        let mut r = SimRenderer::new(&device, &cfg, out, out);
+        r.seed(&device, &queue, &cfg);
+        // Overwrite the seeded field with the analytic bump at cell
+        // centres. The colour pass reads whatever is in the texture.
+        let mut texels = Vec::with_capacity((G * G * 4) as usize);
+        for y in 0..G {
+            for x in 0..G {
+                texels.extend_from_slice(&[bump(x as f32 + 0.5, y as f32 + 0.5), 0.0, 0.0, 0.0]);
+            }
+        }
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: r.field_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(&texels),
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(G * 16),
+                rows_per_image: Some(G),
+            },
+            Extent3d { width: G, height: G, depth_or_array_layers: 1 },
+        );
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let img = read_rgba32f(&device, &queue, r.output_texture(), out, out);
+
+        // Compare inside the bump's support only, where the field is
+        // not flat and the interpolants can differ.
+        let mut se = 0.0f64;
+        let mut n = 0usize;
+        let mut worst = 0.0f32;
+        for py in 0..out {
+            for px in 0..out {
+                // Output pixel centre in grid coordinates, as the
+                // colour pass maps it (1:MAG, no letterbox on a square).
+                let gx = (px as f32 + 0.5) / MAG as f32;
+                let gy = (py as f32 + 0.5) / MAG as f32;
+                let want = bump(gx, gy);
+                if want < 0.02 {
+                    continue;
+                }
+                let got = img[(py * out + px) as usize][0];
+                let e = got - want;
+                se += (e * e) as f64;
+                n += 1;
+                worst = worst.max(e.abs());
+            }
+        }
+        let rms = (se / n as f64).sqrt() as f32;
+        println!("{:<9} at {MAG}x: rms error {rms:.5}, worst {worst:.4}, over {n} pixels", up.name());
+        errors.push((up, rms));
+    }
+    let (nearest, bilinear, bicubic) = (errors[0].1, errors[1].1, errors[2].1);
+    assert!(bilinear < nearest, "bilinear ({bilinear:.5}) should beat nearest ({nearest:.5})");
+    assert!(
+        bicubic < bilinear * 0.5,
+        "bicubic ({bicubic:.5}) should be well under half bilinear's error ({bilinear:.5})"
+    );
+}
+
+/// Phase C of the derived-fields plan: the distance-field matte.
+///
+/// A disc of occupied cells is written into a 32-cell field and
+/// magnified 8x with a hard matte, once through the threshold edge
+/// and once through the distance edge, and each output pixel's
+/// coverage is compared with the analytic disc at the pixel's centre.
+///
+/// The plan expected the distance edge to follow the curve better.
+/// IT DOES NOT, AND THIS TEST SAYS SO: the two edges classify the
+/// same 568 pixels the same way, with the same 1.03 px RMS radial
+/// error. Every cell beside the edge reads +1/2 or -1/2 in the
+/// distance field -- its nearest cell of the other kind is adjacent
+/// -- which is exactly the occupancy the threshold interpolates,
+/// shifted by a half; the two zero sets coincide up to a
+/// second-order wobble at corners. A cell-centre distance field knows
+/// no more about WHERE the edge is than the occupancy does.
+///
+/// What it knows is how far a cell is FROM the edge, which is what
+/// the rest of the test is about: the field reads +0.5 / -0.5 either
+/// side of the edge and about R at the disc's centre, and a feather
+/// set to 2 cells is 2 cells wide -- 32 output pixels per crossing at
+/// 8x -- which is what `softness` means under this edge and what it
+/// could not mean under the threshold, where it was a width in the
+/// channel's units.
+#[test]
+fn the_distance_matte_agrees_on_the_edge_and_feathers_in_cells() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 32;
+    const MAG: u32 = 8;
+    const R: f32 = 10.3; // not an integer, so the disc is not lattice-aligned
+    let palette = test_palette(&device, &queue);
+    let centre = G as f32 * 0.5; // between cells, deliberately
+    let inside = |x: f32, y: f32| (x - centre).powi(2) + (y - centre).powi(2) < R * R;
+
+    let base = || {
+        let mut cfg = SimConfig::default();
+        cfg.coloring = "channel".into();
+        cfg.grid = SimGrid::Fixed { width: G, height: G };
+        cfg.steps = 0;
+        cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+        cfg.coloring_params.insert("channel".into(), 0.0);
+        cfg.coloring_params.insert("scale".into(), 1.0);
+        cfg.coloring_params.insert("offset".into(), 0.0);
+        cfg.matte = crate::config::sim::SimMatte {
+            channel: crate::config::sim::SimMatteChannel::X,
+            cutoff: 0.5,
+            softness: 0.0,
+            invert: false,
+            edge: crate::config::sim::SimMatteEdge::Threshold,
+        };
+        cfg
+    };
+    let write_disc = |r: &SimRenderer| {
+        // f32, said so: an unanchored `1.0` infers f64, cast_slice ships
+        // doubles into an f32 texture, and the disc quietly reads as
+        // zeros. Found by exactly that.
+        let mut texels: Vec<f32> = Vec::with_capacity((G * G * 4) as usize);
+        for y in 0..G {
+            for x in 0..G {
+                let on = inside(x as f32 + 0.5, y as f32 + 0.5);
+                texels.extend_from_slice(&[if on { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
+            }
+        }
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: r.field_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(&texels),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(G * 16), rows_per_image: Some(G) },
+            Extent3d { width: G, height: G, depth_or_array_layers: 1 },
+        );
+    };
+    // The edge's radial error and how many pixels disagree, for one
+    // rendering.
+    let out = G * MAG;
+    let measure = |img: &[[f32; 4]]| -> (f64, usize, usize) {
+        let mut se = 0.0f64;
+        let mut wrong = 0usize;
+        let mut partial = 0usize;
+        for py in 0..out {
+            for px in 0..out {
+                let gx = (px as f32 + 0.5) / MAG as f32;
+                let gy = (py as f32 + 0.5) / MAG as f32;
+                let cov = img[(py * out + px) as usize][3];
+                if cov > 0.0 && cov < 1.0 {
+                    partial += 1;
+                }
+                let want = if inside(gx, gy) { 1.0 } else { 0.0 };
+                if (cov >= 0.5) != (want >= 0.5) {
+                    wrong += 1;
+                    let rr = ((gx - centre).powi(2) + (gy - centre).powi(2)).sqrt();
+                    // In OUTPUT pixels.
+                    let e = ((rr - R) * MAG as f32) as f64;
+                    se += e * e;
+                }
+            }
+        }
+        ((se / wrong.max(1) as f64).sqrt(), wrong, partial)
+    };
+
+    let mut results = Vec::new();
+    for edge in [
+        crate::config::sim::SimMatteEdge::Threshold,
+        crate::config::sim::SimMatteEdge::Distance,
+    ] {
+        let mut cfg = base();
+        cfg.matte.edge = edge;
+        let mut r = SimRenderer::new(&device, &cfg, out, out);
+        r.seed(&device, &queue, &cfg);
+        write_disc(&r);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let img = read_rgba32f(&device, &queue, r.output_texture(), out, out);
+        let (rms, wrong, partial) = measure(&img);
+        println!(
+            "{:<9} edge at {MAG}x: {wrong} pixels on the wrong side, rms radial error {rms:.3} px, {partial} partial",
+            edge.name()
+        );
+        assert_eq!(partial, 0, "{}: a hard matte should have no half-drawn pixels", edge.name());
+        // Nobody is wrong by more than a cell: the occupancy only
+        // knows the circle to that, and neither edge may invent worse.
+        assert!(rms < MAG as f64 * 0.5, "{}: rms radial error {rms:.2} px is over half a cell", edge.name());
+        results.push((edge, rms, wrong));
+
+        if edge == crate::config::sim::SimMatteEdge::Distance {
+            // The field itself: signed, in cells, +0.5 / -0.5 either
+            // side of a straight-ish edge, read at the disc's
+            // leftmost row where the boundary runs almost vertical.
+            let sdf = read_rgba32f(&device, &queue, r.sdf_texture().unwrap(), G, G);
+            let y = G / 2;
+            let row: Vec<f32> = (0..G).map(|x| sdf[(y * G + x) as usize][0]).collect();
+            let first_in = (0..G as usize).find(|&x| inside(x as f32 + 0.5, y as f32 + 0.5)).unwrap();
+            let (d_out, d_in) = (row[first_in - 1], row[first_in]);
+            println!("distance field across the edge: {d_out:+.3} | {d_in:+.3} (cells)");
+            assert!(d_in > 0.0 && d_out < 0.0, "the sign must flip across the edge");
+            assert!((d_in + d_out).abs() < 0.15, "the edge should sit near the middle: {d_out:+.3}/{d_in:+.3}");
+            let mid = sdf[((G / 2) * G + G / 2) as usize][0];
+            assert!((mid - (R - 0.5)).abs() < 1.5, "the centre should be about R inside: {mid:.2}");
+        }
+    }
+
+    // THE EDGE DOES NOT MOVE, and that is the measured finding rather
+    // than the plan's expectation. Every cell beside the edge is +1/2
+    // or -1/2 in the distance field -- its nearest cell of the other
+    // kind is adjacent -- which is exactly the occupancy the threshold
+    // interpolates, shifted by a half, so the two zero sets coincide
+    // to a second-order wobble at corners (~0.02 cells, worked through
+    // in the plan). A cell-centre distance field knows no more about
+    // WHERE the edge is than the occupancy does. What it knows is how
+    // far a cell is FROM it, which is the feather below.
+    let (thr, dist) = (results[0].1, results[1].1);
+    let (thr_n, dist_n) = (results[0].2, results[1].2);
+    assert!(
+        (dist - thr).abs() < 0.1 && (dist_n as i64 - thr_n as i64).abs() <= (thr_n / 20) as i64 + 2,
+        "the two edges should agree on the boundary: {thr:.3}/{thr_n} vs {dist:.3}/{dist_n}"
+    );
+
+    // Softness is a width in cells under the distance edge: a feather
+    // of 2 cells spans about 2 * MAG output pixels across the edge.
+    let mut cfg = base();
+    cfg.matte.edge = crate::config::sim::SimMatteEdge::Distance;
+    cfg.matte.softness = 2.0;
+    let mut r = SimRenderer::new(&device, &cfg, out, out);
+    r.seed(&device, &queue, &cfg);
+    write_disc(&r);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let img = read_rgba32f(&device, &queue, r.output_texture(), out, out);
+    let y = out / 2;
+    let band = (0..out).filter(|&x| {
+        let c = img[(y * out + x) as usize][3];
+        c > 0.02 && c < 0.98
+    }).count();
+    // Two crossings of the row, each about 2 cells = 16 px wide.
+    println!("softness 2 cells: {band} feathered pixels across the middle row (expect ~{})", 2 * 2 * MAG);
+    assert!((band as i64 - (4 * MAG) as i64).abs() <= MAG as i64, "the feather should be softness cells wide: {band}");
+}
+
+/// A settled Gray-Scott field at 1:1, periodic, with the palette that
+/// returns its argument -- the fixture the phase-D colourings are
+/// evaluated on. Returns the renderer (seeded and stepped) and the
+/// field read back.
+fn phase_d_fixture(device: &Device, queue: &Queue, n: u32) -> (SimConfig, SimRenderer, Vec<[f32; 4]>) {
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.seed = 3;
+    cfg.steps = 0;
+    let mut r = SimRenderer::new(device, &cfg, n, n);
+    r.seed(device, queue, &cfg);
+    r.run_steps(device, queue, &cfg, 600);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let field = read_rgba32f(device, queue, r.field_texture(), n, n);
+    (cfg, r, field)
+}
+
+/// Central-difference gradient of channel `c` at a cell, periodic.
+fn cpu_grad(f: &[[f32; 4]], n: usize, x: usize, y: usize, c: usize) -> (f32, f32) {
+    let at = |x: i64, y: i64| f[(y.rem_euclid(n as i64) as usize) * n + x.rem_euclid(n as i64) as usize][c];
+    let (x, y) = (x as i64, y as i64);
+    ((at(x + 1, y) - at(x - 1, y)) * 0.5, (at(x, y + 1) - at(x, y - 1)) * 0.5)
+}
+
+/// The `gradient` colouring against its own formula on the CPU.
+///
+/// The template's gradient is a central difference through the
+/// boundary rule; direction goes through ff_atan2 and magnitude
+/// through a scale and a clamp; the linear greyscale palette returns
+/// its argument. So the red channel of the output at 1:1 must equal
+/// t * mag to float precision, cell by cell -- and where the gradient
+/// is too small for the direction to mean anything the output is dark
+/// whatever the direction, which is the other half of the design.
+#[test]
+fn the_gradient_colouring_matches_its_formula() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, field) = phase_d_fixture(&device, &queue, N);
+    cfg.coloring = "gradient".into();
+    cfg.coloring_params.insert("channel".into(), 1.0);
+    cfg.coloring_params.insert("scale".into(), 6.0);
+    cfg.coloring_params.insert("rotate".into(), 0.2);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+
+    let n = N as usize;
+    let mut worst = 0.0f32;
+    let mut lit = 0usize;
+    for y in 0..n {
+        for x in 0..n {
+            let (gx, gy) = cpu_grad(&field, n, x, y, 1);
+            let mag = (gx * gx + gy * gy).sqrt();
+            let b = (mag * 6.0).clamp(0.0, 1.0);
+            let t = (gy.atan2(gx) / std::f32::consts::TAU + 0.5 + 0.2).rem_euclid(1.0);
+            let want = t * b;
+            let got = out[y * n + x][0];
+            // A direction at a near-zero gradient is noise on both
+            // machines; only the magnitude is compared there.
+            let tol = if mag < 1e-4 { 1e-3 } else { 2e-3 };
+            let e = (got - want).abs();
+            // fract wraps: t near 0 or 1 can land on the other side.
+            let e = e.min((got - (t - 1.0).abs() * b).abs()).min((got - (t + 1.0) * b).abs());
+            worst = worst.max(if e < tol { 0.0 } else { e });
+            if b > 0.1 {
+                lit += 1;
+            }
+        }
+    }
+    println!("gradient colouring: worst mismatch {worst:.2e}, {lit} of {} cells lit", n * n);
+    assert!(lit > n * n / 20, "the fixture should have slopes to draw");
+    assert_eq!(worst, 0.0, "the gradient colouring disagrees with its formula by {worst:.2e}");
+}
+
+/// The `structure` colouring against its own formula: the 3x3
+/// binomial-smoothed structure tensor of channel .x, in each of its
+/// three modes, on the CPU from the read-back field.
+#[test]
+fn the_structure_colouring_matches_its_formula() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, field) = phase_d_fixture(&device, &queue, N);
+    let n = N as usize;
+    // The tensor at every cell, once.
+    let mut tensor = vec![(0.0f32, 0.0f32, 0.0f32); n * n];
+    for y in 0..n {
+        for x in 0..n {
+            let (mut jxx, mut jxy, mut jyy) = (0.0f32, 0.0f32, 0.0f32);
+            for j in -1i64..=1 {
+                for i in -1i64..=1 {
+                    let qx = (x as i64 + i).rem_euclid(n as i64) as usize;
+                    let qy = (y as i64 + j).rem_euclid(n as i64) as usize;
+                    let (gx, gy) = cpu_grad(&field, n, qx, qy, 0);
+                    let w = ((2 - i.abs()) * (2 - j.abs())) as f32 / 16.0;
+                    jxx += w * gx * gx;
+                    jxy += w * gx * gy;
+                    jyy += w * gy * gy;
+                }
+            }
+            tensor[y * n + x] = (jxx, jxy, jyy);
+        }
+    }
+    cfg.coloring = "structure".into();
+    cfg.coloring_params.insert("scale".into(), 5.0);
+    cfg.coloring_params.insert("rotate".into(), 0.1);
+    for (mode, name) in [(0.0f32, "orientation"), (1.0, "coherence"), (2.0, "energy")] {
+        cfg.coloring_params.insert("mode".into(), mode);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        let mut worst = 0.0f32;
+        let mut varied = 0usize;
+        for k in 0..n * n {
+            let (jxx, jxy, jyy) = tensor[k];
+            let energy = jxx + jyy;
+            let strength = (energy.max(0.0).sqrt() * 5.0).clamp(0.0, 1.0);
+            let want = match name {
+                "coherence" => {
+                    let spread = ((jxx - jyy).powi(2) + 4.0 * jxy * jxy).sqrt();
+                    if energy > 1e-12 { (spread / energy).clamp(0.0, 1.0) } else { 0.0 }
+                }
+                "energy" => strength,
+                _ => {
+                    let theta = 0.5 * (2.0 * jxy).atan2(jxx - jyy);
+                    let t = (theta / std::f32::consts::PI + 0.5 + 0.1).rem_euclid(1.0);
+                    t * strength
+                }
+            };
+            let got = out[k][0];
+            let mut e = (got - want).abs();
+            if name == "orientation" {
+                // Wrap, and a direction at a near-zero tensor is noise.
+                let t_alt = (want / strength.max(1e-9)).rem_euclid(1.0);
+                e = e.min((got - ((t_alt - 1.0).abs() * strength)).abs());
+                if strength < 0.05 {
+                    e = e.min(got.abs());
+                }
+            }
+            if e > 3e-3 {
+                worst = worst.max(e);
+            }
+            if got > 0.1 {
+                varied += 1;
+            }
+        }
+        println!("structure/{name}: worst mismatch {worst:.2e}, {varied} of {} cells above 0.1", n * n);
+        assert!(varied > n * n / 50, "structure/{name}: nothing drawn");
+        assert_eq!(worst, 0.0, "structure/{name}: disagrees with its formula by {worst:.2e}");
+    }
+}
+
+/// The `distance` colouring against the distance field it reads, in
+/// each mode -- and the renderer building that field because the
+/// colouring asked, with the matte's own edge left at Threshold.
+#[test]
+fn the_distance_colouring_matches_the_field_it_reads() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, _field) = phase_d_fixture(&device, &queue, N);
+    // The matte on channel B at its median, edge left at THRESHOLD:
+    // the colouring's NeedsDistance is what must build the field.
+    cfg.matte = crate::config::sim::SimMatte {
+        channel: crate::config::sim::SimMatteChannel::Y,
+        cutoff: 0.15,
+        softness: 0.0,
+        invert: false,
+        edge: crate::config::sim::SimMatteEdge::Threshold,
+    };
+    cfg.coloring = "distance".into();
+    cfg.coloring_params.insert("scale".into(), 6.0);
+    let n = N as usize;
+    for (mode, name) in [(0.0f32, "signed"), (1.0, "depth"), (2.0, "outline")] {
+        cfg.coloring_params.insert("mode".into(), mode);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let sdf = read_rgba32f(&device, &queue, r.sdf_texture().expect("built for the colouring"), N, N);
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        let mut worst = 0.0f32;
+        for k in 0..n * n {
+            let d = sdf[k][0];
+            let want = match name {
+                "signed" => (d / 12.0 + 0.5).clamp(0.0, 1.0),
+                "depth" => (d / 6.0).clamp(0.0, 1.0),
+                _ => (1.0 - d.abs() / 6.0).clamp(0.0, 1.0),
+            };
+            // The matte still cuts at the threshold; compare colour on
+            // the figure only, where coverage is 1.
+            if out[k][3] < 0.5 {
+                continue;
+            }
+            worst = worst.max((out[k][0] - want).abs());
+        }
+        println!("distance/{name}: worst mismatch {worst:.2e}");
+        assert!(worst < 2e-3, "distance/{name}: disagrees with the field by {worst:.2e}");
+    }
+    // The field is real: signed either side, with some depth.
+    let sdf = read_rgba32f(&device, &queue, r.sdf_texture().unwrap(), N, N);
+    let (lo, hi) = sdf.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[0]), hi.max(p[0])));
+    println!("distance field spans {lo:.2} .. {hi:.2} cells");
+    assert!(lo < -1.0 && hi > 1.0, "the field should reach both sides of the edge");
+}
+
+/// The LIC is deterministic, finite, and draws lines: it varies, and
+/// it varies MORE across the flow than along it. On the fixture's
+/// contours, neighbouring cells along a contour share most of their
+/// streamline and so most of their average; cells across the front do
+/// not.
+#[test]
+fn the_lic_colouring_draws_lines_along_the_flow() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let (mut cfg, mut r, field) = phase_d_fixture(&device, &queue, N);
+    cfg.coloring = "lic".into();
+    cfg.coloring_params.insert("channel".into(), 1.0);
+    cfg.coloring_params.insert("direction".into(), 0.0);
+    cfg.coloring_params.insert("length".into(), 8.0);
+    cfg.coloring_params.insert("contrast".into(), 1.0);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let a = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    r.color(&device, &queue, &cfg, &palette);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let b = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+    assert_eq!(a, b, "the LIC must be deterministic frame to frame");
+    assert!(a.iter().all(|p| p[0].is_finite() && p[3] == 1.0));
+    let n = N as usize;
+    let mean = a.iter().map(|p| p[0]).sum::<f32>() / a.len() as f32;
+    let sd = (a.iter().map(|p| (p[0] - mean).powi(2)).sum::<f32>() / a.len() as f32).sqrt();
+    // Differences along the contour direction vs across it, where the
+    // gradient is strong enough to define them.
+    let (mut along, mut across, mut cnt) = (0.0f64, 0.0f64, 0usize);
+    for y in 1..n - 1 {
+        for x in 1..n - 1 {
+            let (gx, gy) = cpu_grad(&field, n, x, y, 1);
+            let m = (gx * gx + gy * gy).sqrt();
+            if m < 0.02 {
+                continue;
+            }
+            let (ux, uy) = (gx / m, gy / m);
+            // Step one cell across (up the gradient) and along (its
+            // perpendicular), rounded to a neighbour.
+            let pick = |dx: f32, dy: f32| {
+                let (px, py) = ((x as f32 + dx).round() as usize, (y as f32 + dy).round() as usize);
+                a[py * n + px][0]
+            };
+            let here = a[y * n + x][0];
+            across += (pick(ux, uy) - here).abs() as f64;
+            along += (pick(-uy, ux) - here).abs() as f64;
+            cnt += 1;
+        }
+    }
+    let (along, across) = (along / cnt as f64, across / cnt as f64);
+    println!("lic: sd {sd:.3}; mean step difference along {along:.4} vs across {across:.4} over {cnt} cells");
+    assert!(sd > 0.03, "the LIC drew nothing: sd {sd:.3}");
+    assert!(
+        across > along * 1.3,
+        "lines should run along the contours: across {across:.4} should exceed along {along:.4}"
+    );
+}
+
+/// Phase D's colourings at 1080p, ms per coloured frame. A diagnostic:
+/// the LIC is the one to watch.
+#[test]
+#[ignore]
+fn phase_d_colouring_cost() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    let palette = test_palette(&device, &queue);
+    for (name, extra) in [
+        ("channel", vec![]),
+        ("gradient", vec![]),
+        ("structure", vec![]),
+        ("distance", vec![]),
+        ("lic", vec![("length", 8.0f32)]),
+        ("lic", vec![("length", 24.0)]),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: w, height: h };
+        // Noise everywhere, so no cell is flat: the LIC's walk runs its
+        // full length from every cell, which is its worst case. On a
+        // seeded run most cells are flat and the walk exits at once.
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.coloring = name.into();
+        cfg.matte = crate::config::sim::SimMatte {
+            channel: crate::config::sim::SimMatteChannel::Y,
+            cutoff: 0.15,
+            softness: 0.0,
+            invert: false,
+            edge: crate::config::sim::SimMatteEdge::Threshold,
+        };
+        let mut label = String::new();
+        for (k, v) in &extra {
+            cfg.coloring_params.insert((*k).into(), *v);
+            label = format!("{k}={v}");
+        }
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 50);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const FRAMES: u32 = 20;
+        let t0 = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            r.color(&device, &queue, &cfg, &palette);
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / FRAMES as f64;
+        println!("{name:<10} {label:<12} {ms:>8.3} ms per coloured frame at 1080p");
+    }
+}
+
+/// A coupled-Turing-lattice config from one of its presets, periodic,
+/// at N x N.
+fn lattice4_config(preset: &str, n: u32, seed: u64) -> SimConfig {
+    let m = crate::sim::model_or_default("lattice4");
+    assert_eq!(m.name, "lattice4");
+    let pre = m.preset(preset).unwrap();
+    let mut cfg = SimConfig::default();
+    cfg.model = "lattice4".into();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.init = pre.init.unwrap();
+    if let Some(w) = pre.warp {
+        cfg.warp = w;
+    }
+    cfg.seed = seed;
+    cfg.steps = 0;
+    for (k, v) in pre.params {
+        cfg.model_params.insert((*k).to_string(), *v);
+    }
+    cfg
+}
+
+/// The angle of (A - C, B - D) at every cell: which field leads.
+fn lattice4_angles(f: &[[f32; 4]]) -> Vec<f32> {
+    f.iter().map(|c| (c[1] - c[3]).atan2(c[0] - c[2])).collect()
+}
+
+/// "Three interacting Turing patterns equals one Belousov–Zhabotinsky
+/// reaction": with the fields chained in a ring, a cell's leading
+/// field goes round and round -- the angle of (A − C, B − D) advances
+/// with a consistent sign across the grid -- and with the identity
+/// matrix, four independent patterns, it does not. Measured as the
+/// mean angular velocity over 1500 steps after 1500 of settling, and
+/// the fraction of cells turning the majority way.
+#[test]
+fn lattice4_cycles_in_place_only_when_the_fields_interact() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 96;
+    let palette = test_palette(&device, &queue);
+    let mut result = Vec::new();
+    for preset in ["ring", "independent"] {
+        let cfg = lattice4_config(preset, N, 3);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 1500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let n = (N * N) as usize;
+        let mut total = vec![0.0f32; n];
+        let mut prev = lattice4_angles(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        // Samples must come well within a turn or the angle aliases:
+        // at the defaults a turn takes ~50 steps, and a 50-step gap
+        // measured 0.04 turns per 1000 steps for a ring turning 20.
+        const SAMPLES: u32 = 200;
+        const GAP: u32 = 5;
+        for _ in 0..SAMPLES {
+            r.run_steps(&device, &queue, &cfg, GAP);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let now = lattice4_angles(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+            for k in 0..n {
+                // Unwrapped step, in (-pi, pi].
+                let mut d = now[k] - prev[k];
+                if d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+                if d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+                total[k] += d;
+            }
+            prev = now;
+        }
+        let steps = (SAMPLES * GAP) as f32;
+        let turns: Vec<f32> = total.iter().map(|t| t / std::f32::consts::TAU).collect();
+        let mean = turns.iter().sum::<f32>() / n as f32;
+        let same_sign = turns.iter().filter(|&&t| (t > 0.0) == (mean > 0.0) && t.abs() > 0.05).count() as f32 / n as f32;
+        println!(
+            "lattice4/{preset}: mean {:+.3} turns per 1000 steps; {:.0}% of cells turning the majority way",
+            mean * 1000.0 / steps,
+            100.0 * same_sign
+        );
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), N, N);
+        assert!(out.iter().all(|p| p[0].is_finite()));
+        result.push((preset, mean * 1000.0 / steps, same_sign));
+    }
+    let (_, ring_rate, ring_same) = result[0];
+    let (_, ind_rate, _) = result[1];
+    assert!(ring_rate.abs() > 0.2, "the ring should cycle: {ring_rate:+.3} turns per 1000 steps");
+    assert!(ring_same > 0.7, "the ring should cycle the same way almost everywhere: {:.0}%", 100.0 * ring_same);
+    assert!(ind_rate.abs() < ring_rate.abs() * 0.2, "independent patterns should not cycle: {ind_rate:+.3}");
+}
+
+/// Under the inflating preset the geometry moves WITH the inflation
+/// rather than rearranging: undo 100 steps of zoom on the earlier
+/// membrane map (the cells where no field leads) and it matches the
+/// later one better than the raw comparison does. That is what makes
+/// a recorded run read as a still image the camera zooms into.
+#[test]
+fn lattice4_under_inflation_drifts_rather_than_rearranges() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 192;
+    let mut cfg = lattice4_config("inflating", N, 2);
+    // This test is about the CONTINUOUS inflation's co-moving frame;
+    // the preset itself now runs in octaves, where the field does not
+    // move between doublings at all.
+    cfg.warp.mode = crate::config::sim::SimWarpMode::Continuous;
+    cfg.warp.filter = crate::config::sim::SimWarpFilter::Bilinear;
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 4000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f1 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    const K: u32 = 100;
+    r.run_steps(&device, &queue, &cfg, K);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f2 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let lead = |f: &[[f32; 4]]| -> Vec<f32> {
+        f.iter().map(|c| ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()).collect()
+    };
+    let (l1, l2) = (lead(&f1), lead(&f2));
+    let mut sorted = l1.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let thr = sorted[sorted.len() / 4]; // the darkest quarter are the membranes
+    let m1: Vec<bool> = l1.iter().map(|&v| v < thr).collect();
+    let m2: Vec<bool> = l2.iter().map(|&v| v < thr).collect();
+    let n = N as usize;
+    let mag = cfg.warp.zoom.powi(K as i32);
+    let c = N as f32 * 0.5;
+    let lo = (n as f32 * 0.2) as usize;
+    let hi = (n as f32 * 0.8) as usize;
+    let (mut raw, mut undone, mut cnt) = (0usize, 0usize, 0usize);
+    for y in lo..hi {
+        for x in lo..hi {
+            let later = m2[y * n + x];
+            raw += (m1[y * n + x] != later) as usize;
+            let px = (c + (x as f32 + 0.5 - c) / mag).floor() as usize;
+            let py = (c + (y as f32 + 0.5 - c) / mag).floor() as usize;
+            undone += (m1[py * n + px] != later) as usize;
+            cnt += 1;
+        }
+    }
+    let (raw, undone) = (raw as f32 / cnt as f32, undone as f32 / cnt as f32);
+    println!(
+        "lattice4 inflating: over {K} steps ({mag:.3}x) the membrane map differs on {:.1}% of cells raw, \
+         {:.1}% with the inflation undone",
+        100.0 * raw,
+        100.0 * undone
+    );
+    assert!(f2.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    assert!(raw > 0.0, "the picture should move at all");
+    assert!(undone < raw, "undoing the inflation should explain some of the motion");
+}
+
+/// Sweep of the coupling weights: turn rate against how fast the
+/// membrane geometry moves, without inflation. The picture McCabe
+/// describes has a high turn rate and a still geometry.
+#[test]
+#[ignore]
+fn lattice4_coupling_sweep() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 96;
+    let n = (N * N) as usize;
+    for (selfw, follow, against, amount, gain, decay) in [
+        (1.0f32, 1.5f32, -1.5f32, 0.05f32, 4.0f32, 0.5f32),
+        (1.0, 1.5, -1.5, 0.05, 4.0, 1.0),
+        (1.0, 1.5, -1.5, 0.05, 4.0, 1.5),
+        (1.0, 1.5, -1.5, 0.05, 2.0, 1.0),
+        (1.0, 1.5, -1.5, 0.05, 8.0, 1.5),
+        (0.3, 1.5, -1.5, 0.05, 4.0, 1.0),
+        (0.0, 1.5, -1.5, 0.05, 4.0, 1.0),
+        (1.0, 1.0, -1.0, 0.05, 4.0, 1.0),
+        (1.0, 1.5, -1.5, 0.02, 4.0, 1.0),
+    ] {
+        let mut cfg = lattice4_config("ring", N, 3);
+        let sp = ["a", "b", "c", "d"];
+        for i in 0..4 {
+            for j in 0..4 {
+                let v = match (j + 4 - i) % 4 { 0 => selfw, 3 => follow, 1 => against, _ => 0.0 };
+                cfg.model_params.insert(format!("k{}{}", sp[i], sp[j]), v);
+            }
+        }
+        cfg.model_params.insert("amount".into(), amount);
+        cfg.model_params.insert("gain".into(), gain);
+        cfg.model_params.insert("decay".into(), decay);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 1500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f1 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let mut prev = lattice4_angles(&f1);
+        let mut total = vec![0.0f32; n];
+        for _ in 0..10 {
+            r.run_steps(&device, &queue, &cfg, 10);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let now = lattice4_angles(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+            for k in 0..n {
+                let mut d = now[k] - prev[k];
+                if d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+                if d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+                total[k] += d;
+            }
+            prev = now;
+        }
+        let f2 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let turns = total.iter().sum::<f32>() / n as f32 / std::f32::consts::TAU * 10.0; // per 1000 steps
+        let lead = |f: &[[f32; 4]]| -> Vec<f32> {
+            f.iter().map(|c| ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()).collect()
+        };
+        let (l1, l2) = (lead(&f1), lead(&f2));
+        let mut sorted = l1.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let thr = sorted[n / 4];
+        let moved = (0..n).filter(|&k| (l1[k] < thr) != (l2[k] < thr)).count() as f32 / n as f32;
+        let mean_lead = l1.iter().sum::<f32>() / n as f32;
+        println!(
+            "self {selfw:.1} follow {follow:+.1} against {against:+.1} amount {amount:.2} gain {gain:>4.1} decay {decay:.1}: {turns:+6.2} turns/1000 steps; \
+             membrane map moved {:.1}% in 100 steps; mean lead {mean_lead:.2}",
+            100.0 * moved
+        );
+    }
+}
+
+/// Where does the pattern go? The shift that best aligns the lead map
+/// 50 steps later with the one now, by brute-force cross-correlation
+/// over +-8 cells. A Turing pattern should not translate; a
+/// consistent shift is an anisotropy in the machinery.
+#[test]
+#[ignore]
+fn lattice4_drift_probe() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 96;
+    let n = N as usize;
+    for preset in ["ring", "independent"] {
+        let cfg = lattice4_config(preset, N, 3);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 1500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let lead = |f: &[[f32; 4]]| -> Vec<f32> {
+            f.iter().map(|c| ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()).collect()
+        };
+        let a = lead(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        r.run_steps(&device, &queue, &cfg, 50);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let b = lead(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+        let ma = a.iter().sum::<f32>() / a.len() as f32;
+        let mb = b.iter().sum::<f32>() / b.len() as f32;
+        let mut best = (f32::MIN, 0i32, 0i32);
+        for dy in -8i32..=8 {
+            for dx in -8i32..=8 {
+                let mut c = 0.0f32;
+                for y in 0..n {
+                    for x in 0..n {
+                        let xs = (x as i32 + dx).rem_euclid(n as i32) as usize;
+                        let ys = (y as i32 + dy).rem_euclid(n as i32) as usize;
+                        c += (a[y * n + x] - ma) * (b[ys * n + xs] - mb);
+                    }
+                }
+                if c > best.0 { best = (c, dx, dy); }
+            }
+        }
+        let mut c0 = 0.0f32;
+        for k in 0..n * n { c0 += (a[k] - ma) * (b[k] - mb); }
+        println!("lattice4/{preset}: best shift over 50 steps ({}, {}) cells, correlation {:.3} vs {:.3} unshifted",
+                 best.1, best.2, best.0 / (n * n) as f32, c0 / (n * n) as f32);
+    }
+}
+
+/// The area-weighted mean compactness P^2 / A of a mask's connected
+/// components (4-connected, periodic; components under 20 cells
+/// ignored). A disc is 4 pi = 12.6; a stripe is far larger.
+fn lattice4_compactness(mask: &[bool], n: usize) -> (usize, f64) {
+    let mut seen = vec![false; n * n];
+    let mut count = 0;
+    let (mut weighted, mut total_area) = (0.0f64, 0.0f64);
+    for start in 0..n * n {
+        if !mask[start] || seen[start] {
+            continue;
+        }
+        let mut stack = vec![start];
+        seen[start] = true;
+        let (mut area, mut perimeter) = (0usize, 0usize);
+        while let Some(k) = stack.pop() {
+            area += 1;
+            let (x, y) = (k % n, k / n);
+            for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                let nx = (x as i64 + dx).rem_euclid(n as i64) as usize;
+                let ny = (y as i64 + dy).rem_euclid(n as i64) as usize;
+                let j = ny * n + nx;
+                if !mask[j] {
+                    perimeter += 1;
+                } else if !seen[j] {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+        if area >= 20 {
+            count += 1;
+            weighted += (perimeter * perimeter) as f64 / area as f64 * area as f64;
+            total_area += area as f64;
+        }
+    }
+    (count, weighted / total_area.max(1.0))
+}
+
+/// The `cells` preset is blobs, the `ring` preset is a labyrinth:
+/// the cells where A leads are compact components for cells (P^2/A
+/// nearer a disc's 12.6) and elongated ones for the ring. And the cells still
+/// cycle: the hue turns, at a rate well below the ring's but well
+/// above zero -- the memory bias slows the ring, it does not stop it.
+#[test]
+fn lattice4_cells_are_blobs_that_still_cycle() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let n = N as usize;
+    let mut out = Vec::new();
+    for preset in ["cells", "ring"] {
+        let mut cfg = lattice4_config(preset, N, 3);
+        cfg.model_params.insert("radius".into(), 6.0);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 2500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let three = preset == "cells";
+        let lead: Vec<f32> = f
+            .iter()
+            .map(|c| {
+                if three {
+                    let cx = c[0] - 0.5 * (c[1] + c[2]);
+                    let cy = 0.8660254 * (c[1] - c[2]);
+                    (cx * cx + cy * cy).sqrt()
+                } else {
+                    ((c[0] - c[2]).powi(2) + (c[1] - c[3]).powi(2)).sqrt()
+                }
+            })
+            .collect();
+        // The blobs in the picture are HUE domains: where A leads. The
+        // amplitude mask is speckled by the fluctuation term on both
+        // presets and does not tell them apart (measured: P^2/A 577
+        // against 592).
+        let _ = lead;
+        let mask: Vec<bool> = f
+            .iter()
+            .map(|c| {
+                let (cx, cy) = if three {
+                    (c[0] - 0.5 * (c[1] + c[2]), 0.8660254 * (c[1] - c[2]))
+                } else {
+                    (c[0] - c[2], c[1] - c[3])
+                };
+                let len = (cx * cx + cy * cy).sqrt();
+                len > 1e-3 && cx / len > 0.5
+            })
+            .collect();
+        let (components, compactness) = lattice4_compactness(&mask, n);
+        // Turn rate over 500 steps, sampled every 5.
+        let angle = |f: &[[f32; 4]]| -> Vec<f32> {
+            f.iter()
+                .map(|c| {
+                    if three {
+                        (0.8660254 * (c[1] - c[2])).atan2(c[0] - 0.5 * (c[1] + c[2]))
+                    } else {
+                        (c[1] - c[3]).atan2(c[0] - c[2])
+                    }
+                })
+                .collect()
+        };
+        let mut prev = angle(&f);
+        let mut total = 0.0f64;
+        for _ in 0..100 {
+            r.run_steps(&device, &queue, &cfg, 5);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let now = angle(&read_rgba32f(&device, &queue, r.field_texture(), N, N));
+            for k in 0..n * n {
+                let mut d = now[k] - prev[k];
+                if d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+                if d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+                total += d as f64;
+            }
+            prev = now;
+        }
+        let turns = (total / (n * n) as f64 / std::f64::consts::TAU) * 2.0; // per 1000 steps
+        println!(
+            "lattice4/{preset}: {components} bright components of 20+ cells on {n}x{n}, compactness P^2/A {compactness:.0}              (a disc is 12.6); {turns:+.2} turns per 1000 steps"
+        );
+        out.push((components, compactness, turns));
+    }
+    let ((cells_n, cells_c, cells_t), (ring_n, ring_c, ring_t)) = (out[0], out[1]);
+    // Measured at 128^2, seed 3: cells 27 components at P^2/A 91, ring 9
+    // at 146. A lattice disc counts about 20 by this perimeter.
+    assert!(
+        cells_c < 0.8 * ring_c,
+        "cells should be more compact (P^2/A {cells_c:.0}) than the ring's stripes ({ring_c:.0})"
+    );
+    assert!(
+        cells_n >= 2 * ring_n,
+        "cells should be many more pieces ({cells_n}) than the ring ({ring_n})"
+    );
+    assert!(cells_t.abs() > 0.5, "cells should still cycle: {cells_t:+.2} turns per 1000 steps");
+    assert!(cells_t.abs() < ring_t.abs(), "the memory bias should slow the ring, not speed it");
+}
+
+/// Octave mode: the picture does not jump at a doubling. At the step
+/// whose warp doubles the field, the view was showing the old field
+/// at 2x and now shows the doubled field at 1x -- the same picture,
+/// up to the doubling's own interpolation and one reaction step. The
+/// change across that step is compared with the change across an
+/// ordinary step nearby; a visible pulse would be many times the
+/// ordinary change.
+#[test]
+fn an_octave_doubling_does_not_jump_the_picture() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let palette = test_palette(&device, &queue);
+    // A field with texture everywhere: the default Gray-Scott blob is
+    // blank in the central quarter the 2x view shows.
+    let mut cfg = lattice4_config("ring", N, 4);
+    cfg.model_params.insert("radius".into(), 4.0);
+    cfg.upscale = crate::config::sim::SimUpscale::Bicubic;
+    cfg.warp = crate::config::sim::SimWarp {
+        zoom: 1.01,
+        filter: crate::config::sim::SimWarpFilter::Bicubic,
+        mode: crate::config::sim::SimWarpMode::Octaves,
+        ..Default::default()
+    };
+    // The first doubling step past 600.
+    let doubling = (600..2000u32).find(|&n| cfg.warp.octave(n).warp.is_some()).unwrap();
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    let mut frame = |r: &mut SimRenderer, upto: u32| -> Vec<[f32; 4]> {
+        let now = r.step_index();
+        assert!(upto >= now);
+        r.run_steps(&device, &queue, &cfg, upto - now);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.output_texture(), N, N)
+    };
+    let rms = |a: &[[f32; 4]], b: &[[f32; 4]]| -> f32 {
+        (a.iter().zip(b).map(|(x, y)| (x[0] - y[0]).powi(2)).sum::<f32>() / a.len() as f32).sqrt()
+    };
+    // An ordinary step, twenty before the doubling; then the doubling.
+    let a0 = frame(&mut r, doubling - 20);
+    let a1 = frame(&mut r, doubling - 19);
+    let b0 = frame(&mut r, doubling);
+    let b1 = frame(&mut r, doubling + 1);
+    let (ordinary, across) = (rms(&a0, &a1), rms(&b0, &b1));
+    let view_before = cfg.warp.octave(doubling).view;
+    let view_after = cfg.warp.octave(doubling + 1).view;
+    println!(
+        "octave doubling at step {doubling}: view {view_before:.3} -> {view_after:.3}; frame change {across:.4} \
+         across the doubling vs {ordinary:.4} across an ordinary step"
+    );
+    assert!(view_before > 1.9 && view_after < 1.1, "the view should wrap from ~2 to ~1");
+    assert!(across < 4.0 * ordinary.max(1e-3), "the doubling should not pulse: {across:.4} vs {ordinary:.4}");
+}
+
+/// Octave mode has no cross. Under a continuous per-step zoom the
+/// field on the two central axes is blurred along one axis only, and
+/// its texture there differs from the texture elsewhere; measured as
+/// the ratio of mean gradient energy on the axis lines to that off
+/// them. Octave mode never resamples by a small factor, so its ratio
+/// stays near 1.
+#[test]
+fn an_octave_warp_has_no_axis_cross() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 160;
+    let n = N as usize;
+    let mut out = Vec::new();
+    for mode in [crate::config::sim::SimWarpMode::Continuous, crate::config::sim::SimWarpMode::Octaves] {
+        let mut cfg = lattice4_config("ring", N, 5);
+        cfg.model_params.insert("radius".into(), 4.0);
+        cfg.warp = crate::config::sim::SimWarp {
+            zoom: 1.003,
+            filter: crate::config::sim::SimWarpFilter::Bilinear,
+            mode,
+            ..Default::default()
+        };
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 1500);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        // Gradient energy of channel .x, on the two axis lines (within
+        // a cell of the centre line) against everywhere else, both
+        // restricted to the middle half so the periodic seam is out.
+        let energy = |x: usize, y: usize| -> f32 {
+            let gx = f[y * n + (x + 1) % n][0] - f[y * n + (x + n - 1) % n][0];
+            let gy = f[((y + 1) % n) * n + x][0] - f[((y + n - 1) % n) * n + x][0];
+            gx * gx + gy * gy
+        };
+        let c = n / 2;
+        let (lo, hi) = (n / 4, 3 * n / 4);
+        let (mut on, mut on_n, mut off, mut off_n) = (0.0f64, 0usize, 0.0f64, 0usize);
+        for y in lo..hi {
+            for x in lo..hi {
+                let axis = (x as i64 - c as i64).abs() <= 1 || (y as i64 - c as i64).abs() <= 1;
+                if axis {
+                    on += energy(x, y) as f64;
+                    on_n += 1;
+                } else {
+                    off += energy(x, y) as f64;
+                    off_n += 1;
+                }
+            }
+        }
+        let ratio = (on / on_n as f64) / (off / off_n as f64).max(1e-12);
+        println!("{mode:?}: gradient energy on the axes / off them = {ratio:.3}");
+        out.push(ratio);
+    }
+    let (cont, oct) = (out[0], out[1]);
+    assert!((oct - 1.0).abs() < 0.15, "octaves should show no cross: ratio {oct:.3}");
+    assert!((oct - 1.0).abs() < (cont - 1.0).abs(), "octaves ({oct:.3}) should be nearer 1 than continuous ({cont:.3})");
+}
+
+/// Octave mode is batch invariant: the doubling steps are decided
+/// from the step index, so 300 steps in one call and in three are
+/// the same field, bit for bit.
+#[test]
+fn octave_doublings_do_not_move_with_the_batch() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.seed = 9;
+    cfg.steps = 0;
+    cfg.warp = crate::config::sim::SimWarp {
+        zoom: 1.01,
+        mode: crate::config::sim::SimWarpMode::Octaves,
+        ..Default::default()
+    };
+    let run = |chunks: &[u32]| -> Vec<[f32; 4]> {
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        for &c in chunks {
+            r.run_steps(&device, &queue, &cfg, c);
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.field_texture(), N, N)
+    };
+    let a = run(&[300]);
+    let b = run(&[70, 130, 100]);
+    assert_eq!(a, b, "octave doublings moved with the batch boundary");
+    let doublings = (0..300u32).filter(|&n| cfg.warp.octave(n).warp.is_some()).count();
+    println!("octave batch invariance: {doublings} doublings in 300 steps, fields identical");
+    assert!(doublings >= 3);
+}
+
+/// The frame does not move with the view. A square grid in a wide
+/// output is letterboxed; at every view magnification the bar pixels
+/// stay empty and the picture stays inside the same rectangle. With
+/// the cover fit there are no bars and every pixel is drawn.
+#[test]
+fn the_letterbox_frame_holds_at_every_view_magnification() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 96;
+    const W: u32 = 256;
+    const H: u32 = 96;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = lattice4_config("ring", G, 6);
+    cfg.upscale = crate::config::sim::SimUpscale::Bilinear;
+    cfg.warp = crate::config::sim::SimWarp {
+        zoom: 1.01,
+        mode: crate::config::sim::SimWarpMode::Octaves,
+        ..Default::default()
+    };
+    // A step near the end of an octave, where the view is largest.
+    let step = (300..400u32)
+        .filter(|&n| cfg.warp.octave(n).view > 1.9)
+        .next()
+        .expect("a view near 2 exists");
+    for fit in [crate::config::sim::SimFit::Letterbox, crate::config::sim::SimFit::Cover] {
+        cfg.fit = fit;
+        let mut r = SimRenderer::new(&device, &cfg, W, H);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, step);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let out = read_rgba32f(&device, &queue, r.output_texture(), W, H);
+        let bar = (W - H) / 2; // the letterbox: 96 of 256 shown, bars of 80
+        let covered = |x0: u32, x1: u32| -> usize {
+            (0..H).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| out[(y * W + x) as usize][3] > 0.0).count()
+        };
+        let in_bars = covered(0, bar) + covered(W - bar, W);
+        let inside = covered(bar, W - bar);
+        let view = cfg.warp.octave(step).view;
+        println!("{fit:?} at view {view:.2}: {in_bars} bar pixels drawn, {inside} of {} inside the frame", H * H);
+        match fit {
+            crate::config::sim::SimFit::Letterbox => {
+                assert_eq!(in_bars, 0, "the view reached into the letterbox bars");
+                assert_eq!(inside, (H * H) as usize, "the frame should be fully drawn");
+            }
+            crate::config::sim::SimFit::Cover => {
+                assert_eq!(in_bars + inside, (W * H) as usize, "cover should draw every pixel");
+            }
+        }
+    }
+}
+
+/// Culling the off-screen cells does not change what is shown. The
+/// same seed run for several octaves with and without the cull, in a
+/// wide output under the cover fit so most of the grid is off screen;
+/// the OUTPUT images agree to a small RMS, and the fields differ
+/// outside the window, which is what proves the cull was on.
+#[test]
+fn culling_off_screen_cells_does_not_change_what_is_shown() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const G: u32 = 192;
+    const W: u32 = 192;
+    const H: u32 = 108;
+    let palette = test_palette(&device, &queue);
+    let mut outs = Vec::new();
+    let mut fields = Vec::new();
+    for cull in [false, true] {
+        let mut cfg = lattice4_config("ring", G, 7);
+        cfg.model_params.insert("radius".into(), 4.0);
+        cfg.fit = crate::config::sim::SimFit::Cover;
+        cfg.upscale = crate::config::sim::SimUpscale::Bicubic;
+        cfg.warp = crate::config::sim::SimWarp {
+            zoom: 1.01,
+            filter: crate::config::sim::SimWarpFilter::Bicubic,
+            mode: crate::config::sim::SimWarpMode::Octaves,
+            cull,
+            ..Default::default()
+        };
+        let mut r = SimRenderer::new(&device, &cfg, W, H);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 400);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        outs.push(read_rgba32f(&device, &queue, r.output_texture(), W, H));
+        fields.push(read_rgba32f(&device, &queue, r.field_texture(), G, G));
+    }
+    let rms = |a: &[[f32; 4]], b: &[[f32; 4]]| -> f32 {
+        (a.iter().zip(b).map(|(x, y)| (x[0] - y[0]).powi(2)).sum::<f32>() / a.len() as f32).sqrt()
+    };
+    let shown = rms(&outs[0], &outs[1]);
+    let field = rms(&fields[0], &fields[1]);
+    let frozen = fields[1].iter().zip(&fields[0]).filter(|(a, b)| a != b).count();
+    println!(
+        "octave cull over 400 steps (5.7 octaves): shown images differ by rms {shown:.4}; fields by {field:.4}, \
+         {frozen} of {} cells differ",
+        G * G
+    );
+    assert!(field > 0.0, "the cull changed nothing, so it was not on");
+    assert!(shown < 0.02, "the cull changed what is shown: rms {shown:.4}");
+}
+
+/// The two-layer Brusselator against a CPU mirror of one step, from a
+/// read-back field, periodic, in both coupling forms.
+#[test]
+fn brusselator2_matches_a_cpu_mirror_in_both_couplings() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    for cubic in [0.0f32, 1.0] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "brusselator2".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 11;
+        cfg.dt = 0.001;
+        cfg.model_params.insert("coupling".into(), cubic);
+        cfg.model_params.insert("q".into(), 0.15);
+        let m = crate::sim::model_or_default("brusselator2");
+        assert_eq!(m.name, "brusselator2");
+        let a = m.pack_params(&cfg);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let before = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        r.run_steps(&device, &queue, &cfg, 1);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let after = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        let n = N as usize;
+        let at = |x: i64, y: i64| before[(y.rem_euclid(n as i64) as usize) * n + x.rem_euclid(n as i64) as usize];
+        let mut worst = 0.0f32;
+        for y in 0..n {
+            for x in 0..n {
+                let (xi, yi) = (x as i64, y as i64);
+                let s = at(xi, yi);
+                let (u1, v1, u2, v2) = (s[0], s[1], s[2], s[3]);
+                let (aa, bb, q) = (a[0], a[1], a[7]);
+                let f1 = aa - (bb + 1.0) * u1 + u1 * u1 * v1;
+                let g1 = bb * u1 - u1 * u1 * v1;
+                let f2 = aa - (bb + 1.0) * u2 + u2 * u2 * v2;
+                let g2 = bb * u2 - u2 * u2 * v2;
+                let (mut cu, mut cv) = (q * (u2 - u1), q * (v2 - v1));
+                if cubic > 0.5 {
+                    cu *= u1 * u2;
+                    cv *= v1 * v2;
+                }
+                let rate = [f1 + cu, g1 + cv, f2 - cu, g2 - cv];
+                for c in 0..4 {
+                    let lap = at(xi, yi - 1)[c] + at(xi, yi + 1)[c] + at(xi - 1, yi)[c] + at(xi + 1, yi)[c] - 4.0 * s[c];
+                    let want = (s[c] + 0.001 * (a[2 + c] * lap + rate[c])).max(0.0);
+                    worst = worst.max((after[y * n + x][c] - want).abs());
+                }
+            }
+        }
+        println!("brusselator2 mirror, cubic {cubic}: worst {worst:.2e}");
+        assert!(worst < 5e-5, "brusselator2 disagrees with its mirror by {worst:.2e}");
+    }
+}
+
+/// A radix-2 FFT, in place, for the spectrum gate.
+fn fft_1d(re: &mut [f32], im: &mut [f32]) {
+    let n = re.len();
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let ang = -std::f32::consts::TAU / len as f32;
+        for start in (0..n).step_by(len) {
+            for k in 0..len / 2 {
+                let (wr, wi) = ((ang * k as f32).cos(), (ang * k as f32).sin());
+                let (ar, ai) = (re[start + k], im[start + k]);
+                let (br, bi) = (re[start + k + len / 2], im[start + k + len / 2]);
+                let (tr, ti) = (br * wr - bi * wi, br * wi + bi * wr);
+                re[start + k] = ar + tr;
+                im[start + k] = ai + ti;
+                re[start + k + len / 2] = ar - tr;
+                im[start + k + len / 2] = ai - ti;
+            }
+        }
+        len <<= 1;
+    }
+}
+
+/// The radial power spectrum of one channel of a square field, by
+/// |k| in cycles per cell, binned to 1/n.
+fn radial_spectrum(f: &[[f32; 4]], n: usize, c: usize) -> Vec<f32> {
+    let mean = f.iter().map(|v| v[c]).sum::<f32>() / f.len() as f32;
+    let mut re: Vec<f32> = f.iter().map(|v| v[c] - mean).collect();
+    let mut im = vec![0.0f32; n * n];
+    for y in 0..n {
+        fft_1d(&mut re[y * n..(y + 1) * n], &mut im[y * n..(y + 1) * n]);
+    }
+    for x in 0..n {
+        let (mut cr, mut ci) = (vec![0.0f32; n], vec![0.0f32; n]);
+        for y in 0..n {
+            cr[y] = re[y * n + x];
+            ci[y] = im[y * n + x];
+        }
+        fft_1d(&mut cr, &mut ci);
+        for y in 0..n {
+            re[y * n + x] = cr[y];
+            im[y * n + x] = ci[y];
+        }
+    }
+    let mut power = vec![0.0f32; n / 2 + 1];
+    for y in 0..n {
+        for x in 0..n {
+            let kx = if x <= n / 2 { x as f32 } else { x as f32 - n as f32 };
+            let ky = if y <= n / 2 { y as f32 } else { y as f32 - n as f32 };
+            let k = (kx * kx + ky * ky).sqrt().round() as usize;
+            if k <= n / 2 {
+                power[k] += re[y * n + x].powi(2) + im[y * n + x].powi(2);
+            }
+        }
+    }
+    power
+}
+
+/// The paper's evidence for its patterns is the Fourier spectrum: two
+/// rings, one per layer's wavelength. Under cubic coupling at the
+/// Fig. 3 parameters the boats carry power at both k ≈ 0.2 and
+/// k ≈ 1.0 radians per cell (wavelengths ~31 and ~6 cells); an
+/// uncoupled layer 1 carries only its own. Measured on a 128² grid
+/// after 200,000 steps at dt 0.001.
+#[test]
+#[ignore]
+fn brusselator2_boats_carry_two_wavelengths() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let n = N as usize;
+    let mut out = Vec::new();
+    for (q, label) in [(0.15f32, "boats"), (0.0, "uncoupled")] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "brusselator2".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.dt = 0.001;
+        cfg.model_params.insert("q".into(), q);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 200_000);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+        assert!(f.iter().all(|c| c.iter().all(|v| v.is_finite())));
+        let p = radial_spectrum(&f, n, 0);
+        let total: f32 = p[1..].iter().sum();
+        // k in radians per cell = 2 pi * bin / n; the paper's rings at
+        // 0.2 and 1.0 are bins ~4 and ~20 on 128.
+        let band = |lo: f32, hi: f32| -> f32 {
+            (1..=n / 2)
+                .filter(|&b| {
+                    let k = std::f32::consts::TAU * b as f32 / n as f32;
+                    k >= lo && k < hi
+                })
+                .map(|b| p[b])
+                .sum::<f32>()
+                / total
+        };
+        let (long, short) = (band(0.1, 0.4), band(0.7, 1.4));
+        println!("brusselator2 {label} (q {q}): power fraction at k 0.1-0.4: {long:.3}, at 0.7-1.4: {short:.3}");
+        out.push((long, short));
+    }
+    // Measured: coupled 0.791 long / 0.074 short, uncoupled 0.000 /
+    // 0.968. The coupling hands layer 1 the long wavelength and keeps
+    // a short-wavelength remainder, as the paper's Fig. 4 dispersion
+    // says (only the low-k wing clearly unstable).
+    let ((bl, bs), (ul, us)) = (out[0], out[1]);
+    assert!(bl > 0.5 && bs > 0.03, "boats should carry both wavelengths: {bl:.3} / {bs:.3}");
+    assert!(us > 0.8 && ul < 0.05, "the uncoupled layer 1 should be one-wavelength: {ul:.3} / {us:.3}");
+}
+
+/// The Rössler lattice against a CPU mirror of one step, from a
+/// read-back field, periodic, envelope included.
+#[test]
+fn rossler_matches_a_cpu_mirror() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 40;
+    let mut cfg = SimConfig::default();
+    cfg.model = "rossler".into();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    cfg.seed = 5;
+    cfg.dt = 0.002;
+    cfg.model_params.insert("forget".into(), 0.01);
+    let m = crate::sim::model_or_default("rossler");
+    assert_eq!(m.name, "rossler");
+    let a = m.pack_params(&cfg);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 2000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let before = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let after = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let n = N as usize;
+    let at = |x: i64, y: i64| before[(y.rem_euclid(n as i64) as usize) * n + x.rem_euclid(n as i64) as usize];
+    let h = a[5];
+    let d = [a[3] / (h * h), a[3] / (h * h), a[4] / (h * h)];
+    let mut worst = 0.0f32;
+    for y in 0..n {
+        for x in 0..n {
+            let (xi, yi) = (x as i64, y as i64);
+            let s = at(xi, yi);
+            let (u, v, w) = (s[0], s[1], s[2]);
+            let rate = [-v - w, u + a[0] * v, a[1] + w * (u - a[2])];
+            let mut nx = [0.0f32; 3];
+            for c in 0..3 {
+                let lap = at(xi, yi - 1)[c] + at(xi, yi + 1)[c] + at(xi - 1, yi)[c] + at(xi + 1, yi)[c] - 4.0 * s[c];
+                nx[c] = s[c] + 0.002 * (d[c] * lap + rate[c]);
+                worst = worst.max((after[y * n + x][c] - nx[c]).abs());
+            }
+            let env = nx[0].max(s[3] - a[6] * 0.002);
+            worst = worst.max((after[y * n + x][3] - env).abs());
+        }
+    }
+    println!("rossler mirror: worst {worst:.2e}");
+    assert!(worst < 1e-4, "rossler disagrees with its mirror by {worst:.2e}");
+}
+
+/// The paper's claim, measured: the snapshot is chaotic and the
+/// envelope is ordered. After a long run at a Fig. 3 parameter set
+/// the envelope has settled (it changes little over the last tenth of
+/// the run), and it is spatially structured (its spread across the
+/// grid is a real fraction of its mean). Reproducing the paper's
+/// panels one for one is not claimed.
+#[test]
+#[ignore]
+fn rossler_envelope_settles_into_a_structured_map() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 40;
+    let m = crate::sim::model_or_default("rossler");
+    let pre = m.preset("carpet").unwrap();
+    let mut cfg = SimConfig::default();
+    cfg.model = "rossler".into();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.boundary = SimBoundary::Periodic;
+    cfg.init = pre.init.unwrap();
+    cfg.seed = 2;
+    cfg.dt = 0.005;
+    for (k, v) in pre.params {
+        cfg.model_params.insert((*k).to_string(), *v);
+    }
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 900_000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f1 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    r.run_steps(&device, &queue, &cfg, 100_000);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f2 = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    assert!(f2.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    let n = f2.len() as f32;
+    let mean = f2.iter().map(|c| c[3]).sum::<f32>() / n;
+    let sd = (f2.iter().map(|c| (c[3] - mean).powi(2)).sum::<f32>() / n).sqrt();
+    let drift = (f1.iter().zip(&f2).map(|(a, b)| (a[3] - b[3]).powi(2)).sum::<f32>() / n).sqrt();
+    let snap_sd = {
+        let mu = f2.iter().map(|c| c[0]).sum::<f32>() / n;
+        (f2.iter().map(|c| (c[0] - mu).powi(2)).sum::<f32>() / n).sqrt()
+    };
+    println!(
+        "rossler carpet at t = 5000: envelope mean {mean:.2}, spread {sd:.3} ({:.1}% of mean), drift over the last tenth \
+         {drift:.3}; snapshot spread {snap_sd:.3}",
+        100.0 * sd / mean
+    );
+    assert!(sd / mean > 0.01, "the envelope should be spatially structured");
+    assert!(drift < sd, "the envelope should have settled: drift {drift:.3} vs spread {sd:.3}");
+}
+
+/// Diagnostic: the Rössler field's range over a long run, for the
+/// parameter sets that came out blank or split.
+#[test]
+#[ignore]
+fn rossler_range_probe() {
+    let Some((device, queue)) = repro_device() else { return; };
+    const N: u32 = 40;
+    for (label, duv, dw, dt) in [
+        ("asymmetric", 0.017f32, 1.25f32, 0.002f32),
+        ("diagonal", 0.015, 0.65, 0.002),
+        ("translational", 0.023, 2.5, 0.002),
+        ("top", 0.048, 0.048, 0.002),
+        ("carpet", 0.003, 2.5, 0.002),
+        ("architecture", 0.01, 2.5, 0.002),
+        ("square", 0.032, 2.5, 0.002),
+        ("conventional", 0.03, 2.5, 0.002),
+    ] {
+        let mut cfg = SimConfig::default();
+        cfg.model = "rossler".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Periodic;
+        cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+        cfg.seed = 3;
+        cfg.dt = dt;
+        cfg.model_params.insert("duv".into(), duv);
+        cfg.model_params.insert("dw".into(), dw);
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        let mut done = 0u32;
+        let steps_for = |t: f32| (t / dt) as u32;
+        for target in [steps_for(2000.0), steps_for(4000.0)] {
+            r.run_steps(&device, &queue, &cfg, target - done);
+            done = target;
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let f = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+            let nan = f.iter().filter(|c| !c[0].is_finite()).count();
+            let (mut umin, mut umax, mut emin, mut emax) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+            for c in &f {
+                if c[0].is_finite() { umin = umin.min(c[0]); umax = umax.max(c[0]); }
+                if c[3].is_finite() { emin = emin.min(c[3]); emax = emax.max(c[3]); }
+            }
+            println!("{label:<12} t={:>6.0}: u in [{umin:8.2}, {umax:8.2}], envelope in [{emin:8.2}, {emax:8.2}], {nan} non-finite", done as f32 * dt);
+        }
+    }
+}
+
+/// The warp's channel mask: the moved channels are the warp's, the
+/// others are exactly what they were.
+#[test]
+fn the_warp_moves_only_the_channels_it_is_told_to() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    // Settle WITHOUT the warp -- a 0.3 rad rotation applied every step
+    // blurs the moved channels flat, and rotating a flat field
+    // changes nothing (measured: the first version of this test) --
+    // then rotate once, and compare: the moved channels differ from
+    // `before` by a rotation's worth, the still ones by one step of
+    // reaction, which is far smaller.
+    let mut cfg = lattice4_config("ring", N, 8);
+    let mut r = SimRenderer::new(&device, &cfg, N, N);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let before = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    cfg.warp = crate::config::sim::SimWarp {
+        rotation: 0.3,
+        layers: 0b0101, // x and z move; y and w stay
+        ..Default::default()
+    };
+    r.run_steps(&device, &queue, &cfg, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let after = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+    let n = (N * N) as f32;
+    let rms = |c: usize| (before.iter().zip(&after).map(|(a, b)| (a[c] - b[c]).powi(2)).sum::<f32>() / n).sqrt();
+    let (mx, my, mz, mw) = (rms(0), rms(1), rms(2), rms(3));
+    println!("warp mask 0101, one step: rms change x {mx:.4} y {my:.4} z {mz:.4} w {mw:.4}; warping={} identity={}", !cfg.warp.is_identity(), cfg.warp.is_identity());
+    assert!(mx > 5.0 * my && mz > 5.0 * mw, "the moved channels should change far more than the still ones");
+}
+
+/// Phase 1 of the simulation-layers plan: a layer is the same run it
+/// would be alone. Layer 0 of a two-layer config -- with a two-pass
+/// model beside it, so the single-pass layer is carried through the
+/// stage it has no pass for -- is bit-identical to the single-layer
+/// run of the same model, parameters and seed.
+#[test]
+fn a_layer_is_the_same_run_it_would_be_alone() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let alone = lattice4_config("ring", N, 6);
+    let mut r = SimRenderer::new(&device, &alone, N, N);
+    r.seed(&device, &queue, &alone);
+    r.run_steps(&device, &queue, &alone, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let single = read_rgba32f(&device, &queue, r.field_texture(), N, N);
+
+    let mut layered = alone.clone();
+    layered.layers = vec![
+        crate::config::sim::SimLayer {
+            model: "lattice4".into(),
+            model_params: alone.model_params.clone(),
+            enabled: true,
+        },
+        crate::config::sim::SimLayer {
+            model: "cahn_hilliard".into(),
+            model_params: Default::default(),
+            enabled: true,
+        },
+    ];
+    let mut r = SimRenderer::new(&device, &layered, N, N);
+    r.seed(&device, &queue, &layered);
+    r.run_steps(&device, &queue, &layered, 300);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let layer0 = read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, 0);
+    let layer1 = read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, 1);
+    let differ = single.iter().zip(&layer0).filter(|(a, b)| a != b).count();
+    println!("layer 0 beside a two-pass layer: {differ} cells differ from the single-layer run");
+    assert_eq!(differ, 0, "layer 0 should be the run it would be alone");
+    assert!(layer1.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    assert!(layer1.iter().any(|c| c[0] != layer1[0][0]), "layer 1 should have run");
+}
+
+/// Three layers, batch invariant: 300 steps in one call and in three
+/// are the same field on every slice.
+#[test]
+fn layered_steps_are_batch_invariant() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 48;
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.seed = 12;
+    cfg.steps = 0;
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    let layer = |model: &str| crate::config::sim::SimLayer {
+        model: model.into(),
+        model_params: Default::default(),
+        enabled: true,
+    };
+    cfg.layers = vec![layer("gray_scott"), layer("brusselator"), layer("lattice4")];
+    let run = |chunks: &[u32]| -> Vec<Vec<[f32; 4]>> {
+        let mut r = SimRenderer::new(&device, &cfg, N, N);
+        r.seed(&device, &queue, &cfg);
+        for &c in chunks {
+            r.run_steps(&device, &queue, &cfg, c);
+        }
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (0..3).map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l)).collect()
+    };
+    let a = run(&[300]);
+    let b = run(&[70, 130, 100]);
+    for l in 0..3 {
+        assert_eq!(a[l], b[l], "layer {l} moved with the batch boundary");
+        assert!(a[l].iter().all(|c| c.iter().all(|v| v.is_finite())));
+    }
+    // The layers are different runs: their seeds are salted by layer.
+    assert_ne!(a[0], a[1]);
+    println!("three layers (gray_scott, brusselator, lattice4): batch invariant, all finite");
+}
+
+/// Phase-1 cost probe (simulation-layers plan, section 8): ms per
+/// step at 1080p for one Gray-Scott layer against four, and the
+/// submit batch the ring allows at each.
+#[test]
+#[ignore]
+fn layered_step_cost_at_1080p() {
+    let Some((device, queue)) = repro_device() else { return; };
+    let (w, h) = (1920u32, 1080u32);
+    for n in [1usize, 2, 4, 8] {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: w, height: h };
+        cfg.steps = 0;
+        cfg.layers = (0..n)
+            .map(|_| crate::config::sim::SimLayer {
+                model: "gray_scott".into(),
+                model_params: Default::default(),
+                enabled: true,
+            })
+            .collect();
+        if n == 1 {
+            cfg.layers.clear();
+        }
+        let mut r = SimRenderer::new(&device, &cfg, w, h);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 32);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        const STEPS: u32 = 100;
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t0 = std::time::Instant::now();
+            r.run_steps(&device, &queue, &cfg, STEPS);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            best = best.min(t0.elapsed().as_secs_f64() * 1e3 / STEPS as f64);
+        }
+        println!(
+            "{n} layer(s) of Gray-Scott at 1080p: {best:.3} ms/step ({:.3} per layer); field memory {} MB",
+            best / n as f64,
+            (n as u64 * 2 * (w as u64) * (h as u64) * 16) >> 20
+        );
+    }
+}
+
+/// Phase 2 of the simulation-layers plan: two `brusselator` layers on
+/// the 5-point stencil under a cubic coupling of strength q are the
+/// `brusselator2` model. Both start from the same analytic field --
+/// the fixed point plus a smooth bump -- so the seeds agree; after
+/// 1,000 steps at the paper's dt the layered field matches the
+/// two-layer model's to rounding (the coupling term is added after
+/// the rule's own clamp there and inside its Euler sum here, which
+/// only differs where the clamp acts, and at a = 3, b = 9 it never
+/// does).
+#[test]
+fn two_brusselator_layers_are_the_two_layer_brusselator() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let (a, b, q) = (3.0f32, 9.0f32, 0.15f32);
+    let d = [1.85f32, 5.66, 50.6, 186.0];
+    // The shared initial field, per layer: (u, v) about (a, b/a).
+    let init = |layer: usize, x: u32, y: u32| -> [f32; 2] {
+        let fx = x as f32 / N as f32;
+        let fy = y as f32 / N as f32;
+        let bump = 0.1 * (std::f32::consts::TAU * (fx * 2.0 + layer as f32 * 0.3)).sin()
+            * (std::f32::consts::TAU * fy * 3.0).cos();
+        [a + bump, b / a - 0.5 * bump]
+    };
+    let write = |r: &SimRenderer, texels: &[f32], layer: u32| {
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: r.field_texture(),
+                mip_level: 0,
+                origin: Origin3d { x: 0, y: 0, z: layer },
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(texels),
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(N * 16), rows_per_image: Some(N) },
+            Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+        );
+    };
+    let steps = 1000;
+
+    // The two-layer model: (u1, v1, u2, v2) in one slice.
+    let mut two = SimConfig::default();
+    two.model = "brusselator2".into();
+    two.grid = SimGrid::Fixed { width: N, height: N };
+    two.boundary = SimBoundary::Periodic;
+    two.dt = 0.001;
+    two.steps = 0;
+    for (k, v) in [("a", a), ("b", b), ("du1", d[0]), ("dv1", d[1]), ("du2", d[2]), ("dv2", d[3]), ("coupling", 1.0), ("q", q)] {
+        two.model_params.insert(k.into(), v);
+    }
+    let mut r2 = SimRenderer::new(&device, &two, N, N);
+    r2.seed(&device, &queue, &two);
+    let mut texels = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let l0 = init(0, x, y);
+            let l1 = init(1, x, y);
+            texels.extend_from_slice(&[l0[0], l0[1], l1[0], l1[1]]);
+        }
+    }
+    write(&r2, &texels, 0);
+    r2.run_steps(&device, &queue, &two, steps);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let f2 = read_rgba32f(&device, &queue, r2.field_texture(), N, N);
+
+    // The layered config: two Brusselators, 5-point, cubic both ways.
+    let mut layered = SimConfig::default();
+    layered.grid = SimGrid::Fixed { width: N, height: N };
+    layered.boundary = SimBoundary::Periodic;
+    layered.dt = 0.001;
+    layered.steps = 0;
+    let layer = |dx: f32, dy: f32| crate::config::sim::SimLayer {
+        model: "brusselator".into(),
+        model_params: [("feed_a", a), ("feed_b", b), ("diffusion_x", dx), ("diffusion_y", dy), ("stencil", 1.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        enabled: true,
+    };
+    layered.layers = vec![layer(d[0], d[1]), layer(d[2], d[3])];
+    let coupling = |from: usize, to: usize| crate::config::sim::SimCoupling {
+        from,
+        to,
+        form: crate::config::sim::SimCouplingForm::Cubic,
+        strength: q,
+        channels: 3,
+    };
+    layered.couplings = vec![coupling(1, 0), coupling(0, 1)];
+    let mut rl = SimRenderer::new(&device, &layered, N, N);
+    rl.seed(&device, &queue, &layered);
+    for l in 0..2u32 {
+        let mut texels = Vec::with_capacity((N * N * 4) as usize);
+        for y in 0..N {
+            for x in 0..N {
+                let v = init(l as usize, x, y);
+                texels.extend_from_slice(&[v[0], v[1], 0.0, 0.0]);
+            }
+        }
+        write(&rl, &texels, l);
+    }
+    rl.run_steps(&device, &queue, &layered, steps);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let l0 = read_rgba32f_layer(&device, &queue, rl.field_texture(), N, N, 0);
+    let l1 = read_rgba32f_layer(&device, &queue, rl.field_texture(), N, N, 1);
+
+    let n = (N * N) as f32;
+    let rms = |get: &dyn Fn(usize) -> (f32, f32)| -> f32 {
+        ((0..(N * N) as usize).map(|k| { let (x, y) = get(k); (x - y).powi(2) }).sum::<f32>() / n).sqrt()
+    };
+    let e = [
+        rms(&|k| (l0[k][0], f2[k][0])),
+        rms(&|k| (l0[k][1], f2[k][1])),
+        rms(&|k| (l1[k][0], f2[k][2])),
+        rms(&|k| (l1[k][1], f2[k][3])),
+    ];
+    let moved = rms(&|k| (f2[k][0], init(0, (k % N as usize) as u32, (k / N as usize) as u32)[0]));
+    println!(
+        "two Brusselator layers vs brusselator2 after {steps} steps: rms u1 {:.2e} v1 {:.2e} u2 {:.2e} v2 {:.2e}; the field moved {moved:.3} from its seed",
+        e[0], e[1], e[2], e[3]
+    );
+    assert!(moved > 0.01, "the run should have left its seed");
+    assert!(f2.iter().all(|c| c.iter().all(|v| v.is_finite())));
+    for (i, err) in e.iter().enumerate() {
+        assert!(*err < 1e-3, "channel {i} differs by rms {err:.2e}");
+    }
+}
+
+/// A flame whose one transform is a rotation by `theta` and nothing
+/// else: `linear` at weight 1 on a rotation affine.
+fn rotation_flame(theta: f32) -> crate::scene::transforms::Flame {
+    let mut flame = crate::scene::transforms::Flame::default();
+    flame.transforms.clear();
+    let mut t = crate::scene::transforms::Transform::default();
+    let (s, c) = theta.sin_cos();
+    // x' = a x + b y, y' = c x + d y (affine.wgsl): a rotation matrix.
+    t.a = c;
+    t.b = s;
+    t.c = -s;
+    t.d = c;
+    t.e = 0.0;
+    t.f = 0.0;
+    t.weight = 1.0;
+    t.variations.clear();
+    t.variations.insert("linear".into(), 1.0);
+    flame.transforms.push(t);
+    flame
+}
+
+/// Phase 3 of the simulation-layers plan: a transform that is a pure
+/// rotation, at weight 1, moves a layer exactly as the global warp's
+/// rotation does -- the same backward map through the same bilinear
+/// sampler -- to the warp mirror's tolerance.
+#[test]
+fn a_rotation_transform_equals_the_global_warps_rotation() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let theta = 0.3f32;
+    let settle = |cfg: &SimConfig| -> SimRenderer {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 200);
+        r
+    };
+    let mut base = lattice4_config("ring", N, 8);
+    // Through the global warp.
+    let mut r_warp = settle(&base);
+    let mut cfg_warp = base.clone();
+    cfg_warp.warp = crate::config::sim::SimWarp { rotation: theta, ..Default::default() };
+    r_warp.run_steps(&device, &queue, &cfg_warp, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let by_warp = read_rgba32f(&device, &queue, r_warp.field_texture(), N, N);
+    // Through the transform. The warp rotates the SOURCE by theta about
+    // the centre; the transform is applied to the point as the source,
+    // so the same matrix gives the same map.
+    base.use_transforms = true;
+    let mut r_map = settle(&base);
+    r_map.set_layer_transforms(&device, &queue, &rotation_flame(theta));
+    r_map.run_steps(&device, &queue, &base, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let by_map = read_rgba32f(&device, &queue, r_map.field_texture(), N, N);
+    let n = by_warp.len() as f32;
+    let rms = (by_warp.iter().zip(&by_map).map(|(a, b)| (a[0] - b[0]).powi(2)).sum::<f32>() / n).sqrt();
+    let worst = by_warp.iter().zip(&by_map).map(|(a, b)| (a[0] - b[0]).abs()).fold(0.0f32, f32::max);
+    // And both moved: against a run with no warp at all.
+    let mut r_still = settle(&base);
+    let mut cfg_still = base.clone();
+    cfg_still.use_transforms = false;
+    r_still.run_steps(&device, &queue, &cfg_still, 1);
+    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    let still = read_rgba32f(&device, &queue, r_still.field_texture(), N, N);
+    let moved = (still.iter().zip(&by_map).map(|(a, b)| (a[0] - b[0]).powi(2)).sum::<f32>() / n).sqrt();
+    println!("rotation by transform vs by warp: rms {rms:.2e}, worst {worst:.2e}; the map moved the layer by rms {moved:.3}");
+    assert!(moved > 0.05, "the transform should have moved the layer");
+    assert!(worst < 5e-5, "the transform's rotation differs from the warp's by up to {worst:.2e}");
+}
+
+/// Phase 4 of the simulation-layers plan: a stack of one Normal layer
+/// at opacity 1, carrying the single colouring's colouring, parameters
+/// and matte, is the single colouring's picture bit for bit -- on a
+/// plain channel colouring, on a matted growth model, and on a
+/// distance-reading colouring.
+#[test]
+fn a_single_normal_colour_layer_is_the_single_colouring() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 96;
+    let palette = test_palette(&device, &queue);
+    let mut cases: Vec<(String, SimConfig, u32)> = Vec::new();
+    {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.steps = 0;
+        cfg.seed = 5;
+        cases.push(("gray-scott channel".into(), cfg, 400));
+    }
+    {
+        let m = crate::sim::model_or_default("dla");
+        let pre = m.preset("cluster").or_else(|| m.presets.first()).unwrap();
+        let mut cfg = SimConfig::default();
+        cfg.model = "dla".into();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.boundary = SimBoundary::Clamp;
+        cfg.steps = 0;
+        cfg.seed = 5;
+        cfg.init = pre.init.unwrap_or(crate::config::sim::SimInit::Center);
+        for (k, v) in pre.params {
+            cfg.model_params.insert((*k).to_string(), *v);
+        }
+        if let Some(c) = pre.coloring {
+            cfg.coloring = c.into();
+            for (k, v) in pre.coloring_params {
+                cfg.coloring_params.insert((*k).to_string(), *v);
+            }
+        }
+        if let Some(mt) = pre.matte {
+            cfg.matte = mt;
+        }
+        cases.push(("dla matted".into(), cfg, 600));
+    }
+    {
+        let mut cfg = SimConfig::default();
+        cfg.grid = SimGrid::Fixed { width: N, height: N };
+        cfg.steps = 0;
+        cfg.seed = 5;
+        cfg.coloring = "distance".into();
+        cfg.coloring_params.insert("mode".into(), 1.0);
+        cfg.coloring_params.insert("scale".into(), 6.0);
+        cfg.matte = crate::config::sim::SimMatte {
+            channel: crate::config::sim::SimMatteChannel::Y,
+            cutoff: 0.15,
+            softness: 0.0,
+            invert: false,
+            edge: crate::config::sim::SimMatteEdge::Threshold,
+        };
+        cases.push(("distance colouring".into(), cfg, 400));
+    }
+    for (label, cfg, steps) in cases {
+        let render = |cfg: &SimConfig| -> Vec<[f32; 4]> {
+            let mut r = SimRenderer::new(&device, cfg, 2 * N, 2 * N);
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, steps);
+            r.color(&device, &queue, cfg, &palette);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            read_rgba32f(&device, &queue, r.output_texture(), 2 * N, 2 * N)
+        };
+        let single = render(&cfg);
+        let mut stacked = cfg.clone();
+        stacked.color_layers = vec![crate::config::sim::SimColorLayer {
+            source: 0,
+            gather: false,
+            coloring: cfg.coloring.clone(),
+            coloring_params: cfg.coloring_params.clone(),
+            matte: cfg.matte,
+            blend: crate::config::sim::SimBlend::Normal,
+            opacity: 1.0,
+            enabled: true,
+        }];
+        let stack = render(&stacked);
+        let differ = single.iter().zip(&stack).filter(|(a, b)| a != b).count();
+        let lit = single.iter().filter(|p| p[3] > 0.0 && p[0] > 0.01).count();
+        println!("{label}: {differ} pixels differ between the single colouring and a one-layer stack; {lit} lit");
+        assert!(lit > 100, "{label}: the fixture drew nothing");
+        assert_eq!(differ, 0, "{label}: a one-layer Normal stack must be the single colouring");
+    }
+}
+
+/// Each blend mode against a CPU evaluation of its formula on two
+/// read-back layers: a channel colouring of layer 0 below a channel
+/// colouring of layer 1 at opacity 0.7, in a two-layer Gray-Scott.
+#[test]
+fn blend_modes_match_a_cpu_evaluation() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let mut cfg = SimConfig::default();
+    cfg.grid = SimGrid::Fixed { width: N, height: N };
+    cfg.steps = 0;
+    cfg.seed = 7;
+    cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
+    let layer = |feed: f32| crate::config::sim::SimLayer {
+        model: "gray_scott".into(),
+        model_params: [("feed", feed), ("kill", 0.062)].into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        enabled: true,
+    };
+    cfg.layers = vec![layer(0.0545), layer(0.037)];
+    let colour = |source: usize| crate::config::sim::SimColorLayer {
+        source,
+        gather: false,
+        coloring: "channel".into(),
+        coloring_params: [("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        matte: Default::default(),
+        blend: crate::config::sim::SimBlend::Normal,
+        opacity: 1.0,
+        enabled: true,
+    };
+    let render = |cfg: &SimConfig| -> Vec<[f32; 4]> {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 800);
+        r.color(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.output_texture(), N, N)
+    };
+    let mut bottom_cfg = cfg.clone();
+    bottom_cfg.color_layers = vec![colour(0)];
+    let bottom = render(&bottom_cfg);
+    let mut top_cfg = cfg.clone();
+    top_cfg.color_layers = vec![colour(1)];
+    let top = render(&top_cfg);
+    assert!(bottom.iter().zip(&top).any(|(a, b)| a != b), "the two layers should differ");
+    let opacity = 0.7f32;
+    for blend in [
+        crate::config::sim::SimBlend::Normal,
+        crate::config::sim::SimBlend::Lighten,
+        crate::config::sim::SimBlend::Darken,
+        crate::config::sim::SimBlend::Multiply,
+        crate::config::sim::SimBlend::Screen,
+        crate::config::sim::SimBlend::Overlay,
+        crate::config::sim::SimBlend::Add,
+    ] {
+        let mut stacked = cfg.clone();
+        let mut t = colour(1);
+        t.blend = blend;
+        t.opacity = opacity;
+        stacked.color_layers = vec![colour(0), t];
+        let out = render(&stacked);
+        let mut worst = 0.0f32;
+        for k in 0..out.len() {
+            let (b, tp) = (bottom[k], top[k]);
+            let a = (tp[3] * opacity).clamp(0.0, 1.0);
+            let want: [f32; 4] = if b[3] <= 0.0 {
+                [tp[0], tp[1], tp[2], a]
+            } else {
+                let f = |bc: f32, tc: f32| -> f32 {
+                    match blend {
+                        crate::config::sim::SimBlend::Normal => tc,
+                        crate::config::sim::SimBlend::Lighten => bc.max(tc),
+                        crate::config::sim::SimBlend::Darken => bc.min(tc),
+                        crate::config::sim::SimBlend::Multiply => bc * tc,
+                        crate::config::sim::SimBlend::Screen => 1.0 - (1.0 - bc) * (1.0 - tc),
+                        crate::config::sim::SimBlend::Overlay => {
+                            if bc < 0.5 { 2.0 * bc * tc } else { 1.0 - 2.0 * (1.0 - bc) * (1.0 - tc) }
+                        }
+                        crate::config::sim::SimBlend::Add => (bc + tc).min(1.0),
+                    }
+                };
+                let out_a = a + b[3] * (1.0 - a);
+                let mut w = [0.0f32; 4];
+                for c in 0..3 {
+                    let blended = tp[c] + (f(b[c], tp[c]) - tp[c]) * b[3];
+                    w[c] = (blended * a + b[c] * b[3] * (1.0 - a)) / out_a.max(1e-6);
+                }
+                w[3] = out_a;
+                w
+            };
+            for c in 0..4 {
+                worst = worst.max((out[k][c] - want[c]).abs());
+            }
+        }
+        println!("blend {}: worst difference {worst:.2e}", blend.name());
+        assert!(worst < 2e-5, "blend {} differs from its formula by {worst:.2e}", blend.name());
+    }
+}
+
+/// Four `turing` layers carrying a `lattice4` preset: each layer that
+/// field's parameters, and each non-zero off-diagonal of the matrix a
+/// Signal coupling at its strength.
+fn turing_layers_of(lattice: &SimConfig) -> SimConfig {
+    use crate::config::sim::{SimCoupling, SimCouplingForm, SimLayer};
+    let get = |k: &str| lattice.model_params.get(k).copied().unwrap();
+    let names = ["a", "b", "c", "d"];
+    let mut cfg = lattice.clone();
+    cfg.model = "turing".into();
+    cfg.model_params.clear();
+    cfg.layers = (0..4)
+        .map(|i| SimLayer {
+            model: "turing".into(),
+            model_params: [
+                ("self", get(&format!("k{}{}", names[i], names[i]))),
+                ("radius", get("radius")),
+                ("ratio", get("ratio")),
+                ("amount", get("amount")),
+                ("noise", get("noise")),
+                ("gain", get("gain")),
+                ("decay", get("decay")),
+                ("quadratic", get("quadratic")),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+            enabled: true,
+        })
+        .collect();
+    cfg.couplings.clear();
+    for to in 0..4 {
+        for from in 0..4 {
+            if to == from {
+                continue;
+            }
+            let k = get(&format!("k{}{}", names[to], names[from]));
+            if k != 0.0 {
+                cfg.couplings.push(SimCoupling { from, to, form: SimCouplingForm::Signal, strength: k, channels: 1 });
+            }
+        }
+    }
+    cfg
+}
+
+/// Phase 6 of the simulation-layers plan: four `turing` layers under
+/// Signal couplings are the coupled Turing lattice. The ring preset
+/// with its eight couplings, and the independent preset with none,
+/// against the `lattice4` model from the lattice's own seed (the init
+/// mask's noise is salted by layer, so the layers' seed is copied in
+/// rather than drawn), the step's fluctuations on and matching by
+/// construction, 200 steps; the only difference left is the order the
+/// drive is summed in, and the tolerance is what that costs.
+#[test]
+fn four_turing_layers_are_the_lattices_ring() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let steps: u32 = std::env::var("TU_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    // Measured: ring 5.7e-7 worst at 200 steps (6.5e-6 at 2,000, the
+    // cycle carrying the rounding round), independent 1.2e-7.
+    for (preset, tol) in [("ring", 4e-6f32), ("independent", 1e-6)] {
+        let lattice = lattice4_config(preset, N, 8);
+        let layered = turing_layers_of(&lattice);
+        assert_eq!(layered.couplings.len(), if preset == "ring" { 8 } else { 0 });
+        // The lattice, seeded and read back before it runs.
+        let mut r_l = SimRenderer::new(&device, &lattice, N, N);
+        r_l.seed(&device, &queue, &lattice);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let seed = read_rgba32f(&device, &queue, r_l.field_texture(), N, N);
+        r_l.run_steps(&device, &queue, &lattice, steps);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let a = read_rgba32f(&device, &queue, r_l.field_texture(), N, N);
+        // The layers, each slice given the lattice's field.
+        let mut r_t = SimRenderer::new(&device, &layered, N, N);
+        r_t.seed(&device, &queue, &layered);
+        for field in 0..4u32 {
+            let texels: Vec<f32> = seed.iter().flat_map(|c| [c[field as usize], 0.0, 0.0, 0.0]).collect();
+            queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: r_t.field_texture(),
+                    mip_level: 0,
+                    origin: Origin3d { x: 0, y: 0, z: field },
+                    aspect: TextureAspect::All,
+                },
+                bytemuck::cast_slice(&texels),
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(N * 16), rows_per_image: Some(N) },
+                Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+            );
+        }
+        r_t.run_steps(&device, &queue, &layered, steps);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let mut worst = 0.0f32;
+        let mut sq = 0.0f64;
+        let mut amp = 0.0f32;
+        for field in 0..4 {
+            let b = read_rgba32f_layer(&device, &queue, r_t.field_texture(), N, N, field as u32);
+            if std::env::var("TU_DUMP").is_ok() {
+                println!("field {field}: lattice {:?} layer {:?}", &a[..3].iter().map(|c| c[field]).collect::<Vec<_>>(), &b[..3].iter().map(|c| c[0]).collect::<Vec<_>>());
+            }
+            for (x, y) in a.iter().zip(&b) {
+                let d = (x[field] - y[0]).abs();
+                worst = worst.max(d);
+                sq += (d as f64).powi(2);
+                amp = amp.max(x[field].abs());
+            }
+        }
+        let rms = (sq / (4.0 * (N * N) as f64)).sqrt();
+        println!("{preset}: four turing layers vs lattice4 after {steps} steps: rms {rms:.2e}, worst {worst:.2e}, amplitude {amp:.3}");
+        assert!(amp > 0.3, "{preset}: the lattice did nothing");
+        assert!(worst < tol, "{preset}: worst difference {worst:.2e} exceeds {tol:.0e}");
+
+        // And coloured: the lattice's `species` against one gathered
+        // colour layer of the four `turing` layers.
+        let palette = test_palette(&device, &queue);
+        let mut lattice_c = lattice.clone();
+        lattice_c.coloring = "species".into();
+        lattice_c.coloring_params = [("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        r_l.color(&device, &queue, &lattice_c, &palette);
+        let mut layered_c = layered.clone();
+        layered_c.color_layers = vec![crate::config::sim::SimColorLayer {
+            source: 0,
+            gather: true,
+            coloring: "species".into(),
+            coloring_params: lattice_c.coloring_params.clone(),
+            matte: Default::default(),
+            blend: crate::config::sim::SimBlend::Normal,
+            opacity: 1.0,
+            enabled: true,
+        }];
+        r_t.color(&device, &queue, &layered_c, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let ca = read_rgba32f(&device, &queue, r_l.output_texture(), N, N);
+        let cb = read_rgba32f(&device, &queue, r_t.output_texture(), N, N);
+        let worst_c = ca.iter().zip(&cb).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+        let lit = ca.iter().filter(|p| p[3] > 0.0 && (p[0] + p[1] + p[2]) > 0.05).count();
+        println!("{preset}: species of the lattice vs a gathered colour layer: worst {worst_c:.2e}, {lit} lit");
+        assert!(lit > 1000, "{preset}: the colouring drew nothing");
+        // Measured 6.3e-7 (ring) and 1.2e-7 (independent).
+        assert!(worst_c < 1e-5, "{preset}: the gathered colouring differs by {worst_c:.2e}");
+    }
+}

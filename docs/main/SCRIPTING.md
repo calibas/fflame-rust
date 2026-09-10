@@ -246,6 +246,74 @@ Log-calibrated values under which escape output renders black.
 | `escape.params()` | array | The current formula's parameter names. |
 | `escape.coloring_params()` | array | The current coloring's parameter names. |
 
+## `sim` — simulation mode
+
+Neighbour-coupled simulations: reaction–diffusion, cellular automata,
+growth. **Touching `sim` at all switches the config to simulation
+rendering** — and resets tone mapping to Linear with exposure and gamma
+at 1, for the same reason `escape` does: flame presets carry
+Log-calibrated values under which a unit-range field renders black.
+
+Two things behave unlike the rest of this API, and both are the point
+of the mode rather than quirks:
+
+* **The grid is not the output size.** A simulation's behaviour depends
+  on its cell count — Gray–Scott at 256² and 2048² are different
+  pictures, not one picture at two resolutions — so `sim.grid(w, h)`
+  sets a cell count that renders identically at any export size, and
+  `sim.grid_viewport(scale)` binds it to the window instead.
+* **`steps` is a contract, not a hint.** A still is the state at
+  exactly that many steps from the seed, which is what makes a picture
+  of a model that never settles reproducible at all.
+
+| call | returns | what it does |
+|---|---|---|
+| `sim.enter()` | — | Switch to simulation mode without changing anything else. Every other call below does this implicitly. |
+| `sim.model(name)` | — | Picks the model. An unknown name throws and lists where to look. Changing model **clears the model parameters**, which belong to the model that declared them. |
+| `sim.models()` | array | Every model name, so a script can iterate the registry instead of copying a list out of these docs. |
+| `sim.coloring(name)` | — | Picks the colouring; likewise clears the colouring parameters. |
+| `sim.colorings()` | array | Every colouring name. |
+| `sim.param(name, value)` | — | A model parameter. |
+| `sim.coloring_param(name, value)` | — | A colouring parameter. |
+| `sim.preset(name)` | — | Applies a named parameter set **and its measured step count** — the numbers without the steps show the pattern half-formed. Throws if the current model has no such preset. |
+| `sim.grid(w, h)` | — | A fixed cell count, 16–8192 per side. Reproducible at any output size: the resolve pass scales the coloured grid to the export, letterboxed to the grid's aspect. |
+| `sim.grid_viewport(scale)` | — | Bind the grid to the output instead: `round(output × scale)` cells, 0.125–4. Fills the window, and **re-simulates** at a different export size. |
+| `sim.seed(n)` | — | Seed for the initial field and every stochastic model. With the model, the init and the step count, this is what makes a still reproducible. |
+| `sim.init(kind)` | — | The initial field: `"noise"`, `"blob"`, `"blobs"`, `"ring"`, `"line"` or `"center"`. The shape's SIZE matters — measured, 12-cell blobs die at Gray–Scott's mitosis parameters where 24-cell blobs survive. |
+| `sim.steps(n)` | — | How many steps a still is. **This is also the animation target that drives the run** — see below. |
+| `sim.steps_per_frame(n)` | — | Free-running speed for the panel's Run button only. Not an animation target. |
+| `sim.dt(x)` | — | Model time per step, clamped to the stability bound. Too large and the explicit solver diverges. |
+| `sim.boundary(name)` | — | What a step reads outside the grid: `"periodic"` (wraps, no edge artifacts), `"clamp"`, `"zero"` (a sink, for growth models) or `"mirror"`. |
+
+### Animating the simulation itself
+
+The `Sim.Steps` track is the run. The state at time *t* is
+`round(track(t))` steps from the seed, so a linear ramp is the
+simulation progressing at constant speed, easing it gives slow-in and
+slow-out **on the simulation**, and a hold gives a freeze-frame that
+still animates colour and parameters.
+
+That is deliberately a step COUNT rather than a rate: it keeps a frame
+a function of its time, the way every other animatable quantity here
+is. A per-frame rate would make the same project render differently at
+30 and 60 fps, and would make in-app playback diverge from export.
+
+A decreasing track costs a reseed and a re-run — the rule cannot be
+stepped backwards.
+
+```rhai
+sim.model("gray_scott");
+sim.preset("coral");        // parameters and their measured step count
+sim.grid(512, 512);
+sim.init("blobs");
+sim.seed(7);
+
+// Animate the run: 0 to 8000 steps over the timeline.
+animate("Sim.Steps", [[0.0, 0.0], [10.0, 8000.0]]);
+// ...while the pattern class drifts underneath it.
+animate("Sim.ModelParam.feed", [[0.0, 0.0545], [10.0, 0.030]]);
+```
+
 ### Why the centre is a string
 
 It is the deep-zoom payload. Zoom 60 resolves detail around 10⁻¹⁸ of a

@@ -1,9 +1,31 @@
 # Simulation Mode — integration checklist
 
-**Status:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](simulation-fractals.md) (master plan),
+**Status: ARCHIVED 2026-09-09 — worked through.** Every row that
+describes engine, config, UI, export or API integration is done. Kept
+as the map of what a render mode has to touch — it is the document to
+re-read before adding a FOURTH one, and its **gap** marks (things
+escape got wrong that the new mode should not copy) are the useful
+part.
+
+**What it flagged that is now fixed:** CLI export routing by render
+mode rather than by flame histogram size (§7,
+`src/app/export.rs:192`); loading a `.fflame` switching to the mode's
+workspace (§8, `src/app/mod.rs:1450`); the render-mode bool that made
+"3D" read selected in escape mode (§8).
+
+**What it flagged that is still open**, all pre-existing with escape
+and tracked in the master plan's §5 tail: the online browser's
+render-mode filter has no non-flame option (§8); `es` / `ja` /
+`zh-CN` carry no keys for either mode (§12); and the topic-doc row
+(§13) is only partly done — UI, EXPORT, SCRIPTING and ARCHITECTURE
+cover simulation, RENDERER, CONFIG, BUFFERS, SHADERS, COLOR, RELEASE,
+WASM and TESTING-GUIDE do not, and CLAUDE.md still has no `src/sim/`
+entry beside `src/escape/`.
+
+**Was:** Planning, 2026-09-01. No code. Companion to
+[simulation-fractals.md](../../projects/simulation-fractals.md) (master plan),
 [simulation-pipeline.md](simulation-pipeline.md) (GPU design) and
-[simulation-catalog.md](simulation-catalog.md) (models and sources).
+[simulation-catalog.md](../../projects/simulation-catalog.md) (models and sources).
 
 This is the file-by-file list of everything a third render mode has to
 touch, derived by mapping every place `RenderMode::Escape` reaches
@@ -82,11 +104,12 @@ Mirror `EscapeConfig`'s serde discipline (every field `default`, `skip_serializi
 | `grid` | `SimGrid` enum | `Viewport { scale: 1.0 }` | `Fixed { width, height }` or `Viewport { scale }` — pipeline §7; serde as `{"fixed": [w, h]}` / `{"viewport": scale}` |
 | `seed` | `u64` | 1 | init RNG |
 | `init` | `SimInit` enum | `Noise` | `Noise{amplitude}`, `Blob{radius}`, `Blobs{count,radius}`, `Ring`, `Line`, `Center` (growth seeds) |
-| `steps` | `u32` | 2000 | export/settle contract: exact step count from seed |
+| `steps` | `u32` | 2000 | export/settle contract: exact step count from seed. **Shown as MAX STEPS and enforced in the app since 2026-09-06**: a running simulation stops on the step an export stops on, mid-frame if the batch would overshoot, and pauses rather than ends. **0 = no cap** (free-run; an export then renders the seed) |
 | `steps_per_frame` | `u32` | 4 | interactive stepping and video export |
 | `dt` | `f32` | 1.0 | model time step where the model has one |
 | `boundary` | `SimBoundary` enum | model default | `Periodic`, `Clamp`, `Zero`, `Mirror` |
-| `warp` | `SimWarp` struct | identity | `zoom`, `rotation`, `pan`, `flow` (pipeline §4.1); `is_default` skip |
+| `warp` | `SimWarp` struct | identity | `zoom`, `rotation`, `pan`, `flow`, `filter` (pipeline §4.1); `is_default` skip. **Built 2026-09-05** |
+| `matte` | `SimMatte` struct | off | `channel`, `cutoff`, `softness`, `invert` — which cells are figure and which take the background colour, multiplied into the colouring's coverage in `sim_shade`. **Built 2026-09-05**, not in the original plan |
 | `model_params` | `BTreeMap<String, f32>` | empty | packed by name into slots, exactly `pack_params` |
 | `coloring_params` | `BTreeMap<String, f32>` | empty | same |
 | `agents` | `u32` | 0 | agent count for agent models (model default) |
@@ -100,6 +123,13 @@ Mirror `EscapeConfig`'s serde discipline (every field `default`, `skip_serializi
 Variants (all → a new `UpdateType::SimRerender`; a second `UpdateType::SimReseed` for the fields that restart the run — `SimGridMode`, `SimGridWidth`, `SimGridHeight`, seed, init, model, boundary; and a third, `UpdateType::SimResample`, for `SimGridScale`, which resamples the running field into the new grid instead of restarting — pipeline §7):
 
 `SimModel`, `SimColoring`, `SimGridMode`, `SimGridWidth`, `SimGridHeight`, `SimGridScale`, `SimSeed`, `SimInitKind`, `SimInitAmplitude`, `SimInitRadius`, `SimInitCount`, `SimSteps`, `SimStepsPerFrame`, `SimDt`, `SimBoundary`, `SimWarpZoom`, `SimWarpRotation`, `SimWarpPanX`, `SimWarpPanY`, `SimWarpFlow`, `SimAgents`, `SimUpscale`, `SimDownscale`, `SimModelParam { param }`, `SimColoringParam { param }`.
+
+**As built, 2026-09-05:** the warp shipped with a sixth path,
+`SimWarpFilter` (bilinear or nearest — the spec had no filter, and a
+bilinear resample every step erases a pattern over thousands of them),
+and the matte added four more, `SimMatteChannel`, `SimMatteCutoff`,
+`SimMatteSoftness` and `SimMatteInvert`. `SimAgents` is not built: the
+agent count comes from the model's own parameters.
 
 For each, the five tables escape fills: Display (`delta.rs:834-867`), i18n key (`:1072-1105`, `history.param.sim_*` — **and put the keys in `locales/en.yml`; escape's 14 shading keys and `escape_downsample` are missing there today, gap**), string key (`:2659-2692`, `Sim.Model` … `Sim.ModelParam.{param}`), parse (`:2856-2895`), and `json_to_config_value` (`:3452-3504`) for the animatable ones: every `f32`/`u32` field is animatable (`Float`/`UInt`); `SimModel`, `SimColoring`, `SimBoundary`, `SimInitKind`, `SimGridMode`, `SimUpscale`, `SimDownscale` are not.
 
@@ -177,9 +207,57 @@ Phase 1: sim ignores drag/wheel/pinch (`:460-513`, `:1442`). The overlay at `:12
 
 `src/animation/` has no mode-specific code; tracks address `ConfigPath` string keys, so `Sim.*` keys work through `to_string_key`/`from_string_key` unchanged.
 
-- `src/ui/target_selector.rs`: `TargetCategory::Simulation` (`:44`, label `:59`, id `:74`, gate `:258-264`) and `get_sim_items` next to `get_escape_items` `:310-348`: `SimStepsPerFrame`, `SimDt`, `SimWarpZoom`, `SimWarpRotation`, `SimWarpPanX/Y`, `SimWarpFlow`, plus the active model's and colouring's params. **Do not** offer `SimSeed`, `SimGridMode`, `SimGridWidth`/`Height` (each keyframe would reseed) or `SimGridScale` (each keyframe would resample).
+- `src/ui/target_selector.rs`: `TargetCategory::Simulation` (`:44`, label `:59`, id `:74`, gate `:258-264`) and `get_sim_items` next to `get_escape_items` `:310-348`: **`SimStepCount` first — it is the one that animates the simulation itself** — then `SimDt`, `SimWarpZoom`, `SimWarpRotation`, `SimWarpPanX/Y`, `SimWarpFlow`, plus the active model's and colouring's params. **Do not** offer `SimSeed`, `SimGridMode`, `SimGridWidth`/`Height` (each keyframe would reseed), `SimGridScale` (each keyframe would resample), or `SimStepsPerFrame` (it is the interactive Run speed; the timeline uses `SimStepCount`).
 - `src/animation/export.rs:751-786` — `apply_config_value` arms for every animatable `Sim*` path (with the same NaN/clamp discipline as `EscapeZoomLog2` at `:767-772`).
-- `src/animation/export.rs:1990-2145` — the escape per-frame settle loop is the template, but the semantics differ: **the simulation is stateful across frames**. Frame *n* of a video steps `steps_per_frame` more from frame *n−1*'s state; a scrub backwards must re-run from the seed. The exporter keeps one `SimRenderer` for the whole export and only reseeds when a reseed-class path changes.
+- `src/animation/export.rs:1990-2145` — the escape per-frame settle loop is the template, and **the structure already supports a stateful generator**: `escape_renderer` is declared outside the frame loop and created once with `get_or_insert_with`, so its orbit cache carries frame to frame. A `sim_renderer` sits in exactly the same place. Verified against the code 2026-09-04, not just assumed.
+
+  Per frame the order is: evaluate the tracks → `apply_animation_values` into a fresh `frame_config` → `renderer.load_config` for the shared palette/tonemap tail → advance and colour the sim. Keyframed model parameters therefore take effect **before** the step that frame runs, which is what makes "animate F and k while the pattern evolves" work rather than just cross-fading two stills.
+
+### The step count must come from animation TIME, not from frame count
+
+**Decided 2026-09-04.** The obvious design — advance `steps_per_frame`
+on every rendered frame — makes the simulation frame-rate dependent,
+and that breaks three things the rest of the animation system
+guarantees:
+
+- The same project exported at 30 fps and 60 fps gives **different
+  pictures at the same timestamp**: twice the frames means twice the
+  steps. Every other animatable quantity in this app is a function of
+  time and does not care about fps.
+- In-app playback advances by wall-clock `delta_time`
+  (`app/animation_update.rs:59`) while export advances by
+  `frame / fps` (`export.rs:472`). A frame-counted simulation would
+  make the preview and the export diverge, and the preview would differ
+  again on a slower machine.
+- Seeking is undefined. A track evaluated at time *t* has one value; a
+  frame-counted simulation has whatever history the playhead happened
+  to take to get there.
+
+So the timeline drives a **cumulative step count**, `Sim.StepCount`,
+which is an ordinary animatable float: the simulation state at time *t*
+is `round(track(t))` steps from the seed, full stop. That restores the
+property the animation system assumes everywhere else — a frame is a
+function of its time — and it is strictly more expressive than a rate,
+because easing the track gives slow-in/slow-out on the *simulation*
+and a hold gives a freeze-frame that keeps animating colour and warp.
+
+- Default track for a new animation: a linear ramp `0 → sim.steps` over
+  the duration, i.e. constant speed, which is what a rate would have
+  given.
+- Advancing is incremental and cheap: the renderer already holds
+  `step_index`, so a frame runs `target − step_index` steps.
+- **Going backwards costs a reseed and a re-run**, because the rule is
+  not invertible. That is the documented price of scrubbing back, the
+  timeline shows a "re-simulating" state, and it is why the track is
+  the right place for it: the exporter can see a decrease coming
+  instead of discovering it.
+- `steps_per_frame` stays in the config, but it means only what it says
+  for the interactive **Run** button — free-running speed when no
+  timeline is driving. It is not an animation target.
+
+The exporter keeps one `SimRenderer` for the whole export and reseeds
+only when a reseed-class path changes or the step count moves
+backwards.
 - `src/app/animation_update.rs:44-59` — playback in the app: same stateful rule; no settle-then-jump.
 - Built-in script `assets/scripts/modifiers/zoom_dive.rhai` style: a `sim_sweep.rhai` that keyframes F/k across a Pearson row is the obvious shipped example.
 

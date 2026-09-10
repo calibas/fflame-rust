@@ -37,7 +37,7 @@ use super::reference::OrbitCache;
 /// pixel. Whether a given view can actually have it is decided by the
 /// render-pixel budget in [`EscapeRenderer::resize`], which reduces
 /// the factor rather than failing.
-pub const MAX_SUPERSAMPLE: u32 = 8;
+pub use crate::config::escape::MAX_SUPERSAMPLE;
 
 pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 
@@ -5941,6 +5941,53 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             self.direct_last = None;
         }
         done
+    }
+
+    /// Bytes of GPU memory this renderer is holding.
+    ///
+    /// The same list `destroy` frees, so the two cannot drift: what
+    /// this reports is exactly what dropping the renderer gives back.
+    /// Textures are computed from their extent and format block size;
+    /// buffers report their own size. Approximate in the sense that a
+    /// driver may pad an allocation, never in the sense of guessing
+    /// which allocations exist.
+    pub fn resident_bytes(&self) -> u64 {
+        fn tex(t: &Texture) -> u64 {
+            let block = t.format().target_pixel_byte_cost().unwrap_or(4) as u64;
+            let s = t.size();
+            block * s.width as u64 * s.height as u64 * s.depth_or_array_layers as u64
+        }
+        let mut n = tex(&self.output_texture) + self.params_buffer.size();
+        n += self.perturb_params_buffer.size();
+        n += self.perturb_params_pool.iter().map(|b| b.size()).sum::<u64>();
+        for b in [
+            &self.orbit_buffer,
+            &self.orbit_e_buffer,
+            &self.orbit_r2_buffer,
+            &self.orbit_lo_buffer,
+            &self.iter_state_buffer,
+            &self.bla_buffer,
+            &self.bla_dummy,
+            &self.results_buffer,
+            &self.results_dummy,
+            &self.accum_params,
+        ] {
+            if let Some(b) = b {
+                n += b.size();
+            }
+        }
+        if let Some(t) = &self.final_texture {
+            n += tex(t);
+        }
+        for pair in [&self.accum, &self.height_blur] {
+            if let Some((a, _, b, _)) = pair {
+                n += tex(a) + tex(b);
+            }
+        }
+        if let Some(ts) = &self.timestamps {
+            n += ts.resolve.size() + ts.staging.size();
+        }
+        n
     }
 
     /// Free GPU memory explicitly — on WebGPU `Drop` frees nothing.

@@ -674,7 +674,8 @@ impl FlameRenderer {
                 // the app and render_with branch before this point. If
                 // one is mis-routed anyway, render it as 2D rather than
                 // panicking inside a GPU pass.
-                crate::scene::transforms::RenderMode::Escape => 0,
+                crate::scene::transforms::RenderMode::Escape
+                | crate::scene::transforms::RenderMode::Simulation => 0,
             },
             splat_size: 1.0,
             zoom,
@@ -1816,7 +1817,8 @@ impl FlameRenderer {
                 // the app and render_with branch before this point. If
                 // one is mis-routed anyway, render it as 2D rather than
                 // panicking inside a GPU pass.
-                crate::scene::transforms::RenderMode::Escape => 0,
+                crate::scene::transforms::RenderMode::Escape
+                | crate::scene::transforms::RenderMode::Simulation => 0,
             },
             splat_size: 1.0,
             zoom: config.zoom,
@@ -1881,7 +1883,7 @@ impl FlameRenderer {
         // would otherwise render the same flame with different Levels
         // settings.
         self.update_tonemap(queue, config.tonemap_mode, config.highlight_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.white_level, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false,
-            config.levels_enabled, config.levels_low, config.levels_high, config.levels_gamma);
+            config.effective_levels_enabled(), config.levels_low, config.levels_high, config.levels_gamma);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers + reset ALL iteration counters
@@ -2025,7 +2027,8 @@ impl FlameRenderer {
                 // the app and render_with branch before this point. If
                 // one is mis-routed anyway, render it as 2D rather than
                 // panicking inside a GPU pass.
-                crate::scene::transforms::RenderMode::Escape => 0,
+                crate::scene::transforms::RenderMode::Escape
+                | crate::scene::transforms::RenderMode::Simulation => 0,
             },
             splat_size: 1.0,
             zoom,
@@ -2333,7 +2336,8 @@ impl FlameRenderer {
                 // the app and render_with branch before this point. If
                 // one is mis-routed anyway, render it as 2D rather than
                 // panicking inside a GPU pass.
-                crate::scene::transforms::RenderMode::Escape => 0,
+                crate::scene::transforms::RenderMode::Escape
+                | crate::scene::transforms::RenderMode::Simulation => 0,
             },
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
@@ -2507,7 +2511,7 @@ impl FlameRenderer {
             levels_high: config.levels_high,
             levels_gamma: config.levels_gamma,
             highlight_mode: self.highlight_mode,
-            levels_enabled: if config.levels_enabled { 1 } else { 0 },
+            levels_enabled: if config.effective_levels_enabled() { 1 } else { 0 },
             _pad_levels: [0; 2],
         };
         self.buffers.update_tonemap_params(queue, &params);
@@ -2699,7 +2703,8 @@ impl FlameRenderer {
                 // the app and render_with branch before this point. If
                 // one is mis-routed anyway, render it as 2D rather than
                 // panicking inside a GPU pass.
-                crate::scene::transforms::RenderMode::Escape => 0,
+                crate::scene::transforms::RenderMode::Escape
+                | crate::scene::transforms::RenderMode::Simulation => 0,
             },
             perspective_strength: self.perspective_strength,
             depth_density_compensation: self.depth_density_compensation,
@@ -2818,8 +2823,16 @@ impl FlameRenderer {
 
     /// Check if path features (PathMap color mode or path filters) require buffers
     /// Returns true if path buffers should be enabled
+    ///
+    /// Never in a non-flame mode. Nothing writes the path buffer there
+    /// -- the chaos game does not run -- so the tonemap's PathMap
+    /// branch reads zeros and produces the same pixels as Palette,
+    /// while the buffer costs 58 MB at 1080p and the shader is
+    /// recompiled with path features for nothing.
     pub fn needs_path_features(&self) -> bool {
-        self.color_mode == crate::scene::palette::ColorMode::PathMap || !self.path_filters.is_empty()
+        !self.current_render_mode.is_non_flame()
+            && (self.color_mode == crate::scene::palette::ColorMode::PathMap
+                || !self.path_filters.is_empty())
     }
 
     /// Check if path buffers are currently allocated

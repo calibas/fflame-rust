@@ -15,6 +15,7 @@
   - [VARIATIONS.md](docs/main/VARIATIONS.md) - Variation system, registry
   - [COLOR.md](docs/main/COLOR.md) - Color modes, palette, histogram
   - [CONFIG.md](docs/main/CONFIG.md) - FractalConfig, presets, undo/redo
+  - [SIMULATION.md](docs/main/SIMULATION.md) - Simulation engine: models, the grid, layers, the resolve
   - [EXPORT.md](docs/main/EXPORT.md) - PNG export, metadata, CLI batch mode
   - [SCRIPTING.md](docs/main/SCRIPTING.md) - Rhai script API reference — every callable function (kept honest by a staleness test)
   - [SCRIPTING-GUIDE.md](docs/main/SCRIPTING-GUIDE.md) - Rhai language guide: syntax, running scripts, worked examples (CLI-verified)
@@ -61,6 +62,7 @@
   - `src/storage/` - Local storage: SystemSettings (settings.rs), cross-platform backend, thumbnail cache, custom palettes
   - `src/resources/` - HTTP/filesystem resource fetching (lazy palette packs; WASM fetch API)
   - `src/escape/` - **Escape-time fractal system** (Mandelbrot and kin; `docs/projects/escape-time-fractals.md`): FormulaDef/ColoringDef registries mirroring the variation system (inline WGSL, append-only, feature flags), marker-splicing assembler, EscapeRenderer (one compute dispatch into an Rgba32Float image in flame-accumulator format, consumed by the shared tonemap/effects tail). Dispatch lives inside `render_with` (CLI/thumbnails/video inherit); the app holds a lazy `escape_renderer` (event-driven, `escape_dirty`). `RenderMode::Escape`; EscapeConfig center is exact decimal strings + `zoom_log2`; entering escape defaults tonemap Linear + resets exposure/gamma (flame presets carry Log-calibrated values that render Linear output invisibly). Online sync supports escape configs (`ApiRenderMode::Escape`): stored AS FLAMES on the same endpoints, told apart by `render_mode` alone, so `transform_count` is 0 and `variation_names` empty for them legitimately
+  - `src/sim/` - **Simulation system** (the third render mode; `docs/main/SIMULATION.md`, catalogue in `docs/projects/simulation-catalog.md`): a GRID of `vec4<f32>` cells stepped by a neighbour-coupled rule — reaction-diffusion, cellular automata, aggregation, growth. `ModelDef`/`SimColoringDef` registries mirroring the variation system (inline WGSL, append-only, feature flags); a marker-splicing assembler that splices one model and one colouring into a template and splices the BOUNDARY rule rather than branching on it; `SimRenderer` owning the field (an `Rgba32Float` texture ARRAY, one slice per layer, ping-ponged) and the step counter. 31 models, 11 colourings. Dispatch lives inside `render_with` (CLI/thumbnails/video/gallery inherit); the app holds a lazy `sim_renderer`. `RenderMode::Simulation`. **The picture is the state of a run at a step count** — `(model, params, seed, init, steps)` is in the config and the PNG metadata, so a still is reproducible, and there is no notion of "converged". The rule is NOT invertible, so reaching a lower step count means reseeding and re-running: that is why `sim.steps` is a CAP to the panel's transport and a TARGET to the animation timeline, and why a backward step track is held rather than played (`docs/main/UI.md`). Several layers can be coupled (`Signal` couplings are pre-rule via `sim_drive`, everything else post-rule), and `use_transforms` makes the flame's transforms the layers' per-step maps — the one place a simulation reaches into the variation registry
   - `src/flame_xml.rs` - Apophysis/JWildfire `.flame` XML import/export
   - `src/i18n.rs` - rust-i18n integration; translations in `locales/*.yml` (en, es, ja, zh-CN)
 
@@ -73,7 +75,7 @@
 
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations
-- **Render Modes**: 2D (classic) and 3D (pseudo-3D with depth); single `main_template.wgsl` specialized via the RENDER_3D template flag
+- **Render Modes**: four — `TwoD`, `ThreeD`, `Escape`, `Simulation`. The two flame modes share `main_template.wgsl`, specialized via the RENDER_3D template flag; the other two are different generators (`src/escape/`, `src/sim/`) that hand `render_with` an `Rgba32Float` image in the accumulator's layout and share everything from the tonemap on. `src/ui/render_mode.rs` owns the mode vocabulary and `src/ui/visibility.rs` owns what each mode makes available — add a case there, never a `matches!(render_mode, ...)` in a panel
 - **Variations**: registry holds 500+ ported variations (flam3 / Apophysis / JWildfire plugins)
   - Definitions are `static VariationDef`s in `src/variations/defs/*.rs` with inline WGSL (2D + 3D bodies), parameters, and feature flags
   - Up to `MAX_VARIATIONS_PER_FLAME = 100` active per flame; the shader builder compiles only the active set, with a **per-flame local index map** (no global fixed indices)
@@ -95,9 +97,10 @@
 - **Pan/rotation**: both render modes compose pan → rotate → zoom (Apophysis convention); all pan inputs share `FractalConfig::screen_delta_to_pan_frame`
 
 ### UI Architecture (egui_dock)
-- **Docking system**: all UI is dockable panels (`src/ui/workspace.rs` defines `PanelType` — 25+ panels)
-- Main editing panels: Fractal Viewport, Transforms, Triangle Editor, View, Colors/Tone Mapping, Palette Editor/Library, Fractal Browser, History, Animation, Effects, Xaos Editor, Random Generator, Variations, Subflames
-- **Menu bar**: File, Edit, View, Fractal, Rendering, Window, Help (`src/ui/menu_bar.rs`)
+- **Docking system**: all UI is dockable panels (`src/ui/workspace.rs` defines `PanelType` — 29 panels)
+- Main editing panels: Fractal Viewport, Transforms, Triangle Editor, View, Colors/Tone Mapping, Palette Editor/Library, Fractal Browser, History, Animation, Effects, Xaos Editor, Random Generator, Variations, Subflames, Escape Fractal, Simulation
+- **Menu bar**: File, Edit, View, Mode, Rendering, Window, Help (`src/ui/menu_bar.rs`); `src/ui/compact_menu.rs` is the mobile equivalent
+- **The render mode gates the UI.** `src/ui/render_mode.rs` is the only writer of `ConfigPath::RenderMode` (a source-scanning test enforces it) and holds the mode→workspace and engine-lifetime policy; `src/ui/visibility.rs` is the only answer to "is this panel/control available in this mode", exhaustive over both. **Add a case there, never a `matches!(render_mode, ...)` inside a panel.** Both Window menus draw their rows from `visibility::WINDOW_MENU`. See [docs/projects/ui-render-modes.md](docs/archive/projects/ui-render-modes.md)
 - Per-panel code lives in its own `src/ui/*.rs` file; `src/ui/mod.rs` coordinates docking and bubbles responses through `UiResponse`
 
 ### Palette Library System

@@ -1,0 +1,1796 @@
+//! Neighbour-coupled simulation rendering (reaction–diffusion,
+//! cellular automata, growth).
+//!
+//! The third render mode described in
+//! `docs/projects/simulation-fractals.md`. Where the flame renderer
+//! runs a chaos game into a histogram and the escape renderer
+//! evaluates each pixel independently, this one steps a **stateful
+//! grid**: every cell reads its neighbours, many times per frame, and
+//! a colour pass turns the field into an `Rgba32Float` image shaped
+//! exactly like the flame accumulator (`rgb` = colour, `a` =
+//! coverage), so the existing tonemap → effects → readback tail
+//! consumes it unchanged.
+//!
+//! Architecture mirrors the escape engine deliberately:
+//! * [`ModelDef`] / [`SimColoringDef`] are `static` definitions with
+//!   inline WGSL and self-describing parameters (the panel UI
+//!   auto-generates its controls from them).
+//! * Registries are ordered slices; **append-only**, name-addressed.
+//! * The assembler splices exactly one model and one colouring into a
+//!   small template — per-combination shaders, cached by the renderer.
+//!
+//! What is genuinely different from escape, and shapes everything
+//! below:
+//!
+//! * **The grid is not the viewport.** A simulation's behaviour
+//!   depends on its cell count, so [`crate::config::sim::SimGrid`] is
+//!   a config quantity and the resolve pass scales the coloured grid
+//!   to the output.
+//! * **State persists across frames.** The renderer owns the field
+//!   pair and a step counter; a still is "the state at step N from
+//!   this seed", which is what makes a never-settling model (spirals,
+//!   cyclic automata) reproducible at all.
+//! * **Two textures, ping-ponged.** wgpu rejects read-write storage on
+//!   `rgba32float`, so a step reads `field[i]` as a sampled texture
+//!   and writes `field[1-i]` as a write-only storage texture. That is
+//!   the only portable shape, and it is why there is a swap rather
+//!   than an in-place update.
+
+pub mod assembler;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod app_repro_test;
+pub mod colorings;
+pub mod models;
+pub mod renderer;
+
+pub use renderer::SimRenderer;
+
+/// A parameter a model or colouring exposes, with everything the UI
+/// needs to build a control for it.
+///
+/// Deliberately the same shape as `EscapeParamDef`: a `choices` list
+/// turns the slider into a dropdown, and the value is still a plain
+/// `f32` on the wire so animation tracks address it uniformly.
+#[derive(Clone, Copy, Debug)]
+pub struct SimParamDef {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    pub default: f32,
+    pub min: f32,
+    pub max: f32,
+    pub tooltip: &'static str,
+    /// Non-empty ⇒ the value is an index into these labels and the UI
+    /// shows a dropdown instead of a slider.
+    pub choices: &'static [&'static str],
+}
+
+/// A named parameter set for a model — the equivalent of an escape
+/// formula's presets, and the reason the panel can offer "mitosis"
+/// rather than two unlabelled numbers.
+///
+/// Phase 0's rule applies to everything listed here: **nothing ships
+/// as a preset that has not been run.** The catalogue records what
+/// each one was measured to do, and a Gray–Scott preset whose blobs
+/// die is a preset that does not ship.
+#[derive(Clone, Copy, Debug)]
+pub struct SimPreset {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    /// `(param name, value)` pairs applied over the model's defaults.
+    pub params: &'static [(&'static str, f32)],
+    /// Steps to a settled or developed picture, measured. Used as the
+    /// config's `steps` when the preset is applied.
+    pub steps: u32,
+    /// The initial field this preset needs, when it needs a particular
+    /// one.
+    ///
+    /// Not decoration: FitzHugh-Nagumo's excitable constants give
+    /// spirals from a cut wavefront and a FLAT FIELD from noise, so a
+    /// preset that carried only numbers would ship a picture of
+    /// nothing. `None` leaves whatever the user has.
+    pub init: Option<crate::config::sim::SimInit>,
+    /// The colouring this preset is meant to be seen through.
+    ///
+    /// Which one to use is not something a user should have to work
+    /// out. It is a property of the MODEL's state layout -- which
+    /// channel holds the thing worth drawing, and over what range --
+    /// so the preset that knows the parameters knows this too. A
+    /// sandpile's heights want a scale of 1/3 and a Moore sandpile's
+    /// 1/7; the snowfake's crystal is channel `.z`; DLA reads as a
+    /// cluster only through arrival order. `None` leaves the user's
+    /// choice alone.
+    pub coloring: Option<&'static str>,
+    /// The colouring's parameters, `(name, value)`.
+    ///
+    /// A preset that names a colouring must set EVERY parameter that
+    /// colouring declares, and `preset_colorings_are_complete`
+    /// enforces it. The reason is that parameters are stored by name
+    /// in one map for whichever colouring is current, so a name two
+    /// colourings share -- `channel` and `occupancy` both have
+    /// `scale` -- would otherwise carry the old colouring's value
+    /// into the new one and the preset would not be the picture it
+    /// promises.
+    pub coloring_params: &'static [(&'static str, f32)],
+    /// Which cells this preset considers empty space, for the models
+    /// where "empty" is a real state.
+    ///
+    /// A growth model needs it to be legible at all, because `age`
+    /// cannot tell a cell that NEVER grew from one that grew long ago
+    /// — both sit at one end of the palette — so without a matte a
+    /// discharge is either a white sheet with dark tracery on it or a
+    /// cluster whose trunk fades into the background. With the matte,
+    /// un-grown cells take the background colour and the palette
+    /// spans only the growth.
+    ///
+    /// `None` for every model where a channel value of zero is part
+    /// of the picture rather than the absence of one: a sandpile's
+    /// height 0 is one of its four colours and appears INSIDE the
+    /// pile, and Wolfram's 0 cells are half the space-time diagram.
+    /// Matting those would punch holes in the pattern.
+    pub matte: Option<crate::config::sim::SimMatte>,
+    /// The warp stage the preset runs under, when the picture IS the
+    /// warp: an inflating space is a preset's whole subject, not a
+    /// setting the user would think to reach for. `None` sets the
+    /// identity, so choosing a preset that wants no warp clears one
+    /// the last preset set.
+    pub warp: Option<crate::config::sim::SimWarp>,
+}
+
+/// Capability flags a model opts into. Absence means "doesn't have
+/// it", the same convention the variation and formula registries use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelFeature {
+    /// The step draws random numbers per cell. The assembler compiles
+    /// in the PCG helpers and the step index reaches the kernel, so a
+    /// run is reproducible from `(seed, cell, step)`.
+    NeedsRng,
+    /// The model never reaches a still state. The panel says so and
+    /// the export contract is "the state at step N" rather than "the
+    /// converged picture".
+    NeverStills,
+    /// The rule has no time step: a cellular automaton advances by one
+    /// generation, not by `dt` of model time. The panel hides the dt
+    /// slider rather than showing a control that does nothing.
+    NoTimeStep,
+    /// The step reads wide-radius averages. The renderer builds a
+    /// GAUSSIAN pyramid of the field before every step -- one dispatch
+    /// per level, a 5x5 blur then decimate -- and the step shader
+    /// samples it with a manual trilinear read, so an average over any
+    /// radius costs eight loads. Gaussian rather than box, and that is
+    /// measured: a box pyramid converges to a square kernel however
+    /// many levels it has, and McCabe's texture came out visibly
+    /// axis-aligned on it. See `scripts/sim_prototypes/proto_mccabe_pyramid.py`.
+    NeedsPyramid,
+    /// The model carries a population of AGENTS: a storage buffer of
+    /// 16-byte records that move themselves and deposit into an
+    /// integer accumulation buffer, which the step pass then folds
+    /// into the field. See [`AgentDef`].
+    NeedsAgents,
+    /// The step needs the field's global minimum and maximum. After
+    /// every step the renderer reduces the new field into a ring slot
+    /// and the NEXT step reads it -- one step of lag, which is the
+    /// same dependency the reference algorithm has, since a step can
+    /// only normalise by a range that has already been measured.
+    NeedsMinMax,
+    /// The rule takes a DRIVE: the sum of the Signal couplings aimed
+    /// at its layer, through `sim_drive(p)`, which it folds in before
+    /// its own nonlinearity (simulation-layers plan, section 9). Those
+    /// couplings are then left out of the post-rule sum. Uncoupled,
+    /// the hook returns zero.
+    TakesDrive,
+    /// The model PUBLISHES its Turing signal: a pass before its last
+    /// writes the signal of the field it read into `.y`, so a Signal
+    /// coupling from it reads that channel instead of convolving the
+    /// field again. The stage loop runs every layer's pass k before
+    /// any layer's pass k + 1, so the channel a later pass reads is
+    /// the signal of the same field the convolution would have seen.
+    PublishesSignal,
+}
+
+/// A model's agent stage.
+///
+/// The agents are the state: they persist across steps, they move
+/// themselves, and what they leave behind is an integer deposit the
+/// step pass reads. Two shaders, both supplied by the model:
+///
+/// ```wgsl
+/// fn sim_agent_seed(i: u32) -> SimAgent
+/// fn sim_agent(a: SimAgent, i: u32) -> SimAgent
+/// ```
+///
+/// `SimAgent` is `{ pos: vec2<f32>, heading: f32, state: f32 }`.
+/// `sim_agent` senses through the ordinary `sim_read`, deposits with
+/// `agent_deposit(cell, amount)`, and draws randomness from
+/// `agent_rand(i, salt)`.
+///
+/// **The deposit is INTEGER, and that is what makes an agent model
+/// reproducible.** Thousands of agents land in one cell in an order
+/// the hardware chooses; `atomicAdd` on a u32 is associative and
+/// commutative, so the total does not depend on that order, while an
+/// f32 accumulation would give a different sum every run. The value
+/// is fixed-point, scaled by [`AGENT_DEPOSIT_SCALE`].
+#[derive(Clone, Copy, Debug)]
+pub struct AgentDef {
+    /// How many agents these parameters ask for on a grid of this
+    /// size. Clamped to [`MAX_AGENTS`] by the renderer, which
+    /// allocates for exactly this many. The grid is an argument
+    /// because a population is normally a FRACTION of the area --
+    /// Jones' %p -- so the same setting means the same density at
+    /// every grid size.
+    pub count: fn(&Params, u32, u32) -> u32,
+    /// Dispatches per step. 1 for a population that just moves; 2
+    /// when the agents have to AGREE about something first.
+    ///
+    /// Physarum needs 2. Jones' agents exclude one another -- a cell
+    /// holds one agent, and an agent that cannot move stays put and
+    /// takes a random heading -- and that is not a detail: measured on
+    /// the CPU prototype, dropping it collapses the population into a
+    /// few heavy arcs instead of a network. Resolving it needs the
+    /// agents to see each other's intentions, so pass 1 turns and
+    /// CLAIMS a target cell (`agent_claim`) and pass 2 moves only if
+    /// it won (`agent_claim_check`). The claim is an atomic MINIMUM
+    /// over agent indices, so the winner is the lowest index rather
+    /// than whoever the hardware ran first, and the run reproduces.
+    pub passes: u32,
+    /// `fn sim_agent_seed(i)`, `fn sim_agent(a, i)`, and for a
+    /// two-pass population `fn sim_agent2(a, i)`.
+    pub wgsl: &'static str,
+}
+
+/// Fixed-point scale for the deposit buffer. A u32 then holds a
+/// deposit up to 4.2e6, far above anything a trail reaches.
+pub const AGENT_DEPOSIT_SCALE: f32 = 1024.0;
+
+/// Most agents the engine will allocate: 4 million at 16 bytes is
+/// 64 MB, and the catalogue's upper end for Physarum.
+pub const MAX_AGENTS: u32 = 4_000_000;
+
+/// Levels in the pyramid for a grid, INCLUDING level 0 (the field
+/// itself). One rule, computed identically on the CPU and in WGSL:
+/// halve until the smaller side would drop below 4 cells, capped at
+/// [`MAX_PYRAMID_LEVELS`]. Both sides must agree, because the shader
+/// clamps its sample level to this and the renderer allocates exactly
+/// this many textures.
+pub fn pyramid_levels(grid_w: u32, grid_h: u32) -> u32 {
+    let mut levels = 1u32;
+    let mut s = grid_w.min(grid_h);
+    while s >= 8 && levels < MAX_PYRAMID_LEVELS {
+        s = (s + 1) / 2;
+        levels += 1;
+    }
+    levels
+}
+
+/// Pyramid levels the engine binds, counting level 0. Seven extra
+/// levels reach a 1/128 reduction, which at the calibrated mapping
+/// (`level = log2(0.55 r)`) covers an averaging radius of ~230 cells.
+pub const MAX_PYRAMID_LEVELS: u32 = 8;
+
+/// Slots in the min/max ring: one per step of the largest batch, plus
+/// one so the slot a step READS (the previous step's) is never among
+/// the slots the batch clears before running.
+pub const MINMAX_RING: u32 = 257;
+
+/// How many dispatches one step may be. Four covers the catalogue:
+/// the fourth-order PDEs need two, and the dielectric breakdown model
+/// needs three (grow, relax, weigh).
+pub const MAX_PASSES: u32 = 4;
+
+/// The app's auto-pause rule: should a running simulation stop now?
+///
+/// True exactly when this frame CROSSED `cap` -- the run was short of
+/// it (or had just restarted, which is the same thing measured from
+/// 0) and has now reached it. `SimRenderer::render_frame` clamps a
+/// frame's batch so it cannot pass the cap, so "reached" is always
+/// "landed exactly on".
+///
+/// Crossing pauses; it does not end the run. A second Run press finds
+/// `was_below` false and keeps going, which is what makes the cap a
+/// place the simulation stops once rather than a wall.
+pub fn should_pause_at_limit(cap: u32, was_below: bool, now: u32) -> bool {
+    cap > 0 && was_below && now >= cap
+}
+
+
+/// What one call to `SimRenderer::advance_to` should do.
+///
+/// The state at step N is a function of N, not of how many frames
+/// preceded it, so "get to N" is the whole contract -- and the rule is
+/// not invertible, so the only way back is to restart and re-run.
+///
+/// `budget` caps the steps this call may take (`None` = as many as it
+/// takes). The interactive driver passes one so a target the grid
+/// cannot reach in one display frame is reached over the next few
+/// instead of blocking the UI; the exporter passes none, because a
+/// frame there IS the state at its target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepPlan {
+    /// Restart from the seed before stepping.
+    pub reseed: bool,
+    /// Steps to run in this call.
+    pub steps: u32,
+    /// Whether `target` is reached once those steps have run.
+    pub reached: bool,
+}
+
+/// The plan for getting a field at `index` to `target`.
+///
+/// A pure function because it is the whole of D4, and it deserves a
+/// test that needs neither a GPU nor an App.
+pub fn plan_steps(index: u32, target: u32, budget: Option<u32>) -> StepPlan {
+    let reseed = target < index;
+    let from = if reseed { 0 } else { index };
+    let remaining = target.saturating_sub(from);
+    let steps = match budget {
+        Some(b) => remaining.min(b),
+        None => remaining,
+    };
+    StepPlan { reseed, steps, reached: steps == remaining }
+}
+
+/// Whether the motion asking for a step target is CONTINUOUS -- a
+/// scrubber mid-drag, or playback running -- or a DISCRETE event that
+/// lands on one time and stays there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Motion {
+    /// The time is still moving: a drag in progress, a playing
+    /// timeline (in either direction).
+    Continuous,
+    /// One deliberate jump: the scrubber released, a frame step, the
+    /// `Loop` wrap, a ping-pong turnaround.
+    Discrete,
+}
+
+/// Should a timeline step target be applied to the grid now?
+///
+/// Forward always: running a simulation forward is what it does, and
+/// budgeting (`plan_steps`) keeps a big jump from blocking.
+///
+/// Backward only on a DISCRETE event. Going back means reseeding and
+/// re-running, so applying a falling target under continuous motion
+/// restarts the run on nearly every frame:
+///
+/// - dragging the scrubber left would flicker through restarts for the
+///   whole drag rather than showing one picture (D7);
+/// - a ping-pong's backward leg would restart once per frame for half
+///   of every cycle (D8);
+/// - a track authored to run DOWN (2000 -> 0) would do the same under
+///   forward playback (D9). In-app that plays as a still of the
+///   highest state reached, and dragging the scrubber is how it is
+///   previewed. Export is unaffected: it renders every frame at its
+///   own target, whatever the direction, because a video frame is
+///   the state at its time.
+pub fn timeline_target_applies(index: u32, target: u32, motion: Motion) -> bool {
+    target >= index || motion == Motion::Discrete
+}
+
+
+/// The ceiling on a repeated pass's count. A relaxation slider that
+/// could ask for thousands of sweeps would hit the watchdog inside a
+/// single step, where the submit batching cannot help.
+pub const MAX_INNER_ITERATIONS: u32 = 200;
+
+
+/// Capability flags a colouring opts into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColoringFeature {
+    /// The colouring reads `x.gx` / `x.gy`, the central-difference
+    /// gradient of every channel. Costs four extra texture reads per
+    /// tap, so the template computes it ONLY for colourings that
+    /// declare it -- measured, the reads were 4 of the 5 the colour
+    /// pass made, and the bilinear resolve multiplied them by four
+    /// again.
+    NeedsGradient,
+    /// The colouring reads `x.tensor`, the structure tensor of channel
+    /// `.x` -- the gradient's outer product, smoothed over a 3x3
+    /// binomial window. Thirty-six reads per tap; only the colourings
+    /// that draw orientation or coherence pay it.
+    NeedsStructure,
+    /// The colouring reads `x.dist`, the signed distance to the matte's
+    /// edge in cells. The renderer runs the jump flood for it whenever
+    /// the matte is on, whatever the matte's own edge setting; with
+    /// the matte off there is no figure to be distant from and the
+    /// value is 0.
+    NeedsDistance,
+    /// The colouring reads the cell coordinate `p` and the field
+    /// around it directly -- a line integral convolution has to walk
+    /// the field. Under an interpolating resolve `p` is the NEAREST
+    /// cell, so such a colouring is computed at cell resolution and
+    /// its result interpolated, which for a texture-making colouring
+    /// is its nature. `no_colouring_reads_the_cell_coordinate` exempts
+    /// colourings that declare this and no others.
+    ReadsCell,
+}
+
+/// The Sims 3×3 Laplacian's most negative eigenvalue (centre −1,
+/// edges 0.2, corners 0.05, at the checkerboard mode): −1.6. Diffusion
+/// at rate D contributes `1.6 · D` to the stiffness of that mode.
+pub const SIMS_LAPLACIAN_EIGENVALUE: f32 = 1.6;
+
+/// Explicit Euler is stable for `dt · λ < 2`. The cap sits at 0.96 of
+/// that rather than AT it, because at the bound the checkerboard is
+/// neutrally stable rather than damped: measured, Gray–Scott at
+/// exactly `dt · 1.6 · D = 2.00` carries a checkerboard of rms 0.445
+/// held in place only by its [0, 1] clamp; at 0.96 the mode decays 8%
+/// a step and the rms is 0.0003.
+pub const STABILITY_MARGIN: f32 = 0.96;
+
+/// A model's parameters, resolved: the value in force, or the
+/// declared default when the config has not set one.
+///
+/// Exists for [`ModelDef::dt_bound`], which is a plain `fn` pointer in
+/// a `static` and so cannot close over anything -- it needs the
+/// defaults handed to it rather than looking them up.
+pub struct Params<'a> {
+    model: &'a ModelDef,
+    map: &'a std::collections::BTreeMap<String, f32>,
+}
+
+impl Params<'_> {
+    /// The value in force for `name`. A parameter the model does not
+    /// declare reads 0.0, which is a programming error rather than a
+    /// state a config can reach -- the registry's invariant tests
+    /// check every name a `dt_bound` uses.
+    pub fn get(&self, name: &str) -> f32 {
+        self.map
+            .get(name)
+            .copied()
+            .filter(|v| v.is_finite())
+            .or_else(|| {
+                self.model
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == name)
+                    .map(|p| p.default)
+            })
+            .unwrap_or(0.0)
+    }
+}
+
+/// A precomputed convolution kernel, built on the CPU and uploaded
+/// for the step shader to gather against.
+///
+/// The large-kernel models are not stencils: Lenia's rule is a ring
+/// whose weights vary continuously with radius, and SmoothLife's is a
+/// pair of anti-aliased discs. Neither is expressible as arithmetic on
+/// a fixed neighbourhood, and both are far cheaper to tabulate once
+/// than to evaluate per tap.
+pub struct SimKernel {
+    /// Half-width in cells. The table is `(2 * radius + 1)^2` taps.
+    pub radius: u32,
+    /// Weights, row-major from `-radius` to `+radius` in both axes.
+    /// A model that needs two kernels (SmoothLife's disc and annulus)
+    /// appends the second table after the first and indexes past it;
+    /// keeping them as separate blocks rather than interleaving them
+    /// keeps each gather's reads contiguous.
+    pub weights: Vec<f32>,
+}
+
+/// Largest kernel half-width the engine will build. At 32 a table is
+/// 65 x 65 taps, and a model may store two of them, so the buffer is
+/// sized for `2 * 65^2` floats -- 34 KB, which is nothing. The cost
+/// that matters is the GATHER: 4,225 taps a cell.
+pub const MAX_KERNEL_RADIUS: u32 = 32;
+
+/// One simulation model: the rule, its parameters, and how a cell's
+/// state is laid out in the four channels.
+///
+/// The WGSL contract, spliced by [`assembler`]:
+///
+/// ```wgsl
+/// fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32>
+/// ```
+///
+/// `s` is this cell's current state; `p` its integer coordinates.
+/// Neighbours come from `sim_read(p + offset)`, which the template
+/// provides and which applies the configured boundary — a model never
+/// writes boundary handling itself, because getting it wrong is
+/// invisible in the middle of the grid and wrong only at the edges.
+#[derive(Clone, Copy, Debug)]
+pub struct ModelDef {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    /// One-line description for the panel's dropdown tooltip.
+    pub description: &'static str,
+    pub features: &'static [ModelFeature],
+    pub parameters: &'static [SimParamDef],
+    pub presets: &'static [SimPreset],
+    /// The step rule. See the type docs for the signature.
+    ///
+    /// When [`ModelDef::passes`] is more than 1 this must ALSO define
+    /// `fn sim_step2(s: vec4<f32>, p: vec2<i32>) -> vec4<f32>`. The
+    /// whole string is spliced into both pass modules and each entry
+    /// point calls its own function, so helpers are written once and
+    /// shared rather than duplicated across two fields.
+    pub wgsl: &'static str,
+    /// Dispatches per step. 1 for a rule that is one stencil
+    /// application; 2 for a fourth-order PDE, where the first pass
+    /// stores a derivative into a spare channel and the second takes
+    /// the derivative of THAT.
+    ///
+    /// A fourth-order operator cannot be done in one pass: a cell
+    /// would need its neighbours' neighbours, and the neighbours'
+    /// first-pass values do not exist until every cell has been
+    /// written. Two dispatches are how the ordering is bought -- the
+    /// same "one pass per derivative order" the escape relief blur
+    /// uses.
+    ///
+    /// Both passes of one step carry the SAME `sim_step_index()`: a
+    /// step is a step whatever it costs to compute, and the age
+    /// channel and the animation track both count steps.
+    pub passes: u32,
+    /// One pass may run several times within a step, which is what a
+    /// relaxation is: `Some((pass, param))` repeats that pass the
+    /// number of times the named parameter says, before the rest of
+    /// the step runs once.
+    ///
+    /// The dielectric breakdown model is the reason this exists — it
+    /// re-solves Laplace's equation between one growth and the next,
+    /// and the count is a slider (the paper's "between 5 and 50"),
+    /// not something a shader can be compiled for. Capped at
+    /// [`MAX_INNER_ITERATIONS`].
+    pub repeat: Option<(u32, &'static str)>,
+    /// Largest `dt` the explicit scheme is stable at, for the DEFAULT
+    /// diffusion rates. Measured per model (see each model's note); the
+    /// reaction terms usually bind before diffusion does.
+    ///
+    /// Not the whole cap. The diffusion bound scales as `1 / D`, and
+    /// the sliders reach several times the default rate, so the cap
+    /// that is actually enforced is [`ModelDef::max_dt_for`], which
+    /// takes the current parameters. The config manager's write arms,
+    /// the panel slider's range and the renderer's uniform all go
+    /// through it, so no path can drive the solver past the bound.
+    pub max_dt: f32,
+    /// Names of the parameters that are diffusion rates on the Sims
+    /// stencil. Empty for a rule with no time step.
+    pub diffusion: &'static [&'static str],
+    /// The agent stage, for the models whose state is a population
+    /// rather than a field.
+    pub agents: Option<AgentDef>,
+    /// Builds this model's convolution kernel, for the models whose
+    /// rule is a large-kernel gather rather than a stencil.
+    ///
+    /// Called whenever the parameters are uploaded, which is once per
+    /// batch rather than per step -- a 65 x 65 table is a few
+    /// thousand floats and rebuilding it is far cheaper than tracking
+    /// whether it went stale.
+    pub kernel: Option<fn(&Params) -> SimKernel>,
+    /// A stability bound this model derives itself, overriding the
+    /// Sims-stencil one.
+    ///
+    /// For the fourth-order PDEs, whose bound has nothing to do with a
+    /// diffusion rate on a 3×3 kernel: Swift–Hohenberg is limited by
+    /// `(q0² + ∇²)²` and Cahn–Hilliard by `D γ ∇⁴`. Both are stated
+    /// against the 5-POINT Laplacian, which is the one they use --
+    /// see the note on each model. The returned value is the raw
+    /// bound; [`ModelDef::max_dt_for`] applies [`STABILITY_MARGIN`]
+    /// and the declared ceiling to it.
+    pub dt_bound: Option<fn(&Params) -> f32>,
+    /// The initial state for a cell, given the init shape's mask.
+    ///
+    /// ```wgsl
+    /// fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32>
+    /// ```
+    ///
+    /// `inside` is 1.0 where the configured [`SimInit`] shape covers
+    /// the cell and 0.0 elsewhere; `noise` is uniform in [0, 1) from
+    /// the config seed. Models decide what those mean — Gray–Scott
+    /// puts `B = inside`, a growth model puts occupancy there.
+    ///
+    /// [`SimInit`]: crate::config::sim::SimInit
+    pub wgsl_seed: &'static str,
+    /// Measured default step count for a still (catalogue).
+    pub default_steps: u32,
+    /// The `dt` this model is normally run at. Applied when the model
+    /// is selected, because the models differ by two orders of
+    /// magnitude here -- Gray-Scott runs at 1.0 and Schnakenberg
+    /// diverges above 0.02 -- so carrying one model's dt into another
+    /// is either unusably slow or unstable.
+    pub default_dt: f32,
+}
+
+impl ModelDef {
+    /// This model's parameters, resolved against its defaults.
+    pub fn params_view<'a>(
+        &'a self,
+        map: &'a std::collections::BTreeMap<String, f32>,
+    ) -> Params<'a> {
+        Params { model: self, map }
+    }
+
+    /// Build this model's convolution kernel for the parameters in
+    /// force, clamped to the buffer the renderer allocated.
+    pub fn kernel_for(
+        &self,
+        params: &std::collections::BTreeMap<String, f32>,
+    ) -> Option<SimKernel> {
+        let build = self.kernel?;
+        let mut k = build(&Params { model: self, map: params });
+        k.radius = k.radius.clamp(1, MAX_KERNEL_RADIUS);
+        let taps = (2 * k.radius as usize + 1).pow(2);
+        // A hand-edited config can carry anything; the buffer cannot.
+        k.weights.truncate(2 * taps);
+        Some(k)
+    }
+
+    /// The stability cap for THESE parameters.
+    ///
+    /// Linear stability of explicit Euler on the checkerboard mode:
+    /// `dt · (λ_reaction + 1.6 · D) < 2`. The reaction stiffness
+    /// `λ_reaction` is not derived here; it is INFERRED from the
+    /// model's measured cap at its default diffusion rates,
+    /// `λ_reaction = 2 / max_dt − 1.6 · D_default`, and the cap at any
+    /// other D follows by adding the diffusion term back. A diffusion-
+    /// only bound (`1.25 / D`) is not enough: FitzHugh–Nagumo at
+    /// D = 4 railed at ±3 under it, because the reaction term
+    /// contributes even at rest (`1 − v²` ≈ −0.44, and −8 at the rails).
+    ///
+    /// `D` is the largest of the diffusion parameters, current value
+    /// or default. Using the largest is conservative when the channels
+    /// differ, and covers FitzHugh–Nagumo's `D_w / τ` since τ ≥ 1.
+    ///
+    /// Before this existed the cap was `max_dt` alone, and the sliders
+    /// reach 4–5× the default rates. Measured before the fix, 128²
+    /// after 200 steps: Brusselator and Schnakenberg infinite in half
+    /// their cells, FitzHugh–Nagumo railed with a checkerboard of
+    /// rms 5.1.
+    pub fn max_dt_for(&self, params: &std::collections::BTreeMap<String, f32>) -> f32 {
+        if let Some(bound) = self.dt_bound {
+            let raw = bound(&Params { model: self, map: params });
+            if raw.is_finite() && raw > 0.0 {
+                return (STABILITY_MARGIN * raw).min(self.max_dt).max(1e-4);
+            }
+            return self.max_dt;
+        }
+        if self.diffusion.is_empty() {
+            return self.max_dt;
+        }
+        let mut d_now = 0.0f32;
+        let mut d_def = 0.0f32;
+        for name in self.diffusion {
+            let def = self
+                .parameters
+                .iter()
+                .find(|p| p.name == *name)
+                .map(|p| p.default)
+                .unwrap_or(0.0);
+            let v = params.get(*name).copied().filter(|v| v.is_finite()).unwrap_or(def);
+            d_now = d_now.max(v.max(0.0));
+            d_def = d_def.max(def);
+        }
+        let lambda_reaction = (2.0 / self.max_dt - SIMS_LAPLACIAN_EIGENVALUE * d_def).max(0.0);
+        let lambda = lambda_reaction + SIMS_LAPLACIAN_EIGENVALUE * d_now;
+        (STABILITY_MARGIN * 2.0 / lambda).max(1e-4)
+    }
+}
+
+impl ModelDef {
+    pub fn has(&self, f: ModelFeature) -> bool {
+        self.features.contains(&f)
+    }
+
+    /// Parameter values in declaration order, config overriding the
+    /// definition's defaults. This is the packing order the shader's
+    /// `mparam(i)` indexes, so it is the one place that ordering is
+    /// decided.
+    pub fn pack_params(&self, cfg: &crate::config::sim::SimConfig) -> Vec<f32> {
+        self.pack_params_from(&cfg.model_params)
+    }
+
+    /// The same, from a parameter map -- one layer's.
+    pub fn pack_params_from(&self, map: &std::collections::BTreeMap<String, f32>) -> Vec<f32> {
+        self.parameters
+            .iter()
+            .map(|p| map.get(p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.default))
+            .collect()
+    }
+
+    pub fn preset(&self, name: &str) -> Option<&'static SimPreset> {
+        self.presets.iter().find(|p| p.name == name)
+    }
+}
+
+/// One colouring: field → `(rgb, coverage)`.
+///
+/// ```wgsl
+/// fn sim_color(s: vec4<f32>, grad: vec2<f32>, p: vec2<i32>) -> vec4<f32>
+/// ```
+///
+/// `grad` is the central-difference gradient of channel `.x`, computed
+/// once by the template so a hillshade colouring does not have to
+/// re-read neighbours.
+#[derive(Clone, Copy, Debug)]
+pub struct SimColoringDef {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    pub description: &'static str,
+    pub features: &'static [ColoringFeature],
+    pub parameters: &'static [SimParamDef],
+    pub wgsl: &'static str,
+}
+
+impl SimColoringDef {
+    pub fn has(&self, f: ColoringFeature) -> bool {
+        self.features.contains(&f)
+    }
+
+    pub fn pack_params(&self, cfg: &crate::config::sim::SimConfig) -> Vec<f32> {
+        self.parameters
+            .iter()
+            .map(|p| cfg.coloring_param(p.name, p.default))
+            .collect()
+    }
+}
+
+/// A layered preset: several models on one grid with their couplings
+/// (simulation-layers plan, section 3). Applied whole, as a
+/// full-config edit, since it replaces the layer list.
+pub struct SimLayeredPreset {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    pub description: &'static str,
+    /// Per layer: the model and its parameters.
+    pub layers: &'static [(&'static str, &'static [(&'static str, f32)])],
+    /// (from, to, form, strength, channel mask).
+    pub couplings: &'static [(usize, usize, crate::config::sim::SimCouplingForm, f32, u32)],
+    pub steps: u32,
+    pub dt: f32,
+    pub init: crate::config::sim::SimInit,
+    pub coloring: &'static str,
+    pub coloring_params: &'static [(&'static str, f32)],
+    /// A colour stack, bottom first, each entry (source layer, gather
+    /// four layers' first channels, colouring, its parameters, blend,
+    /// opacity); empty for the single colouring above.
+    pub color_layers: &'static [(usize, bool, &'static str, &'static [(&'static str, f32)], crate::config::sim::SimBlend, f32)],
+    /// Steps per frame the preset asks for: a run at dt 0.001 that
+    /// needs 200,000 steps to show its pattern sits at a uniform fixed
+    /// point for the first several thousand, and at the default
+    /// per-frame count that is a long grey wait.
+    pub steps_per_frame: u32,
+}
+
+impl SimLayeredPreset {
+    /// Write the preset into a config: layers, couplings, dt, steps,
+    /// init and colouring; `model` follows layer 0 so a config with the
+    /// layers removed is still that model.
+    pub fn apply(&self, sim: &mut crate::config::sim::SimConfig) {
+        use crate::config::sim::{SimCoupling, SimLayer};
+        sim.layers = self
+            .layers
+            .iter()
+            .map(|(m, ps)| SimLayer {
+                model: (*m).to_string(),
+                model_params: ps.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+                enabled: true,
+            })
+            .collect();
+        sim.couplings = self
+            .couplings
+            .iter()
+            .map(|&(from, to, form, strength, channels)| SimCoupling { from, to, form, strength, channels })
+            .collect();
+        sim.model = self.layers[0].0.to_string();
+        sim.model_params.clear();
+        sim.steps = self.steps;
+        sim.steps_per_frame = self.steps_per_frame;
+        sim.dt = self.dt;
+        sim.init = self.init;
+        sim.coloring = self.coloring.to_string();
+        sim.coloring_params = self.coloring_params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect();
+        // A preset is the whole picture: whatever the last one left --
+        // a growth model's matte, a colour stack, a warp -- would cut
+        // or move it. The single-model presets reset these the same
+        // way; found when this preset showed nothing after one that
+        // matted.
+        sim.matte = Default::default();
+        sim.color_layers = self
+            .color_layers
+            .iter()
+            .map(|&(source, gather, coloring, params, blend, opacity)| crate::config::sim::SimColorLayer {
+                source,
+                gather,
+                coloring: coloring.to_string(),
+                coloring_params: params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+                matte: Default::default(),
+                blend,
+                opacity,
+                enabled: true,
+            })
+            .collect();
+        sim.warp = Default::default();
+        sim.use_transforms = false;
+    }
+}
+
+/// The lattice's ring as four `turing` layers: each field's own
+/// parameters, and its row of the coupling matrix as Signal couplings
+/// from the fields that drive it. Layer `i` is field `i`.
+const TURING_FIELD: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R3: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 3.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R5: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 5.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R8: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 8.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+const TURING_FIELD_R12: &[(&str, f32)] = &[
+    ("self", 1.0), ("radius", 12.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01),
+    ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0),
+];
+/// The four fields gathered into one `species` colouring, as the
+/// lattice's own preset is coloured.
+const TURING_FIELD_COLOURS: &[(usize, bool, &str, &[(&str, f32)], crate::config::sim::SimBlend, f32)] = &[
+    (0, true, "species", &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)], crate::config::sim::SimBlend::Normal, 1.0),
+];
+
+/// The layered presets, each run before it shipped (catalog section
+/// 31).
+pub static LAYERED_PRESETS: &[SimLayeredPreset] = &[
+    SimLayeredPreset {
+        name: "two_gray_scotts",
+        display_name: "Two Gray–Scotts, coupled",
+        description: "Coral and maze parameters on two layers, joined by weak inter-layer \
+                      diffusion: a coral labyrinth carrying the maze's modulation. At 0.1 the \
+                      labyrinth turns fine; at 0.3 both die.",
+        layers: &[
+            ("gray_scott", &[("feed", 0.0545), ("kill", 0.062)]),
+            ("gray_scott", &[("feed", 0.030), ("kill", 0.057)]),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Linear, 0.02, 3),
+            (0, 1, crate::config::sim::SimCouplingForm::Linear, 0.02, 3),
+        ],
+        steps: 6000,
+        dt: 1.0,
+        steps_per_frame: 16,
+        init: crate::config::sim::SimInit::Blobs { count: 6, radius: 24 },
+        coloring: "channel",
+        coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
+        color_layers: &[],
+    },
+    SimLayeredPreset {
+        name: "brusselator_layers",
+        display_name: "Two Brusselators, cubic",
+        description: "Kyttä, Kaski & Barrio's two-layer Brusselator built from two `brusselator` \
+                      layers on the 5-point stencil under a cubic coupling of 0.09: spots with \
+                      internal structure. The same system as the `brusselator2` model, which \
+                      is the layered path's gate.",
+        layers: &[
+            ("brusselator", &[("feed_a", 3.0), ("feed_b", 9.0), ("diffusion_x", 1.85), ("diffusion_y", 5.66), ("stencil", 1.0)]),
+            ("brusselator", &[("feed_a", 3.0), ("feed_b", 9.0), ("diffusion_x", 50.6), ("diffusion_y", 186.0), ("stencil", 1.0)]),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Cubic, 0.09, 3),
+            (0, 1, crate::config::sim::SimCouplingForm::Cubic, 0.09, 3),
+        ],
+        steps: 200000,
+        dt: 0.001,
+        steps_per_frame: 1024,
+        init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
+        coloring: "channel",
+        coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
+        color_layers: &[],
+    },
+    SimLayeredPreset {
+        name: "turing_ring",
+        display_name: "Four Turing fields, chasing ring",
+        description: "The coupled Turing lattice's ring taken apart: four `turing` layers, each \
+                      following the field before it and opposing the one after through Signal \
+                      couplings of ±1.5. The same run as the `lattice4` ring, which is this \
+                      path's gate; each field coloured on its own in the stack.",
+        layers: &[
+            ("turing", TURING_FIELD),
+            ("turing", TURING_FIELD),
+            ("turing", TURING_FIELD),
+            ("turing", TURING_FIELD),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (3, 0, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (0, 1, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (2, 1, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (1, 2, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (3, 2, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (0, 3, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (2, 3, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+        ],
+        steps: 2000,
+        dt: 1.0,
+        steps_per_frame: 10,
+        init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
+        coloring: "channel",
+        coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+        color_layers: TURING_FIELD_COLOURS,
+    },
+    SimLayeredPreset {
+        name: "turing_scales",
+        display_name: "Four Turing fields, four scales",
+        description: "The chasing ring with a radius per field — 3, 5, 8 and 12 cells — which \
+                      the lattice cannot do: stripes at the finest field's scale in domains \
+                      the coarser fields draw, their walls where the coarse phases meet.",
+        layers: &[
+            ("turing", TURING_FIELD_R3),
+            ("turing", TURING_FIELD_R5),
+            ("turing", TURING_FIELD_R8),
+            ("turing", TURING_FIELD_R12),
+        ],
+        couplings: &[
+            (1, 0, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (3, 0, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (0, 1, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (2, 1, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (1, 2, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+            (3, 2, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (0, 3, crate::config::sim::SimCouplingForm::Signal, -1.5, 1),
+            (2, 3, crate::config::sim::SimCouplingForm::Signal, 1.5, 1),
+        ],
+        steps: 2000,
+        dt: 1.0,
+        steps_per_frame: 10,
+        init: crate::config::sim::SimInit::Noise { amplitude: 1.0 },
+        coloring: "channel",
+        coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
+        color_layers: TURING_FIELD_COLOURS,
+    },
+];
+
+/// Every model, in registration order. **Append only** — the order is
+/// the UI order and, once presets and configs name them, the names are
+/// a compatibility surface.
+pub static MODELS: &[&ModelDef] = &[
+    &models::GRAY_SCOTT,
+    &models::FITZHUGH_NAGUMO,
+    &models::BRUSSELATOR,
+    &models::SCHNAKENBERG,
+    &models::HODGEPODGE,
+    &models::CYCLIC_CA,
+    &models::SPATIAL_RPS,
+    &models::ISING,
+    &models::EDEN,
+    &models::BALLISTIC_DEPOSITION,
+    &models::WOLFRAM_ECA,
+    &models::PACKARD_SNOWFLAKE,
+    &models::PERCOLATION,
+    &models::SWIFT_HOHENBERG,
+    &models::CAHN_HILLIARD,
+    &models::OREGONATOR,
+    &models::KOBAYASHI,
+    &models::LENIA,
+    &models::SMOOTHLIFE,
+    &models::MCCABE,
+    &models::PHYSARUM,
+    &models::DLA,
+    &models::SANDPILE,
+    &models::INVASION_PERCOLATION,
+    &models::SNOWFAKE,
+    &models::DBM,
+    &models::FINGERING,
+    &models::LATTICE4,
+    &models::BRUSSELATOR2,
+    &models::ROSSLER,
+    &models::TURING,
+];
+
+/// Every colouring, in registration order. Append only.
+pub static COLORINGS: &[&SimColoringDef] =
+    &[
+    &colorings::CHANNEL,
+    &colorings::TWO_CHANNEL,
+    &colorings::AGE,
+    &colorings::LABEL,
+    &colorings::SCALE_MIX,
+    &colorings::OCCUPANCY,
+    &colorings::GRADIENT,
+    &colorings::STRUCTURE,
+    &colorings::DISTANCE,
+    &colorings::LIC,
+    &colorings::SPECIES,
+];
+
+/// Look up a model by name, falling back to the first registered one.
+///
+/// Falling back rather than failing is the same forward-compatibility
+/// posture the variation and formula registries take: a config naming
+/// a model this build does not have still opens, with a warning,
+/// instead of refusing the file.
+pub fn model_or_default(name: &str) -> &'static ModelDef {
+    MODELS.iter().copied().find(|m| m.name == name).unwrap_or_else(|| {
+        log::warn!("unknown simulation model {name:?}; using {:?}", MODELS[0].name);
+        MODELS[0]
+    })
+}
+
+pub fn coloring_or_default(name: &str) -> &'static SimColoringDef {
+    COLORINGS
+        .iter()
+        .copied()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| {
+            log::warn!(
+                "unknown simulation colouring {name:?}; using {:?}",
+                COLORINGS[0].name
+            );
+            COLORINGS[0]
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn registry_names_are_unique_and_lowercase() {
+        let mut seen = HashSet::new();
+        for m in MODELS {
+            assert!(seen.insert(m.name), "duplicate model name {:?}", m.name);
+            assert!(
+                m.name.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()),
+                "model name {:?} must be lowercase snake_case -- it is a wire value",
+                m.name
+            );
+        }
+        let mut seen = HashSet::new();
+        for c in COLORINGS {
+            assert!(seen.insert(c.name), "duplicate colouring name {:?}", c.name);
+        }
+    }
+
+    /// The default config must name things that exist, or a fresh
+    /// entry into the mode falls back with a warning.
+    #[test]
+    fn the_default_config_names_registered_entries() {
+        let cfg = crate::config::sim::SimConfig::default();
+        assert!(MODELS.iter().any(|m| m.name == cfg.model), "default model missing");
+        assert!(
+            COLORINGS.iter().any(|c| c.name == cfg.coloring),
+            "default colouring missing"
+        );
+    }
+
+    /// A parameter whose default falls outside its own slider range is
+    /// a control the user cannot return to its default.
+    #[test]
+    fn every_parameter_default_is_inside_its_range() {
+        let all = MODELS
+            .iter()
+            .flat_map(|m| m.parameters.iter().map(move |p| (m.name, p)))
+            .chain(
+                COLORINGS
+                    .iter()
+                    .flat_map(|c| c.parameters.iter().map(move |p| (c.name, p))),
+            );
+        for (owner, p) in all {
+            assert!(p.min <= p.max, "{owner}.{}: min > max", p.name);
+            assert!(
+                p.default >= p.min && p.default <= p.max,
+                "{owner}.{}: default {} outside [{}, {}]",
+                p.name,
+                p.default,
+                p.min,
+                p.max
+            );
+            assert!(!p.tooltip.is_empty(), "{owner}.{}: needs a tooltip", p.name);
+        }
+    }
+
+    /// Presets may only set parameters the model actually has, and
+    /// only to values its sliders can reach -- a preset outside the
+    /// range cannot be edited back to after it is applied.
+    #[test]
+    fn every_preset_sets_real_parameters_within_range() {
+        for m in MODELS {
+            for pre in m.presets {
+                assert!(pre.steps > 0, "{}/{}: steps must be positive", m.name, pre.name);
+                for (k, v) in pre.params {
+                    let def = m
+                        .parameters
+                        .iter()
+                        .find(|p| p.name == *k)
+                        .unwrap_or_else(|| panic!("{}/{}: no parameter {k:?}", m.name, pre.name));
+                    assert!(
+                        *v >= def.min && *v <= def.max,
+                        "{}/{}: {k} = {v} outside [{}, {}]",
+                        m.name,
+                        pre.name,
+                        def.min,
+                        def.max
+                    );
+                }
+            }
+        }
+    }
+
+    /// A stability cap that is zero, negative or absurd would either
+    /// freeze the dt slider or let the solver diverge; the value is a
+    /// derivation and this keeps a typo from shipping as one.
+    #[test]
+    fn every_model_declares_a_sane_stability_cap() {
+        for m in MODELS {
+            assert!(
+                m.max_dt > 0.0 && m.max_dt <= 10.0,
+                "{}: max_dt {} is not a plausible explicit-Euler bound",
+                m.name,
+                m.max_dt
+            );
+            assert!(
+                m.default_dt > 0.0 && m.default_dt <= m.max_dt,
+                "{}: default_dt {} must be positive and within max_dt {}",
+                m.name,
+                m.default_dt,
+                m.max_dt
+            );
+        }
+    }
+
+    /// The declared cap must be consistent with the default diffusion
+    /// rates, and every parameter named as a diffusion rate must
+    /// exist -- a typo there would silently drop the bound.
+    #[test]
+    fn the_declared_cap_respects_the_default_diffusion_bound() {
+        for m in MODELS {
+            for name in m.diffusion {
+                let def = m
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == *name)
+                    .unwrap_or_else(|| panic!("{}: diffusion parameter {name} does not exist", m.name));
+                assert!(
+                    m.max_dt * def.default * 1.6 <= 2.0 + 1e-5,
+                    "{}: max_dt {} at default {name} = {} gives dt·D·1.6 = {} > 2",
+                    m.name,
+                    m.max_dt,
+                    def.default,
+                    m.max_dt * def.default * 1.6
+                );
+            }
+            // With no parameters set, the cap is the declared one under
+            // the safety margin.
+            let at_defaults = m.max_dt_for(&std::collections::BTreeMap::new());
+            assert!(
+                at_defaults <= m.max_dt && at_defaults > 0.0,
+                "{}: cap at defaults {} vs declared {}",
+                m.name,
+                at_defaults,
+                m.max_dt
+            );
+            assert!(
+                m.default_dt <= at_defaults + 1e-6,
+                "{}: default_dt {} exceeds the cap at defaults {}",
+                m.name,
+                m.default_dt,
+                at_defaults
+            );
+            // A rule with no time step must declare no bound either.
+            // The converse does NOT hold: Lenia advances by dt and has
+            // no stability bound at all, because its growth term is
+            // bounded in [-1, 1] and the state is clipped to [0, 1],
+            // so no dt can make it diverge -- only blur the dynamics,
+            // which `max_dt` handles.
+            if m.has(ModelFeature::NoTimeStep) {
+                assert!(
+                    m.diffusion.is_empty() && m.dt_bound.is_none(),
+                    "{}: a rule with no time step declares a stability bound",
+                    m.name
+                );
+            }
+        }
+    }
+
+    /// A two-pass model must actually define its second pass, and a
+    /// one-pass model must not carry a stray one -- the assembler
+    /// splices by name, so a missing `sim_step2` is a shader that
+    /// fails to compile on the device rather than here.
+    #[test]
+    fn the_pass_count_matches_the_functions_the_model_defines() {
+        for m in MODELS {
+            assert!(
+                (1..=MAX_PASSES).contains(&m.passes),
+                "{}: passes {} is not in 1..={MAX_PASSES}",
+                m.name,
+                m.passes
+            );
+            // Every pass from the second up needs its entry point,
+            // and a model must not carry one it never dispatches.
+            for n in 2..=MAX_PASSES {
+                let name = format!("fn sim_step{n}(");
+                let has = m.wgsl.contains(&name);
+                assert_eq!(
+                    has,
+                    m.passes >= n,
+                    "{}: passes = {} but sim_step{n} {} defined",
+                    m.name,
+                    m.passes,
+                    if has { "IS" } else { "is not" }
+                );
+            }
+            if let Some((pass, param)) = m.repeat {
+                assert!(
+                    pass < m.passes,
+                    "{}: repeats pass {pass} but has only {} passes",
+                    m.name,
+                    m.passes
+                );
+                assert!(
+                    m.parameters.iter().any(|p| p.name == param),
+                    "{}: repeat names parameter {param:?}, which it does not declare",
+                    m.name
+                );
+            }
+        }
+    }
+
+    /// A model that derives its own dt bound must produce a positive,
+    /// finite one at its defaults, and its declared `max_dt` must not
+    /// contradict it.
+    #[test]
+    fn a_derived_dt_bound_is_consistent_with_the_declared_one() {
+        for m in MODELS {
+            let Some(bound) = m.dt_bound else { continue };
+            assert!(
+                m.diffusion.is_empty(),
+                "{}: a model derives its bound OR declares Sims diffusion rates, not both",
+                m.name
+            );
+            let empty = std::collections::BTreeMap::new();
+            let raw = bound(&Params { model: m, map: &empty });
+            assert!(
+                raw.is_finite() && raw > 0.0,
+                "{}: derived dt bound {raw} at the defaults",
+                m.name
+            );
+            // Every parameter combination the sliders allow must also
+            // give a usable bound: a bound that goes to zero or NaN
+            // somewhere in range would freeze the dt slider there.
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max] {
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(pd.name.to_string(), v);
+                    let r = bound(&Params { model: m, map: &map });
+                    assert!(
+                        r.is_finite() && r > 0.0,
+                        "{}: dt bound {r} at {} = {v}",
+                        m.name,
+                        pd.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// A kernel must be buildable, normalised and within the buffer at
+    /// every setting the sliders allow -- a radius past the cap would
+    /// read off the end of the table, and weights that do not sum to
+    /// one would silently rescale the rule.
+    #[test]
+    fn a_declared_kernel_is_sane_across_its_parameter_range() {
+        for m in MODELS {
+            let Some(build) = m.kernel else { continue };
+            let mut cases = vec![std::collections::BTreeMap::new()];
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max] {
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(pd.name.to_string(), v);
+                    cases.push(map);
+                }
+            }
+            for map in cases {
+                let k = build(&Params { model: m, map: &map });
+                let taps = (2 * k.radius as usize + 1).pow(2);
+                assert!(
+                    k.radius >= 1 && k.radius <= MAX_KERNEL_RADIUS,
+                    "{}: kernel radius {} outside 1..={MAX_KERNEL_RADIUS}",
+                    m.name,
+                    k.radius
+                );
+                assert!(
+                    k.weights.len() == taps || k.weights.len() == 2 * taps,
+                    "{}: {} weights for a radius-{} kernel ({taps} taps)",
+                    m.name,
+                    k.weights.len(),
+                    k.radius
+                );
+                assert!(
+                    k.weights.iter().all(|w| w.is_finite() && *w >= 0.0),
+                    "{}: kernel has a negative or non-finite weight",
+                    m.name
+                );
+                // Each block must be normalised: the rule reads the
+                // gather as an average.
+                for (i, block) in k.weights.chunks(taps).enumerate() {
+                    let sum: f64 = block.iter().map(|w| *w as f64).sum();
+                    assert!(
+                        (sum - 1.0).abs() < 1e-4,
+                        "{}: kernel block {i} sums to {sum}, not 1",
+                        m.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// The pyramid level count is computed on both sides of the GPU
+    /// boundary; this pins the CPU side's shape so the WGSL copy has
+    /// something exact to match.
+    #[test]
+    fn pyramid_levels_halve_to_a_floor_and_cap() {
+        assert_eq!(pyramid_levels(4, 4), 1);
+        assert_eq!(pyramid_levels(8, 8), 2);
+        assert_eq!(pyramid_levels(64, 64), 5);
+        assert_eq!(pyramid_levels(256, 256), 7);
+        assert_eq!(pyramid_levels(1920, 1080), MAX_PYRAMID_LEVELS);
+        // The smaller side rules.
+        assert_eq!(pyramid_levels(1920, 8), 2);
+    }
+
+    /// Every `mparam(N)` in a model's WGSL, and every `cparam(N)` in a
+    /// colouring's, must index a parameter the definition declares.
+    ///
+    /// The parameter buffer is padded to 16 floats, so an index past
+    /// the declared count reads 0.0 without any error -- a model that
+    /// listed its parameters in one order and its `mparam` calls in
+    /// another would run with a zero where it expected a rate, and
+    /// still render something. This is the check the phase-3 review
+    /// ran by hand once; it belongs in the suite.
+    /// A preset carries the colouring it is meant to be seen through,
+    /// and every one of that colouring's parameters.
+    ///
+    /// Completeness is the load-bearing half. Colouring parameters
+    /// live in one map keyed by NAME for whichever colouring is
+    /// current, so a preset that switched to `occupancy` without
+    /// setting its `scale` would inherit `channel`'s -- 0.004 from a
+    /// DLA preset, say -- and draw nothing. Every name a colouring
+    /// declares must be set.
+    #[test]
+    fn preset_colorings_are_complete() {
+        for m in MODELS {
+            for p in m.presets {
+                let Some(name) = p.coloring else { continue };
+                let c = COLORINGS
+                    .iter()
+                    .find(|c| c.name == name)
+                    .unwrap_or_else(|| panic!("{}/{}: no colouring {name:?}", m.name, p.name));
+                for want in c.parameters {
+                    assert!(
+                        p.coloring_params.iter().any(|(k, _)| *k == want.name),
+                        "{}/{}: colouring {name:?} declares {:?}, which the preset does not set \
+                         -- an unset parameter keeps whatever the last colouring left under \
+                         that name",
+                        m.name,
+                        p.name,
+                        want.name
+                    );
+                }
+                for (k, _) in p.coloring_params {
+                    assert!(
+                        c.parameters.iter().any(|d| d.name == *k),
+                        "{}/{}: sets {k:?}, which colouring {name:?} does not have",
+                        m.name,
+                        p.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every preset names a colouring. Not a law of the type -- the
+    /// field is an `Option` so a future preset may decline -- but the
+    /// point of having it is that a user never has to work out which
+    /// colouring a model wants, and a preset without one puts them
+    /// back in front of that question.
+    #[test]
+    fn every_model_fits_the_parameter_buffer() {
+        for m in MODELS {
+            assert!(
+                m.parameters.len() <= crate::sim::renderer::MODEL_PARAM_SLOTS,
+                "{}: {} parameters, buffer holds {}",
+                m.name,
+                m.parameters.len(),
+                crate::sim::renderer::MODEL_PARAM_SLOTS
+            );
+        }
+    }
+
+    /// Every layered preset names registered models and colourings,
+    /// couples layers that exist, and sets every parameter it names
+    /// within range.
+    #[test]
+    fn every_layered_preset_is_well_formed() {
+        for p in LAYERED_PRESETS {
+            assert!(!p.layers.is_empty(), "{}: no layers", p.name);
+            for (m, ps) in p.layers {
+                let model = model_or_default(m);
+                assert_eq!(model.name, *m, "{}: unknown model {m}", p.name);
+                for (k, v) in *ps {
+                    let pd = model
+                        .parameters
+                        .iter()
+                        .find(|pd| pd.name == *k)
+                        .unwrap_or_else(|| panic!("{}: {m} has no parameter {k}", p.name));
+                    assert!(*v >= pd.min && *v <= pd.max, "{}: {m}.{k} = {v} outside range", p.name);
+                }
+            }
+            for &(from, to, _, strength, mask) in p.couplings {
+                assert!(from < p.layers.len() && to < p.layers.len(), "{}: coupling names a missing layer", p.name);
+                assert!(from != to, "{}: a layer coupled to itself", p.name);
+                assert!(strength.is_finite() && mask <= 15, "{}: bad coupling", p.name);
+            }
+            let c = coloring_or_default(p.coloring);
+            assert_eq!(c.name, p.coloring, "{}: unknown colouring", p.name);
+            for pd in c.parameters {
+                assert!(
+                    p.coloring_params.iter().any(|(k, _)| *k == pd.name),
+                    "{}: colouring parameter {} not set",
+                    p.name,
+                    pd.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_preset_names_a_colouring() {
+        let missing: Vec<String> = MODELS
+            .iter()
+            .flat_map(|m| {
+                m.presets
+                    .iter()
+                    .filter(|p| p.coloring.is_none())
+                    .map(move |p| format!("{}/{}", m.name, p.name))
+            })
+            .collect();
+        assert!(missing.is_empty(), "presets with no colouring: {missing:?}");
+    }
+
+    /// The auto-pause fires once, on arrival, and never for an
+    /// uncapped run.
+    #[test]
+    fn the_run_pauses_on_arriving_at_the_cap_and_not_after() {
+        // Uncapped: nothing ever pauses it.
+        assert!(!should_pause_at_limit(0, true, 10_000));
+        // Short of the cap: keep going.
+        assert!(!should_pause_at_limit(2000, true, 1999));
+        // Landing on it: pause.
+        assert!(should_pause_at_limit(2000, true, 2000));
+        // Already past when the frame began -- Run was pressed again,
+        // so this must NOT pause, or the run would be stuck.
+        assert!(!should_pause_at_limit(2000, false, 2500));
+        // A reseed makes the frame count from 0 again, so the caller
+        // passes was_below and the pause re-arms.
+        assert!(should_pause_at_limit(2000, true, 2000));
+    }
+
+    #[test]
+    fn every_parameter_index_names_a_declared_parameter() {
+        fn indices(wgsl: &str, accessor: &str) -> Vec<usize> {
+            let mut out = Vec::new();
+            let mut rest = wgsl;
+            while let Some(pos) = rest.find(accessor) {
+                rest = &rest[pos + accessor.len()..];
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(n) = digits.parse::<usize>() {
+                    out.push(n);
+                }
+            }
+            out
+        }
+        for m in MODELS {
+            for i in indices(m.wgsl, "mparam(").into_iter().chain(indices(m.wgsl_seed, "mparam(")) {
+                assert!(
+                    i < m.parameters.len(),
+                    "{}: mparam({i}) but only {} parameters are declared",
+                    m.name,
+                    m.parameters.len()
+                );
+            }
+        }
+        for c in COLORINGS {
+            for i in indices(c.wgsl, "cparam(") {
+                assert!(
+                    i < c.parameters.len(),
+                    "{}: cparam({i}) but only {} parameters are declared",
+                    c.name,
+                    c.parameters.len()
+                );
+            }
+        }
+    }
+
+    /// An agent model must declare the feature and the definition
+    /// together, define both of its functions, and ask for a
+    /// population the engine can allocate at every slider setting.
+    #[test]
+    fn an_agent_model_is_declared_consistently() {
+        for m in MODELS {
+            assert_eq!(
+                m.has(ModelFeature::NeedsAgents),
+                m.agents.is_some(),
+                "{}: the NeedsAgents feature and the AgentDef must agree",
+                m.name
+            );
+            let Some(a) = m.agents else { continue };
+            assert!(
+                a.wgsl.contains("fn sim_agent_seed(") && a.wgsl.contains("fn sim_agent("),
+                "{}: an agent model defines sim_agent_seed and sim_agent",
+                m.name
+            );
+            assert!(a.passes == 1 || a.passes == 2, "{}: agent passes must be 1 or 2", m.name);
+            assert_eq!(
+                a.wgsl.contains("fn sim_agent2("),
+                a.passes == 2,
+                "{}: agent passes = {} but sim_agent2 {} defined",
+                m.name,
+                a.passes,
+                if a.passes == 2 { "is not" } else { "is" }
+            );
+            let mut cases = vec![std::collections::BTreeMap::new()];
+            for pd in m.parameters {
+                for v in [pd.min, pd.default, pd.max] {
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(pd.name.to_string(), v);
+                    cases.push(map);
+                }
+            }
+            for map in cases {
+                for (gw, gh) in [(64u32, 64u32), (256, 256), (1920, 1080), (4096, 4096)] {
+                    let n = (a.count)(&Params { model: m, map: &map }, gw, gh);
+                    assert!(
+                        n >= 1 && n <= MAX_AGENTS,
+                        "{}: asks for {n} agents at {gw}x{gh}, outside 1..={MAX_AGENTS}",
+                        m.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_name_falls_back_rather_than_panicking() {
+        assert_eq!(model_or_default("no_such_model").name, MODELS[0].name);
+        assert_eq!(coloring_or_default("no_such_coloring").name, COLORINGS[0].name);
+    }
+
+    /// `mparam(i)` indexes this vector, so its order is the shader's
+    /// contract, not an implementation detail.
+    #[test]
+    fn packed_params_follow_declaration_order_with_config_overrides() {
+        let m = &models::GRAY_SCOTT;
+        let mut cfg = crate::config::sim::SimConfig::default();
+        let defaults = m.pack_params(&cfg);
+        assert_eq!(defaults.len(), m.parameters.len());
+        for (v, p) in defaults.iter().zip(m.parameters) {
+            assert_eq!(*v, p.default);
+        }
+        cfg.model_params.insert(m.parameters[0].name.to_string(), 0.125);
+        assert_eq!(m.pack_params(&cfg)[0], 0.125);
+    }
+}
+
+#[cfg(test)]
+mod timeline_rules_tests {
+    use super::{plan_steps, timeline_target_applies, Motion, StepPlan};
+
+    /// Forward is arithmetic; backward restarts. The budget splits a
+    /// jump across calls without changing where it lands.
+    #[test]
+    fn a_step_plan_runs_forward_and_restarts_to_go_back() {
+        // Forward, unbudgeted: run the difference.
+        assert_eq!(
+            plan_steps(300, 800, None),
+            StepPlan { reseed: false, steps: 500, reached: true }
+        );
+        // Already there: nothing to do, and it counts as reached --
+        // the exporter must not re-run a frame that is already right.
+        assert_eq!(
+            plan_steps(800, 800, None),
+            StepPlan { reseed: false, steps: 0, reached: true }
+        );
+        // Backward: restart, then run the whole target from zero.
+        assert_eq!(
+            plan_steps(800, 300, None),
+            StepPlan { reseed: true, steps: 300, reached: true }
+        );
+        // Backward to the seed itself is a reseed and no steps.
+        assert_eq!(
+            plan_steps(800, 0, None),
+            StepPlan { reseed: true, steps: 0, reached: true }
+        );
+        // Budgeted: take what is allowed, say it has not arrived.
+        assert_eq!(
+            plan_steps(0, 2000, Some(64)),
+            StepPlan { reseed: false, steps: 64, reached: false }
+        );
+        // A budget bigger than the gap does not overshoot.
+        assert_eq!(
+            plan_steps(0, 10, Some(64)),
+            StepPlan { reseed: false, steps: 10, reached: true }
+        );
+        // A budgeted rewind reseeds on the FIRST call and then walks
+        // forward over the following ones. Re-planning after that
+        // reseed must not reseed again: the index it sees is 0.
+        let first = plan_steps(2000, 500, Some(64));
+        assert_eq!(first, StepPlan { reseed: true, steps: 64, reached: false });
+        assert_eq!(
+            plan_steps(64, 500, Some(64)),
+            StepPlan { reseed: false, steps: 64, reached: false }
+        );
+        // A zero budget stalls without reporting arrival, so a caller
+        // that mis-measures cannot silently skip the run.
+        assert_eq!(
+            plan_steps(0, 100, Some(0)),
+            StepPlan { reseed: false, steps: 0, reached: false }
+        );
+    }
+
+    /// The hold rule: forward always, backward only on a discrete
+    /// event. One rule for the scrubber drag, ping-pong's backward leg
+    /// and a track authored to run backwards.
+    #[test]
+    fn a_backward_target_waits_for_the_motion_to_stop() {
+        // Forward under either motion.
+        assert!(timeline_target_applies(100, 900, Motion::Continuous));
+        assert!(timeline_target_applies(100, 900, Motion::Discrete));
+        // Standing still counts as forward: applying it is a no-op.
+        assert!(timeline_target_applies(100, 100, Motion::Continuous));
+        // Backward mid-motion is HELD -- this is the whole point.
+        assert!(!timeline_target_applies(900, 100, Motion::Continuous));
+        // ...and applied once the motion stops.
+        assert!(timeline_target_applies(900, 100, Motion::Discrete));
+        // The seed is a backward target like any other.
+        assert!(!timeline_target_applies(900, 0, Motion::Continuous));
+        assert!(timeline_target_applies(900, 0, Motion::Discrete));
+    }
+}
+
+#[cfg(test)]
+mod timeline_driver_tests {
+    use super::{plan_steps, timeline_target_applies, Motion};
+
+    /// Walk the interactive driver's decision over a whole playback,
+    /// the way the app does: commit-or-hold, then step within a
+    /// budget, frame after frame.
+    ///
+    /// A tiny simulator of the two rules together, because they are
+    /// only correct in combination -- the hold decides WHETHER a
+    /// target reaches the grid, `plan_steps` decides what the grid
+    /// then does about it, and a mistake in either shows up here as a
+    /// picture at the wrong step.
+    fn run(targets: &[(u32, Motion)], budget: u32) -> Vec<u32> {
+        let mut index = 0u32;
+        let mut committed: Option<u32> = None;
+        let mut seen = Vec::new();
+        for &(target, motion) in targets {
+            if timeline_target_applies(index, target, motion) {
+                committed = Some(target);
+            }
+            // One display frame's worth of catching up.
+            if let Some(t) = committed {
+                let plan = plan_steps(index, t, Some(budget));
+                if plan.reseed {
+                    index = 0;
+                }
+                index += plan.steps;
+                if plan.reached {
+                    committed = None;
+                }
+            }
+            seen.push(index);
+        }
+        seen
+    }
+
+    /// A forward ramp is followed exactly when the budget allows, and
+    /// followed LATE, never wrongly, when it does not.
+    #[test]
+    fn a_forward_ramp_is_followed() {
+        let ramp: Vec<(u32, Motion)> =
+            (0..=10).map(|f| (f * 100, Motion::Continuous)).collect();
+        // Generous budget: the grid is exactly on the track.
+        assert_eq!(
+            run(&ramp, 1000),
+            vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+        );
+        // Tight budget: it lags, but it only ever moves FORWARD and it
+        // never passes the target it was given.
+        let lagged = run(&ramp, 40);
+        assert!(
+            lagged.windows(2).all(|w| w[1] >= w[0]),
+            "a forward ramp must never go backwards: {lagged:?}"
+        );
+        assert!(
+            lagged.iter().zip(ramp.iter()).all(|(got, (want, _))| got <= want),
+            "the grid must never be past the target: {lagged:?}"
+        );
+    }
+
+    /// Ping-pong: the backward leg holds the end state, and the run
+    /// restarts ONCE, at the turnaround.
+    #[test]
+    fn a_ping_pong_restarts_once_per_cycle() {
+        let mut frames: Vec<(u32, Motion)> = Vec::new();
+        // Forward leg 0 -> 500.
+        for f in 0..=5 {
+            frames.push((f * 100, Motion::Continuous));
+        }
+        // Backward leg 400 -> 0, all continuous: every one of these is
+        // a falling target, and every one must be REFUSED.
+        for f in (0..5).rev() {
+            frames.push((f * 100, Motion::Continuous));
+        }
+        // The turnaround at t = 0 is the discrete event.
+        frames.push((0, Motion::Discrete));
+
+        let seen = run(&frames, 1000);
+        // The forward leg tracks.
+        assert_eq!(&seen[..6], &[0, 100, 200, 300, 400, 500]);
+        // The backward leg HOLDS at the end state -- not one restart.
+        assert!(
+            seen[6..11].iter().all(|&s| s == 500),
+            "the backward leg must hold the end state, got {:?}",
+            &seen[6..11]
+        );
+        // And the turnaround restarts, once.
+        assert_eq!(seen[11], 0, "the turnaround restarts the run");
+    }
+
+    /// A track authored to count DOWN under forward playback: held,
+    /// for the same reason, and previewable only by a discrete event
+    /// (which is what a scrubber release is).
+    #[test]
+    fn a_backward_track_holds_until_a_discrete_event() {
+        let mut frames: Vec<(u32, Motion)> = vec![(2000, Motion::Discrete)];
+        for f in (0..10).rev() {
+            frames.push((f * 200, Motion::Continuous));
+        }
+        let seen = run(&frames, 100_000);
+        assert_eq!(seen[0], 2000, "the first target applies");
+        assert!(
+            seen[1..].iter().all(|&s| s == 2000),
+            "a falling track under playback holds the highest state: {seen:?}"
+        );
+
+        // The scrubber, released at one time, applies.
+        let scrubbed = run(&[(2000, Motion::Discrete), (600, Motion::Discrete)], 100_000);
+        assert_eq!(scrubbed, vec![2000, 600], "a released scrub applies");
+    }
+
+    /// A budgeted rewind reseeds once and walks forward over the
+    /// following frames -- it must not reseed again on the way.
+    #[test]
+    fn a_budgeted_rewind_restarts_once_and_then_walks() {
+        let frames = vec![
+            // Four frames to climb to 400 at 100 a frame, then one
+            // that arrives.
+            (400, Motion::Discrete),
+            (400, Motion::Continuous),
+            (400, Motion::Continuous),
+            (400, Motion::Continuous),
+            (400, Motion::Continuous),
+            // A scrubber released at a time whose target is BEHIND the
+            // grid, and far enough behind that the rewind cannot be
+            // done in one frame either.
+            (250, Motion::Discrete),
+            (250, Motion::Continuous),
+            (250, Motion::Continuous),
+        ];
+        let seen = run(&frames, 100);
+        assert_eq!(
+            &seen[..5],
+            &[100, 200, 300, 400, 400],
+            "the climb is budgeted, not instant: {seen:?}"
+        );
+        // The rewind reseeds to 0 and takes one budget's worth...
+        assert_eq!(seen[5], 100, "restart, then one budget's worth");
+        // ...then WALKS FORWARD without restarting again. A second
+        // reseed would show here as a drop back to 100.
+        assert_eq!(&seen[6..], &[200, 250], "walks up, no second restart");
+    }
+}

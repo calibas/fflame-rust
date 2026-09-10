@@ -112,18 +112,31 @@ What is deliberately missing: `eval` is disabled, there is no
 randomness. If it isn't in the [reference](SCRIPTING.md) or Rhai's
 core language, it isn't there.
 
-## The three globals
+## The globals
 
-Every script gets three objects:
+Every script gets these objects:
 
 - **`flame`** — the structure: transforms, palette, effects, xaos.
-  This is where most work happens, through typed, validated calls.
+  This is where most flame work happens, through typed, validated
+  calls.
 - **`config`** — everything else in a `.fflame`, by the same key names
   the saved JSON uses: `config.set("brightness", 4.0)`,
-  `config.set("camera_rotation_x", 30.0 * PI() / 180.0)`. Open any
-  saved `.fflame` in a text editor to discover what's settable.
+  `config.set("camera_rotation_x", 30.0 * PI() / 180.0)`. Nested keys
+  are dotted — `config.get("sim.model_params.feed")`. Open any saved
+  `.fflame` in a text editor to discover what's settable.
 - **`anim`** — optional keyframes. Touching `anim` at all makes the
   script emit a `.anim` alongside the flame; ignoring it emits none.
+- **`escape`** — the escape-time engine: formula, colouring, centre,
+  zoom, iteration count.
+- **`sim`** — the simulation engine: model, colouring, preset, grid,
+  seed, steps.
+
+The last two are **mode switches**, not just setters. Touching either
+one puts the config into that render mode, because a simulation field
+under a flame's log-calibrated tone mapping renders as a black frame —
+so a script that set only a model and stopped would otherwise produce
+nothing. A script uses `flame` or `escape` or `sim`; mixing them means
+the last mode entered wins.
 
 One sharp edge on `config.get`: settings equal to their default are
 not stored, and reading an absent key **throws**. Guard it:
@@ -295,6 +308,67 @@ if flame.transform_count() > 0 {
 }
 ```
 
+### A simulation: start from a measurement, then wander
+
+Simulations script like flames, with one difference that decides
+whether you get a picture or a blank canvas: **a model's parameters are
+not independent knobs.** Most of the plane is uniform, and the
+interesting region is a thin curve through it. So start from a preset,
+which has been run and inspected, and move a little.
+
+```rhai
+script("Reaction Walk", "generator");
+
+sim.model("gray_scott");
+sim.preset("coral");      // parameters, dt, steps, init, colouring, matte
+sim.grid(512, 512);
+sim.seed(rand_int(1, 1000000));
+
+// Wander from the preset's OWN values, read back rather than guessed.
+// A value equal to the model default is omitted from the config, so a
+// miss means "the preset left it alone" — not an error.
+for name in ["feed", "kill"] {
+    let base = ();
+    try { base = config.get("sim.model_params." + name); } catch { }
+    if base != () {
+        sim.param(name, base * (1.0 + rand(-0.02, 0.02)));
+    }
+}
+```
+
+Three things in that snippet are the whole lesson:
+
+**A preset is a recipe, not a parameter list.** It carries its measured
+step count, its `dt`, the initial field it needs and the colouring its
+state layout wants. `sim.preset()` applies all of it. Overriding a
+piece afterwards is fine, but know what you are overriding:
+FitzHugh–Nagumo's constants give spirals from a cut wavefront and a
+**flat field** from noise, so adding `sim.init("noise")` after the
+preset is how you ship a picture of nothing.
+
+**±2%, not ±30%.** Gray–Scott is the extreme case and it is the
+subject rather than an accident: measured, `mitosis` is a blank image
+at +2% on feed and kill together, while `coral` survives +5% and dies
+by +8%. Other models hold their pattern at ±30%. The shipped
+`sim_sweep.rhai` carries a per-model scale for exactly this reason,
+each number measured by rendering and checking the image is not one
+flat colour.
+
+**Steps are not free and not optional.** Reaction–diffusion needs
+thousands of steps before the pattern is the pattern — the preset's
+count is measured, so scale it rather than replace it:
+
+```rhai
+let steps = 4000;
+try { steps = config.get("sim.steps"); } catch { }
+sim.steps((steps.to_float() * 1.5).to_int());
+```
+
+`sim.models()` and `sim.colorings()` list the registry, so a script can
+iterate it instead of copying names out of these docs.
+`assets/scripts/generators/sim_sweep.rhai` is the worked version of all
+of the above.
+
 ### Composition: scripts calling scripts
 
 Any shipped or saved script can be called by its id (its file stem).
@@ -312,6 +386,19 @@ might re-run it alone to adjust. Without a seed it continues your
 stream, so two calls give two different results.
 
 ## Gotchas, collected
+
+**A `fn` cannot see your script's variables.** Rhai functions are pure:
+`flame`, `config`, `sim` and every `let` you wrote are simply not in
+scope inside one. Factor a loop into a helper and it throws at the
+first use. Pass what it needs as arguments, or leave the code inline.
+
+**A bare `catch { }` swallows more than you meant.** `config.get`
+throws on a key at its default, so guarding it is normal — but a
+`try`/`catch` wrapped around a whole block will also silently eat a
+typo'd name or an out-of-scope variable, and you are left watching a
+loop that runs and changes nothing. Guard the one call that can throw,
+and print in the catch.
+
 
 - **Finals and linkeds must be attached** (`attach_to_all()` /
   `attach_to(i)`), and attachment happens against the normals that

@@ -129,6 +129,30 @@ GATES = [
     # fat LTO, one codegen unit), so testing under it spent minutes
     # optimizing the parent crate for download size. Measured on the
     # parent-crate-changed case: 178s -> 73s from the profile alone.
+    # The single-engine feature combinations, which nothing else
+    # builds. wasm/escape, wasm/flame and wasm/sim each link the
+    # library with default-features off and ONE engine on, and a
+    # `#[cfg]` that drifted off its item is invisible in every other
+    # build. That is not hypothetical: `render_sim` and `register_sim`
+    # both silently required the ESCAPE feature for months, because a
+    # doc comment was inserted between an escape item's `#[cfg]` and
+    # the item, leaving the attribute on the simulation item that
+    # followed. Nothing failed until the first build with simulation
+    # and no escape.
+    #
+    # `check --lib`, not `test`: the bug class is "does this
+    # combination compile", the binary needs `web-app` by definition,
+    # and building the three wasm crates properly costs ~4 minutes
+    # against ~20 seconds each here.
+    Gate("engine feature matrix",
+         ["cargo", "check", "--lib", "--no-default-features", "--features", "engine-sim"],
+         why="wasm/sim links exactly this; a cfg on the wrong item compiles everywhere else"),
+    Gate("engine feature matrix (escape)",
+         ["cargo", "check", "--lib", "--no-default-features", "--features", "engine-escape"],
+         why="wasm/escape links exactly this"),
+    Gate("engine feature matrix (flame)",
+         ["cargo", "check", "--lib", "--no-default-features", "--features", "engine-flame"],
+         why="wasm/flame links exactly this"),
     Gate("gallery script parity",
          ["cargo", "test", "--profile", "gallery-test"],
          cwd="wasm/script",

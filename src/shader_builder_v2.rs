@@ -253,6 +253,18 @@ pub struct InlinedTransform {
 /// optimize based on known values (dead code elimination, constant folding).
 ///
 /// When any of these values change, shaders must be recompiled.
+/// What `ShaderBuilder::build_definitions` returns: the WGSL
+/// definitions and what the caller needs to finish a kernel with them.
+pub struct Definitions {
+    pub source: String,
+    pub processor: TemplateProcessor,
+    /// The active variations with their local indices.
+    pub active: Vec<(String, u32)>,
+    /// Whether `apply_variations` takes the `vc` / `vrc` pointers.
+    pub has_dc: bool,
+    pub has_rgb: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaderConstants {
     /// Number of transforms (allows loop unrolling in select_transform)
@@ -629,6 +641,29 @@ impl ShaderConstants {
             variation_priorities: collect_phase_overrides(flame, registry, &id_map),
         }
     }
+}
+
+/// Replace every whole-word occurrence of `word` (WGSL identifier
+/// characters on neither side) with `with`.
+fn regex_lite_replace_word(src: &str, word: &str, with: &str) -> String {
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len() + 64);
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(word.as_bytes())
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && (i + word.len() == bytes.len() || !is_ident(bytes[i + word.len()]))
+        {
+            out.push_str(with);
+            i += word.len();
+        } else {
+            let ch = src[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
 }
 
 impl ShaderConstants {
@@ -1509,18 +1544,24 @@ impl ShaderBuilder {
     /// - `path_features_enabled`: true to include path tracking code
     /// - `xaos_enabled`: true to use xaos-weighted transform selection
     /// - `constants`: Hard-coded shader constants
-    pub fn build_from_template(
+    /// Everything a flame shader defines BEFORE its main kernel: the
+    /// constants, the header (bindings, structs), the RNG, the affine,
+    /// the active variations' bodies, `apply_variations`, the helper
+    /// libraries, `get_param`, the per-thread state, the complex and
+    /// utility helpers. `build_from_template` appends the main template
+    /// to this; the simulation's layer map (simulation-layers plan,
+    /// section 4) appends a map function instead and binds the same
+    /// buffers. The split is at one line of the old function, so the
+    /// flame shader is byte-for-byte what it was.
+    pub fn build_definitions(
         &self,
         flame: &crate::scene::transforms::Flame,
-        // No longer used: the local index map now derives from the flame's
-        // variation order. Kept so existing call sites stay unchanged.
-        _active_variations: &HashMap<String, f32>,
         render_3d: bool,
         path_features_enabled: bool,
         xaos_enabled: bool,
         output_histogram_direct: bool,
         constants: &ShaderConstants,
-    ) -> String {
+    ) -> Definitions {
         let active = self.active_with_local_indices(flame, render_3d);
 
         // Compute has_dc once: drives both the apply_variations signature
@@ -1804,6 +1845,92 @@ impl ShaderBuilder {
             shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
             shader.push('\n');
         }
+
+        Definitions { source: shader, processor, active, has_dc, has_rgb }
+    }
+
+    /// The simulation's layer map (simulation-layers plan, section 4):
+    /// the flame's definitions plus `flame_map(xform_id, u, seed)`, a
+    /// transform applied to a point of the unit plane -- affine, then
+    /// variations, then the post affine when enabled -- as the flame's
+    /// own kernel applies it, minus what a map has no use for (the
+    /// hide flag, the colour pointers, the blur contribution). Bound at
+    /// GROUP 1 and with its `params` renamed `flame_params`, so it can
+    /// share a shader with the simulation's own prelude, which owns
+    /// group 0 and the name `params`.
+    pub fn build_layer_map(&self, flame: &crate::scene::transforms::Flame) -> String {
+        let constants = ShaderConstants {
+            num_transforms: flame.transforms.len().max(1) as u32,
+            color_mode: 0,
+            has_post_affine: flame.has_post_affine(),
+            has_attachments: flame.has_attachments(),
+            has_post_symmetry: false,
+            // The blur is a plot-time device; a map has no plot.
+            has_analytic_blur: false,
+            flatten_z_per_iter: false,
+            solid_enabled: false,
+            probe: false,
+            census: false,
+            attachment_cap: flame.attachment_cap() as u32,
+            inlined_transforms: None,
+            cumulative_weights: None,
+            variation_priorities: std::collections::BTreeMap::new(),
+        };
+        let defs = self.build_definitions(flame, false, false, false, true, &constants);
+        let mut src = defs.source;
+        let mut call_args = String::from("&rng");
+        let mut locals = String::new();
+        if defs.has_dc {
+            locals.push_str("    var vc = 0.0;\n");
+            call_args.push_str(", &vc");
+        }
+        if defs.has_rgb {
+            locals.push_str("    var vrc = vec3<f32>(0.0, 0.0, 0.0);\n");
+            call_args.push_str(", &vrc");
+        }
+        call_args.push_str(", &hide");
+        src.push_str(&format!(
+            "\n// A transform as a map on the unit plane, for a simulation layer.\n\
+fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
+    let xform = transforms[xform_id];\n\
+    var rng = rng_init(seed, 0u);\n\
+    var hide = false;\n\
+{locals}\
+    var v = apply_variations(xform, xform_id, apply_affine(xform, u), {call_args});\n\
+    if (HAS_POST_AFFINE) {{\n\
+        if (xform.post_enabled > 0.5) {{\n\
+            v = apply_post_affine(xform, v);\n\
+        }}\n\
+    }}\n\
+    return v;\n\
+}}\n"
+        ));
+        // Group 1, and the flame's `params` out of the simulation's way.
+        let src = src.replace("@group(0) @binding(", "@group(1) @binding(");
+        let re = regex_lite_replace_word(&src, "params", "flame_params");
+        re
+    }
+
+    pub fn build_from_template(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        // No longer used: the local index map now derives from the flame's
+        // variation order. Kept so existing call sites stay unchanged.
+        _active_variations: &HashMap<String, f32>,
+        render_3d: bool,
+        path_features_enabled: bool,
+        xaos_enabled: bool,
+        output_histogram_direct: bool,
+        constants: &ShaderConstants,
+    ) -> String {
+        let Definitions { source: mut shader, processor, active, .. } = self.build_definitions(
+            flame,
+            render_3d,
+            path_features_enabled,
+            xaos_enabled,
+            output_histogram_direct,
+            constants,
+        );
 
         // 10. Main shader from template — same processor as the header so
         // OUTPUT_HISTOGRAM_DIRECT picks consistently across declarations
