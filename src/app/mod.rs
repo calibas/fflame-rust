@@ -2490,7 +2490,7 @@ impl App {
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
-                use crate::animation::export::{AnimationExportConfig, export_animation_fast, VideoEncodingSettings};
+                use crate::animation::export::{AnimationExportConfig, export_animation, VideoEncodingSettings};
 
                 // Clone config and override max_iterations from export settings
                 let mut config = self.config_manager.active_config().clone();
@@ -2546,7 +2546,7 @@ impl App {
                 std::thread::spawn(move || {
                     let mut reporter = UiReporter::new(Arc::clone(&status_arc));
 
-                    match pollster::block_on(export_animation_fast(export_config, &mut reporter)) {
+                    match pollster::block_on(export_animation(export_config, &mut reporter)) {
                         Ok(result) => {
                             println!("\nAnimation export complete!");
                             println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
