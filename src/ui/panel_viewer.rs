@@ -387,6 +387,10 @@ pub struct PanelContext<'a> {
     /// readout/greying only -- the panel never writes them.
     pub sim_timeline_target: Option<u32>,
     pub sim_timeline_holding: bool,
+    /// The timeline owns the grid -- playing, or still walking to a
+    /// target. Greys the transport. Wider than `sim_timeline_target`,
+    /// which is `None` while a backward target is being held.
+    pub sim_timeline_driven: bool,
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
@@ -924,6 +928,7 @@ impl<'a> PanelViewer<'a> {
                         grid: self.context.sim_grid,
                         timeline_target: self.context.sim_timeline_target,
                         timeline_holding: self.context.sim_timeline_holding,
+                        timeline_driven: self.context.sim_timeline_driven,
                     },
                 );
             }

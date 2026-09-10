@@ -246,9 +246,11 @@ paths — recorded as an inconsistency on 2026-09-09 and resolved here
   scrubber to see any point of it. Export renders every frame
   correctly, at a cost that grows with the square of the step count;
   the ETA says how long.
-- **Run / Pause / Step / Space** while the timeline is playing: inert
-  — the timeline owns the step count. When it stops, they work again
-  from wherever the grid is.
+- **Run / Pause / Step / Space** while the timeline is playing a step
+  track: inert — the timeline owns the step count, and Run is
+  disengaged when playback starts. When it stops, they work again from
+  wherever the grid is. An animation with no step track leaves the
+  transport alone: the run keeps going under it.
 
 ## 4. Phases
 
@@ -320,6 +322,47 @@ run of that gate, on the unified loop, still showed zero difference.
 - **Gates:** pure-rule tests for the budget/reseed decision and for
   the hold rule (drag, and ping-pong's backward leg); then in-app,
   the scenarios in §3 by hand.
+
+**What the review of phases 1–3 found (2026-09-09).** A startup hook
+drove the real app through four animations and logged the grid every
+frame. Three things fell out, two of them bugs the pure-rule tests
+could not see because they are about who else is allowed to move the
+grid:
+
+1. **The hold did not hold.** On ping-pong's backward leg and on a
+   track written to count down, the rule refused every falling target
+   correctly -- and then, with nothing committed, the driver fell
+   through to the transport, where Run was still engaged from before
+   playback started. The step count climbed past 2,000 during the
+   "hold", and after playback ended the run kept going under a button
+   nobody had pressed. Fixed two ways: playback with a step track now
+   DISENGAGES Run when it starts, and ownership (`timeline_owns_sim`)
+   is "playing with a step track, or still walking to a target" --
+   wider than "a target is committed" -- so the driver, the panel's
+   greying and the spacebar all treat a held leg as owned.
+2. **Ownership had been playback alone**, which would have taken the
+   grid from a free-running simulation the moment Play was pressed on
+   an animation that only sweeps a colouring parameter. Now it needs a
+   `Sim.Steps` track. Verified: with no step track, playback leaves
+   the run free-running and it pauses at its cap as before.
+3. **Per-dispatch progress cost 18% of a flame frame on the CLI.** The
+   new adapter forwarded every flame dispatch (about 120 a frame at a
+   billion iterations) to a reporter that prints and flushes each
+   time: 505 ms a frame against 415 ms with reporting off. Rate-limited
+   to one report per 100 ms; 431 ms after.
+
+And what it confirmed: the interactive budget does not spiral -- the
+measured step cost climbs as the batch shrinks, because the fixed
+submit-and-wait overhead is amortised over fewer steps, and converges
+where overhead plus work fills the 8 ms; the budget stayed well above
+the eight steps a frame the ramp needed. Pacing engaged exactly once,
+for four frames, while the reversed track's first target was reached.
+A persistent escape renderer gives bit-identical frames for identical
+configs, and a zoom-track frame matches a PNG of its own config
+bit-for-bit once that config carries the same `f32`-rounded value the
+apply path produces (pre-existing: animation values are `f32`). The
+unified loop renders a billion-iteration flame frame in 431 ms against
+the old fast loop's 430 ms.
 
 ### Phase 4 — Record it
 

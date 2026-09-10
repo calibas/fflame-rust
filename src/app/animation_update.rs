@@ -80,6 +80,20 @@ impl App {
     /// Called when controller starts playing but FSM not yet in animation mode.
     fn handle_animation_start(&mut self, is_playing: bool, was_animating: bool) {
         if is_playing && !was_animating {
+            // The timeline takes the grid. Run is DISENGAGED rather
+            // than merely ignored: left engaged it would resume the
+            // moment the timeline released the grid -- after a held
+            // leg, after playback stopped -- and the run would carry
+            // on from wherever it was under a button nobody pressed.
+            // The user re-engages Run afterwards if they want it.
+            #[cfg(feature = "engine-sim")]
+            if self.config_manager.active_config().render_mode
+                == crate::scene::transforms::RenderMode::Simulation
+                && self.animation_has_step_track()
+            {
+                self.sim_running = false;
+                self.sim_step_once = false;
+            }
             self.render_mode
                 .enter_animation(self.config_manager.active_config());
             // Enable animation mode in ConfigManager - UI changes become silent (no undo)
@@ -129,6 +143,48 @@ impl App {
         }
     }
 
+    /// Does the timeline own the simulation's step count right now?
+    ///
+    /// Two states, not one. A COMMITTED target means the grid is
+    /// walking toward it. But playback that is HOLDING a backward
+    /// target -- ping-pong's backward leg, a track written to count
+    /// down -- has committed nothing, and the grid must still not
+    /// move: the whole point of holding is that the picture stays
+    /// put. Found by the review hook on 2026-09-09, where the held
+    /// leg ran on under a Run button nobody had pressed since before
+    /// playback started.
+    ///
+    /// So: playing WITH A STEP TRACK, or a target still being walked
+    /// to after playback stopped or a scrub landed. The transport is
+    /// inert for both.
+    ///
+    /// The step track is the condition, not playback alone. An
+    /// animation that only sweeps a colouring parameter has no claim
+    /// on the step count, and taking the grid from a free-running
+    /// simulation the moment Play was pressed would make "animate a
+    /// parameter over a running simulation" impossible -- which it
+    /// was not before this work, and should not become.
+    #[cfg(feature = "engine-sim")]
+    pub(super) fn timeline_owns_sim(&self) -> bool {
+        (self.animation_controller.is_playing() && self.animation_has_step_track())
+            || self.sim_timeline_target.is_some()
+    }
+
+    /// Whether the loaded animation animates `Sim.Steps` at all.
+    #[cfg(feature = "engine-sim")]
+    pub(super) fn animation_has_step_track(&self) -> bool {
+        let key = crate::config::ConfigPath::SimSteps.to_string_key();
+        self.animation_controller
+            .animation
+            .as_ref()
+            .is_some_and(|a| a.tracks.iter().any(|t| t.target == key))
+    }
+
+    #[cfg(not(feature = "engine-sim"))]
+    pub(super) fn timeline_owns_sim(&self) -> bool {
+        false
+    }
+
     /// Hand the timeline's step count to the grid -- or hold it.
     ///
     /// Called after track values have been applied to the config,
@@ -145,13 +201,23 @@ impl App {
         if config.render_mode != crate::scene::transforms::RenderMode::Simulation {
             return;
         }
+        // Only a step track can hand the grid a target. Any other
+        // track writes nothing to `sim.steps`, and committing the
+        // config's own cap as a target would run the grid to it.
+        if !self.animation_has_step_track() {
+            return;
+        }
         let target = config.sim.steps;
         // Where the field actually is. A renderer that has not been
-        // built yet is at 0, so a first target is always forward.
-        let index = self
-            .sim_renderer
-            .as_ref()
-            .map_or(0, |s| s.step_index());
+        // built yet is at 0, so a first target is always forward --
+        // and so is one about to be reseeded, whose index is stale.
+        let index = if self.sim_reseed {
+            0
+        } else {
+            self.sim_renderer
+                .as_ref()
+                .map_or(0, |s| if s.will_reseed(&config.sim) { 0 } else { s.step_index() })
+        };
         if crate::sim::timeline_target_applies(index, target, motion) {
             self.sim_timeline_target = Some(target);
         }

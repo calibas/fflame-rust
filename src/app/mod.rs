@@ -1612,6 +1612,11 @@ impl App {
         // frame. The panel says so, because a deliberately-held
         // picture and a stuck one look identical otherwise. Computed
         // BEFORE the call, which borrows both of these mutably.
+        // The panel greys the transport on OWNERSHIP, which is wider
+        // than a committed target (see `timeline_owns_sim`): a held
+        // leg has no target and must still be greyed, or Run could be
+        // pressed into the hold. The target itself feeds the readout.
+        let sim_timeline_driven = self.timeline_owns_sim();
         let sim_timeline_holding = {
             #[cfg(feature = "engine-sim")]
             {
@@ -1700,6 +1705,7 @@ impl App {
                 }
             },
             sim_timeline_holding,
+            sim_timeline_driven,
         );
 
         // Simulation transport, back from the panel. `sim_running` is
@@ -2670,6 +2676,10 @@ impl App {
         // Determine overwrite mode (smooth transitions during parameter changes)
         // Must be computed before mutable borrow of flame_renderer
         let use_overwrite = self.should_use_overwrite();
+        // Read before the renderer is borrowed: the simulation driver
+        // below needs it and the method takes `&self`.
+        #[cfg(feature = "engine-sim")]
+        let timeline_owns_sim = self.timeline_owns_sim();
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
@@ -2792,6 +2802,22 @@ impl App {
                         // Still catching up -- keep the frames coming.
                         self.window.request_redraw();
                     }
+                    self.sim_step_once = false;
+                } else if timeline_owns_sim {
+                    // Playing, but HOLDING: the track asked for a step
+                    // count below the grid under continuous motion, so
+                    // nothing was committed. The picture stays put --
+                    // recoloured, so parameter tracks still show, but
+                    // not stepped. Run is disengaged on playback start
+                    // and the transport is greyed, so nothing else
+                    // moves it either.
+                    sim.render_frame(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &final_config.sim,
+                        renderer.palette_view(),
+                        0,
+                    );
                     self.sim_step_once = false;
                 } else {
                     let steps = if self.sim_running {

@@ -1237,6 +1237,7 @@ impl EguiLayer {
         sim_grid: (u32, u32),
         sim_timeline_target: Option<u32>,
         sim_timeline_holding: bool,
+        sim_timeline_driven: bool,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -1801,6 +1802,7 @@ impl EguiLayer {
                         sim_grid,
                         sim_timeline_target,
                         sim_timeline_holding,
+                        sim_timeline_driven,
                         variation_update_requested: &mut variation_update_requested,
                         script_cloud,
                         effect_catalog,

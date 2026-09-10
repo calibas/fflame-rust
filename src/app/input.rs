@@ -227,11 +227,7 @@ impl App {
                     // greys it). Toggling a flag that does nothing now
                     // and then takes effect the moment playback stops
                     // would start the run by surprise.
-                    #[cfg(feature = "engine-sim")]
-                    let driven = self.sim_timeline_target.is_some();
-                    #[cfg(not(feature = "engine-sim"))]
-                    let driven = false;
-                    if !driven {
+                    if !self.timeline_owns_sim() {
                         self.sim_running = !self.sim_running;
                     }
                 } else {
