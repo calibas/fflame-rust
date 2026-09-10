@@ -1186,10 +1186,10 @@ trip. The UI documentation was rewritten by the render-mode project
   `SimColorLayerParam` exist as config paths but the target picker
   offers only the flat ones, so nothing inside a layer can be
   keyframed. Folded into
-  [simulation-panel.md](simulation-panel.md) §5.
+  [simulation-panel.md](../archive/projects/simulation-panel.md) §5 — **done**.
 
-The panel reorganisation itself is
-[simulation-panel.md](simulation-panel.md).
+The panel reorganisation itself is done:
+[simulation-panel.md](../archive/projects/simulation-panel.md).
 
 ---
 

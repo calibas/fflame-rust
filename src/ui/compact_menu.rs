@@ -9,6 +9,7 @@
 use super::menu_context::{MenuActions, MenuState};
 use super::workspace::{PanelType, Workspace};
 use rust_i18n::t;
+use super::menu_bar::rows_do_not_wrap;
 
 /// Render the compact floating menu button and its popup.
 pub fn render_compact_menu(
@@ -82,6 +83,7 @@ fn render_compact_menu_items(
 ) {
     // --- Window submenu ---
     ui.menu_button(t!("menu.window"), |ui| {
+        rows_do_not_wrap(ui);
         // Order is this menu's own -- touch priority, transforms
         // first -- but the labels and the mode policy come from the
         // shared table, so the two menus cannot drift apart.
@@ -109,6 +111,7 @@ fn render_compact_menu_items(
     // not size-to-content buttons). Actions carry no open/closed state,
     // so their `selected` is always false; panel rows show theirs.
     ui.menu_button(t!("menu.file"), |ui| {
+        rows_do_not_wrap(ui);
         if ui.selectable_label(false, t!("menu.new").as_ref()).clicked() {
             menu_actions.file.new_flame = true;
             ui.close();
@@ -190,6 +193,7 @@ fn render_compact_menu_items(
 
     // --- View submenu ---
     ui.menu_button(t!("menu.view"), |ui| {
+        rows_do_not_wrap(ui);
         if ui.button(t!("menu.reset_view")).clicked() {
             menu_actions.view.reset_view = true;
             ui.close();
@@ -202,6 +206,7 @@ fn render_compact_menu_items(
     // only way into Escape or Simulation on a phone would be the
     // panels' own buttons.
     ui.menu_button(t!("menu.mode"), |ui| {
+        rows_do_not_wrap(ui);
         for m in crate::scene::transforms::RenderMode::ALL {
             let label = t!(super::render_mode::mode_label_key(*m));
             if ui

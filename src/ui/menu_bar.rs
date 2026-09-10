@@ -2,6 +2,20 @@ use super::menu_context::{MenuActions, MenuState};
 use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
 
+/// Stop menu rows wrapping.
+///
+/// egui lays a menu out top-down JUSTIFIED, and the default wrap mode
+/// is "follow the layout", so a row wider than the popup's current
+/// width is broken across two lines rather than widening the popup.
+/// The Window menu has 23 rows; wrapped, it runs off the bottom of the
+/// screen. `Extend` makes each row report its true width, so the popup
+/// sizes to its longest row and flips to the left of its button when
+/// there is no room to the right -- which is what started happening to
+/// Window once the Mode menu pushed it further along the bar.
+pub(super) fn rows_do_not_wrap(ui: &mut egui::Ui) {
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+}
+
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
@@ -20,6 +34,7 @@ pub fn render_menu_bar(
             // so their `selected` is always false; entries that open a
             // panel show that panel's state like Window entries do.
             ui.menu_button(t!("menu.file"), |ui| {
+                rows_do_not_wrap(ui);
                 if ui.selectable_label(false, t!("menu.new").as_ref()).clicked() {
                     menu_actions.file.new_flame = true;
                 }
@@ -110,6 +125,7 @@ pub fn render_menu_bar(
 
             // Edit Menu
             ui.menu_button(t!("menu.edit"), |ui| {
+                rows_do_not_wrap(ui);
                 if ui.add_enabled(menu_state.can_undo, egui::Button::new(t!("menu.undo"))).clicked() {
                     menu_actions.edit.undo = true;
                 }
@@ -132,6 +148,7 @@ pub fn render_menu_bar(
             ) != super::visibility::Vis::Hide
             {
                 ui.menu_button(t!("menu.view"), |ui| {
+                    rows_do_not_wrap(ui);
                     if ui.button(t!("menu.reset_view")).clicked() {
                         menu_actions.view.reset_view = true;
                     }
@@ -155,6 +172,7 @@ pub fn render_menu_bar(
             // the flame's two projections is a view-level decision and
             // belongs next to the camera.
             ui.menu_button(t!("menu.mode"), |ui| {
+                rows_do_not_wrap(ui);
                 for m in RenderMode::ALL {
                     let label = t!(super::render_mode::mode_label_key(*m));
                     if ui
@@ -178,6 +196,7 @@ pub fn render_menu_bar(
             ) != super::visibility::Vis::Hide
             {
             ui.menu_button(t!("menu.rendering"), |ui| {
+                rows_do_not_wrap(ui);
                 // Pause/Resume
                 let pause_text = if menu_state.is_paused {
                     t!("menu.resume")
@@ -197,6 +216,7 @@ pub fn render_menu_bar(
 
                 // Iterations per Thread submenu
                 ui.menu_button(t!("menu.iterations_per_thread"), |ui| {
+                    rows_do_not_wrap(ui);
                     for &ipt in &[128, 256, 512, 1024, 2048, 4096] {
                         if ui.button(format!("{}", ipt)).clicked() {
                             menu_actions.rendering.set_iterations_per_thread = Some(ipt);
@@ -215,6 +235,7 @@ pub fn render_menu_bar(
 
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {
+                rows_do_not_wrap(ui);
                 // Reset Workspace to Standard layout
                 if ui.button(t!("menu.reset_workspace")).clicked() {
                     workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
@@ -257,6 +278,7 @@ pub fn render_menu_bar(
 
                 ui.separator();
                 ui.menu_button(t!("menu.workspace_layout"), |ui| {
+                    rows_do_not_wrap(ui);
                     let current = workspace.current_layout;
 
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, t!("menu.layout_beginner").as_ref()).clicked() {
@@ -290,6 +312,7 @@ pub fn render_menu_bar(
 
             // Help Menu
             ui.menu_button(t!("menu.help"), |ui| {
+                rows_do_not_wrap(ui);
                 // Help panel opens as floating window in docking system
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
                 if ui.selectable_label(help_open, t!("menu.help_panel").as_ref()).clicked() {
@@ -319,6 +342,7 @@ pub fn render_menu_bar(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Language selector menu (globe icon) — rightmost
                 ui.menu_button("🌐", |ui| {
+                    rows_do_not_wrap(ui);
                     let locales = crate::i18n::supported_locales();
                     let current_locale = crate::i18n::current_locale();
 

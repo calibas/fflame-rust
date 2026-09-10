@@ -13,8 +13,8 @@
 use crate::config::delta::ConfigPath;
 use crate::config::manager::ConfigManager;
 use crate::config::sim::{
-    SimBoundary, SimDownscale, SimGrid, SimInit, SimMatteChannel, SimMatteEdge, SimUpscale,
-    SimConfig, SimWarp, SimWarpFilter,
+    SimBoundary, SimConfig, SimDownscale, SimGrid, SimInit, SimUpscale, SimWarp,
+    SimWarpFilter,
 };
 use crate::scene::transforms::RenderMode;
 use crate::sim::{SimParamDef, COLORINGS, MODELS};
