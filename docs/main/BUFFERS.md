@@ -13,6 +13,14 @@
 
 ---
 
+> **Flame buffers.** The escape and simulation engines own their own
+> GPU resources and bind groups. The simulation's field is an
+> `Rgba32Float` texture array, one slice per layer, ping-ponged between
+> two allocations — not the u32 histogram described here. Both engines
+> hand their result to the accumulator's layout, which is where this
+> document becomes relevant to them again. See
+> [SIMULATION.md](SIMULATION.md).
+
 ## Bind Group Layouts
 
 The renderer uses three different bind group configurations, one for each pipeline stage.

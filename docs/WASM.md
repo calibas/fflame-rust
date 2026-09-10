@@ -1,5 +1,17 @@
 # WebAssembly (WASM) Build Guide
 
+> **Two different WASM products.** This document is the **web app** —
+> the full editor in a browser, built by `build-wasm.sh` / `.bat`. The
+> other is the set of headless **gallery modules** under `wasm/`
+> (`render`, `flame`, `escape`, `sim`, `script`), which take config
+> JSON and return pixels; they are built with `wasm-pack` and
+> documented in [wasm/README.md](../wasm/README.md).
+>
+> All three render engines work in both. The single-engine modules
+> exist only to cut download size, and are not interchangeable: a
+> module built without an engine reports that the engine is missing
+> rather than rendering something the file never described.
+
 ## ✅ 100% Feature Parity - Production Ready
 
 The fractal flame renderer has been successfully configured for WebAssembly/browser deployment!

@@ -1,10 +1,12 @@
 # Simulation Mode — master plan
 
-**Status:** Phases 0–5 shipped; **phase 6 is the only one left**, and
-what remains of it is at the end of §5 — mostly documentation and
-translation, plus two features scoped and deliberately deferred (a
-display-time view, and the field as a flame transform). 31 models and
-11 colourings are in the registry, on branch `simulation-mode`.
+**Status:** Phases 0–5 shipped, and phase 6 is all but done as of
+2026-09-10 — the script, the WASM module and the documentation landed
+that day. What is left is at the end of §5 and is three items, none of
+them engine work: translations (deferred as their own project), a
+display-time view (held), and the online browser's render-mode filter
+(a gap shared with escape). 31 models and 11 colourings are in the
+registry, on branch `simulation-mode`.
 
 **§5 is where the per-phase status lives**, and each wave records what
 it measured there rather than here. (This header once said "no code
@@ -1206,45 +1208,53 @@ trip. The UI documentation was rewritten by the render-mode project
 2026-09-09, and two that used to be here have gone because they were
 already fixed (see *Closed* below):
 
-- **A shipped `sim_sweep.rhai`.** Smaller than it reads: the scripting
-  API is COMPLETE — `src/script/api.rs:1443-1615` registers the whole
-  `sim` surface (model, colouring, both param maps, grid, seed, init,
-  steps, steps_per_frame, dt, boundary, and `sim.models()` /
-  `sim.colorings()`), documented in SCRIPTING.md. What is missing is
-  an example in `assets/scripts/`, which has 8 generators and 9
-  modifiers, none of them simulation.
 - **`es` / `ja` / `zh-CN` keys** — zero simulation keys in all three.
-  Also smaller than it reads, and not a simulation problem: those
-  files carry 232 / 222 / 222 translated lines against `en.yml`'s
-  1,894. They are stubs for the whole app. Escape has the same hole
-  (integration checklist §12). Fixing it is a translation project, not
-  a simulation one.
-- **A `wasm/sim` gallery module.** `wasm/` has escape, flame, render
-  and script. Note `wasm/README.md` still says "Two standalone
-  modules" and documents only two, so it is stale for escape and flame
-  already.
-- **Docs.** Simulation is mentioned zero times in `docs/main/`
-  RENDERER, CONFIG, BUFFERS, SHADERS and COLOR; zero in `RELEASE.md`,
-  `WASM.md` and `TESTING-GUIDE.md`. **`CLAUDE.md` has no `src/sim/`
-  entry in its Core Modules list at all** — the module list documents
-  `src/escape/` at length and skips the third engine. UI, EXPORT,
-  SCRIPTING and ARCHITECTURE are covered.
+  Smaller than it reads, and not a simulation problem: those files
+  carry 232 / 222 / 222 translated lines against `en.yml`'s 1,894.
+  They are stubs for the whole app, and escape has the same hole
+  (integration checklist §12). **Deferred deliberately, 2026-09-10:**
+  translation is its own project.
 - **Display-only pan/zoom into the grid.** Scoped and deliberately not
   built: the warp is a per-step transform of the field, not a camera,
   so viewport navigation is *refused* in Simulation rather than
   misdirected (`ui::visibility::Control::ViewNavigation`, with tests
   pinning the refusal and a comment saying this arm becomes `Show`
-  when the feature exists).
+  when the feature exists). **Held, 2026-09-10** — there are ideas for
+  how, but it is not scheduled.
 - **The online browser's render-mode filter** offers All / 2D / 3D
   only (`src/ui/fractal_browser.rs:559-567`), so neither non-flame
   mode can be filtered for. Pre-existing with escape; the integration
   checklist §8 flagged it for both.
-- **The IFS phase** of
-  [simulation-derived-fields.md](../archive/projects/simulation-derived-fields.md)
-  — the field used as a transform inside the flame renderer. Scoped,
-  not scheduled.
+
+**And one that turned out not to exist.** This list carried "the IFS
+phase — the field used as a transform inside the flame renderer" from
+[simulation-derived-fields.md](../archive/projects/simulation-derived-fields.md).
+The direction that was actually wanted is the OTHER one — the flame's
+transforms used as the field's per-step maps — and that has been built
+since layers phase 3 (`sim.use_transforms`: transform *i* warps layer
+*i* by its affine and its variations, at a rate that is its weight).
+A texture-sampling variation that reads a simulation field inside the
+chaos game remains unbuilt and unrequested.
 
 **Closed since this list was written:**
+
+- **A shipped `sim_sweep.rhai`** (2026-09-10). The scripting API was
+  already complete; the example was what was missing. Writing it found
+  that `sim.preset()` applied parameters, steps and init but not the
+  colouring, matte, warp or dt, so a preset from script rendered flat
+  where the same preset from the panel did not.
+- **A `wasm/sim` gallery module** (2026-09-10), 0.43 MB gzipped
+  against the full renderer's 0.80. Building it found two `#[cfg]`
+  attributes attached to the wrong item — `render_sim` and
+  `register_sim` had silently required the ESCAPE feature since
+  `37531133` — which nothing had ever compiled. `release.py check` now
+  builds each single-engine combination.
+- **Docs** (2026-09-10). [SIMULATION.md](../main/SIMULATION.md) is the
+  engine's topic doc; RENDERER, CONFIG, BUFFERS, SHADERS and COLOR
+  carry pointers saying what does and does not apply to the other two
+  engines; ARCHITECTURE has a three-engine section; CLAUDE.md has its
+  `src/sim/` entry; RELEASE, WASM and TESTING-GUIDE cover the module
+  and the per-engine gates.
 
 - Layer-scoped animation targets — done in
   [simulation-panel.md](../archive/projects/simulation-panel.md) §5.
