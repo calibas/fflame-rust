@@ -1,12 +1,74 @@
 # The Simulation panel: one list per concept
 
-**Status:** plan of record, 2026-09-09, branch `simulation-mode`. **No
-code written yet.** This is phase 5 of
+**Status: ARCHIVED 2026-09-09 — done.** All five phases built and
+gated; the four adjacent problems in §5 fixed. Kept as the record of
+why the panel is shaped this way. Anything still outstanding is under
+**What is still open** below.
+
+**Was:** plan of record, 2026-09-09, branch `simulation-mode`. This is phase 5 of
 [simulation-layers.md](simulation-layers.md), the only unbuilt phase
 there, widened by what the panel has accumulated since that plan was
 written.
 
 Surveyed before planning; every claim carries its `file:line`.
+
+## What is still open
+
+Nothing this document planned. These are the simulation's remaining
+phase-6 items, which live in
+[simulation-fractals.md](simulation-fractals.md) and are listed here
+only so a reader of this document is not left thinking the mode is
+finished:
+
+- A shipped `sim_sweep.rhai`; `es` / `ja` / `zh-CN` keys (zero
+  simulation keys in all three); a `wasm/sim` gallery module; the
+  RENDERER, CONFIG and EXPORT topic docs, which mention simulation
+  zero times.
+- A display-time view, so viewport navigation means something in
+  Simulation rather than being refused.
+
+## What was built
+
+| Phase | Landed |
+|---|---|
+| 1 | Spacebar runs the grid in Simulation mode |
+| 2 | Transport row pinned above a scrolling body |
+| 3 | Model and Layers merged into one list |
+| 4 | Colouring and the colour stack merged the same way |
+| 5 | Five sections, plus the control the merge dropped |
+
+**Four things came out that this plan did not predict**, all recorded
+in the commits:
+
+1. **Editing a translation did not rebuild the crate.** `rust_i18n`
+   reads `locales/` when its macro expands, but cargo was never told,
+   so an edited string silently did not take and the locale-key tests
+   passed against a stale table. Found by renaming a key to prove a
+   test was load-bearing and watching it go green. `build.rs` now
+   watches `locales/`.
+2. **The dt ceiling bug surfaced as a compile error.** Merging the
+   Model section deleted the variable the timestep slider was wrongly
+   reading, and the compiler pointed at it. §5 had predicted the bug;
+   it did not predict that the merge would find it for free.
+3. **Phase 3 dropped a control and nothing failed.** Merging Model and
+   Layers took the `use_transforms` checkbox with it, leaving the
+   feature that makes the flame's transforms the layers' maps
+   unreachable, with every test and all 330 baselines still green.
+   Phase 5's gate — `the_panel_writes_every_sim_path`, a source scan
+   for a control per config path — exists because of it, and was
+   verified by removing the checkbox again.
+4. **"Add layer adds two" was not a bug.** It promoted the existing
+   system and added one, giving two, which is correct; it only looked
+   wrong because layer 0 was invisible. Recorded rather than "fixed",
+   since it reached the plan through my own summary of the survey.
+
+**And one regression this work caused elsewhere.** Adding the Mode menu
+pushed Window further along the bar, leaving its popup less room; egui
+lays menus out top-down *justified* with wrapping on by default, so the
+23-row Window menu wrapped every row and ran off the bottom of the
+screen. Every menu closure now sets `TextWrapMode::Extend`, so a row
+reports its true width and the popup sizes to its longest row and flips
+left when there is no room right.
 
 ## 0. What is being asked for
 
