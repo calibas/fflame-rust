@@ -2163,7 +2163,16 @@ impl App {
 
                     let is_escape_export = export_config.render_mode
                         == crate::scene::transforms::RenderMode::Escape;
-                    while !is_escape_export && total_rendered < max_iterations {
+                    // The chaos game is the FLAME generator, and this
+                    // loop is gated on the mode for the same reason the
+                    // video loop is: a non-flame frame that runs it
+                    // spends the config's `max_iterations` -- a billion
+                    // by default -- filling a histogram nothing reads.
+                    // Testing for escape alone is what made a
+                    // custom-size SIMULATION export come out as the
+                    // config's flame.
+                    let is_non_flame_export = export_config.render_mode.is_non_flame();
+                    while !is_non_flame_export && total_rendered < max_iterations {
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                             label: Some("WASM Export Render Frame"),
                         });
@@ -2287,13 +2296,55 @@ impl App {
                         None
                     };
 
+                    // The simulation generator. `render_still` is the
+                    // export contract: seed, run exactly `sim.steps`,
+                    // colour -- so an exported PNG is the state at the
+                    // step count the config names, and reproducible
+                    // from it. A fresh renderer, deliberately: the
+                    // viewport's own holds the user's RUN, and reusing
+                    // it would advance or restart what is on screen as
+                    // a side effect of exporting.
+                    #[cfg(feature = "engine-sim")]
+                    let sim_export = if export_config.render_mode
+                        == crate::scene::transforms::RenderMode::Simulation
+                    {
+                        let mut sim = crate::sim::SimRenderer::new(
+                            &self.gpu.device,
+                            &export_config.sim,
+                            export_width,
+                            export_height,
+                        );
+                        if export_config.sim.use_transforms {
+                            sim.set_layer_transforms(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &export_config.flame,
+                            );
+                        }
+                        sim.render_still(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &export_config.sim,
+                            temp_renderer.palette_view(),
+                        );
+                        Some(sim)
+                    } else {
+                        None
+                    };
+                    #[cfg(not(feature = "engine-sim"))]
+                    let sim_export: Option<()> = None;
+
                     // Final tonemap pass; the temp renderer supplies the
-                    // palette + tonemap tail for both modes.
+                    // palette + tonemap tail for all three modes.
                     let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("WASM Export Final Tonemap"),
                     });
-                    if let Some(ref esc) = escape_export {
-                        temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, esc.output_view());
+                    #[cfg(feature = "engine-sim")]
+                    let sim_view = sim_export.as_ref().map(|s| s.output_view());
+                    #[cfg(not(feature = "engine-sim"))]
+                    let sim_view: Option<&egui_wgpu::wgpu::TextureView> = None;
+                    if let Some(view) = escape_export.as_ref().map(|e| e.output_view()).or(sim_view) {
+                        temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, view);
                     } else {
                         temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
                     }
