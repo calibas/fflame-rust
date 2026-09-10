@@ -16,6 +16,15 @@
 
 ---
 
+> **The palette is shared; the mapping is not.** This document
+> describes how a FLAME colours: a colour coordinate evolved through
+> the chaos game and accumulated into a histogram. A simulation
+> colouring instead maps cell state to `(rgb, coverage)` at colour
+> time — no accumulation, no histogram — and coverage 0 lets the
+> background composite through, which is what a matte and a transparent
+> simulation PNG are built on. The palette texture and the tone-mapping
+> tail below are the same for both. See [SIMULATION.md](SIMULATION.md).
+
 ## Color Modes
 
 The renderer supports three color generation modes:

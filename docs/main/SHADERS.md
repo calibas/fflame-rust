@@ -15,6 +15,15 @@
 
 ---
 
+> **One of three assemblers.** This document covers the flame's
+> `shader_builder_v2`. The escape engine and the simulation engine each
+> have their own, on the same principle — a template with markers, and
+> only the active definitions spliced in. The simulation's is
+> [src/sim/assembler.rs](../../src/sim/assembler.rs) (see
+> [SIMULATION.md](SIMULATION.md)); it splices one model and one
+> colouring, and splices the boundary rule rather than branching on it.
+> All three are held to the same `shader_lint` rules.
+
 ## Shader Architecture
 
 ### Modular Component System

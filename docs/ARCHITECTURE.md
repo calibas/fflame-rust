@@ -11,10 +11,40 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [VARIATIONS.md](main/VARIATIONS.md) - Variation registry, all 26 core variations, parameters
 - [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
 - [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
+- [SIMULATION.md](main/SIMULATION.md) - The simulation engine: models, the grid, layers, the resolve
 - [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode, video export
 - [SCRIPTING.md](main/SCRIPTING.md) - Rhai script API reference (generators, modifiers, animation)
 - [PRESET-BROWSER.md](main/PRESET-BROWSER.md) - Gallery UI system for browsing fractals
 - [TESTING-GUIDE.md](TESTING-GUIDE.md) - Unit tests, regression tests, benchmarks, profiling
+
+---
+
+## Three render engines
+
+`RenderMode` on the config picks one, and they are genuinely different
+generators that share one tail.
+
+| mode | generator | lives in | plan |
+| --- | --- | --- | --- |
+| `TwoD` / `ThreeD` | the chaos game — sample, splat, accumulate | `src/renderer/`, `src/variations/` | [RENDERER.md](main/RENDERER.md) |
+| `Escape` | one compute dispatch per pixel, iterated to escape | `src/escape/` | [escape-time-fractals.md](projects/escape-time-fractals.md) |
+| `Simulation` | a grid of cells stepped by a neighbour-coupled rule | `src/sim/` | [SIMULATION.md](main/SIMULATION.md) |
+
+**The tail is shared and that is the point.** Each generator produces an
+`Rgba32Float` image in the flame accumulator's layout, and everything
+after — density effects, tone mapping, the effect chain, readback, PNG
+metadata — is the flame renderer's. `render_with` in
+[src/renderer/render.rs](../src/renderer/render.rs) is where the swap
+happens, so a new pass added to the tail reaches all three modes, and
+CLI export, thumbnails, video and the gallery inherit every engine for
+free.
+
+Each engine is a Cargo feature (`engine-flame`, `engine-escape`,
+`engine-sim`), all on by default. Off, that engine's registry and
+shaders are unreachable and the linker drops them — which is what the
+single-engine WASM modules in [wasm/](../wasm/README.md) are for.
+`release.py check` compiles the library at each combination, because a
+`#[cfg]` on the wrong item is invisible in every other build.
 
 ---
 

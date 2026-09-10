@@ -14,6 +14,15 @@
 - [src/gpu/pipelines.rs](../../src/gpu/pipelines.rs) - Pipeline creation
 - [src/gpu/buffers.rs](../../src/gpu/buffers.rs) - Buffer management
 
+> **This document is the FLAME pipeline.** Two other engines produce a
+> picture the same shape and reuse everything from the accumulator
+> onward: escape-time ([escape-time-fractals.md](../projects/escape-time-fractals.md))
+> and simulation ([SIMULATION.md](SIMULATION.md)). Neither runs the
+> compute or accumulate passes below; both hand `render_with` an
+> `Rgba32Float` image in the accumulator's layout and join at the
+> tonemap. If you add a pass to the tail, say what it does for all
+> three.
+
 ---
 
 ## Rendering Pipeline Overview
