@@ -153,6 +153,47 @@ pub const PERTURB_CHUNK_BUDGET_FE: u64 = 600_000_000;
 static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
+/// Mode C's dispatch budget, in WALK STEPS: one candidate advanced
+/// down one branch at one level, so `levels * beam * maps` per pixel.
+///
+/// Separate from [`DIRECT_DISPATCH_BUDGET`] because a walk step is not
+/// an iteration and the two cannot share a unit. Measured on a
+/// 512x512 dragon at levels 40, beam 8, two maps -- 168M steps in
+/// 114 ms above the harness floor, so **1.5e9 steps/s**. At that rate
+/// this budget is a ~300 ms band, which is inside
+/// [`DIRECT_BAND_SLOW_MS`] and leaves the breaker room to halve if a
+/// slower device disagrees.
+///
+/// Getting this wrong is not a slow render, it is a hang: mode C's
+/// cost was first modelled as `levels * maps`, which is 8x low at the
+/// default beam and 250x low in absolute terms. A 1080p view then
+/// dispatched the whole image at once, took seconds, and the driver
+/// reset -- which surfaces on Windows as
+/// `STATUS_STACK_BUFFER_OVERRUN`, not as anything mentioning the GPU.
+/// The breaker cannot help: it only engages once a render is BANDED,
+/// and this estimate is what decides whether it ever is.
+pub const IFS_DISPATCH_BUDGET: u64 = 450_000_000;
+
+/// Rows per dispatch for a mode-C walk, as pure arithmetic.
+///
+/// `beam` and `levels` are the def's parameters, `maps` the analysed
+/// flame's transform count.
+pub fn ifs_rows_per_dispatch(
+    width: u32,
+    height: u32,
+    levels: u32,
+    beam: u32,
+    maps: usize,
+    budget: u64,
+) -> u32 {
+    let per_pixel = (levels.max(1) as u64)
+        .saturating_mul(beam.max(1) as u64)
+        .saturating_mul(maps.max(1) as u64);
+    let per_row = (width.max(1) as u64).saturating_mul(per_pixel);
+    let rows = budget / per_row.max(1);
+    (rows.max(1) as u32).min(height.max(1))
+}
+
 /// True while a banded (multi-dispatch) direct render still has bands
 /// to go -- the window in which a device loss is attributed to our
 /// band size. (A loss during the LAST band goes uncounted; the next
@@ -553,6 +594,18 @@ pub struct EscapeRenderer {
     /// accumulator; the palette is Rgba8Unorm and filters fine).
     palette_sampler: wgpu::Sampler,
     bind_group_layout: BindGroupLayout,
+    /// Mode C's second bind group: the flame's inverse maps (D5). Its
+    /// own group so no existing pipeline's layout moves and every
+    /// existing shader stays byte-identical.
+    ifs_bind_group_layout: BindGroupLayout,
+    ifs_buffer: Buffer,
+    /// Rows the buffer currently holds, so it only grows.
+    ifs_capacity: u32,
+    /// The analysed flame, or `None` when the loaded one does not
+    /// qualify (or mode C is not active). A mode-C render with no maps
+    /// draws nothing rather than garbage.
+    ifs: Option<super::ifs::PackedIfs>,
+    ifs_uploaded: Option<super::ifs::PackedIfs>,
     /// Compiled pipelines keyed `"formula|coloring"` — tiny shaders,
     /// but a live panel flips combinations and recompiles add up.
     pipelines: HashMap<String, ComputePipeline>,
@@ -1320,6 +1373,29 @@ impl EscapeRenderer {
             mapped_at_creation: false,
         });
 
+        // Mode C's map buffer starts at one row: a flame that
+        // qualifies grows it, and a device that never renders mode C
+        // pays 32 bytes.
+        let ifs_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Escape IFS Bind Group Layout"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Maps"),
+            size: std::mem::size_of::<super::ifs::IfsMapGpu>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             width,
             height,
@@ -1328,6 +1404,11 @@ impl EscapeRenderer {
             params_buffer,
             palette_sampler,
             bind_group_layout,
+            ifs_bind_group_layout,
+            ifs_buffer,
+            ifs_capacity: 1,
+            ifs: None,
+            ifs_uploaded: None,
             pipelines: HashMap::new(),
             #[cfg(test)]
             force_perturbed: false,
@@ -3070,7 +3151,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if Self::wants_perturbation(escape) {
             return Some(DerivativeGap::Perturbed);
         }
-        if super::fields::get_field(&escape.formula).is_some() {
+        if super::fields::get_field(&escape.formula).is_some()
+            || super::ifs::get_ifs(&escape.formula).is_some()
+        {
             return Some(DerivativeGap::Formula);
         }
         if super::get_formula(&escape.formula).wgsl_derivative.is_empty() {
@@ -3131,13 +3214,81 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// resume state: each band is a complete render of its own rows,
     /// and the output texture accumulates them. It also gives the
     /// direct path progressive top-to-bottom feedback it never had.
+    /// Hand the renderer the analysed flame for mode C.
+    ///
+    /// `None` means "no qualifying flame": a mode-C render then draws
+    /// nothing, which is the honest picture while the panel explains
+    /// which condition failed. Called by whoever owns the config —
+    /// the app on a flame edit, `render_with` once per job — so the
+    /// analysis is CPU work done once, not once per pixel.
+    ///
+    /// Returns whether this changed anything, which is the caller's
+    /// cue to mark the escape image dirty.
+    pub fn set_ifs(&mut self, packed: Option<super::ifs::PackedIfs>) -> bool {
+        if super::ifs::packed_bytes_eq(self.ifs.as_ref(), packed.as_ref()) {
+            return false;
+        }
+        self.ifs = packed;
+        true
+    }
+
+    /// Whether a qualifying flame is loaded.
+    pub fn has_ifs(&self) -> bool {
+        self.ifs.is_some()
+    }
+
+    /// Grow the map buffer if needed and write the rows, skipping both
+    /// when the packed data is unchanged from the last upload.
+    fn upload_ifs(&mut self, device: &Device, queue: &Queue) {
+        let Some(packed) = self.ifs.clone() else { return };
+        if super::ifs::packed_bytes_eq(self.ifs_uploaded.as_ref(), Some(&packed)) {
+            return;
+        }
+        let needed = packed.rows.len().max(1) as u32;
+        if needed > self.ifs_capacity {
+            self.ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Escape IFS Maps"),
+                size: needed as u64 * std::mem::size_of::<super::ifs::IfsMapGpu>() as u64,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.ifs_capacity = needed;
+        }
+        if !packed.rows.is_empty() {
+            queue.write_buffer(&self.ifs_buffer, 0, bytemuck::cast_slice(&packed.rows));
+        }
+        self.ifs_uploaded = Some(packed);
+    }
+
     fn direct_rows_per_dispatch(&self, escape: &EscapeConfig) -> u32 {
-        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
         // The session shift only ever shrinks (see DIRECT_BUDGET_SHIFT),
         // and carries over from previous sessions.
         tuning::ensure_loaded();
-        let budget = DIRECT_DISPATCH_BUDGET
-            >> DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+        let shift = DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Mode C iterates no `max_iter` at all: it walks, and a walk
+        // step is a different unit with a budget of its own.
+        if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            let param = |name: &str, fallback: f32| {
+                escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                    def.parameters
+                        .iter()
+                        .find(|p| p.name == name)
+                        .map_or(fallback, |p| p.default)
+                })
+            };
+            return ifs_rows_per_dispatch(
+                self.width,
+                self.height,
+                param("levels", 24.0) as u32,
+                param("beam", 8.0) as u32,
+                self.ifs.as_ref().map_or(1, |i| i.rows.len()),
+                IFS_DISPATCH_BUDGET >> shift,
+            );
+        }
+
+        let per_row = (self.width as u64).saturating_mul(escape.max_iter.max(1) as u64);
+        let budget = DIRECT_DISPATCH_BUDGET >> shift;
         let rows = budget / per_row.max(1);
         (rows.max(1) as u32).min(self.height.max(1))
     }
@@ -5285,6 +5436,38 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Mode B routing: a formula name resolving in the FIELD
         // registry compiles the field template instead. Same bind
         // group layout, same dispatch — only the shader differs.
+        // Mode C routing: a formula name resolving in the IFS
+        // registry compiles the distance template, which is the one
+        // shader that also binds group 1.
+        if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+            let key = format!("ifs|{}|{}", def.name, coloring.name);
+            if !self.pipelines.contains_key(&key) {
+                let source = assembler::assemble_ifs(def, coloring);
+                let module = device.create_shader_module(ShaderModuleDescriptor {
+                    label: Some(&format!("Escape Shader {key}")),
+                    source: ShaderSource::Wgsl(source.into()),
+                });
+                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Escape IFS Pipeline Layout"),
+                    bind_group_layouts: &[
+                        Some(&self.bind_group_layout),
+                        Some(&self.ifs_bind_group_layout),
+                    ],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Escape Pipeline {key}")),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("escape_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                self.pipelines.insert(key.clone(), pipeline);
+            }
+            return key;
+        }
         let (key, source_for) = if let Some(field) = super::fields::get_field(&escape.formula) {
             let coloring = super::fields::get_field_coloring(&escape.coloring, field);
             (
@@ -5371,7 +5554,21 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
-        if let Some(field) = super::fields::get_field(&escape.formula) {
+        if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            // Mode C: the def's params, its coloring's, and the
+            // whole-IFS constants in the fdata block the other modes
+            // use for derived formula data.
+            let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+            super::pack_params(def.parameters, &escape.formula_params, fparams.as_flattened_mut());
+            super::pack_params(
+                coloring.parameters,
+                &escape.coloring_params,
+                cparams.as_flattened_mut(),
+            );
+            if let Some(packed) = self.ifs.as_ref() {
+                fdata[..4].copy_from_slice(&packed.globals);
+            }
+        } else if let Some(field) = super::fields::get_field(&escape.formula) {
             // Mode B: pack the field's params + its resolved coloring's.
             let coloring = super::fields::get_field_coloring(&escape.coloring, field);
             super::pack_params(field.parameters, &escape.formula_params, fparams.as_flattened_mut());
@@ -5458,7 +5655,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // dispatch over the records plus the usual resolve. This is
         // what makes palette and coloring edits real-time on the
         // perturbed path. Field formulas write no records.
-        let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
+        // Field and distance formulas write no terminal records, so
+        // they have no recolor cache to key.
+        let iterate_key = if super::fields::get_field(&escape.formula).is_none()
+            && super::ifs::get_ifs(&escape.formula).is_none()
+        {
             Some(self.iterate_key_for(escape))
         } else {
             None
@@ -5891,6 +6092,23 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             ],
         });
 
+        // Mode C's maps. Uploaded here rather than in `set_ifs` so
+        // the queue write lands in this frame's submission, and only
+        // when the packed data actually changed.
+        let ifs_bind_group = if super::ifs::get_ifs(&escape.formula).is_some() {
+            self.upload_ifs(device, queue);
+            Some(device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Escape IFS Bind Group"),
+                layout: &self.ifs_bind_group_layout,
+                entries: &[BindGroupEntry {
+                    binding: 0,
+                    resource: self.ifs_buffer.as_entire_binding(),
+                }],
+            }))
+        } else {
+            None
+        };
+
         let key = self.ensure_pipeline(device, escape);
         let pipeline = &self.pipelines[&key];
 
@@ -5900,6 +6118,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
+        if let Some(bg) = ifs_bind_group.as_ref() {
+            pass.set_bind_group(1, bg, &[]);
+        }
         pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
         drop(pass);
         self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);

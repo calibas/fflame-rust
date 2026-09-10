@@ -1,0 +1,1815 @@
+//! Mode C — the flame as a distance field
+//! ([docs/projects/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md),
+//! phase 1).
+//!
+//! A fourth registry pair on the escape engine's one pattern (D1).
+//! Where a mode-A formula iterates a function of the pixel and a
+//! mode-B field sums a series, a mode-C **distance function** answers
+//! "how far is this pixel from the set" — and the set, for the one
+//! entry that ships in phase 1, is the attractor of the loaded flame,
+//! analysed into affine maps by
+//! [`crate::scene::ifs_analysis`] and walked by the inverse iteration
+//! [`crate::scene::ifs_estimate`] gates on the CPU.
+//!
+//! Later entries need no flame at all: the Mandelbulb, Mandelbox and
+//! KIFS distance estimators are `IfsDef`s whose WGSL never touches the
+//! map buffer (plan §5, phase 4). That is why this is a registry and
+//! not a special case.
+//!
+//! # WGSL contract (template `IFS_TEMPLATE` in assembler.rs)
+//!
+//! An `IfsDef` defines
+//! `fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult`.
+//!
+//! The point arrives **split**: `ref0` is the view centre and `delta0`
+//! the pixel's offset from it, and the walk is written to carry the
+//! two apart. For an affine map that split is exact —
+//! `S⁻¹(C + δ) = S⁻¹(C) + M⁻¹δ`, no cross term (§2.5) — so phase 2
+//! replaces the per-pixel reference half with one high-precision orbit
+//! computed per view and every pixel keeps its δ in f32, without the
+//! loop changing shape. Writing it joined and splitting it later would
+//! be a rewrite; writing it split now costs a handful of multiplies.
+//!
+//! An `IfsColoringDef` defines
+//! `fn ifs_color(res: IfsResult, px: f32) -> IfsShade`, where `px` is
+//! the width of one pixel in plane units — what an antialiased edge
+//! needs to know. `IfsShade { t, lum }` is the field templates'
+//! convention: `t` is the palette position (wrapped), `lum` multiplies
+//! the sampled colour.
+//!
+//! Params reach both through `fparam(i)` / `cparam(i)`, exactly as in
+//! modes A and B.
+
+use super::EscapeParamDef;
+use crate::scene::ifs_analysis::{Affine2, Ifs2};
+
+/// A mode-C distance function.
+pub struct IfsDef {
+    /// Registry name — what `EscapeConfig::formula` stores.
+    pub name: &'static str,
+    pub display_name: &'static str,
+    /// Whether this entry reads the flame's map buffer. `true` means
+    /// the render is gated on the loaded flame passing the criterion
+    /// (§2.4) and the panel says so; `false` is a self-contained
+    /// distance estimator that renders whatever flame is loaded.
+    pub needs_flame: bool,
+    /// Coloring used when `EscapeConfig::coloring` names another
+    /// registry's entry (the usual state right after a switch).
+    pub default_coloring: &'static str,
+    pub parameters: &'static [EscapeParamDef],
+    pub presets: &'static [super::EscapePreset],
+    pub wgsl: &'static str,
+}
+
+/// A mode-C coloring: the four quantities of §2.3 → palette position
+/// and luminance.
+pub struct IfsColoringDef {
+    pub name: &'static str,
+    pub display_name: &'static str,
+    pub parameters: &'static [EscapeParamDef],
+    pub wgsl: &'static str,
+}
+
+// ====================================================================
+// The distance function
+// ====================================================================
+
+/// The loaded flame's attractor, by Hart's inverse iteration.
+///
+/// Transcribed from [`crate::scene::ifs_estimate::estimate`], which is
+/// the reference and carries the gates. The one structural difference
+/// is the reference/delta split described in the module docs.
+pub static IFS_FLAME: IfsDef = IfsDef {
+    name: "ifs_flame",
+    display_name: "Flame Attractor (Distance)",
+    needs_flame: true,
+    default_coloring: "ifs_distance",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Inverse Depth",
+            default: 24.0,
+            min: 1.0,
+            max: 160.0,
+            tooltip: "How many inverse maps to apply before giving up and calling the \
+                      pixel part of the set. Deeper resolves finer structure and is \
+                      never less sound; the depth a zoom needs grows like \
+                      log(1/zoom)/log(1/sigma).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 8.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "How many branch addresses the walk follows at once. Every \
+                      address bounds the distance to ITS piece and the truth is the \
+                      smallest, so following one can only read too far — which \
+                      erodes an attractor whose pieces share a boundary. 1 is the \
+                      greedy walk. Measured on the Heighway dragon, whose two \
+                      pieces share a boundary: 1 renders less than half its area, \
+                      4 leaves a scatter of holes, 8 is exact — for 68% more time \
+                      than 1. An IFS with disjoint pieces (a Sierpiński, a Koch) \
+                      is already exact at 1, so lower it if the picture does not \
+                      change.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+// Inverse of map i, applied to a full point (reference half).
+fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
+    let m = ifs_maps[i].inv_m;
+    let t = ifs_maps[i].inv_t;
+    return vec2<f32>(
+        m.x * p.x + m.y * p.y + t.x,
+        m.z * p.x + m.w * p.y + t.y,
+    );
+}
+
+// Inverse of map i, LINEAR part only (delta half). The translation is
+// carried entirely by the reference, which is what makes the split
+// exact for affine maps.
+fn ifs_inv_delta(i: u32, d: vec2<f32>) -> vec2<f32> {
+    let m = ifs_maps[i].inv_m;
+    return vec2<f32>(
+        m.x * d.x + m.y * d.y,
+        m.z * d.x + m.w * d.y,
+    );
+}
+
+// Where in the annulus [R, R/sigma] an escaped point sits, counted
+// DOWN so the level rises toward the set and joins continuously onto
+// the next band.
+fn ifs_residual(r: f32, radius: f32, sigma: f32) -> f32 {
+    if (!(radius > 0.0) || !(sigma > 0.0) || !(sigma < 1.0)) {
+        return 0.0;
+    }
+    let across = log(r / radius) / log(1.0 / sigma);
+    return 1.0 - clamp(across, 0.0, 1.0);
+}
+
+// One partial address the beam is still following.
+struct IfsCand {
+    rf: vec2<f32>,
+    dl: vec2<f32>,
+    // The point at first escape -- the orbit-trap coordinate.
+    point: vec2<f32>,
+    // Product of the sigma_min of the maps applied so far.
+    sigma: f32,
+    // Running MAXIMUM of sigma * (r - radius) over the levels visited,
+    // unclamped, so it is negative while the path is inside the ball.
+    bound: f32,
+    // Distance from the ball's centre now -- THE ranking key, and the
+    // whole of it. Ranking by `bound` instead is degenerate: it is a
+    // running maximum, so once a path grazes the ball's edge every
+    // descendant inherits the same value and the siblings cannot be
+    // told apart (measured on the gasket: loose at 568 of 576 grid
+    // points that way against 10 this way). Adding `bound` as a
+    // tiebreak changes no measurement, and one f32 is what the
+    // keep-list has to shift.
+    r: f32,
+    addr: f32,
+    level: f32,
+    color: f32,
+    // sigma_min of the last map applied, for the annulus residual.
+    last_sigma: f32,
+    // bit 0 = escaped, bit 1 = done (past FAR, no longer expanded).
+    flags: u32,
+}
+
+fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
+    let c = ifs_centre();
+    let radius = ifs_radius();
+    let n = ifs_count();
+
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.0;
+    res.point = ref0 + delta0;
+    res.escaped = 0u;
+    res.depth = 0u;
+    if (n == 0u) {
+        // No qualifying flame. Report the pixel as infinitely far from
+        // the set rather than on it: distance 0 is what a point ON the
+        // attractor returns, and would fill the frame with the
+        // interior colour instead of drawing nothing. The panel is
+        // where the reason is explained.
+        res.distance = 1e30;
+        res.escaped = 1u;
+        return res;
+    }
+
+    let max_levels = u32(clamp(fparam(0u), 1.0, 160.0));
+    let beam = u32(clamp(fparam(1u), 1.0, f32(IFS_MAX_BEAM)));
+    let far = max(radius, 1.0) * 1e12;
+    let mean_sigma = ifs_mean_sigma();
+
+    var live: array<IfsCand, IFS_MAX_BEAM>;
+    var next: array<IfsCand, IFS_MAX_BEAM>;
+    var live_count = 1u;
+
+    var root: IfsCand;
+    root.rf = ref0;
+    root.dl = delta0;
+    root.sigma = 1.0;
+
+    // The final transform maps the whole attractor, so its inverse is
+    // applied once, before the walk, and its contraction scales the
+    // result exactly as a level's would.
+    let fin = ifs_final();
+    if (fin.w > 0.5) {
+        let fm = ifs_final_m();
+        root.rf = vec2<f32>(
+            fm.x * ref0.x + fm.y * ref0.y + fin.x,
+            fm.z * ref0.x + fm.w * ref0.y + fin.y,
+        );
+        root.dl = vec2<f32>(fm.x * delta0.x + fm.y * delta0.y, fm.z * delta0.x + fm.w * delta0.y);
+        root.sigma = fin.z;
+    }
+    root.point = root.rf + root.dl;
+    root.bound = -1e30;
+    root.r = length(root.point - c);
+    root.addr = 0.0;
+    root.level = 0.0;
+    root.color = 0.0;
+    root.last_sigma = mean_sigma;
+    root.flags = 0u;
+    live[0] = root;
+
+    var addr_scale = 1.0 / f32(n);
+
+    for (var k = 0u; k < max_levels; k = k + 1u) {
+        var all_done = true;
+        for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+            if ((live[ci].flags & 2u) != 0u) {
+                continue;
+            }
+            let q = live[ci].rf + live[ci].dl;
+            let r = length(q - c);
+            live[ci].r = r;
+            // Every level's value is a lower bound; the walk keeps the
+            // largest. Stopping at the first escape is what draws the
+            // bounding ball as though it were the set.
+            live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
+
+            if (r > radius && (live[ci].flags & 1u) == 0u) {
+                live[ci].flags = live[ci].flags | 1u;
+                live[ci].level = f32(k) + ifs_residual(r, radius, live[ci].last_sigma);
+                live[ci].point = q;
+            }
+
+            if (!(r < far)) {
+                live[ci].flags = live[ci].flags | 2u;
+            } else {
+                all_done = false;
+            }
+        }
+        if (all_done) {
+            break;
+        }
+        // Positions evaluated must be exactly `max_levels`: expanding
+        // on the last pass would score a level deeper than asked for.
+        if (k + 1u >= max_levels) {
+            break;
+        }
+
+        // Expand, keeping only the `beam` best children.
+        //
+        // Two passes, and the split is what makes this affordable. The
+        // obvious form -- build each child in full and insertion-sort
+        // it into the keep-list -- shifts a whole candidate (fourteen
+        // registers) up to `beam` times for each of `beam * n`
+        // children, which is the shader's entire cost and the reason a
+        // 1080p view used to hang the driver.
+        //
+        // Pass one ranks by KEY alone: two affine applies and a length
+        // per child, and the list it shifts holds one f32 and one u32.
+        // Pass two rebuilds only the `beam` survivors. Nothing large
+        // is ever moved by the sort.
+        var key: array<f32, IFS_MAX_BEAM>;
+        // Which child each key came from: parent * (n + 1) + branch,
+        // with branch == n meaning "carried forward, not descended".
+        var src: array<u32, IFS_MAX_BEAM>;
+        var next_count = 0u;
+        let stride = n + 1u;
+
+        for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+            var first = 0u;
+            var last = n;
+            if ((live[ci].flags & 2u) != 0u) {
+                // A converged path is carried forward unchanged.
+                first = n;
+                last = n + 1u;
+            }
+            for (var bi = first; bi < last; bi = bi + 1u) {
+                var cand_key = live[ci].r;
+                if (bi < n) {
+                    let rf = ifs_inv_point(bi, live[ci].rf);
+                    let dl = ifs_inv_delta(bi, live[ci].dl);
+                    cand_key = length(rf + dl - c);
+                }
+                var pos = next_count;
+                for (var j = 0u; j < next_count; j = j + 1u) {
+                    if (cand_key < key[j]) {
+                        pos = j;
+                        break;
+                    }
+                }
+                if (pos < beam) {
+                    var j = min(next_count, beam - 1u);
+                    loop {
+                        if (j <= pos) {
+                            break;
+                        }
+                        key[j] = key[j - 1u];
+                        src[j] = src[j - 1u];
+                        j = j - 1u;
+                    }
+                    key[pos] = cand_key;
+                    src[pos] = ci * stride + bi;
+                    next_count = min(next_count + 1u, beam);
+                }
+            }
+        }
+
+        // Pass two: rebuild the survivors. `next` is a separate array
+        // because a survivor's parent may already have been overwritten
+        // if we wrote back into `live` in place.
+        for (var k2 = 0u; k2 < next_count; k2 = k2 + 1u) {
+            let parent = src[k2] / stride;
+            let bi = src[k2] % stride;
+            var child = live[parent];
+            if (bi < n) {
+                child.rf = ifs_inv_point(bi, live[parent].rf);
+                child.dl = ifs_inv_delta(bi, live[parent].dl);
+                child.sigma = live[parent].sigma * ifs_maps[bi].sigma_min;
+                child.last_sigma = ifs_maps[bi].sigma_min;
+                child.r = key[k2];
+                // Score the child as it is made: one that inherited
+                // only its parent's bound would rank identically to
+                // all its siblings.
+                child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
+                if ((live[parent].flags & 1u) == 0u) {
+                    child.addr = live[parent].addr + f32(bi) * addr_scale;
+                    if (k == 0u) {
+                        // The coarsest branch is the piece the point is
+                        // in, so its transform colour is the direct
+                        // analogue of a flame's.
+                        child.color = ifs_maps[bi].color;
+                    }
+                }
+            }
+            next[k2] = child;
+        }
+
+        for (var ci = 0u; ci < next_count; ci = ci + 1u) {
+            live[ci] = next[ci];
+        }
+        live_count = next_count;
+        addr_scale = addr_scale / f32(n);
+    }
+
+    // The beam is RANKED by position but ANSWERED by bound: pruning
+    // asks "which piece is this point in", and the estimate asks
+    // "which surviving address gives the smallest distance".
+    var win = 0u;
+    for (var ci = 1u; ci < live_count; ci = ci + 1u) {
+        if (live[ci].bound < live[win].bound) {
+            win = ci;
+        }
+    }
+    let best = live[win];
+
+    res.distance = max(best.bound, 0.0);
+    res.address = best.addr;
+    res.color = best.color;
+    if ((best.flags & 1u) != 0u) {
+        res.level = best.level;
+        res.point = best.point;
+        res.escaped = 1u;
+        res.depth = u32(floor(best.level));
+    } else {
+        res.level = f32(max_levels);
+        res.point = best.rf + best.dl;
+        res.depth = max_levels;
+    }
+    return res;
+}
+"#,
+};
+
+// ====================================================================
+// Colorings — the four quantities of §2.3, one each
+// ====================================================================
+
+/// `d`: the set as a shape, with an exact antialiased edge and
+/// optional exterior contour bands. The picture that answers "does a
+/// distance render look better than the chaos game".
+pub static IFS_DISTANCE: IfsColoringDef = IfsColoringDef {
+    name: "ifs_distance",
+    display_name: "Distance",
+    parameters: &[
+        EscapeParamDef {
+            name: "edge",
+            display_name: "Edge Width",
+            default: 1.0,
+            min: 0.0,
+            max: 8.0,
+            tooltip: "Antialiasing width in pixels. The set's boundary is where the \
+                      distance crosses zero, so this is a real sub-pixel coverage, \
+                      not a blur.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "bands",
+            display_name: "Contour Spacing",
+            default: 0.0,
+            min: 0.0,
+            max: 40.0,
+            tooltip: "Exterior contour bands per unit of log distance. 0 = a flat \
+                      exterior (the background shows through).",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "interior",
+            display_name: "Interior Palette",
+            default: 0.5,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Palette position for the set itself. Not 0 by default: most                       palettes are black at their low end, so a set drawn there is                       invisible against the background and the render reads as                       empty.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
+    let edge = max(cparam(0u), 1e-4) * px;
+    // Sub-pixel coverage of the set: 1 inside, 0 a pixel out.
+    let cover = 1.0 - smoothstep(0.0, edge, res.distance);
+    let bands = cparam(1u);
+    if (bands <= 0.0) {
+        return IfsShade(cparam(2u), cover);
+    }
+    // Log distance banding: geometric spacing, so the contours stay
+    // evenly spaced as the view zooms.
+    let t = log(max(res.distance, 1e-30)) * bands * 0.05;
+    return IfsShade(mix(t, cparam(2u), cover), 1.0);
+}
+"#,
+};
+
+/// `level`: Hepting–Hart escape-time bands — the Fractint
+/// "escape-time Sierpiński" look, from the same walk (D9).
+pub static IFS_LEVEL: IfsColoringDef = IfsColoringDef {
+    name: "ifs_level",
+    display_name: "Escape Level",
+    parameters: &[
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Palette Scale",
+            default: 0.12,
+            min: 0.005,
+            max: 2.0,
+            tooltip: "Palette cycles per inverse-iteration level.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset",
+            display_name: "Palette Offset",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Rotates the band colours.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "smooth",
+            display_name: "Smooth Bands",
+            default: 1.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "Use the continuous residual across the annulus (smooth) or \
+                      the integer level (hard bands).",
+            choices: &["Hard", "Smooth"],
+        },
+    ],
+    wgsl: r#"
+fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
+    var lvl = res.level;
+    if (cparam(2u) < 0.5) {
+        lvl = floor(res.level);
+    }
+    return IfsShade(lvl * cparam(0u) + cparam(1u), 1.0);
+}
+"#,
+};
+
+/// `address`: the branch taken at each level, as a base-N fraction —
+/// the symbolic colouring, and the analogue of a flame's transform
+/// colour. `address_mix` generalised past base 2.
+///
+/// This is the one that survives a deep zoom: every level adds a
+/// digit, while the smooth quantities lose contrast (§2.5).
+pub static IFS_ADDRESS: IfsColoringDef = IfsColoringDef {
+    name: "ifs_address",
+    display_name: "Branch Address",
+    parameters: &[
+        EscapeParamDef {
+            name: "source",
+            display_name: "Source",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The full address as a base-N fraction, or just the coarsest \
+                      branch's transform colour (which is what a flame would show).",
+            choices: &["Address fraction", "First transform colour"],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Palette Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette cycles across the address range.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "reach",
+            display_name: "Halo Reach",
+            default: 6.0,
+            min: 0.0,
+            max: 200.0,
+            tooltip: "How far from the set, in pixels, the colouring stays lit. \
+                      The quantity is defined everywhere, but it only MEANS \
+                      anything near the attractor — without this the picture is \
+                      the exterior's branch partition rather than the set. \
+                      0 = no fade, light the whole plane.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
+    var v = res.address;
+    if (cparam(0u) >= 0.5) {
+        v = res.color;
+    }
+    return IfsShade(v * cparam(1u), ifs_halo(res, px, cparam(2u)));
+}
+"#,
+};
+
+/// `p_K`: the point after the last inversion, trapped in the expanded
+/// frame. The orbit-trap vocabulary, which the expansion makes
+/// scale-free — the trap is the same size at every zoom depth.
+pub static IFS_TRAP: IfsColoringDef = IfsColoringDef {
+    name: "ifs_trap",
+    display_name: "Orbit Trap",
+    parameters: &[
+        EscapeParamDef {
+            name: "shape",
+            display_name: "Trap Shape",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "What the expanded point is measured against.",
+            choices: &["Distance to centre", "Cross (axes)", "Angle"],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Palette Scale",
+            default: 1.0,
+            min: 0.01,
+            max: 20.0,
+            tooltip: "Palette cycles per unit of trap value.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "reach",
+            display_name: "Halo Reach",
+            default: 6.0,
+            min: 0.0,
+            max: 200.0,
+            tooltip: "How far from the set, in pixels, the colouring stays lit. \
+                      The quantity is defined everywhere, but it only MEANS \
+                      anything near the attractor — without this the picture is \
+                      the exterior's branch partition rather than the set. \
+                      0 = no fade, light the whole plane.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
+    let d = res.point - ifs_centre();
+    let shape = i32(cparam(0u));
+    var v = length(d);
+    if (shape == 1) {
+        v = min(abs(d.x), abs(d.y));
+    } else if (shape == 2) {
+        v = (ff_atan2(d.y, d.x) + 3.14159265) * 0.15915494;
+    }
+    return IfsShade(v * cparam(1u), ifs_halo(res, px, cparam(2u)));
+}
+"#,
+};
+
+// ====================================================================
+// Registries
+// ====================================================================
+
+/// Ordered mode-C registry. **Append-only** — same contract as
+/// [`super::FORMULAS`].
+pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME];
+
+/// Ordered mode-C coloring registry. **Append-only.**
+pub static IFS_COLORINGS: &[&IfsColoringDef] =
+    &[&IFS_DISTANCE, &IFS_LEVEL, &IFS_ADDRESS, &IFS_TRAP];
+
+/// Look up a mode-C distance function by name. `None` = the name
+/// belongs to another mode (or is unknown).
+pub fn get_ifs(name: &str) -> Option<&'static IfsDef> {
+    IFS_DEFS.iter().find(|f| f.name == name).copied()
+}
+
+/// Resolve the coloring for a mode-C render, falling back to the
+/// def's declared default when the config still names another
+/// registry's entry (the state right after a switch).
+pub fn get_ifs_coloring(name: &str, def: &IfsDef) -> &'static IfsColoringDef {
+    IFS_COLORINGS.iter().find(|c| c.name == name).copied().unwrap_or_else(|| {
+        IFS_COLORINGS
+            .iter()
+            .find(|c| c.name == def.default_coloring)
+            .copied()
+            .unwrap_or(IFS_COLORINGS[0])
+    })
+}
+
+// ====================================================================
+// The map buffer (D5)
+// ====================================================================
+
+/// One map, as the shader reads it: the INVERSE affine, the smallest
+/// singular value of the forward map, and the transform's colour.
+///
+/// The forward map is never uploaded — the walk only ever inverts, and
+/// `σ_min` is the only thing it needs of the forward direction.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IfsMapGpu {
+    /// Row-major 2×2 of the inverse: `[a, b, c, d]`.
+    pub inv_m: [f32; 4],
+    /// Translation of the inverse.
+    pub inv_t: [f32; 2],
+    /// Smallest singular value of the FORWARD map — the per-level
+    /// contraction the distance is scaled by.
+    pub sigma_min: f32,
+    /// The transform's colour index, for the address colouring.
+    pub color: f32,
+}
+
+/// The whole-IFS constants, packed into the `fdata` block the escape
+/// params already carry (mode A uses it for CPU-derived formula data,
+/// mode B not at all).
+///
+/// Layout, one `vec4` each:
+/// 0. `centre.x, centre.y, radius, map_count`
+/// 1. the final map's inverse 2×2, row-major
+/// 2. `final_t.x, final_t.y, final_sigma_min, has_final`
+/// 3. `mean_sigma_min, 0, 0, 0`
+pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
+    if out.len() < 4 {
+        return;
+    }
+    out[0] = [
+        ifs.ball.centre[0] as f32,
+        ifs.ball.centre[1] as f32,
+        ifs.ball.radius as f32,
+        ifs.maps.len() as f32,
+    ];
+    match &ifs.final_map {
+        Some(f) => {
+            let m = f.inverse;
+            out[1] = [m.m[0][0] as f32, m.m[0][1] as f32, m.m[1][0] as f32, m.m[1][1] as f32];
+            out[2] = [m.t[0] as f32, m.t[1] as f32, f.sigma_min as f32, 1.0];
+        }
+        None => {
+            out[1] = [1.0, 0.0, 0.0, 1.0];
+            out[2] = [0.0, 0.0, 1.0, 0.0];
+        }
+    }
+    let mean = if ifs.maps.is_empty() {
+        0.5
+    } else {
+        ifs.maps.iter().map(|m| m.sigma_min).sum::<f64>() / ifs.maps.len() as f64
+    };
+    out[3] = [mean as f32, 0.0, 0.0, 0.0];
+}
+
+/// An analysed flame, ready for the shader: the whole-IFS constants
+/// and one row per map.
+///
+/// Built on the CPU whenever the flame changes and handed to the
+/// renderer through [`super::EscapeRenderer::set_ifs`], so a video
+/// loop analyses once per frame rather than once per pixel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackedIfs {
+    pub globals: [[f32; 4]; 4],
+    pub rows: Vec<IfsMapGpu>,
+}
+
+/// Compare two packed IFSs **by bytes**, not by `PartialEq`.
+///
+/// The caller re-analyses the flame every frame and asks whether
+/// anything changed; a "yes" marks the escape image dirty. Float
+/// equality answers yes forever the moment a single NaN is in the
+/// packed data — a transform whose colour is NaN is enough — and the
+/// app then re-renders a band every frame and never settles, which is
+/// indistinguishable from the engine simply being far too slow.
+///
+/// Bytes compare NaN to itself as equal, which is the question
+/// actually being asked: is this the same buffer we already uploaded?
+pub fn packed_bytes_eq(a: Option<&PackedIfs>, b: Option<&PackedIfs>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => {
+            bytemuck::bytes_of(&x.globals) == bytemuck::bytes_of(&y.globals)
+                && bytemuck::cast_slice::<IfsMapGpu, u8>(&x.rows)
+                    == bytemuck::cast_slice::<IfsMapGpu, u8>(&y.rows)
+        }
+        _ => false,
+    }
+}
+
+/// Analyse a flame and pack it, or say why it does not qualify.
+///
+/// The 2D criterion: mode C is a plane render in phase 1, and a 3D
+/// flame with `preserve_z` off is a planar IFS anyway (see
+/// [`crate::scene::ifs_analysis::Space`]).
+pub fn pack_flame(
+    flame: &crate::scene::transforms::Flame,
+    registry: &crate::variations::VariationRegistry,
+) -> Result<PackedIfs, Vec<crate::scene::ifs_analysis::Disqualification>> {
+    let ifs = crate::scene::ifs_analysis::analyse_2d(flame, registry)?;
+    let colors: Vec<f32> = flame.transforms.iter().map(|t| t.color).collect();
+    let mut globals = [[0.0f32; 4]; 4];
+    pack_globals(&ifs, &mut globals);
+    Ok(PackedIfs { globals, rows: pack_maps(&ifs, &colors) })
+}
+
+/// The per-map rows of the storage buffer, in the flame's transform
+/// order — so a branch index in the address IS a transform index.
+pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
+    ifs.maps
+        .iter()
+        .map(|m| {
+            let inv: Affine2 = m.inverse;
+            IfsMapGpu {
+                inv_m: [
+                    inv.m[0][0] as f32,
+                    inv.m[0][1] as f32,
+                    inv.m[1][0] as f32,
+                    inv.m[1][1] as f32,
+                ],
+                inv_t: [inv.t[0] as f32, inv.t[1] as f32],
+                sigma_min: m.sigma_min as f32,
+                color: colors.get(m.transform_index).copied().unwrap_or(0.0),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::ifs_analysis::analyse_2d;
+    use crate::scene::transforms::{Flame, Transform};
+    use crate::variations::global_registry;
+    use std::collections::HashMap;
+
+    fn half(tx: f32, ty: f32, color: f32) -> Transform {
+        let mut t = Transform::default();
+        t.a = 0.5;
+        t.b = 0.0;
+        t.c = 0.0;
+        t.d = 0.5;
+        t.e = tx;
+        t.f = ty;
+        t.color = color;
+        t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+        t.variation_order = vec!["linear".to_string()];
+        t
+    }
+
+    fn square() -> Ifs2 {
+        let mut fl = Flame::default();
+        fl.transforms = vec![half(0.0, 0.0, 0.1), half(0.5, 0.0, 0.4), half(0.0, 0.5, 0.7)];
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        let guard = global_registry();
+        analyse_2d(&fl, &guard).expect("qualifies")
+    }
+
+    /// The classical affine IFSs, as flames with a mode-C view.
+    ///
+    /// Built here rather than hand-written as JSON because the VIEW
+    /// comes from the analysis: the bounding ball the walk already
+    /// computes is exactly what frames the attractor, so a preset
+    /// cannot be committed pointing somewhere the set is not.
+    pub(super) fn classical_presets() -> Vec<crate::config::FractalConfig> {
+        use std::collections::HashMap;
+
+        fn xform(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, color: f32) -> Transform {
+            let mut t = Transform::default();
+            t.a = a;
+            t.b = b;
+            t.c = c;
+            t.d = d;
+            t.e = e;
+            t.f = f;
+            t.color = color;
+            t.weight = 1.0;
+            t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+            t.variation_order = vec!["linear".to_string()];
+            t
+        }
+        // A pure scale-and-shift, the shape most classical IFSs are.
+        let scale = |s: f32, tx: f32, ty: f32, color: f32| xform(s, 0.0, 0.0, s, tx, ty, color);
+
+        let third = 1.0f32 / 3.0;
+        let (c60, s60) = (0.5f32, 0.866_025_4f32);
+
+        // Sierpinski carpet: the 3x3 subdivision minus its centre.
+        let mut carpet = Vec::new();
+        for i in 0..3u32 {
+            for j in 0..3u32 {
+                if i == 1 && j == 1 {
+                    continue;
+                }
+                let n = carpet.len() as f32;
+                carpet.push(scale(third, i as f32 / 3.0, j as f32 / 3.0, n / 8.0));
+            }
+        }
+
+        let cases: Vec<(&str, &str, Vec<Transform>)> = vec![
+            (
+                "Sierpinski Gasket",
+                "ifs_address",
+                vec![
+                    scale(0.5, 0.0, 0.0, 0.1),
+                    scale(0.5, 0.5, 0.0, 0.5),
+                    scale(0.5, 0.25, 0.5, 0.9),
+                ],
+            ),
+            ("Sierpinski Carpet", "ifs_level", carpet),
+            (
+                "Heighway Dragon",
+                "ifs_distance",
+                vec![
+                    xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0, 0.2),
+                    xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0, 0.8),
+                ],
+            ),
+            (
+                "Koch Curve",
+                "ifs_address",
+                vec![
+                    scale(third, 0.0, 0.0, 0.05),
+                    xform(third * c60, -third * s60, third * s60, third * c60, third, 0.0, 0.35),
+                    xform(third * c60, third * s60, -third * s60, third * c60, 0.5, s60 / 3.0, 0.65),
+                    scale(third, 2.0 * third, 0.0, 0.95),
+                ],
+            ),
+        ];
+
+        let registry = global_registry();
+        cases
+            .into_iter()
+            .map(|(name, coloring, transforms)| {
+                let mut c = crate::config::FractalConfig::default();
+                c.render_mode = crate::scene::transforms::RenderMode::Escape;
+                c.flame.name = name.to_string();
+                c.flame.transforms = transforms;
+                c.flame.final_transforms.clear();
+                c.flame.xaos = None;
+
+                let ifs = crate::scene::ifs_analysis::analyse_2d(&c.flame, &registry)
+                    .unwrap_or_else(|why| {
+                        panic!("{name} must qualify, but: {why:?}");
+                    });
+
+                c.escape.formula = "ifs_flame".to_string();
+                c.escape.coloring = coloring.to_string();
+                c.escape.center_re = format!("{}", ifs.ball.centre[0]);
+                c.escape.center_im = format!("{}", ifs.ball.centre[1]);
+                // The home view spans 4 units, so 2.4 radii leaves the
+                // attractor a comfortable margin — the same framing the
+                // panel's Frame button applies.
+                c.escape.zoom_log2 = (4.0 / (ifs.ball.radius * 2.4)).log2();
+                // No supersampling. Mode C's edge is antialiased
+                // ANALYTICALLY, from the sub-pixel value of the
+                // distance, and its other colourings are smooth fields
+                // that do not alias — so supersampling would be four
+                // times the walk for a picture that already has exact
+                // edges.
+
+                // Entering escape mode resets these in the app; a saved
+                // config has to carry them, or a flame's Log-calibrated
+                // tonemap renders the Linear output invisibly.
+                c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+                c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+                c.gamma = crate::config::defaults::DEFAULT_GAMMA;
+                c
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "one-shot generator"]
+    fn write_the_classical_ifs_presets() {
+        // Through the config's OWN serialiser, not serde directly: it
+        // stamps `version`, and a config without one is migrated on
+        // load as if it were v2 — which lifts `render_mode` out of the
+        // `flame` object and so OVERWRITES the top-level Escape with
+        // the flame's absent default. The preset then renders as a
+        // FLAME, silently and plausibly, which is how this was missed
+        // until a preset drew 539 pixels of chaos game.
+        let json: Vec<serde_json::Value> = classical_presets()
+            .iter()
+            .map(|c| {
+                serde_json::from_str(&c.to_json().expect("serialise")).expect("reparse")
+            })
+            .collect();
+        let json = serde_json::to_string_pretty(&json).expect("serialise");
+        std::fs::create_dir_all("output").expect("output dir");
+        std::fs::write("output/ifs-presets.json", json).expect("write");
+        println!("wrote output/ifs-presets.json");
+    }
+
+    /// The shipped mode-C presets must still qualify, and their saved
+    /// view must actually contain the attractor.
+    ///
+    /// A preset is the one thing a user meets before they know what
+    /// the criterion is, so a mode-C preset whose flame stopped
+    /// qualifying would render an empty frame with an explanation
+    /// they did not ask for. And a preset pointing somewhere the set
+    /// is not renders empty for a different reason entirely, which is
+    /// worse — nothing says which of the two went wrong.
+    #[test]
+    fn the_shipped_ifs_presets_still_qualify_and_frame_their_attractor() {
+        let registry = global_registry();
+        let mut checked = 0;
+        for cfg in crate::resources::presets::load_embedded_presets().expect("presets parse") {
+            if get_ifs(&cfg.escape.formula).is_none() {
+                continue;
+            }
+            checked += 1;
+            let name = cfg.flame.name.clone();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&cfg.flame, &registry)
+                .unwrap_or_else(|why| panic!("preset {name:?} no longer qualifies: {why:?}"));
+
+            // The coloring must belong to mode C, or the render falls
+            // back to the def's default and the preset is not the
+            // picture it was saved as.
+            assert!(
+                IFS_COLORINGS.iter().any(|c| c.name == cfg.escape.coloring),
+                "preset {name:?} names coloring {:?}, which is not a mode-C coloring",
+                cfg.escape.coloring
+            );
+
+            // The saved view must hold the whole bounding ball.
+            let span_y = 4.0 / 2f64.powf(cfg.escape.zoom_log2);
+            let (cx, cy) = cfg.escape.center_f64();
+            let dx = cx - ifs.ball.centre[0];
+            let dy = cy - ifs.ball.centre[1];
+            let off = (dx * dx + dy * dy).sqrt();
+            assert!(
+                span_y * 0.5 >= ifs.ball.radius + off,
+                "preset {name:?} frames {span_y:.4} vertically, but its attractor needs \
+                 {:.4} (ball radius {:.4}, view offset {off:.4})",
+                (ifs.ball.radius + off) * 2.0,
+                ifs.ball.radius
+            );
+        }
+        assert_eq!(checked, 4, "expected the four classical IFS presets, found {checked}");
+    }
+
+    #[test]
+    fn registry_names_are_unique_and_disjoint_from_the_other_modes() {
+        let mut seen = std::collections::HashSet::new();
+        for d in IFS_DEFS {
+            assert!(seen.insert(d.name), "duplicate mode-C name {}", d.name);
+            assert!(
+                !crate::escape::FORMULAS.iter().any(|m| m.name == d.name),
+                "{} shadows a mode-A formula",
+                d.name
+            );
+            assert!(
+                crate::escape::fields::get_field(d.name).is_none(),
+                "{} shadows a mode-B field",
+                d.name
+            );
+        }
+        seen.clear();
+        for c in IFS_COLORINGS {
+            assert!(seen.insert(c.name), "duplicate mode-C coloring {}", c.name);
+        }
+    }
+
+    #[test]
+    fn default_colorings_resolve_and_foreign_names_fall_back() {
+        for d in IFS_DEFS {
+            assert!(
+                IFS_COLORINGS.iter().any(|c| c.name == d.default_coloring),
+                "{} declares unknown default coloring {}",
+                d.name,
+                d.default_coloring
+            );
+            // A mode-A coloring name, the state right after a switch.
+            assert_eq!(get_ifs_coloring("smooth", d).name, d.default_coloring);
+            assert_eq!(get_ifs_coloring("ifs_level", d).name, "ifs_level");
+        }
+    }
+
+    /// The GPU tests walk the CPU reference at [`BEAM`] and compare
+    /// against a shader that reads its own default. If the def's
+    /// default moves and the mirror does not, the comparison quietly
+    /// stops comparing like with like.
+    #[test]
+    fn the_shipped_beam_and_depth_defaults_are_what_the_gpu_tests_mirror() {
+        let get = |name: &str| {
+            IFS_FLAME
+                .parameters
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.default)
+                .expect("parameter present")
+        };
+        assert_eq!(get("beam"), gpu_tests::BEAM as f32);
+        assert_eq!(get("levels"), gpu_tests::LEVELS as f32);
+    }
+
+    /// Every path that drives an `EscapeRenderer` must hand it the
+    /// analysed flame.
+    ///
+    /// Mode C is the one escape formula that is NOT a function of the
+    /// escape config alone, so a render path that never calls
+    /// `set_ifs` draws an empty frame — correctly, quietly, and
+    /// indistinguishably from a flame that does not qualify. The app's
+    /// viewport was exactly that until this test existed.
+    #[test]
+    fn every_escape_render_path_supplies_the_ifs() {
+        for (path, src) in [
+            ("src/app/mod.rs", include_str!("../app/mod.rs")),
+            ("src/renderer/render.rs", include_str!("../renderer/render.rs")),
+        ] {
+            assert!(
+                src.contains("EscapeRenderer") || src.contains("escape_renderer"),
+                "{path} no longer drives the escape renderer; drop it from this list"
+            );
+            assert!(
+                src.contains("set_ifs"),
+                "{path} renders escape mode but never calls set_ifs, so mode C                  draws nothing there"
+            );
+        }
+    }
+
+    /// A 1080p mode-C view must BAND, and the bands must be small
+    /// enough that the driver never sees a multi-second dispatch.
+    ///
+    /// This is the test the first cut of mode C did not have. Its cost
+    /// was modelled as `levels * maps`, which left out the beam
+    /// entirely and was 250x low in absolute terms, so a 1080p view
+    /// dispatched all 2 million pixels at once, ground for seconds and
+    /// took the driver with it. The breaker that exists for exactly
+    /// this cannot help, because it only engages once a render is
+    /// banded — and this arithmetic is what decides whether it ever is.
+    #[test]
+    fn a_1080p_mode_c_view_bands_into_dispatches_a_driver_will_survive() {
+        use crate::escape::renderer::{ifs_rows_per_dispatch, IFS_DISPATCH_BUDGET};
+
+        // Measured: 1.5e9 walk steps per second (see the budget's docs).
+        const STEPS_PER_MS: u64 = 1_500_000;
+
+        for &(label, w, h) in &[
+            ("1080p", 1920u32, 1080u32),
+            ("1080p at 2x supersample", 3840, 2160),
+            ("4K", 3840, 2160),
+            ("8K at 2x supersample", 15360, 8640),
+        ] {
+            for &(levels, beam, maps) in &[(24u32, 8u32, 3usize), (40, 8, 8), (160, 8, 20)] {
+                let rows =
+                    ifs_rows_per_dispatch(w, h, levels, beam, maps, IFS_DISPATCH_BUDGET);
+                assert!(rows >= 1, "{label}: {rows} rows");
+                let steps = (w as u64)
+                    * (rows as u64)
+                    * (levels as u64)
+                    * (beam as u64)
+                    * (maps as u64);
+                let ms = steps / STEPS_PER_MS;
+                assert!(
+                    ms < 700,
+                    "{label} at levels {levels}, beam {beam}, {maps} maps: a band of \
+                     {rows} rows is ~{ms} ms, past the point the breaker calls slow"
+                );
+            }
+        }
+
+        // And it must actually band rather than sending the frame whole.
+        let rows = ifs_rows_per_dispatch(1920, 1080, 24, 8, 3, IFS_DISPATCH_BUDGET);
+        assert!(rows < 1080, "1080p should band, got {rows} rows of 1080");
+
+        // A cheap view should NOT be chopped up for nothing: banding
+        // costs a resolve pass each time.
+        let rows = ifs_rows_per_dispatch(512, 512, 24, 1, 2, IFS_DISPATCH_BUDGET);
+        assert_eq!(rows, 512, "a small cheap view should render in one dispatch");
+    }
+
+    /// The breaker's halvings have to reach mode C, or a device that
+    /// cannot hold a 300 ms band has no way to say so.
+    #[test]
+    fn the_budget_shift_still_shrinks_mode_c_bands() {
+        use crate::escape::renderer::{ifs_rows_per_dispatch, IFS_DISPATCH_BUDGET};
+        let full = ifs_rows_per_dispatch(1920, 1080, 24, 8, 3, IFS_DISPATCH_BUDGET);
+        let halved = ifs_rows_per_dispatch(1920, 1080, 24, 8, 3, IFS_DISPATCH_BUDGET >> 1);
+        assert!(halved < full, "shift 1 gave {halved} rows against {full}");
+        let deep = ifs_rows_per_dispatch(1920, 1080, 24, 8, 3, IFS_DISPATCH_BUDGET >> 6);
+        assert!(deep >= 1, "shift 6 must still make progress, got {deep}");
+    }
+
+    /// A NaN anywhere in the packed data must not read as "changed".
+    ///
+    /// The app re-analyses the flame every frame and marks the escape
+    /// image dirty when the answer differs. Under `PartialEq` a single
+    /// NaN — a transform colour is enough — answers "changed" forever,
+    /// so the view re-renders a band every frame and never settles.
+    /// That is a permanent redraw loop, and it looks exactly like the
+    /// engine being too slow rather than like a bug.
+    #[test]
+    fn a_nan_in_the_packed_data_does_not_read_as_a_change_every_frame() {
+        let ifs = square();
+        let mut packed =
+            PackedIfs { globals: [[0.0; 4]; 4], rows: pack_maps(&ifs, &[0.1, 0.4, 0.7]) };
+        pack_globals(&ifs, &mut packed.globals);
+
+        // Same value, so nothing changed.
+        assert!(packed_bytes_eq(Some(&packed), Some(&packed.clone())));
+        assert!(packed_bytes_eq(None, None));
+        assert!(!packed_bytes_eq(Some(&packed), None));
+
+        // A NaN colour: `PartialEq` would call this a change.
+        let mut nanned = packed.clone();
+        nanned.rows[1].color = f32::NAN;
+        assert!(
+            nanned != nanned.clone(),
+            "the premise: PartialEq calls a NaN-carrying value different from itself"
+        );
+        assert!(
+            packed_bytes_eq(Some(&nanned), Some(&nanned.clone())),
+            "a NaN-carrying pack must still compare equal to itself, or the app              re-renders forever"
+        );
+
+        // And a real change is still seen.
+        let mut moved = packed.clone();
+        moved.rows[0].inv_t[0] += 1.0;
+        assert!(!packed_bytes_eq(Some(&packed), Some(&moved)));
+        let mut reframed = packed.clone();
+        reframed.globals[0][2] += 1.0;
+        assert!(!packed_bytes_eq(Some(&packed), Some(&reframed)));
+    }
+
+    #[test]
+    fn lookup_routes_to_mode_c_only() {
+        assert!(get_ifs("ifs_flame").is_some());
+        assert!(get_ifs("mandelbrot").is_none());
+        assert!(get_ifs("weierstrass").is_none());
+        assert!(get_ifs("nonexistent").is_none());
+    }
+
+    /// The packed inverse must actually invert the forward map: a
+    /// transposed or column-major slip here would render a plausible
+    /// but wrong picture, which is the hardest kind to notice.
+    #[test]
+    fn packed_inverses_undo_the_forward_maps_in_the_shader_s_layout() {
+        let ifs = square();
+        let rows = pack_maps(&ifs, &[0.1, 0.4, 0.7]);
+        assert_eq!(rows.len(), 3);
+
+        for (row, m) in rows.iter().zip(ifs.maps.iter()) {
+            for &p in &[[0.3f64, -0.8], [1.7, 2.4], [0.0, 0.0]] {
+                let fwd = m.forward.apply(p);
+                // Exactly the arithmetic `ifs_inv_point` performs.
+                let back = [
+                    row.inv_m[0] as f64 * fwd[0] + row.inv_m[1] as f64 * fwd[1]
+                        + row.inv_t[0] as f64,
+                    row.inv_m[2] as f64 * fwd[0] + row.inv_m[3] as f64 * fwd[1]
+                        + row.inv_t[1] as f64,
+                ];
+                assert!(
+                    (back[0] - p[0]).abs() < 1e-6 && (back[1] - p[1]).abs() < 1e-6,
+                    "round trip {p:?} -> {fwd:?} -> {back:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn packed_rows_carry_sigma_and_the_transform_colour_in_order() {
+        let ifs = square();
+        let rows = pack_maps(&ifs, &[0.1, 0.4, 0.7]);
+        for r in &rows {
+            assert!((r.sigma_min - 0.5).abs() < 1e-6, "sigma {r:?}");
+        }
+        assert_eq!(rows.iter().map(|r| r.color).collect::<Vec<_>>(), vec![0.1, 0.4, 0.7]);
+        // A colour list shorter than the flame (a caller bug) must not
+        // panic mid-render.
+        let short = pack_maps(&ifs, &[0.1]);
+        assert_eq!(short[2].color, 0.0);
+    }
+
+    #[test]
+    fn globals_describe_the_ball_the_final_and_the_count() {
+        let ifs = square();
+        let mut out = [[0.0f32; 4]; 8];
+        pack_globals(&ifs, &mut out);
+        assert_eq!(out[0][3], 3.0, "map count");
+        assert!(out[0][2] > 0.0, "radius");
+        // No final: identity inverse, has_final = 0, sigma 1.
+        assert_eq!(out[1], [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(out[2], [0.0, 0.0, 1.0, 0.0]);
+        assert!((out[3][0] - 0.5).abs() < 1e-6, "mean sigma {out:?}");
+    }
+
+    /// The GPU row must match what WGSL's std430 rules read: 32 bytes,
+    /// with the scalars trailing a vec2 rather than straddling a
+    /// 16-byte boundary.
+    #[test]
+    fn the_gpu_row_is_the_layout_the_shader_declares() {
+        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 32);
+        assert_eq!(std::mem::align_of::<IfsMapGpu>(), 4);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_m), 0);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_t), 16);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, sigma_min), 24);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, color), 28);
+    }
+}
+
+/// The transcription gate: the shader's walk against the CPU
+/// reference.
+///
+/// [`crate::scene::ifs_estimate`] gates the ALGORITHM against IFSs
+/// with closed-form answers. These gate that the shader computes the
+/// same thing — the packing, the reference/delta split, the view
+/// mapping and the colouring — which is the half a CPU test cannot
+/// reach and the half where a transposed matrix renders a plausible
+/// wrong picture.
+///
+/// Classes, not values: a pixel is compared as inside-the-set or
+/// outside-it, never by its exact colour, so nothing here can be
+/// perturbed by f32 rounding, a palette change or a tonemap tweak.
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+    use crate::scene::ifs_estimate::estimate;
+    use crate::scene::transforms::{Flame, RenderMode, Transform};
+    use crate::variations::global_registry;
+    use std::collections::HashMap;
+
+    const W: u32 = 96;
+    const H: u32 = 96;
+    /// Frames the gasket: centre (0.5, 0.4), vertical span 2.
+    const CENTRE: [f64; 2] = [0.5, 0.4];
+    const ZOOM_LOG2: f64 = 1.0;
+    pub(super) const LEVELS: u32 = 24;
+    /// The def parameter default, mirrored so the CPU reference walks
+    /// the same beam the shader does.
+    pub(super) const BEAM: u32 = 8;
+
+    pub(super) fn device() -> (wgpu::Device, wgpu::Queue) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        // The flame renderer is built on every render_with job
+        // whatever the mode, and its compute layout wants nine
+        // storage buffers where the default limit is eight.
+        let adapter_limits = adapter.limits();
+        let mut limits = wgpu::Limits::default();
+        limits.max_storage_buffers_per_shader_stage =
+            adapter_limits.max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+        limits.max_buffer_size = adapter_limits.max_buffer_size;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("ifs test"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .expect("device")
+    }
+
+    fn half(tx: f32, ty: f32) -> Transform {
+        let mut t = Transform::default();
+        t.a = 0.5;
+        t.b = 0.0;
+        t.c = 0.0;
+        t.d = 0.5;
+        t.e = tx;
+        t.f = ty;
+        t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+        t.variation_order = vec!["linear".to_string()];
+        t
+    }
+
+    fn sierpinski_flame() -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms = vec![half(0.0, 0.0), half(0.5, 0.0), half(0.25, 0.5)];
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        fl
+    }
+
+    /// A general affine transform in the analysis module's row-major
+    /// reading: `x' = a·x + b·y + e`, `y' = c·x + d·y + f`.
+    fn xform(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Transform {
+        let mut t = Transform::default();
+        t.a = a;
+        t.b = b;
+        t.c = c;
+        t.d = d;
+        t.e = e;
+        t.f = f;
+        t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+        t.variation_order = vec!["linear".to_string()];
+        t
+    }
+
+    fn flame_of(transforms: Vec<Transform>) -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms = transforms;
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        fl
+    }
+
+    /// Four half-scale maps tiling `[0,1]²`: the attractor is the
+    /// filled square, which is the one case with an exact distance.
+    fn square_flame() -> Flame {
+        flame_of(vec![half(0.0, 0.0), half(0.5, 0.0), half(0.0, 0.5), half(0.5, 0.5)])
+    }
+
+    /// The Heighway dragon: two similarities of ratio 1/sqrt(2), each
+    /// a 45-degree rotation.
+    fn dragon_flame() -> Flame {
+        flame_of(vec![
+            xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
+            xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
+        ])
+    }
+
+    /// The Koch curve: four similarities of ratio 1/3, two of them
+    /// rotated by +/-60 degrees.
+    fn koch_flame() -> Flame {
+        let s = 1.0f32 / 3.0;
+        let (c60, s60) = (0.5f32, 0.8660254f32);
+        flame_of(vec![
+            xform(s, 0.0, 0.0, s, 0.0, 0.0),
+            xform(s * c60, -s * s60, s * s60, s * c60, s, 0.0),
+            xform(s * c60, s * s60, -s * s60, s * c60, 0.5, s60 / 3.0),
+            xform(s, 0.0, 0.0, s, 2.0 * s, 0.0),
+        ])
+    }
+
+    /// A flame that fails the criterion: `spherical` is not affine,
+    /// and it is the commonest reason in the phase-0 census.
+    fn spherical_flame() -> Flame {
+        let mut fl = sierpinski_flame();
+        fl.transforms[1].variations = HashMap::from([("spherical".to_string(), 1.0)]);
+        fl.transforms[1].variation_order = vec!["spherical".to_string()];
+        fl
+    }
+
+    fn config_for(flame: Flame) -> crate::config::FractalConfig {
+        let mut c = crate::config::FractalConfig::default();
+        c.render_mode = RenderMode::Escape;
+        c.flame = flame;
+        c.escape.formula = "ifs_flame".to_string();
+        c.escape.coloring = "ifs_distance".to_string();
+        c.escape.center_re = "0.5".to_string();
+        c.escape.center_im = "0.4".to_string();
+        c.escape.zoom_log2 = ZOOM_LOG2;
+        c.escape.rotation = 0.0;
+        c.escape.supersample = 1;
+        c.escape.formula_params.insert("levels".to_string(), LEVELS as f32);
+        // A mid-palette interior so "lit" is not accidentally black,
+        // and no contour bands so luminance IS coverage.
+        c.escape.coloring_params.insert("interior".to_string(), 0.5);
+        c.escape.coloring_params.insert("bands".to_string(), 0.0);
+        c.escape.coloring_params.insert("edge".to_string(), 1.0);
+        // What entering escape mode does in the app (render_mode.rs):
+        // a flame's Log-calibrated tonemap renders Linear output
+        // invisibly.
+        c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+        c.gamma = crate::config::defaults::DEFAULT_GAMMA;
+        c
+    }
+
+    fn render(config: &crate::config::FractalConfig) -> Vec<u8> {
+        let (device, queue) = device();
+        let job = crate::renderer::RenderJob::new(config, W, H);
+        let out = pollster::block_on(crate::renderer::render(
+            &device,
+            &queue,
+            job,
+            &mut crate::renderer::NoProgress,
+        ))
+        .expect("render");
+        out.rgba_data
+    }
+
+    /// The plane point a pixel centre maps to — the template's
+    /// mapping, transcribed.
+    fn pixel_to_plane(x: u32, y: u32) -> [f64; 2] {
+        let span_y = 4.0 / 2f64.powf(ZOOM_LOG2);
+        let span_x = span_y * W as f64 / H as f64;
+        let u = (x as f64 + 0.5) / W as f64 - 0.5;
+        let v = (y as f64 + 0.5) / H as f64 - 0.5;
+        [CENTRE[0] + u * span_x, CENTRE[1] - v * span_y]
+    }
+
+    fn brightness(rgba: &[u8], x: u32, y: u32) -> f64 {
+        let i = ((y * W + x) * 4) as usize;
+        (rgba[i] as f64 + rgba[i + 1] as f64 + rgba[i + 2] as f64) / 765.0
+    }
+
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_gpu_walk_agrees_with_the_cpu_reference_on_a_sierpinski() {
+        let config = config_for(sierpinski_flame());
+        let rgba = render(&config);
+        assert_eq!(rgba.len(), (W * H * 4) as usize);
+
+        let guard = global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&config.flame, &guard)
+            .expect("Sierpinski qualifies");
+        let px = (4.0 / 2f64.powf(ZOOM_LOG2)) / H as f64;
+
+        // Classify by the CPU reference, skipping the boundary band
+        // where a sub-pixel coverage is legitimately between the two.
+        //
+        // The gasket has measure zero, so "distance exactly 0" catches
+        // almost nothing at 96x96 (54 pixels, measured): what the
+        // render draws is the set THICKENED to the antialiasing width,
+        // so the interior class is "within a quarter pixel", where
+        // coverage is 0.84 and up.
+        let mut inside = Vec::new();
+        let mut outside = Vec::new();
+        for y in 0..H {
+            for x in 0..W {
+                let d = estimate(&ifs, pixel_to_plane(x, y), LEVELS, BEAM).distance;
+                if d < 0.25 * px {
+                    inside.push(brightness(&rgba, x, y));
+                } else if d > 3.0 * px {
+                    outside.push(brightness(&rgba, x, y));
+                }
+            }
+        }
+        println!(
+            "interior {} / exterior {} of {} pixels",
+            inside.len(),
+            outside.len(),
+            W * H
+        );
+        assert!(inside.len() > 150, "too few interior pixels: {}", inside.len());
+        assert!(outside.len() > 2000, "too few exterior pixels: {}", outside.len());
+
+        let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len() as f64;
+        let (mi, mo) = (mean(&inside), mean(&outside));
+        assert!(mi > 0.05, "the set rendered dark ({mi:.4}) -- nothing to compare");
+        assert!(
+            mi > mo * 8.0 + 0.02,
+            "interior ({mi:.4}) and exterior ({mo:.4}) are not separated: the shader \
+             is not drawing the set the CPU walk finds"
+        );
+
+        // Per pixel, not just on average: split at the midpoint and
+        // require the two classifications to agree almost everywhere.
+        let cut = (mi + mo) * 0.5;
+        let lit_in = inside.iter().filter(|&&b| b > cut).count();
+        let lit_out = outside.iter().filter(|&&b| b > cut).count();
+        let agree = (lit_in + (outside.len() - lit_out)) as f64
+            / (inside.len() + outside.len()) as f64;
+        assert!(
+            agree > 0.97,
+            "GPU and CPU disagree on {:.1}% of pixels (interior lit {lit_in}/{}, \
+             exterior lit {lit_out}/{})",
+            (1.0 - agree) * 100.0,
+            inside.len(),
+            outside.len()
+        );
+    }
+
+    /// A flame that fails the criterion must render EMPTY, not a
+    /// frame-filling interior. `distance == 0` is what a point on the
+    /// attractor returns, so "no maps" has to mean far away, not near.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_flame_that_does_not_qualify_renders_nothing() {
+        let guard = global_registry();
+        assert!(
+            pack_flame(&spherical_flame(), &guard).is_err(),
+            "the fixture must actually fail the criterion"
+        );
+        drop(guard);
+
+        let rgba = render(&config_for(spherical_flame()));
+        let lit = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (x, y)))
+            .filter(|&(x, y)| brightness(&rgba, x, y) > 0.02)
+            .count();
+        assert!(
+            lit * 100 < (W * H) as usize,
+            "a non-qualifying flame lit {lit} of {} pixels -- it should draw nothing",
+            W * H
+        );
+    }
+
+    /// Depth is the walk's resolution knob: a deeper walk resolves
+    /// more of the gasket's holes, so the lit area shrinks. If it did
+    /// not, the depth parameter would not be reaching the shader.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_deeper_walk_resolves_more_holes() {
+        let lit_at = |levels: u32| {
+            let mut c = config_for(sierpinski_flame());
+            c.escape.formula_params.insert("levels".to_string(), levels as f32);
+            let rgba = render(&c);
+            (0..H)
+                .flat_map(|y| (0..W).map(move |x| (x, y)))
+                .filter(|&(x, y)| brightness(&rgba, x, y) > 0.02)
+                .count()
+        };
+        let shallow = lit_at(2);
+        let deep = lit_at(20);
+        assert!(shallow > 0 && deep > 0, "nothing rendered: {shallow}, {deep}");
+        assert!(
+            deep < shallow,
+            "depth 20 lit {deep} pixels and depth 2 lit {shallow}: the walk's depth \
+             is not reaching the shader"
+        );
+    }
+
+    /// The atan2 guard the trap colouring needs must be the flame
+    /// engine's, byte for byte — a divergent copy is exactly how the
+    /// Metal zero-pair bug comes back.
+    #[test]
+    fn the_atan2_guard_is_identical_to_the_flame_one() {
+        let utilities = include_str!("../../shaders/core/utilities.wgsl");
+        let body = |src: &str| -> String {
+            let start = src.find("fn ff_atan2(").expect("ff_atan2 present");
+            let rest = &src[start..];
+            let end = rest.find("\n}").expect("closing brace") + 2;
+            rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        let template = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_TRAP);
+        assert_eq!(
+            body(utilities),
+            body(&template),
+            "the mode-C template's ff_atan2 has drifted from shaders/core/utilities.wgsl"
+        );
+    }
+
+    /// Every registered combination must compile. A mode-C coloring
+    /// that references a field the result struct does not carry is a
+    /// shader-creation panic at the moment a user picks it, which is
+    /// not where it should be found.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn every_mode_c_combination_compiles() {
+        let (device, _queue) = device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        for def in IFS_DEFS {
+            for coloring in IFS_COLORINGS {
+                let source = crate::escape::assembler::assemble_ifs(def, coloring);
+                let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(&format!("{}|{}", def.name, coloring.name)),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                });
+            }
+        }
+        let err = pollster::block_on(scope.pop());
+        assert!(err.is_none(), "a mode-C shader failed to compile: {err:?}");
+    }
+
+    /// What the beam costs on the GPU, so the default is chosen on a
+    /// measurement rather than on taste.
+    ///
+    /// The candidate arrays are function-scope registers, so a wider
+    /// beam does not just do more work — it can push the shader into
+    /// spilling, which is a cliff rather than a slope. This prints the
+    /// slope so the cliff is visible if it appears.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn what_the_beam_width_costs() {
+        let (device, queue) = device();
+        // Control: the same harness over a mode-A formula. Without it
+        // there is no way to tell the walk's cost from the fixed cost
+        // of a render_with round trip -- device setup, palette,
+        // tonemap, effects and readback.
+        {
+            let mut c = config_for(dragon_flame());
+            c.escape.formula = "mandelbrot".to_string();
+            c.escape.coloring = "smooth".to_string();
+            c.escape.max_iter = 256;
+            let once = || {
+                let job = crate::renderer::RenderJob::new(&c, 512, 512);
+                pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render")
+            };
+            let _ = once();
+            let t0 = web_time::Instant::now();
+            let _ = once();
+            println!(
+                "  mode A (mandelbrot, 256 iter): {:>7.1} ms  <- harness floor",
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        for &beam in &[1u32, 2, 4, 8] {
+            let mut c = config_for(dragon_flame());
+            c.escape.center_re = "0.35".to_string();
+            c.escape.center_im = "0.25".to_string();
+            c.escape.zoom_log2 = 1.6;
+            c.escape.formula_params.insert("levels".to_string(), 40.0);
+            c.escape.formula_params.insert("beam".to_string(), beam as f32);
+            // One warm render so shader compilation is not in the number.
+            let render_once = || {
+                let job = crate::renderer::RenderJob::new(&c, 512, 512);
+                pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render")
+            };
+            let _ = render_once();
+            let t0 = web_time::Instant::now();
+            let out = render_once();
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let lit = out
+                .rgba_data
+                .chunks(4)
+                .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .count();
+            println!("  beam {beam}: {ms:>7.1} ms at 512x512, {lit} lit pixels");
+        }
+    }
+
+    /// A 1080p mode-C render must finish, and finish in bands.
+    ///
+    /// The arithmetic is gated separately
+    /// (`a_1080p_mode_c_view_bands_into_dispatches_a_driver_will_survive`);
+    /// this is the end-to-end version, because the failure it exists
+    /// for was not a slow render but a driver reset, and no unit test
+    /// on a row count can see that.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn a_1080p_render_of_every_shipped_preset_finishes() {
+        let (device, queue) = device();
+        for cfg in crate::resources::presets::load_embedded_presets().expect("presets parse") {
+            if get_ifs(&cfg.escape.formula).is_none() {
+                continue;
+            }
+            let t0 = web_time::Instant::now();
+            let job = crate::renderer::RenderJob::new(&cfg, 1920, 1080);
+            let out = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let lit = out
+                .rgba_data
+                .chunks(4)
+                .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .count();
+            println!("  {:22} {ms:>7.1} ms at 1920x1080, {lit} lit", cfg.flame.name);
+            assert!(lit > 1920 * 1080 / 400, "{:?} rendered blank", cfg.flame.name);
+            // Not a performance target — a hang detector. The failure
+            // this guards took seconds per frame and reset the driver.
+            assert!(ms < 8000.0, "{:?} took {ms:.0} ms at 1080p", cfg.flame.name);
+        }
+    }
+
+    /// Render the shipped mode-C presets exactly as they are saved —
+    /// their own view, colouring and supersampling. This is what a
+    /// user meets, so it is what gets looked at.
+    #[test]
+    #[ignore = "needs a GPU; writes images for inspection"]
+    fn render_the_shipped_presets_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let mut seen = 0;
+        for cfg in crate::resources::presets::load_embedded_presets().expect("presets parse") {
+            if get_ifs(&cfg.escape.formula).is_none() {
+                continue;
+            }
+            seen += 1;
+            let (device, queue) = device();
+            let job = crate::renderer::RenderJob::new(&cfg, 512, 512);
+            let out = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            // A preset that renders an empty frame is the failure this
+            // exists to catch: the criterion and the framing are both
+            // gated elsewhere, but "qualifies and is in view" does not
+            // by itself mean "draws something".
+            let lit = out
+                .rgba_data
+                .chunks(4)
+                .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                .count();
+            let slug = cfg.flame.name.to_lowercase().replace(' ', "-");
+            let path = dir.join(format!("preset-{slug}.png"));
+            image::save_buffer(&path, &out.rgba_data, 512, 512, image::ColorType::Rgba8)
+                .expect("write png");
+            println!("wrote {} ({lit} lit)", path.display());
+            // A curve is measure zero, so the bar is low -- this is
+            // catching an EMPTY frame, not judging composition.
+            assert!(
+                lit > 400,
+                "preset {:?} lit only {lit} pixels",
+                cfg.flame.name
+            );
+        }
+        assert_eq!(seen, 4, "expected the four classical IFS presets, found {seen}");
+    }
+
+    /// Render the classical affine IFSs for inspection (plan phase 1:
+    /// "the classical presets render to their textbook pictures,
+    /// inspected and baselined"). Writes to the gitignored `output/`.
+    #[test]
+    #[ignore = "needs a GPU; writes images for inspection"]
+    fn render_the_classical_ifss_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+
+        let cases: Vec<(&str, Flame, [f64; 2], f64)> = vec![
+            ("sierpinski", sierpinski_flame(), [0.5, 0.4], 1.0),
+            ("square", square_flame(), [0.5, 0.5], 1.2),
+            ("dragon", dragon_flame(), [0.35, 0.25], 1.6),
+            ("koch", koch_flame(), [0.5, 0.12], 2.0),
+        ];
+        let colorings = ["ifs_distance", "ifs_level", "ifs_address", "ifs_trap"];
+
+        for (name, flame, centre, zoom) in cases {
+            for coloring in colorings {
+                let mut c = config_for(flame.clone());
+                c.escape.coloring = coloring.to_string();
+                c.escape.center_re = centre[0].to_string();
+                c.escape.center_im = centre[1].to_string();
+                c.escape.zoom_log2 = zoom;
+                c.escape.supersample = 2;
+                c.escape.formula_params.insert("levels".to_string(), 40.0);
+                let (device, queue) = device();
+                let job = crate::renderer::RenderJob::new(&c, 512, 512);
+                let out = pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render");
+                let path = dir.join(format!("{name}-{coloring}.png"));
+                image::save_buffer(
+                    &path,
+                    &out.rgba_data,
+                    512,
+                    512,
+                    image::ColorType::Rgba8,
+                )
+                .expect("write png");
+                println!("wrote {}", path.display());
+            }
+        }
+    }
+}

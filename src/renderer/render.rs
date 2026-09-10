@@ -960,6 +960,14 @@ async fn render_escape(
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = job.config.escape.supersample.max(1);
     escape_renderer.resize(device, job.width, job.height, want_ss);
+    // Mode C reads the flame as an IFS, so the analysis runs once per
+    // job here rather than per pixel in the shader. A flame that does
+    // not qualify hands the renderer `None` and draws nothing — the
+    // panel is where the reason is explained.
+    if crate::escape::ifs::get_ifs(&job.config.escape.formula).is_some() {
+        let registry = crate::variations::global_registry();
+        escape_renderer.set_ifs(crate::escape::ifs::pack_flame(&job.config.flame, &registry).ok());
+    }
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
     escape_renderer.set_chunk_time_target(200.0);

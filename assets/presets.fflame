@@ -1051,5 +1051,630 @@
     "version": 1,
     "vibrancy": 1.0,
     "zoom": 1.4204298257827759
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.3333333333333333",
+      "center_re": "0.5",
+      "coloring": "ifs_address",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 1.321928093444667
+    },
+    "flame": {
+      "name": "Sierpinski Gasket",
+      "transforms": [
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.1,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.9,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.25,
+          "f": 0.5,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.5000000223517421",
+      "center_re": "0.5000000223517421",
+      "coloring": "ifs_level",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 1.2369655282300176
+    },
+    "flame": {
+      "name": "Sierpinski Carpet",
+      "transforms": [
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.125,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.33333334,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.25,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.6666667,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.375,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.33333334,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.33333334,
+          "f": 0.6666667,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.625,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.75,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.33333334,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.875,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.6666667,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.19999999999999998",
+      "center_re": "0.39999999999999997",
+      "coloring": "ifs_distance",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 0.6263763368089926
+    },
+    "flame": {
+      "name": "Heighway Dragon",
+      "transforms": [
+        {
+          "a": 0.5,
+          "b": -0.5,
+          "c": 0.5,
+          "color": 0.2,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": -0.5,
+          "b": -0.5,
+          "c": 0.5,
+          "color": 0.8,
+          "color_speed": 0.0,
+          "d": -0.5,
+          "direct_color": 1.0,
+          "e": 1.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.06185895766012041",
+      "center_re": "0.5000000151672536",
+      "coloring": "ifs_address",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 1.7260081204836983
+    },
+    "flame": {
+      "name": "Koch Curve",
+      "transforms": [
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.05,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.16666667,
+          "b": -0.28867513,
+          "c": 0.28867513,
+          "color": 0.35,
+          "color_speed": 0.0,
+          "d": 0.16666667,
+          "direct_color": 1.0,
+          "e": 0.33333334,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.16666667,
+          "b": 0.28867513,
+          "c": -0.28867513,
+          "color": 0.65,
+          "color_speed": 0.0,
+          "d": 0.16666667,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": 0.28867513,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.33333334,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.95,
+          "color_speed": 0.0,
+          "d": 0.33333334,
+          "direct_color": 1.0,
+          "e": 0.6666667,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
   }
 ]

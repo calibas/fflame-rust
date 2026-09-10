@@ -703,7 +703,29 @@ fn merge<A: Copy>(
 
 // ----------------------------------------------------------------- ball
 
-/// A ball every map sends into itself (Hart's construction).
+/// Relative slack on the bounding ball's radius, so points ON the
+/// attractor are strictly inside it rather than a rounding error
+/// outside. See [`ball_2d`].
+pub const BALL_MARGIN: f64 = 1e-9;
+
+/// How many times [`ball_2d`] / [`ball_3d`] refine their first ball.
+///
+/// Hart's radius is a bound on a ball each map sends into ITSELF, which
+/// is a much stronger property than the estimate needs — the walk only
+/// needs the attractor to be inside. So the first ball can be far
+/// larger than the set: the Heighway dragon's is 1.707 around a set of
+/// circumradius ~0.75, and a ball that loose leaves the greedy branch
+/// choice guessing over a region where every branch keeps the point
+/// inside.
+///
+/// Refining is one line of set theory: if `A ⊆ B` then
+/// `A = ∪ Sᵢ(A) ⊆ ∪ Sᵢ(B)`, so a ball containing the images is another
+/// valid ball, and iterating contracts it toward the attractor's own
+/// bounding ball. Every iterate is valid, so the smallest one wins.
+const BALL_REFINEMENTS: usize = 64;
+
+/// A ball every map sends into itself (Hart's construction), then
+/// refined [`BALL_REFINEMENTS`] times toward the attractor.
 ///
 /// For centre `c`, map `S` with Lipschitz `L < 1` sends `B(c, R)` into
 /// `B(S(c), L·R)`, which lies inside `B(c, R)` whenever
@@ -712,6 +734,13 @@ fn merge<A: Copy>(
 /// maps' fixed points, which lie on the attractor and so sit where the
 /// bound is tight; a map without a fixed point (none here, since every
 /// map is contractive) would fall back to the origin.
+///
+/// The radius carries [`BALL_MARGIN`]. The bound above is a supremum
+/// the attractor ATTAINS -- the Sierpinski apex sits exactly on the
+/// sphere -- so in f64 an attractor point lands a few ulps outside and
+/// the distance walk reads it as having escaped at level 0. Growing
+/// the ball is always safe (any radius above the bound still satisfies
+/// `S(B) subset B`) and costs 1e-9 of relative tightness.
 fn ball_2d(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
     let fixed: Vec<[f64; 2]> = maps.iter().filter_map(|m| m.forward.fixed_point()).collect();
     let centre = if fixed.is_empty() {
@@ -728,7 +757,33 @@ fn ball_2d(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
             d / (1.0 - m.sigma_max)
         })
         .fold(0.0f64, f64::max);
-    Ball { centre, radius }
+
+    // Refine: the images' own bounding ball is another valid one.
+    let (mut c, mut r) = (centre, radius);
+    let (mut best_c, mut best_r) = (centre, radius);
+    for _ in 0..BALL_REFINEMENTS {
+        let n = maps.len() as f64;
+        let images: Vec<[f64; 2]> = maps.iter().map(|m| m.forward.apply(c)).collect();
+        let nc = [
+            images.iter().map(|p| p[0]).sum::<f64>() / n,
+            images.iter().map(|p| p[1]).sum::<f64>() / n,
+        ];
+        let nr = maps
+            .iter()
+            .zip(&images)
+            .map(|(m, im)| {
+                let d = ((im[0] - nc[0]).powi(2) + (im[1] - nc[1]).powi(2)).sqrt();
+                d + m.sigma_max * r
+            })
+            .fold(0.0f64, f64::max);
+        c = nc;
+        r = nr;
+        if r < best_r {
+            best_c = c;
+            best_r = r;
+        }
+    }
+    Ball { centre: best_c, radius: best_r * (1.0 + BALL_MARGIN) }
 }
 
 fn ball_3d(maps: &[IfsMap<Affine3>]) -> Ball<[f64; 3]> {
@@ -751,7 +806,36 @@ fn ball_3d(maps: &[IfsMap<Affine3>]) -> Ball<[f64; 3]> {
             d / (1.0 - m.sigma_max)
         })
         .fold(0.0f64, f64::max);
-    Ball { centre, radius }
+
+    let (mut c, mut r) = (centre, radius);
+    let (mut best_c, mut best_r) = (centre, radius);
+    for _ in 0..BALL_REFINEMENTS {
+        let n = maps.len() as f64;
+        let images: Vec<[f64; 3]> = maps.iter().map(|m| m.forward.apply(c)).collect();
+        let nc = [
+            images.iter().map(|p| p[0]).sum::<f64>() / n,
+            images.iter().map(|p| p[1]).sum::<f64>() / n,
+            images.iter().map(|p| p[2]).sum::<f64>() / n,
+        ];
+        let nr = maps
+            .iter()
+            .zip(&images)
+            .map(|(m, im)| {
+                let d = ((im[0] - nc[0]).powi(2)
+                    + (im[1] - nc[1]).powi(2)
+                    + (im[2] - nc[2]).powi(2))
+                .sqrt();
+                d + m.sigma_max * r
+            })
+            .fold(0.0f64, f64::max);
+        c = nc;
+        r = nr;
+        if r < best_r {
+            best_c = c;
+            best_r = r;
+        }
+    }
+    Ball { centre: best_c, radius: best_r * (1.0 + BALL_MARGIN) }
 }
 
 // ---------------------------------------------------------------- tests
