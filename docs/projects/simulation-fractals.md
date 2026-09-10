@@ -157,6 +157,21 @@ measurements are in the pipeline document.
   per frame (integration §6). Rejected: re-running from the seed every
   frame (quadratic; and it makes "never stills" models impossible to
   export as video).
+  - *Status, 2026-09-09.* There are two video loops. The app's export
+    dialog uses `export_animation_fast`, which does keep the
+    `SimRenderer` alive as this decision says. Until 2026-09-09 that
+    loop ALSO ran the flame's full `max_iterations` of chaos game on
+    every simulation frame, into a histogram nothing read: the escape
+    arm had been carved out of the flame path and the simulation arm
+    added beside it without the same gate. Measured on a 720p ramp,
+    364 ms of a 381 ms frame; gated, the frame is 17 ms. The CLI's
+    `export-animation` uses the older `export_animation`, which
+    renders each frame through the still path (`render_sim`: seed,
+    run `steps`, colour) — exactly the rejected quadratic form. It is
+    correct, only slow; a 300-frame ramp to 2000 steps runs ~300,000
+    steps instead of 2,000. Not yet fixed: the fast loop is not a
+    drop-in for the CLI, since it never ran density effects on any
+    engine.
 - **D5b — The timeline animates a cumulative STEP COUNT, not a rate**
   (decided 2026-09-04, prompted by asking whether the progression
   itself can be animated — it can, and this is how). A `Sim.StepCount`
