@@ -1600,16 +1600,53 @@ fn register_sim(engine: &mut Engine) {
             let model = crate::sim::model_or_default(&cfg.sim.model);
             match model.preset(name) {
                 Some(p) => {
-                    // A preset is its parameters AND its measured step
-                    // count: the numbers without the steps show the
-                    // pattern half-formed.
+                    // A preset is a WHOLE RECIPE, and applying half of
+                    // it produces a picture of nothing. This used to
+                    // set parameters, steps and init only, so a script
+                    // got the previous colouring, matte and warp: a
+                    // Brusselator preset came out uniform because its
+                    // colouring never arrived, and Lenia at another
+                    // model's dt dies. The panel has always applied
+                    // all of it (`sim_panel::preset_changes`); this
+                    // now matches, field for field.
+                    //
+                    // Order matters: dt first, because switching model
+                    // set it to the model default and a preset may
+                    // override; then parameters over the defaults.
+                    cfg.sim.dt = model.default_dt;
                     for (k, v) in p.params {
                         cfg.sim.model_params.insert((*k).to_string(), *v);
                     }
+                    // The measured step count. The numbers without the
+                    // steps show the pattern half-formed.
                     cfg.sim.steps = p.steps;
                     if let Some(init) = p.init {
+                        // Not decoration: FitzHugh-Nagumo's constants
+                        // give spirals from a cut wavefront and a FLAT
+                        // FIELD from noise.
                         cfg.sim.init = init;
                     }
+                    if let Some(c) = p.coloring {
+                        // Which colouring a model wants is a property
+                        // of its state layout, not a user preference,
+                        // so the preset carries it. Parameters are
+                        // stored by name in one map for whichever
+                        // colouring is current, so the old one's
+                        // values must go or a shared name (`scale`
+                        // belongs to both `channel` and `occupancy`)
+                        // would carry over.
+                        if cfg.sim.coloring != c {
+                            cfg.sim.coloring_params.clear();
+                        }
+                        cfg.sim.coloring = c.to_string();
+                        for (k, v) in p.coloring_params {
+                            cfg.sim.coloring_params.insert((*k).to_string(), *v);
+                        }
+                    }
+                    // Matte and warp are set EITHER WAY, so a preset
+                    // that wants neither clears what the last one set.
+                    cfg.sim.matte = p.matte.unwrap_or_default();
+                    cfg.sim.warp = p.warp.unwrap_or_default();
                     Ok(())
                 }
                 None => Err(err(format!(
