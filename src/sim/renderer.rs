@@ -2603,6 +2603,77 @@ impl SimRenderer {
         self.color(device, queue, cfg, palette_view);
     }
 
+
+    /// Advance the field to `target` steps and colour it.
+    ///
+    /// The timeline's contract, and the exporter's: the picture at a
+    /// given time is the state at that step count, whatever happened
+    /// before. Going BACKWARDS means restarting and re-running, since
+    /// the rule is not invertible.
+    ///
+    /// `budget` caps the steps this call may take. The exporter passes
+    /// `None` -- a video frame IS the state at its target, so it runs
+    /// as long as it must. The interactive driver passes a
+    /// per-display-frame allowance so a big jump is walked over
+    /// several frames instead of blocking the UI; call again next
+    /// frame until it returns true.
+    ///
+    /// Returns whether `target` has been reached. The field is
+    /// recoloured either way, so a partial catch-up still shows
+    /// progress rather than a frozen picture.
+    ///
+    /// One caveat, inherent to a non-invertible rule: a restart re-runs
+    /// with the parameters as they are NOW. If a model parameter is
+    /// animating too, the original run's history had it changing along
+    /// the way and the re-run's does not, so a reversed step track
+    /// retraces the forward pictures exactly only when the parameters
+    /// are constant.
+    pub fn advance_to(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        cfg: &SimConfig,
+        palette_view: &TextureView,
+        target: u32,
+        budget: Option<u32>,
+    ) -> bool {
+        let reached = self.advance_steps(device, queue, cfg, target, budget);
+        self.color(device, queue, cfg, palette_view);
+        reached
+    }
+
+    /// `advance_to` without the colouring.
+    ///
+    /// Split out for the exporter, which walks a long run in batches
+    /// to report progress and wants ONE colour pass at the end rather
+    /// than one per batch. The interactive driver uses `advance_to`,
+    /// which recolours every frame -- a parameter or palette edit has
+    /// to be visible without advancing the simulation.
+    pub fn advance_steps(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        cfg: &SimConfig,
+        target: u32,
+        budget: Option<u32>,
+    ) -> bool {
+        // A config that no longer describes the loaded field reseeds
+        // anyway (`SeedIdentity`), and then the index to measure from
+        // is 0 rather than whatever the old run had reached.
+        let index = if self.will_reseed(cfg) { 0 } else { self.step_index };
+        let plan = crate::sim::plan_steps(index, target, budget);
+        if plan.reseed {
+            self.request_seed();
+        }
+        if self.will_reseed(cfg) {
+            self.seed(device, queue, cfg);
+        }
+        if plan.steps > 0 {
+            self.run_steps(device, queue, cfg, plan.steps);
+        }
+        plan.reached
+    }
+
     /// A complete still: seed, run exactly `cfg.steps`, colour. The
     /// export contract.
     pub fn render_still(

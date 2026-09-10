@@ -291,6 +291,80 @@ pub fn should_pause_at_limit(cap: u32, was_below: bool, now: u32) -> bool {
     cap > 0 && was_below && now >= cap
 }
 
+
+/// What one call to `SimRenderer::advance_to` should do.
+///
+/// The state at step N is a function of N, not of how many frames
+/// preceded it, so "get to N" is the whole contract -- and the rule is
+/// not invertible, so the only way back is to restart and re-run.
+///
+/// `budget` caps the steps this call may take (`None` = as many as it
+/// takes). The interactive driver passes one so a target the grid
+/// cannot reach in one display frame is reached over the next few
+/// instead of blocking the UI; the exporter passes none, because a
+/// frame there IS the state at its target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepPlan {
+    /// Restart from the seed before stepping.
+    pub reseed: bool,
+    /// Steps to run in this call.
+    pub steps: u32,
+    /// Whether `target` is reached once those steps have run.
+    pub reached: bool,
+}
+
+/// The plan for getting a field at `index` to `target`.
+///
+/// A pure function because it is the whole of D4, and it deserves a
+/// test that needs neither a GPU nor an App.
+pub fn plan_steps(index: u32, target: u32, budget: Option<u32>) -> StepPlan {
+    let reseed = target < index;
+    let from = if reseed { 0 } else { index };
+    let remaining = target.saturating_sub(from);
+    let steps = match budget {
+        Some(b) => remaining.min(b),
+        None => remaining,
+    };
+    StepPlan { reseed, steps, reached: steps == remaining }
+}
+
+/// Whether the motion asking for a step target is CONTINUOUS -- a
+/// scrubber mid-drag, or playback running -- or a DISCRETE event that
+/// lands on one time and stays there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Motion {
+    /// The time is still moving: a drag in progress, a playing
+    /// timeline (in either direction).
+    Continuous,
+    /// One deliberate jump: the scrubber released, a frame step, the
+    /// `Loop` wrap, a ping-pong turnaround.
+    Discrete,
+}
+
+/// Should a timeline step target be applied to the grid now?
+///
+/// Forward always: running a simulation forward is what it does, and
+/// budgeting (`plan_steps`) keeps a big jump from blocking.
+///
+/// Backward only on a DISCRETE event. Going back means reseeding and
+/// re-running, so applying a falling target under continuous motion
+/// restarts the run on nearly every frame:
+///
+/// - dragging the scrubber left would flicker through restarts for the
+///   whole drag rather than showing one picture (D7);
+/// - a ping-pong's backward leg would restart once per frame for half
+///   of every cycle (D8);
+/// - a track authored to run DOWN (2000 -> 0) would do the same under
+///   forward playback (D9). In-app that plays as a still of the
+///   highest state reached, and dragging the scrubber is how it is
+///   previewed. Export is unaffected: it renders every frame at its
+///   own target, whatever the direction, because a video frame is
+///   the state at its time.
+pub fn timeline_target_applies(index: u32, target: u32, motion: Motion) -> bool {
+    target >= index || motion == Motion::Discrete
+}
+
+
 /// The ceiling on a repeated pass's count. A relaxation slider that
 /// could ask for thousands of sweeps would hit the watchdog inside a
 /// single step, where the submit batching cannot help.
@@ -1497,5 +1571,81 @@ mod tests {
         }
         cfg.model_params.insert(m.parameters[0].name.to_string(), 0.125);
         assert_eq!(m.pack_params(&cfg)[0], 0.125);
+    }
+}
+
+#[cfg(test)]
+mod timeline_rules_tests {
+    use super::{plan_steps, timeline_target_applies, Motion, StepPlan};
+
+    /// Forward is arithmetic; backward restarts. The budget splits a
+    /// jump across calls without changing where it lands.
+    #[test]
+    fn a_step_plan_runs_forward_and_restarts_to_go_back() {
+        // Forward, unbudgeted: run the difference.
+        assert_eq!(
+            plan_steps(300, 800, None),
+            StepPlan { reseed: false, steps: 500, reached: true }
+        );
+        // Already there: nothing to do, and it counts as reached --
+        // the exporter must not re-run a frame that is already right.
+        assert_eq!(
+            plan_steps(800, 800, None),
+            StepPlan { reseed: false, steps: 0, reached: true }
+        );
+        // Backward: restart, then run the whole target from zero.
+        assert_eq!(
+            plan_steps(800, 300, None),
+            StepPlan { reseed: true, steps: 300, reached: true }
+        );
+        // Backward to the seed itself is a reseed and no steps.
+        assert_eq!(
+            plan_steps(800, 0, None),
+            StepPlan { reseed: true, steps: 0, reached: true }
+        );
+        // Budgeted: take what is allowed, say it has not arrived.
+        assert_eq!(
+            plan_steps(0, 2000, Some(64)),
+            StepPlan { reseed: false, steps: 64, reached: false }
+        );
+        // A budget bigger than the gap does not overshoot.
+        assert_eq!(
+            plan_steps(0, 10, Some(64)),
+            StepPlan { reseed: false, steps: 10, reached: true }
+        );
+        // A budgeted rewind reseeds on the FIRST call and then walks
+        // forward over the following ones. Re-planning after that
+        // reseed must not reseed again: the index it sees is 0.
+        let first = plan_steps(2000, 500, Some(64));
+        assert_eq!(first, StepPlan { reseed: true, steps: 64, reached: false });
+        assert_eq!(
+            plan_steps(64, 500, Some(64)),
+            StepPlan { reseed: false, steps: 64, reached: false }
+        );
+        // A zero budget stalls without reporting arrival, so a caller
+        // that mis-measures cannot silently skip the run.
+        assert_eq!(
+            plan_steps(0, 100, Some(0)),
+            StepPlan { reseed: false, steps: 0, reached: false }
+        );
+    }
+
+    /// The hold rule: forward always, backward only on a discrete
+    /// event. One rule for the scrubber drag, ping-pong's backward leg
+    /// and a track authored to run backwards.
+    #[test]
+    fn a_backward_target_waits_for_the_motion_to_stop() {
+        // Forward under either motion.
+        assert!(timeline_target_applies(100, 900, Motion::Continuous));
+        assert!(timeline_target_applies(100, 900, Motion::Discrete));
+        // Standing still counts as forward: applying it is a no-op.
+        assert!(timeline_target_applies(100, 100, Motion::Continuous));
+        // Backward mid-motion is HELD -- this is the whole point.
+        assert!(!timeline_target_applies(900, 100, Motion::Continuous));
+        // ...and applied once the motion stops.
+        assert!(timeline_target_applies(900, 100, Motion::Discrete));
+        // The seed is a backward target like any other.
+        assert!(!timeline_target_applies(900, 0, Motion::Continuous));
+        assert!(timeline_target_applies(900, 0, Motion::Discrete));
     }
 }
