@@ -2879,6 +2879,28 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// records made without a derivative orbit must not serve a
     /// coloring that reads one.
     fn iterate_key_for(&self, escape: &EscapeConfig) -> String {
+        // Mode C: everything the WALK depends on, and nothing the
+        // colouring does. The walk is the expensive half and none of
+        // it looks at the colouring or the palette, so a colouring
+        // edit hits this cache and costs one dispatch.
+        //
+        // `ifs_token` is in here for the same reason it is in the band
+        // key: the flame is an input to the walk that does not live in
+        // the escape config.
+        if super::ifs::get_ifs(&escape.formula).is_some() {
+            return format!(
+                "ifs|{}|{:?}|{}|{}|{}|{}|{}x{}|{}",
+                escape.formula,
+                escape.formula_params,
+                escape.center_re,
+                escape.center_im,
+                escape.zoom_log2,
+                escape.rotation,
+                self.width,
+                self.height,
+                self.ifs_token,
+            );
+        }
         let coloring = super::get_coloring(&escape.coloring);
         let needs_accum = coloring.has_feature(super::ColoringFeature::NeedsOrbitAccum);
         let needs_period = coloring.has_feature(super::ColoringFeature::NeedsPeriod);
@@ -2961,6 +2983,35 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         escape: &EscapeConfig,
         palette_view: &TextureView,
     ) {
+        // Mode C recolours from its own record layout, through its
+        // own template, with the same coloring def the walk used.
+        let ifs_key = super::ifs::get_ifs(&escape.formula).map(|def| {
+            let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+            let key = format!("ifs_recolor|{}", coloring.name);
+            if !self.pipelines.contains_key(&key) {
+                let source = assembler::assemble_ifs_recolor(coloring);
+                let module = device.create_shader_module(ShaderModuleDescriptor {
+                    label: Some(&format!("Escape Shader {key}")),
+                    source: ShaderSource::Wgsl(source.into()),
+                });
+                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Escape IFS Recolor Pipeline Layout"),
+                    bind_group_layouts: &[Some(&self.recolor_bind_group_layout)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Escape Pipeline {key}")),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("escape_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                self.pipelines.insert(key.clone(), pipeline);
+            }
+            key
+        });
+
         let coloring = super::get_coloring(&escape.coloring);
         let deriv = self.derivative_active(escape);
         // The fit the shader will apply. `None` (nothing measured yet,
@@ -2973,7 +3024,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             None
         };
         queue_contrast(queue, &self.contrast_params, &escape.contrast, fit);
-        let key = format!("recolor|{}|{}", coloring.name, deriv);
+        let key = match ifs_key {
+            Some(k) => k,
+            None => format!("recolor|{}|{}", coloring.name, deriv),
+        };
         if !self.pipelines.contains_key(&key) {
             let source = assembler::assemble_recolor(coloring, deriv);
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -5707,11 +5761,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // dispatch over the records plus the usual resolve. This is
         // what makes palette and coloring edits real-time on the
         // perturbed path. Field formulas write no records.
-        // Field and distance formulas write no terminal records, so
-        // they have no recolor cache to key.
-        let iterate_key = if super::fields::get_field(&escape.formula).is_none()
-            && super::ifs::get_ifs(&escape.formula).is_none()
-        {
+        // Field formulas write no terminal records, so they have no
+        // recolor cache to key. Mode C does write them: its walk is the
+        // engine's most expensive pass and none of it depends on the
+        // colouring.
+        let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
             Some(self.iterate_key_for(escape))
         } else {
             None

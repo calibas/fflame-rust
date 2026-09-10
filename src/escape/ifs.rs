@@ -1678,6 +1678,196 @@ mod gpu_tests {
         }
     }
 
+    /// A recolour must draw exactly what a full walk would have drawn.
+    ///
+    /// The cache is only worth having if preferring it is invisible.
+    /// This renders a colouring two ways — through the cache, by
+    /// switching colouring on a renderer that already walked; and from
+    /// scratch, on a renderer that has never seen the view — and
+    /// requires the two images to be identical. Not close: identical.
+    /// The colouring def is the same static in both paths, so any
+    /// difference is the record layout or the template, and both are
+    /// mistakes that would show as plausible wrong colours.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_recolour_draws_exactly_what_the_walk_would_have() {
+        let (device, queue) = device();
+        let base = config_for(sierpinski_flame());
+
+        let render_on = |engines: Option<&mut crate::renderer::RenderEngines>,
+                         coloring: &str|
+         -> Vec<u8> {
+            let mut c = base.clone();
+            c.escape.coloring = coloring.to_string();
+            let mut job = crate::renderer::RenderJob::new(&c, W, H);
+            if let Some(e) = engines {
+                job = job.with_engines(e);
+            }
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+
+        for coloring in ["ifs_distance", "ifs_level", "ifs_address", "ifs_trap"] {
+            // A renderer that has already walked this view, then asked
+            // for a different colouring: the walk is cached, so this
+            // must take the recolor path.
+            let mut engines = crate::renderer::RenderEngines::default();
+            let _warm = render_on(Some(&mut engines), "ifs_distance");
+            let cached = render_on(Some(&mut engines), coloring);
+            let path = crate::escape::diag::snapshot().path;
+
+            // A renderer that has never seen it: a full walk.
+            let fresh = render_on(None, coloring);
+
+            assert_eq!(
+                cached.len(),
+                fresh.len(),
+                "{coloring}: different image sizes"
+            );
+            let differing = cached
+                .iter()
+                .zip(fresh.iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(
+                differing, 0,
+                "{coloring}: the cached recolour differs from a full walk in \
+                 {differing} of {} bytes (path was {path:?})",
+                cached.len()
+            );
+            // And it really did come from the cache -- an equal image
+            // proves nothing if both sides walked.
+            assert_eq!(
+                path, "recolor",
+                "{coloring}: expected the recolor path, took {path:?}; the cache is \
+                 not being hit and the comparison is vacuous"
+            );
+        }
+    }
+
+    /// The record the walk writes and the record the recolour reads
+    /// must be the same declaration.
+    ///
+    /// They live in two templates, and a field added to one alone would
+    /// shift every field after it — silently, into plausible wrong
+    /// colours, with no validation error to point at.
+    #[test]
+    fn both_mode_c_templates_declare_the_same_record() {
+        let walk = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_DISTANCE);
+        let recolor = crate::escape::assembler::assemble_ifs_recolor(&IFS_DISTANCE);
+        let decl = |src: &str| -> String {
+            let start = src.find("struct IfsRecord {").expect("IfsRecord declared");
+            let rest = &src[start..];
+            let end = rest.find("\n}").expect("closing brace") + 2;
+            rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        assert_eq!(
+            decl(&walk),
+            decl(&recolor),
+            "the mode-C walk and recolor templates disagree about IfsRecord"
+        );
+
+        // And the record must be the 32 bytes the shared results
+        // buffer allocates per pixel, or the two modes cannot share it.
+        let d = decl(&walk);
+        let floats = d.matches("f32").count();
+        let uints = d.matches("u32").count();
+        let vec2s = d.matches("vec2<f32>").count();
+        // vec2<f32> counts once as "vec2<f32>" and once as "f32".
+        let words = (floats - vec2s) + uints + vec2s * 2;
+        assert_eq!(words, 8, "IfsRecord is {words} words, not the 32 bytes mode A uses: {d}");
+    }
+
+    /// What the recolor cache buys, at the size the app runs.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn what_a_colouring_change_costs_with_and_without_the_cache() {
+        let (device, queue) = device();
+        let cfg = crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .find(|c| c.flame.name == "Heighway Dragon")
+            .expect("the dragon preset");
+
+        let time = |engines: Option<&mut crate::renderer::RenderEngines>, coloring: &str| {
+            let mut c = cfg.clone();
+            c.escape.coloring = coloring.to_string();
+            let mut job = crate::renderer::RenderJob::new(&c, 1920, 1080);
+            if let Some(e) = engines {
+                job = job.with_engines(e);
+            }
+            let t0 = web_time::Instant::now();
+            let _ = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            (t0.elapsed().as_secs_f64() * 1000.0, crate::escape::diag::snapshot().path)
+        };
+
+        // The floor: a `render_with` round trip at this size does
+        // device setup, a flame renderer, the tonemap and effects tail
+        // and an 8 MB readback before any escape work happens. Timing
+        // without subtracting it measures mostly that -- which is how
+        // the beam's cost was first reported wrong.
+        let floor = {
+            let mut c = cfg.clone();
+            c.escape.formula = "mandelbrot".to_string();
+            c.escape.coloring = "smooth".to_string();
+            let once = || {
+                let job = crate::renderer::RenderJob::new(&c, 1920, 1080);
+                let _ = pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render");
+            };
+            once();
+            let t0 = web_time::Instant::now();
+            once();
+            t0.elapsed().as_secs_f64() * 1000.0
+        };
+
+        let mut engines = crate::renderer::RenderEngines::default();
+        let (walk, walk_path) = time(Some(&mut engines), "ifs_distance");
+        let (recolour, recolour_path) = time(Some(&mut engines), "ifs_level");
+        let (again, again_path) = time(Some(&mut engines), "ifs_address");
+        // A reading at or below zero means the recolour costs less
+        // than the control's own iteration -- it is free at this
+        // resolution, not negative.
+        println!("  harness floor    {floor:>7.1} ms  (mode A, subtracted below)");
+        println!(
+            "  first walk       {:>7.1} ms of work  ({walk_path})",
+            walk - floor
+        );
+        println!(
+            "  colouring change {:>7.1} ms of work  ({recolour_path})",
+            recolour - floor
+        );
+        println!(
+            "  and another      {:>7.1} ms of work  ({again_path})",
+            again - floor
+        );
+        assert_eq!(recolour_path, "recolor");
+        assert_eq!(again_path, "recolor");
+        let walk_work = walk - floor;
+        let recolour_work = recolour - floor;
+        assert!(
+            walk_work > 0.0 && recolour_work * 4.0 < walk_work,
+            "the cache saved little: {recolour_work:.0} ms of work against a              {walk_work:.0} ms walk"
+        );
+    }
+
     /// A 1080p mode-C render must finish, and finish in bands.
     ///
     /// The arithmetic is gated separately
