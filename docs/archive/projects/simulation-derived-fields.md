@@ -1,8 +1,15 @@
 # Simulation: derived fields — resolve, matte edges, vector colourings
 
-**Status:** plan of record, 2026-09-06. **Phases A–D built and gated
-the same day** — C not as expected, see its section. The IFS phase is
-scoped, not scheduled.
+**Status: ARCHIVED 2026-09-09 — phases A–D done.** Built and gated
+2026-09-06, phase C not as expected — see its section, which is the
+most interesting page here.
+
+**The IFS phase is NOT built**: the simulation field used as a
+transform inside the flame renderer, which is the third of the three
+requests §1 opens with. It is scoped in §1 and §5 and deliberately
+never scheduled; it is carried forward in the master plan's open list
+([simulation-fractals.md](../../projects/simulation-fractals.md) §5)
+so it is not lost by archiving this.
 
 This is the plan for three requests made together: a low-resolution
 grid that presents as a detailed picture rather than a pixelated one;

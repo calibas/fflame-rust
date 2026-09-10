@@ -1,9 +1,20 @@
 # Simulation Mode — model catalogue
 
-**Status:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](simulation-fractals.md) (master plan),
-[simulation-pipeline.md](simulation-pipeline.md) (GPU design) and
-[simulation-integration.md](simulation-integration.md) (file checklist).
+**Status: LIVE REFERENCE**, started 2026-09-01 as a plan and kept as
+the catalogue it became. **31 of these models ship**; the sections
+that describe something not implemented say so in place (Lenia's
+multi-ring kernels, the hexagon preset that was refuted, the
+`stop_at_span` condition). This is where a model's governing rule, its
+source, its discretisation and what bit it are recorded — read it
+before touching `src/sim/models.rs`, and add a section here when
+adding a model.
+
+Companion to [simulation-fractals.md](simulation-fractals.md) (master
+plan), and to the archived
+[simulation-pipeline.md](../archive/projects/simulation-pipeline.md)
+(GPU design) and
+[simulation-integration.md](../archive/projects/simulation-integration.md)
+(file checklist).
 
 Every model the seed document ([field-type-fractals.md](../archive/escape-time/field-type-fractals.md))
 mentions, plus the few its sources lead to directly. For each: the
@@ -23,7 +34,7 @@ person or paper the session could not confirm.
 
 Pipeline stage names (`warp`, `pyramid`, `update`, `agents`, `color`,
 `resolve`, `settle`) are those of
-[simulation-pipeline.md §4](simulation-pipeline.md).
+[simulation-pipeline.md §4](../archive/projects/simulation-pipeline.md).
 
 ---
 

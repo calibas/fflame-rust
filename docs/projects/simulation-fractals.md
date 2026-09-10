@@ -1,11 +1,15 @@
 # Simulation Mode — master plan
 
-**Status:** Phases 0–4 shipped and phase 5 under way, 2026-09-05.
-24 models and 6 colourings are in the registry, on branch
-`simulation-mode`. The header below said "no code has been written"
-until phase 5 wave 1, four phases after it stopped being true —
+**Status:** Phases 0–5 shipped; **phase 6 is the only one left**, and
+what remains of it is at the end of §5 — mostly documentation and
+translation, plus two features scoped and deliberately deferred (a
+display-time view, and the field as a flame transform). 31 models and
+11 colourings are in the registry, on branch `simulation-mode`.
+
 **§5 is where the per-phase status lives**, and each wave records what
-it measured there rather than here. The plan's decisions (§3) are
+it measured there rather than here. (This header once said "no code
+has been written" until phase 5 wave 1 — four phases after it stopped
+being true. Hence the rule.) The plan's decisions (§3) are
 unchanged; where a measurement contradicted one, the phase note says
 so.
 
@@ -18,8 +22,8 @@ four documents so each can be read for one purpose:
 | document | answers |
 |---|---|
 | **this file** | what is being built, why these decisions, in what order, with what risks and open questions |
-| [simulation-pipeline.md](simulation-pipeline.md) | how the GPU renders it: state, stages, driver, colouring, determinism, feasibility numbers |
-| [simulation-integration.md](simulation-integration.md) | every file the mode touches, mapped from where `RenderMode::Escape` reaches today |
+| [simulation-pipeline.md](../archive/projects/simulation-pipeline.md) | how the GPU renders it: state, stages, driver, colouring, determinism, feasibility numbers |
+| [simulation-integration.md](../archive/projects/simulation-integration.md) | every file the mode touches, mapped from where `RenderMode::Escape` reaches today |
 | [simulation-catalog.md](simulation-catalog.md) | every model: rule as the source states it, discretisation, parameters, presets, sources with verification labels |
 
 ---
@@ -1198,26 +1202,61 @@ pinned the client-side refusal was replaced by one pinning the round
 trip. The UI documentation was rewritten by the render-mode project
 ([../archive/projects/ui-render-modes.md](../archive/projects/ui-render-modes.md)).
 
-**Still to do:**
+**Still to do** — every line below re-verified against the code
+2026-09-09, and two that used to be here have gone because they were
+already fixed (see *Closed* below):
 
-- A shipped `sim_sweep.rhai`. There is no simulation script in
-  `assets/scripts/`.
-- `es` / `ja` / `zh-CN` keys — **zero** simulation keys in all three.
-- A `wasm/sim` gallery module; `wasm/` has flame, escape, render and
-  script.
-- Docs: RENDERER, CONFIG and EXPORT mention simulation **zero** times;
-  CLAUDE.md once, ARCHITECTURE twice. WASM and RELEASE unchecked.
-- Display-only pan/zoom into the grid. Scoped and deliberately not
+- **A shipped `sim_sweep.rhai`.** Smaller than it reads: the scripting
+  API is COMPLETE — `src/script/api.rs:1443-1615` registers the whole
+  `sim` surface (model, colouring, both param maps, grid, seed, init,
+  steps, steps_per_frame, dt, boundary, and `sim.models()` /
+  `sim.colorings()`), documented in SCRIPTING.md. What is missing is
+  an example in `assets/scripts/`, which has 8 generators and 9
+  modifiers, none of them simulation.
+- **`es` / `ja` / `zh-CN` keys** — zero simulation keys in all three.
+  Also smaller than it reads, and not a simulation problem: those
+  files carry 232 / 222 / 222 translated lines against `en.yml`'s
+  1,894. They are stubs for the whole app. Escape has the same hole
+  (integration checklist §12). Fixing it is a translation project, not
+  a simulation one.
+- **A `wasm/sim` gallery module.** `wasm/` has escape, flame, render
+  and script. Note `wasm/README.md` still says "Two standalone
+  modules" and documents only two, so it is stale for escape and flame
+  already.
+- **Docs.** Simulation is mentioned zero times in `docs/main/`
+  RENDERER, CONFIG, BUFFERS, SHADERS and COLOR; zero in `RELEASE.md`,
+  `WASM.md` and `TESTING-GUIDE.md`. **`CLAUDE.md` has no `src/sim/`
+  entry in its Core Modules list at all** — the module list documents
+  `src/escape/` at length and skips the third engine. UI, EXPORT,
+  SCRIPTING and ARCHITECTURE are covered.
+- **Display-only pan/zoom into the grid.** Scoped and deliberately not
   built: the warp is a per-step transform of the field, not a camera,
-  so viewport navigation is currently *refused* in Simulation rather
-  than misdirected (`ui::visibility::Control::ViewNavigation`).
-- **Layer-scoped** animation targets. `SimLayerParam` and
-  `SimColorLayerParam` exist as config paths but the target picker
-  offers only the flat ones, so nothing inside a layer can be
-  keyframed. Folded into
-  [simulation-panel.md](../archive/projects/simulation-panel.md) §5 — **done**.
+  so viewport navigation is *refused* in Simulation rather than
+  misdirected (`ui::visibility::Control::ViewNavigation`, with tests
+  pinning the refusal and a comment saying this arm becomes `Show`
+  when the feature exists).
+- **The online browser's render-mode filter** offers All / 2D / 3D
+  only (`src/ui/fractal_browser.rs:559-567`), so neither non-flame
+  mode can be filtered for. Pre-existing with escape; the integration
+  checklist §8 flagged it for both.
+- **The IFS phase** of
+  [simulation-derived-fields.md](../archive/projects/simulation-derived-fields.md)
+  — the field used as a transform inside the flame renderer. Scoped,
+  not scheduled.
 
-The panel reorganisation itself is done:
+**Closed since this list was written:**
+
+- Layer-scoped animation targets — done in
+  [simulation-panel.md](../archive/projects/simulation-panel.md) §5.
+- CLI export routing by render mode (`src/app/export.rs:192`), which
+  the checklist flagged as a gap escape had.
+- Loading a `.fflame` switches to the mode's workspace
+  (`src/app/mod.rs:1450`), the other flagged gap.
+- The whole video-export story, which turned out to be two problems
+  rather than one:
+  [video-loop-and-sim-timeline.md](../archive/projects/video-loop-and-sim-timeline.md).
+
+The panel reorganisation is done:
 [simulation-panel.md](../archive/projects/simulation-panel.md).
 
 ---
