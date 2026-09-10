@@ -4448,8 +4448,27 @@ fn ifs_final() -> vec4<f32> {
 }
 
 fn ifs_mean_sigma() -> f32 {
-    return params.fdata[3].x;
+    return params.fdata[1].x;
 }
+
+// The beam's handover state, packed by `escape::ifs::pack_seeds`.
+fn ifs_handover_level() -> u32 {
+    return u32(max(params.fdata[1].y, 0.0));
+}
+
+fn ifs_seed_count() -> u32 {
+    return u32(max(params.fdata[1].z, 0.0));
+}
+
+fn ifs_addr_scale() -> f32 {
+    return params.fdata[1].w;
+}
+
+// Word `w` of seed `j`. Four words each, from index 4.
+fn ifs_seed(j: u32, w: u32) -> vec4<f32> {
+    return params.fdata[4u + 4u * j + w];
+}
+
 
 // IEEE-exact atan2 at the four signed-zero pairs. The expanded point
 // can land exactly on the ball centre, so the angle trap reaches (0,0)
@@ -4499,11 +4518,11 @@ struct IfsShade {
 // are defined for every point the walk touches, but they describe the
 // SET; lighting the whole plane by them shows the exterior's branch
 // partition instead, which is a different (and much flatter) picture.
-fn ifs_halo(res: IfsResult, px: f32, reach: f32) -> f32 {
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
     if (!(reach > 0.0)) {
         return 1.0;
     }
-    return exp(-res.distance / (reach * px));
+    return exp(-res.distance / reach);
 }
 
 //__IFS__
@@ -4517,26 +4536,15 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // The pixel arrives SPLIT: the view centre and the offset from it,
-    // handed to the walk apart. Affine inverses carry the two without
-    // a cross term, so phase 2 can replace the reference half with one
-    // high-precision orbit per view and leave this loop alone.
+    // The pixel's NORMALISED offset, spanning [-1/2, 1/2]. Not a
+    // position: at a deep zoom there is no position an f32 could hold,
+    // and the walk starts from the beam state the CPU handed over
+    // instead. `rot_cs` and `span` are folded into the seeds' basis.
     let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
-        / vec2<f32>(f32(params.width), f32(params.height));
-    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
-    d.y = -d.y;
-    let rot = params.rot_cs;
-    let delta = vec2<f32>(
-        d.x * rot.x - d.y * rot.y,
-        d.x * rot.y + d.y * rot.x,
-    );
+        / vec2<f32>(f32(params.width), f32(params.height))
+        - vec2<f32>(0.5, 0.5);
 
-    let res = ifs_evaluate(params.center, delta);
-
-    // One pixel in plane units -- what an antialiased edge measures
-    // against. The span is already the supersampled grid's, so this
-    // shrinks with supersampling exactly as it should.
-    let px = params.span.y / f32(max(params.height, 1u));
+    let res = ifs_evaluate(uv);
 
     // Cache the walk before colouring it. A band cannot be
     // re-coloured after the fact without this -- the walk that
@@ -4553,7 +4561,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         results[idx].depth = res.depth;
     }
 
-    let shade = ifs_color(res, px);
+    let shade = ifs_color(res);
     let t = fract(shade.t);
     let height = select(shade.t, t, params.shade_flags == 1u);
     let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
@@ -4674,11 +4682,11 @@ struct IfsShade {
     lum: f32,
 }
 
-fn ifs_halo(res: IfsResult, px: f32, reach: f32) -> f32 {
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
     if (!(reach > 0.0)) {
         return 1.0;
     }
-    return exp(-res.distance / (reach * px));
+    return exp(-res.distance / reach);
 }
 
 //__IFS_COLORING__
@@ -4698,8 +4706,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     res.escaped = r.escaped;
     res.depth = r.depth;
 
-    let px = params.span.y / f32(max(params.height, 1u));
-    let shade = ifs_color(res, px);
+    let shade = ifs_color(res);
     let t = fract(shade.t);
     let height = select(shade.t, t, params.shade_flags == 1u);
     let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;

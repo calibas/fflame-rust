@@ -605,6 +605,12 @@ pub struct EscapeRenderer {
     /// the row-band pass instead of striping the picture (see
     /// [`Self::band_key`]). Hashed once on `set_ifs`, not per frame.
     ifs_token: u64,
+    /// The beam's handover state for the current view, packed for
+    /// `fdata` (see `escape::ifs::pack_seeds`). Recomputed when the
+    /// VIEW changes, not just the flame — it is a function of the
+    /// centre, the zoom and the depth as much as of the maps.
+    ifs_seeds: Option<[[f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS]>,
+    ifs_seed_key: String,
     /// The analysed flame, or `None` when the loaded one does not
     /// qualify (or mode C is not active). A mode-C render with no maps
     /// draws nothing rather than garbage.
@@ -1412,6 +1418,8 @@ impl EscapeRenderer {
             ifs_buffer,
             ifs_capacity: 1,
             ifs_token: 0,
+            ifs_seeds: None,
+            ifs_seed_key: String::new(),
             ifs: None,
             ifs_uploaded: None,
             pipelines: HashMap::new(),
@@ -3334,6 +3342,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         };
         self.ifs = packed;
+        self.ifs_seed_key.clear();
         true
     }
 
@@ -3363,6 +3372,68 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             queue.write_buffer(&self.ifs_buffer, 0, bytemuck::cast_slice(&packed.rows));
         }
         self.ifs_uploaded = Some(packed);
+    }
+
+    /// Walk the reference orbit for this view, if it is not already
+    /// walked.
+    ///
+    /// This is the CPU half of §2.5: the levels every pixel in the view
+    /// shares, done once at a precision the shader does not have, so
+    /// the shader can continue in f32 from a point where f32 is
+    /// enough. Cached on the view because a banded render calls this
+    /// once per band and the answer is the same every time.
+    fn ensure_ifs_seeds(&mut self, escape: &EscapeConfig) {
+        let Some(packed) = self.ifs.clone() else {
+            self.ifs_seeds = None;
+            self.ifs_seed_key.clear();
+            return;
+        };
+        let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
+        let param = |name: &str, fallback: f32| {
+            escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+            })
+        };
+        let beam = param("beam", 8.0).clamp(1.0, 8.0) as u32;
+        let key = format!(
+            "{}|{}|{}|{}|{}x{}|{beam}|{}",
+            escape.center_re,
+            escape.center_im,
+            escape.zoom_log2,
+            escape.rotation,
+            self.width,
+            self.height,
+            self.ifs_token,
+        );
+        if self.ifs_seed_key == key {
+            return;
+        }
+
+        let span_y = 4.0 / escape.zoom_factor();
+        let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
+        let basis = super::ifs::view_basis(span_x, span_y, escape.rotation);
+        let px = span_y / self.height.max(1) as f64;
+        let centre = {
+            let (x, y) = escape.center_f64();
+            [x, y]
+        };
+        // Enough levels to reach the handover at any zoom this build
+        // claims, and bounded so a pathological IFS cannot spin here.
+        let budget = (escape.zoom_log2.max(0.0) as u32 + 64).min(4096);
+        let seeds = crate::scene::ifs_estimate::seed_beam(
+            &packed.ifs,
+            centre,
+            basis,
+            px,
+            budget,
+            beam,
+        );
+
+        let mut out = [[0.0f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS];
+        out[..4].copy_from_slice(&packed.globals);
+        super::ifs::pack_seeds(&seeds, packed.rows.len(), &packed.colors, &mut out);
+        self.ifs_seeds = Some(out);
+        self.ifs_seed_key = key;
     }
 
     fn direct_rows_per_dispatch(&self, escape: &EscapeConfig) -> u32 {
@@ -5670,8 +5741,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 &escape.coloring_params,
                 cparams.as_flattened_mut(),
             );
-            if let Some(packed) = self.ifs.as_ref() {
-                fdata[..4].copy_from_slice(&packed.globals);
+            match self.ifs_seeds.as_ref() {
+                Some(seeded) => fdata[..seeded.len()].copy_from_slice(seeded),
+                // No qualifying flame: the globals alone, whose map
+                // count of zero is what tells the shader to draw
+                // nothing.
+                None => {
+                    if let Some(packed) = self.ifs.as_ref() {
+                        fdata[..4].copy_from_slice(&packed.globals);
+                    }
+                }
             }
         } else if let Some(field) = super::fields::get_field(&escape.formula) {
             // Mode B: pack the field's params + its resolved coloring's.
@@ -5746,6 +5825,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
         let results_active = self.ensure_results(device);
+        self.ensure_ifs_seeds(escape);
         let mut params = self.params_for(escape);
         if results_active {
             // Bit 3: the iterate templates write their terminal

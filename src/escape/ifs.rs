@@ -19,23 +19,30 @@
 //! # WGSL contract (template `IFS_TEMPLATE` in assembler.rs)
 //!
 //! An `IfsDef` defines
-//! `fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult`.
+//! `fn ifs_evaluate(uv: vec2<f32>) -> IfsResult`, where `uv` is the
+//! pixel's normalised offset — the screen spanning [-½, ½] on each
+//! axis.
 //!
-//! The point arrives **split**: `ref0` is the view centre and `delta0`
-//! the pixel's offset from it, and the walk is written to carry the
-//! two apart. For an affine map that split is exact —
-//! `S⁻¹(C + δ) = S⁻¹(C) + M⁻¹δ`, no cross term (§2.5) — so phase 2
-//! replaces the per-pixel reference half with one high-precision orbit
-//! computed per view and every pixel keeps its δ in f32, without the
-//! loop changing shape. Writing it joined and splitting it later would
-//! be a rewrite; writing it split now costs a handful of multiplies.
+//! Not a position, because at a deep zoom there is no position an f32
+//! could hold. The walk starts from the beam state the CPU handed over
+//! (`scene::ifs_estimate::seed_beam`), and each seed's `basis` carries
+//! `uv` straight to that candidate's delta. §2.5's reference/delta
+//! split is real and exact — `S⁻¹(C + δ) = S⁻¹(C) + M⁻¹δ`, no cross
+//! term — and it lives entirely on the CPU, which is the point of
+//! doing it there: the handover happens where the delta has grown to a
+//! quarter of the ball's radius, and at that size the shader can carry
+//! one combined point with nothing lost.
 //!
 //! An `IfsColoringDef` defines
-//! `fn ifs_color(res: IfsResult, px: f32) -> IfsShade`, where `px` is
-//! the width of one pixel in plane units — what an antialiased edge
-//! needs to know. `IfsShade { t, lum }` is the field templates'
-//! convention: `t` is the palette position (wrapped), `lum` multiplies
-//! the sampled colour.
+//! `fn ifs_color(res: IfsResult) -> IfsShade`. `IfsShade { t, lum }` is
+//! the field templates' convention: `t` is the palette position
+//! (wrapped), `lum` multiplies the sampled colour.
+//!
+//! `res.distance` is **in pixels**, not plane units. In plane units it
+//! underflows f32 at a zoom the walk could otherwise still resolve,
+//! and every colouring wanted it divided by the pixel width anyway —
+//! so the edge width and the halo reach are both in pixels, and the
+//! contour bands come out zoom-invariant.
 //!
 //! Params reach both through `fparam(i)` / `cparam(i)`, exactly as in
 //! modes A and B.
@@ -118,24 +125,13 @@ pub static IFS_FLAME: IfsDef = IfsDef {
         },
     ],
     wgsl: r#"
-// Inverse of map i, applied to a full point (reference half).
+// Inverse of map i.
 fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
     let m = ifs_maps[i].inv_m;
     let t = ifs_maps[i].inv_t;
     return vec2<f32>(
         m.x * p.x + m.y * p.y + t.x,
         m.z * p.x + m.w * p.y + t.y,
-    );
-}
-
-// Inverse of map i, LINEAR part only (delta half). The translation is
-// carried entirely by the reference, which is what makes the split
-// exact for affine maps.
-fn ifs_inv_delta(i: u32, d: vec2<f32>) -> vec2<f32> {
-    let m = ifs_maps[i].inv_m;
-    return vec2<f32>(
-        m.x * d.x + m.y * d.y,
-        m.z * d.x + m.w * d.y,
     );
 }
 
@@ -151,24 +147,29 @@ fn ifs_residual(r: f32, radius: f32, sigma: f32) -> f32 {
 }
 
 // One partial address the beam is still following.
+//
+// A single POINT, not a reference and a delta: the CPU hands over at
+// the level where the delta has grown to a quarter of the ball's
+// radius, and at that size f32 holds the sum with nothing to spare
+// for. The split is real and it is exact -- it is just entirely the
+// CPU's, which is the whole point of doing it there.
 struct IfsCand {
-    rf: vec2<f32>,
-    dl: vec2<f32>,
+    q: vec2<f32>,
     // The point at first escape -- the orbit-trap coordinate.
     point: vec2<f32>,
-    // Product of the sigma_min of the maps applied so far.
+    // Product of the sigma_min applied so far, PER PIXEL WIDTH. In
+    // world units this underflows f32 at a zoom the delta could still
+    // have been carried through.
     sigma: f32,
-    // Running MAXIMUM of sigma * (r - radius) over the levels visited,
-    // unclamped, so it is negative while the path is inside the ball.
+    // Running maximum of sigma * (r - radius), in the same pixel
+    // units, unclamped so it is negative while inside the ball.
     bound: f32,
     // Distance from the ball's centre now -- THE ranking key, and the
     // whole of it. Ranking by `bound` instead is degenerate: it is a
     // running maximum, so once a path grazes the ball's edge every
     // descendant inherits the same value and the siblings cannot be
     // told apart (measured on the gasket: loose at 568 of 576 grid
-    // points that way against 10 this way). Adding `bound` as a
-    // tiebreak changes no measurement, and one f32 is what the
-    // keep-list has to shift.
+    // points that way against 10 this way).
     r: f32,
     addr: f32,
     level: f32,
@@ -179,7 +180,7 @@ struct IfsCand {
     flags: u32,
 }
 
-fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
+fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
     let c = ifs_centre();
     let radius = ifs_radius();
     let n = ifs_count();
@@ -189,7 +190,7 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
     res.level = 0.0;
     res.address = 0.0;
     res.color = 0.0;
-    res.point = ref0 + delta0;
+    res.point = vec2<f32>(0.0, 0.0);
     res.escaped = 0u;
     res.depth = 0u;
     if (n == 0u) {
@@ -206,41 +207,41 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
     let max_levels = u32(clamp(fparam(0u), 1.0, 160.0));
     let beam = u32(clamp(fparam(1u), 1.0, f32(IFS_MAX_BEAM)));
     let far = max(radius, 1.0) * 1e12;
-    let mean_sigma = ifs_mean_sigma();
+    let handover = ifs_handover_level();
+    var addr_scale = ifs_addr_scale();
 
+    // Seed from the reference orbit the CPU walked. Every one of these
+    // candidates is where the view centre's own beam had got to, and
+    // `basis` carries this pixel's offset the same distance.
     var live: array<IfsCand, IFS_MAX_BEAM>;
     var next: array<IfsCand, IFS_MAX_BEAM>;
-    var live_count = 1u;
-
-    var root: IfsCand;
-    root.rf = ref0;
-    root.dl = delta0;
-    root.sigma = 1.0;
-
-    // The final transform maps the whole attractor, so its inverse is
-    // applied once, before the walk, and its contraction scales the
-    // result exactly as a level's would.
-    let fin = ifs_final();
-    if (fin.w > 0.5) {
-        let fm = ifs_final_m();
-        root.rf = vec2<f32>(
-            fm.x * ref0.x + fm.y * ref0.y + fin.x,
-            fm.z * ref0.x + fm.w * ref0.y + fin.y,
-        );
-        root.dl = vec2<f32>(fm.x * delta0.x + fm.y * delta0.y, fm.z * delta0.x + fm.w * delta0.y);
-        root.sigma = fin.z;
+    var live_count = min(ifs_seed_count(), beam);
+    if (live_count == 0u) {
+        live_count = 1u;
     }
-    root.point = root.rf + root.dl;
-    root.bound = -1e30;
-    root.r = length(root.point - c);
-    root.addr = 0.0;
-    root.level = 0.0;
-    root.color = 0.0;
-    root.last_sigma = mean_sigma;
-    root.flags = 0u;
-    live[0] = root;
-
-    var addr_scale = 1.0 / f32(n);
+    for (var j = 0u; j < live_count; j = j + 1u) {
+        let a = ifs_seed(j, 0u);
+        let b = ifs_seed(j, 1u);
+        let d = ifs_seed(j, 2u);
+        let e = ifs_seed(j, 3u);
+        var cand: IfsCand;
+        // position + basis * uv, the basis already composed with the
+        // view so this one multiply is the whole delta.
+        cand.q = vec2<f32>(
+            a.x + a.z * uv.x + a.w * uv.y,
+            a.y + b.x * uv.x + b.y * uv.y,
+        );
+        cand.sigma = b.z;
+        cand.bound = b.w;
+        cand.r = length(cand.q - c);
+        cand.addr = d.x;
+        cand.last_sigma = d.y;
+        cand.level = d.z;
+        cand.flags = bitcast<u32>(d.w);
+        cand.point = vec2<f32>(e.x, e.y);
+        cand.color = e.z;
+        live[j] = cand;
+    }
 
     for (var k = 0u; k < max_levels; k = k + 1u) {
         var all_done = true;
@@ -248,18 +249,15 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
             if ((live[ci].flags & 2u) != 0u) {
                 continue;
             }
-            let q = live[ci].rf + live[ci].dl;
-            let r = length(q - c);
+            let r = length(live[ci].q - c);
             live[ci].r = r;
-            // Every level's value is a lower bound; the walk keeps the
-            // largest. Stopping at the first escape is what draws the
-            // bounding ball as though it were the set.
             live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
 
             if (r > radius && (live[ci].flags & 1u) == 0u) {
                 live[ci].flags = live[ci].flags | 1u;
-                live[ci].level = f32(k) + ifs_residual(r, radius, live[ci].last_sigma);
-                live[ci].point = q;
+                live[ci].level =
+                    f32(handover + k) + ifs_residual(r, radius, live[ci].last_sigma);
+                live[ci].point = live[ci].q;
             }
 
             if (!(r < far)) {
@@ -281,18 +279,11 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
         //
         // Two passes, and the split is what makes this affordable. The
         // obvious form -- build each child in full and insertion-sort
-        // it into the keep-list -- shifts a whole candidate (fourteen
-        // registers) up to `beam` times for each of `beam * n`
-        // children, which is the shader's entire cost and the reason a
-        // 1080p view used to hang the driver.
-        //
-        // Pass one ranks by KEY alone: two affine applies and a length
-        // per child, and the list it shifts holds one f32 and one u32.
-        // Pass two rebuilds only the `beam` survivors. Nothing large
-        // is ever moved by the sort.
+        // it into the keep-list -- shifts a whole candidate through the
+        // list for each of `beam * n` children, which was the shader's
+        // entire cost. Pass one ranks by KEY alone; pass two rebuilds
+        // only the `beam` survivors.
         var key: array<f32, IFS_MAX_BEAM>;
-        // Which child each key came from: parent * (n + 1) + branch,
-        // with branch == n meaning "carried forward, not descended".
         var src: array<u32, IFS_MAX_BEAM>;
         var next_count = 0u;
         let stride = n + 1u;
@@ -301,16 +292,13 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
             var first = 0u;
             var last = n;
             if ((live[ci].flags & 2u) != 0u) {
-                // A converged path is carried forward unchanged.
                 first = n;
                 last = n + 1u;
             }
             for (var bi = first; bi < last; bi = bi + 1u) {
                 var cand_key = live[ci].r;
                 if (bi < n) {
-                    let rf = ifs_inv_point(bi, live[ci].rf);
-                    let dl = ifs_inv_delta(bi, live[ci].dl);
-                    cand_key = length(rf + dl - c);
+                    cand_key = length(ifs_inv_point(bi, live[ci].q) - c);
                 }
                 var pos = next_count;
                 for (var j = 0u; j < next_count; j = j + 1u) {
@@ -336,16 +324,12 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
             }
         }
 
-        // Pass two: rebuild the survivors. `next` is a separate array
-        // because a survivor's parent may already have been overwritten
-        // if we wrote back into `live` in place.
         for (var k2 = 0u; k2 < next_count; k2 = k2 + 1u) {
             let parent = src[k2] / stride;
             let bi = src[k2] % stride;
             var child = live[parent];
             if (bi < n) {
-                child.rf = ifs_inv_point(bi, live[parent].rf);
-                child.dl = ifs_inv_delta(bi, live[parent].dl);
+                child.q = ifs_inv_point(bi, live[parent].q);
                 child.sigma = live[parent].sigma * ifs_maps[bi].sigma_min;
                 child.last_sigma = ifs_maps[bi].sigma_min;
                 child.r = key[k2];
@@ -355,7 +339,7 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
                 child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
                 if ((live[parent].flags & 1u) == 0u) {
                     child.addr = live[parent].addr + f32(bi) * addr_scale;
-                    if (k == 0u) {
+                    if (handover + k == 0u) {
                         // The coarsest branch is the piece the point is
                         // in, so its transform colour is the direct
                         // analogue of a flame's.
@@ -391,11 +375,11 @@ fn ifs_evaluate(ref0: vec2<f32>, delta0: vec2<f32>) -> IfsResult {
         res.level = best.level;
         res.point = best.point;
         res.escaped = 1u;
-        res.depth = u32(floor(best.level));
+        res.depth = u32(max(floor(best.level), 0.0));
     } else {
-        res.level = f32(max_levels);
-        res.point = best.rf + best.dl;
-        res.depth = max_levels;
+        res.level = f32(handover + max_levels);
+        res.point = best.q;
+        res.depth = handover + max_levels;
     }
     return res;
 }
@@ -445,9 +429,11 @@ pub static IFS_DISTANCE: IfsColoringDef = IfsColoringDef {
         },
     ],
     wgsl: r#"
-fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
-    let edge = max(cparam(0u), 1e-4) * px;
-    // Sub-pixel coverage of the set: 1 inside, 0 a pixel out.
+fn ifs_color(res: IfsResult) -> IfsShade {
+    let edge = max(cparam(0u), 1e-4);
+    // Sub-pixel coverage of the set: 1 inside, 0 a pixel out. The
+    // distance is already in pixels, which is what makes this the same
+    // edge at every zoom.
     let cover = 1.0 - smoothstep(0.0, edge, res.distance);
     let bands = cparam(1u);
     if (bands <= 0.0) {
@@ -497,7 +483,7 @@ pub static IFS_LEVEL: IfsColoringDef = IfsColoringDef {
         },
     ],
     wgsl: r#"
-fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
+fn ifs_color(res: IfsResult) -> IfsShade {
     var lvl = res.level;
     if (cparam(2u) < 0.5) {
         lvl = floor(res.level);
@@ -551,12 +537,12 @@ pub static IFS_ADDRESS: IfsColoringDef = IfsColoringDef {
         },
     ],
     wgsl: r#"
-fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
+fn ifs_color(res: IfsResult) -> IfsShade {
     var v = res.address;
     if (cparam(0u) >= 0.5) {
         v = res.color;
     }
-    return IfsShade(v * cparam(1u), ifs_halo(res, px, cparam(2u)));
+    return IfsShade(v * cparam(1u), ifs_halo(res, cparam(2u)));
 }
 "#,
 };
@@ -601,7 +587,7 @@ pub static IFS_TRAP: IfsColoringDef = IfsColoringDef {
         },
     ],
     wgsl: r#"
-fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
+fn ifs_color(res: IfsResult) -> IfsShade {
     let d = res.point - ifs_centre();
     let shape = i32(cparam(0u));
     var v = length(d);
@@ -610,7 +596,7 @@ fn ifs_color(res: IfsResult, px: f32) -> IfsShade {
     } else if (shape == 2) {
         v = (ff_atan2(d.y, d.x) + 3.14159265) * 0.15915494;
     }
-    return IfsShade(v * cparam(1u), ifs_halo(res, px, cparam(2u)));
+    return IfsShade(v * cparam(1u), ifs_halo(res, cparam(2u)));
 }
 "#,
 };
@@ -675,9 +661,14 @@ pub struct IfsMapGpu {
 ///
 /// Layout, one `vec4` each:
 /// 0. `centre.x, centre.y, radius, map_count`
-/// 1. the final map's inverse 2×2, row-major
-/// 2. `final_t.x, final_t.y, final_sigma_min, has_final`
-/// 3. `mean_sigma_min, 0, 0, 0`
+/// 1. `mean_sigma_min, handover_level, seed_count, addr_scale` — the
+///    last three filled in by [`pack_seeds`]
+/// 2, 3. reserved
+///
+/// The FINAL transform is not here. It used to be, because the shader
+/// applied its inverse before walking; the CPU's seeding walk applies
+/// it now, so by the time the shader starts it is already accounted
+/// for and there is nothing to send.
 pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
     if out.len() < 4 {
         return;
@@ -688,23 +679,14 @@ pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
         ifs.ball.radius as f32,
         ifs.maps.len() as f32,
     ];
-    match &ifs.final_map {
-        Some(f) => {
-            let m = f.inverse;
-            out[1] = [m.m[0][0] as f32, m.m[0][1] as f32, m.m[1][0] as f32, m.m[1][1] as f32];
-            out[2] = [m.t[0] as f32, m.t[1] as f32, f.sigma_min as f32, 1.0];
-        }
-        None => {
-            out[1] = [1.0, 0.0, 0.0, 1.0];
-            out[2] = [0.0, 0.0, 1.0, 0.0];
-        }
-    }
     let mean = if ifs.maps.is_empty() {
         0.5
     } else {
         ifs.maps.iter().map(|m| m.sigma_min).sum::<f64>() / ifs.maps.len() as f64
     };
-    out[3] = [mean as f32, 0.0, 0.0, 0.0];
+    out[1] = [mean as f32, 0.0, 0.0, 0.0];
+    out[2] = [0.0; 4];
+    out[3] = [0.0; 4];
 }
 
 /// An analysed flame, ready for the shader: the whole-IFS constants
@@ -717,6 +699,15 @@ pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
 pub struct PackedIfs {
     pub globals: [[f32; 4]; 4],
     pub rows: Vec<IfsMapGpu>,
+    /// The f64 analysis the rows were packed from.
+    ///
+    /// Kept because the reference orbit is walked on the CPU at a
+    /// precision the packed f32 rows cannot express — seeding from the
+    /// rows would cap the zoom at the rows' own rounding, which is the
+    /// wall the seeding exists to move.
+    pub ifs: Ifs2,
+    /// Transform colours, in map order.
+    pub colors: Vec<f32>,
 }
 
 /// Compare two packed IFSs **by bytes**, not by `PartialEq`.
@@ -755,7 +746,99 @@ pub fn pack_flame(
     let colors: Vec<f32> = flame.transforms.iter().map(|t| t.color).collect();
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
-    Ok(PackedIfs { globals, rows: pack_maps(&ifs, &colors) })
+    let rows = pack_maps(&ifs, &colors);
+    Ok(PackedIfs { globals, rows, ifs, colors })
+}
+
+/// How many `vec4`s of the params' `fdata` block one seed occupies.
+pub const SEED_VEC4S: usize = 4;
+/// Where the seeds start in `fdata`; the whole-IFS constants are below.
+pub const SEED_BASE: usize = 4;
+/// The widest beam a seeded walk can hand over, bounded by `fdata`.
+pub const MAX_SEEDS: usize = (64 - SEED_BASE) / SEED_VEC4S;
+
+/// Pack the beam's handover state into the params' `fdata` block.
+///
+/// No new buffer: `fdata` is 64 `vec4`s and the whole-IFS constants use
+/// four, which leaves room for fifteen seeds where the beam allows
+/// eight.
+///
+/// Layout per seed, starting at `SEED_BASE + SEED_VEC4S * j`:
+/// 0. `position.xy`, `basis[0][0]`, `basis[0][1]`
+/// 1. `basis[1][0]`, `basis[1][1]`, `sigma_per_px`, `bound_per_px`
+/// 2. `address fraction`, `last_sigma`, `escape level` (−1 = none), `flags`
+/// 3. `escape point.xy`, `transform colour`, unused
+///
+/// `flags`: bit 0 escaped, bit 1 done.
+pub fn pack_seeds(
+    seeds: &crate::scene::ifs_estimate::Seeds,
+    n_maps: usize,
+    colors: &[f32],
+    out: &mut [[f32; 4]],
+) {
+    if out.len() < 2 {
+        return;
+    }
+    let count = seeds.cands.len().min(MAX_SEEDS);
+    // The next digit's weight, after however many the CPU already took.
+    let addr_scale = if n_maps == 0 {
+        0.0
+    } else {
+        (1.0f64 / n_maps as f64).powi(seeds.level as i32 + 1)
+    };
+    out[1] = [
+        out[1][0],
+        seeds.level as f32,
+        count as f32,
+        addr_scale as f32,
+    ];
+
+    for (j, c) in seeds.cands.iter().take(count).enumerate() {
+        let base = SEED_BASE + SEED_VEC4S * j;
+        if base + SEED_VEC4S > out.len() {
+            break;
+        }
+        let (esc_level, esc_point, escaped) = match c.escape {
+            Some((lvl, p)) => (lvl as f32, [p[0] as f32, p[1] as f32], 1u32),
+            None => (-1.0, [0.0, 0.0], 0u32),
+        };
+        let flags = escaped | if c.done { 2 } else { 0 };
+        let colour = c
+            .address
+            .first()
+            .and_then(|&i| colors.get(i as usize))
+            .copied()
+            .unwrap_or(0.0);
+        out[base] = [
+            c.position[0] as f32,
+            c.position[1] as f32,
+            c.basis[0][0] as f32,
+            c.basis[0][1] as f32,
+        ];
+        out[base + 1] = [
+            c.basis[1][0] as f32,
+            c.basis[1][1] as f32,
+            c.sigma_per_px as f32,
+            if c.bound_per_px.is_finite() { c.bound_per_px as f32 } else { -1e30 },
+        ];
+        out[base + 2] = [
+            crate::scene::ifs_estimate::address_fraction(&c.address, n_maps as u32) as f32,
+            c.last_sigma as f32,
+            esc_level,
+            f32::from_bits(flags),
+        ];
+        out[base + 3] = [esc_point[0], esc_point[1], colour, 0.0];
+    }
+}
+
+/// The view basis: takes a pixel's normalised offset — the screen
+/// spanning [-½, ½] on each axis — to a world offset from the centre.
+///
+/// The `-span_y` is the template's `d.y = -d.y`: screen y runs down.
+pub fn view_basis(span_x: f64, span_y: f64, rotation: f32) -> [[f64; 2]; 2] {
+    let (c, s) = ((rotation as f64).cos(), (rotation as f64).sin());
+    // rotate(diag(span_x, -span_y))
+    [[c * span_x, s * span_y], [s * span_x, -c * span_y]]
 }
 
 /// The per-map rows of the storage buffer, in the flame's transform
@@ -1149,8 +1232,13 @@ mod tests {
     #[test]
     fn a_nan_in_the_packed_data_does_not_read_as_a_change_every_frame() {
         let ifs = square();
-        let mut packed =
-            PackedIfs { globals: [[0.0; 4]; 4], rows: pack_maps(&ifs, &[0.1, 0.4, 0.7]) };
+        let colors = vec![0.1f32, 0.4, 0.7];
+        let mut packed = PackedIfs {
+            globals: [[0.0; 4]; 4],
+            rows: pack_maps(&ifs, &colors),
+            ifs: ifs.clone(),
+            colors,
+        };
         pack_globals(&ifs, &mut packed.globals);
 
         // Same value, so nothing changed.
@@ -1229,16 +1317,49 @@ mod tests {
     }
 
     #[test]
-    fn globals_describe_the_ball_the_final_and_the_count() {
+    fn globals_describe_the_ball_and_the_count() {
         let ifs = square();
         let mut out = [[0.0f32; 4]; 8];
         pack_globals(&ifs, &mut out);
         assert_eq!(out[0][3], 3.0, "map count");
         assert!(out[0][2] > 0.0, "radius");
-        // No final: identity inverse, has_final = 0, sigma 1.
-        assert_eq!(out[1], [1.0, 0.0, 0.0, 1.0]);
-        assert_eq!(out[2], [0.0, 0.0, 1.0, 0.0]);
-        assert!((out[3][0] - 0.5).abs() < 1e-6, "mean sigma {out:?}");
+        assert!((out[1][0] - 0.5).abs() < 1e-6, "mean sigma {out:?}");
+    }
+
+    /// The seeds must land where the shader's accessors read them,
+    /// and must not tread on the globals below.
+    #[test]
+    fn seeds_pack_where_the_shader_reads_them() {
+        let ifs = square();
+        let span = 0.5f64;
+        let seeds = crate::scene::ifs_estimate::seed_beam(
+            &ifs,
+            ifs.ball.centre,
+            view_basis(span, span, 0.0),
+            span / 64.0,
+            200,
+            4,
+        );
+        let mut out = [[0.0f32; 4]; 4 + SEED_VEC4S * MAX_SEEDS];
+        pack_globals(&ifs, &mut out);
+        let mean_before = out[1][0];
+        pack_seeds(&seeds, ifs.maps.len(), &[0.1, 0.4, 0.7], &mut out);
+
+        assert_eq!(out[1][0], mean_before, "pack_seeds trod on the mean sigma");
+        assert_eq!(out[1][1], seeds.level as f32, "handover level");
+        assert_eq!(out[1][2] as usize, seeds.cands.len().min(MAX_SEEDS), "seed count");
+        assert!(out[1][3] > 0.0, "address scale");
+
+        // Seed 0's position and basis, where `ifs_seed(0, 0)` looks.
+        let c = &seeds.cands[0];
+        assert!((out[SEED_BASE][0] - c.position[0] as f32).abs() < 1e-6);
+        assert!((out[SEED_BASE][2] - c.basis[0][0] as f32).abs() < 1e-6);
+        assert!((out[SEED_BASE + 1][2] - c.sigma_per_px as f32).abs() < 1e-3);
+        // And nothing beyond the seeds it wrote.
+        let used = SEED_BASE + SEED_VEC4S * seeds.cands.len().min(MAX_SEEDS);
+        for v in &out[used..] {
+            assert_eq!(*v, [0.0; 4], "wrote past the seeds it has");
+        }
     }
 
     /// The GPU row must match what WGSL's std430 rules read: 32 bytes,
@@ -1870,14 +1991,22 @@ mod gpu_tests {
 
     /// How deep mode C claims to zoom, as a `zoom_log2`.
     ///
-    /// MEASURED, not chosen: past this the picture is not merely
-    /// coarse, it is somewhere else. The view centre reaches the
-    /// shader as `params.center: vec2<f32>`, so it is quantised to
-    /// about 6e-8 near 0.28 — at zoom 2^22 that is 6% of the view, at
-    /// 2^26 it is the whole view, and the render agrees with the
-    /// reference at chance. §2.5's reference orbit is what moves this,
-    /// and moving it is the deliverable that raises this number.
-    pub(super) const DEEP_ZOOM_LIMIT: f64 = 20.0;
+    /// MEASURED, not chosen.
+    ///
+    /// It was **20** while the shader walked from `params.center`, a
+    /// `vec2<f32>` quantised to about 6e-8 near 0.28: at 2²² that is
+    /// 6% of the view and at 2²⁶ the whole of it, so the render agreed
+    /// with the reference at chance. §2.5's reference orbit moved it
+    /// here — the CPU walks the shared prefix and the shader continues
+    /// from a handover where f32 is enough.
+    ///
+    /// **40 is now the f64 CENTRE's limit, not the walk's.** The
+    /// seeding is f64, so the centre is quantised to 5.5e-17 and that
+    /// is about 1% of the view by 2⁴⁹. `FixedPoint::from_decimal` and
+    /// `limbs_for_view` are what raise it further, and the config
+    /// already stores the centre as an exact decimal string for
+    /// exactly that.
+    pub(super) const DEEP_ZOOM_LIMIT: f64 = 40.0;
 
     /// Where the f32 walk stops agreeing with the f64 reference.
     ///
@@ -1901,9 +2030,14 @@ mod gpu_tests {
         // dyadic rational that f32 holds exactly, which would hide the
         // precision wall entirely: 0.25 agrees perfectly at any zoom
         // because there is nothing to round.
+        // Forty-five maps deep, which puts it within 2^-45 of the
+        // set — the view has to CONTAIN the attractor for the sweep to
+        // mean anything, and a shallower point runs out from under it.
+        // Deeper is not available: an f64 holds this to 2^-53 relative
+        // and no further, which is also what caps the sweep.
         let target = {
             let mut p = ifs.ball.centre;
-            for k in 0..40u32 {
+            for k in 0..45u32 {
                 p = ifs.maps[(k % 3) as usize].forward.apply(p);
             }
             p
@@ -1912,7 +2046,7 @@ mod gpu_tests {
 
         let mut worst_agreed = 0.0f64;
         println!("  zoom  depth  agreement  (interior/exterior pixels)");
-        for &zoom in &[0.0f64, 8.0, 16.0, 20.0, 22.0, 24.0, 26.0, 30.0, 40.0] {
+        for &zoom in &[0.0f64, 16.0, 24.0, 32.0, 40.0, 44.0] {
             // Depth has to keep up with the zoom or the walk cannot
             // resolve what the view is showing: at sigma = 0.5 each
             // level buys one bit, so a view 2^z across needs about
@@ -1945,6 +2079,17 @@ mod gpu_tests {
                 let v = (y as f64 + 0.5) / H as f64 - 0.5;
                 [target[0] + u * span_x, target[1] - v * span_y]
             };
+
+            let dir = std::path::Path::new("output/ifs");
+            std::fs::create_dir_all(dir).expect("output dir");
+            image::save_buffer(
+                dir.join(format!("deep-2e{zoom}.png")),
+                &rgba,
+                W,
+                H,
+                image::ColorType::Rgba8,
+            )
+            .expect("write png");
 
             let mut inside = Vec::new();
             let mut outside = Vec::new();
