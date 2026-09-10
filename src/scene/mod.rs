@@ -1,4 +1,5 @@
 pub mod transforms;
+pub mod ifs_analysis;
 pub mod xaos;
 pub mod presets;
 pub mod palette;

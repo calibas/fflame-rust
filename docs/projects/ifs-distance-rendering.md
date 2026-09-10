@@ -1,7 +1,8 @@
 # Affine flames by distance: 2D fields and 3D raymarching in the escape engine
 
-**Status:** plan of record, 2026-09-10, branch to be cut from `main`
-after `simulation-mode` merges. **No code written yet.**
+**Status:** plan of record, 2026-09-10, on branch `ifs-distance`.
+**Phase 0 built 2026-09-10** (§5, with the census result recorded
+there); phases 1–4 not started.
 
 This is the plan for rendering a flame that is an affine IFS — every
 transform a linear map, no folds, no nonlinear variations — **by its
@@ -203,8 +204,12 @@ A flame qualifies when **every** condition holds, and the panel says
 which one fails when it does not:
 
 1. Every variation on every transform is in the affine set:
-   `linear`, `linear3D`, `zscale`, `ztranslate`. Post-affines are
-   affine and compose in.
+   `linear`, `linear3D`, `zscale`, `ztranslate`, and **`affine3D`** —
+   JWildfire's general 3D affine with per-axis scale, six shears, a
+   rotation and a translation. Phase 0 added the last one after the
+   census showed it is the only shipped variation that can make a
+   transform contractive in z at all. Post-affines are affine and
+   compose in.
 2. Every transform's composed linear part is **contractive in every
    direction**: largest singular value strictly below one. In 3D this
    excludes the Apophysis-style flame — XY affine plus a z offset — whose
@@ -386,6 +391,41 @@ Pure Rust, in a module both this plan and flame-deep-zoom §7 consume.
   flame that must fail condition 2 in z. A script or test that runs the
   criterion over every shipped flame preset and reports the count and
   the reasons; that number goes in this document.
+
+**Built 2026-09-10** — [src/scene/ifs_analysis.rs](../../src/scene/ifs_analysis.rs),
+nine tests. Two things the tests taught that the plan had not said:
+
+- **A plane *rotation* does not make an Apophysis flame contractive.**
+  A 90° YZ rotation on an XY half-scale map sends the unit z scale into
+  y, and σ_max is exactly 1. The plane map must scale as well as
+  rotate. (The determinant would have called the rotated map
+  contractive.)
+- **`g` survives the flat path scaled**, because the affine that
+  carries it runs before the variation sum that scales z.
+
+**The census** (`how_many_shipped_flames_are_affine_ifss`, prints
+rather than asserts, since the number is the deliverable):
+
+| | |
+|---|---|
+| shipped flames examined | 159 — 9 from the preset library, 150 visual-regression configs |
+| qualify as a **planar** affine IFS | **3**, all of them smoke tests for `affine3D` and `zscale` |
+| 3D with `preserve_z` on (solid candidates) | 34 |
+| qualify as a **solid** affine IFS | **0** — every candidate uses a non-affine variation |
+
+Not one flame from the preset library qualifies. The commonest reasons
+are `spherical` (13), `quaternion_linear` (6, a 4D affine whose fourth
+coordinate carries across iterations — its 3D shadow is not a 3D IFS,
+unless its w-coupling is zero, a refinement not made), `flatten` (5,
+affine but singular), `subflame_wf` (5), a non-affine final (4).
+
+So the risk named in §6 is real and now measured: as shipped, this
+feature reaches the classical affine IFSs and flames built for it, not
+the existing catalogue. That was always the honest expectation — the
+flame aesthetic is the nonlinear variation — and it makes the §7
+extension to conformal invertible maps (Möbius, spherical inversion)
+the thing that would change the number. `spherical` alone is 13 of
+159.
 
 ### Phase 1 — 2D distance field
 
