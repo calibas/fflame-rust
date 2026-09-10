@@ -1429,17 +1429,8 @@ fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltRes
     Ok(())
 }
 
-// ------------------------------------------------------------------ escape
+// ------------------------------------------------------------------ simulation
 
-/// Escape-time settings: `escape.formula(...)`, `escape.center(...)`.
-///
-/// Setting anything here switches the config to escape rendering, so
-/// a script never has to remember the render mode as well. That is
-/// the one piece of magic in this object, and it earns its place: the
-/// alternative is a config carrying escape settings while rendering a
-/// flame, which reads as a bug in the script rather than a missing
-/// line.
-#[cfg(feature = "engine-escape")]
 /// The `sim` script surface.
 ///
 /// Every setter enters simulation mode first, the way the escape
@@ -1658,6 +1649,17 @@ fn register_sim(engine: &mut Engine) {
     );
 }
 
+// ------------------------------------------------------------------ escape
+
+/// Escape-time settings: `escape.formula(...)`, `escape.center(...)`.
+///
+/// Setting anything here switches the config to escape rendering, so
+/// a script never has to remember the render mode as well. That is
+/// the one piece of magic in this object, and it earns its place: the
+/// alternative is a config carrying escape settings while rendering a
+/// flame, which reads as a bug in the script rather than a missing
+/// line.
+#[cfg(feature = "engine-escape")]
 fn register_escape(engine: &mut Engine) {
     use crate::scene::transforms::RenderMode;
 

@@ -782,7 +782,7 @@ fn apply_config_value(
             // than it previewed. Whatever the grid cannot hold is
             // made up by accumulation in the frame loop below.
             config.escape.supersample =
-                (*v).clamp(1, crate::escape::renderer::MAX_SUPERSAMPLE);
+                (*v).clamp(1, crate::config::escape::MAX_SUPERSAMPLE);
         }
         (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
             config.escape.formula_params.insert(param.clone(), *v);
@@ -2128,11 +2128,11 @@ mod tests {
         apply_animation_values(&mut config, &[
             (EditingTarget::Main, "Escape.Supersample".to_string(), json!(8)),
         ]);
-        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE);
+        assert_eq!(config.escape.supersample, crate::config::escape::MAX_SUPERSAMPLE);
         apply_animation_values(&mut config, &[
             (EditingTarget::Main, "Escape.Supersample".to_string(), json!(40)),
         ]);
-        assert_eq!(config.escape.supersample, crate::escape::renderer::MAX_SUPERSAMPLE,
+        assert_eq!(config.escape.supersample, crate::config::escape::MAX_SUPERSAMPLE,
             "past the maximum still clamps");
     }
 
@@ -2197,7 +2197,7 @@ mod tests {
         assert_eq!(config.escape.zoom_log2, 0.0, "overflowing zoom falls back");
         assert_eq!(
             config.escape.supersample,
-            crate::escape::renderer::MAX_SUPERSAMPLE,
+            crate::config::escape::MAX_SUPERSAMPLE,
             "supersample clamps to the panel's maximum (it used to stop at 3)"
         );
     }

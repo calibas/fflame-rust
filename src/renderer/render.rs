@@ -669,17 +669,6 @@ pub async fn render_with(
     })
 }
 
-/// Escape-time render path — the generator swap behind `render_with`.
-///
-/// Reuses the flame renderer for everything except the generator:
-/// `load_config` uploads palette (rotation/squeeze), tonemap params,
-/// curve LUT and background exactly as the flame path sees them, and
-/// the tail below mirrors the flame tail minus its flame-only stages
-/// (solid shade, DoF, density renormalization). The `EscapeRenderer`
-/// itself is created per call and destroyed after readback, the same
-/// one-shot discipline as `EffectChainRunner` — the interactive app
-/// will hold a persistent one instead.
-#[cfg(feature = "engine-escape")]
 /// Render one simulation still: seed, run exactly `sim.steps`, colour.
 ///
 /// The step count is the contract (master plan D5), so this does not
@@ -885,6 +874,17 @@ async fn render_sim(
     })
 }
 
+/// Escape-time render path — the generator swap behind `render_with`.
+///
+/// Reuses the flame renderer for everything except the generator:
+/// `load_config` uploads palette (rotation/squeeze), tonemap params,
+/// curve LUT and background exactly as the flame path sees them, and
+/// the tail below mirrors the flame tail minus its flame-only stages
+/// (solid shade, DoF, density renormalization). The `EscapeRenderer`
+/// itself is created per call and destroyed after readback, the same
+/// one-shot discipline as `EffectChainRunner` — the interactive app
+/// will hold a persistent one instead.
+#[cfg(feature = "engine-escape")]
 async fn render_escape(
     renderer: &mut FlameRenderer,
     device: &Device,

@@ -37,7 +37,7 @@ use super::reference::OrbitCache;
 /// pixel. Whether a given view can actually have it is decided by the
 /// render-pixel budget in [`EscapeRenderer::resize`], which reduces
 /// the factor rather than failing.
-pub const MAX_SUPERSAMPLE: u32 = 8;
+pub use crate::config::escape::MAX_SUPERSAMPLE;
 
 pub const PERTURB_MIN_ZOOM: f64 = 14.0;
 
