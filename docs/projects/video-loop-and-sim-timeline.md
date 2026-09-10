@@ -32,8 +32,9 @@ Three things, in the user's words, lightly condensed:
 | Per frame | `crate::renderer::render()` — a FRESH `FlameRenderer` and a fresh engine, through the still path | its own copy of the still path's flame section, then tonemap, colour effects, readback |
 | Renderer across frames | new each frame | one, kept |
 | Simulation across frames | reseeded and rerun from zero each frame — **quadratic**; the form D5 in `simulation-fractals.md` rejects | one `SimRenderer`, advanced to the frame's `sim.steps` |
-| Density effects | run (inherited from the still path) | **never run**, on any engine |
+| Density effects | **never run** -- it CALLS the stage, but the device never asked for `FLOAT32_FILTERABLE`, so the stage declined every time (found in phase 2) | **never run**: the stage is not called at all |
 | Solid-mode DoF pass | run | **never run** |
+| Device features | `CLEAR_TEXTURE` only | `CLEAR_TEXTURE` only |
 | Final dispatch | full batch (overshoots by up to one dispatch) | trimmed to the target (`workgroups_for_remaining`) |
 | ffmpeg | written from the render thread | writer thread, `sync_channel(16)` |
 | Lines | 348 | 699 |
@@ -286,6 +287,23 @@ Each phase is one commit and leaves the app working.
     settle behaviour, accumulated antialiasing still applied).
   - Every existing animation unit test passes or is deleted with the
     code it tested.
+
+**What phase 2 turned up that this plan had wrong.** The table above
+originally said the CLI loop ran density effects, because it renders
+through the still path and the still path has the stage. It does call
+the stage. The stage declined: density effects bilinear-sample the
+Rgba32Float accumulation, which needs `FLOAT32_FILTERABLE`, and the
+animation-export device asked only for `CLEAR_TEXTURE` -- while
+`app/export.rs`, `export/high_res.rs`, `gpu/device.rs`, `shader_bench`
+and `probe/run.rs` all request it when the adapter advertises it. So
+BOTH loops dropped density effects, for two independent reasons, and
+unifying them would have fixed only one. The device now asks for the
+same features every other export path does.
+
+The lesson for the gate: "the code calls the stage" is not evidence
+the stage ran. The measurement is. Turning the effect off and
+requiring the two videos to DIFFER is what caught this -- the first
+run of that gate, on the unified loop, still showed zero difference.
 
 ### Phase 3 — The timeline drives the grid in-app
 
