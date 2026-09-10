@@ -2769,6 +2769,21 @@ impl App {
                 ) {
                     self.escape_dirty = true;
                 }
+                // Mode C renders the FLAME as a distance field, so a
+                // flame edit has to reach the escape image — and
+                // nothing else marks it dirty, because every other
+                // escape formula is a function of the escape config
+                // alone. Re-analysing each frame is a handful of
+                // affines and a ball refinement; `set_ifs` reports
+                // whether it actually changed, which is the cue.
+                if crate::escape::ifs::get_ifs(&final_config.escape.formula).is_some() {
+                    let registry = crate::variations::global_registry();
+                    let packed =
+                        crate::escape::ifs::pack_flame(&final_config.flame, &registry).ok();
+                    if escape.set_ifs(packed) {
+                        self.escape_dirty = true;
+                    }
+                }
                 if self.escape_dirty {
                     let settled = escape.render(
                         &self.gpu.device,

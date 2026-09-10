@@ -84,10 +84,12 @@ pub fn render_escape_content(
     // Mode B (field) formulas share the dropdown as a second group;
     // which registry resolves the name routes everything downstream.
     let field = crate::escape::fields::get_field(&esc.formula);
+    let ifs_def = crate::escape::ifs::get_ifs(&esc.formula);
     let formula = crate::escape::get_formula(&esc.formula);
-    let selected_label = match field {
-        Some(f) => f.display_name,
-        None => formula.display_name,
+    let selected_label = match (ifs_def, field) {
+        (Some(d), _) => d.display_name,
+        (None, Some(f)) => f.display_name,
+        (None, None) => formula.display_name,
     };
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
@@ -146,8 +148,50 @@ pub fn render_escape_content(
                         }
                     }
                 }
+                // Mode C: distance functions. `ifs_flame` reads the
+                // LOADED FLAME rather than a formula of its own, so
+                // there is no default view to land on — the flame's
+                // own extent decides where to stand, and the panel
+                // offers a Frame button for it below.
+                ui.separator();
+                for d in crate::escape::ifs::IFS_DEFS {
+                    if ui
+                        .selectable_label(
+                            ifs_def.is_some_and(|sel| sel.name == d.name),
+                            d.display_name,
+                        )
+                        .clicked()
+                        && esc.formula != d.name
+                    {
+                        let _ = config_manager.update_batch(
+                            vec![
+                                (
+                                    ConfigPath::EscapeFormula,
+                                    ConfigValue::String(d.name.to_string()),
+                                ),
+                                (
+                                    ConfigPath::EscapeColoring,
+                                    ConfigValue::String(d.default_coloring.to_string()),
+                                ),
+                            ],
+                            "history.param.escape_formula".to_string(),
+                        );
+                    }
+                }
             });
     });
+
+    // ---- Mode C: does the loaded flame qualify? ----
+    //
+    // The criterion answers *why not* rather than *whether* (the
+    // analysis returns every reason, not the first), so the panel can
+    // list them: a flame with two non-affine transforms should say so
+    // once, not make the user fix one to discover the next.
+    if let Some(d) = ifs_def {
+        if d.needs_flame {
+            show_ifs_criterion(ui, config_manager);
+        }
+    }
 
     // ---- Presets ----
     //
@@ -156,9 +200,10 @@ pub fn render_escape_content(
     // a normal thing to want after wandering off, not only something
     // that happens on a formula switch.
     {
-        let presets: &[crate::escape::EscapePreset] = match field {
-            Some(f) => f.presets,
-            None => crate::escape::get_formula(&esc.formula).presets,
+        let presets: &[crate::escape::EscapePreset] = match (ifs_def, field) {
+            (Some(d), _) => d.presets,
+            (None, Some(f)) => f.presets,
+            (None, None) => crate::escape::get_formula(&esc.formula).presets,
         };
         if !presets.is_empty() {
             ui.horizontal(|ui| {
@@ -225,9 +270,10 @@ pub fn render_escape_content(
     // Formula parameters, straight from the def (slider bounds and
     // tooltips included). Values read def defaults when unset — the
     // same value the shader's packer uses.
-    let formula_params = match field {
-        Some(f) => f.parameters,
-        None => formula.parameters,
+    let formula_params = match (ifs_def, field) {
+        (Some(d), _) => d.parameters,
+        (None, Some(f)) => f.parameters,
+        (None, None) => formula.parameters,
     };
     for p in formula_params {
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
@@ -247,6 +293,7 @@ pub fn render_escape_content(
     // planes render the same image and the control is inert. See
     // FormulaFeature::DynamicalOnly.
     let julia_meaningful = field.is_none()
+        && ifs_def.is_none()
         && crate::escape::formula_julia_is_meaningful(
             crate::escape::get_formula(&esc.formula),
         );
@@ -986,11 +1033,14 @@ pub fn render_escape_content(
     // formula. A field shader has none of the three -- no escape
     // test, no bailout, and a fixed-count accumulation with no step
     // to damp -- so all three sat in the panel doing nothing.
-    let controls = match field {
-        Some(_) => crate::escape::FIELD_ITERATION_CONTROLS,
-        None => crate::escape::iteration_controls(
-            crate::escape::get_formula(&esc.formula),
-        ),
+    // Mode C reads none of them either: its walk has no escape test,
+    // no bailout and no step to damp — the depth and the beam are its
+    // own parameters, drawn from the def above.
+    let controls = match (ifs_def, field) {
+        (Some(_), _) | (None, Some(_)) => crate::escape::FIELD_ITERATION_CONTROLS,
+        (None, None) => {
+            crate::escape::iteration_controls(crate::escape::get_formula(&esc.formula))
+        }
     };
 
     if controls.bailout {
@@ -1053,7 +1103,7 @@ pub fn render_escape_content(
     ui.separator();
 
     // ---- Coloring ----
-    show_coloring_section(ui, config_manager, &esc, field);
+    show_coloring_section(ui, config_manager, &esc, field, ifs_def);
 }
 
 /// A starting `scale` for a coloring, from the iteration cap.
@@ -1157,6 +1207,99 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     }
 }
 
+/// Mode C's criterion (the plan's §2.4), shown under the formula row.
+///
+/// The analysis returns EVERY reason a flame fails rather than the
+/// first, so this lists them: a flame with two non-affine transforms
+/// should say so once, not make the user fix one to discover the next.
+///
+/// It also says, when the flame does qualify, that the render draws
+/// the SET and not the measure — weights, colour speed and density do
+/// not apply here, and two flames differing only in weights render
+/// identically. That is D6, and the panel is where it stops being a
+/// surprise.
+fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+    // Analyse first and drop the borrow, so the Frame button below can
+    // write through the same manager.
+    enum Verdict {
+        Ok { maps: usize, lo: f64, hi: f64, has_final: bool, centre: [f64; 2], radius: f64 },
+        No(Vec<String>),
+    }
+    let verdict = {
+        let cfg = config_manager.active_config();
+        let registry = crate::variations::global_registry();
+        match crate::scene::ifs_analysis::analyse_2d(&cfg.flame, &registry) {
+            Ok(ifs) => Verdict::Ok {
+                maps: ifs.maps.len(),
+                lo: ifs.maps.iter().map(|m| m.sigma_min).fold(f64::INFINITY, f64::min),
+                hi: ifs.maps.iter().map(|m| m.sigma_max).fold(0.0f64, f64::max),
+                has_final: ifs.final_map.is_some(),
+                centre: ifs.ball.centre,
+                radius: ifs.ball.radius,
+            },
+            Err(why) => Verdict::No(why.iter().map(|d| d.to_string()).collect()),
+        }
+    };
+
+    match verdict {
+        Verdict::Ok { maps, lo, hi, has_final, centre, radius } => {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(120, 190, 120),
+                    t!(
+                        "escape_panel.ifs_qualifies",
+                        count = maps.to_string(),
+                        lo = format!("{lo:.3}"),
+                        hi = format!("{hi:.3}")
+                    ),
+                );
+                if has_final {
+                    ui.label(
+                        egui::RichText::new(t!("escape_panel.ifs_has_final")).small().weak(),
+                    );
+                }
+            });
+            ui.label(
+                egui::RichText::new(t!("escape_panel.ifs_set_not_measure")).small().weak(),
+            );
+            if radius > 0.0
+                && ui
+                    .button(t!("escape_panel.ifs_frame"))
+                    .on_hover_text(t!("escape_panel.ifs_frame_tip"))
+                    .clicked()
+            {
+                // The home view spans 4 units vertically, so a span of
+                // 2.4 radii leaves the attractor a comfortable margin.
+                let span = (radius * 2.4).max(1e-12);
+                let _ = config_manager.update_batch(
+                    vec![
+                        (
+                            ConfigPath::EscapeCenterRe,
+                            ConfigValue::String(format!("{centre:?}", centre = centre[0])),
+                        ),
+                        (
+                            ConfigPath::EscapeCenterIm,
+                            ConfigValue::String(format!("{centre:?}", centre = centre[1])),
+                        ),
+                        (ConfigPath::EscapeZoomLog2, ((4.0f64 / span).log2() as f32).into()),
+                    ],
+                    "history.param.escape_center".to_string(),
+                );
+            }
+        }
+        Verdict::No(reasons) => {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 170, 90),
+                t!("escape_panel.ifs_rejected"),
+            );
+            for r in &reasons {
+                ui.label(egui::RichText::new(format!("  \u{2022} {r}")).small().weak());
+            }
+            ui.label(egui::RichText::new(t!("escape_panel.ifs_rejected_tip")).small().weak());
+        }
+    }
+}
+
 /// Coloring dropdown + params. `field` = Some routes to the mode-B
 /// coloring registry (with the def's fallback resolution — the
 /// stored name usually still says "smooth" right after a switch).
@@ -1165,7 +1308,40 @@ fn show_coloring_section(
     config_manager: &mut ConfigManager,
     esc: &crate::config::escape::EscapeConfig,
     field: Option<&'static crate::escape::fields::FieldDef>,
+    ifs_def: Option<&'static crate::escape::ifs::IfsDef>,
 ) {
+    if let Some(d) = ifs_def {
+        let coloring = crate::escape::ifs::get_ifs_coloring(&esc.coloring, d);
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.coloring"));
+            egui::ComboBox::from_id_salt("escape_coloring")
+                .selected_text(coloring.display_name)
+                .show_ui(ui, |ui| {
+                    for c in crate::escape::ifs::IFS_COLORINGS {
+                        if ui
+                            .selectable_label(c.name == coloring.name, c.display_name)
+                            .clicked()
+                            && c.name != coloring.name
+                        {
+                            let _ = config_manager.update_param(
+                                ConfigPath::EscapeColoring,
+                                ConfigValue::String(c.name.to_string()),
+                            );
+                        }
+                    }
+                });
+        });
+        for p in coloring.parameters {
+            let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
+            if param_control(ui, &mut v, p, "coloring") {
+                let _ = config_manager.update_param(
+                    ConfigPath::EscapeColoringParam { param: p.name.to_string() },
+                    v.into(),
+                );
+            }
+        }
+        return;
+    }
     if let Some(f) = field {
         let coloring = crate::escape::fields::get_field_coloring(&esc.coloring, f);
         ui.horizontal(|ui| {
@@ -1590,6 +1766,62 @@ mod tests {
             config.render_mode = RenderMode::Escape;
             config.escape.formula = f.name.to_string();
             let _ = lay_out(config);
+        }
+    }
+
+    /// Mode C lays out for a flame that qualifies and for one that
+    /// does not — the criterion path runs the analysis and formats
+    /// every reason, which is a lot of panel code that only executes
+    /// when a flame fails.
+    #[test]
+    fn the_panel_lays_out_for_every_distance_function() {
+        use std::collections::HashMap;
+        let half = |tx: f32, ty: f32, var: &str| {
+            let mut t = crate::scene::transforms::Transform::default();
+            t.a = 0.5;
+            t.d = 0.5;
+            t.e = tx;
+            t.f = ty;
+            t.variations = HashMap::from([(var.to_string(), 1.0)]);
+            t.variation_order = vec![var.to_string()];
+            t
+        };
+        for d in crate::escape::ifs::IFS_DEFS {
+            for (label, var) in [("qualifying", "linear"), ("rejected", "spherical")] {
+                for c in crate::escape::ifs::IFS_COLORINGS {
+                    let mut config = crate::config::FractalConfig::default();
+                    config.render_mode = RenderMode::Escape;
+                    config.escape.formula = d.name.to_string();
+                    config.escape.coloring = c.name.to_string();
+                    config.flame.transforms =
+                        vec![half(0.0, 0.0, "linear"), half(0.5, 0.0, var)];
+                    config.flame.final_transforms.clear();
+                    config.flame.xaos = None;
+                    let _ = lay_out(config);
+                    let _ = label;
+                }
+            }
+        }
+    }
+
+    /// Every mode-C parameter and coloring must have somewhere to be
+    /// drawn. A def whose params the panel never reaches is a control
+    /// the user cannot touch, and the shader reads its default
+    /// silently — which looks like the parameter doing nothing.
+    #[test]
+    fn every_mode_c_parameter_is_reachable_from_the_panel() {
+        for d in crate::escape::ifs::IFS_DEFS {
+            assert!(!d.parameters.is_empty(), "{} has no parameters to draw", d.name);
+            assert!(
+                crate::escape::ifs::IFS_COLORINGS
+                    .iter()
+                    .any(|c| c.name == d.default_coloring),
+                "{} defaults to a coloring outside the registry",
+                d.name
+            );
+        }
+        for c in crate::escape::ifs::IFS_COLORINGS {
+            assert!(!c.parameters.is_empty(), "{} has no parameters to draw", c.name);
         }
     }
 

@@ -2,7 +2,9 @@
 
 **Status:** plan of record, 2026-09-10, on branch `ifs-distance`.
 **Phase 0 built 2026-09-10** (§5, with the census result recorded
-there); phases 1–4 not started.
+there). **Phase 1 built 2026-09-10** (§5, with its three
+findings); phases 2–4 not started. §8 is the roadmap past affine,
+written 2026-09-10 before phase 1 could foreclose it.
 
 This is the plan for rendering a flame that is an affine IFS — every
 transform a linear map, no folds, no nonlinear variations — **by its
@@ -71,7 +73,9 @@ matters in §2.
 **Variations sum.** The dispatcher is `result += weight * f(p)`, so a
 transform whose variations are all affine is affine. Today that set is
 `linear`, `linear3D`, `zscale` (contributes `weight·z` to z) and
-`ztranslate` (a constant). `flatten` is affine but singular.
+`ztranslate` (a constant). `flatten` is affine but singular. Affine is
+the *only* class closed under this sum, which is why phase 0 could
+ignore the sum entirely and §8.4 cannot.
 
 **`address_mix` exists** ([src/escape/colorings.rs](../../src/escape/colorings.rs)):
 a colouring that accumulates a per-iteration branch address as a
@@ -252,6 +256,12 @@ perturbation carries a `δ²` term and the cancellation glitches it
 causes; a linear map has neither. There is nothing to detect and
 nothing to re-reference.
 
+**This exactness is a property of affine maps, not of this plan.**
+A nonlinear map has a second-order term and gets Mandelbrot's
+problem back in full. §8.5 draws the consequence: deep zoom and a
+wider variation set are separate capabilities that do not arrive
+together.
+
 **The expanding dynamics do the rest.** Every inversion multiplies δ by
 at least `1/σ_max`, so a pixel-scale offset reaches O(1) after about
 `log(1/zoom) / log(1/σ)` levels — at σ = 0.5 and zoom 2⁻¹⁰⁰⁰, a
@@ -408,12 +418,14 @@ rather than asserts, since the number is the deliverable):
 
 | | |
 |---|---|
-| shipped flames examined | 159 — 9 from the preset library, 150 visual-regression configs |
-| qualify as a **planar** affine IFS | **3**, all of them smoke tests for `affine3D` and `zscale` |
+| shipped flames examined | 163 — 13 from the preset library, 150 visual-regression configs |
+| qualify as a **planar** affine IFS | **7** — 3 smoke tests for `affine3D` and `zscale`, plus the 4 classical IFSs phase 1 ships as presets |
 | 3D with `preserve_z` on (solid candidates) | 34 |
 | qualify as a **solid** affine IFS | **0** — every candidate uses a non-affine variation |
 
-Not one flame from the preset library qualifies. The commonest reasons
+The four presets qualify by construction and say nothing about the
+catalogue; read against what shipped before phase 1, the number is
+**3 of 159**. Not one flame from the preset library qualified. The commonest reasons
 are `spherical` (13), `quaternion_linear` (6, a 4D affine whose fourth
 coordinate carries across iterations — its 3D shadow is not a 3D IFS,
 unless its w-coupling is zero, a refinement not made), `flatten` (5,
@@ -438,11 +450,227 @@ the thing that would change the number. `spherical` alone is 13 of
   rewriting the loop; writing it that way first costs nothing (§2.5).
 - The escape panel's *From flame* source and the criterion message.
 - Presets: the classical affine IFSs above, as flames.
+- The σ product accumulated **in the shader loop**, not folded from
+  a precomputed per-level constant — identical arithmetic for affine
+  maps, and the one line that would otherwise have to be rewritten to
+  reach §8's ladder.
 - **Gates:** the Sierpiński distance matches the analytic distance to
   within tracing tolerance on a grid of test points; the classical
   presets render to their textbook pictures, inspected and baselined;
   one qualifying shipped flame preset rendered both ways, overlaid, and
   the edges coincide. Every existing baseline unchanged.
+
+**Built 2026-09-10** — the estimator
+([src/scene/ifs_estimate.rs](../../src/scene/ifs_estimate.rs), generic
+over dimension so phase 3 inherits it), the registry pair and the four
+colourings ([src/escape/ifs.rs](../../src/escape/ifs.rs)), the template
+and `assemble_ifs`, and the renderer's group-1 map buffer. Not yet
+built: the panel's *From flame* source and its criterion message, and
+the presets as shipped assets — the classical IFSs live in the gallery
+test for now.
+
+**Five things the pictures taught, none of which the plan had said**
+(the third of them is why the beam is in this phase at all)**:**
+
+- **§2.2's pseudocode draws the bounding balls.** Breaking out of the
+  loop at the first escape returns `σ·(|q − c| − R)`, which goes to
+  **zero at the ball's surface** — so every level's ball is reported as
+  part of the attractor and renders as a bright ring around the set.
+  Plainly visible on a Sierpiński. Every level's value is a lower
+  bound, so the walk now runs on and keeps the LARGEST; the value
+  converges (each inversion multiplies the radius by ~`1/σ` and the
+  running product by `σ`), so there is a far cutoff rather than a
+  budget. Measured on the unit square, whose distance is exact: the
+  worst estimate/exact ratio over the exterior grid goes from **0.448
+  to 1.0000**. The rings were never a property of the set.
+
+- **Hart's ball is far looser than the estimate needs.** His radius
+  bounds a ball each map sends into ITSELF; the walk only needs the
+  attractor to be inside one. Since `A ⊆ B` implies `A = ∪Sᵢ(A) ⊆ ∪Sᵢ(B)`,
+  the images' bounding ball is another valid ball, and iterating
+  contracts it toward the attractor's own. The dragon's went from 1.707
+  to about its true circumradius; the unit square's converges to
+  exactly 0.7071, the circumscribed circle.
+
+- **Greedy's cost is now measured, on a classical IFS.** Every address
+  bounds the distance to ITS piece and the truth is the minimum over
+  all of them, so following one address can only read too LARGE — and
+  too large renders as "far from the set", which erodes the picture.
+  Against exhaustive search over every address at depth 10
+  (`greedy_erodes_a_just_touching_ifs_and_exhaustive_does_not`):
+
+  | IFS | pieces meet | greedy loose at | worst ratio |
+  |---|---|---|---|
+  | Sierpiński gasket | at points | 10 / 576 | 1.27× |
+  | Heighway dragon | along a boundary | 288 / 576 | **62×** |
+
+  So the split is not "overlapping flames" versus the rest, as §6 row 1
+  frames it — it is how the pieces MEET. Disjoint or point-touching
+  IFSs are essentially exact under greedy; a just-touching attractor
+  with positive area is not.
+
+  **The beam moved into phase 1 because of this**, D4's schedule
+  notwithstanding: phase 1's own gate is that the classical presets
+  render to their textbook pictures, and the dragon did not. Widths,
+  against exhaustive search at depth 10:
+
+  | beam | loose at | worst ratio | walk, 512² |
+  |---|---|---|---|
+  | 1 | 288 / 576 | 62.5× | 17 ms |
+  | 2 | 33 / 576 | 6.2× | 31 ms |
+  | 3 | 1 / 576 | 1.3× | — |
+  | 4 | **0 / 576** | **1.00×** | 60 ms |
+  | 8 | 0 / 576 | 1.00× | 114 ms |
+
+  Those times are the walk alone. The first version of this table
+  reported the whole `render_with` round trip and put beam 8 at "68%
+  more than greedy", which was wrong by a lot: a mode-A Mandelbrot
+  through the same harness costs 363 ms before any walk happens, so
+  the measurement was almost entirely floor. Against a control, beam 8
+  is **7×** beam 1. Any timing claim here needs a control; this one
+  did not have one.
+
+  Beam 4 already agrees with exhaustive search on that grid, but the
+  picture needs 8: of 16 384 points ON the dragon, beam 4 still reads
+  141 as off it — a scatter of holes through a solid region — and beam
+  8 reads none. Depth does not buy it (24, 40 and 80 all leave the same
+  141), so the shipped default is **8**. An IFS with disjoint pieces is
+  exact at 1 and pays the 7× for nothing, which is why it is a
+  parameter.
+
+  Two things about the ranking, both found by measurement. Candidates
+  are ranked by **distance to the ball's centre**, not by their bound:
+  the bound is a running maximum, so once a path grazes the ball's edge
+  every descendant inherits the same value and the siblings cannot be
+  told apart — loose at 568 of 576 gasket points that way against 10.
+  Adding the bound as a tiebreak moves no measurement at all, so the
+  key is one number, which matters because shifting it is the shader's
+  inner loop. And the beam is *ranked* by position but *answered* by
+  bound: pruning asks which piece the point is in, the estimate asks
+  which surviving address is nearest.
+
+  **The selection is two passes, and that is not a micro-optimisation.**
+  Building each child in full and insertion-sorting it into the
+  keep-list shifts a fourteen-register candidate up to `beam` times for
+  each of `beam × maps` children. Ranking on the key alone and
+  rebuilding only the `beam` survivors moves an f32 and a u32 instead,
+  and descends `beam` times rather than `beam × maps`.
+
+- **The address and the trap need a distance halo to show the set.**
+  Both quantities are defined for every point the walk touches, so a
+  colouring that lights the whole plane by them draws the EXTERIOR's
+  branch partition — big flat wedges, and the attractor invisible
+  inside them. Fading by distance from the set (a reach in pixels) is
+  what turns the address into the picture §2.3 promised: the
+  Sierpiński's three sub-gaskets and the Koch curve's four
+  sub-curves, each its own colour, with exact edges. That picture is
+  the one the chaos game cannot make, because it colours by branch
+  ADDRESS rather than by which transform happened to fire.
+
+- **A colouring whose default is palette position 0 draws nothing.**
+  `ifs_distance` puts the set at a palette position and the exterior at
+  the background, and its "interior" parameter defaulted to 0 -- which
+  in most palettes, the shipped Fire included, is black. The dragon
+  preset rendered a completely empty frame, and read as a broken
+  distance function rather than a bad default. It is 0.5 now. The same
+  trap sits under any colouring that maps a constant into a palette.
+
+**The classical IFSs, rendered** (the gallery test writes them to
+`output/ifs/`): Sierpiński, the four-map filled square, Koch and — with
+the beam — the Heighway dragon all render to their textbook pictures
+with exact antialiased edges. Four ship as presets (gasket, carpet,
+dragon, Koch), framed by the bounding ball the analysis already
+computes, so a preset cannot point somewhere the set is not; a test
+reads them back out of `assets/presets.fflame`, re-checks the criterion
+and the framing, and renders each one to confirm it is not blank.
+
+That last check earned its place immediately. A config serialised with
+`serde_json` directly carries no `version`, so loading it runs the
+v2 to v3 migration -- which lifts `render_mode` out of the nested
+`flame` object and OVERWRITES the top-level `escape` with the flame's
+absent default. The presets came back as ordinary 2D flames and drew a
+few hundred pixels of chaos game: a plausible picture, of the right
+fractal, from the wrong engine. Generating them through
+`FractalConfig::to_json`, which stamps the version, is the fix.
+
+**Mode C is the one escape formula that is not a function of the escape
+config alone**, and that has a consequence worth stating: every path
+driving an `EscapeRenderer` has to hand it the analysed flame, and a
+path that forgets draws an empty frame — correctly, quietly, and
+indistinguishably from a flame that does not qualify. The app's own
+viewport was exactly that until a source-scanning test went in beside
+the two call sites. A flame edit also has to mark the escape image
+dirty, which nothing else needed to do.
+
+**The panel** gains mode C as a third group in the formula dropdown,
+the def's parameters and colourings, and the criterion: it lists
+*every* reason a flame fails rather than the first, says plainly that
+the render draws the set and not the measure (D6), and offers a Frame
+Attractor button.
+
+**What phase 2 still owns**: the high-precision reference orbit and the
+deep-zoom path (§2.5), the remaining colouring parameters, and the D9
+comparison against Mode C's escape buffer. The beam is no longer among
+them, but its cost on an *overlapping* flame — as opposed to a
+just-touching one — is still unmeasured, because no shipped flame
+overlaps and qualifies.
+
+### Phase 1b — the 1080p hang
+
+Reported straight after phase 1 landed: the presets rendered, but
+loading one left the app barely usable, and a pan or zoom usually
+froze or killed it with `STATUS_STACK_BUFFER_OVERRUN`.
+
+That exit code names no GPU, and it is not a stack overflow. It is what
+Windows reports when the driver resets under a compute dispatch that
+overran its watchdog — and the dispatch was the whole image at once.
+
+**The cause was the chunk estimate, not the shader.** The direct path
+sizes each dispatch as `budget / (width · per-pixel cost)`, and mode C
+declared its per-pixel cost as `levels · maps`. That leaves out the
+beam (8× at the default) and, worse, it is stated in mode A's unit: a
+walk step is not an iteration, and measured against the shared budget
+it is about 250× heavier. The estimate came out so large that
+`rows ≥ height` — one dispatch, every pixel, several seconds.
+
+The adaptive breaker that exists for exactly this could not help. It
+halves the budget when a band survives but runs slow, or when the
+device is lost — and it only arms while a render is BANDED. An
+estimate that never bands never arms it, so the first frame is also
+the fatal one.
+
+Three fixes, in order of what they were worth:
+
+- **A budget of its own**, `IFS_DISPATCH_BUDGET`, in walk steps
+  (`levels · beam · maps` per pixel), calibrated from the measured
+  1.5e9 steps/s to a ~300 ms band. The row arithmetic is a pure
+  function with tests that assert a 1080p view bands, that no band at
+  any supported size and depth exceeds the breaker's 700 ms, that the
+  breaker's halvings still reach it, and that a small cheap view is
+  NOT chopped up for nothing.
+- **The two-pass selection** above, which took beam 8 from 152 ms to
+  114 ms of walk.
+- **The presets stopped asking for 2× supersampling**, which was four
+  times the walk for nothing: mode C's edge is antialiased
+  analytically, from the sub-pixel value of the distance, and its other
+  colourings are smooth fields that do not alias.
+
+A 1080p render of every shipped preset now finishes in about a second,
+in three bands, and there is an end-to-end test that says so — the row
+arithmetic can be gated by a unit test, but a driver reset cannot.
+
+**One more hazard, found while looking rather than reported.** Mode C
+is the only escape formula that depends on the flame, so the app
+re-analyses it every frame and marks the escape image dirty when the
+result differs. That comparison was `PartialEq` on packed `f32`s — and
+a NaN never equals itself, so a single NaN anywhere in the packed data
+(a transform colour is enough) answers "changed" on every frame,
+forever. The view would re-render a band per frame and never settle:
+a permanent redraw loop that looks exactly like the engine being too
+slow, which is the same symptom as the hang and would have survived
+its fix. The comparison is by BYTES now, which asks the question
+actually being asked — is this the same buffer we already uploaded —
+and a test pins it.
 
 ### Phase 2 — colouring, overlap, and depth
 
@@ -494,18 +722,17 @@ the thing that would change the number. `spherical` alone is 13 of
 | risk | consequence | mitigation |
 |---|---|---|
 | Greedy branch choice fails on overlapping flames | wrong distance, visible tearing where branches cross | the beam (D4); the level colouring, which does not depend on the choice; measured in phase 2 before a default is set |
-| Few shipped flames qualify | the feature reaches classical IFSs and little else | phase 0 counts them before phase 1 starts; the affine set can grow (conformal invertible variations — Möbius, spherical — are the next candidates, §7) |
+| Few shipped flames qualify | the feature reaches classical IFSs and little else | phase 0 counts them before phase 1 starts; the affine set can grow, and §8 is the ladder for growing it |
 | Anisotropic transforms make the bound loose | slow march in 3D, not wrong pictures | report σ_max/σ_min per transform; cap march steps; the 2D path is unaffected |
 | The escape camera duplicates the flame's | two sets of camera fields drift | D8 is a decision to argue with; the View panel writes both through one path |
 | Set-not-measure disappoints on a favourite flame | "it doesn't look like my flame" | D6, said in the panel; the index-map colouring is the structural part; the comparison view makes the difference legible rather than surprising |
 
 ## 7. Deliberately not here
 
-- **Nonlinear variations.** Conformal invertible ones — Möbius,
-  spherical inversion — have a scalar local scale and fit the estimate;
-  they are the next step in growing the affine set, not this plan.
-  Folds and non-conformal maps are Mode C's territory if Mode C
-  survives D9.
+- **Nonlinear variations.** Not in this plan, but the intended
+  direction, and §8 records what they require — including the one
+  thing phase 1 must not foreclose. Folds and non-invertible maps
+  stay Mode C's territory if Mode C survives D9.
 - **Xaos.** A graph-directed IFS's estimate restricts the branch
   choice by the graph; the machinery is the same and the choice logic
   is not. After phase 2.
@@ -518,3 +745,117 @@ the thing that would change the number. `spherical` alone is 13 of
 - **The measure.** No attempt to bring density into the distance
   render. A hybrid — the distance field as a mask or trap inside the
   chaos game — is a bridge for later.
+
+## 8. Growing the set: what a reversible variation has to supply
+
+The census in §5 says what was expected: the flame aesthetic *is* the
+nonlinear variation, so an affine-only criterion reaches almost none of
+the catalogue. The intent is to support a good portion of the
+variations eventually. This section records what that takes — written
+before phase 1, so phase 1 does not build something that has to be torn
+out to get there.
+
+### 8.1 Three things per variation, not one
+
+Invertibility is necessary and not sufficient. The estimate of §2.2
+applies inverse maps until the point escapes the ball, then divides the
+escape distance by the accumulated contraction. So each variation must
+supply:
+
+1. **A closed-form inverse**, as WGSL. Not a proof that a preimage
+   exists — a computation of it.
+2. **A lower bound on local scale**: σ_min of the Jacobian at a point,
+   or over a region. For affine maps this is a constant and phase 0
+   precomputes it on the CPU. For anything else it is a function of
+   position, and must be accumulated *inside* the shader loop, at the
+   orbit points the walk actually visits.
+3. **A branch rule** where the map is many-to-one. Choosing a branch
+   chooses which preimage the walk follows; §2.2's greedy choice
+   generalises, and so does its weakness (§6, row 1).
+
+### 8.2 RNG is not the disqualifier — what the RNG *does* is
+
+`julia` ([defs/advanced.rs](../../src/variations/defs/advanced.rs)) is
+√z with a random sign. It is **already an inverse-iteration map**, and
+its RNG selects between two preimages, which is exactly what the
+distance walk does deliberately. `blur`, in the same file, never reads
+`p` at all: it returns a uniform disc point. That is not a function
+with a hard inverse, it is a *measure*, and it sits outside the
+framework rather than at the far end of it.
+
+The sorting question is whether the RNG **selects a branch** or
+**manufactures a point**. Only the second is categorically out — along
+with `NeedsAccum` and per-thread-state variations, whose map depends on
+iteration history and so is not an IFS map at all.
+
+### 8.3 The ladder
+
+Four classes, each with σ_min in closed form, each more shader work
+than the last, each reaching further into the catalogue.
+
+| class | Jacobian | σ_min | examples |
+|---|---|---|---|
+| **affine** | constant | a constant, CPU-side | `linear`, `zscale`, `affine3D` — phase 0 |
+| **conformal** | scalar × rotation | `\|f′(z)\|`, exact rather than bounded | `spherical` (`p/(r²+ε)`, an involution — its own inverse), `mobius`, `julia`, `power`, `exp`/`log` |
+| **radial** | `r ↦ f(r)`, θ fixed | `min(f′(r), f(r)/r)`, invertible where f is monotone | the disc family by formula shape — `bubble`, `fisheye`, `hyperbolic` — **not audited, listed as candidates** |
+| **general invertible** | full 2×2 | smaller singular value, per point | whatever else has a closed-form inverse |
+
+The conformal rung is the best value for the work: one scalar per
+point, exact rather than a bound, and `spherical` alone was 13 of the
+159 flames in the census.
+
+### 8.4 The weighted sum is a second gate
+
+A transform's variations are **summed**: `result += weight · f(A p)`. A
+weighted sum of invertible maps is not generally invertible, and has no
+closed-form inverse when it is. Affine is special here not because it
+is easy but because it is the only class closed under weighted sums —
+which is why phase 0 never had to notice this.
+
+Past affine the practical rule is **one Normal-phase variation per
+transform**, with the pre- and post-affines composing around it: the
+inverse of `w · v(A p)` is `A⁻¹(v⁻¹(q/w))`.
+
+So "supporting a good portion of the variations" does not translate
+into "supporting a good portion of the flames". The sum structure is an
+independent constraint, and what it costs should be measured the way §5
+measured the first one — a second census column, not an assumption.
+
+### 8.5 Deep zoom does not come along
+
+§2.5's exactness is an affine property. `S⁻¹(C + δ) = S⁻¹(C) + M⁻¹δ`
+has no cross term because the map has no second-order term. A nonlinear
+map has curvature, and a perturbed nonlinear IFS inherits the whole
+Mandelbrot problem — glitch detection, rebasing, all of it. The escape
+engine's perturbation machinery knows how to do that, but it is not
+free and it is not automatic.
+
+**The two capabilities decouple.** A build that renders `spherical` is
+not thereby a build that deep-zooms `spherical`. Affine stays exactly
+deep-zoomable; every rung above it gets the hard version.
+
+### 8.6 Where the data belongs
+
+[`AFFINE_VARIATIONS`](../../src/scene/ifs_analysis.rs) is a `&[&str]`
+const. That is right at five entries and wrong at a hundred: it keeps
+knowledge about a variation somewhere other than the variation, so
+every addition edits a central list instead of one file.
+
+The shape that scales mirrors what the registry already does — a
+`VariationDef` carrying its own inverse the way it carries `wgsl_2d`,
+`features` and `parameters`: an inverse **kind** (affine / conformal /
+radial / general), an inverse WGSL body, a scale WGSL body. All
+optional, absent by default, so the other 640-odd definitions do not
+move and the append-only registration order is untouched. Then:
+
+- the criterion asks the registry whether a variation has an inverse,
+  rather than consulting a list;
+- the shader builder splices inverse bodies exactly as it splices
+  forward ones, through the per-flame local index map that already
+  exists;
+- D5's inverse-map buffer stays the affine fast path and gains a
+  spliced-shader path beside it, rather than being replaced;
+- the census becomes a progress meter instead of a verdict.
+
+None of this is phase 1's work. Phase 1's only obligation is not to
+foreclose it, which costs one line (§5, phase 1).

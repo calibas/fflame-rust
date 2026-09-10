@@ -19,6 +19,7 @@
 //! `srgb_to_linear` convention the flame plot uses.
 
 use super::fields::{FieldColoringDef, FieldDef};
+use super::ifs::{IfsColoringDef, IfsDef};
 use super::{ColoringDef, ColoringFeature, FormulaDef, FormulaFeature};
 
 /// Number of vec4 slots for each param block in the uniform — 16 float
@@ -4340,6 +4341,208 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
+
+const IFS_TEMPLATE: &str = r#"
+// Distance-field compute pass (mode C, ifs-distance-rendering.md
+// phase 1): no iteration of the pixel and no series - each pixel walks
+// the INVERSE maps of an affine IFS until it leaves a bounding ball,
+// and what the walk yields is the distance to the attractor plus three
+// more quantities that cost nothing extra. The same uniform block as
+// the escape and field templates keeps the renderer's params packing
+// shared; `max_iter` is unused here (the walk's depth is a def param).
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    // Mode C keeps the whole-IFS constants here: see
+    // `escape::ifs::pack_globals` for the layout.
+    fdata: array<vec4<f32>, 64>,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+
+// One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
+// mode C is the only pipeline whose layout mentions it and no existing
+// shader's bindings move (D5).
+struct IfsMapGpu {
+    inv_m: vec4<f32>,
+    inv_t: vec2<f32>,
+    sigma_min: f32,
+    color: f32,
+}
+
+@group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+fn fdata4(i: u32) -> vec4<f32> {
+    return params.fdata[i];
+}
+
+// The whole-IFS constants.
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].z;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[0].w, 0.0));
+}
+
+// The final transform's inverse: 2x2 in one vec4, then
+// (t.x, t.y, sigma_min, has_final).
+fn ifs_final_m() -> vec4<f32> {
+    return params.fdata[1];
+}
+
+fn ifs_final() -> vec4<f32> {
+    return params.fdata[2];
+}
+
+fn ifs_mean_sigma() -> f32 {
+    return params.fdata[3].x;
+}
+
+// IEEE-exact atan2 at the four signed-zero pairs. The expanded point
+// can land exactly on the ball centre, so the angle trap reaches (0,0)
+// -- where Metal's fast-math atan2 returns pi/4 for same-sign zeros
+// and NaN for mixed. Transcribed from shaders/core/utilities.wgsl and
+// kept identical by `the_atan2_guard_is_identical_to_the_flame_one`.
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+// What one evaluation yields: the four quantities of the plan's 2.3.
+struct IfsResult {
+    // Lower bound on the distance to the attractor. Zero means the
+    // walk never pushed the point out of the ball, i.e. it is on the
+    // set as far as this depth can tell.
+    distance: f32,
+    // Inverse-orbit depth at escape, with a continuous residual.
+    // Rises toward the set.
+    level: f32,
+    // The branch history as a base-N fraction in [0, 1).
+    address: f32,
+    // The coarsest branch's transform colour.
+    color: f32,
+    // The point after the last inversion, in the expanded frame.
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+// The widest beam a mode-C walk may follow. The candidate arrays are
+// function-scope registers, so this is a register-pressure ceiling
+// rather than a limit anything wants to raise casually.
+const IFS_MAX_BEAM: u32 = 8u;
+
+// Palette position + luminance, the field templates' convention.
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+// Fade by distance from the set, in pixels. The address and the trap
+// are defined for every point the walk touches, but they describe the
+// SET; lighting the whole plane by them shows the exterior's branch
+// partition instead, which is a different (and much flatter) picture.
+fn ifs_halo(res: IfsResult, px: f32, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / (reach * px));
+}
+
+//__IFS__
+
+//__IFS_COLORING__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let py = gid.y + params.tile_y0;
+    if (gid.x >= params.width || py >= params.height) {
+        return;
+    }
+
+    // The pixel arrives SPLIT: the view centre and the offset from it,
+    // handed to the walk apart. Affine inverses carry the two without
+    // a cross term, so phase 2 can replace the reference half with one
+    // high-precision orbit per view and leave this loop alone.
+    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height));
+    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
+    d.y = -d.y;
+    let rot = params.rot_cs;
+    let delta = vec2<f32>(
+        d.x * rot.x - d.y * rot.y,
+        d.x * rot.y + d.y * rot.x,
+    );
+
+    let res = ifs_evaluate(params.center, delta);
+
+    // One pixel in plane units -- what an antialiased edge measures
+    // against. The span is already the supersampled grid's, so this
+    // shrinks with supersampling exactly as it should.
+    let px = params.span.y / f32(max(params.height, 1u));
+
+    let shade = ifs_color(res, px);
+    let t = fract(shade.t);
+    let height = select(shade.t, t, params.shade_flags == 1u);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}
+"#;
+
+/// Assemble a mode-C distance shader: splice one distance function
+/// and one coloring into [`IFS_TEMPLATE`]. Same marker discipline as
+/// [`assemble`].
+pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef) -> String {
+    let mut out = Vec::new();
+    for line in IFS_TEMPLATE.lines() {
+        match line.trim() {
+            "//__IFS__" => out.push(def.wgsl.trim().to_string()),
+            "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("\n")
+}
 
 /// Assemble a mode-B field shader: splice one field def and one field
 /// coloring into [`FIELD_TEMPLATE`]. Same marker discipline as
