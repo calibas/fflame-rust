@@ -4392,6 +4392,26 @@ struct IfsMapGpu {
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;
 
+// One pixel's walk, cached so a colouring change need not re-walk it.
+//
+// Thirty-two bytes, the same stride as mode A's `IterResult`, so both
+// share the one records buffer and the one binding. Everything a
+// mode-C colouring can read is here: the four quantities of the plan's
+// 2.3 plus the escape flag and depth.
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+// The recolor cache. Written when params.flags bit 3 is set; bound to
+// a 32-byte dummy and left alone otherwise, exactly as mode A does.
+@group(0) @binding(5) var<storage, read_write> results: array<IfsRecord>;
+
 fn fparam(i: u32) -> f32 {
     return params.fparams[i / 4u][i % 4u];
 }
@@ -4518,6 +4538,21 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // shrinks with supersampling exactly as it should.
     let px = params.span.y / f32(max(params.height, 1u));
 
+    // Cache the walk before colouring it. A band cannot be
+    // re-coloured after the fact without this -- the walk that
+    // produced it is gone -- which is what made a palette edit cost a
+    // full re-render.
+    if ((params.flags & 8u) != 0u) {
+        let idx = py * params.width + gid.x;
+        results[idx].distance = res.distance;
+        results[idx].level = res.level;
+        results[idx].address = res.address;
+        results[idx].color = res.color;
+        results[idx].point = res.point;
+        results[idx].escaped = res.escaped;
+        results[idx].depth = res.depth;
+    }
+
     let shade = ifs_color(res, px);
     let t = fract(shade.t);
     let height = select(shade.t, t, params.shade_flags == 1u);
@@ -4528,6 +4563,169 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }
 "#;
+
+const IFS_RECOLOR_TEMPLATE: &str = r#"
+// Mode-C recolor pass: a colouring and a palette, over cached walk
+// records. See assemble_ifs_recolor.
+//
+// Mode C's walk is by far the most expensive thing the escape engine
+// does, and none of it depends on the colouring or the palette. This
+// is what makes a palette rotation one cheap dispatch instead of a
+// full re-walk -- and, because the walk is banded across frames, what
+// stops a palette edit part-way through a pass from striping the
+// picture.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
+
+// Bound because the layout is shared with mode A's recolor pass. Mode
+// C does not apply the contrast fit: its walk pass does not either,
+// and the two have to agree or the cache would not reproduce the
+// picture it replaces.
+struct ContrastParams {
+    plane: vec3<f32>,
+    lo: f32,
+    hi: f32,
+    strength: f32,
+    turns: f32,
+    enabled: u32,
+}
+@group(0) @binding(6) var<uniform> contrast: ContrastParams;
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+// The whole-IFS constants, from the same `fdata` block the walk reads.
+// The trap colouring measures against the ball's centre, so this has
+// to be here too.
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].z;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[0].w, 0.0));
+}
+
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+struct IfsResult {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+fn ifs_halo(res: IfsResult, px: f32, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / (reach * px));
+}
+
+//__IFS_COLORING__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+    let r = results[gid.y * params.width + gid.x];
+    var res: IfsResult;
+    res.distance = r.distance;
+    res.level = r.level;
+    res.address = r.address;
+    res.color = r.color;
+    res.point = r.point;
+    res.escaped = r.escaped;
+    res.depth = r.depth;
+
+    let px = params.span.y / f32(max(params.height, 1u));
+    let shade = ifs_color(res, px);
+    let t = fract(shade.t);
+    let height = select(shade.t, t, params.shade_flags == 1u);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
+    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}"#;
+
+/// Assemble the mode-C recolor pass for one coloring.
+///
+/// The colouring is the SAME def the walk template splices, and it
+/// sees the same `IfsResult` -- so a recolor reproduces the walk
+/// pass's picture rather than approximating it. That is what makes
+/// the cache safe to prefer, and it is asserted by test.
+pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
+    let mut out = Vec::new();
+    for line in IFS_RECOLOR_TEMPLATE.lines() {
+        match line.trim() {
+            "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("
+")
+}
 
 /// Assemble a mode-C distance shader: splice one distance function
 /// and one coloring into [`IFS_TEMPLATE`]. Same marker discipline as

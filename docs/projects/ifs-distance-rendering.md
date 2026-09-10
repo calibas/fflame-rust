@@ -699,9 +699,31 @@ and a test pins it.
   the escape engine's big-number types, K growing with `zoom_log2`.
   Gate: a Sierpiński zoom to 2⁻²⁰⁰ renders the same triangle, and the
   address colouring changes digit by digit down the zoom.
-- The beam (D4, B > 1) and its cost measured; the address colouring
-  at a chosen depth and as a mixed fraction; contour, glow and trap
-  colourings with their parameters; edge antialiasing from `d`.
+- ~~The beam (D4, B > 1) and its cost measured~~ — **moved into phase
+  1**, because the dragon needed it to render at all (§5, phase 1).
+- **A mode-C recolor cache — built 2026-09-10, and taken first.**
+  The address colouring at a chosen depth, contour, glow and trap
+  colourings with their parameters: all of that is unusable to TUNE
+  while every slider drag costs a full re-walk, and after phase 1b a
+  palette edit restarts the banded pass outright. So the cache came
+  before the colourings it exists to make adjustable.
+
+  The walk writes its four quantities into the 32-byte-per-pixel
+  records buffer the escape engine already allocates — the same
+  stride and the same binding mode A's `IterResult` uses, so the two
+  share one buffer — and a mode-C recolor template runs the same
+  colouring def over them. Measured on the dragon at 1080p, against a
+  mode-A control to remove the harness floor: **433 ms of walk becomes
+  nothing measurable.** Gated by rendering each colouring two ways —
+  through the cache, and from scratch on a renderer that has never
+  seen the view — and requiring the two images to be byte-identical,
+  plus a check that the cached path was actually taken, because equal
+  images prove nothing if both sides walked. A second test asserts the
+  two templates declare the same record, since a field added to one
+  alone shifts every field after it into plausible wrong colours with
+  no validation error to point at.
+- The address colouring as a mixed fraction; the remaining colouring
+  parameters; edge antialiasing from `d` beyond what phase 1 has.
 - **Gates:** three overlapping flames rendered greedy against beam,
   the difference measured and inspected; the D9 comparison — does the
   level colouring on an overlapping flame hold up against what the
