@@ -454,6 +454,11 @@ pub struct SimRenderer {
     /// pipeline or the grid changes and the old measurement no longer
     /// describes the kernel.
     steps_per_submit: u32,
+    /// Measured cost of one step, in milliseconds, from the same
+    /// timing that sizes `steps_per_submit`. Zero until a batch has
+    /// run. Used by the interactive driver to size a per-display-frame
+    /// budget so catching up to a timeline target never blocks the UI.
+    ms_per_step: f64,
     /// Set when the field has not been seeded yet, or the config
     /// changed in a way that invalidates it.
     needs_seed: bool,
@@ -584,6 +589,7 @@ impl SimRenderer {
             layer_map: None,
             color_layers_buffer,
             steps_per_submit: FIRST_SUBMIT,
+            ms_per_step: 0.0,
             needs_seed: true,
             seeded_as: None,
         }
@@ -1071,6 +1077,27 @@ impl SimRenderer {
         } else {
             Some(cfg.steps - self.step_index)
         }
+    }
+
+    /// How many steps fit in `budget_ms`, from the measured cost of a
+    /// step.
+    ///
+    /// The interactive driver's answer to "the timeline wants 2,000
+    /// steps and this display frame has 8 ms": take what fits, return,
+    /// and come back next frame. Blocking until the target is reached
+    /// would freeze the UI for as long as the jump takes -- and a
+    /// scrub can ask for one on every slider event.
+    ///
+    /// Before any batch has been timed this returns [`FIRST_SUBMIT`],
+    /// the same blind, conservative first step count `run_steps` uses:
+    /// enough to get a measurement, small enough that an expensive
+    /// model's first frame is not a stall. Never zero, so a caller
+    /// looping on it cannot spin.
+    pub fn steps_in(&self, budget_ms: f64) -> u32 {
+        if self.ms_per_step <= 0.0 {
+            return FIRST_SUBMIT;
+        }
+        ((budget_ms / self.ms_per_step).floor()).clamp(1.0, u32::MAX as f64) as u32
     }
 
     pub fn grid_size(&self) -> (u32, u32) {
@@ -2496,6 +2523,16 @@ impl SimRenderer {
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             let ms = started.elapsed().as_secs_f64() * 1e3;
             let per_step = ms / batch as f64;
+            // Kept for the interactive budget. Smoothed, because a
+            // single submission can be timed against unrelated work
+            // still in flight; an exponential average settles on the
+            // real cost within a few batches without a spike moving it
+            // far.
+            self.ms_per_step = if self.ms_per_step > 0.0 {
+                self.ms_per_step * 0.7 + per_step * 0.3
+            } else {
+                per_step
+            };
             self.steps_per_submit = if per_step > 0.0 {
                 (SUBMIT_BUDGET_MS / per_step).floor().clamp(1.0, MAX_STEPS_PER_SUBMIT as f64) as u32
             } else {

@@ -1315,6 +1315,19 @@ impl App {
             // This ensures tone-mapping-only changes don't incorrectly enable overwrite mode
             self.flame = self.config_manager.active_config().flame.clone();
 
+            // Hand the scrubbed step count to the grid, or hold it.
+            // A drag in progress is CONTINUOUS, so dragging LEFT holds
+            // the picture instead of restarting the run on every
+            // slider event; the release below applies it once. A frame
+            // step, or a click that jumps the playhead, arrives with
+            // `seek_drag_stopped` already set and so applies straight
+            // away.
+            self.commit_timeline_sim_target(if ui_response.animation_seek_drag_stopped {
+                crate::sim::Motion::Discrete
+            } else {
+                crate::sim::Motion::Continuous
+            });
+
             // Pause audio during scrubbing to avoid scratching artifacts (desktop)
             // and AudioBufferSourceNode recreation storm (WASM)
             if self.animation_controller.sync_audio && self.audio_player.has_audio() {
@@ -1325,6 +1338,10 @@ impl App {
         // Only reset accumulation when drag stops or on discrete actions (frame step, click to seek)
         // This provides smooth preview during scrubber drag, then clean rebuild when released
         if ui_response.animation_seek_drag_stopped {
+            // The drag ended on a time: apply whatever was held.
+            // Doing it here as well as above covers the release event
+            // that carries no `seek_changed` of its own.
+            self.commit_timeline_sim_target(crate::sim::Motion::Discrete);
             self.config_manager.request_reset();
 
             // Seek audio to final position and resume playback after scrub finishes

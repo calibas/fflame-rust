@@ -382,6 +382,11 @@ pub struct PanelContext<'a> {
     /// Steps completed and the grid in use, for the panel's readout.
     pub sim_step_index: u32,
     pub sim_grid: (u32, u32),
+    /// The step count the timeline has committed the grid to, if it is
+    /// driving, and whether a backward target is being held. Both are
+    /// readout/greying only -- the panel never writes them.
+    pub sim_timeline_target: Option<u32>,
+    pub sim_timeline_holding: bool,
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
@@ -917,6 +922,8 @@ impl<'a> PanelViewer<'a> {
                         reseed: self.context.sim_reseed,
                         step_index: self.context.sim_step_index,
                         grid: self.context.sim_grid,
+                        timeline_target: self.context.sim_timeline_target,
+                        timeline_holding: self.context.sim_timeline_holding,
                     },
                 );
             }

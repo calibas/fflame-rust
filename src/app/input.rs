@@ -222,7 +222,18 @@ impl App {
                     // local every frame -- a write into the response
                     // would be overwritten by that stale value before it
                     // took effect.
-                    self.sim_running = !self.sim_running;
+                    // ...unless the TIMELINE owns the step count, in
+                    // which case the transport is inert (the panel
+                    // greys it). Toggling a flag that does nothing now
+                    // and then takes effect the moment playback stops
+                    // would start the run by surprise.
+                    #[cfg(feature = "engine-sim")]
+                    let driven = self.sim_timeline_target.is_some();
+                    #[cfg(not(feature = "engine-sim"))]
+                    let driven = false;
+                    if !driven {
+                        self.sim_running = !self.sim_running;
+                    }
                 } else {
                     // Toggle animation playback (video-editor convention).
                     //
