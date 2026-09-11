@@ -794,22 +794,47 @@ and a test pins it.
   transform left the shader too: the seeding walk applies it, so by the
   time the shader starts there is nothing to send.
 
-  **What limits it now is the f64 centre, not the walk.** Seeding is
-  f64, so the centre is quantised to 5.5e-17 — about 1% of the view by
-  2⁴⁹. `FixedPoint::from_decimal` and `limbs_for_view` are what raise
-  it, and the config already stores the centre as an exact decimal
-  string for exactly that. The same limit caps the *fixture*: a
-  Sierpiński point forty-five maps deep is the deepest an f64 can
-  express, and a shallower one runs out from under the view.
+  **The centre went arbitrary-precision the same day, and
+  `DEEP_ZOOM_LIMIT` is 200.** The seeding walk is generic over its
+  position type (`SeedPoint`): only the POSITION needs more than f64,
+  and only until the handover. The maps' coefficients stay f64, the
+  basis and σ product stay f64 — they run like 2^±zoom, which an f64
+  exponent holds past 2¹⁰²³ — and the distance to the ball is O(1), so
+  f64 answers it however precise the point is. What needs precision is
+  the centre, and the reason is cancellation: after k levels the walk
+  has computed `A_k·C + b_k` with `A_k ~ 2ᵏ` and an O(1) answer, so k
+  bits of C are spent getting there. The `BigFloat` impl lives in the
+  escape module because `scene` compiles without the escape engine.
 
-  Two traps this measurement set, both caught only by looking at what
-  the fixture was:
+  **§2.5's gate is met**: a Sierpiński zoom to 2⁻²⁰⁰ renders the same
+  triangle, at 100% class agreement with the high-precision reference,
+  and the same at every zoom below it. The ceiling is now the depth
+  parameter (256) rather than precision.
 
-  - the first centre was **0.25**, which agrees at every zoom because
-    it is exactly representable — that version reported no wall at all;
-  - the first deep-zoom gate centred on the **origin**, same thing. It
-    still passes to 2¹⁶⁰ and is still worth having, but what it proves
-    is the walk, not the precision of the centre.
+  **Three fixtures in a row hid the wall, and each was found only by
+  asking what the fixture was rather than reading the result.**
+
+  - The first centre was **0.25** — f32-exact, so it agreed at every
+    zoom and reported no wall at all.
+  - The first deep gate centred on the **origin** — f64-exact, same
+    thing. It still passes to 2¹⁶⁰ and is worth keeping, but what it
+    proves is the walk, not the centre.
+  - The control written to prove the second one honest asked whether an
+    **f64 centre's picture is self-similar**, and it IS: every f64 is a
+    dyadic rational, and a dyadic centre's inverse orbit runs out of
+    fractional bits and lands exactly on a fixed point. Self-similar
+    for a completely degenerate reason.
+
+  So the gate that actually establishes the claim asks the question
+  directly, at 2¹²⁰: **more limbs must not change the picture** (it is
+  converged — 22 limbs and 44 limbs agree exactly) and **f64 must
+  change it** (the precision is load-bearing — f64 differs completely).
+  A gate can pass for the wrong reason, and here three did.
+
+  The working fixture is **(5/14, 1/7)**: the fixed point of
+  `m₀∘m₁∘m₂`, so the view keeps finding structure however deep it
+  goes, and a decimal that repeats forever, so nothing about it is
+  exactly representable.
 - ~~The beam (D4, B > 1) and its cost measured~~ — **moved into phase
   1**, because the dragon needed it to render at all (§5, phase 1).
 - **A mode-C recolor cache — built 2026-09-10, and taken first.**
