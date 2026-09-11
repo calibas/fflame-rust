@@ -5158,18 +5158,35 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32)
     }
     let t_max = -b + sqrt(disc);
 
-    // Two different epsilons, and the difference is the whole
-    // behaviour of this function.
+    // Two different epsilons, and the RELATIONSHIP between them is the
+    // whole behaviour of this function.
     //
-    // The BIAS is a pixel: the ray has to clear the surface it starts
-    // on, and a pixel is how precisely that surface's position is
-    // known. The HIT test is a fraction of the attractor instead --
-    // testing at a pixel's width would call the ray blocked as soon
-    // as it grazed anything within a pixel, which under light coming
-    // in at an angle is every point on a textured face. Measured, that
-    // erased the sponge's sub-squares entirely: not a shadow but a
-    // flat repaint of the face.
-    let eps = max(ifs_radius() * 1e-4, 1e-30);
+    // The BIAS is a few pixels: the ray has to clear the surface it
+    // starts on, and a pixel is how precisely that surface's position
+    // is known. The HIT test is a fraction of the attractor -- testing
+    // at a pixel's width would call the ray blocked as soon as it
+    // grazed anything within a pixel, which under light arriving at an
+    // angle is every point on a textured face. Measured, that erased
+    // the sponge's sub-squares: not a shadow but a flat repaint.
+    //
+    // But the two scale differently, and where they CROSS the function
+    // fails completely. The bias shrinks with the pixel and the hit
+    // test does not, so a surface close enough to the eye gets a bias
+    // smaller than the threshold -- and then every ray is blocked on
+    // its first sample, by the surface it started on. The picture goes
+    // uniformly to its ambient floor, spreading out from the centre of
+    // the frame as the eye closes in, and it arrives sooner at higher
+    // supersampling because that shrinks the pixel too. Reported from
+    // a Menger sponge at a zoom of 2^1.67, which is where the eye
+    // reaches the bounding sphere and the nearest surface is a
+    // hundredth of a unit away.
+    //
+    // So the threshold is capped at a tenth of the bias. Where the
+    // pixel is large -- which is everywhere the earlier measurement
+    // was made -- the geometric value is the smaller of the two and
+    // nothing changes; where it is not, the hit test follows the bias
+    // down and the ray can always clear its own surface.
+    let eps = max(min(ifs_radius() * 1e-4, bias * 0.1), 1e-30);
     var t = bias;
     var shade = 1.0;
     var i = 0u;

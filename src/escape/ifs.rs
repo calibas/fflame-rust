@@ -2592,6 +2592,82 @@ mod tests {
         }
     }
 
+    /// A view whose CENTRE is off the attractor must still draw the
+    /// attractor.
+    ///
+    /// Reported as "sections disappear when they are mostly
+    /// off-screen", which is the same thing from the outside: pan
+    /// until the set is at the edge of the frame and the middle of the
+    /// view is empty space.
+    ///
+    /// It was the handover. A seed carries the CENTRE's running bound
+    /// and its escape, and the continuation starts every pixel from
+    /// them -- so once the centre left the bounding ball, its positive
+    /// bound was inherited by pixels INSIDE it, as a running maximum
+    /// nothing later could lower. A point sitting exactly on the
+    /// attractor then reported the centre's distance to the ball:
+    /// measured at 7.333 against a true zero, which renders as empty
+    /// space.
+    ///
+    /// The probe is a point ON the set, kept near the edge of the
+    /// frame but inside it, because outside the frame is outside what
+    /// the seeding promises. The comparison is the unseeded walk,
+    /// which has no handover and so cannot have this fault.
+    #[test]
+    fn a_view_centred_off_the_set_still_finds_it() {
+        let guard = global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&gpu_tests::sierpinski_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let on_set = ifs.maps[0].forward.fixed_point().expect("contractive");
+        let exact = crate::scene::ifs_estimate::estimate(&ifs, on_set, 40, gpu_tests::BEAM)
+            .distance;
+        assert!(exact < 1e-9, "the probe is not on the set: {exact}");
+
+        // The probe sits at 0.4 of the way to the frame's edge, so the
+        // view centre is 0.4 * span from it. At the wide end that puts
+        // the centre well outside the ball -- which is the case that
+        // failed -- and at the narrow end just beside the set.
+        let mut worst: (f64, f64) = (0.0, 0.0);
+        for &span in &[8.0f64, 4.0, 2.0, 1.0, 0.5, 0.25, 0.0625] {
+            let centre = [on_set[0] + 0.4 * span, on_set[1]];
+            let basis = view_basis(span, span, 0.0);
+            let px = span / 512.0;
+            let seeds = crate::scene::ifs_estimate::seed_beam(
+                &ifs,
+                centre,
+                basis,
+                px,
+                64,
+                gpu_tests::BEAM,
+            );
+            let uv = [-0.4, 0.0];
+            // The seeded walk reports in PIXELS, which is the only
+            // form that survives a deep zoom -- back to world units to
+            // compare.
+            let seeded = crate::scene::ifs_estimate::estimate_seeded(
+                &ifs,
+                &seeds,
+                uv,
+                40,
+                gpu_tests::BEAM,
+            )
+            .distance
+                * px;
+            if seeded > worst.0 {
+                worst = (seeded, span);
+            }
+        }
+        assert!(
+            worst.0 < 1e-6,
+            "a point ON the set reads {:.4} away at span {:.3} -- the seed is handing \
+             every pixel the centre's own distance, and the set renders as empty space",
+            worst.0,
+            worst.1,
+        );
+    }
+
     /// A deep zoom must hold a centre f64 cannot express.
     ///
     /// The earlier gates all centred somewhere exactly representable —
@@ -5055,6 +5131,82 @@ mod gpu_tests {
             ratio(&red),
             ratio(&white)
         );
+    }
+
+    /// A shadowed solid must not collapse as the eye closes in, and
+    /// the zoom it survives must not depend on the RESOLUTION.
+    ///
+    /// Reported from a Menger sponge: a hair of extra zoom and a whole
+    /// section went to its ambient floor, and it arrived sooner at
+    /// higher supersampling. That pairing is the diagnosis. The shadow
+    /// ray's start offset is a few pixels and its hit threshold was a
+    /// fixed fraction of the attractor, so the two crossed — and past
+    /// the crossing every ray reported itself blocked by the surface it
+    /// started on. Shrinking the pixel, by zooming or by sampling
+    /// harder, brought the crossing closer.
+    ///
+    /// So this renders the same approach at two pixel sizes and asks
+    /// for two things a collapse cannot give: that the picture keeps
+    /// its variation, and that the two sizes agree about how bright it
+    /// is. Either alone would be passed by a fault that darkened both
+    /// equally, or by one that only ever fired at one resolution.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_shadowed_solid_survives_the_eye_reaching_its_surface() {
+        let (device, queue) = device();
+        let shot = |zoom: f64, n: u32| -> Vec<u8> {
+            let mut c = config_for(menger_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.cam_pitch = 0.611;
+            c.escape.cam_yaw = 0.785;
+            c.escape.zoom_log2 = zoom;
+            c.escape.formula_params.insert("shadow".to_string(), 1.0);
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.ambient = 0.05;
+            c.solid_shading.lights[0].enabled = true;
+            let job = crate::renderer::RenderJob::new(&c, n, n);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let stats = |px: &[u8]| {
+            let v: Vec<f64> = px
+                .chunks(4)
+                .map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64)
+                .collect();
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            let var = v.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / v.len() as f64;
+            (mean, var.sqrt())
+        };
+
+        // Up to the zoom where the eye reaches the bounding sphere --
+        // `FRAME_DISTANCE` is 3.2, so that is log2(3.2) = 1.68. Past
+        // it the camera is inside the solid and a flat frame is the
+        // honest answer, which is why the sweep stops there.
+        for step in 0..=8 {
+            let zoom = 1.60 + 0.01 * step as f64;
+            let (m_small, s_small) = stats(&shot(zoom, 128));
+            let (m_large, s_large) = stats(&shot(zoom, 320));
+            assert!(
+                s_large > 40.0 && s_small > 40.0,
+                "at zoom {zoom:.2} the picture flattened: spread {s_small:.1} at 128px \
+                 and {s_large:.1} at 320px -- a shadow that blocks everything"
+            );
+            let ratio = m_large / m_small.max(1.0);
+            assert!(
+                (0.85..=1.18).contains(&ratio),
+                "at zoom {zoom:.2} the two resolutions disagree about brightness by \
+                 {ratio:.2}x ({m_small:.0} at 128px against {m_large:.0} at 320px) -- \
+                 the shadow is keyed to the pixel rather than to the geometry"
+            );
+        }
     }
 
     /// What the rig costs, per light.
