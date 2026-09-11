@@ -2784,6 +2784,16 @@ impl App {
                     if escape.set_ifs(packed) {
                         self.escape_dirty = true;
                     }
+                    if escape.set_solid_lighting(
+                        &final_config.solid_shading,
+                        (
+                            final_config.fog_strength,
+                            final_config.fog_start,
+                            final_config.background_color,
+                        ),
+                    ) {
+                        self.escape_dirty = true;
+                    }
                 }
                 if self.escape_dirty {
                     let settled = escape.render(

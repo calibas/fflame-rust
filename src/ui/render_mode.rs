@@ -411,7 +411,8 @@ mod tests {
         for m in RenderMode::ALL {
             if let Some((_, panel)) = layout_for(*m) {
                 assert!(
-                    super::super::visibility::panel(panel, *m).is_show(),
+                    super::super::visibility::panel(panel, *m, super::super::visibility::Solid::No)
+                        .is_show(),
                     "{m:?} opens a panel it also greys"
                 );
             }

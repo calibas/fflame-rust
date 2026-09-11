@@ -464,36 +464,15 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
             choices: &[],
         },
         EscapeParamDef {
-            name: "sun_azimuth",
-            display_name: "Light Azimuth",
-            default: 315.0,
-            min: 0.0,
-            max: 360.0,
-            tooltip: "Where the light comes from, degrees around the vertical axis. \
-                      The cartographer's convention, which the hillshade colouring \
-                      also uses: 315 is over your left shoulder.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "sun_elevation",
-            display_name: "Light Elevation",
-            default: 40.0,
-            min: 2.0,
-            max: 90.0,
-            tooltip: "How high the light sits, degrees above the horizon. Low light \
-                      lengthens the shadows and shows the relief; overhead flattens \
-                      it.",
-            choices: &[],
-        },
-        EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
             default: 0.7,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a shadowed surface goes. 0 skips the shadow march \
-                      entirely, and that march is what shadows cost -- a second walk \
-                      of the distance function per lit pixel.",
+                      entirely, and that march is what shadows cost -- one more walk \
+                      of the distance function per LIGHT per lit pixel, so the price \
+                      is set by how many lights you switch on.",
             choices: &[],
         },
         EscapeParamDef {
@@ -1538,9 +1517,11 @@ pub fn pack_globals3(
     cam: &SolidCamera,
     link_levels: usize,
     beam: usize,
+    shading: &crate::config::SolidShadingSettings,
+    fog: (f32, f32, [f32; 3]),
     out: &mut [[f32; 4]],
 ) {
-    if out.len() < 8 {
+    if out.len() < 18 {
         return;
     }
     out[0] = [
@@ -1592,6 +1573,95 @@ pub fn pack_globals3(
         0.0,
         0.0,
     ];
+    pack_rig3(cam, shading, fog, out);
+}
+
+/// The lighting rig, from the Solid Rendering panel's own settings.
+///
+/// The panel is the one place lighting is described in this app, and a
+/// solid IFS has no business inventing a second vocabulary for it — so
+/// mode D reads `SolidShadingSettings` rather than growing its own
+/// light controls. What it does NOT do is route its pixels through the
+/// shade pass (D7 proposed that): the pass's advantage over a marcher
+/// is entirely this rig, which is forty lines, while its geometry —
+/// screen-space normals, eight-tap SSAO, splat-resolution shadow maps —
+/// is the half a marcher already does better and exactly. Sending the
+/// pixels there would cost four full-image buffers and a depth encoding
+/// to arrive at the same picture, and a single occlusion channel cannot
+/// express a shadow PER LIGHT, which a marcher gets by tracing one.
+///
+/// Lights are stored in CAMERA space, which is what the splat pipeline
+/// shades in; the marcher works in world space, so they are rotated
+/// here, once, rather than per pixel.
+fn pack_rig3(
+    cam: &SolidCamera,
+    shading: &crate::config::SolidShadingSettings,
+    fog: (f32, f32, [f32; 3]),
+    out: &mut [[f32; 4]],
+) {
+    // An untouched panel says `shading_strength = 0`, which for a FLAME
+    // means "classic emissive, no lighting" — a meaningful picture. For
+    // a solid it is a flat silhouette, so UNTOUCHED means a default key
+    // light rather than no light.
+    //
+    // Untouched is the whole struct being default, not
+    // `shading_strength == 0`. The difference matters: a user who sets
+    // the strength to zero deliberately is asking for the unlit
+    // silhouette, and a rule keyed on the strength alone would take
+    // that away from them — there would be no way to ask for it.
+    let any = !crate::config::SolidShadingSettings::is_default(shading);
+    let (strength, ambient, diffuse, specular, shininess, ssao) = if any {
+        (
+            shading.shading_strength,
+            shading.ambient,
+            shading.diffuse,
+            shading.specular,
+            shading.shininess,
+            shading.ssao_strength,
+        )
+    } else {
+        (1.0, 0.12, 0.88, 0.0, 32.0, 1.0)
+    };
+    out[8] = [strength, ambient, diffuse, specular];
+    out[9] = [shininess, ssao, fog.0, fog.1];
+    out[10] = [fog.2[0], fog.2[1], fog.2[2], 0.0];
+
+    let mut n = 0usize;
+    for l in shading.lights.iter() {
+        if any && (!l.enabled || l.intensity <= 0.0) {
+            continue;
+        }
+        let (az, el) = if any {
+            (l.azimuth.to_radians() as f64, l.elevation.to_radians() as f64)
+        } else {
+            // The panel's own light-0 default, so "untouched" and
+            // "light 0 as it ships" are the same picture.
+            (35f32.to_radians() as f64, 40f32.to_radians() as f64)
+        };
+        // Camera space: azimuth 0, elevation 0 is a headlight, azimuth
+        // swings about the vertical and elevation tilts up. Rotated to
+        // world through the camera's own basis -- +z in camera space
+        // points BACK at the eye, which is -forward.
+        let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+        let dir = [
+            cam.right[0] * c[0] + cam.up[0] * c[1] - cam.forward[0] * c[2],
+            cam.right[1] * c[0] + cam.up[1] * c[1] - cam.forward[1] * c[2],
+            cam.right[2] * c[0] + cam.up[2] * c[1] - cam.forward[2] * c[2],
+        ];
+        let dir = normalize3(dir);
+        let (colour, intensity) = if any {
+            (l.color, l.intensity.max(0.0))
+        } else {
+            ([1.0, 1.0, 1.0], 1.0)
+        };
+        out[11 + n * 2] = [dir[0] as f32, dir[1] as f32, dir[2] as f32, intensity];
+        out[12 + n * 2] = [colour[0], colour[1], colour[2], 0.0];
+        n += 1;
+        if n == 4 || !any {
+            break;
+        }
+    }
+    out[7][2] = n as f32;
 }
 
 fn normalize3(v: [f64; 3]) -> [f64; 3] {
@@ -1940,6 +2010,39 @@ mod tests {
             // set, and on a surface every visible point is ON it — so
             // it would dim the whole solid uniformly.
             c.escape.coloring_params.insert("reach".to_string(), 0.0);
+
+            // A key and a fill, from the Solid Rendering panel's own
+            // settings -- so a preset arrives lit the way the panel
+            // would describe it, and the panel is live the moment it
+            // is opened rather than starting from nothing.
+            //
+            // White, and no specular, on purpose: the cached recolour
+            // carries the lighting as a single scalar, which is the
+            // whole answer exactly when the lighting IS a multiplier.
+            // A coloured light is three multipliers and a specular is
+            // a term added rather than a scale, so either would send a
+            // palette drag back through the walk -- about 590 ms a
+            // frame at 1080p against 20. Both are one click away for
+            // a still.
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.ambient = 0.2;
+            c.solid_shading.diffuse = 0.95;
+            c.solid_shading.specular = 0.0;
+            c.solid_shading.ssao_strength = 1.0;
+            c.solid_shading.lights[0] = crate::config::SolidLight {
+                enabled: true,
+                azimuth: 35.0,
+                elevation: 35.0,
+                intensity: 1.0,
+                color: [1.0, 1.0, 1.0],
+            };
+            c.solid_shading.lights[1] = crate::config::SolidLight {
+                enabled: true,
+                azimuth: -95.0,
+                elevation: 10.0,
+                intensity: 0.35,
+                color: [1.0, 1.0, 1.0],
+            };
 
             c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
             c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
@@ -4636,6 +4739,18 @@ mod gpu_tests {
             c.escape.coloring_params.insert("bands".to_string(), 0.0);
             c.escape.coloring_params.insert("edge".to_string(), 1.0);
             c.escape.formula_params.insert("levels".to_string(), levels as f32);
+            // Lighting OFF, as flat ambient. This test asks where the
+            // SURFACE is, and it reads that off "is the pixel lit" --
+            // so a surface turned away from the key light and sitting
+            // in a crevice would be counted as absent, which is a
+            // statement about the rig rather than about the geometry.
+            // (Measured: it read 68% agreement at 2^16, where the
+            // geometry is exact.)
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.ambient = 1.0;
+            c.solid_shading.diffuse = 0.0;
+            c.solid_shading.specular = 0.0;
+            c.solid_shading.ssao_strength = 0.0;
             c.escape.cam_target_x = super::tests::decimal(6, 7, 60);
             c.escape.cam_target_y = super::tests::decimal(5, 7, 60);
             c.escape.cam_target_z = super::tests::decimal(3, 7, 60);
@@ -4801,6 +4916,175 @@ mod gpu_tests {
              up to 2^{GATED_TO} -- if this DROPPED, the seed chain regressed; if you \
              raised the ceiling, raise GATED_TO and say so"
         );
+    }
+
+    /// A solid walk lights itself from the Solid Rendering panel.
+    ///
+    /// Three separate claims, because three separate things could be
+    /// wired wrong and each fails silently: the lights have to REACH
+    /// the shader, they have to be in the right space, and a change to
+    /// them has to restart the render rather than sit behind a cache.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_panels_lights_steer_a_solid_walk() {
+        let (device, queue) = device();
+        let shot = |f: &dyn Fn(&mut crate::config::FractalConfig)| -> Vec<u8> {
+            let mut c = config_for(tetrahedron_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 18.0);
+            c.gamma = 1.0;
+            c.exposure = 0.6;
+            f(&mut c);
+            let job = crate::renderer::RenderJob::new(&c, 160, 160);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+        let differing = |a: &[u8], b: &[u8]| {
+            a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| lum(x) != lum(y)).count()
+        };
+
+        // An untouched panel is the fallback rig -- one white key
+        // light -- because a solid with no light is a silhouette, and
+        // "the user has set nothing" is not a request for one.
+        let untouched = shot(&|_| {});
+        let surface = untouched.chunks(4).filter(|p| lum(p) > 24).count();
+        assert!(surface > 160 * 160 / 20, "nothing rendered: {surface}");
+
+        // Moving the key light moves the shading.
+        let moved = shot(&|c| {
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.specular = 0.0;
+            c.solid_shading.lights[0].enabled = true;
+            c.solid_shading.lights[0].azimuth = -70.0;
+            c.solid_shading.lights[0].elevation = 5.0;
+        });
+        assert!(
+            differing(&untouched, &moved) * 5 > surface,
+            "moving the key light changed {} of {surface} lit pixels -- the panel is \
+             not reaching the walk",
+            differing(&untouched, &moved)
+        );
+
+        // A SECOND light can only add light, never remove it: this is
+        // the assertion that catches a light landing in the wrong slot
+        // or the wrong space, which "the picture changed" would not.
+        let two = shot(&|c| {
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.specular = 0.0;
+            c.solid_shading.lights[0].enabled = true;
+            c.solid_shading.lights[0].azimuth = -70.0;
+            c.solid_shading.lights[0].elevation = 5.0;
+            c.solid_shading.lights[1].enabled = true;
+            c.solid_shading.lights[1].azimuth = 120.0;
+            c.solid_shading.lights[1].elevation = 30.0;
+            c.solid_shading.lights[1].intensity = 0.8;
+        });
+        let mut darker = 0usize;
+        let mut brighter = 0usize;
+        for (a, b) in moved.chunks(4).zip(two.chunks(4)) {
+            if lum(a) <= 24 {
+                continue;
+            }
+            if lum(b) < lum(a) - 3 {
+                darker += 1;
+            } else if lum(b) > lum(a) + 3 {
+                brighter += 1;
+            }
+        }
+        assert_eq!(darker, 0, "{darker} pixels got DARKER when a light was added");
+        assert!(
+            brighter * 10 > surface,
+            "adding a second light brightened only {brighter} of {surface} pixels"
+        );
+
+        // A coloured light has to reach the picture as a COLOUR.
+        let red = shot(&|c| {
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.specular = 0.0;
+            c.solid_shading.lights[0].enabled = true;
+            c.solid_shading.lights[0].color = [1.0, 0.2, 0.2];
+        });
+        let white = shot(&|c| {
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.specular = 0.0;
+            c.solid_shading.lights[0].enabled = true;
+        });
+        let ratio = |px: &[u8]| {
+            let (mut r, mut b) = (0u64, 0u64);
+            for p in px.chunks(4) {
+                if lum(p) > 24 {
+                    r += p[0] as u64;
+                    b += p[2] as u64;
+                }
+            }
+            r as f64 / b.max(1) as f64
+        };
+        assert!(
+            ratio(&red) > ratio(&white) * 1.2,
+            "a red light did not redden the picture: {:.3} against {:.3}",
+            ratio(&red),
+            ratio(&white)
+        );
+    }
+
+    /// What the rig costs, per light.
+    ///
+    /// The whole price of this design is one shadow march per LIGHT
+    /// per lit pixel, so the number that matters is how the render
+    /// scales with the count -- and whether turning shadows off buys
+    /// it all back, which is what tells a user which knob to reach
+    /// for.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn what_a_solid_render_pays_per_light() {
+        let (device, queue) = device();
+        for (name, flame) in [("tetrahedron", tetrahedron_flame()), ("menger", menger_flame())] {
+            for shadow in [1.0f32, 0.0] {
+                for lights in 1..=4usize {
+                    let mut c = config_for(flame.clone());
+                    c.escape.formula = "ifs_flame_3d".to_string();
+                    c.escape.coloring = "ifs_address".to_string();
+                    c.escape.cam_yaw = 0.9;
+                    c.escape.coloring_params.insert("reach".to_string(), 0.0);
+                    c.escape.formula_params.insert("shadow".to_string(), shadow);
+                    c.solid_shading.shading_strength = 1.0;
+                    for i in 0..lights {
+                        c.solid_shading.lights[i].enabled = true;
+                        c.solid_shading.lights[i].azimuth = 35.0 + 80.0 * i as f32;
+                        c.solid_shading.lights[i].elevation = 40.0 - 10.0 * i as f32;
+                        c.solid_shading.lights[i].intensity = 1.0 / lights as f32;
+                    }
+                    let once = || {
+                        let job = crate::renderer::RenderJob::new(&c, 256, 256);
+                        pollster::block_on(crate::renderer::render(
+                            &device,
+                            &queue,
+                            job,
+                            &mut crate::renderer::NoProgress,
+                        ))
+                        .expect("render")
+                        .rgba_data
+                    };
+                    let _ = once();
+                    let t0 = web_time::Instant::now();
+                    let _ = once();
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    println!(
+                        "  {name:<12} shadow {shadow:.0}  {lights} light(s): {ms:>8.1} ms"
+                    );
+                }
+            }
+        }
     }
 
     /// What the second march costs.

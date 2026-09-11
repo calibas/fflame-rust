@@ -640,6 +640,15 @@ pub struct EscapeRenderer {
     /// asks about a LINE, whose samples span the whole zoom — a pixel
     /// from the target at one end and the far side of the attractor at
     /// the other — so no one level is the handover for all of them.
+    /// The Solid Rendering panel's settings and the scene's fog,
+    /// which a SOLID mode-D walk lights itself with.
+    ///
+    /// Held here rather than read from the escape config because they
+    /// are not escape settings: they are the app's one description of
+    /// lighting, and a solid IFS has no business inventing a second
+    /// vocabulary for it. Set alongside the flame, by the same callers,
+    /// for the same reason.
+    solid_lighting: (crate::config::SolidShadingSettings, f32, f32, [f32; 3]),
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -1477,6 +1486,7 @@ impl EscapeRenderer {
             ifs_token: 0,
             ifs_seeds: None,
             ifs_seed_key: String::new(),
+            solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -2975,7 +2985,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the escape config.
         if super::ifs::get_ifs(&escape.formula).is_some() {
             return format!(
-                "ifs|{}|{:?}|{}|{}|{}|{}|{}x{}|{}|{}",
+                "ifs|{}|{:?}|{}|{}|{}|{}|{}x{}|{}|{}|{}",
                 escape.formula,
                 escape.formula_params,
                 escape.center_re,
@@ -2986,6 +2996,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 self.height,
                 self.ifs_token,
                 camera_key(escape),
+                // A light is an input to the walk's PICTURE, and the
+                // fourth input whose absence here would have shown as
+                // bands of different lighting scrolling down the frame.
+                self.lighting_key(),
             );
         }
         let coloring = super::get_coloring(&escape.coloring);
@@ -3237,7 +3251,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             )
         }
         format!(
-            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
             escape.formula,
             escape.formula_params,
             escape.coloring,
@@ -3246,6 +3260,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             escape.zoom_log2,
             escape.rotation,
             camera_key(escape),
+            self.lighting_key(),
             escape.max_iter,
             escape.bailout,
             escape.julia,
@@ -3569,6 +3584,80 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             beam as usize,
         ));
         self.ifs_chain_key = key;
+    }
+
+    /// The lighting a solid walk shades with, and the scene's fog.
+    ///
+    /// Returns whether anything changed, so the caller can restart a
+    /// progressive render — a light is an input to the picture like any
+    /// other, and this is the FOURTH input whose absence from the keys
+    /// would have shown as bands of different lighting scrolling down
+    /// the frame (the palette, the flame and the camera came first).
+    pub fn set_solid_lighting(
+        &mut self,
+        shading: &crate::config::SolidShadingSettings,
+        fog: (f32, f32, [f32; 3]),
+    ) -> bool {
+        let next = (shading.clone(), fog.0, fog.1, fog.2);
+        if self.solid_lighting == next {
+            return false;
+        }
+        self.solid_lighting = next;
+        true
+    }
+
+    /// Whether a cached recolour of a SOLID walk would be exact.
+    ///
+    /// A record is thirty-two bytes and every one of them is spoken
+    /// for, so the lighting it carries is a single scalar: what a new
+    /// albedo would have to be multiplied by. That is the whole of the
+    /// answer exactly when the lighting IS a multiplier — no specular
+    /// (which adds a term rather than scaling one), white lights (a
+    /// coloured one is three different multipliers), and no fog (which
+    /// mixes toward a colour rather than scaling).
+    ///
+    /// Outside those, the cache is refused and a colouring change
+    /// re-walks. That is slower and it is CORRECT, which is the way
+    /// round this has to fail: the alternative is a recoloured frame
+    /// that is quietly lit differently from the one before it.
+    fn solid_recolour_is_exact(&self, escape: &EscapeConfig) -> bool {
+        let Some(def) = super::ifs::get_ifs(&escape.formula) else { return true };
+        if !def.solid {
+            return true;
+        }
+        let (sh, fog_strength, _, _) = &self.solid_lighting;
+        if *fog_strength > 0.0 {
+            return false;
+        }
+        // The fallback rig (nothing set in the panel) is a single
+        // white light with no specular, so it qualifies.
+        if !sh.active() || !sh.lights.iter().any(|l| l.enabled) {
+            return true;
+        }
+        if sh.specular > 0.0 {
+            return false;
+        }
+        sh.lights.iter().all(|l| {
+            !l.enabled
+                || (l.color[0] == l.color[1] && l.color[1] == l.color[2])
+        })
+    }
+
+    /// A cheap identity for that lighting, for the band and chunk keys.
+    fn lighting_key(&self) -> String {
+        let (s, fs, f0, bg) = &self.solid_lighting;
+        let mut k = format!(
+            "{}/{}/{}/{}/{}/{}/{fs}/{f0}/{:?}",
+            s.shading_strength, s.ambient, s.diffuse, s.specular, s.shininess,
+            s.ssao_strength, bg,
+        );
+        for l in &s.lights {
+            k.push_str(&format!(
+                "|{}:{}:{}:{}:{:?}",
+                l.enabled, l.azimuth, l.elevation, l.intensity, l.color
+            ));
+        }
+        k
     }
 
     /// Grow the chain buffer if needed and write the links.
@@ -6018,6 +6107,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         &cam,
                         links / beam.max(1),
                         beam,
+                        &self.solid_lighting.0,
+                        (
+                            self.solid_lighting.1,
+                            self.solid_lighting.2,
+                            self.solid_lighting.3,
+                        ),
                         &mut fdata,
                     );
                 }
@@ -6129,7 +6224,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // recolor cache to key. Mode D does write them: its walk is the
         // engine's most expensive pass and none of it depends on the
         // colouring.
-        let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
+        let iterate_key = if super::fields::get_field(&escape.formula).is_none()
+            && self.solid_recolour_is_exact(escape)
+        {
             Some(self.iterate_key_for(escape))
         } else {
             None

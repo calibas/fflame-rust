@@ -57,12 +57,48 @@ const LINEAR_ONLY: &str = "visibility.linear_only";
 /// Mixes between two values that are equal here.
 const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
 
+/// Whether the loaded config renders a SOLID SURFACE.
+///
+/// Not a render mode and deliberately not derivable from one (D2 in
+/// `ifs-distance-rendering.md`): escape mode is not three-dimensional,
+/// one FORMULA in it is, so gating on the mode would offer lighting
+/// over a Mandelbrot and withhold it from the thing it steers. A 3D
+/// flame is the other case, and it is the same question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Solid {
+    Yes,
+    No,
+}
+
+impl Solid {
+    /// What a config says. The flame side is the render mode; the
+    /// escape side is the formula.
+    pub fn of(config: &crate::config::FractalConfig) -> Solid {
+        let yes = match config.render_mode {
+            RenderMode::ThreeD => true,
+            RenderMode::Escape => {
+                crate::escape::ifs::formula_is_solid(&config.escape.formula)
+            }
+            RenderMode::TwoD | RenderMode::Simulation => false,
+        };
+        if yes { Solid::Yes } else { Solid::No }
+    }
+
+    fn is_yes(self) -> bool {
+        self == Solid::Yes
+    }
+}
+
 /// Is this panel meaningful in this mode?
 ///
 /// Exhaustive by construction -- there is no `_` arm, so a new panel
 /// or a new mode does not compile until someone has decided what it
 /// means. That is the point of the function.
-pub fn panel(p: PanelType, m: RenderMode) -> Vis {
+///
+/// `solid` is the one thing the mode does not settle: lighting belongs
+/// to whatever renders a surface, and in escape mode that is a
+/// property of the formula.
+pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
     use PanelType as P;
     use RenderMode as M;
     match p {
@@ -106,13 +142,24 @@ pub fn panel(p: PanelType, m: RenderMode) -> Vis {
             M::Escape | M::Simulation => Vis::Grey(FLAME_ONLY),
         },
 
-        // Occlusion and the shade pass are pseudo-3D flame features.
-        // The panel already says so itself; saying it in the menu too
-        // means you find out before opening it.
-        P::SolidLighting => match m {
-            M::ThreeD => Vis::Show,
-            M::TwoD | M::Escape | M::Simulation => Vis::Grey(THREE_D_ONLY),
-        },
+        // Lighting belongs to whatever renders a SURFACE, and two
+        // engines do: the 3D flame pipeline, and escape mode's solid
+        // distance marcher. Both read these same settings, so both
+        // offer the same panel -- a marcher lights itself rather than
+        // going through the shade pass, but the vocabulary is one.
+        P::SolidLighting => {
+            // The one rule written against `solid` alone rather than
+            // against the mode, because the mode is not what decides
+            // it -- `Solid::of` already answers for the 3D flame
+            // pipeline and for the escape marcher, and having the
+            // mode answer TOO would be two rules that can disagree.
+            let _ = m;
+            if solid.is_yes() {
+                Vis::Show
+            } else {
+                Vis::Grey(THREE_D_ONLY)
+            }
+        }
 
         // It works, but everything it produces is a flame, so using it
         // silently leaves the mode you are in.
@@ -422,6 +469,41 @@ mod tests {
     /// so this is the closest thing to one -- and `Display` panics on
     /// nothing, so a missing variant shows up as a count mismatch the
     /// moment someone adds one without updating the tests.
+    /// Lighting follows the CONFIG, not the mode (D2).
+    ///
+    /// Escape mode is not three-dimensional — one formula in it is —
+    /// so a rule written against the mode would offer the lighting
+    /// panel over a Mandelbrot, where it steers nothing, and withhold
+    /// it from the solid marcher, which reads these very settings.
+    #[test]
+    fn lighting_follows_the_formula_in_escape_mode() {
+        use crate::scene::transforms::RenderMode as M;
+
+        let solid_of = |formula: &str| {
+            let mut c = crate::config::FractalConfig::default();
+            c.render_mode = M::Escape;
+            c.escape.formula = formula.to_string();
+            Solid::of(&c)
+        };
+        assert_eq!(solid_of("ifs_flame_3d"), Solid::Yes);
+        assert_eq!(solid_of("ifs_flame"), Solid::No, "the planar walk renders no surface");
+        assert_eq!(solid_of("mandelbrot"), Solid::No);
+
+        assert!(panel(PanelType::SolidLighting, M::Escape, Solid::Yes).is_show());
+        assert!(!panel(PanelType::SolidLighting, M::Escape, Solid::No).is_show());
+        // The flame side is the same question, answered by the same flag.
+        assert!(panel(PanelType::SolidLighting, M::ThreeD, Solid::Yes).is_show());
+        // TwoD never reports Solid::Yes, so the flag alone deciding is
+        // not a licence for the 2D mode to show it -- `Solid::of` is.
+        assert_eq!(Solid::of(&crate::config::FractalConfig::default()), Solid::No);
+
+        // A 3D flame is the other thing that renders a surface, and
+        // `Solid::of` has to say so or the two answers disagree.
+        let mut flame3d = crate::config::FractalConfig::default();
+        flame3d.render_mode = M::ThreeD;
+        assert_eq!(Solid::of(&flame3d), Solid::Yes);
+    }
+
     #[test]
     fn the_test_list_covers_every_panel() {
         let mut seen: Vec<String> = ALL_PANELS.iter().map(|p| format!("{p:?}")).collect();
@@ -453,7 +535,7 @@ mod tests {
         let mut checked = 0;
         for m in RenderMode::ALL {
             for p in ALL_PANELS {
-                if let Vis::Grey(key) = panel(*p, *m) {
+                if let Vis::Grey(key) = panel(*p, *m, Solid::No) {
                     let text = t!(key);
                     assert_ne!(text.as_ref(), key, "{p:?}/{m:?}: missing locale key {key}");
                     assert!(text.len() > 10, "{key} is too terse to explain anything");
@@ -582,9 +664,12 @@ mod tests {
     #[test]
     fn the_flame_modes_offer_everything_but_solid_in_two_d() {
         for p in ALL_PANELS {
-            assert!(panel(*p, RenderMode::ThreeD).is_show(), "{p:?} missing in 3D");
+            assert!(
+                panel(*p, RenderMode::ThreeD, Solid::Yes).is_show(),
+                "{p:?} missing in 3D"
+            );
             let want = *p != PanelType::SolidLighting;
-            assert_eq!(panel(*p, RenderMode::TwoD).is_show(), want, "{p:?} in 2D");
+            assert_eq!(panel(*p, RenderMode::TwoD, Solid::No).is_show(), want, "{p:?} in 2D");
         }
     }
 
@@ -597,7 +682,7 @@ mod tests {
         let greyed = |m: RenderMode| -> Vec<String> {
             let mut v: Vec<String> = ALL_PANELS
                 .iter()
-                .filter(|p| !panel(**p, m).is_show())
+                .filter(|p| !panel(**p, m, Solid::No).is_show())
                 .map(|p| format!("{p:?}"))
                 .collect();
             v.sort();
@@ -625,12 +710,12 @@ mod tests {
     /// flame mode -- otherwise there would be no way in.
     #[test]
     fn each_engine_is_reachable_from_a_flame_mode_and_hides_the_other() {
-        assert!(panel(PanelType::Escape, RenderMode::TwoD).is_show());
-        assert!(panel(PanelType::Simulation, RenderMode::TwoD).is_show());
-        assert!(!panel(PanelType::Escape, RenderMode::Simulation).is_show());
-        assert!(!panel(PanelType::Simulation, RenderMode::Escape).is_show());
-        assert!(panel(PanelType::Escape, RenderMode::Escape).is_show());
-        assert!(panel(PanelType::Simulation, RenderMode::Simulation).is_show());
+        assert!(panel(PanelType::Escape, RenderMode::TwoD, Solid::No).is_show());
+        assert!(panel(PanelType::Simulation, RenderMode::TwoD, Solid::No).is_show());
+        assert!(!panel(PanelType::Escape, RenderMode::Simulation, Solid::No).is_show());
+        assert!(!panel(PanelType::Simulation, RenderMode::Escape, Solid::No).is_show());
+        assert!(panel(PanelType::Escape, RenderMode::Escape, Solid::No).is_show());
+        assert!(panel(PanelType::Simulation, RenderMode::Simulation, Solid::No).is_show());
     }
 
     /// The compact submenu picks from the desktop table rather than

@@ -262,7 +262,7 @@ pub fn render_menu_bar(
                     }
                     let open = workspace.panel_exists(row.panel);
                     let label = t!(row.label_key);
-                    match super::visibility::panel(row.panel, mode) {
+                    match super::visibility::panel(row.panel, mode, menu_state.solid) {
                         super::visibility::Vis::Show => {
                             if ui.selectable_label(open, label.as_ref()).clicked() {
                                 workspace.open_floating_panel(row.panel, ctx);

@@ -4922,6 +4922,24 @@ fn ifs_cap() -> f32 {
     return params.fdata[7].y;
 }
 
+// The lighting rig, from the Solid Rendering panel (see
+// `escape::ifs::pack_rig3`). Slots 8-10 are the material and the fog;
+// 11 onward are the lights, two vec4s each, already rotated into world
+// space so the marcher does not do it per pixel.
+fn ifs_shading_strength() -> f32 { return params.fdata[8].x; }
+fn ifs_ambient() -> f32 { return params.fdata[8].y; }
+fn ifs_diffuse() -> f32 { return params.fdata[8].z; }
+fn ifs_specular() -> f32 { return params.fdata[8].w; }
+fn ifs_shininess() -> f32 { return params.fdata[9].x; }
+fn ifs_occlusion_strength() -> f32 { return params.fdata[9].y; }
+fn ifs_fog_strength() -> f32 { return params.fdata[9].z; }
+fn ifs_fog_start() -> f32 { return params.fdata[9].w; }
+fn ifs_fog_color() -> vec3<f32> { return params.fdata[10].xyz; }
+fn ifs_light_count() -> u32 { return u32(clamp(params.fdata[7].z, 0.0, 4.0)); }
+fn ifs_light_dir(i: u32) -> vec3<f32> { return params.fdata[11u + i * 2u].xyz; }
+fn ifs_light_power(i: u32) -> f32 { return params.fdata[11u + i * 2u].w; }
+fn ifs_light_color(i: u32) -> vec3<f32> { return params.fdata[12u + i * 2u].xyz; }
+
 // The deepest link whose matrix still carries this delta no further
 // than the cap.
 //
@@ -5268,55 +5286,89 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // which is a fact about the shape at the scale being
             // looked at. Tied to the view instead, the same geometry
             // would change how occluded it was as you zoomed.
-            let ao = ifs_ao(p, n, ifs_radius() * fparam(7u));
-
-            // The light, in world terms: azimuth around the vertical
-            // axis and elevation above the horizon, the convention the
-            // hillshade colouring already uses.
-            let az = fparam(3u) * 0.017453293;
-            let el = fparam(4u) * 0.017453293;
-            let key = vec3<f32>(cos(el) * cos(az), cos(el) * sin(az), sin(el));
-            let lambert = max(dot(n, key), 0.0);
-
-            // A second march, toward the light. Skipped where the
-            // surface already faces away -- the shadow cannot darken
-            // what the lambert term has already taken to zero, and the
-            // march is what shadows cost.
-            var sun = 1.0;
-            let shadow_amount = clamp(fparam(5u), 0.0, 1.0);
-            if (shadow_amount > 0.0 && lambert > 0.0) {
-                let reaching = ifs_shadow(
-                    p + n * eps0 * 2.0,
-                    key,
-                    fparam(6u),
-                    eps0 * 4.0,
-                    max_steps,
-                );
-                sun = mix(1.0, reaching, shadow_amount);
-            }
-
-            // Occlusion on the AMBIENT term and the shadow on the
-            // DIRECT one, which is the way round the two names already
-            // say. Before shadows existed the ao rode on the direct
-            // term instead, and that is a defensible cheat while it is
-            // the only occlusion in the picture -- but once a shadow
-            // march is answering for the direct light, leaving it
-            // there double-counts one and leaves the other unoccluded.
-            // Measured on the sponge, it also erased the sub-squares:
-            // a fully shadowed recess and an unshadowed flat face both
-            // landed on the same constant ambient, so the recesses
-            // disappeared into the face at exactly the moment they
-            // should have gone darkest.
-            let lit = 0.12 * (0.35 + 0.65 * ao * ao) + 0.88 * lambert * sun;
+            let ao = mix(
+                1.0,
+                ifs_ao(p, n, ifs_radius() * fparam(5u)),
+                clamp(ifs_occlusion_strength(), 0.0, 1.0)
+            );
 
             let tt = fract(shade.t);
             height = select(shade.t, tt, params.shade_flags == 1u);
             let srgb = textureSampleLevel(
                 palette_texture, palette_sampler, vec2<f32>(tt, 0.5), 0.0
             ).rgb;
-            rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
-                * clamp(shade.lum, 0.0, 4.0)
-                * lit;
+            let albedo = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
+                * clamp(shade.lum, 0.0, 4.0);
+
+            // Blinn-Phong over the Solid Rendering panel's own lights.
+            // The same vocabulary the splat pipeline shades in, and
+            // the same arithmetic -- occlusion on the AMBIENT term and
+            // the shadow on the DIRECT one, which is the way round the
+            // two names already say.
+            //
+            // What differs is where the two hard numbers come from. A
+            // splat render reconstructs its occlusion from neighbouring
+            // depths and its shadows from light-space depth maps; a
+            // marcher asks the distance field, once per light, and gets
+            // a soft-edged answer for free because a sphere trace
+            // already knows how close it passed. That is also the
+            // cost: one more walk per LIGHT per lit pixel, which is why
+            // the price is set by how many lights are switched on.
+            let v = -dir;
+            let shadow_amount = clamp(fparam(3u), 0.0, 1.0);
+            let sharpness = fparam(4u);
+            var lit_rgb = albedo * (ifs_ambient() * ao);
+            let lights = ifs_light_count();
+            for (var li = 0u; li < lights; li = li + 1u) {
+                let ld = ifs_light_dir(li);
+                let ndotl = max(dot(n, ld), 0.0);
+                // A surface facing away cannot be lit, so there is
+                // nothing for a shadow to darken and no march to pay.
+                if (ndotl <= 0.0) {
+                    continue;
+                }
+                let lcol = ifs_light_color(li) * ifs_light_power(li);
+                var sun = 1.0;
+                if (shadow_amount > 0.0) {
+                    let reaching = ifs_shadow(
+                        p + n * eps0 * 2.0,
+                        ld,
+                        sharpness,
+                        eps0 * 4.0,
+                        max_steps,
+                    );
+                    sun = mix(1.0, reaching, shadow_amount);
+                }
+                lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * ndotl * ao * sun);
+                if (ifs_specular() > 0.0) {
+                    let hh = normalize(ld + v);
+                    let spec = pow(max(dot(n, hh), 0.0), max(ifs_shininess(), 1.0));
+                    lit_rgb = lit_rgb + lcol * (ifs_specular() * spec * sun);
+                }
+            }
+
+            rgb = mix(albedo, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
+
+            // Depth fog AFTER lighting, so distant lit surfaces fade
+            // toward the background like atmosphere rather than being
+            // lit on top of it -- the ordering the shade pass settled
+            // on, for the reason recorded there.
+            if (ifs_fog_strength() > 0.0) {
+                let depth = t * dot(dir, fwd);
+                let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
+                rgb = mix(rgb, ifs_fog_color(), f);
+            }
+            // The cached-recolour factor: what a colouring change would
+            // have to multiply the new albedo by. Exact only while the
+            // lighting IS a single achromatic multiplier -- no
+            // specular, white lights, no fog -- and the host disables
+            // the cache when it is not (see `solid_recolour_is_exact`).
+            let lit = select(
+                1.0,
+                dot(lit_rgb, vec3<f32>(0.3333333, 0.3333333, 0.3333333))
+                    / max(dot(albedo, vec3<f32>(0.3333333, 0.3333333, 0.3333333)), 1e-12),
+                dot(albedo, vec3<f32>(1.0, 1.0, 1.0)) > 0.0
+            );
             coverage = 1.0;
 
             rec.distance = res.distance;
