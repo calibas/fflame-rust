@@ -489,13 +489,16 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
         EscapeParamDef {
             name: "occlusion",
             display_name: "Occlusion Reach",
-            default: 0.06,
+            default: 0.15,
             min: 0.0,
             max: 0.5,
-            tooltip: "How far along the surface normal to look for the walls that \
-                      enclose a point, as a fraction of the whole attractor. Small \
-                      values darken only the tightest crevices; large values shade \
-                      whole hollows. 0 turns ambient occlusion off.",
+            tooltip: "How far to look for the walls that enclose a point, as a \
+                      fraction of the whole attractor. It has to be comparable to the \
+                      feature you want shaded: small values darken only the tightest \
+                      crevices, and a hollow wider than this reads as open -- which, \
+                      at that reach, it is. 0 turns occlusion off. Occlusion answers \
+                      for the sky; a cavity goes properly dark because the LIGHT \
+                      cannot reach into it, and that is Shadows.",
             choices: &[],
         },
     ],
@@ -4316,10 +4319,27 @@ mod gpu_tests {
         let path = crate::escape::diag::snapshot().path;
         assert_eq!(path, "recolor", "a colouring change stopped using the cache");
         let fresh_level = shot(None, 1.3, "ifs_level");
+        // Not byte-identity, and the reason is arithmetic rather than
+        // staleness: the fresh walk builds its lighting by summing a
+        // term per light, while the recolour multiplies the new albedo
+        // by the single factor the record carries. Both compute the
+        // same number and they round differently in the last place.
+        // What a STALE record looks like is nothing like that -- it is
+        // whole regions of the previous view, so the bound here is on
+        // both how many bytes may differ and by how much.
+        let worst = recoloured
+            .iter()
+            .zip(&fresh_level)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
         let differing = recoloured.iter().zip(&fresh_level).filter(|(a, b)| a != b).count();
-        assert_eq!(
-            differing, 0,
-            "the cached recolour of a solid differs from a fresh walk in {differing}              bytes -- stale records for the pixels that miss",
+        assert!(
+            worst <= 1 && differing * 1000 < recoloured.len(),
+            "the cached recolour of a solid differs from a fresh walk in {differing} of \
+             {} bytes, worst by {worst} -- a last-place rounding difference is at most \
+             1, so this is stale records rather than arithmetic",
+            recoloured.len(),
         );
 
         // The same for the walk's own parameters. `levels` is in the
