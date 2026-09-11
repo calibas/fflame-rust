@@ -4716,6 +4716,286 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }"#;
 
+const IFS_3D_TEMPLATE: &str = r#"
+// Distance-march compute pass (mode D, 3D): each pixel casts one ray
+// and sphere-traces the attractor's distance function.
+//
+// A distance function samples the SET, so this is not the splat
+// pipeline with lights on it: the surface is where d crosses zero, the
+// normal is d's gradient rather than a reconstruction from neighbour
+// depths, and the occlusion is how hard the march had to work. None of
+// the three can speckle, because none of them is inferred from a
+// stochastic sample.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+
+// Four vec4s and no vec3: a vec3<f32> aligns to sixteen bytes here
+// and to four in Rust, so a struct with one in it is a different size
+// on each side. See `escape::ifs::IfsMap3Gpu`.
+struct IfsMap3Gpu {
+    r0: vec4<f32>,
+    r1: vec4<f32>,
+    r2: vec4<f32>,
+    extra: vec4<f32>,
+}
+
+@group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
+
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+@group(0) @binding(5) var<storage, read_write> results: array<IfsRecord>;
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+// The whole-IFS constants. Laid out by `escape::ifs::pack_globals3`:
+// 0. ball centre xyz, radius
+// 1. mean sigma, map count, unused, unused
+// 2. camera position xyz, field of view (radians)
+// 3. camera forward xyz, unused
+// 4. camera right xyz, unused
+// 5. camera up xyz, unused
+// The ball's centre in three dimensions: the walk and the marcher's
+// sphere test.
+fn ifs_ball_centre() -> vec3<f32> {
+    return params.fdata[0].xyz;
+}
+
+// And the SAME point projected, which is what a colouring means by
+// `ifs_centre()`. The four colourings are shared between the planar
+// and solid templates -- a colouring maps one of the four quantities
+// to a palette position, and that is the same question in either
+// dimension -- so the name has to mean the same shape in both.
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].w;
+}
+
+fn ifs_mean_sigma() -> f32 {
+    return params.fdata[1].x;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[1].y, 0.0));
+}
+
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+// What one evaluation yields. The planar template's struct, with the
+// trap point in 3D -- the colourings only read `.point` through
+// `ifs_centre()`, which is why they are shared between the two.
+struct IfsResult {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+// The widest beam a walk may follow. The candidate arrays are
+// function-scope registers, so this is a register-pressure ceiling --
+// and a 3D candidate is wider than a planar one, so it binds harder
+// here.
+const IFS_MAX_BEAM: u32 = 8u;
+
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / reach);
+}
+
+//__IFS__
+
+//__IFS_COLORING__
+
+// Central differences of the distance function: the normal is a
+// PROPERTY of d, not a reconstruction from neighbouring depths. That
+// is the whole difference from the splat pipeline's screen-space
+// normals, and it is why this cannot speckle.
+fn ifs_normal(p: vec3<f32>, h: f32) -> vec3<f32> {
+    let dx = vec3<f32>(h, 0.0, 0.0);
+    let dy = vec3<f32>(0.0, h, 0.0);
+    let dz = vec3<f32>(0.0, 0.0, h);
+    let n = vec3<f32>(
+        ifs_distance_at(p + dx) - ifs_distance_at(p - dx),
+        ifs_distance_at(p + dy) - ifs_distance_at(p - dy),
+        ifs_distance_at(p + dz) - ifs_distance_at(p - dz),
+    );
+    let len = length(n);
+    if (!(len > 0.0)) {
+        return vec3<f32>(0.0, 0.0, 1.0);
+    }
+    return n / len;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let py = gid.y + params.tile_y0;
+    if (gid.x >= params.width || py >= params.height) {
+        return;
+    }
+
+    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height))
+        - vec2<f32>(0.5, 0.5);
+    let aspect = f32(params.width) / f32(max(params.height, 1u));
+
+    // A pinhole camera (D8). Not the flame's `zr = 1 - persp*z`, which
+    // is depth scaling for splats rather than a projection, and which
+    // a marcher would have to be contorted to match.
+    let eye = params.fdata[2].xyz;
+    let fov = params.fdata[2].w;
+    let fwd = params.fdata[3].xyz;
+    let right = params.fdata[4].xyz;
+    let up = params.fdata[5].xyz;
+    let tan_half = tan(fov * 0.5);
+    let dir = normalize(
+        fwd + right * (uv.x * aspect * 2.0 * tan_half) - up * (uv.y * 2.0 * tan_half)
+    );
+
+    // The march starts at the bounding sphere, not at the eye: every
+    // step before it is a step through provably empty space, and the
+    // ray may miss the sphere entirely.
+    let oc = eye - ifs_ball_centre();
+    let b = dot(oc, dir);
+    let c_term = dot(oc, oc) - ifs_radius() * ifs_radius();
+    let disc = b * b - c_term;
+
+    var rgb = vec3<f32>(0.0, 0.0, 0.0);
+    var coverage = 0.0;
+    var height = 0.0;
+
+    if (disc >= 0.0 && ifs_count() > 0u) {
+        let root = sqrt(disc);
+        var t = max(-b - root, 0.0);
+        let t_max = -b + root;
+
+        // One pixel's width at the ray's depth: the march stops when
+        // the surface is closer than the pixel is wide, because past
+        // that it cannot show the difference.
+        let px_at = 2.0 * tan_half / f32(max(params.height, 1u));
+
+        let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
+        var steps = 0u;
+        var hit = false;
+        var d = 0.0;
+        loop {
+            if (steps >= max_steps || t > t_max) {
+                break;
+            }
+            let p = eye + dir * t;
+            d = ifs_distance_at(p);
+            let eps = max(px_at * t, 1e-7);
+            if (d < eps) {
+                hit = true;
+                break;
+            }
+            t = t + d;
+            steps = steps + 1u;
+        }
+
+        if (hit) {
+            let p = eye + dir * t;
+            let res = ifs_evaluate3(p);
+            let shade = ifs_color(res);
+
+            let n = ifs_normal(p, max(px_at * t, 1e-6));
+            // Occlusion from the march: a ray that needed many small
+            // steps was squeezing through structure, which is exactly
+            // where a surface is occluded. Free, and a property of the
+            // field rather than a screen-space guess.
+            let ao = 1.0 - f32(steps) / f32(max_steps);
+            let key = normalize(vec3<f32>(0.4, 0.7, 0.6));
+            let lambert = max(dot(n, key), 0.0);
+            let lit = 0.12 + 0.88 * lambert * (0.35 + 0.65 * ao * ao);
+
+            let tt = fract(shade.t);
+            height = select(shade.t, tt, params.shade_flags == 1u);
+            let srgb = textureSampleLevel(
+                palette_texture, palette_sampler, vec2<f32>(tt, 0.5), 0.0
+            ).rgb;
+            rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
+                * clamp(shade.lum, 0.0, 4.0)
+                * lit;
+            coverage = 1.0;
+
+            if ((params.flags & 8u) != 0u) {
+                let idx = py * params.width + gid.x;
+                results[idx].distance = res.distance;
+                results[idx].level = res.level;
+                results[idx].address = res.address;
+                results[idx].color = res.color;
+                results[idx].point = res.point;
+                results[idx].escaped = res.escaped;
+                results[idx].depth = res.depth;
+            }
+        }
+    }
+
+    // Coverage, not colour: a ray that hit nothing is left ABSENT so
+    // the tonemap's background blend fills it, which is what makes the
+    // background colour apply and a transparent export stay
+    // transparent.
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}"#;
+
 /// Assemble the mode-D recolor pass for one coloring.
 ///
 /// The colouring is the SAME def the walk template splices, and it
@@ -4738,8 +5018,12 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
 /// and one coloring into [`IFS_TEMPLATE`]. Same marker discipline as
 /// [`assemble`].
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef) -> String {
+    // The two templates share the walk's shape and all four
+    // colourings; what differs is everything around the walk -- a
+    // camera, a march, a normal and a shade.
+    let template = if def.solid { IFS_3D_TEMPLATE } else { IFS_TEMPLATE };
     let mut out = Vec::new();
-    for line in IFS_TEMPLATE.lines() {
+    for line in template.lines() {
         match line.trim() {
             "//__IFS__" => out.push(def.wgsl.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
