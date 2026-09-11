@@ -4404,8 +4404,19 @@ struct IfsRecord {
     address: f32,
     color: f32,
     point: vec2<f32>,
+    // Bit 0: the walk left the ball. Bit 1: a SOLID render found no
+    // surface at this pixel.
     escaped: u32,
-    depth: u32,
+    // What the walk's own shading multiplied the colour by -- one for
+    // a plane, the lit factor for a solid.
+    //
+    // This word held `depth`, which was stored and never read: no
+    // colouring takes it, and the recolor pass only copied it back.
+    // A solid's LIGHTING, on the other hand, cannot be recomputed
+    // without the walk -- the normal is central differences of the
+    // distance function -- so a cached recolour came back flat until
+    // it was kept here.
+    shade: f32,
 }
 
 // The recolor cache. Written when params.flags bit 3 is set; bound to
@@ -4558,7 +4569,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         results[idx].color = res.color;
         results[idx].point = res.point;
         results[idx].escaped = res.escaped;
-        results[idx].depth = res.depth;
+        results[idx].shade = 1.0;
     }
 
     let shade = ifs_color(res);
@@ -4610,8 +4621,19 @@ struct IfsRecord {
     address: f32,
     color: f32,
     point: vec2<f32>,
+    // Bit 0: the walk left the ball. Bit 1: a SOLID render found no
+    // surface at this pixel.
     escaped: u32,
-    depth: u32,
+    // What the walk's own shading multiplied the colour by -- one for
+    // a plane, the lit factor for a solid.
+    //
+    // This word held `depth`, which was stored and never read: no
+    // colouring takes it, and the recolor pass only copied it back.
+    // A solid's LIGHTING, on the other hand, cannot be recomputed
+    // without the walk -- the normal is central differences of the
+    // distance function -- so a cached recolour came back flat until
+    // it was kept here.
+    shade: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -4703,14 +4725,26 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     res.address = r.address;
     res.color = r.color;
     res.point = r.point;
-    res.escaped = r.escaped;
-    res.depth = r.depth;
+    res.escaped = r.escaped & 1u;
+    res.depth = 0u;
+
+    // Bit 1 of `escaped` is a SOLID render's "no surface here". Left
+    // absent rather than painted, so the tonemap's background blend
+    // fills it -- the same convention the walk pass uses, and what
+    // keeps a transparent export transparent.
+    if ((r.escaped & 2u) != 0u) {
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0));
+        return;
+    }
 
     let shade = ifs_color(res);
     let t = fract(shade.t);
     let height = select(shade.t, t, params.shade_flags == 1u);
     let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
-    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+    let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
+        * clamp(shade.lum, 0.0, 4.0)
+        * r.shade;
 
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
@@ -4772,8 +4806,19 @@ struct IfsRecord {
     address: f32,
     color: f32,
     point: vec2<f32>,
+    // Bit 0: the walk left the ball. Bit 1: a SOLID render found no
+    // surface at this pixel.
     escaped: u32,
-    depth: u32,
+    // What the walk's own shading multiplied the colour by -- one for
+    // a plane, the lit factor for a solid.
+    //
+    // This word held `depth`, which was stored and never read: no
+    // colouring takes it, and the recolor pass only copied it back.
+    // A solid's LIGHTING, on the other hand, cannot be recomputed
+    // without the walk -- the normal is central differences of the
+    // distance function -- so a cached recolour came back flat until
+    // it was kept here.
+    shade: f32,
 }
 
 @group(0) @binding(5) var<storage, read_write> results: array<IfsRecord>;
@@ -4921,6 +4966,21 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var coverage = 0.0;
     var height = 0.0;
 
+    // A MISS still writes a record. The recolor cache reads every
+    // pixel's, so a pixel left unwritten keeps whatever the last view
+    // put there -- and a re-colour then paints the previous frame's
+    // geometry into this frame's empty space. Bit 1 of `escaped` is
+    // "no surface here", which the recolor pass turns back into
+    // absence.
+    var rec: IfsRecord;
+    rec.distance = 1e30;
+    rec.level = 0.0;
+    rec.address = 0.0;
+    rec.color = 0.0;
+    rec.point = vec2<f32>(0.0, 0.0);
+    rec.escaped = 3u;
+    rec.shade = 1.0;
+
     if (disc >= 0.0 && ifs_count() > 0u) {
         let root = sqrt(disc);
         var t = max(-b - root, 0.0);
@@ -4975,17 +5035,20 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 * lit;
             coverage = 1.0;
 
-            if ((params.flags & 8u) != 0u) {
-                let idx = py * params.width + gid.x;
-                results[idx].distance = res.distance;
-                results[idx].level = res.level;
-                results[idx].address = res.address;
-                results[idx].color = res.color;
-                results[idx].point = res.point;
-                results[idx].escaped = res.escaped;
-                results[idx].depth = res.depth;
-            }
+            rec.distance = res.distance;
+            rec.level = res.level;
+            rec.address = res.address;
+            rec.color = res.color;
+            rec.point = res.point;
+            // Bit 1 clear: there IS a surface at this pixel.
+            rec.escaped = res.escaped & 1u;
+            rec.shade = lit;
         }
+    }
+
+    if ((params.flags & 8u) != 0u) {
+        let idx = py * params.width + gid.x;
+        results[idx] = rec;
     }
 
     // Coverage, not colour: a ray that hit nothing is left ABSENT so

@@ -2978,6 +2978,7 @@ mod gpu_tests {
     #[test]
     fn both_mode_d_templates_declare_the_same_record() {
         let walk = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_DISTANCE);
+        let solid = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_DISTANCE);
         let recolor = crate::escape::assembler::assemble_ifs_recolor(&IFS_DISTANCE);
         let decl = |src: &str| -> String {
             let start = src.find("struct IfsRecord {").expect("IfsRecord declared");
@@ -2989,6 +2990,13 @@ mod gpu_tests {
             decl(&walk),
             decl(&recolor),
             "the mode-D walk and recolor templates disagree about IfsRecord"
+        );
+        // The SOLID walk shares the buffer too, so all three have to
+        // agree -- and it is the one that writes the shade word.
+        assert_eq!(
+            decl(&walk),
+            decl(&solid),
+            "the planar and solid walks disagree about IfsRecord"
         );
 
         // And the record must be the 32 bytes the shared results
@@ -3481,6 +3489,126 @@ mod gpu_tests {
                 );
             }
         }
+    }
+
+    /// Moving the camera must change the picture on a renderer that
+    /// has already drawn one.
+    ///
+    /// Reported from the app: the camera sliders did nothing, and
+    /// resizing the window fixed it. Two causes, both about a pass
+    /// that is allowed to continue when it should start over —
+    ///
+    /// - the recolor cache's key had no camera in it, so a camera
+    ///   change HIT the cache and re-coloured the old geometry. The
+    ///   picture could not change until something else invalidated
+    ///   the key, and a resize is exactly that;
+    /// - a solid walk wrote a record only where a ray HIT, so every
+    ///   pixel that missed kept the previous view's record, and a
+    ///   re-colour painted the last frame's solid into this frame's
+    ///   empty space.
+    ///
+    /// The fresh render is the control: a renderer that has never seen
+    /// the view cannot have a stale anything.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn moving_the_camera_changes_the_picture_through_the_cache() {
+        let (device, queue) = device();
+        let shot = |engines: Option<&mut crate::renderer::RenderEngines>,
+                    yaw: f32,
+                    coloring: &str|
+         -> Vec<u8> {
+            let mut c = config_for(menger_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = coloring.to_string();
+            c.escape.cam_yaw = yaw;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 14.0);
+            let mut job = crate::renderer::RenderJob::new(&c, 160, 160);
+            if let Some(e) = engines {
+                job = job.with_engines(e);
+            }
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+
+        // A renderer that has already drawn one view, then asked for
+        // another camera.
+        let mut engines = crate::renderer::RenderEngines::default();
+        let _first = shot(Some(&mut engines), 0.0, "ifs_address");
+        let reused = shot(Some(&mut engines), 1.3, "ifs_address");
+        let fresh = shot(None, 1.3, "ifs_address");
+        let differing = reused.iter().zip(&fresh).filter(|(a, b)| a != b).count();
+        assert_eq!(
+            differing, 0,
+            "a camera change on a warm renderer differs from a fresh one in              {differing} of {} bytes -- the pass did not restart",
+            reused.len()
+        );
+
+        // And a COLOURING change must still take the cache, or the
+        // fix has simply disabled it.
+        let recoloured = shot(Some(&mut engines), 1.3, "ifs_level");
+        let path = crate::escape::diag::snapshot().path;
+        assert_eq!(path, "recolor", "a colouring change stopped using the cache");
+        let fresh_level = shot(None, 1.3, "ifs_level");
+        let differing = recoloured.iter().zip(&fresh_level).filter(|(a, b)| a != b).count();
+        assert_eq!(
+            differing, 0,
+            "the cached recolour of a solid differs from a fresh walk in {differing}              bytes -- stale records for the pixels that miss",
+        );
+
+        // The same for the walk's own parameters. `levels` is in the
+        // keys already, but it is what the report named, so it is what
+        // the test names. Its own renderer, warmed at the depth it is
+        // about to leave -- sharing the one above would compare two
+        // states that never matched.
+        let mut warm = crate::renderer::RenderEngines::default();
+        let _ = shot(Some(&mut warm), 1.3, "ifs_address");
+        let deeper = {
+            let mut c = config_for(menger_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 1.3;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 22.0);
+            let job = crate::renderer::RenderJob::new(&c, 160, 160)
+                .with_engines(&mut warm);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let fresh_deeper = {
+            let mut c = config_for(menger_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 1.3;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 22.0);
+            let job = crate::renderer::RenderJob::new(&c, 160, 160);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let differing = deeper.iter().zip(&fresh_deeper).filter(|(a, b)| a != b).count();
+        assert_eq!(
+            differing, 0,
+            "a depth change on a warm renderer differs from a fresh one in {differing}              bytes"
+        );
     }
 
     /// Does a solid render need the beam it is paying for?
