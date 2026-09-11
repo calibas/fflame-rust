@@ -786,7 +786,7 @@ pub fn address_fraction(address: &[u32], n_maps: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::ifs_analysis::{analyse_2d, Ifs2};
+    use crate::scene::ifs_analysis::{analyse_2d, Ifs2, Ifs3};
     use crate::scene::transforms::{Flame, Transform};
     use crate::variations::global_registry;
     use std::collections::HashMap;
@@ -1380,6 +1380,161 @@ mod tests {
         assert!(
             wide > greedy,
             "the beam bought nothing on an overlapping IFS ({greedy:.1}% -> {wide:.1}%)"
+        );
+    }
+
+    // ------------------------------------------------------------ 3D
+
+    /// A 3D transform: the XY affine is the identity plus a
+    /// translation, and `linear3D` at half weight scales all three
+    /// axes — so the map is `p ↦ (p + v)/2`, whose fixed point is `v`
+    /// itself: the translation IS the corner it contracts toward, not
+    /// twice it.
+    ///
+    /// `linear` alone will not do: it contributes to all three
+    /// diagonal entries too, but an Apophysis-style transform leaves
+    /// the z SCALE at one, which phase 0 measured as the reason no
+    /// shipped 3D flame qualifies. Half-weight `linear3D` is the
+    /// simplest thing that contracts in z.
+    fn half3(v: [f32; 3]) -> Transform {
+        let mut t = Transform::default();
+        t.a = 1.0;
+        t.b = 0.0;
+        t.c = 0.0;
+        t.d = 1.0;
+        t.e = v[0];
+        t.f = v[1];
+        t.g = v[2];
+        t.variations = HashMap::from([("linear3D".to_string(), 0.5)]);
+        t.variation_order = vec!["linear3D".to_string()];
+        t
+    }
+
+    fn flame3(transforms: Vec<Transform>) -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms = transforms;
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        fl
+    }
+
+    fn analyse3(transforms: Vec<Transform>) -> Ifs3 {
+        let guard = global_registry();
+        crate::scene::ifs_analysis::analyse_3d(&flame3(transforms), &guard)
+            .expect("should qualify as a solid IFS")
+    }
+
+    /// Eight half-scale maps to the corners of a cube. Their images
+    /// tile it exactly, so the attractor IS the solid unit cube and
+    /// the distance to it is closed form — the 3D twin of the unit
+    /// square, and the only 3D case with an exact answer everywhere.
+    fn unit_cube() -> Ifs3 {
+        let mut maps = Vec::new();
+        for i in 0..8 {
+            maps.push(half3([
+                (i & 1) as f32,
+                ((i >> 1) & 1) as f32,
+                ((i >> 2) & 1) as f32,
+            ]));
+        }
+        analyse3(maps)
+    }
+
+    /// The Sierpiński tetrahedron: four half-scale maps to alternating
+    /// corners of a cube.
+    fn tetrahedron() -> Ifs3 {
+        analyse3(vec![
+            half3([0.0, 0.0, 0.0]),
+            half3([1.0, 1.0, 0.0]),
+            half3([1.0, 0.0, 1.0]),
+            half3([0.0, 1.0, 1.0]),
+        ])
+    }
+
+    fn box_distance3(p: [f64; 3], lo: f64, hi: f64) -> f64 {
+        let d = |x: f64| (lo - x).max(0.0).max(x - hi);
+        let (dx, dy, dz) = (d(p[0]), d(p[1]), d(p[2]));
+        (dx * dx + dy * dy + dz * dz).sqrt()
+    }
+
+    /// The walk is generic over dimension, so 3D should already work.
+    /// This is the claim, checked: eight maps whose attractor is the
+    /// solid unit cube, against the exact distance to that cube.
+    #[test]
+    fn the_walk_estimates_a_solid_cube_in_three_dimensions() {
+        let ifs = unit_cube();
+        assert_eq!(ifs.maps.len(), 8);
+        // Every map halves every axis, so every singular value is ½ —
+        // which is what makes this a SOLID IFS rather than a stack of
+        // planes.
+        for m in &ifs.maps {
+            assert!((m.sigma_min - 0.5).abs() < 1e-6, "sigma_min {:?}", m.sigma_min);
+            assert!((m.sigma_max - 0.5).abs() < 1e-6, "sigma_max {:?}", m.sigma_max);
+        }
+        // The ball is the cube's circumscribed sphere.
+        assert!((ifs.ball.radius - (0.75f64).sqrt()).abs() < 1e-6, "{:?}", ifs.ball);
+
+        let mut worst_ratio = f64::INFINITY;
+        let mut checked = 0;
+        for i in -6..=12 {
+            for j in -6..=12 {
+                for k in -6..=12 {
+                    let p = [i as f64 * 0.25, j as f64 * 0.25, k as f64 * 0.25];
+                    let d = estimate(&ifs, p, 40, 8).distance;
+                    let exact = box_distance3(p, 0.0, 1.0);
+                    assert!(
+                        d <= exact + 1e-9,
+                        "at {p:?}: estimate {d} exceeds exact {exact}"
+                    );
+                    if exact == 0.0 {
+                        assert_eq!(d, 0.0, "inside the cube at {p:?}");
+                    } else if exact > 0.25 {
+                        worst_ratio = worst_ratio.min(d / exact);
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 200, "not enough exterior points: {checked}");
+        println!("  cube: worst estimate/exact ratio {worst_ratio:.4} over {checked} points");
+        assert!(worst_ratio > 0.999, "the 3D bound is loose: {worst_ratio}");
+    }
+
+    /// The tetrahedron must qualify as a SOLID IFS, and its attractor
+    /// must be where a Sierpiński tetrahedron is.
+    #[test]
+    fn the_sierpinski_tetrahedron_qualifies_and_sits_where_it_should() {
+        let ifs = tetrahedron();
+        assert_eq!(ifs.maps.len(), 4);
+        for m in &ifs.maps {
+            assert!(m.sigma_max < 1.0, "not contractive: {:?}", m.sigma_max);
+        }
+
+        // Its four fixed points are the corners it is built from.
+        let mut corners: Vec<[f64; 3]> =
+            ifs.maps.iter().map(|m| m.forward.fixed_point().expect("contractive")).collect();
+        corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let want = [[0.0, 0.0, 0.0], [0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]];
+        for (got, want) in corners.iter().zip(&want) {
+            for k in 0..3 {
+                assert!(
+                    (got[k] - want[k]).abs() < 1e-6,
+                    "corner {got:?} should be {want:?}"
+                );
+            }
+        }
+
+        // A corner is on the attractor, so the walk must not push it
+        // out; the cube's centre is in the tetrahedron's hole, so it
+        // must.
+        for c in &corners {
+            assert!(!estimate(&ifs, *c, 40, 8).escaped, "corner {c:?} escaped");
+        }
+        let hole = estimate(&ifs, [0.5, 0.5, 0.5], 40, 8);
+        assert!(
+            hole.distance > 0.05,
+            "the tetrahedron's centre should be a hole, got {}",
+            hole.distance
         );
     }
 

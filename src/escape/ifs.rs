@@ -48,13 +48,23 @@
 //! modes A and B.
 
 use super::EscapeParamDef;
-use crate::scene::ifs_analysis::{Affine2, Ifs2};
+use crate::scene::ifs_analysis::{Affine2, Ifs2, Ifs3};
 
 /// A mode-D distance function.
 pub struct IfsDef {
     /// Registry name — what `EscapeConfig::formula` stores.
     pub name: &'static str,
     pub display_name: &'static str,
+    /// Whether this entry marches a RAY through three dimensions
+    /// rather than evaluating a plane.
+    ///
+    /// It selects the template, because the two differ in everything
+    /// around the walk — a camera, a march, a normal and a shade —
+    /// while sharing the walk's shape and, notably, all four
+    /// colourings: a colouring maps one of the four quantities to a
+    /// palette position, and that is the same question in either
+    /// dimension.
+    pub solid: bool,
     /// Whether this entry reads the flame's map buffer. `true` means
     /// the render is gated on the loaded flame passing the criterion
     /// (§2.4) and the panel says so; `false` is a self-contained
@@ -89,6 +99,7 @@ pub struct IfsColoringDef {
 pub static IFS_FLAME: IfsDef = IfsDef {
     name: "ifs_flame",
     display_name: "Flame Attractor (Distance)",
+    solid: false,
     needs_flame: true,
     default_coloring: "ifs_distance",
     presets: &[],
@@ -401,6 +412,267 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
 "#,
 };
 
+/// The loaded flame's attractor in three dimensions, sphere-traced.
+///
+/// The walk is the planar one's, in 3D arithmetic; what it answers is
+/// different in one way that matters, and the marcher is the reason.
+/// A plane render wants the distance in PIXELS, because that is what
+/// an edge and a halo are measured in and because world units
+/// underflow f32 under a deep zoom. A marcher steps BY the distance,
+/// so it has to be a length in the space the ray is crossing.
+pub static IFS_FLAME_3D: IfsDef = IfsDef {
+    name: "ifs_flame_3d",
+    display_name: "Flame Attractor (Solid)",
+    solid: true,
+    needs_flame: true,
+    default_coloring: "ifs_address",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Inverse Depth",
+            default: 24.0,
+            min: 1.0,
+            max: 256.0,
+            tooltip: "How many inverse maps to apply before calling the point part of \
+                      the set. Every march step pays this, so it costs more here than \
+                      in the plane.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 8.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "How many branch addresses the walk follows at once. Every address \
+                      bounds the distance to ITS piece and the truth is the smallest, so \
+                      following one can only read too far -- which a marcher turns into \
+                      a surface that is not there.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 96.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up. A ray that runs \
+                      out is left as a miss, and the count also drives the ambient \
+                      occlusion -- a ray that needed many small steps was squeezing \
+                      through structure.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+// Inverse of map i, in three dimensions.
+fn ifs_inv_point3(i: u32, p: vec3<f32>) -> vec3<f32> {
+    let m = ifs_maps[i];
+    return vec3<f32>(
+        dot(m.r0.xyz, p) + m.r0.w,
+        dot(m.r1.xyz, p) + m.r1.w,
+        dot(m.r2.xyz, p) + m.r2.w,
+    );
+}
+
+fn ifs_residual(r: f32, radius: f32, sigma: f32) -> f32 {
+    if (!(radius > 0.0) || !(sigma > 0.0) || !(sigma < 1.0)) {
+        return 0.0;
+    }
+    let across = log(r / radius) / log(1.0 / sigma);
+    return 1.0 - clamp(across, 0.0, 1.0);
+}
+
+struct IfsCand3 {
+    q: vec3<f32>,
+    point: vec3<f32>,
+    sigma: f32,
+    bound: f32,
+    r: f32,
+    addr: f32,
+    level: f32,
+    color: f32,
+    last_sigma: f32,
+    flags: u32,
+}
+
+// The walk, in three dimensions. The same algorithm the planar one
+// runs -- a beam of addresses, ranked by distance to the ball's
+// centre, answered by the smallest bound -- and the same reasons for
+// each part. What differs is the arithmetic and that the distance is
+// in WORLD units here rather than pixels: a marcher steps by it, so
+// it has to be a length in the space the ray is crossing.
+fn ifs_walk3(p0: vec3<f32>) -> IfsResult {
+    let c = ifs_ball_centre();
+    let radius = ifs_radius();
+    let n = ifs_count();
+
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.0;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+    if (n == 0u) {
+        res.distance = 1e30;
+        res.escaped = 1u;
+        return res;
+    }
+
+    let max_levels = u32(clamp(fparam(0u), 1.0, 256.0));
+    let beam = u32(clamp(fparam(1u), 1.0, f32(IFS_MAX_BEAM)));
+    let far = max(radius, 1.0) * 1e12;
+
+    var live: array<IfsCand3, IFS_MAX_BEAM>;
+    var next: array<IfsCand3, IFS_MAX_BEAM>;
+    var live_count = 1u;
+    var root: IfsCand3;
+    root.q = p0;
+    root.point = p0;
+    root.sigma = 1.0;
+    root.bound = -1e30;
+    root.r = length(p0 - c);
+    root.addr = 0.0;
+    root.level = 0.0;
+    root.color = 0.0;
+    root.last_sigma = ifs_mean_sigma();
+    root.flags = 0u;
+    live[0] = root;
+
+    var addr_scale = 1.0 / f32(n);
+    var deepest = -1.0;
+
+    for (var k = 0u; k < max_levels; k = k + 1u) {
+        var all_done = true;
+        for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+            if ((live[ci].flags & 2u) != 0u) {
+                continue;
+            }
+            let r = length(live[ci].q - c);
+            live[ci].r = r;
+            live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
+            if (r > radius && (live[ci].flags & 1u) == 0u) {
+                live[ci].flags = live[ci].flags | 1u;
+                live[ci].level = f32(k) + ifs_residual(r, radius, live[ci].last_sigma);
+                live[ci].point = live[ci].q;
+            }
+            if (!(r < far)) {
+                live[ci].flags = live[ci].flags | 2u;
+            } else {
+                all_done = false;
+            }
+        }
+        if (all_done || k + 1u >= max_levels) {
+            break;
+        }
+
+        var key: array<f32, IFS_MAX_BEAM>;
+        var src: array<u32, IFS_MAX_BEAM>;
+        var next_count = 0u;
+        let stride = n + 1u;
+        for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+            var first = 0u;
+            var last = n;
+            if ((live[ci].flags & 2u) != 0u) {
+                first = n;
+                last = n + 1u;
+            }
+            for (var bi = first; bi < last; bi = bi + 1u) {
+                var cand_key = live[ci].r;
+                if (bi < n) {
+                    cand_key = length(ifs_inv_point3(bi, live[ci].q) - c);
+                }
+                var pos = next_count;
+                for (var j = 0u; j < next_count; j = j + 1u) {
+                    if (cand_key < key[j]) {
+                        pos = j;
+                        break;
+                    }
+                }
+                if (pos < beam) {
+                    var j = min(next_count, beam - 1u);
+                    loop {
+                        if (j <= pos) {
+                            break;
+                        }
+                        key[j] = key[j - 1u];
+                        src[j] = src[j - 1u];
+                        j = j - 1u;
+                    }
+                    key[pos] = cand_key;
+                    src[pos] = ci * stride + bi;
+                    next_count = min(next_count + 1u, beam);
+                }
+            }
+        }
+        for (var k2 = 0u; k2 < next_count; k2 = k2 + 1u) {
+            let parent = src[k2] / stride;
+            let bi = src[k2] % stride;
+            var child = live[parent];
+            if (bi < n) {
+                child.q = ifs_inv_point3(bi, live[parent].q);
+                child.sigma = live[parent].sigma * ifs_maps[bi].extra.x;
+                child.last_sigma = ifs_maps[bi].extra.x;
+                child.r = key[k2];
+                child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
+                if ((live[parent].flags & 1u) == 0u) {
+                    child.addr = live[parent].addr + f32(bi) * addr_scale;
+                    if (k == 0u) {
+                        child.color = ifs_maps[bi].extra.y;
+                    }
+                }
+            }
+            next[k2] = child;
+        }
+        for (var ci = 0u; ci < next_count; ci = ci + 1u) {
+            live[ci] = next[ci];
+        }
+        live_count = next_count;
+        addr_scale = addr_scale / f32(n);
+    }
+
+    var win = 0u;
+    for (var ci = 1u; ci < live_count; ci = ci + 1u) {
+        if (live[ci].bound < live[win].bound) {
+            win = ci;
+        }
+    }
+    let unescaped = f32(max_levels);
+    for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+        var lvl = unescaped;
+        if ((live[ci].flags & 1u) != 0u) {
+            lvl = live[ci].level;
+        }
+        deepest = max(deepest, lvl);
+    }
+    let best = live[win];
+
+    res.distance = max(best.bound, 0.0);
+    res.address = best.addr;
+    res.color = best.color;
+    res.level = deepest;
+    res.depth = u32(max(floor(deepest), 0.0));
+    res.escaped = best.flags & 1u;
+    // The trap coordinate, projected: a colouring reads it against
+    // `ifs_centre()`, and in 3D that is the two axes across the view.
+    res.point = best.point.xy;
+    return res;
+}
+
+// What the marcher steps by.
+fn ifs_distance_at(p: vec3<f32>) -> f32 {
+    return ifs_walk3(p).distance;
+}
+
+// What the marcher colours with, at the point it stopped.
+fn ifs_evaluate3(p: vec3<f32>) -> IfsResult {
+    return ifs_walk3(p);
+}
+"#,
+};
+
 // ====================================================================
 // Colorings — the four quantities of §2.3, one each
 // ====================================================================
@@ -622,7 +894,7 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 
 /// Ordered mode-D registry. **Append-only** — same contract as
 /// [`super::FORMULAS`].
-pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME];
+pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D];
 
 /// Ordered mode-D coloring registry. **Append-only.**
 pub static IFS_COLORINGS: &[&IfsColoringDef] =
@@ -704,6 +976,61 @@ pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
     out[3] = [0.0; 4];
 }
 
+/// One 3D map, as the marcher reads it: the INVERSE affine, the
+/// smallest singular value of the forward map, and the transform's
+/// colour.
+///
+/// Sixty-four bytes against the planar row's thirty-two, because a
+/// 3×3 and a translation is twelve floats where a 2×2 and one is six.
+/// The rows are a storage buffer, so the stride is the struct's and
+/// nothing else has to agree with it — unlike the records buffer,
+/// which mode A and mode D share.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IfsMap3Gpu {
+    /// Row `i` of the inverse 3×3 in `xyz`, and the translation's
+    /// `i`-th component in `w`.
+    ///
+    /// Four `vec4`s and no `vec3` anywhere, which is deliberate. A
+    /// `vec3<f32>` aligns to SIXTEEN bytes in WGSL and to four in
+    /// Rust, so the obvious struct — three padded rows, a `vec3`
+    /// translation, two scalars — is eighty bytes on one side and
+    /// ninety-six on the other. The shader then reads each map from
+    /// the wrong offset and the render comes out as noise that still
+    /// looks vaguely like something, which is how this was found.
+    pub rows: [[f32; 4]; 3],
+    /// `σ_min` of the forward map, the transform's colour, and the
+    /// padding that makes the stride sixty-four.
+    pub extra: [f32; 4],
+}
+
+/// The 3D rows, in the flame's transform order.
+pub fn pack_maps3(ifs: &Ifs3, colors: &[f32]) -> Vec<IfsMap3Gpu> {
+    ifs.maps
+        .iter()
+        .map(|m| {
+            let inv = m.inverse;
+            let row = |i: usize| {
+                [
+                    inv.m[i][0] as f32,
+                    inv.m[i][1] as f32,
+                    inv.m[i][2] as f32,
+                    inv.t[i] as f32,
+                ]
+            };
+            IfsMap3Gpu {
+                rows: [row(0), row(1), row(2)],
+                extra: [
+                    m.sigma_min as f32,
+                    colors.get(m.transform_index).copied().unwrap_or(0.0),
+                    0.0,
+                    0.0,
+                ],
+            }
+        })
+        .collect()
+}
+
 /// An analysed flame, ready for the shader: the whole-IFS constants
 /// and one row per map.
 ///
@@ -723,6 +1050,15 @@ pub struct PackedIfs {
     pub ifs: Ifs2,
     /// Transform colours, in map order.
     pub colors: Vec<f32>,
+    /// The SOLID analysis and its rows, when the flame also qualifies
+    /// in three dimensions.
+    ///
+    /// Separate because qualifying is a different question per
+    /// dimension and most flames answer it differently: an
+    /// Apophysis-style transform is a perfectly good planar map and
+    /// has unit scale in z, so it makes a stack of planes rather than
+    /// a solid. Phase 0 measured none of 34 candidates qualifying.
+    pub solid: Option<(Ifs3, Vec<IfsMap3Gpu>)>,
 }
 
 /// Compare two packed IFSs **by bytes**, not by `PartialEq`.
@@ -762,7 +1098,15 @@ pub fn pack_flame(
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
     let rows = pack_maps(&ifs, &colors);
-    Ok(PackedIfs { globals, rows, ifs, colors })
+    // The solid analysis is attempted and allowed to fail: a flame
+    // that is a planar IFS need not be a solid one.
+    let solid = crate::scene::ifs_analysis::analyse_3d(flame, registry)
+        .ok()
+        .map(|ifs3| {
+            let rows3 = pack_maps3(&ifs3, &colors);
+            (ifs3, rows3)
+        });
+    Ok(PackedIfs { globals, rows, ifs, colors, solid })
 }
 
 /// How many `vec4`s of the params' `fdata` block one seed occupies.
@@ -912,6 +1256,96 @@ pub fn view_basis(span_x: f64, span_y: f64, rotation: f32) -> [[f64; 2]; 2] {
     let (c, s) = ((rotation as f64).cos(), (rotation as f64).sin());
     // rotate(diag(span_x, -span_y))
     [[c * span_x, s * span_y], [s * span_x, -c * span_y]]
+}
+
+/// The whole-IFS constants and the camera, for a solid render.
+///
+/// Layout, one `vec4` each:
+/// 0. `ball centre xyz, radius`
+/// 1. `mean_sigma_min, map_count, 0, 0`
+/// 2. `eye xyz, field of view (radians)`
+/// 3. `forward xyz, 0`
+/// 4. `right xyz, 0`
+/// 5. `up xyz, 0`
+///
+/// The camera is here rather than shared with the flame's because the
+/// flame's fields are `f32` — the same wall the planar view centre hit
+/// at 2²² (D8). A camera of its own can carry its position the way the
+/// escape view carries its centre.
+pub fn pack_globals3(ifs: &Ifs3, eye: [f64; 3], fov: f32, out: &mut [[f32; 4]]) {
+    if out.len() < 6 {
+        return;
+    }
+    out[0] = [
+        ifs.ball.centre[0] as f32,
+        ifs.ball.centre[1] as f32,
+        ifs.ball.centre[2] as f32,
+        ifs.ball.radius as f32,
+    ];
+    let mean = if ifs.maps.is_empty() {
+        0.5
+    } else {
+        ifs.maps.iter().map(|m| m.sigma_min).sum::<f64>() / ifs.maps.len() as f64
+    };
+    out[1] = [mean as f32, ifs.maps.len() as f32, 0.0, 0.0];
+
+    // Look at the attractor. A fixed frame for now: phase 3's camera
+    // controls replace this, and the marcher does not care which built
+    // the basis.
+    let to = ifs.ball.centre;
+    let fwd = normalize3([to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]]);
+    // Any up that is not parallel to the view; z is the odd axis out
+    // in a flame, so prefer it and fall back when looking along it.
+    let world_up = if fwd[2].abs() > 0.9 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    let right = normalize3(cross3(fwd, world_up));
+    let up = cross3(right, fwd);
+
+    out[2] = [eye[0] as f32, eye[1] as f32, eye[2] as f32, fov];
+    out[3] = [fwd[0] as f32, fwd[1] as f32, fwd[2] as f32, 0.0];
+    out[4] = [right[0] as f32, right[1] as f32, right[2] as f32, 0.0];
+    out[5] = [up[0] as f32, up[1] as f32, up[2] as f32, 0.0];
+}
+
+fn normalize3(v: [f64; 3]) -> [f64; 3] {
+    let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if n > 0.0 {
+        [v[0] / n, v[1] / n, v[2] / n]
+    } else {
+        [0.0, 0.0, 1.0]
+    }
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Where to stand for a solid render, until D8's camera config lands.
+///
+/// The frame is derived from the attractor's own bounding ball, so any
+/// qualifying flame is in view without being told where it is; the
+/// escape view's `zoom_log2` moves the eye in and `rotation` orbits
+/// it, so the two controls that already exist do something sensible.
+/// A real camera replaces this and the marcher will not notice — it
+/// reads a basis, not a policy.
+pub fn preview_camera(ifs: &Ifs3, zoom_log2: f64, rotation: f32) -> ([f64; 3], f32) {
+    let r = ifs.ball.radius.max(1e-6);
+    let dist = 3.2 * r / 2f64.powf(zoom_log2);
+    let a = rotation as f64;
+    // Slightly above the equator, so the silhouette is not symmetric
+    // and the shading has something to do.
+    let dir = normalize3([a.cos() * 0.86, a.sin() * 0.86, 0.42]);
+    (
+        [
+            ifs.ball.centre[0] + dir[0] * dist,
+            ifs.ball.centre[1] + dir[1] * dist,
+            ifs.ball.centre[2] + dir[2] * dist,
+        ],
+        0.7,
+    )
 }
 
 /// The per-map rows of the storage buffer, in the flame's transform
@@ -1311,6 +1745,7 @@ mod tests {
             rows: pack_maps(&ifs, &colors),
             ifs: ifs.clone(),
             colors,
+            solid: None,
         };
         pack_globals(&ifs, &mut packed.globals);
 
@@ -1522,6 +1957,69 @@ mod tests {
             worst_f64 > 1e-3,
             "an f64 centre gave the same picture at zoom 2^{ZOOM}              ({worst_f64:.3e}) -- then precision is not what the deep gate is              measuring, and that gate proves nothing"
         );
+    }
+
+    /// The solid row must be the sixty-four bytes the shader reads,
+    /// with no `vec3` anywhere.
+    ///
+    /// A `vec3<f32>` aligns to sixteen bytes in WGSL and four in Rust.
+    /// The obvious struct — three padded rows, a `vec3` translation,
+    /// two scalars — is eighty bytes here and ninety-six there, so the
+    /// shader reads every map but the first from the wrong offset. It
+    /// does not fail: it renders a plausible-looking noisy blob, which
+    /// is how it was found and why this test exists.
+    #[test]
+    fn the_solid_row_is_the_layout_the_shader_declares() {
+        assert_eq!(std::mem::size_of::<IfsMap3Gpu>(), 64);
+        assert_eq!(std::mem::offset_of!(IfsMap3Gpu, rows), 0);
+        assert_eq!(std::mem::offset_of!(IfsMap3Gpu, extra), 48);
+        // And no vec3 in the shader's declaration either, which is the
+        // half a size assertion cannot see.
+        let src = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_ADDRESS);
+        let start = src.find("struct IfsMap3Gpu {").expect("declared");
+        let decl = &src[start..start + src[start..].find("
+}").expect("closes")];
+        assert!(
+            !decl.contains("vec3"),
+            "the solid row declares a vec3, whose alignment differs between              WGSL and Rust: {decl}"
+        );
+    }
+
+    /// The packed inverse must undo the forward map in the shader's
+    /// own arithmetic — a transposed 3×3 renders a plausible wrong
+    /// solid, the same way a transposed 2×2 renders a plausible wrong
+    /// plane.
+    #[test]
+    fn packed_solid_inverses_undo_the_forward_maps() {
+        let guard = global_registry();
+        let flame = gpu_tests::tetrahedron_flame();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&flame, &guard).expect("qualifies");
+        drop(guard);
+        let colors: Vec<f32> = flame.transforms.iter().map(|t| t.color).collect();
+        let rows = pack_maps3(&ifs3, &colors);
+        assert_eq!(rows.len(), 4);
+
+        for (row, m) in rows.iter().zip(ifs3.maps.iter()) {
+            for &p in &[[0.3f64, -0.8, 0.4], [1.7, 2.4, -1.1], [0.0, 0.0, 0.0]] {
+                let fwd = m.forward.apply(p);
+                // Exactly what `ifs_inv_point3` computes.
+                let back: Vec<f64> = (0..3)
+                    .map(|i| {
+                        row.rows[i][0] as f64 * fwd[0]
+                            + row.rows[i][1] as f64 * fwd[1]
+                            + row.rows[i][2] as f64 * fwd[2]
+                            + row.rows[i][3] as f64
+                    })
+                    .collect();
+                for k in 0..3 {
+                    assert!(
+                        (back[k] - p[k]).abs() < 1e-5,
+                        "round trip {p:?} -> {fwd:?} -> {back:?}"
+                    );
+                }
+            }
+            assert!((row.extra[0] - m.sigma_min as f32).abs() < 1e-6, "sigma");
+        }
     }
 
     #[test]
@@ -2484,6 +2982,163 @@ mod gpu_tests {
             );
         }
         assert_eq!(seen, 4, "expected the four classical IFS presets, found {seen}");
+    }
+
+    /// A 3D flame: the XY affine is identity plus a translation and
+    /// `linear3D` at half weight scales all three axes, so the map is
+    /// `p ↦ (p + v)/2` and its fixed point is `v`.
+    ///
+    /// `linear` will not do. An Apophysis-style transform leaves the z
+    /// SCALE at one, which is why phase 0's census found none of 34
+    /// three-dimensional candidates qualifying as solid: their
+    /// attractor is a stack of planes, not a body.
+    fn half3(v: [f32; 3], colour: f32) -> Transform {
+        let mut t = Transform::default();
+        t.a = 1.0;
+        t.b = 0.0;
+        t.c = 0.0;
+        t.d = 1.0;
+        t.e = v[0];
+        t.f = v[1];
+        t.g = v[2];
+        t.color = colour;
+        t.variations = HashMap::from([("linear3D".to_string(), 0.5)]);
+        t.variation_order = vec!["linear3D".to_string()];
+        t
+    }
+
+    fn solid_flame(transforms: Vec<Transform>) -> Flame {
+        //  and  are CONFIG fields, not flame
+        // ones, since the v3 migration -- and `analyse_3d` reads
+        // neither: it composes the 3D affine and asks whether it
+        // contracts, which is a property of the transforms alone.
+        let mut fl = Flame::default();
+        fl.transforms = transforms;
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        fl
+    }
+
+    /// Four half-scale maps to alternating cube corners.
+    pub(super) fn tetrahedron_flame() -> Flame {
+        solid_flame(vec![
+            half3([0.0, 0.0, 0.0], 0.08),
+            half3([1.0, 1.0, 0.0], 0.36),
+            half3([1.0, 0.0, 1.0], 0.64),
+            half3([0.0, 1.0, 1.0], 0.92),
+        ])
+    }
+
+    /// Twenty maps at a third: the Menger sponge, the plan's §4
+    /// picture — "twenty affine maps looks like a Menger sponge, not
+    /// like a point cloud with lights on it".
+    fn menger_flame() -> Flame {
+        let mut ts = Vec::new();
+        for i in 0..3i32 {
+            for j in 0..3i32 {
+                for k in 0..3i32 {
+                    // The sponge keeps a cell unless it is centred on
+                    // two or more axes.
+                    let mid = (i == 1) as i32 + (j == 1) as i32 + (k == 1) as i32;
+                    if mid >= 2 {
+                        continue;
+                    }
+                    let n = ts.len() as f32;
+                    let mut t = Transform::default();
+                    t.a = 1.0;
+                    t.d = 1.0;
+                    // p -> (p + 2v)/3 has fixed point v, so the
+                    // translation is twice the corner at this scale.
+                    t.e = i as f32;
+                    t.f = j as f32;
+                    t.g = k as f32;
+                    t.color = n / 20.0;
+                    t.variations =
+                        HashMap::from([("linear3D".to_string(), 1.0 / 3.0)]);
+                    t.variation_order = vec!["linear3D".to_string()];
+                    ts.push(t);
+                }
+            }
+        }
+        solid_flame(ts)
+    }
+
+    /// The solid renders, for inspection. This is §0's first item:
+    /// whether a distance march looks better than the splat pipeline
+    /// with lights on it.
+    #[test]
+    #[ignore = "needs a GPU; writes images for inspection"]
+    fn render_the_solid_ifss_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+
+        let guard = global_registry();
+        for (name, flame) in [("tetrahedron", tetrahedron_flame()), ("menger", menger_flame())]
+        {
+            let ifs3 = crate::scene::ifs_analysis::analyse_3d(&flame, &guard)
+                .unwrap_or_else(|why| panic!("{name} must qualify as solid: {why:?}"));
+            println!("  {name}: {} maps, radius {:.3}", ifs3.maps.len(), ifs3.ball.radius);
+
+            // The geometry, checked on the CPU rather than read off a
+            // render: both of these sets have their middle cell
+            // removed, so the centre of the unit cube is a HOLE. A
+            // low-contrast colouring can hide that, and a wrong map
+            // layout can fake it.
+            let middle = crate::scene::ifs_estimate::estimate(
+                &ifs3,
+                [0.5, 0.5, 0.5],
+                30,
+                8,
+            )
+            .distance;
+            println!("    centre of the cube is {middle:.4} from the set");
+            assert!(
+                middle > 0.05,
+                "{name}: the centre should be a hole, got {middle:.4}"
+            );
+            // And a corner is ON it.
+            let corner = crate::scene::ifs_estimate::estimate(
+                &ifs3,
+                ifs3.maps[0].forward.fixed_point().expect("contractive"),
+                30,
+                8,
+            );
+            assert!(!corner.escaped, "{name}: a fixed point should be on the set");
+
+            for coloring in ["ifs_address", "ifs_distance", "ifs_level"] {
+                let mut c = config_for(flame.clone());
+                c.escape.formula = "ifs_flame_3d".to_string();
+                c.escape.coloring = coloring.to_string();
+                c.escape.zoom_log2 = 0.0;
+                c.escape.rotation = 0.9;
+                c.escape.formula_params.insert("levels".to_string(), 20.0);
+                c.escape.coloring_params.insert("reach".to_string(), 0.0);
+                c.escape.coloring_params.insert("interior".to_string(), 0.5);
+
+                let (device, queue) = device();
+                let job = crate::renderer::RenderJob::new(&c, 448, 448);
+                let out = pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render");
+                let lit = out
+                    .rgba_data
+                    .chunks(4)
+                    .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                    .count();
+                let path = dir.join(format!("solid-{name}-{coloring}.png"));
+                image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8)
+                    .expect("write png");
+                println!("    {} ({lit} lit)", path.display());
+                assert!(
+                    lit > 448 * 448 / 100,
+                    "{name}/{coloring} rendered almost nothing ({lit} lit)"
+                );
+            }
+        }
     }
 
     /// D9's pictures: the three overlapping IFSs, greedy against beam,

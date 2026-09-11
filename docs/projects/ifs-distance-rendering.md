@@ -353,6 +353,16 @@ machinery; it is a phase-3 item, not a new one.
   alternative is sharing the flame's camera fields outright and
   teaching the shade-pass extension the pinhole, which is less
   duplication and more coupling.
+
+  **Settled 2026-09-10, and for a reason the original argument did not
+  have: DEEP ZOOM.** The flame's camera fields are `f32`, which is the
+  same wall mode D's view centre hit — it renders somewhere else past
+  2²². An escape camera can carry its position the way the escape
+  view already carries its centre, as exact decimal strings with a
+  `zoom_log2`, and hand the marcher a high-precision ray origin with an
+  f32 direction (§2.5's last paragraph). Sharing the flame's fields
+  would cap 3D at a zoom 2D passed this morning, so the duplication is
+  not the cost — it is the feature.
 - **D9 — Mode C of the escape plan is superseded for affine IFSs.** The
   escape-level quantity of §2.2 is Hepting–Hart's E(x), per pixel, in
   one pass, from the same loop that gives the distance. The escape
@@ -926,6 +936,60 @@ and a test pins it.
   lit pixels against 8 473.
 
 ### Phase 3 — 3D
+
+**The tracer is built, 2026-09-10** — `ifs_flame_3d`, a second `IfsDef`
+with `solid: true`, which selects a second template. The two share the
+walk's shape and **all four colourings**: a colouring maps one of the
+four quantities to a palette position, and that is the same question in
+either dimension.
+
+**The walk needed no new algorithm.** `estimate` was written generic
+over `IfsSpace` in phase 1 and `Affine3` already implemented it, so the
+3D walk is the 2D one with 3D arithmetic — and it is EXACT: against the
+analytic distance to a solid cube (eight half-scale maps whose images
+tile it), the worst estimate/exact ratio over 6 584 points is 1.0000.
+The 3D twin of the unit-square gate, and the only 3D case with a
+closed-form answer.
+
+One thing the walk answers differently, and the marcher is why: a plane
+render wants the distance in PIXELS, because that is what an edge and a
+halo are measured in and because world units underflow f32 under a deep
+zoom. A marcher steps BY the distance, so it has to be a length in the
+space the ray is crossing.
+
+**What the pictures show.** A Sierpiński tetrahedron viewed down an
+axis presents as a gasket, with sharp edges and no speckle. The Menger
+sponge as twenty affine maps looks like a Menger sponge — §4's picture,
+rendered. Normals are central differences of `d`, so they are a
+property of the field rather than a reconstruction from neighbouring
+depths; occlusion is how hard the march had to work, which is free and
+also a property of the field. Neither can speckle, because neither is
+inferred from a stochastic sample. That is §2.1's argument, seen.
+
+**A layout bug worth recording, because it did not fail.** The first
+solid row used a `vec3<f32>` for the translation. A `vec3` aligns to
+sixteen bytes in WGSL and four in Rust, so the struct was eighty bytes
+on one side and ninety-six on the other, and the shader read every map
+but the first from the wrong offset. It did not error: it rendered a
+plausible noisy blob that still looked vaguely like something. The row
+is four `vec4`s now with no `vec3` anywhere, and a test asserts both
+the size and that the shader's own declaration contains no `vec3` —
+the half a size assertion cannot see.
+
+**The geometry is checked on the CPU, not read off the render.** Both
+shipped solids have their middle cell removed, so the centre of the
+unit cube must be a hole; the test asserts it (Menger: 0.236 from the
+set). A low-contrast colouring can hide a hole and a wrong map layout
+can fake one, so the picture is not the evidence.
+
+**Still to come in this phase**: the escape camera (D8) — the frame is
+derived from the attractor's bounding ball for now, with `zoom_log2`
+moving the eye and `rotation` orbiting it — soft shadows, the
+shade-pass extension (D7), and 3D seeding, which is deliberately not
+built: a ray marches THROUGH space, so what a handover carries is
+per-ray rather than per-pixel and how far along the ray a sample sits
+is part of the offset. The marcher's shape should decide that.
+
 
 - The escape camera (D8), ray generation, the View panel and fly mode
   driving it (D2), the visibility cases.

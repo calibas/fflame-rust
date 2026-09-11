@@ -599,8 +599,12 @@ pub struct EscapeRenderer {
     /// existing shader stays byte-identical.
     ifs_bind_group_layout: BindGroupLayout,
     ifs_buffer: Buffer,
-    /// Rows the buffer currently holds, so it only grows.
+    /// BYTES the buffer currently holds, so it only grows. Bytes
+    /// rather than rows because the planar and solid strides differ.
     ifs_capacity: u32,
+    /// Which dimension the uploaded rows are, so a mode switch
+    /// re-uploads rather than reinterpreting one stride as the other.
+    ifs_uploaded_solid: Option<bool>,
     /// A cheap identity for the packed maps, so a flame edit restarts
     /// the row-band pass instead of striping the picture (see
     /// [`Self::band_key`]). Hashed once on `set_ifs`, not per frame.
@@ -1416,7 +1420,8 @@ impl EscapeRenderer {
             bind_group_layout,
             ifs_bind_group_layout,
             ifs_buffer,
-            ifs_capacity: 1,
+            ifs_capacity: 0,
+            ifs_uploaded_solid: None,
             ifs_token: 0,
             ifs_seeds: None,
             ifs_seed_key: String::new(),
@@ -3353,25 +3358,46 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     /// Grow the map buffer if needed and write the rows, skipping both
     /// when the packed data is unchanged from the last upload.
-    fn upload_ifs(&mut self, device: &Device, queue: &Queue) {
+    fn upload_ifs(&mut self, device: &Device, queue: &Queue, solid: bool) {
         let Some(packed) = self.ifs.clone() else { return };
-        if super::ifs::packed_bytes_eq(self.ifs_uploaded.as_ref(), Some(&packed)) {
+        if self.ifs_uploaded_solid == Some(solid)
+            && super::ifs::packed_bytes_eq(self.ifs_uploaded.as_ref(), Some(&packed))
+        {
             return;
         }
-        let needed = packed.rows.len().max(1) as u32;
-        if needed > self.ifs_capacity {
+        // A solid row is sixty-four bytes against a planar row's
+        // thirty-two, so the buffer is sized in BYTES rather than
+        // rows: switching dimension changes the stride, not just the
+        // count.
+        let bytes = if solid {
+            packed.solid.as_ref().map_or(0, |(_, r)| {
+                r.len() * std::mem::size_of::<super::ifs::IfsMap3Gpu>()
+            })
+        } else {
+            packed.rows.len() * std::mem::size_of::<super::ifs::IfsMapGpu>()
+        }
+        .max(std::mem::size_of::<super::ifs::IfsMap3Gpu>()) as u32;
+
+        if bytes > self.ifs_capacity {
             self.ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Escape IFS Maps"),
-                size: needed as u64 * std::mem::size_of::<super::ifs::IfsMapGpu>() as u64,
+                size: bytes as u64,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            self.ifs_capacity = needed;
+            self.ifs_capacity = bytes;
         }
-        if !packed.rows.is_empty() {
-            queue.write_buffer(&self.ifs_buffer, 0, bytemuck::cast_slice(&packed.rows));
+        match (solid, packed.solid.as_ref()) {
+            (true, Some((_, rows3))) if !rows3.is_empty() => {
+                queue.write_buffer(&self.ifs_buffer, 0, bytemuck::cast_slice(rows3));
+            }
+            (false, _) if !packed.rows.is_empty() => {
+                queue.write_buffer(&self.ifs_buffer, 0, bytemuck::cast_slice(&packed.rows));
+            }
+            _ => {}
         }
         self.ifs_uploaded = Some(packed);
+        self.ifs_uploaded_solid = Some(solid);
     }
 
     /// Walk the reference orbit for this view, if it is not already
@@ -3389,6 +3415,16 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return;
         };
         let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
+        if def.solid {
+            // No seeding in three dimensions yet: a ray marches
+            // THROUGH space, so what a handover would carry is
+            // per-ray rather than per-pixel, and how far along the ray
+            // a sample sits is part of the offset. The marcher's shape
+            // should decide that, not the other way round.
+            self.ifs_seeds = None;
+            self.ifs_seed_key.clear();
+            return;
+        }
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
                 def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
@@ -5755,14 +5791,24 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 &escape.coloring_params,
                 cparams.as_flattened_mut(),
             );
-            match self.ifs_seeds.as_ref() {
-                Some(seeded) => fdata[..seeded.len()].copy_from_slice(seeded),
+            if def.solid {
+                if let Some((ifs3, _)) = self.ifs.as_ref().and_then(|p| p.solid.as_ref()) {
+                    let (eye, fov) =
+                        super::ifs::preview_camera(ifs3, escape.zoom_log2, escape.rotation);
+                    super::ifs::pack_globals3(ifs3, eye, fov, &mut fdata);
+                }
+                // A flame that is planar but not solid leaves the map
+                // count at zero, and the marcher draws nothing.
+            } else {
+                match self.ifs_seeds.as_ref() {
+                    Some(seeded) => fdata[..seeded.len()].copy_from_slice(seeded),
                 // No qualifying flame: the globals alone, whose map
                 // count of zero is what tells the shader to draw
                 // nothing.
-                None => {
-                    if let Some(packed) = self.ifs.as_ref() {
-                        fdata[..4].copy_from_slice(&packed.globals);
+                    None => {
+                        if let Some(packed) = self.ifs.as_ref() {
+                            fdata[..4].copy_from_slice(&packed.globals);
+                        }
                     }
                 }
             }
@@ -6295,8 +6341,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Mode D's maps. Uploaded here rather than in `set_ifs` so
         // the queue write lands in this frame's submission, and only
         // when the packed data actually changed.
-        let ifs_bind_group = if super::ifs::get_ifs(&escape.formula).is_some() {
-            self.upload_ifs(device, queue);
+        let ifs_bind_group = if let Some(def) = super::ifs::get_ifs(&escape.formula) {
+            self.upload_ifs(device, queue, def.solid);
             Some(device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Escape IFS Bind Group"),
                 layout: &self.ifs_bind_group_layout,
