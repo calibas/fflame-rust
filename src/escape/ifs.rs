@@ -483,7 +483,9 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
             max: 128.0,
             tooltip: "How sharply a shadow's edge falls off. The march already knows \
                       how close it passed to the surface, so the penumbra costs \
-                      nothing: small values spread it, large values harden it.",
+                      nothing. The number stands for the inverse of the light's own \
+                      SIZE -- a broad light makes soft edges -- so small values \
+                      spread the penumbra and large ones harden it.",
             choices: &[],
         },
         EscapeParamDef {
@@ -812,8 +814,13 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 "#,
 };
 
-/// `level`: Hepting–Hart escape-time bands — the Fractint
-/// "escape-time Sierpiński" look, from the same walk (D9).
+/// `level`: escape-time bands — nested shells of constant inverse-orbit
+/// depth around the set, from the same walk (D9).
+///
+/// The quantity is Hepting and Hart's discrete escape time, which is
+/// itself after Prusinkiewicz and Sandness; see §9 of the plan. This
+/// used to claim the look was Fractint's, which nobody here has
+/// checked, so it does not say that any more.
 pub static IFS_LEVEL: IfsColoringDef = IfsColoringDef {
     name: "ifs_level",
     display_name: "Escape Level",
