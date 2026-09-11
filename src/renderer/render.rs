@@ -967,6 +967,16 @@ async fn render_escape(
     if crate::escape::ifs::get_ifs(&job.config.escape.formula).is_some() {
         let registry = crate::variations::global_registry();
         escape_renderer.set_ifs(crate::escape::ifs::pack_flame(&job.config.flame, &registry).ok());
+        // A SOLID walk lights itself, from the app's own lighting
+        // settings rather than a second vocabulary of its own.
+        escape_renderer.set_solid_lighting(
+            &job.config.solid_shading,
+            (
+                job.config.fog_strength,
+                job.config.fog_start,
+                job.config.background_color,
+            ),
+        );
     }
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.

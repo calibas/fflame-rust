@@ -88,6 +88,10 @@ pub struct MenuState {
     pub render_mode: RenderMode,
     /// The active tone-map mode, the visibility policy's second axis.
     pub tonemap_mode: crate::scene::tonemap::ToneMapMode,
+    /// Whether the loaded config renders a SURFACE, which the mode
+    /// does not settle on its own: escape mode is not
+    /// three-dimensional, one formula in it is.
+    pub solid: crate::ui::visibility::Solid,
     pub online_mode: bool,
     pub has_api_flame_id: bool,
     pub api_flame_id: Option<String>,

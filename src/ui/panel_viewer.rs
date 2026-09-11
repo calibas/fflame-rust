@@ -814,8 +814,10 @@ impl<'a> PanelViewer<'a> {
         // "edits the flame and is inactive in Escape mode", including
         // in Simulation, and including for the two engine panels,
         // which edit no flame at all.
-        let mode = self.context.config_manager.active_config().render_mode;
-        if let super::visibility::Vis::Grey(reason) = super::visibility::panel(*tab, mode) {
+        let config = self.context.config_manager.active_config();
+        let mode = config.render_mode;
+        let solid = super::visibility::Solid::of(config);
+        if let super::visibility::Vis::Grey(reason) = super::visibility::panel(*tab, mode, solid) {
             ui.label(t!(reason));
             return;
         }

@@ -347,6 +347,16 @@ machinery; it is a phase-3 item, not a new one.
   occlusion buffer when present; its screen-space reconstruction is
   the fallback, not the path. The extension improves solid flames too,
   once anything produces a normal buffer for them.
+
+  **Half-taken, 2026-09-11.** The extension is built; mode D is not its
+  consumer. By the time it existed the marcher had its own rig, and
+  the pass's remaining advantage was that rig alone — forty lines —
+  against four full-image buffers, a depth encoding and a second pass
+  to reach the same pixels, with no way to express a shadow PER LIGHT
+  through one occlusion channel. So mode D reads the same
+  `SolidShadingSettings` and lights itself. The vocabulary is shared,
+  which was the point; the pixels are not, which was the mechanism.
+  See the phase 3 record.
 - **D8 — Projection: a pinhole camera with a field of view, on the
   escape config.** The flame's `zr = 1 − persp·z` is depth scaling,
   not a camera, and generating rays for it would be contorting the
@@ -1264,9 +1274,82 @@ the occlusion bit must be clear, and with geometry supplied the same
 call must differ in exactly those fields and nowhere else. The six
 `solid-*` visual baselines are the end-to-end half.
 
-**Still to come in this phase**: mode D as a producer for that
-extension — writing albedo rather than lit colour, plus a normal, an
-occlusion and a depth buffer, and running the shade pass over them. A ray
+**The rig, 2026-09-11 (D7, second half — and a divergence from how D7
+said to get there).** A solid walk now lights itself from
+`SolidShadingSettings`: the Solid Rendering panel's own four lights,
+ambient, diffuse, specular, shininess and occlusion strength, plus the
+scene's depth fog. Same controls, same panel, same vocabulary — the
+panel is simply available in escape mode when the FORMULA is solid,
+which is D2 again and is why `visibility::panel` grew a `Solid`
+argument rather than another `matches!` on the mode.
+
+**What it does not do is send the pixels through the shade pass, and
+that is a deliberate departure from D7 as written.** D7 assumed the
+marcher had geometry and needed a rig. By the time it was built the
+marcher had a rig too — one white key light, traced shadows, real
+occlusion — so the question became what routing the pixels would
+actually buy. Measured against what it would cost:
+
+- The shade pass's advantage over the marcher is **entirely** the rig:
+  four coloured lights, a material, fog, temporal smoothing. That is
+  about forty lines of WGSL.
+- Its geometry is the half the marcher already does better and
+  exactly — screen-space normals against an analytic gradient, an
+  eight-tap SSAO against the distance field itself, splat-resolution
+  shadow maps against a traced ray.
+- Routing would cost four full-image buffers (~100 MB at 1080p, on an
+  engine that already has an OOM scope for exactly this), four texture
+  writes a pixel, a depth buffer in the splat encoding, and a second
+  full-screen pass — to arrive at the same picture.
+- And a single occlusion channel **cannot express a shadow per light**.
+  Four lights with one shadow term means light 1's shadow darkens
+  light 3. The marcher gets per-light shadows by tracing one each.
+
+So the extension stands (it is built, gated, and the right shape for
+the next generator that wants it), and mode D is not its first
+consumer. The vocabulary is shared, which was the point; the pixels
+are not, which was the mechanism.
+
+**What it costs, measured.** Lights are free and shadows are not:
+
+| | 1 light | 4 lights |
+|---|---|---|
+| Shadows off | 83.5 ms | 83.3 ms |
+| Shadows on | 112.7 ms | 185.4 ms |
+
+Blinn-Phong per light is a handful of arithmetic against a
+hundred-walk march, so the count costs nothing on its own. A traced
+shadow is one more march per light, +35% for the first and about
+25 ms each after — sub-linear because a surface facing away from a
+light skips that light's march entirely. The knob is **Shadows**, not
+the light count, and the tooltip says so.
+
+**The recolour cache carries the lighting as one scalar, and that is
+exact only while the lighting IS a multiplier.** A record is
+thirty-two bytes with every one spoken for, so what it holds is what a
+new albedo would be multiplied by. No specular (which adds a term
+rather than scaling one), white lights (a coloured one is three
+different multipliers) and no fog (which mixes toward a colour).
+Outside those the cache is REFUSED and a colouring change re-walks —
+slower, and correct, which is the way round this has to fail. It is
+also why the two solid presets ship with white lights and no
+specular: a palette drag would otherwise cost about 590 ms a frame at
+1080p against 20, and both are one click away for a still.
+
+**An untouched panel means a default key light, not no light.** For a
+flame, `shading_strength = 0` is classic emissive and a real picture;
+for a solid it is a flat silhouette. Untouched is the whole struct
+being default rather than the strength being zero, and the difference
+matters: a user who sets the strength to zero deliberately is asking
+for the unlit silhouette, and a rule keyed on the strength alone would
+leave no way to ask for it.
+
+**The fourth key.** Lighting had to go into the band and chunk keys, or
+a light change would have shown as bands of different lighting
+scrolling down the frame. That is the fourth input to arrive without
+one, after the palette, the flame and the camera.
+
+**Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
 offset — and the ray origins are all the same point, the eye, which is
