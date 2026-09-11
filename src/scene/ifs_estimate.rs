@@ -2,7 +2,8 @@
 //! ([docs/projects/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md)
 //! §2.2, phase 1).
 //!
-//! Hart's inverse iteration: apply inverse maps to the query point,
+//! Inverse iteration (see the plan's §9 for the lineage): apply
+//! inverse maps to the query point,
 //! tracking how much the forward composition would contract, and scale
 //! the distance measured in the expanded frame back down. What comes
 //! out is the distance to the attractor — plus, from the same walk and

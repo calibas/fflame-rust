@@ -91,7 +91,7 @@ pub struct IfsColoringDef {
 // The distance function
 // ====================================================================
 
-/// The loaded flame's attractor, by Hart's inverse iteration.
+/// The loaded flame's attractor, by inverse iteration.
 ///
 /// Transcribed from [`crate::scene::ifs_estimate::estimate`], which is
 /// the reference and carries the gates. The one structural difference
