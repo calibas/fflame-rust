@@ -511,27 +511,49 @@ pub fn seed_beam<P: SeedPoint>(
     let far = radius.max(1.0) * FAR;
 
     for _ in 0..max_levels {
-        // Score exactly as the walk does, so the prefix is a prefix
-        // and not an approximation of one.
+        // Score as the walk does, but for the WHOLE VIEW rather than
+        // for the centre it is walked from.
+        //
+        // Everything a seed carries is inherited by every pixel: the
+        // bound as a running MAXIMUM that nothing later can lower, and
+        // the escape as a level nothing later revisits. Scored at the
+        // centre's own position that is sound only while the view is
+        // small enough for the difference not to matter -- and this
+        // walk's whole job is to run until it nearly does.
+        //
+        // So a candidate is scored at the nearest point its view can
+        // reach, `r - reach`, which is a real lower bound on every
+        // pixel's own distance and so a sound bound and a sound escape
+        // test for all of them. The continuation raises it again per
+        // pixel, which is what the continuation is for.
+        //
+        // Left as the centre's this is not a subtle error. Pan until
+        // the centre leaves the bounding ball and its positive bound
+        // is inherited by pixels INSIDE it, so a point sitting exactly
+        // on the attractor reports the centre's distance to the ball
+        // and the set renders as empty space -- measured at 7.333 for
+        // a centre eight units out, against a true zero. That is what
+        // "sections disappear when they are mostly off-screen" was.
         let mut all_done = true;
-        for c in live.iter_mut() {
+        for (c, basis) in live.iter_mut().zip(&bases) {
             if c.done {
                 continue;
             }
-            c.bound = c.bound.max(c.sigma * (c.r - radius));
-            if c.r > radius && c.escape.is_none() {
+            let near = c.r - basis_reach(*basis);
+            c.bound = c.bound.max(c.sigma * (near - radius));
+            if near > radius && c.escape.is_none() {
                 let last = c
                     .address
                     .last()
                     .map(|&i| ifs.maps[i as usize].sigma_min)
                     .unwrap_or(mean);
                 c.escape = Some((
-                    level as f64 + escape_residual(c.r, radius, last),
+                    level as f64 + escape_residual(near, radius, last),
                     c.address.clone(),
                     c.q.clone(),
                 ));
             }
-            if !c.r.is_finite() || c.r > far {
+            if !c.r.is_finite() || near > far {
                 c.done = true;
             } else {
                 all_done = false;
@@ -902,27 +924,36 @@ pub fn seed_chain3<P: SeedPoint3>(
     let mut levels: Vec<Vec<Seed3>> = Vec::new();
 
     for level in 0..=max_levels {
-        // Score exactly as the walk does, so the prefix is a prefix
-        // and not an approximation of one.
+        // Scored for every sample the link can serve rather than for
+        // the target alone -- the same correction as the plane's above
+        // and for the same reason, since a bound is a running maximum
+        // and an escape is a level, so a link hands both to every
+        // sample that starts from it and the continuation can undo
+        // neither.
+        //
+        // A link accepts a delta only while its matrix carries it no
+        // further than the cap, so `cap` IS the furthest any sample of
+        // this link can sit from the reference.
         let mut all_done = true;
         for c in live.iter_mut() {
             if c.done {
                 continue;
             }
-            c.bound = c.bound.max(c.sigma * (c.r - radius));
-            if c.r > radius && c.escape.is_none() {
+            let near = c.r - cap;
+            c.bound = c.bound.max(c.sigma * (near - radius));
+            if near > radius && c.escape.is_none() {
                 let last = c
                     .address
                     .last()
                     .map(|&i| ifs.maps[i as usize].sigma_min)
                     .unwrap_or(mean);
                 c.escape = Some((
-                    level as f64 + escape_residual(c.r, radius, last),
+                    level as f64 + escape_residual(near, radius, last),
                     c.address.clone(),
                     c.q.clone(),
                 ));
             }
-            if !c.r.is_finite() || c.r > far {
+            if !c.r.is_finite() || near > far {
                 c.done = true;
             } else {
                 all_done = false;

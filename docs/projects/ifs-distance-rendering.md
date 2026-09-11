@@ -1399,6 +1399,54 @@ the last place, so the gate bounds how many bytes may differ AND by
 how much — a stale record is whole regions of the previous view, which
 no last-place bound admits.
 
+**Two faults reported 2026-09-11, and neither was what it looked
+like.**
+
+**"A slight zoom difference and a whole section goes dark; it happens
+sooner at higher supersampling."** The shadow ray's START offset is a
+few pixels — the surface's position is only known to about that — while
+its HIT threshold was a fixed fraction of the attractor, chosen
+deliberately so that light arriving at a glancing angle would not call
+every textured face blocked. The two scale differently, and where they
+CROSS the function fails completely: a surface close enough to the eye
+gets a start offset smaller than the threshold, so every ray is blocked
+on its first sample by the surface it started on, and the frame goes
+uniformly to its ambient floor. It spreads from the centre outward as
+the eye closes in, and supersampling brings it on sooner because that
+shrinks the pixel too — which is why the pairing in the report was the
+diagnosis. The threshold is capped at a tenth of the offset now, so
+where the pixel is large nothing changes and where it is not the
+threshold follows the offset down. The gate renders the same approach
+at two pixel sizes and asks both that the picture keeps its variation
+and that the two sizes agree about its brightness; either alone would
+be passed by a fault that darkened both equally.
+
+**"Sections disappear when they are mostly off-screen. Is there
+culling?"** There is no culling. It was the handover, and the mechanism
+is worth stating because it is the same shape as a bug §2.5 already
+warned about in another form: **everything a seed carries is inherited
+by every pixel** — the bound as a running MAXIMUM that nothing later
+can lower, and the escape as a level nothing later revisits. Both were
+scored at the view CENTRE's own position. That is sound only while the
+view is small enough for the difference not to matter, and the
+handover's whole job is to run until it nearly does.
+
+Pan until the centre leaves the bounding ball and its positive bound is
+inherited by pixels INSIDE it. A point sitting exactly on the attractor
+then reports the centre's distance to the ball — measured at **7.333
+against a true zero** for a centre eight units out — and a point that
+reports itself far from the set renders as empty space. The set was not
+being culled; it was being told it was somewhere else.
+
+Both walks now score at `r − reach`, the nearest point the view (or, in
+3D, the link) can reach, which is a real lower bound on every pixel's
+own distance and therefore a sound bound and a sound escape test for
+all of them. The continuation raises it again per pixel, which is what
+the continuation is for. The gate probes a point ON the set, kept near
+the frame's edge but inside it — outside the frame is outside what the
+seeding promises — and requires it to read zero at spans from 8 down to
+1/16.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
