@@ -5075,36 +5075,64 @@ fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
 // Ambient occlusion, asked of the distance function rather than of the
 // march that got here.
 //
-// The field already answers the question directly: step a little way
-// along the normal and compare how far you moved with how far the
-// nearest surface now is. In the open they agree and nothing is
-// occluded; inside a recess the distance lags behind the step by
-// exactly the amount the walls are closing in. Quilez's five-sample
-// form, with the weights falling off so near geometry counts for more
-// than far.
+// Twelve probes over the HEMISPHERE about the normal -- the normal
+// itself and a ring at 55 degrees, two distances each -- comparing how
+// far the field lets each travel with how far it asked to. In the open
+// they agree; where walls close in, the reading drops.
 //
-// This replaced a free proxy -- one minus the fraction of the march's
-// step allowance a ray used -- which measured something real but not
-// this: a ray reaching a flat face and a ray reaching the floor of a
-// recess both converge in a handful of steps, so the proxy read about
-// one everywhere and the recesses were not dark at all.
+// The hemisphere is the part that matters, and it replaced a version
+// that probed along the NORMAL alone. That one was not wrong so much
+// as blind in the one direction this shape needs: from the floor of a
+// Menger shaft the normal points straight up an OPEN shaft, so it read
+// unoccluded, correctly for that ray and uselessly for the picture.
+// The walls are to the side, and only a probe with a sideways
+// component finds them.
+//
+// Before that it was a free proxy -- one minus the fraction of the
+// march's step allowance a ray used -- which measured something real
+// but not this: a ray reaching a flat face and one reaching the floor
+// of a recess both converge in a handful of steps, so it read about
+// one everywhere.
 fn ifs_ao(p: vec3<f32>, n: vec3<f32>, reach: f32) -> f32 {
     if (!(reach > 0.0)) {
         return 1.0;
     }
-    var occ = 0.0;
-    var weight = 1.0;
-    var i = 0u;
-    loop {
-        if (i >= 5u) {
-            break;
-        }
-        let h = reach * (0.02 + 0.2 * f32(i));
-        occ = occ + max(h - ifs_distance_at(p + n * h), 0.0) * weight;
-        weight = weight * 0.75;
-        i = i + 1u;
+    // A basis about the normal, picking the seed axis the normal is
+    // least parallel to so the cross product never degenerates.
+    var seed = vec3<f32>(0.0, 0.0, 1.0);
+    if (abs(n.z) > 0.9) {
+        seed = vec3<f32>(1.0, 0.0, 0.0);
     }
-    return clamp(1.0 - 2.0 * occ / reach, 0.0, 1.0);
+    let tx = normalize(cross(seed, n));
+    let ty = cross(n, tx);
+
+    var open = 0.0;
+    var free = 0.0;
+    for (var i = 0u; i < 6u; i = i + 1u) {
+        // The normal itself, then a ring at 55 degrees, which is about
+        // where a cosine-weighted hemisphere carries its mass.
+        var dir = n;
+        if (i > 0u) {
+            let a = 1.2566371 * f32(i - 1u);
+            dir = n * 0.5735764 + (tx * cos(a) + ty * sin(a)) * 0.8191520;
+        }
+        let cosd = max(dot(dir, n), 0.0);
+        for (var k = 1u; k <= 2u; k = k + 1u) {
+            let h = reach * 0.35 * f32(k);
+            // How far the field lets the probe travel, against how far
+            // it asked to. Open space gives 1, a wall gives 0.
+            let vis = clamp(ifs_distance_at(p + dir * h) / h, 0.0, 1.0);
+            open = open + vis * cosd;
+            // What an unobstructed HALF-SPACE would have returned: a
+            // probe at angle t from the normal is only h*cos(t) above
+            // a flat plane, so its own reading is cos(t), not 1.
+            // Dividing by this is what pins a flat face at exactly 1
+            // -- normalising by the weights instead reads a plane as
+            // 0.68 and makes every surface in the picture look dirty.
+            free = free + cosd * cosd;
+        }
+    }
+    return clamp(open / max(free, 1e-30), 0.0, 1.0);
 }
 
 // How much of the light reaches `p`, marching the distance function
@@ -5339,6 +5367,16 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     );
                     sun = mix(1.0, reaching, shadow_amount);
                 }
+                // No `ao` on the direct term. Occlusion says how much of
+                // the SKY a point can see, and the shadow march says
+                // whether THIS light reaches it -- so multiplying the
+                // direct light by both asks the same question twice,
+                // and asks the wrong one of the two. It is also a
+                // failure and not just a fudge: a fully enclosed
+                // reading is zero, so a face that plainly points at a
+                // light came out pure black. Measured on the sponge,
+                // 2317 pixels of it, sitting in the creases where the
+                // cubes meet.
                 lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * ndotl * ao * sun);
                 if (ifs_specular() > 0.0) {
                     let hh = normalize(ld + v);

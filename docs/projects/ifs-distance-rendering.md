@@ -1349,6 +1349,56 @@ a light change would have shown as bands of different lighting
 scrolling down the frame. That is the fourth input to arrive without
 one, after the palette, the flame and the camera.
 
+**The occlusion was wrong twice, reported 2026-09-11 as "hard shadows
+with Shadows at zero, and bright pixels inside the dark lines".** Both
+faults were mine and both were found by printing numbers off the
+render rather than by looking at it.
+
+1. **The normaliser saturated.** It was `1 − 2·occ/reach`, and the 2
+   was a guess. Measured on a Menger crease whose probes read four
+   tenths of their height, that expression returns −0.13 and clamps to
+   **zero** — so a moderately concave surface came out as *fully
+   enclosed*. The normaliser is accumulated now (`Σ h·w`, the reading
+   a point would get if every probe landed inside the set), which pins
+   open space at exactly 1 and full enclosure at exactly 0 with no
+   constant left to be wrong. The same crease reads 0.4.
+
+   Zero occlusion mattered because **occlusion multiplied the direct
+   term as well**, so a face that plainly pointed at a light rendered
+   pure black. 2 317 pixels of the sponge, all of them in the creases
+   where the cubes meet — and since a black pixel next to a lit one
+   reads as a hole, that is what "bright pixels inside the dark lines"
+   was: the lit pixels were the surface, and the dark ones were the
+   bug.
+
+2. **The probe was blind sideways.** It sampled along the NORMAL
+   alone, which is not wrong so much as useless for this shape: from
+   the floor of a Menger shaft the normal points straight up an open
+   shaft, so it read unoccluded — correctly for that one ray. The
+   walls are to the side. It is twelve probes over the hemisphere now
+   (the normal plus a ring at 55°, two distances each), normalised
+   against what an unobstructed HALF-SPACE would return rather than
+   against the weights — a flat face is exactly 1 either way, but
+   dividing by the weights reads a plane as 0.68 and makes every
+   surface in the picture look dirty.
+
+**And a thing that is not a bug, recorded because it looks like one.**
+Correct occlusion on a Menger sponge is mild: a shaft is wider than
+the reach, so its walls really are open at that scale. The dramatic
+black shafts the first renders had came *from* the saturation. A
+cavity goes properly dark because the LIGHT cannot get into it, which
+is Shadows, not Occlusion — the tooltip says so now, and the default
+reach moved from 0.06 to 0.15, which is comparable to the features it
+is being asked to shade.
+
+The recolour comparison is no longer byte-identity, and for an
+arithmetic reason rather than a staleness one: the fresh walk sums a
+term per light while the recolour multiplies by the single factor the
+record carries. Both compute the same number and round differently in
+the last place, so the gate bounds how many bytes may differ AND by
+how much — a stale record is whole regions of the previous view, which
+no last-place bound admits.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
