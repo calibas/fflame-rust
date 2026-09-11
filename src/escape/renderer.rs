@@ -3557,9 +3557,16 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 })
             };
             // A solid render's per-pixel cost has the march in it, and
-            // its budget is scaled to match.
+            // its budget is scaled to match. Shadows add a SECOND
+            // march, of at most the same step count, so a shadowed
+            // pixel is counted as two -- which halves the band rather
+            // than letting a band quietly take twice as long. Measured
+            // at the defaults the real cost is about a fifth more, not
+            // twice, but the thing a band size protects against is the
+            // driver's watchdog, and that is a ceiling question.
             let (steps, budget) = if def.solid {
-                (param("steps", 96.0) as u32, IFS_SOLID_BUDGET)
+                let marches = if param("shadow", 0.7) > 0.0 { 2 } else { 1 };
+                (param("steps", 96.0) as u32 * marches, IFS_SOLID_BUDGET)
             } else {
                 (1, IFS_DISPATCH_BUDGET)
             };
