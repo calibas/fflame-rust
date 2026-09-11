@@ -710,7 +710,7 @@ pub const BALL_MARGIN: f64 = 1e-9;
 
 /// How many times [`ball_2d`] / [`ball_3d`] refine their first ball.
 ///
-/// Hart's radius is a bound on a ball each map sends into ITSELF, which
+/// The fixed ball's radius bounds a ball each map sends into ITSELF, which
 /// is a much stronger property than the estimate needs — the walk only
 /// needs the attractor to be inside. So the first ball can be far
 /// larger than the set: the Heighway dragon's is 1.707 around a set of
@@ -724,7 +724,7 @@ pub const BALL_MARGIN: f64 = 1e-9;
 /// bounding ball. Every iterate is valid, so the smallest one wins.
 const BALL_REFINEMENTS: usize = 64;
 
-/// A ball every map sends into itself (Hart's construction), then
+/// A ball every map sends into itself, then
 /// refined [`BALL_REFINEMENTS`] times toward the attractor.
 ///
 /// For centre `c`, map `S` with Lipschitz `L < 1` sends `B(c, R)` into

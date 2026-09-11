@@ -154,10 +154,12 @@ records it.
 ### 2.2 The distance estimate
 
 For an IFS of contractive affine maps `Sᵢ(x) = Mᵢx + tᵢ` with attractor
-A and a ball B(c, R) with `Sᵢ(B) ⊂ B` for every i, Hart (1996, sphere
-tracing, §on linear fractals) gives the bound by **inverse iteration**:
-apply inverse maps to the query point, tracking expansion, and scale
-the distance in the expanded frame back down.
+A and a ball B(c, R) with `Sᵢ(B) ⊂ B` for every i, the estimate is by
+**inverse iteration**: apply inverse maps to the query point, tracking
+expansion, and scale the distance in the expanded frame back down. See
+§9 for where each half of that comes from — the escape time is old and
+well attributed, the distance scaling is ours until someone finds it a
+source.
 
 ```
 p ← query point (after the inverse of the final transform, if any)
@@ -429,7 +431,10 @@ Pure Rust, in a module both this plan and flame-deep-zoom §7 consume.
   measure the escape plan and the deep-zoom plan both want.
 - The criterion (§2.4) as a function returning *why not*, not a bool.
 - The bounding ball: a ball fixed by the IFS, grown from the
-  translations and contractions (Hart's construction), conservative.
+  translations and contractions, conservative. The CONDITION
+  `Sᵢ(B) ⊆ B` is Hepting–Hart's (8); the radius that satisfies it,
+  `R ≥ |S(c) − c| / (1 − L)`, is the elementary contraction-mapping
+  bound and is not attributed to anyone.
 - **Gates:** unit tests against IFSs with known answers — Sierpiński's
   three maps at σ = 0.5, an anisotropic map whose determinant-based
   measure reads neutral but whose σ_max exceeds one, a 3D Apophysis
@@ -519,7 +524,7 @@ test for now.
   worst estimate/exact ratio over the exterior grid goes from **0.448
   to 1.0000**. The rings were never a property of the set.
 
-- **Hart's ball is far looser than the estimate needs.** His radius
+- **The fixed ball is far looser than the estimate needs.** Its radius
   bounds a ball each map sends into ITSELF; the walk only needs the
   attractor to be inside one. Since `A ⊆ B` implies `A = ∪Sᵢ(A) ⊆ ∪Sᵢ(B)`,
   the images' bounding ball is another valid ball, and iterating
@@ -1625,3 +1630,64 @@ move and the append-only registration order is untouched. Then:
 
 None of this is phase 1's work. Phase 1's only obligation is not to
 foreclose it, which costs one line (§5, phase 1).
+
+## 9. Where this comes from
+
+Written after the fact, because the first version of §2.2 cited a
+section of a paper that does not exist. The rule in CLAUDE.md about
+not inventing attributions applies to papers as much as to variation
+authors, and a plausible-sounding citation is worse than none — it
+looks checked.
+
+**Verified, by reading the papers:**
+
+- **Escape time for a linear fractal, by inverse maps.** Prusinkiewicz
+  and Sandness, *Koch curves as attractors and repellers*, IEEE
+  Computer Graphics and Applications 8(6):26–40, 1988. Hepting and
+  Hart's Definition 4.2 is explicitly "based on the one given by
+  Prusinkiewicz and Sandness", and reads
+  `DE(x) = 1 + maxᵢ DE(Tᵢ⁻¹(x))` inside the disk and 0 outside — "the
+  maximum number of inverse transformations necessary to iterate x to
+  a point outside D_R". That MAX over the maps is what this plan calls
+  `deepest_level`, and the disk condition `T(D_R) ⊂ D_R` is our
+  bounding ball.
+- **The N-ary tree with pruning**, which is what the walk without a
+  beam is: Hepting, Prusinkiewicz and Saupe, *Rendering methods for
+  iterated function systems*, in Fractals in the Fundamental and
+  Applied Sciences, 1991 — cited for exactly that by Hepting and Hart.
+- **The escape buffer**, the FORWARD algorithm this plan repeatedly
+  contrasts itself with: Hepting and Hart, *The Escape Buffer:
+  Efficient Computation of Escape Time for Linear Fractals*, Graphics
+  Interface '95, pp. 204–214. Its own §7.1 names the gap this plan
+  fills: "If a similar forward algorithm can be constructed around
+  DISTANCE instead of escape time, the result would greatly increase
+  the efficiency of computing the distance transform of linear
+  fractals."
+- **Sphere tracing**, which is what the solid marcher does, step for
+  step: Hart, *Sphere tracing: a geometric method for the antialiased
+  ray tracing of implicit surfaces*, The Visual Computer
+  12(10):527–545, 1996. Including the stopping rule — the paper works
+  in terms of "the radius of a pixel", which is our `px_at * t`.
+
+**Cited but NOT read, so nothing is claimed about its contents:** Hart
+and DeFanti, *Efficient antialiased rendering of 3-D linear fractals*,
+Computer Graphics 25(3):91–100, 1991. It is the obvious place for a
+distance bound on a linear fractal to live and it is where Hart 1996
+gets its pixel radius, but this plan does not assert what is in it.
+
+**Not attributed, because no source was found:** scaling the escape
+excess by the product of the maps' minimum singular values to turn an
+escape time into a DISTANCE — §2.2's `σ·(r − R)` and its running
+maximum over levels. It is the natural Lipschitz analogue of the
+escape time above and it may well be in the 1991 paper; until someone
+checks, it is unattributed rather than mis-attributed.
+
+**What was wrong.** §2.2 read "Hart (1996, sphere tracing, §on linear
+fractals)". That paper has no such section — its sections are
+Introduction, Sphere Tracing, Antialiasing, Results, Conclusion — and
+it contains no occurrence of "IFS", "iterated function", "attractor"
+or "contractive"; its Appendix F on fractals is about noise and
+hypertexture. The sphere-tracing half of the attribution was right and
+the linear-fractal half was invented. `Hart's inverse iteration`
+appeared in three source files as well and is now named for what it
+is.
