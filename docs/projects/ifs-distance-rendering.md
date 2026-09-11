@@ -1012,6 +1012,36 @@ view span over a thousand-odd, so it binds about ten bits earlier than
 "under the view" would. The first version of that test asserted 2²⁰–2²⁸
 and was simply wrong.
 
+**The solids ship as presets, 2026-09-11** — a Sierpiński tetrahedron
+and a Menger sponge, beside the four planar ones. They had to be BUILT
+rather than found, and phase 0's census is why: none of 34 shipped 3D
+candidates qualifies as solid, because an Apophysis-style transform is
+a perfectly good planar map and has unit scale in z. Half-weight
+`linear3D` is the simplest thing that contracts in all three. They
+frame themselves — an empty camera target means the attractor's own
+centre — so neither preset has to know where its own solid is.
+
+**The beam's default is 1 for a solid, against 8 for the plane**, and
+that is a measurement rather than a nerve. A march pays the beam on
+every STEP, not once per pixel, and both shipped solids TILE — the
+sponge's twenty sub-cubes are disjoint, the tetrahedron's four meet at
+points — so greedy is exact on them for the same reason it is on the
+gasket and Koch. Measured at 256²: beam 8 costs 2.8× beam 1 on the
+sponge and changes **two bytes** of a quarter-megabyte image. At 1080p
+the default took the sponge from **11.1 s to 1.09 s**, byte-identical.
+The parameter stays for a solid whose pieces overlap.
+
+**And the chunk model has the march in it now.** It counted one walk
+per pixel while a marcher walks once per STEP — the same class of
+mistake that hung a 1080p planar view, and it survived the first solid
+render because the beam change hid it. `IFS_SOLID_BUDGET` is the planar
+budget times the default step count, so the defaults band exactly as
+before (three bands, about a second) while raising the march or the
+beam shrinks the bands instead of silently lengthening them. The ratio
+is a calibration, not a worst case: most rays never take their full
+allowance, and modelling the ceiling would band a 1080p view into
+one-row dispatches for nothing.
+
 **Still to come in this phase**: soft shadows, the shade-pass extension
 (D7), and **3D seeding**, which the camera has now given a shape. A ray
 marches THROUGH space, so what a handover carries is per-ray rather
