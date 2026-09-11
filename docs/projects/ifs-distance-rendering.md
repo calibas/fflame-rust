@@ -982,13 +982,42 @@ unit cube must be a hole; the test asserts it (Menger: 0.236 from the
 set). A low-contrast colouring can hide a hole and a wrong map layout
 can fake one, so the picture is not the evidence.
 
-**Still to come in this phase**: the escape camera (D8) — the frame is
-derived from the attractor's bounding ball for now, with `zoom_log2`
-moving the eye and `rotation` orbiting it — soft shadows, the
-shade-pass extension (D7), and 3D seeding, which is deliberately not
-built: a ray marches THROUGH space, so what a handover carries is
-per-ray rather than per-pixel and how far along the ray a sample sits
-is part of the offset. The marcher's shape should decide that.
+**The camera is built, 2026-09-11** (D8). It has the shape a deep zoom
+wants: the **target** holds still and carries the precision — three
+exact decimal strings, like the 2D centre and for the same reason —
+while `zoom_log2` shortens the eye's distance around it and two angles
+orbit. An empty target means the attractor's own centre, so a flame
+you have just switched to is framed without being told where it is.
+`solid_camera` is the one place the angles mean anything, so the
+marcher, the panel and anything that later flies it cannot disagree.
+
+The controls follow the **config, not the mode** (D2): escape mode is
+not three-dimensional, one formula in it is, so gating on the mode
+would show a camera over a Mandelbrot and hide it over the thing it
+steers.
+
+**And it does not reach a deep zoom, which is worth stating plainly
+rather than implying otherwise.** The target carries digits but the
+marcher is handed an ABSOLUTE eye position in f32, and near a target of
+0.5 that is quantised to 6e-8 — so past **2¹³** a pixel is smaller than
+the eye's own rounding and the ray starts somewhere else. That is the
+wall the plane hit before §2.5's reference orbit, moved one step along,
+and the answer is the same one: stop sending a position and send an
+offset. `a_solid_deep_zoom_is_limited_by_the_eye_not_the_target` pins
+the number so raising it is a deliberate act.
+
+2¹³ is lower than a guess would put it, and the reason is worth
+keeping: the eye's rounding has to stay under a PIXEL, which is the
+view span over a thousand-odd, so it binds about ten bits earlier than
+"under the view" would. The first version of that test asserted 2²⁰–2²⁸
+and was simply wrong.
+
+**Still to come in this phase**: soft shadows, the shade-pass extension
+(D7), and **3D seeding**, which the camera has now given a shape. A ray
+marches THROUGH space, so what a handover carries is per-ray rather
+than per-pixel and how far along the ray a sample sits is part of the
+offset — and the ray origins are all the same point, the eye, which is
+what makes a per-view handover possible at all.
 
 
 - The escape camera (D8), ray generation, the View panel and fly mode

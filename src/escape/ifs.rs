@@ -1258,21 +1258,96 @@ pub fn view_basis(span_x: f64, span_y: f64, rotation: f32) -> [[f64; 2]; 2] {
     [[c * span_x, s * span_y], [s * span_x, -c * span_y]]
 }
 
-/// The whole-IFS constants and the camera, for a solid render.
+/// Where a solid render looks from, and which way.
+///
+/// One place, so the marcher, the panel and anything that later flies
+/// the camera cannot disagree about what an angle means.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SolidCamera {
+    pub eye: [f64; 3],
+    pub target: [f64; 3],
+    pub forward: [f64; 3],
+    pub right: [f64; 3],
+    pub up: [f64; 3],
+    pub fov: f32,
+    /// How far the eye sits from the target, in world units.
+    pub distance: f64,
+}
+
+/// How many ball radii away `zoom_log2 = 0` puts the eye.
+///
+/// Chosen so the attractor fills the frame at the default field of
+/// view rather than rattling around in it: the ball subtends roughly
+/// `2·asin(1/3.2) ≈ 0.64` radians, against a 0.7-radian default.
+const FRAME_DISTANCE: f64 = 3.2;
+
+/// Short of the pole by this much, where an up vector does not exist.
+const PITCH_LIMIT: f32 = 1.5533;
+
+/// Build the camera for a solid render.
+///
+/// The TARGET carries the precision and the eye is derived from it:
+/// `zoom_log2` shortens the distance, the two angles orbit. That is
+/// the shape a deep zoom wants — an approach to a point that holds
+/// still — and it is why the target is stored as decimal strings while
+/// the angles are plain `f32` (D8).
+///
+/// An empty target means the attractor's own centre, so a flame you
+/// have just switched to is framed without being told where it is.
+pub fn solid_camera(
+    escape: &crate::config::escape::EscapeConfig,
+    ifs: &Ifs3,
+) -> SolidCamera {
+    let axis = |s: &str, fallback: f64| -> f64 {
+        if s.trim().is_empty() {
+            fallback
+        } else {
+            s.trim().parse::<f64>().unwrap_or(fallback)
+        }
+    };
+    let target = [
+        axis(&escape.cam_target_x, ifs.ball.centre[0]),
+        axis(&escape.cam_target_y, ifs.ball.centre[1]),
+        axis(&escape.cam_target_z, ifs.ball.centre[2]),
+    ];
+
+    let r = ifs.ball.radius.max(1e-12);
+    let distance = FRAME_DISTANCE * r / 2f64.powf(escape.zoom_log2);
+
+    let pitch = escape.cam_pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT) as f64;
+    let yaw = escape.cam_yaw as f64;
+    // The eye sits on the sphere of that radius about the target; the
+    // view looks back down the same line.
+    let dir = [
+        pitch.cos() * yaw.cos(),
+        pitch.cos() * yaw.sin(),
+        pitch.sin(),
+    ];
+    let eye = [
+        target[0] + dir[0] * distance,
+        target[1] + dir[1] * distance,
+        target[2] + dir[2] * distance,
+    ];
+    let forward = [-dir[0], -dir[1], -dir[2]];
+
+    // World up is +z, which is the axis a flame treats as depth. The
+    // pitch clamp is what keeps this from being parallel to the view.
+    let right = normalize3(cross3(forward, [0.0, 0.0, 1.0]));
+    let up = cross3(right, forward);
+
+    SolidCamera { eye, target, forward, right, up, fov: escape.cam_fov.clamp(0.05, 3.0), distance }
+}
+
+/// Pack the whole-IFS constants and the camera for a solid render.
 ///
 /// Layout, one `vec4` each:
 /// 0. `ball centre xyz, radius`
 /// 1. `mean_sigma_min, map_count, 0, 0`
-/// 2. `eye xyz, field of view (radians)`
+/// 2. `eye xyz, field of view`
 /// 3. `forward xyz, 0`
 /// 4. `right xyz, 0`
 /// 5. `up xyz, 0`
-///
-/// The camera is here rather than shared with the flame's because the
-/// flame's fields are `f32` — the same wall the planar view centre hit
-/// at 2²² (D8). A camera of its own can carry its position the way the
-/// escape view carries its centre.
-pub fn pack_globals3(ifs: &Ifs3, eye: [f64; 3], fov: f32, out: &mut [[f32; 4]]) {
+pub fn pack_globals3(ifs: &Ifs3, cam: &SolidCamera, out: &mut [[f32; 4]]) {
     if out.len() < 6 {
         return;
     }
@@ -1288,22 +1363,10 @@ pub fn pack_globals3(ifs: &Ifs3, eye: [f64; 3], fov: f32, out: &mut [[f32; 4]]) 
         ifs.maps.iter().map(|m| m.sigma_min).sum::<f64>() / ifs.maps.len() as f64
     };
     out[1] = [mean as f32, ifs.maps.len() as f32, 0.0, 0.0];
-
-    // Look at the attractor. A fixed frame for now: phase 3's camera
-    // controls replace this, and the marcher does not care which built
-    // the basis.
-    let to = ifs.ball.centre;
-    let fwd = normalize3([to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]]);
-    // Any up that is not parallel to the view; z is the odd axis out
-    // in a flame, so prefer it and fall back when looking along it.
-    let world_up = if fwd[2].abs() > 0.9 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
-    let right = normalize3(cross3(fwd, world_up));
-    let up = cross3(right, fwd);
-
-    out[2] = [eye[0] as f32, eye[1] as f32, eye[2] as f32, fov];
-    out[3] = [fwd[0] as f32, fwd[1] as f32, fwd[2] as f32, 0.0];
-    out[4] = [right[0] as f32, right[1] as f32, right[2] as f32, 0.0];
-    out[5] = [up[0] as f32, up[1] as f32, up[2] as f32, 0.0];
+    out[2] = [cam.eye[0] as f32, cam.eye[1] as f32, cam.eye[2] as f32, cam.fov];
+    out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
+    out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
+    out[5] = [cam.up[0] as f32, cam.up[1] as f32, cam.up[2] as f32, 0.0];
 }
 
 fn normalize3(v: [f64; 3]) -> [f64; 3] {
@@ -1311,7 +1374,7 @@ fn normalize3(v: [f64; 3]) -> [f64; 3] {
     if n > 0.0 {
         [v[0] / n, v[1] / n, v[2] / n]
     } else {
-        [0.0, 0.0, 1.0]
+        [1.0, 0.0, 0.0]
     }
 }
 
@@ -1323,29 +1386,12 @@ fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     ]
 }
 
-/// Where to stand for a solid render, until D8's camera config lands.
+/// Whether this formula names a SOLID distance function.
 ///
-/// The frame is derived from the attractor's own bounding ball, so any
-/// qualifying flame is in view without being told where it is; the
-/// escape view's `zoom_log2` moves the eye in and `rotation` orbits
-/// it, so the two controls that already exist do something sensible.
-/// A real camera replaces this and the marcher will not notice — it
-/// reads a basis, not a policy.
-pub fn preview_camera(ifs: &Ifs3, zoom_log2: f64, rotation: f32) -> ([f64; 3], f32) {
-    let r = ifs.ball.radius.max(1e-6);
-    let dist = 3.2 * r / 2f64.powf(zoom_log2);
-    let a = rotation as f64;
-    // Slightly above the equator, so the silhouette is not symmetric
-    // and the shading has something to do.
-    let dir = normalize3([a.cos() * 0.86, a.sin() * 0.86, 0.42]);
-    (
-        [
-            ifs.ball.centre[0] + dir[0] * dist,
-            ifs.ball.centre[1] + dir[1] * dist,
-            ifs.ball.centre[2] + dir[2] * dist,
-        ],
-        0.7,
-    )
+/// D2: the 3D controls follow the CONFIG, not the render mode. Escape
+/// mode is not three-dimensional; one formula in it is.
+pub fn formula_is_solid(name: &str) -> bool {
+    get_ifs(name).is_some_and(|d| d.solid)
 }
 
 /// The per-map rows of the storage buffer, in the flame's transform
@@ -2020,6 +2066,196 @@ mod tests {
             }
             assert!((row.extra[0] - m.sigma_min as f32).abs() < 1e-6, "sigma");
         }
+    }
+
+    /// The camera's frame must be right-handed and orthonormal, or
+    /// the marcher's rays are sheared and nothing downstream can tell.
+    #[test]
+    fn the_solid_camera_is_an_orthonormal_frame_about_its_target() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let len = |a: [f64; 3]| dot(a, a).sqrt();
+
+        for &(pitch, yaw, zoom) in &[
+            (0.0f32, 0.0f32, 0.0f64),
+            (0.42, 0.9, 0.0),
+            (-1.2, -2.5, 6.0),
+            (1.5533, 3.14, 40.0),
+            (-1.5533, 0.0, 200.0),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.cam_pitch = pitch;
+            esc.cam_yaw = yaw;
+            esc.zoom_log2 = zoom;
+            let c = solid_camera(&esc, &ifs3);
+
+            for (name, v) in [("forward", c.forward), ("right", c.right), ("up", c.up)] {
+                assert!(
+                    (len(v) - 1.0).abs() < 1e-9,
+                    "{name} is not unit at pitch {pitch} yaw {yaw}: {}",
+                    len(v)
+                );
+            }
+            assert!(dot(c.forward, c.right).abs() < 1e-9, "forward/right not square");
+            assert!(dot(c.forward, c.up).abs() < 1e-9, "forward/up not square");
+            assert!(dot(c.right, c.up).abs() < 1e-9, "right/up not square");
+
+            // And it must LOOK at the target, not merely near it.
+            //
+            // Recovered by SUBTRACTING the two positions, which is
+            // only meaningful while the gap is large enough for an f64
+            // to hold: at zoom 2⁴⁰ the eye sits 2.5e-12 from a target
+            // near 0.5, and the difference has three significant
+            // digits left. That is not the camera losing the
+            // direction — it is this check losing it — but it is the
+            // same cancellation the SHADER meets, and
+            // `a_solid_deep_zoom_is_limited_by_the_eye_not_the_target`
+            // measures where.
+            if zoom <= 20.0 {
+                let to_target = [
+                    c.target[0] - c.eye[0],
+                    c.target[1] - c.eye[1],
+                    c.target[2] - c.eye[2],
+                ];
+                let d = len(to_target);
+                assert!((d - c.distance).abs() < 1e-9 * d.max(1.0), "distance disagrees");
+                for k in 0..3 {
+                    assert!(
+                        (to_target[k] / d - c.forward[k]).abs() < 1e-9,
+                        "forward does not point at the target at pitch {pitch} yaw {yaw}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Zooming approaches the target; it does not move it.
+    ///
+    /// That is the whole shape of a deep zoom, and the reason the
+    /// target is stored as decimal strings while the distance is
+    /// derived: the precision belongs to the point that holds still.
+    #[test]
+    fn zooming_approaches_the_target_and_leaves_it_alone() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.cam_target_x = "0.3333333333333333333333333333".to_string();
+        esc.cam_target_y = "0.25".to_string();
+        esc.cam_target_z = "0.125".to_string();
+
+        let mut last = f64::INFINITY;
+        for zoom in [0.0f64, 8.0, 40.0, 120.0] {
+            esc.zoom_log2 = zoom;
+            let c = solid_camera(&esc, &ifs3);
+            assert!(c.distance < last, "zoom {zoom} did not approach");
+            last = c.distance;
+            // The target is where it was asked to be, to the digits it
+            // was given -- not to an f32's worth of them.
+            assert!(
+                (c.target[0] - 1.0 / 3.0).abs() < 1e-15,
+                "target drifted at zoom {zoom}: {}",
+                c.target[0]
+            );
+        }
+        // And each doubling of the zoom halves the distance.
+        esc.zoom_log2 = 10.0;
+        let a = solid_camera(&esc, &ifs3).distance;
+        esc.zoom_log2 = 11.0;
+        let b = solid_camera(&esc, &ifs3).distance;
+        assert!((a / b - 2.0).abs() < 1e-9, "a zoom step is not an octave: {a} vs {b}");
+    }
+
+    /// An empty target means the attractor's own centre, so a flame
+    /// just switched to is framed without being told where it is.
+    #[test]
+    fn an_empty_target_frames_the_attractor() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+        let esc = crate::config::escape::EscapeConfig::default();
+        let c = solid_camera(&esc, &ifs3);
+        for k in 0..3 {
+            assert!((c.target[k] - ifs3.ball.centre[k]).abs() < 1e-12);
+        }
+        // At the home zoom the whole attractor is inside the frame.
+        let half_angle = (c.fov as f64) * 0.5;
+        let subtended = (ifs3.ball.radius / c.distance).asin();
+        assert!(
+            subtended < half_angle,
+            "the attractor subtends {subtended:.3} against a half-fov of {half_angle:.3}"
+        );
+    }
+
+    /// A solid deep zoom is limited by the EYE, not the target — and
+    /// that is what 3D seeding is for.
+    ///
+    /// The camera puts the precision where a deep zoom needs it: the
+    /// target holds still and carries digits, the distance shrinks
+    /// around it. But the marcher is handed an ABSOLUTE eye position
+    /// in `f32`, and near a target of 0.5 that is quantised to 6e-8 —
+    /// so past a zoom of about **2¹³** a PIXEL is smaller than the
+    /// eye's own rounding and the ray starts somewhere else. Exactly
+    /// the wall the plane hit before §2.5's reference orbit, moved one
+    /// step along.
+    ///
+    /// The plane's answer was to stop sending a position at all and
+    /// send an offset instead. The solid answer is the same, and it is
+    /// the 3D seeding phase 3 has not built: a ray marches THROUGH
+    /// space, so what a handover carries is per-ray, and how far along
+    /// the ray a sample sits is part of the offset.
+    ///
+    /// This pins the number so raising it is a deliberate act.
+    #[test]
+    fn a_solid_deep_zoom_is_limited_by_the_eye_not_the_target() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.cam_target_x = "0.3333333333333333333333333333".to_string();
+
+        // Where the eye's f32 rounding is still smaller than what the
+        // frame shows.
+        let mut deepest = 0.0f64;
+        for zoom in 0..40 {
+            esc.zoom_log2 = zoom as f64;
+            let c = solid_camera(&esc, &ifs3);
+            // One pixel across a 1080-tall frame, at the target.
+            let px = 2.0 * (c.fov as f64 * 0.5).tan() * c.distance / 1080.0;
+            // What an f32 can resolve about the eye's position.
+            let quantum = (c.eye[0].abs().max(1.0) as f32) * f32::EPSILON;
+            if (quantum as f64) < px {
+                deepest = zoom as f64;
+            }
+        }
+        println!("  a solid view stays inside f32's eye at zoom 2^{deepest}");
+        // MEASURED at 2^13, and lower than a guess would put it: the
+        // eye's rounding has to stay under a PIXEL, which is the view
+        // span over a thousand-odd, so it binds about ten bits earlier
+        // than "under the view" would.
+        assert!(
+            (12.0..=16.0).contains(&deepest),
+            "the solid zoom limit moved to 2^{deepest} -- if it went UP, 3D seeding              landed and this test should say so; if DOWN, something regressed"
+        );
+    }
+
+    /// Only a solid formula gets the 3D controls (D2).
+    #[test]
+    fn the_camera_belongs_to_the_formula_not_the_mode() {
+        assert!(formula_is_solid("ifs_flame_3d"));
+        assert!(!formula_is_solid("ifs_flame"));
+        assert!(!formula_is_solid("mandelbrot"));
+        assert!(!formula_is_solid("weierstrass"));
+        assert!(!formula_is_solid("nonexistent"));
     }
 
     #[test]
@@ -3110,7 +3346,7 @@ mod gpu_tests {
                 c.escape.formula = "ifs_flame_3d".to_string();
                 c.escape.coloring = coloring.to_string();
                 c.escape.zoom_log2 = 0.0;
-                c.escape.rotation = 0.9;
+                c.escape.cam_yaw = 0.9;
                 c.escape.formula_params.insert("levels".to_string(), 20.0);
                 c.escape.coloring_params.insert("reach".to_string(), 0.0);
                 c.escape.coloring_params.insert("interior".to_string(), 0.5);
@@ -3139,6 +3375,64 @@ mod gpu_tests {
                 );
             }
         }
+    }
+
+    /// Turning the camera must turn the picture, and zooming must
+    /// fill more of the frame.
+    ///
+    /// The marcher reads a basis, not a policy, so nothing downstream
+    /// would notice a camera that silently ignored its angles — the
+    /// render would simply always look the same, which reads as a
+    /// fixed viewpoint rather than a broken one.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_camera_steers_the_solid_render() {
+        let (device, queue) = device();
+        let shot = |yaw: f32, pitch: f32, zoom: f64| -> Vec<u8> {
+            let mut c = config_for(tetrahedron_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = yaw;
+            c.escape.cam_pitch = pitch;
+            c.escape.zoom_log2 = zoom;
+            c.escape.formula_params.insert("levels".to_string(), 16.0);
+            let job = crate::renderer::RenderJob::new(&c, 128, 128);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let lit = |px: &[u8]| {
+            px.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count()
+        };
+
+        let base = shot(0.0, 0.42, 0.0);
+        assert!(lit(&base) > 128 * 128 / 20, "nothing rendered: {}", lit(&base));
+
+        let turned = shot(1.1, 0.42, 0.0);
+        let differing = base.iter().zip(&turned).filter(|(a, b)| a != b).count();
+        assert!(
+            differing > base.len() / 10,
+            "yaw changed only {differing} of {} bytes -- the camera is not steering",
+            base.len()
+        );
+
+        let tilted = shot(0.0, -0.9, 0.0);
+        let differing = base.iter().zip(&tilted).filter(|(a, b)| a != b).count();
+        assert!(differing > base.len() / 10, "pitch does not steer");
+
+        // Closer fills more of the frame.
+        let near = shot(0.0, 0.42, 1.0);
+        assert!(
+            lit(&near) > lit(&base),
+            "zooming in lit {} against {} -- the eye is not approaching",
+            lit(&near),
+            lit(&base)
+        );
     }
 
     /// D9's pictures: the three overlapping IFSs, greedy against beam,

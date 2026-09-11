@@ -1788,6 +1788,18 @@ impl ConfigManager {
             ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
             ConfigPath::EscapeCenterRe => Ok(ConfigValue::String(config.escape.center_re.clone())),
             ConfigPath::EscapeCenterIm => Ok(ConfigValue::String(config.escape.center_im.clone())),
+            ConfigPath::EscapeCamTargetX => {
+                Ok(ConfigValue::String(config.escape.cam_target_x.clone()))
+            }
+            ConfigPath::EscapeCamTargetY => {
+                Ok(ConfigValue::String(config.escape.cam_target_y.clone()))
+            }
+            ConfigPath::EscapeCamTargetZ => {
+                Ok(ConfigValue::String(config.escape.cam_target_z.clone()))
+            }
+            ConfigPath::EscapeCamPitch => Ok(config.escape.cam_pitch.into()),
+            ConfigPath::EscapeCamYaw => Ok(config.escape.cam_yaw.into()),
+            ConfigPath::EscapeCamFov => Ok(config.escape.cam_fov.into()),
             // f32 view of an f64 field — see the ConfigPath doc for why
             // the precision ceiling is acceptable until phase 4.
             ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
@@ -2818,6 +2830,28 @@ impl ConfigManager {
             }
             ConfigPath::EscapeCenterIm => {
                 self.current.escape.center_im = value.try_into()?;
+            }
+            ConfigPath::EscapeCamTargetX => {
+                self.current.escape.cam_target_x = value.try_into()?;
+            }
+            ConfigPath::EscapeCamTargetY => {
+                self.current.escape.cam_target_y = value.try_into()?;
+            }
+            ConfigPath::EscapeCamTargetZ => {
+                self.current.escape.cam_target_z = value.try_into()?;
+            }
+            ConfigPath::EscapeCamPitch => {
+                // Clamped short of the poles, where the up vector is
+                // undefined and the frame flips.
+                let v: f32 = value.try_into()?;
+                self.current.escape.cam_pitch = v.clamp(-1.5533, 1.5533);
+            }
+            ConfigPath::EscapeCamYaw => {
+                self.current.escape.cam_yaw = value.try_into()?;
+            }
+            ConfigPath::EscapeCamFov => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.cam_fov = v.clamp(0.05, 3.0);
             }
             ConfigPath::EscapeZoomLog2 => {
                 let v: f32 = value.try_into()?;

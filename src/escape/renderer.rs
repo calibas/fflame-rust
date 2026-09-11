@@ -5793,9 +5793,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             );
             if def.solid {
                 if let Some((ifs3, _)) = self.ifs.as_ref().and_then(|p| p.solid.as_ref()) {
-                    let (eye, fov) =
-                        super::ifs::preview_camera(ifs3, escape.zoom_log2, escape.rotation);
-                    super::ifs::pack_globals3(ifs3, eye, fov, &mut fdata);
+                    let cam = super::ifs::solid_camera(escape, ifs3);
+                    super::ifs::pack_globals3(ifs3, &cam, &mut fdata);
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.
