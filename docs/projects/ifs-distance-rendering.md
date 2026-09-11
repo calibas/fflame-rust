@@ -203,7 +203,7 @@ is built from them:
 | quantity | what it is | colourings |
 |---|---|---|
 | `d` | distance to the attractor (0 on it) | edge antialiasing; contour bands; glow / halo; the classic DE shading |
-| `level` | inverse-orbit depth at escape, with residual | Hepting–Hart escape-time bands: the Fractint "escape-time Sierpiński" look |
+| `level` | inverse-orbit depth at escape, with residual | escape-time bands, the Hepting–Hart quantity: nested shells of constant depth around the set |
 | `address` | the branch chosen at each level, packed | symbolic colouring — the analogue of transform colour; `address_mix` generalised to base N |
 | `p_K` | the point after K inversions | orbit traps in the expanded frame; image lookups, as the origami colouring does |
 
@@ -1143,11 +1143,12 @@ by looking, and each would have read as "shadows do not work".
    the fraction of the march's step allowance a ray used — free, and a
    real property of the field, but not this property: a ray reaching a
    flat face and a ray reaching the floor of a recess both converge in
-   a handful of steps, so it read about one everywhere. It is five
-   samples along the normal now (Quilez's form), comparing how far the
-   sample moved with how far the surface then is. That is the
-   difference between a sponge whose holes have depth and a sponge
-   painted on a cube.
+   a handful of steps, so it read about one everywhere. It became five
+   samples along the normal, comparing how far the sample moved with
+   how far the surface then is — and then, when that turned out to be
+   blind sideways, the twelve-probe hemisphere described below. The
+   five-sample version was Quilez's form; the hemisphere is not his and
+   is no longer credited to him.
 
 **And the presets were framed down their own symmetry axes.** A
 Sierpiński tetrahedron seen down an axis is exactly the planar gasket;
@@ -1681,6 +1682,47 @@ escape time into a DISTANCE — §2.2's `σ·(r − R)` and its running
 maximum over levels. It is the natural Lipschitz analogue of the
 escape time above and it may well be in the 1991 paper; until someone
 checks, it is unattributed rather than mis-attributed.
+
+**Also borrowed, and verified:**
+
+- **Soft shadows by the narrowest passage.** Inigo Quilez,
+  *Soft shadows in raymarched SDFs*,
+  <https://iquilezles.org/articles/rmshadows/> — the
+  `shade = min(shade, k·d/t)` accumulation `ifs_shadow` runs. His `k`
+  is "related to the inverse of the light source's size, since larger
+  lights create softer shadows", which is what our **Shadow Sharpness**
+  is and what its tooltip now says.
+- **The attractor as the fixed point of `A = ∪ Sᵢ(A)`**, which the ball
+  refinement is one line of: Hutchinson, *Fractals and self-similarity*,
+  Indiana University Journal of Mathematics 30(5):713–747, 1981.
+- **Blinn–Phong**, the per-light shading mode D shares with the splat
+  pipeline's shade pass: Phong 1975, Blinn 1977. Naming it is the
+  credit; the arithmetic is deliberately the shade pass's, so the two
+  engines describe light the same way.
+- **The Barnsley fern**, one of phase 0's fixtures, is from Barnsley's
+  *Fractals Everywhere* (1988), which is also where the IFS vocabulary
+  this plan uses comes from.
+
+**Named only to put them out of scope** (§7): the Mandelbulb, Mandelbox
+and KIFS distance functions. Those are community constructions — the
+Mandelbulb is generally credited to Daniel White and Paul Nylander, the
+Mandelbox to Tom Lowe, KIFS to the demoscene handle "Knighty" — and
+this plan neither uses nor reproduces them, so the names are here to
+say what this is NOT.
+
+**Ours, and said so rather than left ambiguous:** the twelve-probe
+hemisphere occlusion (Quilez's along-the-normal form is what it
+replaced, for being unable to see a well); the beam, its
+distance-to-centre ranking and the two-pass selection; the seed chain
+and its per-level handover; and the reference/delta split applied to
+inverse maps.
+
+**Unchecked, and flagged rather than asserted.** An earlier version of
+§2.3's table called the level colouring "the Fractint 'escape-time
+Sierpiński' look". Fractint does ship an IFS type and escape-time
+rendering of linear fractals was in the literature by then, but nobody
+here has opened Fractint to confirm it produces that picture, so the
+claim is gone rather than dressed up.
 
 **What was wrong.** §2.2 read "Hart (1996, sphere tracing, §on linear
 fractals)". That paper has no such section — its sections are
