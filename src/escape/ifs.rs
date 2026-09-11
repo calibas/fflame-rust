@@ -98,7 +98,7 @@ pub static IFS_FLAME: IfsDef = IfsDef {
             display_name: "Inverse Depth",
             default: 24.0,
             min: 1.0,
-            max: 160.0,
+            max: 256.0,
             tooltip: "How many inverse maps to apply before giving up and calling the \
                       pixel part of the set. Deeper resolves finer structure and is \
                       never less sound; the depth a zoom needs grows like \
@@ -204,7 +204,7 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         return res;
     }
 
-    let max_levels = u32(clamp(fparam(0u), 1.0, 160.0));
+    let max_levels = u32(clamp(fparam(0u), 1.0, 256.0));
     let beam = u32(clamp(fparam(1u), 1.0, f32(IFS_MAX_BEAM)));
     let far = max(radius, 1.0) * 1e12;
     let handover = ifs_handover_level();
@@ -831,6 +831,64 @@ pub fn pack_seeds(
     }
 }
 
+/// A seeding position at arbitrary precision.
+///
+/// The impl lives here rather than beside the trait because `BigFloat`
+/// is the escape engine's, and `scene` compiles without the escape
+/// engine. Only the POSITION is big: the map coefficients stay f64,
+/// and so does the distance the walk compares against the ball, which
+/// is O(1) however precise the point is.
+impl crate::scene::ifs_estimate::SeedPoint for [super::bigfloat::BigFloat; 2] {
+    fn apply_affine(&self, a: &Affine2) -> Self {
+        let n = self[0].n_limbs().max(self[1].n_limbs());
+        let big = |v: f64| super::bigfloat::BigFloat::from_f64(v, n);
+        [
+            big(a.m[0][0])
+                .mul(&self[0])
+                .add(&big(a.m[0][1]).mul(&self[1]))
+                .add(&big(a.t[0])),
+            big(a.m[1][0])
+                .mul(&self[0])
+                .add(&big(a.m[1][1]).mul(&self[1]))
+                .add(&big(a.t[1])),
+        ]
+    }
+
+    fn distance_to(&self, p: [f64; 2]) -> f64 {
+        let dx = self[0].to_f64() - p[0];
+        let dy = self[1].to_f64() - p[1];
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    fn to_f64(&self) -> [f64; 2] {
+        [self[0].to_f64(), self[1].to_f64()]
+    }
+}
+
+/// The view centre, at the precision the zoom asks for.
+///
+/// `EscapeConfig` keeps the centre as exact decimal strings precisely
+/// so this is possible: an f64 centre is quantised to 5.5e-17, which
+/// is about 1% of the view by 2⁴⁹ and the whole of it not long after.
+/// The walk consumes about one bit of the centre per level, and the
+/// handover is at roughly `zoom` levels, so the precision needed grows
+/// with the zoom — which is exactly what `limbs_for_view` sizes.
+pub fn centre_at_precision(
+    escape: &crate::config::escape::EscapeConfig,
+) -> Option<[super::bigfloat::BigFloat; 2]> {
+    let n = super::fixedpoint::limbs_for_view(
+        &escape.center_re,
+        &escape.center_im,
+        escape.zoom_log2,
+    );
+    let re = super::fixedpoint::FixedPoint::from_decimal(&escape.center_re, n)?;
+    let im = super::fixedpoint::FixedPoint::from_decimal(&escape.center_im, n)?;
+    Some([
+        super::bigfloat::BigFloat::from_fixed(&re),
+        super::bigfloat::BigFloat::from_fixed(&im),
+    ])
+}
+
 /// The view basis: takes a pixel's normalised offset — the screen
 /// spanning [-½, ½] on each axis — to a world offset from the centre.
 ///
@@ -1267,6 +1325,190 @@ mod tests {
         assert!(!packed_bytes_eq(Some(&packed), Some(&reframed)));
     }
 
+    /// A long exact decimal for `num/den`, by long division.
+    pub(super) fn decimal(num: u64, den: u64, digits: usize) -> String {
+        let mut out = format!("{}.", num / den);
+        let mut r = num % den;
+        for _ in 0..digits {
+            r *= 10;
+            out.push((b'0' + (r / den) as u8) as char);
+            r %= den;
+        }
+        out
+    }
+
+    /// A deep zoom must hold a centre f64 cannot express.
+    ///
+    /// The earlier gates all centred somewhere exactly representable —
+    /// 0.25, then the origin — which is precisely the thing that hides
+    /// a precision wall, and did hide one. This one centres on
+    /// **(5/14, 1/7)**, whose decimal expansion repeats forever.
+    ///
+    /// That point is the fixed point of `m₀∘m₁∘m₂`, a contraction by
+    /// ⅛ that maps the attractor into itself — so the gasket around it
+    /// is its own image at every scale of eight, and the distance
+    /// field in PIXELS at zoom Z and at Z+3 must be the same field.
+    /// Self-similarity again, but this time about a centre that only
+    /// survives in `BigFloat`: at f64 the same test fails by 2⁵⁰.
+    #[test]
+    fn a_deep_zoom_holds_a_centre_f64_cannot_express() {
+        let guard = global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&gpu_tests::sierpinski_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = decimal(5, 14, 400);
+        esc.center_im = decimal(1, 7, 400);
+
+        // f64 rounds this to 5.5e-17; the gate is that the render does
+        // not.
+        assert_ne!(
+            esc.center_re.parse::<f64>().expect("parses").to_string(),
+            esc.center_re[..20].to_string(),
+            "the fixture must not be an f64-exact centre"
+        );
+
+        let field_at = |zoom: f64| -> Vec<f64> {
+            let mut e = esc.clone();
+            e.zoom_log2 = zoom;
+            let span = 4.0 / 2f64.powf(zoom);
+            let basis = view_basis(span, span, 0.0);
+            let px = span / 32.0;
+            let centre = centre_at_precision(&e).expect("centre parses");
+            let seeds = crate::scene::ifs_estimate::seed_beam(
+                &ifs,
+                centre,
+                basis,
+                px,
+                (zoom as u32) + 64,
+                8,
+            );
+            let mut out = Vec::new();
+            for i in 0..17 {
+                for j in 0..17 {
+                    let uv = [i as f64 / 16.0 - 0.5, j as f64 / 16.0 - 0.5];
+                    out.push(
+                        crate::scene::ifs_estimate::estimate_seeded(&ifs, &seeds, uv, 64, 8)
+                            .distance,
+                    );
+                }
+            }
+            out
+        };
+
+        for &zoom in &[6.0f64, 30.0, 60.0, 120.0, 180.0] {
+            let here = field_at(zoom);
+            let octave = field_at(zoom + 3.0);
+            let mut worst: f64 = 0.0;
+            for (a, b) in here.iter().zip(&octave) {
+                worst = worst.max((a - b).abs() / a.max(*b).max(1.0));
+            }
+            let spread = here.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                - here.iter().cloned().fold(f64::INFINITY, f64::min);
+            println!(
+                "  zoom 2^{zoom} vs 2^{}: worst {worst:.3e}, spread {spread:.2} px",
+                zoom + 3.0
+            );
+            assert!(
+                worst < 1e-3,
+                "at zoom 2^{zoom} the picture is not self-similar three octaves down \
+                 (worst {worst:.3e}) -- the centre has lost its precision"
+            );
+            assert!(spread > 1.0, "at zoom 2^{zoom} the field is flat ({spread:.3} px)");
+        }
+    }
+
+    /// The centre's PRECISION is what makes the deep zoom work, and
+    /// this is the test that says so.
+    ///
+    /// The self-similarity gate above is necessary but not sufficient,
+    /// and the first control written for it proved the point: it asked
+    /// whether an f64 centre's picture is self-similar, and it IS —
+    /// every f64 is a dyadic rational, and a dyadic centre's inverse
+    /// orbit runs out of fractional bits and lands exactly on a fixed
+    /// point, so it is self-similar for a completely degenerate
+    /// reason. A gate can pass for the wrong reason; this one asks the
+    /// question directly instead.
+    ///
+    /// Two claims, at a zoom where they can be told apart:
+    ///
+    /// - the answer has CONVERGED in precision — more limbs does not
+    ///   change it, so the walk is not still losing the centre;
+    /// - f64 gives a DIFFERENT answer — so the precision is load
+    ///   bearing, and the gate above is not passing for free.
+    #[test]
+    fn the_centres_precision_is_what_makes_the_deep_zoom_work() {
+        let guard = global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&gpu_tests::sierpinski_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let re = decimal(5, 14, 400);
+        let im = decimal(1, 7, 400);
+        const ZOOM: f64 = 120.0;
+        let span = 4.0 / 2f64.powf(ZOOM);
+        let basis = view_basis(span, span, 0.0);
+        let px = span / 32.0;
+
+        let field = |centre: &dyn Fn() -> Box<dyn FnOnce() -> Vec<f64>>| centre()();
+        let _ = field;
+
+        let sample = |seeds: &crate::scene::ifs_estimate::Seeds| -> Vec<f64> {
+            (0..13)
+                .flat_map(|i| (0..13).map(move |j| (i, j)))
+                .map(|(i, j)| {
+                    let uv = [i as f64 / 12.0 - 0.5, j as f64 / 12.0 - 0.5];
+                    crate::scene::ifs_estimate::estimate_seeded(&ifs, &seeds, uv, 64, 8).distance
+                })
+                .collect()
+        };
+        let big_at = |limbs: usize| -> Vec<f64> {
+            let fp_re = crate::escape::fixedpoint::FixedPoint::from_decimal(&re, limbs).expect("re");
+            let fp_im = crate::escape::fixedpoint::FixedPoint::from_decimal(&im, limbs).expect("im");
+            let centre = [
+                crate::escape::bigfloat::BigFloat::from_fixed(&fp_re),
+                crate::escape::bigfloat::BigFloat::from_fixed(&fp_im),
+            ];
+            sample(&crate::scene::ifs_estimate::seed_beam(
+                &ifs, centre, basis, px, 256, 8,
+            ))
+        };
+
+        let n = crate::escape::fixedpoint::limbs_for_view(&re, &im, ZOOM);
+        let at_n = big_at(n);
+        let at_2n = big_at(n * 2);
+        let worst_precision = at_n
+            .iter()
+            .zip(&at_2n)
+            .map(|(a, b)| (a - b).abs() / a.max(*b).max(1.0))
+            .fold(0.0f64, f64::max);
+        println!("  {n} limbs vs {} limbs: worst {worst_precision:.3e}", n * 2);
+        assert!(
+            worst_precision < 1e-9,
+            "doubling the precision changed the picture ({worst_precision:.3e}) --              {n} limbs is not enough for zoom 2^{ZOOM}"
+        );
+
+        let at_f64 = sample(&crate::scene::ifs_estimate::seed_beam(
+            &ifs,
+            [re.parse::<f64>().expect("re"), im.parse::<f64>().expect("im")],
+            basis,
+            px,
+            256,
+            8,
+        ));
+        let worst_f64 = at_n
+            .iter()
+            .zip(&at_f64)
+            .map(|(a, b)| (a - b).abs() / a.max(*b).max(1.0))
+            .fold(0.0f64, f64::max);
+        println!("  {n} limbs vs f64:        worst {worst_f64:.3e}");
+        assert!(
+            worst_f64 > 1e-3,
+            "an f64 centre gave the same picture at zoom 2^{ZOOM}              ({worst_f64:.3e}) -- then precision is not what the deep gate is              measuring, and that gate proves nothing"
+        );
+    }
+
     #[test]
     fn lookup_routes_to_mode_c_only() {
         assert!(get_ifs("ifs_flame").is_some());
@@ -1449,7 +1691,7 @@ mod gpu_tests {
         t
     }
 
-    fn sierpinski_flame() -> Flame {
+    pub(super) fn sierpinski_flame() -> Flame {
         let mut fl = Flame::default();
         fl.transforms = vec![half(0.0, 0.0), half(0.5, 0.0), half(0.25, 0.5)];
         fl.final_transforms.clear();
@@ -2006,58 +2248,46 @@ mod gpu_tests {
     /// `limbs_for_view` are what raise it further, and the config
     /// already stores the centre as an exact decimal string for
     /// exactly that.
-    pub(super) const DEEP_ZOOM_LIMIT: f64 = 40.0;
+    pub(super) const DEEP_ZOOM_LIMIT: f64 = 200.0;
 
-    /// Where the f32 walk stops agreeing with the f64 reference.
+    /// How deep the render agrees with the reference.
     ///
-    /// §2.5 promises deep zoom, and the shader already carries the
-    /// pixel split into a reference half and a delta half so the
-    /// machinery can be dropped in. This measures what that machinery
-    /// has to buy: the zoom at which the plain f32 path stops drawing
-    /// the same picture the reference does.
+    /// The reference is the SEEDED CPU walk at the precision the zoom
+    /// asks for — `seed_beam` + `estimate_seeded`, which
+    /// `the_centres_precision_is_what_makes_the_deep_zoom_work` shows
+    /// has converged in precision and which a direct f64 walk cannot
+    /// match past about 2⁴⁵.
+    ///
+    /// The centre is **(5/14, 1/7)**, which repeats forever in decimal
+    /// and is the fixed point of `m₀∘m₁∘m₂`, so the view keeps finding
+    /// structure however far it zooms. Earlier versions of this sweep
+    /// centred on 0.25 and then on a depth-40 attractor point; the
+    /// first is f32-exact and reported no wall at all, the second is
+    /// only within 2⁻⁴⁰ of the set and ran out from under the view.
     #[test]
     #[ignore = "needs a GPU; prints a measurement"]
-    fn where_the_f32_walk_stops_agreeing_with_the_reference() {
+    fn how_deep_the_render_agrees_with_the_reference() {
         let guard = global_registry();
         let flame = sierpinski_flame();
         let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
         drop(guard);
 
-        // A point ON the attractor, so zooming in keeps finding
-        // structure rather than running off into empty space — and a
-        // DEEP one, reached by forty maps, so its coordinates need
-        // about forty bits. A shallow attractor point of this IFS is a
-        // dyadic rational that f32 holds exactly, which would hide the
-        // precision wall entirely: 0.25 agrees perfectly at any zoom
-        // because there is nothing to round.
-        // Forty-five maps deep, which puts it within 2^-45 of the
-        // set — the view has to CONTAIN the attractor for the sweep to
-        // mean anything, and a shallower point runs out from under it.
-        // Deeper is not available: an f64 holds this to 2^-53 relative
-        // and no further, which is also what caps the sweep.
-        let target = {
-            let mut p = ifs.ball.centre;
-            for k in 0..45u32 {
-                p = ifs.maps[(k % 3) as usize].forward.apply(p);
-            }
-            p
-        };
-        println!("  target {target:?}");
+        let re = super::tests::decimal(5, 14, 400);
+        let im = super::tests::decimal(1, 7, 400);
+        let mut deepest = 0.0f64;
 
-        let mut worst_agreed = 0.0f64;
         println!("  zoom  depth  agreement  (interior/exterior pixels)");
-        for &zoom in &[0.0f64, 16.0, 24.0, 32.0, 40.0, 44.0] {
+        for &zoom in &[0.0f64, 16.0, 32.0, 64.0, 96.0, 128.0, 160.0, 200.0] {
             // Depth has to keep up with the zoom or the walk cannot
-            // resolve what the view is showing: at sigma = 0.5 each
-            // level buys one bit, so a view 2^z across needs about
-            // z levels before it can tell interior from exterior at
-            // all. This is the FIRST limit, and it is a parameter.
-            let levels = (zoom as u32 + 24).min(160);
+            // resolve what the view shows: at σ = ½ each level buys one
+            // bit. Past 256 the def's own ceiling binds.
+            let levels = (zoom as u32 + 24).min(256);
             let mut c = config_for(flame.clone());
             c.escape.formula_params.insert("levels".to_string(), levels as f32);
-            c.escape.center_re = format!("{:.20}", target[0]);
-            c.escape.center_im = format!("{:.20}", target[1]);
+            c.escape.center_re = re.clone();
+            c.escape.center_im = im.clone();
             c.escape.zoom_log2 = zoom;
+
             let rgba = {
                 let (device, queue) = device();
                 let job = crate::renderer::RenderJob::new(&c, W, H);
@@ -2071,15 +2301,6 @@ mod gpu_tests {
                 .rgba_data
             };
 
-            let span_y = 4.0 / 2f64.powf(zoom);
-            let px = span_y / H as f64;
-            let plane = |x: u32, y: u32| -> [f64; 2] {
-                let span_x = span_y * W as f64 / H as f64;
-                let u = (x as f64 + 0.5) / W as f64 - 0.5;
-                let v = (y as f64 + 0.5) / H as f64 - 0.5;
-                [target[0] + u * span_x, target[1] - v * span_y]
-            };
-
             let dir = std::path::Path::new("output/ifs");
             std::fs::create_dir_all(dir).expect("output dir");
             image::save_buffer(
@@ -2091,15 +2312,38 @@ mod gpu_tests {
             )
             .expect("write png");
 
+            let span_y = 4.0 / 2f64.powf(zoom);
+            let span_x = span_y * W as f64 / H as f64;
+            let seeds = crate::scene::ifs_estimate::seed_beam(
+                &ifs,
+                centre_at_precision(&c.escape).expect("centre parses"),
+                view_basis(span_x, span_y, 0.0),
+                span_y / H as f64,
+                zoom as u32 + 64,
+                BEAM,
+            );
+
             let mut inside = Vec::new();
             let mut outside = Vec::new();
             for y in 0..H {
                 for x in 0..W {
-                    let d = estimate(&ifs, plane(x, y), levels, BEAM).distance;
+                    let uv = [
+                        (x as f64 + 0.5) / W as f64 - 0.5,
+                        (y as f64 + 0.5) / H as f64 - 0.5,
+                    ];
+                    // Already in pixels, like the shader's.
+                    let d = crate::scene::ifs_estimate::estimate_seeded(
+                        &ifs,
+                        &seeds,
+                        uv,
+                        levels,
+                        BEAM,
+                    )
+                    .distance;
                     let b = brightness(&rgba, x, y);
-                    if d < 0.25 * px {
+                    if d < 0.25 {
                         inside.push(b);
-                    } else if d > 3.0 * px {
+                    } else if d > 3.0 {
                         outside.push(b);
                     }
                 }
@@ -2128,14 +2372,15 @@ mod gpu_tests {
             if zoom <= DEEP_ZOOM_LIMIT {
                 assert!(
                     agree > 0.99,
-                    "at zoom 2^{zoom} the f32 walk agrees with the reference on only                      {:.1}% of pixels, inside the depth this build claims",
+                    "at zoom 2^{zoom} the render agrees with the reference on only \
+                     {:.1}% of pixels, inside the depth this build claims",
                     agree * 100.0
                 );
-                worst_agreed = worst_agreed.max(zoom);
+                deepest = deepest.max(zoom);
             }
         }
         assert!(
-            worst_agreed >= DEEP_ZOOM_LIMIT,
+            deepest >= DEEP_ZOOM_LIMIT,
             "the sweep never reached the claimed limit of 2^{DEEP_ZOOM_LIMIT}"
         );
     }

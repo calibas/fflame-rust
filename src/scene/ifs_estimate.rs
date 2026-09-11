@@ -353,6 +353,42 @@ fn mean_sigma_min<A>(maps: &[IfsMap<A>]) -> f64 {
 // making this generic over dimension now would mean an associated
 // basis type on [`IfsSpace`] for one caller, so it waits.
 
+/// A position the seeding walk can carry, at whatever precision the
+/// view needs.
+///
+/// Only the POSITION needs more than f64, and only until the handover.
+/// The maps' coefficients are f64 and stay f64; the accumulated basis
+/// and σ product are f64 and stay f64 (they run like 2^±zoom, which an
+/// f64 exponent holds to ~2¹⁰²³); the distance to the ball's centre is
+/// O(1) and f64 answers it. What needs precision is the centre, and
+/// the reason is cancellation: after k levels the walk has computed
+/// `A_k·C + b_k` where `A_k ~ 2ᵏ` and the answer is O(1), so k bits of
+/// C are consumed to get there. At the handover k is about the zoom.
+pub trait SeedPoint: Clone {
+    /// Apply an affine map whose coefficients are f64.
+    fn apply_affine(&self, a: &Affine2) -> Self;
+    /// Distance to an f64 point. The answer is O(1), so f64 holds it
+    /// however precise `self` is.
+    fn distance_to(&self, p: [f64; 2]) -> f64;
+    /// Collapse for the handover, where f32 is about to take over
+    /// anyway.
+    fn to_f64(&self) -> [f64; 2];
+}
+
+impl SeedPoint for [f64; 2] {
+    fn apply_affine(&self, a: &Affine2) -> Self {
+        a.apply(*self)
+    }
+
+    fn distance_to(&self, p: [f64; 2]) -> f64 {
+        Affine2::distance(*self, p)
+    }
+
+    fn to_f64(&self) -> [f64; 2] {
+        *self
+    }
+}
+
 /// One beam candidate, handed from the CPU's walk to the shader's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Seed {
@@ -414,9 +450,9 @@ const HANDOVER_FRACTION: f64 = 0.25;
 /// `view_basis` maps a normalised pixel offset — the screen spanning
 /// [-½, ½] on each axis — to a world offset from the centre. `px` is
 /// the world width of one pixel.
-pub fn seed_beam(
+pub fn seed_beam<P: SeedPoint>(
     ifs: &Ifs2,
-    centre: [f64; 2],
+    centre: P,
     view_basis: [[f64; 2]; 2],
     px: f64,
     max_levels: u32,
@@ -430,18 +466,19 @@ pub fn seed_beam(
 
     let (q0, sigma0, basis0) = match &ifs.final_map {
         Some(f) => (
-            f.inverse.apply(centre),
+            centre.apply_affine(&f.inverse),
             f.sigma_min,
             compose_basis(&f.inverse, view_basis),
         ),
         None => (centre, 1.0, view_basis),
     };
 
+    let r0 = q0.distance_to(ball);
     let mut live = vec![Cand {
         q: q0,
         sigma: sigma0,
         bound: f64::NEG_INFINITY,
-        r: Affine2::distance(q0, ball),
+        r: r0,
         address: Vec::new(),
         escape: None,
         done: false,
@@ -470,7 +507,7 @@ pub fn seed_beam(
                 c.escape = Some((
                     level as f64 + escape_residual(c.r, radius, last),
                     c.address.clone(),
-                    c.q,
+                    c.q.clone(),
                 ));
             }
             if !c.r.is_finite() || c.r > far {
@@ -493,7 +530,7 @@ pub fn seed_beam(
             break;
         }
 
-        let mut next: Vec<Cand<[f64; 2]>> = Vec::with_capacity(live.len() * ifs.maps.len());
+        let mut next: Vec<Cand<P>> = Vec::with_capacity(live.len() * ifs.maps.len());
         let mut next_bases: Vec<[[f64; 2]; 2]> = Vec::with_capacity(next.capacity());
         for (c, basis) in live.iter().zip(&bases) {
             if c.done {
@@ -502,9 +539,9 @@ pub fn seed_beam(
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                let q = m.inverse.apply(c.q);
+                let q = c.q.apply_affine(&m.inverse);
                 let sigma = c.sigma * m.sigma_min;
-                let r = Affine2::distance(q, ball);
+                let r = q.distance_to(ball);
                 let mut child = c.clone();
                 child.q = q;
                 child.sigma = sigma;
@@ -532,7 +569,7 @@ pub fn seed_beam(
             .into_iter()
             .zip(bases)
             .map(|(c, basis)| Seed {
-                position: c.q,
+                position: c.q.to_f64(),
                 basis,
                 sigma_per_px: c.sigma * scale,
                 last_sigma: c
@@ -545,7 +582,7 @@ pub fn seed_beam(
                 } else {
                     f64::NEG_INFINITY
                 },
-                escape: c.escape.map(|(lvl, _, p)| (lvl, p)),
+                escape: c.escape.map(|(lvl, _, p)| (lvl, p.to_f64())),
                 done: c.done,
                 address: c.address,
             })

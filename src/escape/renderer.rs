@@ -3413,21 +3413,35 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let span_x = span_y * (self.width as f64 / self.height.max(1) as f64);
         let basis = super::ifs::view_basis(span_x, span_y, escape.rotation);
         let px = span_y / self.height.max(1) as f64;
-        let centre = {
-            let (x, y) = escape.center_f64();
-            [x, y]
-        };
         // Enough levels to reach the handover at any zoom this build
         // claims, and bounded so a pathological IFS cannot spin here.
         let budget = (escape.zoom_log2.max(0.0) as u32 + 64).min(4096);
-        let seeds = crate::scene::ifs_estimate::seed_beam(
-            &packed.ifs,
-            centre,
-            basis,
-            px,
-            budget,
-            beam,
-        );
+        // The centre at the precision the zoom asks for. An f64 centre
+        // caps the zoom at about 2^49 whatever the walk does, because
+        // the walk spends roughly a bit of the centre per level.
+        // Falling back to f64 when the strings will not parse keeps a
+        // malformed config rendering something rather than nothing.
+        let seeds = match super::ifs::centre_at_precision(escape) {
+            Some(centre) => crate::scene::ifs_estimate::seed_beam(
+                &packed.ifs,
+                centre,
+                basis,
+                px,
+                budget,
+                beam,
+            ),
+            None => {
+                let (x, y) = escape.center_f64();
+                crate::scene::ifs_estimate::seed_beam(
+                    &packed.ifs,
+                    [x, y],
+                    basis,
+                    px,
+                    budget,
+                    beam,
+                )
+            }
+        };
 
         let mut out = [[0.0f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS];
         out[..4].copy_from_slice(&packed.globals);
