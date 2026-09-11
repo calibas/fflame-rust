@@ -1042,6 +1042,34 @@ is a calibration, not a worst case: most rays never take their full
 allowance, and modelling the ceiling would band a 1080p view into
 one-row dispatches for nothing.
 
+**Two staleness bugs, reported from the app and both about a pass
+being allowed to continue when it should start over.** The camera
+sliders did nothing and a resize fixed it; changing the depth stacked
+frames of different depths on top of each other.
+
+- **The recolor cache's key had no camera in it.** So a camera change
+  HIT the cache and re-coloured the old geometry — the picture could
+  not change until something else invalidated the key, and a resize is
+  exactly that. The same omission was in the band key. Both carry it
+  now. This is the third time a key has been missing an input the
+  picture depends on (the palette, the flame, now the camera), and the
+  shape is always the same: the input does not live in `EscapeConfig`'s
+  view fields, so it was not in the format string.
+- **A solid walk wrote a record only where a ray HIT.** Every pixel
+  that missed kept the previous view's record, so a re-colour painted
+  the last frame's solid into this frame's empty space. Misses write a
+  record now, with bit 1 of `escaped` meaning "no surface here", which
+  the recolor pass turns back into absence rather than paint.
+
+And a third that only surfaced once the first two were fixed: **a
+cached recolour of a solid came back flat.** Lighting cannot be
+recomputed from a record — the normal is central differences of the
+distance function, which needs the walk — so the shade is kept in the
+record. The word it uses held `depth`, which was stored and never
+read: no colouring takes it and the recolor pass only copied it back.
+A test now requires all THREE templates to agree about the record's
+declaration, since the solid walk is the one that writes the shade.
+
 **Still to come in this phase**: soft shadows, the shade-pass extension
 (D7), and **3D seeding**, which the camera has now given a shape. A ray
 marches THROUGH space, so what a handover carries is per-ray rather

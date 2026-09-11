@@ -2910,6 +2910,23 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// records made without a derivative orbit must not serve a
     /// coloring that reads one.
     fn iterate_key_for(&self, escape: &EscapeConfig) -> String {
+        // The camera is not in `EscapeConfig`'s view fields, but it is
+        // an input to what a SOLID render computes -- so a pass that
+        // spans frames has to restart when it moves, and a cache keyed
+        // without it would answer a camera change with the old
+        // geometry re-coloured.
+        fn camera_key(escape: &EscapeConfig) -> String {
+            format!(
+                "{}/{}/{}/{}/{}/{}",
+                escape.cam_target_x,
+                escape.cam_target_y,
+                escape.cam_target_z,
+                escape.cam_pitch,
+                escape.cam_yaw,
+                escape.cam_fov,
+            )
+        }
+
         // Mode D: everything the WALK depends on, and nothing the
         // colouring does. The walk is the expensive half and none of
         // it looks at the colouring or the palette, so a colouring
@@ -2920,7 +2937,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the escape config.
         if super::ifs::get_ifs(&escape.formula).is_some() {
             return format!(
-                "ifs|{}|{:?}|{}|{}|{}|{}|{}x{}|{}",
+                "ifs|{}|{:?}|{}|{}|{}|{}|{}x{}|{}|{}",
                 escape.formula,
                 escape.formula_params,
                 escape.center_re,
@@ -2930,6 +2947,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 self.width,
                 self.height,
                 self.ifs_token,
+                camera_key(escape),
             );
         }
         let coloring = super::get_coloring(&escape.coloring);
@@ -3164,8 +3182,24 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     fn chunk_key_for(&self, escape: &EscapeConfig, orbit_tag: u64, orbit_done: bool) -> String {
+        // The camera is not in `EscapeConfig`'s view fields, but it is
+        // an input to what a SOLID render computes -- so a pass that
+        // spans frames has to restart when it moves, and a cache keyed
+        // without it would answer a camera change with the old
+        // geometry re-coloured.
+        fn camera_key(escape: &EscapeConfig) -> String {
+            format!(
+                "{}/{}/{}/{}/{}/{}",
+                escape.cam_target_x,
+                escape.cam_target_y,
+                escape.cam_target_z,
+                escape.cam_pitch,
+                escape.cam_yaw,
+                escape.cam_fov,
+            )
+        }
         format!(
-            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
             escape.formula,
             escape.formula_params,
             escape.coloring,
@@ -3173,6 +3207,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             escape.center_im,
             escape.zoom_log2,
             escape.rotation,
+            camera_key(escape),
             escape.max_iter,
             escape.bailout,
             escape.julia,
