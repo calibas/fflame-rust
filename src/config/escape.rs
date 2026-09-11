@@ -120,6 +120,36 @@ pub struct EscapeConfig {
     pub coloring_params: BTreeMap<String, f32>,
 
 
+    /// Where a solid render looks: the point the camera orbits and
+    /// approaches, as exact decimal strings.
+    ///
+    /// Strings for the same reason the 2D centre is one. A deep zoom
+    /// is an approach to a POINT, and the eye's distance shrinks with
+    /// `zoom_log2` while the target holds still — so the target is the
+    /// quantity that needs digits, and an `f32` camera position would
+    /// cap 3D at a zoom the plane passed long ago (D8).
+    ///
+    /// Empty means "the attractor's own centre", which is what frames
+    /// a flame you have just switched to without being told where it
+    /// is. The moment the camera is moved they become explicit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cam_target_x: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cam_target_y: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cam_target_z: String,
+
+    /// Elevation above the target's horizon, radians. Clamped short of
+    /// the poles, where the up vector is undefined.
+    #[serde(default = "default_cam_pitch", skip_serializing_if = "is_default_cam_pitch")]
+    pub cam_pitch: f32,
+    /// Rotation about the target, radians.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cam_yaw: f32,
+    /// Horizontal field of view, radians.
+    #[serde(default = "default_cam_fov", skip_serializing_if = "is_default_cam_fov")]
+    pub cam_fov: f32,
+
     /// Supersampling factor: the image renders at N× resolution per
     /// axis and box-downsamples (N² samples per display pixel).
     /// 1 = off. Part of the CONFIG (not a device preference) so a
@@ -157,6 +187,25 @@ pub struct EscapeConfig {
     /// and skipped when off, so every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "EscapeContrast::is_default")]
     pub contrast: EscapeContrast,
+}
+
+/// Looking down at about 24°, which shows a solid's top and one
+/// side rather than a silhouette.
+fn default_cam_pitch() -> f32 {
+    0.42
+}
+
+fn is_default_cam_pitch(v: &f32) -> bool {
+    (*v - default_cam_pitch()).abs() < f32::EPSILON
+}
+
+/// About 40°, which is a normal lens rather than a dramatic one.
+fn default_cam_fov() -> f32 {
+    0.7
+}
+
+fn is_default_cam_fov(v: &f32) -> bool {
+    (*v - default_cam_fov()).abs() < f32::EPSILON
 }
 
 fn default_supersample() -> u32 {
@@ -727,6 +776,12 @@ impl Default for EscapeConfig {
             center_im: default_center_im(),
             zoom_log2: 0.0,
             rotation: 0.0,
+            cam_target_x: String::new(),
+            cam_target_y: String::new(),
+            cam_target_z: String::new(),
+            cam_pitch: default_cam_pitch(),
+            cam_yaw: 0.0,
+            cam_fov: default_cam_fov(),
             max_iter: default_max_iter(),
             bailout: default_bailout(),
             damping_re: default_damping_re(),

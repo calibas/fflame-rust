@@ -191,6 +191,9 @@ pub fn render_escape_content(
         if d.needs_flame {
             show_ifs_criterion(ui, config_manager);
         }
+        if d.solid {
+            show_solid_camera(ui, config_manager, &esc);
+        }
     }
 
     // ---- Presets ----
@@ -1205,6 +1208,95 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
         // Orbit traps and the averaging family already live at O(1).
         _ => 1.0,
     }
+}
+
+/// The solid camera (D8), shown only when the loaded formula is a
+/// solid one.
+///
+/// D2: the 3D controls follow the CONFIG, not the render mode. Escape
+/// mode is not three-dimensional — one formula in it is — so gating on
+/// the mode would show these over a Mandelbrot and hide them over the
+/// thing they steer.
+fn show_solid_camera(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+) {
+    ui.separator();
+    ui.label(egui::RichText::new(t!("escape_panel.camera")).strong());
+
+    // The target is decimal STRINGS: a deep zoom is an approach to a
+    // point, so the target is the quantity that needs digits while the
+    // distance shrinks around it. An f32 here would cap 3D at a zoom
+    // the plane passed long ago.
+    let axes: [(&str, ConfigPath, &String); 3] = [
+        ("X", ConfigPath::EscapeCamTargetX, &esc.cam_target_x),
+        ("Y", ConfigPath::EscapeCamTargetY, &esc.cam_target_y),
+        ("Z", ConfigPath::EscapeCamTargetZ, &esc.cam_target_z),
+    ];
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.camera_target"));
+        for (name, path, value) in axes {
+            let mut text = value.clone();
+            ui.label(name);
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .desired_width(78.0)
+                    .hint_text(t!("escape_panel.camera_target_auto")),
+            );
+            if resp.changed() {
+                let _ = config_manager
+                    .update_param(path, ConfigValue::String(text.trim().to_string()));
+            }
+        }
+    });
+    ui.label(
+        egui::RichText::new(t!("escape_panel.camera_target_tip")).small().weak(),
+    );
+
+    let mut angle = |ui: &mut egui::Ui,
+                     label: String,
+                     path: ConfigPath,
+                     value: f32,
+                     range: std::ops::RangeInclusive<f32>,
+                     tip: String| {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let mut deg = value.to_degrees();
+            if ui
+                .add(egui::Slider::new(&mut deg, *range.start()..=*range.end()).suffix("°"))
+                .on_hover_text(tip)
+                .changed()
+            {
+                let _ = config_manager.update_param(path, deg.to_radians().into());
+            }
+        });
+    };
+
+    angle(
+        ui,
+        t!("escape_panel.camera_pitch").to_string(),
+        ConfigPath::EscapeCamPitch,
+        esc.cam_pitch,
+        -89.0..=89.0,
+        t!("escape_panel.camera_pitch_tip").to_string(),
+    );
+    angle(
+        ui,
+        t!("escape_panel.camera_yaw").to_string(),
+        ConfigPath::EscapeCamYaw,
+        esc.cam_yaw,
+        -180.0..=180.0,
+        t!("escape_panel.camera_yaw_tip").to_string(),
+    );
+    angle(
+        ui,
+        t!("escape_panel.camera_fov").to_string(),
+        ConfigPath::EscapeCamFov,
+        esc.cam_fov,
+        3.0..=170.0,
+        t!("escape_panel.camera_fov_tip").to_string(),
+    );
 }
 
 /// Mode D's criterion (the plan's §2.4), shown under the formula row.

@@ -310,6 +310,14 @@ pub enum ConfigPath {
     /// below anything a slider or track produces. Phase 4 revisits if a
     /// deep dive ever needs finer undo steps.
     EscapeZoomLog2,
+    /// The solid camera's target, one axis each, as decimal strings —
+    /// the precision a deep 3D zoom needs (D8).
+    EscapeCamTargetX,
+    EscapeCamTargetY,
+    EscapeCamTargetZ,
+    EscapeCamPitch,
+    EscapeCamYaw,
+    EscapeCamFov,
     /// View rotation, radians.
     EscapeRotation,
     /// Per-pixel iteration ceiling.
@@ -949,6 +957,12 @@ impl Display for ConfigPath {
             ConfigPath::EscapeCenterRe => write!(f, "Escape Center Re"),
             ConfigPath::EscapeCenterIm => write!(f, "Escape Center Im"),
             ConfigPath::EscapeZoomLog2 => write!(f, "Escape Zoom"),
+            ConfigPath::EscapeCamTargetX => write!(f, "Camera Target X"),
+            ConfigPath::EscapeCamTargetY => write!(f, "Camera Target Y"),
+            ConfigPath::EscapeCamTargetZ => write!(f, "Camera Target Z"),
+            ConfigPath::EscapeCamPitch => write!(f, "Camera Pitch"),
+            ConfigPath::EscapeCamYaw => write!(f, "Camera Yaw"),
+            ConfigPath::EscapeCamFov => write!(f, "Camera Field of View"),
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
             ConfigPath::SimModel => write!(f, "Simulation Model"),
@@ -1238,6 +1252,18 @@ impl ConfigPath {
             ConfigPath::EscapeCenterRe => I18nKey::simple("history.param.escape_center_re"),
             ConfigPath::EscapeCenterIm => I18nKey::simple("history.param.escape_center_im"),
             ConfigPath::EscapeZoomLog2 => I18nKey::simple("history.param.escape_zoom"),
+            ConfigPath::EscapeCamTargetX => {
+                I18nKey::simple("history.param.escape_cam_target_x")
+            }
+            ConfigPath::EscapeCamTargetY => {
+                I18nKey::simple("history.param.escape_cam_target_y")
+            }
+            ConfigPath::EscapeCamTargetZ => {
+                I18nKey::simple("history.param.escape_cam_target_z")
+            }
+            ConfigPath::EscapeCamPitch => I18nKey::simple("history.param.escape_cam_pitch"),
+            ConfigPath::EscapeCamYaw => I18nKey::simple("history.param.escape_cam_yaw"),
+            ConfigPath::EscapeCamFov => I18nKey::simple("history.param.escape_cam_fov"),
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
             ConfigPath::SimModel => I18nKey::simple("history.param.sim_model"),
@@ -2641,6 +2667,12 @@ impl ConfigPath {
             | ConfigPath::EscapeCenterRe
             | ConfigPath::EscapeCenterIm
             | ConfigPath::EscapeZoomLog2
+            | ConfigPath::EscapeCamTargetX
+            | ConfigPath::EscapeCamTargetY
+            | ConfigPath::EscapeCamTargetZ
+            | ConfigPath::EscapeCamPitch
+            | ConfigPath::EscapeCamYaw
+            | ConfigPath::EscapeCamFov
             | ConfigPath::EscapeRotation
             | ConfigPath::EscapeMaxIter
             | ConfigPath::EscapeSupersample
@@ -2980,6 +3012,12 @@ impl ConfigPath {
             ConfigPath::EscapeCenterRe => "Escape.CenterRe".to_string(),
             ConfigPath::EscapeCenterIm => "Escape.CenterIm".to_string(),
             ConfigPath::EscapeZoomLog2 => "Escape.ZoomLog2".to_string(),
+            ConfigPath::EscapeCamTargetX => "Escape.CamTargetX".to_string(),
+            ConfigPath::EscapeCamTargetY => "Escape.CamTargetY".to_string(),
+            ConfigPath::EscapeCamTargetZ => "Escape.CamTargetZ".to_string(),
+            ConfigPath::EscapeCamPitch => "Escape.CamPitch".to_string(),
+            ConfigPath::EscapeCamYaw => "Escape.CamYaw".to_string(),
+            ConfigPath::EscapeCamFov => "Escape.CamFov".to_string(),
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
             ConfigPath::SimModel => "Sim.Model".to_string(),
@@ -3230,6 +3268,12 @@ impl ConfigPath {
                 ["CenterRe"] => return Some(ConfigPath::EscapeCenterRe),
                 ["CenterIm"] => return Some(ConfigPath::EscapeCenterIm),
                 ["ZoomLog2"] => return Some(ConfigPath::EscapeZoomLog2),
+                ["CamTargetX"] => return Some(ConfigPath::EscapeCamTargetX),
+                ["CamTargetY"] => return Some(ConfigPath::EscapeCamTargetY),
+                ["CamTargetZ"] => return Some(ConfigPath::EscapeCamTargetZ),
+                ["CamPitch"] => return Some(ConfigPath::EscapeCamPitch),
+                ["CamYaw"] => return Some(ConfigPath::EscapeCamYaw),
+                ["CamFov"] => return Some(ConfigPath::EscapeCamFov),
                 ["Rotation"] => return Some(ConfigPath::EscapeRotation),
                 ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
                 ["Supersample"] => return Some(ConfigPath::EscapeSupersample),
@@ -4044,7 +4088,18 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeReferencePeriod
         | ConfigPath::EscapeBiomorph
         | ConfigPath::EscapeCenterRe
-        | ConfigPath::EscapeCenterIm => None,
+        | ConfigPath::EscapeCenterIm
+        // The camera's target is decimal STRINGS, for the precision a
+        // deep zoom needs; a float track could not carry it.
+        | ConfigPath::EscapeCamTargetX
+        | ConfigPath::EscapeCamTargetY
+        | ConfigPath::EscapeCamTargetZ => None,
+
+        // The camera's angles are ordinary floats, and orbiting one is
+        // exactly the sort of thing an animation track is for.
+        ConfigPath::EscapeCamPitch | ConfigPath::EscapeCamYaw | ConfigPath::EscapeCamFov => {
+            json.as_f64().map(|v| ConfigValue::Float(v as f32))
+        }
 
         // Complex types not supported for animation (yet)
         ConfigPath::TonemapCurve | ConfigPath::Palette => None,
