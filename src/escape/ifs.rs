@@ -442,13 +442,13 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
         EscapeParamDef {
             name: "beam",
             display_name: "Beam Width",
-            default: 8.0,
+            default: 1.0,
             min: 1.0,
             max: 8.0,
             tooltip: "How many branch addresses the walk follows at once. Every address \
                       bounds the distance to ITS piece and the truth is the smallest, so \
                       following one can only read too far -- which a marcher turns into \
-                      a surface that is not there.",
+                      a surface that is not there. Raise it for a solid whose pieces \n                      OVERLAP; one whose pieces TILE needs nothing, and a march \n                      pays the beam on every step rather than once per pixel -- \n                      measured at 2.8x the time for two bytes of difference.",
             choices: &[],
         },
         EscapeParamDef {
@@ -1561,6 +1561,53 @@ mod tests {
             .collect()
     }
 
+    /// The solid classical IFSs, as flames with a solid-mode view.
+    ///
+    /// Separate from the planar ones because qualifying is a different
+    /// question per dimension: an Apophysis-style transform is a
+    /// perfectly good planar map and has unit scale in z, so a 2D
+    /// preset loaded into the solid formula renders nothing. Phase 0's
+    /// census measured that the other way round — none of 34 shipped
+    /// 3D candidates qualified as solid — which is why these had to be
+    /// built rather than found.
+    pub(super) fn solid_presets() -> Vec<crate::config::FractalConfig> {
+        let registry = global_registry();
+        [
+            ("Sierpinski Tetrahedron", gpu_tests::tetrahedron_flame()),
+            ("Menger Sponge", gpu_tests::menger_flame()),
+        ]
+        .into_iter()
+        .map(|(name, flame)| {
+            let mut c = crate::config::FractalConfig::default();
+            c.render_mode = crate::scene::transforms::RenderMode::Escape;
+            c.flame = flame;
+            c.flame.name = name.to_string();
+
+            crate::scene::ifs_analysis::analyse_3d(&c.flame, &registry)
+                .unwrap_or_else(|why| panic!("{name} must qualify as solid, but: {why:?}"));
+
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            // The camera frames itself: an empty target means the
+            // attractor's own centre, and `zoom_log2 = 0` is the
+            // distance at which the bounding ball fills the frame. A
+            // preset does not have to know where its own solid is.
+            c.escape.zoom_log2 = 0.0;
+            c.escape.cam_yaw = 0.9;
+
+            // The halo is a PLANAR idea — it fades by distance from the
+            // set, and on a surface every visible point is ON it — so
+            // it would dim the whole solid uniformly.
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+
+            c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+            c.gamma = crate::config::defaults::DEFAULT_GAMMA;
+            c
+        })
+        .collect()
+    }
+
     #[test]
     #[ignore = "one-shot generator"]
     fn write_the_classical_ifs_presets() {
@@ -1572,6 +1619,9 @@ mod tests {
         // FLAME, silently and plausibly, which is how this was missed
         // until a preset drew 539 pixels of chaos game.
         let json: Vec<serde_json::Value> = classical_presets()
+            .into_iter()
+            .chain(solid_presets())
+            .collect::<Vec<_>>()
             .iter()
             .map(|c| {
                 serde_json::from_str(&c.to_json().expect("serialise")).expect("reparse")
@@ -1595,13 +1645,36 @@ mod tests {
     #[test]
     fn the_shipped_ifs_presets_still_qualify_and_frame_their_attractor() {
         let registry = global_registry();
-        let mut checked = 0;
+        let (mut planar, mut solid) = (0, 0);
         for cfg in crate::resources::presets::load_embedded_presets().expect("presets parse") {
-            if get_ifs(&cfg.escape.formula).is_none() {
+            let Some(def) = get_ifs(&cfg.escape.formula) else { continue };
+            let name = cfg.flame.name.clone();
+
+            // A SOLID preset answers a different question: qualifying
+            // in 3D is not qualifying in 2D, and its view is a camera
+            // rather than a centre and a span.
+            if def.solid {
+                solid += 1;
+                let ifs3 = crate::scene::ifs_analysis::analyse_3d(&cfg.flame, &registry)
+                    .unwrap_or_else(|why| {
+                        panic!("solid preset {name:?} no longer qualifies: {why:?}")
+                    });
+                assert!(
+                    IFS_COLORINGS.iter().any(|c| c.name == cfg.escape.coloring),
+                    "solid preset {name:?} names coloring {:?}, not a mode-D one",
+                    cfg.escape.coloring
+                );
+                let cam = solid_camera(&cfg.escape, &ifs3);
+                let subtended = (ifs3.ball.radius / cam.distance).asin();
+                assert!(
+                    subtended < (cam.fov as f64) * 0.5,
+                    "solid preset {name:?} does not frame its attractor: it subtends                      {subtended:.3} against a half-fov of {:.3}",
+                    cam.fov as f64 * 0.5
+                );
                 continue;
             }
-            checked += 1;
-            let name = cfg.flame.name.clone();
+
+            planar += 1;
             let ifs = crate::scene::ifs_analysis::analyse_2d(&cfg.flame, &registry)
                 .unwrap_or_else(|why| panic!("preset {name:?} no longer qualifies: {why:?}"));
 
@@ -1628,7 +1701,8 @@ mod tests {
                 ifs.ball.radius
             );
         }
-        assert_eq!(checked, 4, "expected the four classical IFS presets, found {checked}");
+        assert_eq!(planar, 4, "expected four planar IFS presets, found {planar}");
+        assert_eq!(solid, 2, "expected two solid IFS presets, found {solid}");
     }
 
     #[test]
@@ -1760,6 +1834,38 @@ mod tests {
         // costs a resolve pass each time.
         let rows = ifs_rows_per_dispatch(512, 512, 24, 1, 2, IFS_DISPATCH_BUDGET);
         assert_eq!(rows, 512, "a small cheap view should render in one dispatch");
+    }
+
+    /// A solid view must band too, and raising the march must shrink
+    /// the bands rather than lengthen them.
+    ///
+    /// The marcher walks the distance function once per STEP, so its
+    /// per-pixel cost has a factor the planar model does not. Leaving
+    /// that out is the same class of mistake that hung a 1080p planar
+    /// view: the estimate stays small, the render never bands, and the
+    /// driver sees a dispatch measured in seconds.
+    #[test]
+    fn a_solid_view_bands_and_the_march_is_in_the_estimate() {
+        use crate::escape::renderer::{ifs_rows_per_dispatch, IFS_SOLID_BUDGET};
+        // The Menger sponge at 1080p and the shipped defaults: twenty
+        // maps, depth 24, beam 1, 96 steps.
+        let rows = ifs_rows_per_dispatch(1920, 1080, 24, 1 * 96, 20, IFS_SOLID_BUDGET);
+        assert!(rows < 1080, "1080p should band, got {rows} of 1080");
+        assert!(rows > 100, "and not into slivers: {rows} rows");
+
+        // Asking for a longer march must make the bands smaller.
+        let longer = ifs_rows_per_dispatch(1920, 1080, 24, 1 * 512, 20, IFS_SOLID_BUDGET);
+        assert!(
+            longer < rows,
+            "raising the step count did not shrink the band ({longer} against {rows})"
+        );
+        // So must a wider beam.
+        let wider = ifs_rows_per_dispatch(1920, 1080, 24, 8 * 96, 20, IFS_SOLID_BUDGET);
+        assert!(wider < rows, "a wider beam did not shrink the band");
+
+        // And the breaker still reaches it.
+        let halved = ifs_rows_per_dispatch(1920, 1080, 24, 96, 20, IFS_SOLID_BUDGET >> 1);
+        assert!(halved < rows, "the budget shift does not reach a solid view");
     }
 
     /// The breaker's halvings have to reach mode D, or a device that
@@ -3217,7 +3323,7 @@ mod gpu_tests {
                 cfg.flame.name
             );
         }
-        assert_eq!(seen, 4, "expected the four classical IFS presets, found {seen}");
+        assert_eq!(seen, 6, "expected six IFS presets, found {seen}");
     }
 
     /// A 3D flame: the XY affine is identity plus a translation and
@@ -3268,7 +3374,7 @@ mod gpu_tests {
     /// Twenty maps at a third: the Menger sponge, the plan's §4
     /// picture — "twenty affine maps looks like a Menger sponge, not
     /// like a point cloud with lights on it".
-    fn menger_flame() -> Flame {
+    pub(super) fn menger_flame() -> Flame {
         let mut ts = Vec::new();
         for i in 0..3i32 {
             for j in 0..3i32 {
@@ -3373,6 +3479,55 @@ mod gpu_tests {
                     lit > 448 * 448 / 100,
                     "{name}/{coloring} rendered almost nothing ({lit} lit)"
                 );
+            }
+        }
+    }
+
+    /// Does a solid render need the beam it is paying for?
+    ///
+    /// The planar default is 8, and phase 1 measured why: an
+    /// attractor whose pieces share a boundary is rendered wrong
+    /// without it. But the shipped solids TILE — the sponge's twenty
+    /// sub-cubes are disjoint, the tetrahedron's four meet at points —
+    /// and a march pays the beam on every step, not once per pixel.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn what_a_solid_render_pays_for_its_beam() {
+        let (device, queue) = device();
+        for (name, flame) in [("tetrahedron", tetrahedron_flame()), ("menger", menger_flame())] {
+            let mut prev: Option<Vec<u8>> = None;
+            for beam in [1u32, 2, 4, 8] {
+                let mut c = config_for(flame.clone());
+                c.escape.formula = "ifs_flame_3d".to_string();
+                c.escape.coloring = "ifs_address".to_string();
+                c.escape.cam_yaw = 0.9;
+                c.escape.coloring_params.insert("reach".to_string(), 0.0);
+                c.escape.formula_params.insert("beam".to_string(), beam as f32);
+                let once = || {
+                    let job = crate::renderer::RenderJob::new(&c, 256, 256);
+                    pollster::block_on(crate::renderer::render(
+                        &device,
+                        &queue,
+                        job,
+                        &mut crate::renderer::NoProgress,
+                    ))
+                    .expect("render")
+                    .rgba_data
+                };
+                let _ = once();
+                let t0 = web_time::Instant::now();
+                let px = once();
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let differing = prev
+                    .as_ref()
+                    .map(|p: &Vec<u8>| p.iter().zip(&px).filter(|(a, b)| a != b).count());
+                match differing {
+                    Some(d) => println!(
+                        "  {name:<12} beam {beam}: {ms:>7.1} ms, {d} bytes differ from the                          narrower one"
+                    ),
+                    None => println!("  {name:<12} beam {beam}: {ms:>7.1} ms"),
+                }
+                prev = Some(px);
             }
         }
     }

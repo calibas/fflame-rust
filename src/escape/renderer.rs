@@ -174,6 +174,24 @@ static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
 /// and this estimate is what decides whether it ever is.
 pub const IFS_DISPATCH_BUDGET: u64 = 450_000_000;
 
+/// The same budget for a SOLID render, whose per-pixel cost counts the
+/// march.
+///
+/// A marcher walks the distance function once per STEP, not once per
+/// pixel, so its cost has a fourth factor the planar model does not.
+/// The budget is ninety-six times larger to match, which is the
+/// default step count -- so at the defaults this bands exactly as the
+/// planar model did (measured: a 1080p Menger sponge in three bands,
+/// about a second), and raising the step count shrinks the bands
+/// rather than silently lengthening them.
+///
+/// The ratio is a calibration, not a worst case. Most rays never take
+/// their full allowance: one that misses the bounding sphere costs
+/// nothing and one that hits converges in a few steps, so the average
+/// march is far shorter than the ceiling. Modelling the ceiling would
+/// band a 1080p view into one-row dispatches for nothing.
+pub const IFS_SOLID_BUDGET: u64 = 43_000_000_000;
+
 /// Rows per dispatch for a mode-D walk, as pure arithmetic.
 ///
 /// `beam` and `levels` are the def's parameters, `maps` the analysed
@@ -3503,13 +3521,25 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         .map_or(fallback, |p| p.default)
                 })
             };
+            // A solid render's per-pixel cost has the march in it, and
+            // its budget is scaled to match.
+            let (steps, budget) = if def.solid {
+                (param("steps", 96.0) as u32, IFS_SOLID_BUDGET)
+            } else {
+                (1, IFS_DISPATCH_BUDGET)
+            };
+            let maps = match (def.solid, self.ifs.as_ref()) {
+                (true, Some(p)) => p.solid.as_ref().map_or(1, |(_, r)| r.len()),
+                (_, Some(p)) => p.rows.len(),
+                (_, None) => 1,
+            };
             return ifs_rows_per_dispatch(
                 self.width,
                 self.height,
                 param("levels", 24.0) as u32,
-                param("beam", 8.0) as u32,
-                self.ifs.as_ref().map_or(1, |i| i.rows.len()),
-                IFS_DISPATCH_BUDGET >> shift,
+                param("beam", 8.0).max(1.0) as u32 * steps.max(1),
+                maps,
+                budget >> shift,
             );
         }
 
