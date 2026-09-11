@@ -60,13 +60,41 @@ struct ShadeParams {
     background_r: f32,
     background_g: f32,
     background_b: f32,
-    _pad_fog: f32,
+    tan_half: f32,
     shadow_fit: [f32; 4],
     shadow_word_offset: u32,
     shadow_res: u32,
     shadow_count: u32,
-    _pad_sm: u32,
+    projection: u32,
     lights: [ShadeLight; 4],
+}
+
+/// Geometry a GENERATOR can hand the shade pass instead of leaving it
+/// to reconstruct (D7).
+///
+/// The division of labour is the point. A distance marcher knows the
+/// gradient of its own field and how enclosed a point is — both exactly,
+/// both as properties of the field rather than of neighbouring pixels —
+/// and it has no reason to hand this pass a depth buffer to guess them
+/// back from. What it does NOT have is the lighting rig: four coloured
+/// lights, a material, fog and the temporal smoothing that keeps a
+/// progressive render from strobing. Those live here and are worth
+/// sharing.
+///
+/// Absent, every existing caller takes the path it always took: the
+/// screen-space reconstruction is the FALLBACK, not the path.
+pub struct ShadeGeometry<'a> {
+    /// Full-image normal texture, camera space, global coordinates.
+    pub normals: &'a TextureView,
+    /// Full-image occlusion in `x`, replacing the screen-space
+    /// estimate. A marcher can fold a traced shadow into this, which
+    /// SSAO has no way to express.
+    pub occlusion: Option<&'a TextureView>,
+    /// Half-angle tangent of a pinhole projection, when the generator
+    /// is not using the splat pipeline's `zr = 1 − persp·z`. That
+    /// formula is depth scaling rather than a projection (D8), and a
+    /// marcher would have to be contorted to match it.
+    pub pinhole_tan_half: Option<f32>,
 }
 
 /// Mirrors WGSL `AtrousParams` (atrous.wgsl).
@@ -133,6 +161,13 @@ pub struct ShadePass {
     atrous_params: [Buffer; 3],
     /// Full-image (normal.xyz, depth) ping-pong; sized (w, h) when present.
     normal_texs: Option<(u32, u32, [(Texture, TextureView); 2])>,
+    /// The last `ShadeParams` written, for the D7 gate. A solid render
+    /// is not bit-reproducible (the in-batch depth race), so "the
+    /// extension changes nothing when nothing is supplied" cannot be
+    /// asserted of the PIXELS — but it can be asserted of the bytes
+    /// the shader reads, which is where the claim actually lives.
+    #[cfg(test)]
+    last_params: std::cell::Cell<Option<ShadeParams>>,
     /// 1×1 stand-in bound when the inline-normal path is used.
     dummy_normal: (Texture, TextureView),
     /// Full-image output ping-pong (interactive path; two textures so
@@ -199,6 +234,18 @@ impl ShadePass {
                         ty: BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // 5: generator-supplied occlusion (see ShadeGeometry);
+                // the 1x1 dummy when none is offered.
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -397,6 +444,8 @@ impl ShadePass {
             atrous_bgl,
             atrous_params,
             normal_texs,
+            #[cfg(test)]
+            last_params: std::cell::Cell::new(None),
             dummy_normal,
             output,
             output_front: 0,
@@ -544,6 +593,7 @@ impl ShadePass {
             fog,
             ema,
             Some(&output[self.output_front].1),
+            None,
         );
         self.output = Some(output);
         self.output_front = back;
@@ -585,6 +635,9 @@ impl ShadePass {
         fog: (f32, f32, [f32; 3]),
         temporal_ema: f32,
         prev_shade: Option<&TextureView>,
+        // Generator-supplied normals and occlusion (D7). `None` is
+        // every pre-existing caller, and takes the path it always took.
+        supplied: Option<ShadeGeometry<'_>>,
     ) {
         let mut lights = [ShadeLight {
             dir_intensity: [0.0; 4],
@@ -614,12 +667,23 @@ impl ShadePass {
         // estimator in shade.wgsl.
         let smoothing = shading.normal_smoothing.min(3) as usize;
         let full_cover = tex_y0 == 0 && tex_height == full_height;
-        let normal_view: Option<&TextureView> = match &self.normal_texs {
+        // A supplied normal texture replaces BOTH the estimate and the
+        // chain that would have built one: the normals pass reads a
+        // depth field to recover what the generator already knows
+        // exactly, so running it would be work done to arrive at a
+        // worse answer.
+        let own_normals = match &self.normal_texs {
             Some((w, h, texs)) if full_cover && *w == full_width && *h == full_height => {
                 Some(&texs[smoothing % 2].1) // final resting texture after ping-pong
             }
             _ => None,
         };
+        let normal_view: Option<&TextureView> = match &supplied {
+            Some(g) => Some(g.normals),
+            None => own_normals,
+        };
+        let build_normals = supplied.is_none() && own_normals.is_some();
+        let occlusion_view = supplied.as_ref().and_then(|g| g.occlusion);
 
         let cam_rows = effective_camera_rows(camera.0, camera.1, camera.2);
         let cam_pos = camera.3;
@@ -643,9 +707,13 @@ impl ShadePass {
             depth_word_offset,
             tex_y0,
             tex_height,
-            use_normal_tex: u32::from(normal_view.is_some()),
-            // Surface closing requires the full-image normal texture.
-            gap_fill: if normal_view.is_some() { shading.gap_fill.min(3) } else { 0 },
+            use_normal_tex: u32::from(normal_view.is_some())
+                | if occlusion_view.is_some() { 2 } else { 0 },
+            // Surface closing requires the full-image normal texture,
+            // and it closes the pinholes a sparse CHAOS GAME leaves.
+            // A marcher's surface has none, so a supplied normal
+            // buffer turns it off rather than inheriting it.
+            gap_fill: if build_normals { shading.gap_fill.min(3) } else { 0 },
             cam_row0: [cam_rows[0][0], cam_rows[0][1], cam_rows[0][2], 0.0],
             cam_row1: [cam_rows[1][0], cam_rows[1][1], cam_rows[1][2], 0.0],
             cam_row2: [cam_rows[2][0], cam_rows[2][1], cam_rows[2][2], 0.0],
@@ -657,7 +725,10 @@ impl ShadePass {
             background_r: fog.2[0],
             background_g: fog.2[1],
             background_b: fog.2[2],
-            _pad_fog: 0.0,
+            tan_half: supplied
+                .as_ref()
+                .and_then(|g| g.pinhole_tan_half)
+                .unwrap_or(0.0),
             shadow_fit: match shadow {
                 Some((_, c, r)) => [c[0], c[1], c[2], r],
                 None => [0.0, 0.0, 0.0, 1.0],
@@ -665,14 +736,18 @@ impl ShadePass {
             shadow_word_offset: shadow.map_or(0, |(o, _, _)| o),
             shadow_res: 1024,
             shadow_count: if shadow.is_some() && shading.shadow_strength > 0.0 { 4 } else { 0 },
-            _pad_sm: 0,
+            projection: u32::from(
+                supplied.as_ref().is_some_and(|g| g.pinhole_tan_half.is_some()),
+            ),
             lights,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+        #[cfg(test)]
+        self.last_params.set(Some(params));
 
         // Encode the normal-estimation + smoothing chain ahead of the shade
         // dispatch (same encoder, ordered).
-        if normal_view.is_some() {
+        if build_normals {
             let (_, _, texs) = self.normal_texs.as_ref().unwrap();
             let normals_bg = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Normals Bind Group"),
@@ -756,6 +831,12 @@ impl ShadePass {
                     ),
                 },
                 BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::TextureView(
+                        occlusion_view.unwrap_or(&self.dummy_normal.1),
+                    ),
+                },
+                BindGroupEntry {
                     binding: 7,
                     resource: BindingResource::TextureView(
                         prev_shade.unwrap_or(&self.dummy_normal.1),
@@ -771,5 +852,210 @@ impl ShadePass {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(full_width.div_ceil(8), tex_height.div_ceil(8), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device() -> Option<(Device, Queue)> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let al = adapter.limits();
+            let mut limits = wgpu::Limits::default();
+            limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+            limits.max_buffer_size = al.max_buffer_size;
+            limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("shade pass test"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: limits,
+                    memory_hints: wgpu::MemoryHints::Performance,
+                    experimental_features: Default::default(),
+                    trace: Default::default(),
+                })
+                .await
+                .ok()
+        })
+    }
+
+    fn rgba32f(device: &Device, w: u32, h: u32, storage: bool) -> (Texture, TextureView) {
+        let mut usage = TextureUsages::TEXTURE_BINDING;
+        if storage {
+            usage |= TextureUsages::STORAGE_BINDING;
+        }
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some("shade test tex"),
+            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba32Float,
+            usage,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// D7's gate: offering the pass nothing must leave it exactly as it
+    /// was.
+    ///
+    /// This is asserted of the PARAMETER BYTES rather than of the
+    /// pixels, and that is not a weaker claim here — it is the only
+    /// available one. A solid flame is not bit-reproducible (the
+    /// in-batch depth race, see docs/projects/solid-rendering.md), so
+    /// two renders of the same flame differ whether or not anything
+    /// changed and a pixel comparison could not tell the two apart.
+    /// What the extension could actually break is the block of bytes
+    /// the shader reads, and that IS deterministic.
+    ///
+    /// The three fields the extension touches are the two former
+    /// padding slots and one bit of an existing flag. All three must
+    /// read zero, and the rest of the block is identical by
+    /// construction because nothing else was edited — which the second
+    /// half of the test makes checkable: with geometry SUPPLIED, the
+    /// same call must differ in those fields and nowhere else.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn supplying_no_geometry_leaves_the_shade_pass_exactly_as_it_was() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 32;
+        const H: u32 = 32;
+
+        let pass = ShadePass::new_pipeline_only(&device);
+        let (_accum, accum_view) = rgba32f(&device, W, H, false);
+        let (_out, out_view) = rgba32f(&device, W, H, true);
+        let (_norm, norm_view) = rgba32f(&device, W, H, false);
+        let (_occ, occ_view) = rgba32f(&device, W, H, false);
+        let depth = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shade test depth"),
+            size: (W * H * 4) as u64 * 4,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        let shading = SolidShadingSettings::default();
+        let mut go = |supplied: Option<ShadeGeometry<'_>>| -> ShadeParams {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("shade test"),
+            });
+            pass.run_region(
+                &device,
+                &queue,
+                &mut enc,
+                &accum_view,
+                &depth,
+                &out_view,
+                &shading,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.02,
+                W,
+                H,
+                0,
+                0,
+                H,
+                (0.0, 0.0, 0.0, [0.0, 0.0, 0.0]),
+                None,
+                (0.0, 0.0, [0.0, 0.0, 0.0]),
+                0.0,
+                None,
+                supplied,
+            );
+            queue.submit(std::iter::once(enc.finish()));
+            pass.last_params.get().expect("params were written")
+        };
+
+        let plain = go(None);
+        assert_eq!(
+            plain.tan_half, 0.0,
+            "the slot that was padding must still read as padding"
+        );
+        assert_eq!(plain.projection, 0, "the default projection is the splat one");
+        assert_eq!(
+            plain.use_normal_tex & 2,
+            0,
+            "the occlusion bit must be clear when no occlusion was offered"
+        );
+
+        let with = go(Some(ShadeGeometry {
+            normals: &norm_view,
+            occlusion: Some(&occ_view),
+            pinhole_tan_half: Some(0.35),
+        }));
+
+        // The extension does something...
+        assert_eq!(with.projection, 1);
+        assert_eq!(with.tan_half, 0.35);
+        assert_eq!(with.use_normal_tex & 3, 3, "both bits set when both are offered");
+
+        // ...and nothing else. Compared field by field through the
+        // bytes, with the three the extension owns masked out, because
+        // "I only edited those" is exactly the claim under test.
+        let mut a = bytemuck::bytes_of(&plain).to_vec();
+        let mut b = bytemuck::bytes_of(&with).to_vec();
+        for off in [
+            std::mem::offset_of!(ShadeParams, tan_half),
+            std::mem::offset_of!(ShadeParams, projection),
+            std::mem::offset_of!(ShadeParams, use_normal_tex),
+            // Gap fill follows the normal texture, and always did.
+            std::mem::offset_of!(ShadeParams, gap_fill),
+        ] {
+            a[off..off + 4].fill(0);
+            b[off..off + 4].fill(0);
+        }
+        assert_eq!(
+            a, b,
+            "supplying geometry changed a field the extension does not own"
+        );
+    }
+
+    /// The WGSL struct and the Rust one have to agree, and the two
+    /// repurposed slots are where that would break first: a padding
+    /// word that became a real field is invisible to the compiler on
+    /// both sides.
+    #[test]
+    fn the_shade_params_layout_matches_the_shader() {
+        let src = include_str!("../../shaders/shade.wgsl");
+        // Order matters as much as presence -- a uniform struct is
+        // read positionally.
+        let order = [
+            "background_b: f32,",
+            "tan_half: f32,",
+            "shadow_fit: vec4<f32>,",
+            "shadow_word_offset: u32,",
+            "shadow_res: u32,",
+            "shadow_count: u32,",
+            "projection: u32,",
+            "lights: array<ShadeLight, 4>,",
+        ];
+        let mut at = 0usize;
+        for field in order {
+            let found = src[at..]
+                .find(field)
+                .unwrap_or_else(|| panic!("shade.wgsl has no `{field}` after byte {at}"));
+            at += found + field.len();
+        }
+        // And nothing that used to be padding still claims to be.
+        assert!(!src.contains("_pad_fog"), "shade.wgsl still declares _pad_fog");
+        assert!(!src.contains("_pad_sm"), "shade.wgsl still declares _pad_sm");
+        // 336 bytes, as the struct's own doc records.
+        assert_eq!(std::mem::size_of::<ShadeParams>(), 336);
     }
 }

@@ -2889,6 +2889,7 @@ impl HighResExporter {
                     (config.fog_strength, config.fog_start, config.background_color),
                     0.0,
                     None,
+                    None,
                 );
                 self.queue.submit(std::iter::once(shade_encoder.finish()));
                 strip_shade = Some((tex, view));
@@ -3121,6 +3122,7 @@ impl HighResExporter {
                 }),
                 (config.fog_strength, config.fog_start, config.background_color),
                 0.0,
+                None,
                 None,
             );
             self.queue.submit(std::iter::once(shade_encoder.finish()));
