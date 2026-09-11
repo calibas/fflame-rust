@@ -87,23 +87,23 @@ pub fn panel(p: PanelType, m: RenderMode) -> Vis {
         | P::Export
         | P::Rendering
         | P::LoginDialog
-        | P::SaveOnlineDialog => Vis::Show,
+        | P::SaveOnlineDialog
+        // The transform editors, in EVERY mode. Simulation uses the
+        // flame's transforms as its per-layer warps (simulation-layers
+        // plan, section 4), and escape mode D renders the flame's
+        // attractor as a distance field — so in both, editing a
+        // transform edits the picture. In mode A and mode B the flame
+        // is inert, but the panel is how you prepare one before
+        // switching, and greying it there would be a per-FORMULA
+        // answer from a per-mode policy.
+        | P::Transforms
+        | P::TriangleEditor
+        | P::Variations => Vis::Show,
 
         // Flame-only editing surfaces.
         P::View | P::XaosEditor | P::Subflames | P::PathEditor => match m {
             M::TwoD | M::ThreeD => Vis::Show,
             M::Escape | M::Simulation => Vis::Grey(FLAME_ONLY),
-        },
-
-        // The transform editors. Simulation uses the flame's
-        // transforms as its per-layer warps (simulation-layers plan,
-        // section 4), so they stay there and go in Escape. They are
-        // live only when `sim.use_transforms` is on, which is a
-        // control-level matter for phase 4, not a reason to hide the
-        // panel: it is how you turn the feature on.
-        P::Transforms | P::TriangleEditor | P::Variations => match m {
-            M::TwoD | M::ThreeD | M::Simulation => Vis::Show,
-            M::Escape => Vis::Grey(FLAME_ONLY),
         },
 
         // Occlusion and the shade pass are pseudo-3D flame features.
@@ -603,8 +603,11 @@ mod tests {
             v.sort();
             v
         };
+        // The transform editors are NOT here: escape mode D renders
+        // the flame's attractor as a distance field, so editing a
+        // transform edits the picture.
         let mut want_escape = vec![
-            "Transforms", "TriangleEditor", "Variations", "View", "XaosEditor",
+            "View", "XaosEditor",
             "Subflames", "PathEditor", "SolidLighting", "RandomGenerator", "Simulation",
         ];
         want_escape.sort();
