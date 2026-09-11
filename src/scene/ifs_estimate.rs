@@ -116,6 +116,16 @@ pub struct Estimate<P> {
     pub point: P,
     /// Whether the walk left the ball within `max_levels`.
     pub escaped: bool,
+    /// The DEEPEST level any surviving candidate reached, as opposed
+    /// to [`Self::level`], which is the winning one's.
+    ///
+    /// The two answer different questions and the beam need not agree
+    /// with itself about them: `level` belongs to the candidate that
+    /// minimises the DISTANCE, while this is "how far down can any
+    /// address still explain this point" — which is what the
+    /// Hepting–Hart escape buffer computes, and what an escape-time
+    /// colouring means by a level.
+    pub deepest_level: f64,
 }
 
 /// One partial address the beam is still following.
@@ -288,6 +298,14 @@ where
     // The beam is RANKED by position but ANSWERED by bound: pruning
     // asks "which piece is this point in", and the estimate asks
     // "which surviving address gives the smallest distance".
+    //
+    // The LEVEL is a different question and takes a different answer:
+    // the deepest any surviving address reached, which is what an
+    // escape-time colouring means and what the escape buffer computes.
+    let deepest_level = live
+        .iter()
+        .map(|c| c.escape.as_ref().map_or(max_levels as f64, |(lvl, _, _)| *lvl))
+        .fold(f64::NEG_INFINITY, f64::max);
     let best = live
         .into_iter()
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
@@ -295,13 +313,16 @@ where
 
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
     match best.escape {
-        Some((level, address, point)) => Estimate { distance, level, address, point, escaped: true },
+        Some((level, address, point)) => {
+            Estimate { distance, level, address, point, escaped: true, deepest_level }
+        }
         None => Estimate {
             distance,
             level: max_levels as f64,
             address: best.address,
             point: best.q,
             escaped: false,
+            deepest_level,
         },
     }
 }
@@ -683,6 +704,14 @@ pub fn estimate_seeded(
         live = next;
     }
 
+    let deepest_level = live
+        .iter()
+        .map(|c| {
+            c.escape
+                .as_ref()
+                .map_or((seeds.level + max_levels) as f64, |(lvl, _, _)| *lvl)
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
     let best = live
         .into_iter()
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
@@ -691,7 +720,7 @@ pub fn estimate_seeded(
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
     match best.escape {
         Some((level, address, point)) => {
-            Estimate { distance, level, address, point, escaped: true }
+            Estimate { distance, level, address, point, escaped: true, deepest_level }
         }
         None => Estimate {
             distance,
@@ -699,6 +728,7 @@ pub fn estimate_seeded(
             address: best.address,
             point: best.q,
             escaped: false,
+            deepest_level,
         },
     }
 }
@@ -1223,6 +1253,134 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Three OVERLAPPING affine IFSs, which the shipped catalogue does
+    /// not contain: the phase-0 census found three qualifying flames
+    /// and all three are variation smoke tests. D9 is decided on these
+    /// or not at all.
+    ///
+    /// Overlap here means the pieces genuinely share area, not merely
+    /// touch — which is the case §2.2 names as where a branch
+    /// heuristic fails.
+    fn overlapping_ifss() -> Vec<(&'static str, Ifs2)> {
+        // Sierpinski's three maps at 0.6 instead of 0.5: the pieces
+        // are too big for the triangle and lap over each other.
+        let fat = analyse(vec![
+            affine_xform(0.6, 0.0, 0.0, 0.6, 0.0, 0.0),
+            affine_xform(0.6, 0.0, 0.0, 0.6, 0.4, 0.0),
+            affine_xform(0.6, 0.0, 0.0, 0.6, 0.2, 0.4),
+        ]);
+        // Two maps covering the unit square with a half each, at 0.7 —
+        // a wide band of the middle belongs to both.
+        let band = analyse(vec![
+            affine_xform(0.7, 0.0, 0.0, 0.7, 0.0, 0.0),
+            affine_xform(0.7, 0.0, 0.0, 0.7, 0.3, 0.3),
+        ]);
+        // Rotated and overlapping: two similarities at 0.65 turned
+        // against each other, so the overlap is not axis-aligned and
+        // the nearest-centre rule has no symmetry to lean on.
+        let turned = analyse(vec![
+            affine_xform(0.46, -0.46, 0.46, 0.46, 0.0, 0.0),
+            affine_xform(0.46, 0.46, -0.46, 0.46, 0.5, 0.1),
+        ]);
+        vec![("fat gasket", fat), ("overlapping band", band), ("turned pair", turned)]
+    }
+
+    /// The deepest level any address can still explain a point at —
+    /// which is what the Hepting–Hart escape buffer computes.
+    ///
+    /// The buffer's whole advantage is that it needs no branch choice:
+    /// it iterates the IMAGE through the maps, so a point is inside at
+    /// level k exactly when SOME address of length k holds it. That is
+    /// the maximum over addresses, and it is computable here directly.
+    /// So D9 does not need the buffer implemented to be decided — it
+    /// needs the answer the buffer would give, and this is that answer.
+    fn exhaustive_level(ifs: &Ifs2, p: [f64; 2], depth: u32) -> u32 {
+        fn walk(ifs: &Ifs2, q: [f64; 2], left: u32, deepest: &mut u32, at: u32) {
+            if Affine2::distance(q, ifs.ball.centre) > ifs.ball.radius {
+                return;
+            }
+            *deepest = (*deepest).max(at);
+            if left == 0 {
+                return;
+            }
+            for m in &ifs.maps {
+                walk(ifs, m.inverse.apply(q), left - 1, deepest, at + 1);
+            }
+        }
+        let mut deepest = 0;
+        walk(ifs, p, depth, &mut deepest, 0);
+        deepest
+    }
+
+    /// D9, decided: does the beam's level hold up against what the
+    /// escape buffer would give, on the IFSs where the branch choice
+    /// is supposed to fail?
+    ///
+    /// If it does, the escape buffer's remaining advantage is gone and
+    /// Mode C of the escape plan is closed by this one. If it does
+    /// not, Mode C's multi-pass form is the overlapping-IFS path and
+    /// this plan's estimate is the rest.
+    #[test]
+    fn the_beams_level_against_what_the_escape_buffer_would_give() {
+        const DEPTH: u32 = 12;
+        println!("  IFS                beam   level agrees   worst shortfall");
+        let mut verdict = Vec::new();
+        for (name, ifs) in overlapping_ifss() {
+            for beam in [1u32, 4, 8] {
+                let (mut agree, mut total, mut worst) = (0usize, 0usize, 0u32);
+                let n = 21;
+                for i in 0..n {
+                    for j in 0..n {
+                        let p = [
+                            -0.5 + 2.0 * i as f64 / (n - 1) as f64,
+                            -0.5 + 2.0 * j as f64 / (n - 1) as f64,
+                        ];
+                        let truth = exhaustive_level(&ifs, p, DEPTH);
+                        // The walk's integer level: how many levels it
+                        // stayed inside for.
+                        let mine =
+                            estimate(&ifs, p, DEPTH + 1, beam).deepest_level.floor() as u32;
+                        total += 1;
+                        if mine >= truth {
+                            agree += 1;
+                        } else {
+                            worst = worst.max(truth - mine);
+                        }
+                    }
+                }
+                let pct = agree as f64 / total as f64 * 100.0;
+                println!("  {name:<18} {beam:>4}   {pct:>10.1}%   {worst:>15}");
+                verdict.push((name, beam, pct, worst));
+            }
+        }
+
+        // The walk can never claim a level the buffer would not: it
+        // follows real addresses, so any level it reaches is one some
+        // address explains. It can only fall SHORT, by picking a worse
+        // address than the best one -- which is exactly the failure
+        // the buffer does not have.
+        for &(name, beam, pct, worst) in &verdict {
+            if beam == 8 {
+                assert!(
+                    pct > 99.0,
+                    "{name}: at the shipped beam the level falls short of the escape \
+                     buffer's on {:.1}% of points (worst {worst} levels) -- Mode C's \
+                     multi-pass form is still the overlapping-IFS path",
+                    100.0 - pct
+                );
+            }
+        }
+        // And the beam must be what buys it, or the comparison says
+        // nothing about the beam.
+        let greedy = verdict.iter().filter(|v| v.1 == 1).map(|v| v.2).fold(100.0f64, f64::min);
+        let wide = verdict.iter().filter(|v| v.1 == 8).map(|v| v.2).fold(100.0f64, f64::min);
+        println!("  worst case: greedy {greedy:.1}%, beam 8 {wide:.1}%");
+        assert!(
+            wide > greedy,
+            "the beam bought nothing on an overlapping IFS ({greedy:.1}% -> {wide:.1}%)"
+        );
     }
 
     fn box_distance(p: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> f64 {

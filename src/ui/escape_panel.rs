@@ -148,7 +148,7 @@ pub fn render_escape_content(
                         }
                     }
                 }
-                // Mode C: distance functions. `ifs_flame` reads the
+                // Mode D: distance functions. `ifs_flame` reads the
                 // LOADED FLAME rather than a formula of its own, so
                 // there is no default view to land on — the flame's
                 // own extent decides where to stand, and the panel
@@ -181,7 +181,7 @@ pub fn render_escape_content(
             });
     });
 
-    // ---- Mode C: does the loaded flame qualify? ----
+    // ---- Mode D: does the loaded flame qualify? ----
     //
     // The criterion answers *why not* rather than *whether* (the
     // analysis returns every reason, not the first), so the panel can
@@ -1033,7 +1033,7 @@ pub fn render_escape_content(
     // formula. A field shader has none of the three -- no escape
     // test, no bailout, and a fixed-count accumulation with no step
     // to damp -- so all three sat in the panel doing nothing.
-    // Mode C reads none of them either: its walk has no escape test,
+    // Mode D reads none of them either: its walk has no escape test,
     // no bailout and no step to damp — the depth and the beam are its
     // own parameters, drawn from the def above.
     let controls = match (ifs_def, field) {
@@ -1207,7 +1207,7 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     }
 }
 
-/// Mode C's criterion (the plan's §2.4), shown under the formula row.
+/// Mode D's criterion (the plan's §2.4), shown under the formula row.
 ///
 /// The analysis returns EVERY reason a flame fails rather than the
 /// first, so this lists them: a flame with two non-affine transforms
@@ -1769,7 +1769,7 @@ mod tests {
         }
     }
 
-    /// Mode C lays out for a flame that qualifies and for one that
+    /// Mode D lays out for a flame that qualifies and for one that
     /// does not — the criterion path runs the analysis and formats
     /// every reason, which is a lot of panel code that only executes
     /// when a flame fails.
@@ -1804,12 +1804,12 @@ mod tests {
         }
     }
 
-    /// Every mode-C parameter and coloring must have somewhere to be
+    /// Every mode-D parameter and coloring must have somewhere to be
     /// drawn. A def whose params the panel never reaches is a control
     /// the user cannot touch, and the shader reads its default
     /// silently — which looks like the parameter doing nothing.
     #[test]
-    fn every_mode_c_parameter_is_reachable_from_the_panel() {
+    fn every_mode_d_parameter_is_reachable_from_the_panel() {
         for d in crate::escape::ifs::IFS_DEFS {
             assert!(!d.parameters.is_empty(), "{} has no parameters to draw", d.name);
             assert!(
