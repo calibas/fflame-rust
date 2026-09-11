@@ -1680,7 +1680,8 @@
   {
     "escape": {
       "bailout": 4.0,
-      "cam_yaw": 0.9,
+      "cam_pitch": 0.25,
+      "cam_yaw": 2.6,
       "center_im": "0",
       "center_re": "-0.5",
       "coloring": "ifs_address",
@@ -1779,6 +1780,7 @@
         }
       ]
     },
+    "gamma": 2.2,
     "levels_gamma": 0.5,
     "palette": {
       "locked": false,
@@ -2269,6 +2271,7 @@
         }
       ]
     },
+    "gamma": 2.2,
     "levels_gamma": 0.5,
     "palette": {
       "locked": false,

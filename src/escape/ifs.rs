@@ -458,9 +458,65 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
             min: 4.0,
             max: 512.0,
             tooltip: "How many times a ray may step before giving up. A ray that runs \
-                      out is left as a miss, and the count also drives the ambient \
-                      occlusion -- a ray that needed many small steps was squeezing \
-                      through structure.",
+                      out is left as a miss, so too few steps eat holes in a surface \
+                      seen at a glancing angle, where a ray travels furthest for the \
+                      distance it closes.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "sun_azimuth",
+            display_name: "Light Azimuth",
+            default: 315.0,
+            min: 0.0,
+            max: 360.0,
+            tooltip: "Where the light comes from, degrees around the vertical axis. \
+                      The cartographer's convention, which the hillshade colouring \
+                      also uses: 315 is over your left shoulder.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "sun_elevation",
+            display_name: "Light Elevation",
+            default: 40.0,
+            min: 2.0,
+            max: 90.0,
+            tooltip: "How high the light sits, degrees above the horizon. Low light \
+                      lengthens the shadows and shows the relief; overhead flattens \
+                      it.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.7,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a shadowed surface goes. 0 skips the shadow march \
+                      entirely, and that march is what shadows cost -- a second walk \
+                      of the distance function per lit pixel.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 128.0,
+            tooltip: "How sharply a shadow's edge falls off. The march already knows \
+                      how close it passed to the surface, so the penumbra costs \
+                      nothing: small values spread it, large values harden it.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.06,
+            min: 0.0,
+            max: 0.5,
+            tooltip: "How far along the surface normal to look for the walls that \
+                      enclose a point, as a fraction of the whole attractor. Small \
+                      values darken only the tightest crevices; large values shade \
+                      whole hollows. 0 turns ambient occlusion off.",
             choices: &[],
         },
     ],
@@ -1573,11 +1629,17 @@ mod tests {
     pub(super) fn solid_presets() -> Vec<crate::config::FractalConfig> {
         let registry = global_registry();
         [
-            ("Sierpinski Tetrahedron", gpu_tests::tetrahedron_flame()),
-            ("Menger Sponge", gpu_tests::menger_flame()),
+            // The angles are chosen, not defaulted. Both of these
+            // sets have symmetry axes, and a camera on one renders a
+            // solid as a flat emblem -- the tetrahedron seen down its
+            // axis is exactly the planar Sierpinski gasket, which is a
+            // poor advertisement for a renderer whose whole claim is
+            // the third dimension.
+            ("Sierpinski Tetrahedron", gpu_tests::tetrahedron_flame(), 2.6, 0.25),
+            ("Menger Sponge", gpu_tests::menger_flame(), 0.9, 0.42),
         ]
         .into_iter()
-        .map(|(name, flame)| {
+        .map(|(name, flame, yaw, pitch)| {
             let mut c = crate::config::FractalConfig::default();
             c.render_mode = crate::scene::transforms::RenderMode::Escape;
             c.flame = flame;
@@ -1593,7 +1655,8 @@ mod tests {
             // distance at which the bounding ball fills the frame. A
             // preset does not have to know where its own solid is.
             c.escape.zoom_log2 = 0.0;
-            c.escape.cam_yaw = 0.9;
+            c.escape.cam_yaw = yaw;
+            c.escape.cam_pitch = pitch;
 
             // The halo is a PLANAR idea — it fades by distance from the
             // set, and on a surface every visible point is ON it — so
@@ -1602,7 +1665,18 @@ mod tests {
 
             c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
             c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
-            c.gamma = crate::config::defaults::DEFAULT_GAMMA;
+            // Not the default gamma of 4, which is a curve for
+            // DENSITY. A solid render is not an accumulation being
+            // rescued from the dark; it is already an image, and the
+            // shader hands the tonemap LINEAR light -- it decodes the
+            // palette with `pow(srgb, 2.2)` precisely so the lighting
+            // multiplies in linear. So the display curve it wants is
+            // the matching sRGB encode, and anything flatter than that
+            // lifts the darks until the shading is gone: at gamma 4
+            // the eightfold drop from a lit surface to the ambient
+            // floor lands inside two deciles of output, which is a
+            // sponge with no shadows in its holes.
+            c.gamma = 2.2;
             c
         })
         .collect()
@@ -1848,23 +1922,33 @@ mod tests {
     fn a_solid_view_bands_and_the_march_is_in_the_estimate() {
         use crate::escape::renderer::{ifs_rows_per_dispatch, IFS_SOLID_BUDGET};
         // The Menger sponge at 1080p and the shipped defaults: twenty
-        // maps, depth 24, beam 1, 96 steps.
-        let rows = ifs_rows_per_dispatch(1920, 1080, 24, 1 * 96, 20, IFS_SOLID_BUDGET);
+        // maps, depth 24, beam 1, 96 steps -- and shadows on, which is
+        // a second march of the same length, so the caller passes
+        // twice the step count.
+        let rows = ifs_rows_per_dispatch(1920, 1080, 24, 2 * 96, 20, IFS_SOLID_BUDGET);
         assert!(rows < 1080, "1080p should band, got {rows} of 1080");
-        assert!(rows > 100, "and not into slivers: {rows} rows");
+        assert!(rows > 50, "and not into slivers: {rows} rows");
+
+        // Turning shadows off is half the work and must buy back the
+        // band, or the second march is not in the estimate at all.
+        let unshadowed = ifs_rows_per_dispatch(1920, 1080, 24, 1 * 96, 20, IFS_SOLID_BUDGET);
+        assert!(
+            unshadowed > rows,
+            "the shadow march is not in the band estimate ({unshadowed} against {rows})"
+        );
 
         // Asking for a longer march must make the bands smaller.
-        let longer = ifs_rows_per_dispatch(1920, 1080, 24, 1 * 512, 20, IFS_SOLID_BUDGET);
+        let longer = ifs_rows_per_dispatch(1920, 1080, 24, 2 * 512, 20, IFS_SOLID_BUDGET);
         assert!(
             longer < rows,
             "raising the step count did not shrink the band ({longer} against {rows})"
         );
         // So must a wider beam.
-        let wider = ifs_rows_per_dispatch(1920, 1080, 24, 8 * 96, 20, IFS_SOLID_BUDGET);
+        let wider = ifs_rows_per_dispatch(1920, 1080, 24, 8 * 2 * 96, 20, IFS_SOLID_BUDGET);
         assert!(wider < rows, "a wider beam did not shrink the band");
 
         // And the breaker still reaches it.
-        let halved = ifs_rows_per_dispatch(1920, 1080, 24, 96, 20, IFS_SOLID_BUDGET >> 1);
+        let halved = ifs_rows_per_dispatch(1920, 1080, 24, 2 * 96, 20, IFS_SOLID_BUDGET >> 1);
         assert!(halved < rows, "the budget shift does not reach a solid view");
     }
 
@@ -2352,6 +2436,79 @@ mod tests {
             (12.0..=16.0).contains(&deepest),
             "the solid zoom limit moved to 2^{deepest} -- if it went UP, 3D seeding              landed and this test should say so; if DOWN, something regressed"
         );
+    }
+
+    /// Does the tetrahedron shadow itself at all, and from where?
+    ///
+    /// Asked on the CPU, of the distance function itself, because the
+    /// alternative is reading occlusion off a render -- and a render
+    /// that shows no shadows cannot tell a light with nothing to block
+    /// it from a march that steps over blockers.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn how_much_does_the_tetrahedron_shadow_itself() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        // Points ON the set: the fixed points of deep addresses, which
+        // is the cheapest way to get a surface sample that is really
+        // on the attractor rather than near it.
+        let mut surface: Vec<[f64; 3]> = Vec::new();
+        let n = ifs3.maps.len();
+        for seed in 0..2048usize {
+            let mut p = ifs3.ball.centre;
+            let mut x = seed * 2654435761 + 12345;
+            for _ in 0..40 {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let i = (x >> 33) % n;
+                p = ifs3.maps[i].forward.apply(p);
+            }
+            surface.push(p);
+        }
+
+        for el_deg in [2.0f64, 15.0, 40.0, 70.0] {
+            for az_deg in [0.0f64, 45.0, 135.0, 225.0, 315.0] {
+                let (el, az) = (el_deg.to_radians(), az_deg.to_radians());
+                let l = [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()];
+                let mut blocked = 0usize;
+                let mut min_clear = f64::INFINITY;
+                for &p in &surface {
+                    // March the true distance function toward the
+                    // light, exactly as the shader does.
+                    // Start clear of the surface by more than the
+                    // hit threshold, or the first sample reports the
+                    // point shadowing itself -- which reads as "every
+                    // direction is blocked".
+                    const EPS: f64 = 2e-4;
+                    let mut t = EPS * 20.0;
+                    let mut clear: f64 = 1.0;
+                    for _ in 0..256 {
+                        if t > 4.0 {
+                            break;
+                        }
+                        let q = [p[0] + l[0] * t, p[1] + l[1] * t, p[2] + l[2] * t];
+                        let d = crate::scene::ifs_estimate::estimate(&ifs3, q, 24, 4).distance;
+                        if d < EPS {
+                            clear = 0.0;
+                            break;
+                        }
+                        clear = clear.min(12.0 * d / t);
+                        t += d;
+                    }
+                    if clear < 0.5 {
+                        blocked += 1;
+                    }
+                    min_clear = min_clear.min(clear);
+                }
+                println!(
+                    "  el {el_deg:>4} az {az_deg:>5}: {blocked:>5} of {} points in shadow, \
+                     darkest clearance {min_clear:.3}",
+                    surface.len()
+                );
+            }
+        }
     }
 
     /// Only a solid formula gets the 3D controls (D2).
@@ -3656,6 +3813,303 @@ mod gpu_tests {
                     None => println!("  {name:<12} beam {beam}: {ms:>7.1} ms"),
                 }
                 prev = Some(px);
+            }
+        }
+    }
+
+    /// A shadow must darken SOME of the lit surface and leave the rest
+    /// alone.
+    ///
+    /// That is the assertion that separates a shadow from a dimmer
+    /// switch, and it is the failure worth guarding: a march that
+    /// starts on the surface reports every point as occluding itself,
+    /// which darkens everything uniformly and still looks like a
+    /// change. So the test asks for both populations at once — pixels
+    /// the light reaches untouched, and pixels it does not — and
+    /// separately that no pixel got BRIGHTER, because a shadow can
+    /// only take light away.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_shadow_darkens_some_of_the_lit_surface_and_not_all_of_it() {
+        let (device, queue) = device();
+        let shot = |shadow: f32| -> Vec<u8> {
+            let mut c = config_for(tetrahedron_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 18.0);
+            c.escape.formula_params.insert("shadow".to_string(), shadow);
+            // Measured through a LINEAR display curve, so the byte is
+            // proportional to the light that reached the surface. The
+            // default gamma of 4 is a display choice and it compresses
+            // the eightfold drop from a lit surface to the ambient
+            // floor into about two deciles of output -- which would
+            // make every threshold below a statement about the tone
+            // curve rather than about the shadow. The exposure is set
+            // so nothing clips, checked rather than assumed.
+            c.gamma = 1.0;
+            c.exposure = 0.6;
+            let job = crate::renderer::RenderJob::new(&c, 192, 192);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+
+        let plain = shot(0.0);
+        let shadowed = shot(1.0);
+        let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+
+        let mut surface = 0usize;
+        let mut untouched = 0usize;
+        let mut darkened = 0usize;
+        let mut brighter = 0usize;
+        for (a, b) in plain.chunks(4).zip(shadowed.chunks(4)) {
+            let (la, lb) = (lum(a), lum(b));
+            if la <= 24 {
+                continue;
+            }
+            surface += 1;
+            // +3 of slack for the rounding of three 8-bit channels,
+            // not for a trend: a trend shows up in the count.
+            if lb > la + 3 {
+                brighter += 1;
+            }
+            let ratio = lb as f64 / la as f64;
+            if ratio > 0.98 {
+                untouched += 1;
+            } else if ratio < 0.75 {
+                darkened += 1;
+            }
+        }
+
+        assert!(surface > 192 * 192 / 20, "nothing rendered: {surface} lit pixels");
+        let clipped = plain.chunks(4).filter(|p| p[..3].iter().any(|&v| v == 255)).count();
+        assert!(
+            clipped * 50 < surface,
+            "{clipped} of {surface} lit pixels are saturated -- at this exposure the \
+             picture cannot show a shadow, so nothing below is a measurement of one"
+        );
+        assert_eq!(brighter, 0, "{brighter} of {surface} pixels got BRIGHTER under a shadow");
+        assert!(
+            darkened * 20 > surface,
+            "only {darkened} of {surface} lit pixels fell into shadow -- \
+             a shadow that shadows nothing"
+        );
+        assert!(
+            untouched * 20 > surface,
+            "only {untouched} of {surface} lit pixels kept their light -- \
+             this is a dimmer, not a shadow"
+        );
+    }
+
+    /// The sharpness knob must move the PENUMBRA, not the shadow.
+    ///
+    /// The soft edge is the one thing this costs nothing for — the
+    /// march already measured how close it passed — so the honest test
+    /// is that the partially-lit population shrinks as the knob rises,
+    /// while the fully-dark one does not move with it.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn sharpening_a_shadow_narrows_its_penumbra() {
+        let (device, queue) = device();
+        let shot = |k: f32| -> Vec<u8> {
+            let mut c = config_for(tetrahedron_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 18.0);
+            c.escape.formula_params.insert("shadow".to_string(), 1.0);
+            c.escape.formula_params.insert("shadow_sharpness".to_string(), k);
+            // Measured through a LINEAR display curve, so the byte is
+            // proportional to the light that reached the surface. The
+            // default gamma of 4 is a display choice and it compresses
+            // the eightfold drop from a lit surface to the ambient
+            // floor into about two deciles of output -- which would
+            // make every threshold below a statement about the tone
+            // curve rather than about the shadow. The exposure is set
+            // so nothing clips, checked rather than assumed.
+            c.gamma = 1.0;
+            c.exposure = 0.6;
+            let job = crate::renderer::RenderJob::new(&c, 192, 192);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+
+        let reference = {
+            let mut c = config_for(tetrahedron_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 18.0);
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+            // Measured through a LINEAR display curve, so the byte is
+            // proportional to the light that reached the surface. The
+            // default gamma of 4 is a display choice and it compresses
+            // the eightfold drop from a lit surface to the ambient
+            // floor into about two deciles of output -- which would
+            // make every threshold below a statement about the tone
+            // curve rather than about the shadow. The exposure is set
+            // so nothing clips, checked rather than assumed.
+            c.gamma = 1.0;
+            c.exposure = 0.6;
+            let job = crate::renderer::RenderJob::new(&c, 192, 192);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+
+        let penumbra = |px: &[u8]| {
+            reference
+                .chunks(4)
+                .zip(px.chunks(4))
+                .filter(|(a, b)| {
+                    let la = lum(a);
+                    if la <= 24 {
+                        return false;
+                    }
+                    let r = lum(b) as f64 / la as f64;
+                    (0.45..=0.95).contains(&r)
+                })
+                .count()
+        };
+
+        let soft = penumbra(&shot(2.0));
+        let hard = penumbra(&shot(96.0));
+        assert!(soft > 0, "no partially-lit pixels at all -- the penumbra is missing");
+        assert!(
+            hard * 2 < soft,
+            "sharpening left {hard} partially-lit pixels against {soft} soft ones -- \
+             the knob is not reaching the penumbra"
+        );
+    }
+
+    /// What the shadow march actually does to the picture, as a
+    /// distribution rather than a look.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn how_the_shadow_march_lands() {
+        let (device, queue) = device();
+        for (subject, flame) in
+            [("tetra", tetrahedron_flame()), ("menger", menger_flame())]
+        {
+        let shot = |shadow: f32, k: f32, el: f32, steps: f32, beam: f32| -> Vec<u8> {
+            let mut c = config_for(flame.clone());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 18.0);
+            c.escape.formula_params.insert("shadow".to_string(), shadow);
+            c.escape.formula_params.insert("shadow_sharpness".to_string(), k);
+            c.escape.formula_params.insert("sun_elevation".to_string(), el);
+            c.escape.formula_params.insert("steps".to_string(), steps);
+            c.escape.formula_params.insert("beam".to_string(), beam);
+            c.gamma = 1.0;
+            c.exposure = 0.6;
+            let job = crate::renderer::RenderJob::new(&c, 192, 192);
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+
+        for &(k, el, steps, beam) in &[
+            (12.0f32, 40.0f32, 96.0f32, 1.0f32),
+            (12.0, 15.0, 96.0, 1.0),
+            (2.0, 40.0, 96.0, 1.0),
+        ] {
+            let plain = shot(0.0, k, el, steps, beam);
+            let dark = shot(1.0, k, el, steps, beam);
+            let mut bins = [0usize; 11];
+            let mut surface = 0usize;
+            for (a, b) in plain.chunks(4).zip(dark.chunks(4)) {
+                let la = lum(a);
+                if la <= 24 {
+                    continue;
+                }
+                surface += 1;
+                let r = (lum(b) as f64 / la as f64).clamp(0.0, 1.0);
+                bins[(r * 10.0).round() as usize] += 1;
+            }
+            let pct: Vec<String> = bins
+                .iter()
+                .map(|n| format!("{:>4.1}", 100.0 * *n as f64 / surface.max(1) as f64))
+                .collect();
+            let mut abs = [0usize; 11];
+            for a in plain.chunks(4) {
+                let la = lum(a);
+                if la > 24 {
+                    abs[(la as f64 / 765.0 * 10.0).round() as usize] += 1;
+                }
+            }
+            let apct: Vec<String> = abs
+                .iter()
+                .map(|n| format!("{:>4.1}", 100.0 * *n as f64 / surface.max(1) as f64))
+                .collect();
+            println!(
+                "  {subject:<7} k={k:<5} el={el:<5} beam={beam} steps={steps:<5}: {surface} lit\n     \
+                 ratio    {}\n     absolute {}",
+                pct.join(" "),
+                apct.join(" ")
+            );
+        }
+        }
+    }
+
+    /// What the second march costs.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn what_a_solid_render_pays_for_its_shadows() {
+        let (device, queue) = device();
+        for (name, flame) in [("tetrahedron", tetrahedron_flame()), ("menger", menger_flame())] {
+            for shadow in [0.0f32, 1.0] {
+                let mut c = config_for(flame.clone());
+                c.escape.formula = "ifs_flame_3d".to_string();
+                c.escape.coloring = "ifs_address".to_string();
+                c.escape.cam_yaw = 0.9;
+                c.escape.coloring_params.insert("reach".to_string(), 0.0);
+                c.escape.formula_params.insert("shadow".to_string(), shadow);
+                let once = || {
+                    let job = crate::renderer::RenderJob::new(&c, 256, 256);
+                    pollster::block_on(crate::renderer::render(
+                        &device,
+                        &queue,
+                        job,
+                        &mut crate::renderer::NoProgress,
+                    ))
+                    .expect("render")
+                    .rgba_data
+                };
+                let _ = once();
+                let t0 = web_time::Instant::now();
+                let _ = once();
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                println!("  {name:<12} shadow {shadow:.0}: {ms:>8.1} ms");
             }
         }
     }

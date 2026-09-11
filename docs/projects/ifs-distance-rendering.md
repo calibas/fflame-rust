@@ -962,9 +962,11 @@ axis presents as a gasket, with sharp edges and no speckle. The Menger
 sponge as twenty affine maps looks like a Menger sponge — §4's picture,
 rendered. Normals are central differences of `d`, so they are a
 property of the field rather than a reconstruction from neighbouring
-depths; occlusion is how hard the march had to work, which is free and
-also a property of the field. Neither can speckle, because neither is
-inferred from a stochastic sample. That is §2.1's argument, seen.
+depths; occlusion is asked of the field directly (see the shadow
+record below — the first answer, "how hard the march had to work", was
+free and measured almost nothing). Neither can speckle, because
+neither is inferred from a stochastic sample. That is §2.1's argument,
+seen.
 
 **A layout bug worth recording, because it did not fail.** The first
 solid row used a `vec3<f32>` for the translation. A `vec3` aligns to
@@ -1070,8 +1072,82 @@ read: no colouring takes it and the recolor pass only copied it back.
 A test now requires all THREE templates to agree about the record's
 declaration, since the solid walk is the one that writes the shade.
 
-**Still to come in this phase**: soft shadows, the shade-pass extension
-(D7), and **3D seeding**, which the camera has now given a shape. A ray
+**Soft shadows, 2026-09-11.** A second march, from the surface toward
+the light, with the penumbra falling out of it for nothing: a sphere
+trace already knows how CLOSE it passed at every step, and that
+clearance over the distance travelled IS the angle by which the
+blocker missed the light. A shadow map has to be filtered into looking
+soft; this is soft because the geometry is. Four parameters — the
+light's azimuth and elevation (the cartographer's convention the
+hillshade colouring already uses), the shadow's strength, and the
+sharpness of its edge. Strength 0 skips the march, which is the whole
+cost: measured at +23% on the tetrahedron and +23% on the sponge.
+
+The band model counts it. A shadowed pixel is charged for **two**
+marches rather than one, which halves the band. The measured cost is a
+fifth more, not twice — but what a band size protects against is the
+driver's watchdog, and that is a ceiling question, not an average one.
+Phase 1b is what happens when it is answered with an average.
+
+**Three things had to be right before a shadow was visible at all, and
+none of them was the shadow.** Each was found by measuring rather than
+by looking, and each would have read as "shadows do not work".
+
+1. **The instrument was clipping, and then compressing.** At the
+   default exposure a lit surface saturates the 8-bit output, and a
+   saturated pixel cannot show a shadow — eight times less light is
+   still past 255. Fixing the exposure was not enough: at the default
+   **gamma of 4** the eightfold drop from a lit surface to the ambient
+   floor lands inside two deciles of output. Gamma 4 is a curve for
+   DENSITY, an accumulation being rescued from the dark. A solid
+   render is not that; it is already an image, and the shader hands
+   the tonemap linear light — it decodes the palette with
+   `pow(srgb, 2.2)` precisely so the lighting multiplies in linear. So
+   the display curve a solid wants is the matching sRGB encode, and
+   the two solid presets ship with **gamma 2.2**. The shadow tests
+   measure at gamma 1, so that a threshold is a statement about the
+   shadow rather than about the tone curve.
+
+2. **Ambient occlusion was on the wrong factor.** The lighting read
+   `0.12 + 0.88·λ·sun·ao`, so the occlusion was darkening the DIRECT
+   light — which the shadow march is already answering for — while the
+   ambient term, the one the name is about, was unoccluded. Swapped,
+   it is `0.12·ao + 0.88·λ·sun`. This is not pedantry about names: with
+   the old arrangement a fully shadowed recess and an unshadowed flat
+   face both landed on the same constant ambient, so on the sponge the
+   sub-squares DISAPPEARED into the face at exactly the moment they
+   should have gone darkest. Turning shadows on made the picture
+   flatter.
+
+3. **The occlusion itself measured almost nothing.** It was one minus
+   the fraction of the march's step allowance a ray used — free, and a
+   real property of the field, but not this property: a ray reaching a
+   flat face and a ray reaching the floor of a recess both converge in
+   a handful of steps, so it read about one everywhere. It is five
+   samples along the normal now (Quilez's form), comparing how far the
+   sample moved with how far the surface then is. That is the
+   difference between a sponge whose holes have depth and a sponge
+   painted on a cube.
+
+**And the presets were framed down their own symmetry axes.** A
+Sierpiński tetrahedron seen down an axis is exactly the planar gasket;
+a solid renderer whose whole claim is the third dimension should not
+ship a preset that renders a flat emblem. Both solid presets now carry
+chosen angles rather than the defaults.
+
+**The gates are two populations, not one difference.** "The picture
+changed" is passed by a march that starts on the surface and therefore
+reports every point as shadowing itself — a uniform dimmer. So the
+test requires BOTH: lit pixels the light still reaches untouched, and
+lit pixels it does not, each at least a twentieth of the surface, with
+no pixel brighter than before, since a shadow can only take light
+away. A second gate holds the penumbra to the sharpness knob: the
+partially-lit population must shrink as the edge hardens, which a
+uniform darkening cannot fake. Both check the render was not clipping
+before they believe anything they measured.
+
+**Still to come in this phase**: the shade-pass extension (D7) and
+**3D seeding**, which the camera has now given a shape. A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
 offset — and the ray origins are all the same point, the eye, which is

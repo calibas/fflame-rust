@@ -4909,6 +4909,92 @@ fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
 
 //__IFS_COLORING__
 
+// Ambient occlusion, asked of the distance function rather than of the
+// march that got here.
+//
+// The field already answers the question directly: step a little way
+// along the normal and compare how far you moved with how far the
+// nearest surface now is. In the open they agree and nothing is
+// occluded; inside a recess the distance lags behind the step by
+// exactly the amount the walls are closing in. Quilez's five-sample
+// form, with the weights falling off so near geometry counts for more
+// than far.
+//
+// This replaced a free proxy -- one minus the fraction of the march's
+// step allowance a ray used -- which measured something real but not
+// this: a ray reaching a flat face and a ray reaching the floor of a
+// recess both converge in a handful of steps, so the proxy read about
+// one everywhere and the recesses were not dark at all.
+fn ifs_ao(p: vec3<f32>, n: vec3<f32>, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    var occ = 0.0;
+    var weight = 1.0;
+    var i = 0u;
+    loop {
+        if (i >= 5u) {
+            break;
+        }
+        let h = reach * (0.02 + 0.2 * f32(i));
+        occ = occ + max(h - ifs_distance_at(p + n * h), 0.0) * weight;
+        weight = weight * 0.75;
+        i = i + 1u;
+    }
+    return clamp(1.0 - 2.0 * occ / reach, 0.0, 1.0);
+}
+
+// How much of the light reaches `p`, marching the distance function
+// toward it.
+//
+// The penumbra is free, and that is the point. A sphere trace already
+// knows how CLOSE it passed to the surface at every step, and that
+// clearance over the distance travelled is the angle the blocker
+// missed the light by -- so the softness is a measurement of the
+// geometry rather than a blur applied to a hard answer. Inigo
+// Quilez's formulation, which is the standard one for distance
+// fields.
+fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32) -> f32 {
+    // The ray leaves at the bounding sphere: past it every point is
+    // provably outside the set, so there is nothing left to occlude.
+    let oc = p - ifs_ball_centre();
+    let b = dot(oc, light);
+    let disc = b * b - (dot(oc, oc) - ifs_radius() * ifs_radius());
+    if (!(disc > 0.0)) {
+        return 1.0;
+    }
+    let t_max = -b + sqrt(disc);
+
+    // Two different epsilons, and the difference is the whole
+    // behaviour of this function.
+    //
+    // The BIAS is a pixel: the ray has to clear the surface it starts
+    // on, and a pixel is how precisely that surface's position is
+    // known. The HIT test is a fraction of the attractor instead --
+    // testing at a pixel's width would call the ray blocked as soon
+    // as it grazed anything within a pixel, which under light coming
+    // in at an angle is every point on a textured face. Measured, that
+    // erased the sponge's sub-squares entirely: not a shadow but a
+    // flat repaint of the face.
+    let eps = max(ifs_radius() * 1e-4, 1e-7);
+    var t = bias;
+    var shade = 1.0;
+    var i = 0u;
+    loop {
+        if (i >= max_steps || t > t_max) {
+            break;
+        }
+        let d = ifs_distance_at(p + light * t);
+        if (d < eps) {
+            return 0.0;
+        }
+        shade = min(shade, k * d / t);
+        t = t + d;
+        i = i + 1u;
+    }
+    return clamp(shade, 0.0, 1.0);
+}
+
 // Central differences of the distance function: the normal is a
 // PROPERTY of d, not a reconstruction from neighbouring depths. That
 // is the whole difference from the splat pipeline's screen-space
@@ -5015,15 +5101,53 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let res = ifs_evaluate3(p);
             let shade = ifs_color(res);
 
-            let n = ifs_normal(p, max(px_at * t, 1e-6));
-            // Occlusion from the march: a ray that needed many small
-            // steps was squeezing through structure, which is exactly
-            // where a surface is occluded. Free, and a property of the
-            // field rather than a screen-space guess.
-            let ao = 1.0 - f32(steps) / f32(max_steps);
-            let key = normalize(vec3<f32>(0.4, 0.7, 0.6));
+            let eps0 = max(px_at * t, 1e-6);
+            let n = ifs_normal(p, eps0);
+            // The occlusion reach is a fraction of the attractor, not
+            // of the pixel: it is asking how enclosed this point is,
+            // which is a fact about the shape at the scale being
+            // looked at. Tied to the view instead, the same geometry
+            // would change how occluded it was as you zoomed.
+            let ao = ifs_ao(p, n, ifs_radius() * fparam(7u));
+
+            // The light, in world terms: azimuth around the vertical
+            // axis and elevation above the horizon, the convention the
+            // hillshade colouring already uses.
+            let az = fparam(3u) * 0.017453293;
+            let el = fparam(4u) * 0.017453293;
+            let key = vec3<f32>(cos(el) * cos(az), cos(el) * sin(az), sin(el));
             let lambert = max(dot(n, key), 0.0);
-            let lit = 0.12 + 0.88 * lambert * (0.35 + 0.65 * ao * ao);
+
+            // A second march, toward the light. Skipped where the
+            // surface already faces away -- the shadow cannot darken
+            // what the lambert term has already taken to zero, and the
+            // march is what shadows cost.
+            var sun = 1.0;
+            let shadow_amount = clamp(fparam(5u), 0.0, 1.0);
+            if (shadow_amount > 0.0 && lambert > 0.0) {
+                let reaching = ifs_shadow(
+                    p + n * eps0 * 2.0,
+                    key,
+                    fparam(6u),
+                    eps0 * 4.0,
+                    max_steps,
+                );
+                sun = mix(1.0, reaching, shadow_amount);
+            }
+
+            // Occlusion on the AMBIENT term and the shadow on the
+            // DIRECT one, which is the way round the two names already
+            // say. Before shadows existed the ao rode on the direct
+            // term instead, and that is a defensible cheat while it is
+            // the only occlusion in the picture -- but once a shadow
+            // march is answering for the direct light, leaving it
+            // there double-counts one and leaves the other unoccluded.
+            // Measured on the sponge, it also erased the sub-squares:
+            // a fully shadowed recess and an unshadowed flat face both
+            // landed on the same constant ambient, so the recesses
+            // disappeared into the face at exactly the moment they
+            // should have gone darkest.
+            let lit = 0.12 * (0.35 + 0.65 * ao * ao) + 0.88 * lambert * sun;
 
             let tt = fract(shade.t);
             height = select(shade.t, tt, params.shade_flags == 1u);
