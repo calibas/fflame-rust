@@ -1231,7 +1231,42 @@ bound for the planar walk too at one empty link — a layout that
 differed by dimension would need two pipeline layouts for one shader
 family, and the planar template simply never reads it.
 
-**Still to come in this phase**: the shade-pass extension (D7). A ray
+**The shade-pass extension, 2026-09-11 (D7, first half).**
+`run_region` takes a `ShadeGeometry` now: a normal texture, an optional
+occlusion texture, and the half-angle of a pinhole projection. Supplied,
+they replace the screen-space reconstruction *and* the chain that builds
+it — the normals pass reads a depth field to recover what a marcher
+already knows exactly, so running it would be work done to reach a worse
+answer. Absent, every existing caller takes the path it always took.
+
+The division of labour is the point, and it is not "the marcher does
+lighting" versus "the shade pass does lighting". A distance marcher
+knows the gradient of its own field and how enclosed a point is, both
+exactly and both as properties of the field rather than of neighbouring
+pixels; it can also fold in a shadow it actually traced, which SSAO has
+no way to express. What it does not have is the rig: four coloured
+lights, a material, fog, and the temporal smoothing that keeps a
+progressive render from strobing. Each side keeps what it is better at.
+
+`reconstruct` gained the pinhole because that is the only place a pixel
+and a depth become a position — D8's projection difference is confined
+to five lines rather than spread through the pass.
+
+**The gate is asserted of the parameter bytes, not of the pixels, and
+that is the only honest form it can take.** A solid flame is not
+bit-reproducible — the in-batch depth race, recorded in
+`solid-rendering.md` — so two renders of the same flame differ whether
+or not anything changed, and a pixel comparison could not tell the two
+cases apart. What the extension could actually break is the block of
+bytes the shader reads, and that IS deterministic: with nothing
+supplied the two former padding slots must still read as padding and
+the occlusion bit must be clear, and with geometry supplied the same
+call must differ in exactly those fields and nowhere else. The six
+`solid-*` visual baselines are the end-to-end half.
+
+**Still to come in this phase**: mode D as a producer for that
+extension — writing albedo rather than lit colour, plus a normal, an
+occlusion and a depth buffer, and running the shade pass over them. A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
 offset — and the ray origins are all the same point, the eye, which is
