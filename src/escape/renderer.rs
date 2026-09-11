@@ -153,7 +153,7 @@ pub const PERTURB_CHUNK_BUDGET_FE: u64 = 600_000_000;
 static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
-/// Mode C's dispatch budget, in WALK STEPS: one candidate advanced
+/// Mode D's dispatch budget, in WALK STEPS: one candidate advanced
 /// down one branch at one level, so `levels * beam * maps` per pixel.
 ///
 /// Separate from [`DIRECT_DISPATCH_BUDGET`] because a walk step is not
@@ -164,7 +164,7 @@ static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
 /// [`DIRECT_BAND_SLOW_MS`] and leaves the breaker room to halve if a
 /// slower device disagrees.
 ///
-/// Getting this wrong is not a slow render, it is a hang: mode C's
+/// Getting this wrong is not a slow render, it is a hang: mode D's
 /// cost was first modelled as `levels * maps`, which is 8x low at the
 /// default beam and 250x low in absolute terms. A 1080p view then
 /// dispatched the whole image at once, took seconds, and the driver
@@ -174,7 +174,7 @@ static DIRECT_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
 /// and this estimate is what decides whether it ever is.
 pub const IFS_DISPATCH_BUDGET: u64 = 450_000_000;
 
-/// Rows per dispatch for a mode-C walk, as pure arithmetic.
+/// Rows per dispatch for a mode-D walk, as pure arithmetic.
 ///
 /// `beam` and `levels` are the def's parameters, `maps` the analysed
 /// flame's transform count.
@@ -594,7 +594,7 @@ pub struct EscapeRenderer {
     /// accumulator; the palette is Rgba8Unorm and filters fine).
     palette_sampler: wgpu::Sampler,
     bind_group_layout: BindGroupLayout,
-    /// Mode C's second bind group: the flame's inverse maps (D5). Its
+    /// Mode D's second bind group: the flame's inverse maps (D5). Its
     /// own group so no existing pipeline's layout moves and every
     /// existing shader stays byte-identical.
     ifs_bind_group_layout: BindGroupLayout,
@@ -612,7 +612,7 @@ pub struct EscapeRenderer {
     ifs_seeds: Option<[[f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS]>,
     ifs_seed_key: String,
     /// The analysed flame, or `None` when the loaded one does not
-    /// qualify (or mode C is not active). A mode-C render with no maps
+    /// qualify (or mode D is not active). A mode-D render with no maps
     /// draws nothing rather than garbage.
     ifs: Option<super::ifs::PackedIfs>,
     ifs_uploaded: Option<super::ifs::PackedIfs>,
@@ -1383,8 +1383,8 @@ impl EscapeRenderer {
             mapped_at_creation: false,
         });
 
-        // Mode C's map buffer starts at one row: a flame that
-        // qualifies grows it, and a device that never renders mode C
+        // Mode D's map buffer starts at one row: a flame that
+        // qualifies grows it, and a device that never renders mode D
         // pays 32 bytes.
         let ifs_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Escape IFS Bind Group Layout"),
@@ -2887,7 +2887,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// records made without a derivative orbit must not serve a
     /// coloring that reads one.
     fn iterate_key_for(&self, escape: &EscapeConfig) -> String {
-        // Mode C: everything the WALK depends on, and nothing the
+        // Mode D: everything the WALK depends on, and nothing the
         // colouring does. The walk is the expensive half and none of
         // it looks at the colouring or the palette, so a colouring
         // edit hits this cache and costs one dispatch.
@@ -2991,7 +2991,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         escape: &EscapeConfig,
         palette_view: &TextureView,
     ) {
-        // Mode C recolours from its own record layout, through its
+        // Mode D recolours from its own record layout, through its
         // own template, with the same coloring def the walk used.
         let ifs_key = super::ifs::get_ifs(&escape.formula).map(|def| {
             let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
@@ -3118,14 +3118,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     ///   drawn in the old colours and the rest in the new ones —
     ///   reported as horizontal bands of different colours while the
     ///   render scanned down.
-    /// - **the flame**, which only mode C reads, and which the app
+    /// - **the flame**, which only mode D reads, and which the app
     ///   re-analyses every frame.
     ///
     /// Restarting is the honest answer for both: a band cannot be
     /// re-coloured after the fact, because the walk that produced it is
     /// gone. (Mode A escapes this through its recolor cache, which
     /// keeps per-pixel records and re-colours without re-iterating;
-    /// mode C would need a cache of its own, and that is phase 2's
+    /// mode D would need a cache of its own, and that is phase 2's
     /// business.)
     fn band_key(&self, escape: &EscapeConfig, palette_generation: u64) -> String {
         Self::compose_band_key(
@@ -3316,9 +3316,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// resume state: each band is a complete render of its own rows,
     /// and the output texture accumulates them. It also gives the
     /// direct path progressive top-to-bottom feedback it never had.
-    /// Hand the renderer the analysed flame for mode C.
+    /// Hand the renderer the analysed flame for mode D.
     ///
-    /// `None` means "no qualifying flame": a mode-C render then draws
+    /// `None` means "no qualifying flame": a mode-D render then draws
     /// nothing, which is the honest picture while the panel explains
     /// which condition failed. Called by whoever owns the config —
     /// the app on a flame edit, `render_with` once per job — so the
@@ -3456,7 +3456,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         tuning::ensure_loaded();
         let shift = DIRECT_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
 
-        // Mode C iterates no `max_iter` at all: it walks, and a walk
+        // Mode D iterates no `max_iter` at all: it walks, and a walk
         // step is a different unit with a budget of its own.
         if let Some(def) = super::ifs::get_ifs(&escape.formula) {
             let param = |name: &str, fallback: f32| {
@@ -5626,7 +5626,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Mode B routing: a formula name resolving in the FIELD
         // registry compiles the field template instead. Same bind
         // group layout, same dispatch — only the shader differs.
-        // Mode C routing: a formula name resolving in the IFS
+        // Mode D routing: a formula name resolving in the IFS
         // registry compiles the distance template, which is the one
         // shader that also binds group 1.
         if let Some(def) = super::ifs::get_ifs(&escape.formula) {
@@ -5745,7 +5745,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
         if let Some(def) = super::ifs::get_ifs(&escape.formula) {
-            // Mode C: the def's params, its coloring's, and the
+            // Mode D: the def's params, its coloring's, and the
             // whole-IFS constants in the fdata block the other modes
             // use for derived formula data.
             let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
@@ -5856,7 +5856,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // what makes palette and coloring edits real-time on the
         // perturbed path. Field formulas write no records.
         // Field formulas write no terminal records, so they have no
-        // recolor cache to key. Mode C does write them: its walk is the
+        // recolor cache to key. Mode D does write them: its walk is the
         // engine's most expensive pass and none of it depends on the
         // colouring.
         let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
@@ -6292,7 +6292,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             ],
         });
 
-        // Mode C's maps. Uploaded here rather than in `set_ifs` so
+        // Mode D's maps. Uploaded here rather than in `set_ifs` so
         // the queue write lands in this frame's submission, and only
         // when the packed data actually changed.
         let ifs_bind_group = if super::ifs::get_ifs(&escape.formula).is_some() {
@@ -6480,12 +6480,12 @@ mod tests {
     /// the rows already drawn in the old colours and the rest in the
     /// new ones. Reported from the app as horizontal bands of
     /// different colours while the render scanned down, on rotating
-    /// the palette over a mode-C view.
+    /// the palette over a mode-D view.
     ///
     /// The band cursor already restarts when its key changes; the
     /// palette simply was not in the key, because it lives in the
     /// flame renderer's texture rather than the escape config. Nor was
-    /// the flame, which only mode C reads.
+    /// the flame, which only mode D reads.
     #[test]
     fn the_band_key_changes_when_the_palette_or_the_flame_does() {
         let base = "mandelbrot|{}|smooth|0|0|0";

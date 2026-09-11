@@ -15,6 +15,13 @@ sphere-traced, which is what the classic high-quality fractal renders
 are made of, and what the point-splatting solid mode structurally
 cannot match.
 
+**On the two names.** The escape plan's **Mode C** is the
+Hepting–Hart escape buffer, planned there and not built; this
+plan's registry kind is **mode D**, the fourth after formulas and
+fields. D9 is about whether the first is still needed once the
+second exists, so both appear in the same sentences and they had
+better not share a letter.
+
 It supersedes the escape-time-IFS "Mode C" of
 [escape-time-fractals.md](escape-time-fractals.md) §6 for the affine
 case — see D9 — and it shares its prerequisites with that plan and
@@ -356,6 +363,9 @@ machinery; it is a phase-3 item, not a new one.
   overlapping-IFS path and this plan's estimate the rest. Either way
   the analysis of phase 0 is Mode C's prerequisite list, built.
 
+  **Decided 2026-09-10: Mode C is closed for the affine case**, with
+  the residual recorded below. See phase 2.
+
 ## 4. What the user will see
 
 - **Escape panel, a new source:** *"From flame"* beside the formula
@@ -593,7 +603,7 @@ few hundred pixels of chaos game: a plausible picture, of the right
 fractal, from the wrong engine. Generating them through
 `FractalConfig::to_json`, which stamps the version, is the fix.
 
-**Mode C is the one escape formula that is not a function of the escape
+**Mode D is the one escape formula that is not a function of the escape
 config alone**, and that has a consequence worth stating: every path
 driving an `EscapeRenderer` has to hand it the analysed flame, and a
 path that forgets draws an empty frame — correctly, quietly, and
@@ -602,7 +612,7 @@ viewport was exactly that until a source-scanning test went in beside
 the two call sites. A flame edit also has to mark the escape image
 dirty, which nothing else needed to do.
 
-**The panel** gains mode C as a third group in the formula dropdown,
+**The panel** gains mode D as a third group in the formula dropdown,
 the def's parameters and colourings, and the criterion: it lists
 *every* reason a flame fails rather than the first, says plainly that
 the render draws the set and not the measure (D6), and offers a Frame
@@ -626,7 +636,7 @@ Windows reports when the driver resets under a compute dispatch that
 overran its watchdog — and the dispatch was the whole image at once.
 
 **The cause was the chunk estimate, not the shader.** The direct path
-sizes each dispatch as `budget / (width · per-pixel cost)`, and mode C
+sizes each dispatch as `budget / (width · per-pixel cost)`, and mode D
 declared its per-pixel cost as `levels · maps`. That leaves out the
 beam (8× at the default) and, worse, it is stated in mode A's unit: a
 walk step is not an iteration, and measured against the shared budget
@@ -651,7 +661,7 @@ Three fixes, in order of what they were worth:
 - **The two-pass selection** above, which took beam 8 from 152 ms to
   114 ms of walk.
 - **The presets stopped asking for 2× supersampling**, which was four
-  times the walk for nothing: mode C's edge is antialiased
+  times the walk for nothing: mode D's edge is antialiased
   analytically, from the sub-pixel value of the distance, and its other
   colourings are smooth fields that do not alias.
 
@@ -667,7 +677,7 @@ edit part-way through leaves the rows already drawn in the old colours.
 The band cursor already restarts when its key changes; the palette
 simply was not in that key, because it lives in the flame renderer's
 texture rather than the escape config. Neither was the flame, which
-only mode C reads and which the app re-analyses every frame. Both are
+only mode D reads and which the app re-analyses every frame. Both are
 in the key now, via a palette generation counter bumped at the single
 point the texture is written.
 
@@ -675,11 +685,11 @@ Restarting is the honest answer, because a band cannot be re-coloured
 after the fact: the walk that produced it is gone. Mode A escapes this
 through its recolor cache — per-pixel records that re-colour without
 re-iterating — and it is why mode A's palette editing was never
-affected. Mode C has no such cache, so a palette edit costs it a full
+affected. Mode D has no such cache, so a palette edit costs it a full
 re-render, and during a slider drag only the top band gets drawn. That
 is the first thing phase 2 fixes.
 
-**One more hazard, found while looking rather than reported.** Mode C
+**One more hazard, found while looking rather than reported.** Mode D
 is the only escape formula that depends on the flame, so the app
 re-analyses it every frame and marks the escape image dirty when the
 result differs. That comparison was `PartialEq` on packed `f32`s — and
@@ -837,7 +847,7 @@ and a test pins it.
   exactly representable.
 - ~~The beam (D4, B > 1) and its cost measured~~ — **moved into phase
   1**, because the dragon needed it to render at all (§5, phase 1).
-- **A mode-C recolor cache — built 2026-09-10, and taken first.**
+- **A mode-D recolor cache — built 2026-09-10, and taken first.**
   The address colouring at a chosen depth, contour, glow and trap
   colourings with their parameters: all of that is unusable to TUNE
   while every slider drag costs a full re-walk, and after phase 1b a
@@ -847,7 +857,7 @@ and a test pins it.
   The walk writes its four quantities into the 32-byte-per-pixel
   records buffer the escape engine already allocates — the same
   stride and the same binding mode A's `IterResult` uses, so the two
-  share one buffer — and a mode-C recolor template runs the same
+  share one buffer — and a mode-D recolor template runs the same
   colouring def over them. Measured on the dragon at 1080p, against a
   mode-A control to remove the harness floor: **433 ms of walk becomes
   nothing measurable.** Gated by rendering each colouring two ways —
@@ -860,11 +870,60 @@ and a test pins it.
   no validation error to point at.
 - The address colouring as a mixed fraction; the remaining colouring
   parameters; edge antialiasing from `d` beyond what phase 1 has.
-- **Gates:** three overlapping flames rendered greedy against beam,
-  the difference measured and inspected; the D9 comparison — does the
-  level colouring on an overlapping flame hold up against what the
-  escape buffer would give — recorded with pictures. This is where
-  Mode C's fate is decided, and it is decided by looking.
+- **D9, decided 2026-09-10.**
+
+  The catalogue has no flame that both overlaps and qualifies — phase
+  0's census found three qualifying flames and all three are variation
+  smoke tests — so the three are constructed: a Sierpiński whose maps
+  are 0.6 instead of 0.5 so the pieces lap over each other, two
+  half-covers of the square at 0.7 sharing a wide band, and two
+  similarities at 0.46 **turned against each other**, so the overlap is
+  not axis-aligned and the nearest-centre rule has no symmetry to lean
+  on.
+
+  **The escape buffer did not have to be built to be measured
+  against.** Its whole advantage is that it needs no branch choice: it
+  iterates the IMAGE through the maps, so a point is inside at level k
+  exactly when SOME address of length k holds it. That is the maximum
+  over addresses — computable directly by exhaustive search, and that
+  is the answer the buffer would give.
+
+  How often the walk's level reaches it, against exhaustive search at
+  depth 12 over a 21×21 grid:
+
+  | IFS | beam 1 | beam 4 | beam 8 |
+  |---|---|---|---|
+  | fat gasket | 99.5% | 100% | 100% |
+  | overlapping band | 100% | 100% | 100% |
+  | turned pair | 98.6%, short by ≤6 | 98.9% | **99.3%, short by ≤2** |
+
+  **The verdict: closed.** The buffer's remaining advantage is worth
+  0.7% of points, by at most two levels, on the hardest case that could
+  be constructed — and the shortfall has a direction. The walk follows
+  real addresses, so any level it reports is one some address explains:
+  it can only ever fall SHORT, never over-claim. The artifact is a
+  point drawn very slightly further out than it is, which is
+  conservative and invisible. That does not buy a second multi-pass
+  renderer.
+
+  **A measurement error worth keeping, because it inverted a result.**
+  The first version of this compared the *winning* candidate's level —
+  the one that minimises the distance — against the buffer's. On that
+  quantity a wider beam was sometimes WORSE (the band read 99.1% at
+  beam 8 against 100% at beam 4), which is not a property a beam should
+  have. It was the comparison, not the beam: the escape buffer computes
+  the deepest surviving address, and `level` was answering a different
+  question. `Estimate::deepest_level` answers the buffer's question,
+  and on it the beam is monotone and the anomaly is gone. The shader
+  reports the deepest too, for the same reason.
+
+  **And the pictures** (`render_the_overlapping_ifss_for_d9`, written
+  to `output/ifs/`). The level colouring over an overlapping IFS is the
+  Hepting–Hart escape-time look the plan promised, and it is the
+  prettiest thing mode D draws. The distance colouring is where the
+  beam shows: on the turned pair, greedy renders a broken, speckled
+  curve missing whole lobes, and beam 8 renders it continuous — 5 304
+  lit pixels against 8 473.
 
 ### Phase 3 — 3D
 
@@ -889,7 +948,9 @@ and a test pins it.
 - SIMULATION.md's sibling: a topic doc for the escape engine's four
   kinds, or a section in the escape plan — whichever the escape plan's
   size argues for by then.
-- The escape plan's Mode C section updated per D9's outcome.
+- The escape plan's Mode C section updated per D9's outcome — which
+  is "closed for the affine case", with the 0.7%/≤2-level residual and
+  its direction recorded.
 - The Mandelbulb, KIFS and Mandelbox distance functions are **not**
   in this plan: they are `IfsDef`-shaped registry entries that need no
   flame and no phase-0 analysis, and they become catalogue work the

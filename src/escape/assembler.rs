@@ -4343,7 +4343,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#;
 
 const IFS_TEMPLATE: &str = r#"
-// Distance-field compute pass (mode C, ifs-distance-rendering.md
+// Distance-field compute pass (mode D, ifs-distance-rendering.md
 // phase 1): no iteration of the pixel and no series - each pixel walks
 // the INVERSE maps of an affine IFS until it leaves a bounding ball,
 // and what the walk yields is the distance to the attractor plus three
@@ -4369,7 +4369,7 @@ struct EscapeParams {
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
-    // Mode C keeps the whole-IFS constants here: see
+    // Mode D keeps the whole-IFS constants here: see
     // `escape::ifs::pack_globals` for the layout.
     fdata: array<vec4<f32>, 64>,
 }
@@ -4381,7 +4381,7 @@ struct EscapeParams {
 @group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
 
 // One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
-// mode C is the only pipeline whose layout mentions it and no existing
+// mode D is the only pipeline whose layout mentions it and no existing
 // shader's bindings move (D5).
 struct IfsMapGpu {
     inv_m: vec4<f32>,
@@ -4396,7 +4396,7 @@ struct IfsMapGpu {
 //
 // Thirty-two bytes, the same stride as mode A's `IterResult`, so both
 // share the one records buffer and the one binding. Everything a
-// mode-C colouring can read is here: the four quantities of the plan's
+// mode-D colouring can read is here: the four quantities of the plan's
 // 2.3 plus the escape flag and depth.
 struct IfsRecord {
     distance: f32,
@@ -4503,7 +4503,7 @@ struct IfsResult {
     depth: u32,
 }
 
-// The widest beam a mode-C walk may follow. The candidate arrays are
+// The widest beam a mode-D walk may follow. The candidate arrays are
 // function-scope registers, so this is a register-pressure ceiling
 // rather than a limit anything wants to raise casually.
 const IFS_MAX_BEAM: u32 = 8u;
@@ -4573,10 +4573,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#;
 
 const IFS_RECOLOR_TEMPLATE: &str = r#"
-// Mode-C recolor pass: a colouring and a palette, over cached walk
+// Mode-D recolor pass: a colouring and a palette, over cached walk
 // records. See assemble_ifs_recolor.
 //
-// Mode C's walk is by far the most expensive thing the escape engine
+// Mode D's walk is by far the most expensive thing the escape engine
 // does, and none of it depends on the colouring or the palette. This
 // is what makes a palette rotation one cheap dispatch instead of a
 // full re-walk -- and, because the walk is banded across frames, what
@@ -4716,7 +4716,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }"#;
 
-/// Assemble the mode-C recolor pass for one coloring.
+/// Assemble the mode-D recolor pass for one coloring.
 ///
 /// The colouring is the SAME def the walk template splices, and it
 /// sees the same `IfsResult` -- so a recolor reproduces the walk
@@ -4734,7 +4734,7 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
 ")
 }
 
-/// Assemble a mode-C distance shader: splice one distance function
+/// Assemble a mode-D distance shader: splice one distance function
 /// and one coloring into [`IFS_TEMPLATE`]. Same marker discipline as
 /// [`assemble`].
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef) -> String {

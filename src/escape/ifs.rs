@@ -1,10 +1,10 @@
-//! Mode C — the flame as a distance field
+//! Mode D — the flame as a distance field
 //! ([docs/projects/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md),
 //! phase 1).
 //!
 //! A fourth registry pair on the escape engine's one pattern (D1).
 //! Where a mode-A formula iterates a function of the pixel and a
-//! mode-B field sums a series, a mode-C **distance function** answers
+//! mode-B field sums a series, a mode-D **distance function** answers
 //! "how far is this pixel from the set" — and the set, for the one
 //! entry that ships in phase 1, is the attractor of the loaded flame,
 //! analysed into affine maps by
@@ -50,7 +50,7 @@
 use super::EscapeParamDef;
 use crate::scene::ifs_analysis::{Affine2, Ifs2};
 
-/// A mode-C distance function.
+/// A mode-D distance function.
 pub struct IfsDef {
     /// Registry name — what `EscapeConfig::formula` stores.
     pub name: &'static str,
@@ -68,7 +68,7 @@ pub struct IfsDef {
     pub wgsl: &'static str,
 }
 
-/// A mode-C coloring: the four quantities of §2.3 → palette position
+/// A mode-D coloring: the four quantities of §2.3 → palette position
 /// and luminance.
 pub struct IfsColoringDef {
     pub name: &'static str,
@@ -358,8 +358,8 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
     }
 
     // The beam is RANKED by position but ANSWERED by bound: pruning
-    // asks "which piece is this point in", and the estimate asks
-    // "which surviving address gives the smallest distance".
+    // asks "which piece is this point in", and the DISTANCE asks
+    // "which surviving address gives the smallest".
     var win = 0u;
     for (var ci = 1u; ci < live_count; ci = ci + 1u) {
         if (live[ci].bound < live[win].bound) {
@@ -368,18 +368,33 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
     }
     let best = live[win];
 
+    // The LEVEL is a different question and takes a different answer:
+    // the deepest any surviving address reached. That is what an
+    // escape-time colouring means by a level, and it is what the
+    // Hepting-Hart escape buffer computes -- so it is the quantity
+    // D9 is decided on. Measured against exhaustive search over three
+    // overlapping IFSs, taking the winner's level instead costs up to
+    // a percentage point and is not even monotone in the beam width.
+    let unescaped = f32(handover + max_levels);
+    var deepest = -1.0;
+    for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+        var lvl = unescaped;
+        if ((live[ci].flags & 1u) != 0u) {
+            lvl = live[ci].level;
+        }
+        deepest = max(deepest, lvl);
+    }
+
     res.distance = max(best.bound, 0.0);
     res.address = best.addr;
     res.color = best.color;
+    res.level = deepest;
+    res.depth = u32(max(floor(deepest), 0.0));
     if ((best.flags & 1u) != 0u) {
-        res.level = best.level;
         res.point = best.point;
         res.escaped = 1u;
-        res.depth = u32(max(floor(best.level), 0.0));
     } else {
-        res.level = f32(handover + max_levels);
         res.point = best.q;
-        res.depth = handover + max_levels;
     }
     return res;
 }
@@ -605,21 +620,21 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 // Registries
 // ====================================================================
 
-/// Ordered mode-C registry. **Append-only** — same contract as
+/// Ordered mode-D registry. **Append-only** — same contract as
 /// [`super::FORMULAS`].
 pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME];
 
-/// Ordered mode-C coloring registry. **Append-only.**
+/// Ordered mode-D coloring registry. **Append-only.**
 pub static IFS_COLORINGS: &[&IfsColoringDef] =
     &[&IFS_DISTANCE, &IFS_LEVEL, &IFS_ADDRESS, &IFS_TRAP];
 
-/// Look up a mode-C distance function by name. `None` = the name
+/// Look up a mode-D distance function by name. `None` = the name
 /// belongs to another mode (or is unknown).
 pub fn get_ifs(name: &str) -> Option<&'static IfsDef> {
     IFS_DEFS.iter().find(|f| f.name == name).copied()
 }
 
-/// Resolve the coloring for a mode-C render, falling back to the
+/// Resolve the coloring for a mode-D render, falling back to the
 /// def's declared default when the config still names another
 /// registry's entry (the state right after a switch).
 pub fn get_ifs_coloring(name: &str, def: &IfsDef) -> &'static IfsColoringDef {
@@ -735,7 +750,7 @@ pub fn packed_bytes_eq(a: Option<&PackedIfs>, b: Option<&PackedIfs>) -> bool {
 
 /// Analyse a flame and pack it, or say why it does not qualify.
 ///
-/// The 2D criterion: mode C is a plane render in phase 1, and a 3D
+/// The 2D criterion: mode D is a plane render in phase 1, and a 3D
 /// flame with `preserve_z` off is a planar IFS anyway (see
 /// [`crate::scene::ifs_analysis::Space`]).
 pub fn pack_flame(
@@ -952,7 +967,7 @@ mod tests {
         analyse_2d(&fl, &guard).expect("qualifies")
     }
 
-    /// The classical affine IFSs, as flames with a mode-C view.
+    /// The classical affine IFSs, as flames with a mode-D view.
     ///
     /// Built here rather than hand-written as JSON because the VIEW
     /// comes from the analysis: the bounding ball the walk already
@@ -1048,7 +1063,7 @@ mod tests {
                 // attractor a comfortable margin — the same framing the
                 // panel's Frame button applies.
                 c.escape.zoom_log2 = (4.0 / (ifs.ball.radius * 2.4)).log2();
-                // No supersampling. Mode C's edge is antialiased
+                // No supersampling. Mode D's edge is antialiased
                 // ANALYTICALLY, from the sub-pixel value of the
                 // distance, and its other colourings are smooth fields
                 // that do not alias — so supersampling would be four
@@ -1088,11 +1103,11 @@ mod tests {
         println!("wrote output/ifs-presets.json");
     }
 
-    /// The shipped mode-C presets must still qualify, and their saved
+    /// The shipped mode-D presets must still qualify, and their saved
     /// view must actually contain the attractor.
     ///
     /// A preset is the one thing a user meets before they know what
-    /// the criterion is, so a mode-C preset whose flame stopped
+    /// the criterion is, so a mode-D preset whose flame stopped
     /// qualifying would render an empty frame with an explanation
     /// they did not ask for. And a preset pointing somewhere the set
     /// is not renders empty for a different reason entirely, which is
@@ -1110,12 +1125,12 @@ mod tests {
             let ifs = crate::scene::ifs_analysis::analyse_2d(&cfg.flame, &registry)
                 .unwrap_or_else(|why| panic!("preset {name:?} no longer qualifies: {why:?}"));
 
-            // The coloring must belong to mode C, or the render falls
+            // The coloring must belong to mode D, or the render falls
             // back to the def's default and the preset is not the
             // picture it was saved as.
             assert!(
                 IFS_COLORINGS.iter().any(|c| c.name == cfg.escape.coloring),
-                "preset {name:?} names coloring {:?}, which is not a mode-C coloring",
+                "preset {name:?} names coloring {:?}, which is not a mode-D coloring",
                 cfg.escape.coloring
             );
 
@@ -1140,7 +1155,7 @@ mod tests {
     fn registry_names_are_unique_and_disjoint_from_the_other_modes() {
         let mut seen = std::collections::HashSet::new();
         for d in IFS_DEFS {
-            assert!(seen.insert(d.name), "duplicate mode-C name {}", d.name);
+            assert!(seen.insert(d.name), "duplicate mode-D name {}", d.name);
             assert!(
                 !crate::escape::FORMULAS.iter().any(|m| m.name == d.name),
                 "{} shadows a mode-A formula",
@@ -1154,7 +1169,7 @@ mod tests {
         }
         seen.clear();
         for c in IFS_COLORINGS {
-            assert!(seen.insert(c.name), "duplicate mode-C coloring {}", c.name);
+            assert!(seen.insert(c.name), "duplicate mode-D coloring {}", c.name);
         }
     }
 
@@ -1194,7 +1209,7 @@ mod tests {
     /// Every path that drives an `EscapeRenderer` must hand it the
     /// analysed flame.
     ///
-    /// Mode C is the one escape formula that is NOT a function of the
+    /// Mode D is the one escape formula that is NOT a function of the
     /// escape config alone, so a render path that never calls
     /// `set_ifs` draws an empty frame — correctly, quietly, and
     /// indistinguishably from a flame that does not qualify. The app's
@@ -1211,15 +1226,15 @@ mod tests {
             );
             assert!(
                 src.contains("set_ifs"),
-                "{path} renders escape mode but never calls set_ifs, so mode C                  draws nothing there"
+                "{path} renders escape mode but never calls set_ifs, so mode D                  draws nothing there"
             );
         }
     }
 
-    /// A 1080p mode-C view must BAND, and the bands must be small
+    /// A 1080p mode-D view must BAND, and the bands must be small
     /// enough that the driver never sees a multi-second dispatch.
     ///
-    /// This is the test the first cut of mode C did not have. Its cost
+    /// This is the test the first cut of mode D did not have. Its cost
     /// was modelled as `levels * maps`, which left out the beam
     /// entirely and was 250x low in absolute terms, so a 1080p view
     /// dispatched all 2 million pixels at once, ground for seconds and
@@ -1227,7 +1242,7 @@ mod tests {
     /// this cannot help, because it only engages once a render is
     /// banded — and this arithmetic is what decides whether it ever is.
     #[test]
-    fn a_1080p_mode_c_view_bands_into_dispatches_a_driver_will_survive() {
+    fn a_1080p_mode_d_view_bands_into_dispatches_a_driver_will_survive() {
         use crate::escape::renderer::{ifs_rows_per_dispatch, IFS_DISPATCH_BUDGET};
 
         // Measured: 1.5e9 walk steps per second (see the budget's docs).
@@ -1267,10 +1282,10 @@ mod tests {
         assert_eq!(rows, 512, "a small cheap view should render in one dispatch");
     }
 
-    /// The breaker's halvings have to reach mode C, or a device that
+    /// The breaker's halvings have to reach mode D, or a device that
     /// cannot hold a 300 ms band has no way to say so.
     #[test]
-    fn the_budget_shift_still_shrinks_mode_c_bands() {
+    fn the_budget_shift_still_shrinks_mode_d_bands() {
         use crate::escape::renderer::{ifs_rows_per_dispatch, IFS_DISPATCH_BUDGET};
         let full = ifs_rows_per_dispatch(1920, 1080, 24, 8, 3, IFS_DISPATCH_BUDGET);
         let halved = ifs_rows_per_dispatch(1920, 1080, 24, 8, 3, IFS_DISPATCH_BUDGET >> 1);
@@ -1510,7 +1525,7 @@ mod tests {
     }
 
     #[test]
-    fn lookup_routes_to_mode_c_only() {
+    fn lookup_routes_to_mode_d_only() {
         assert!(get_ifs("ifs_flame").is_some());
         assert!(get_ifs("mandelbrot").is_none());
         assert!(get_ifs("weierstrass").is_none());
@@ -1946,17 +1961,17 @@ mod gpu_tests {
         assert_eq!(
             body(utilities),
             body(&template),
-            "the mode-C template's ff_atan2 has drifted from shaders/core/utilities.wgsl"
+            "the mode-D template's ff_atan2 has drifted from shaders/core/utilities.wgsl"
         );
     }
 
-    /// Every registered combination must compile. A mode-C coloring
+    /// Every registered combination must compile. A mode-D coloring
     /// that references a field the result struct does not carry is a
     /// shader-creation panic at the moment a user picks it, which is
     /// not where it should be found.
     #[test]
     #[ignore = "needs a GPU"]
-    fn every_mode_c_combination_compiles() {
+    fn every_mode_d_combination_compiles() {
         let (device, _queue) = device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         for def in IFS_DEFS {
@@ -1969,7 +1984,7 @@ mod gpu_tests {
             }
         }
         let err = pollster::block_on(scope.pop());
-        assert!(err.is_none(), "a mode-C shader failed to compile: {err:?}");
+        assert!(err.is_none(), "a mode-D shader failed to compile: {err:?}");
     }
 
     /// What the beam costs on the GPU, so the default is chosen on a
@@ -2121,7 +2136,7 @@ mod gpu_tests {
     /// shift every field after it — silently, into plausible wrong
     /// colours, with no validation error to point at.
     #[test]
-    fn both_mode_c_templates_declare_the_same_record() {
+    fn both_mode_d_templates_declare_the_same_record() {
         let walk = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_DISTANCE);
         let recolor = crate::escape::assembler::assemble_ifs_recolor(&IFS_DISTANCE);
         let decl = |src: &str| -> String {
@@ -2133,7 +2148,7 @@ mod gpu_tests {
         assert_eq!(
             decl(&walk),
             decl(&recolor),
-            "the mode-C walk and recolor templates disagree about IfsRecord"
+            "the mode-D walk and recolor templates disagree about IfsRecord"
         );
 
         // And the record must be the 32 bytes the shared results
@@ -2231,7 +2246,7 @@ mod gpu_tests {
         );
     }
 
-    /// How deep mode C claims to zoom, as a `zoom_log2`.
+    /// How deep mode D claims to zoom, as a `zoom_log2`.
     ///
     /// MEASURED, not chosen.
     ///
@@ -2385,10 +2400,10 @@ mod gpu_tests {
         );
     }
 
-    /// A 1080p mode-C render must finish, and finish in bands.
+    /// A 1080p mode-D render must finish, and finish in bands.
     ///
     /// The arithmetic is gated separately
-    /// (`a_1080p_mode_c_view_bands_into_dispatches_a_driver_will_survive`);
+    /// (`a_1080p_mode_d_view_bands_into_dispatches_a_driver_will_survive`);
     /// this is the end-to-end version, because the failure it exists
     /// for was not a slow render but a driver reset, and no unit test
     /// on a row count can see that.
@@ -2423,7 +2438,7 @@ mod gpu_tests {
         }
     }
 
-    /// Render the shipped mode-C presets exactly as they are saved —
+    /// Render the shipped mode-D presets exactly as they are saved —
     /// their own view, colouring and supersampling. This is what a
     /// user meets, so it is what gets looked at.
     #[test]
@@ -2469,6 +2484,102 @@ mod gpu_tests {
             );
         }
         assert_eq!(seen, 4, "expected the four classical IFS presets, found {seen}");
+    }
+
+    /// D9's pictures: the three overlapping IFSs, greedy against beam,
+    /// distance and level.
+    ///
+    /// The plan says this is decided by looking, so this is the
+    /// looking. Writes to the gitignored `output/ifs/`.
+    #[test]
+    #[ignore = "needs a GPU; writes images for inspection"]
+    fn render_the_overlapping_ifss_for_d9() {
+        use std::collections::HashMap;
+        let xform = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, colour: f32| {
+            let mut t = Transform::default();
+            t.a = a;
+            t.b = b;
+            t.c = c;
+            t.d = d;
+            t.e = e;
+            t.f = f;
+            t.color = colour;
+            t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+            t.variation_order = vec!["linear".to_string()];
+            t
+        };
+        let flame_of = |ts: Vec<Transform>| {
+            let mut fl = Flame::default();
+            fl.transforms = ts;
+            fl.final_transforms.clear();
+            fl.xaos = None;
+            fl
+        };
+
+        // The same three the CPU measurement uses.
+        let cases: Vec<(&str, Flame)> = vec![
+            (
+                "fat-gasket",
+                flame_of(vec![
+                    xform(0.6, 0.0, 0.0, 0.6, 0.0, 0.0, 0.1),
+                    xform(0.6, 0.0, 0.0, 0.6, 0.4, 0.0, 0.5),
+                    xform(0.6, 0.0, 0.0, 0.6, 0.2, 0.4, 0.9),
+                ]),
+            ),
+            (
+                "overlapping-band",
+                flame_of(vec![
+                    xform(0.7, 0.0, 0.0, 0.7, 0.0, 0.0, 0.2),
+                    xform(0.7, 0.0, 0.0, 0.7, 0.3, 0.3, 0.8),
+                ]),
+            ),
+            (
+                "turned-pair",
+                flame_of(vec![
+                    xform(0.46, -0.46, 0.46, 0.46, 0.0, 0.0, 0.2),
+                    xform(0.46, 0.46, -0.46, 0.46, 0.5, 0.1, 0.8),
+                ]),
+            ),
+        ];
+
+        let guard = global_registry();
+        for (name, flame) in cases {
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard)
+                .unwrap_or_else(|why| panic!("{name} must qualify: {why:?}"));
+            for beam in [1u32, 8] {
+                for coloring in ["ifs_distance", "ifs_level"] {
+                    let mut c = config_for(flame.clone());
+                    c.escape.coloring = coloring.to_string();
+                    c.escape.center_re = format!("{:.17}", ifs.ball.centre[0]);
+                    c.escape.center_im = format!("{:.17}", ifs.ball.centre[1]);
+                    c.escape.zoom_log2 = (4.0 / (ifs.ball.radius * 2.4)).log2();
+                    c.escape.formula_params.insert("levels".to_string(), 40.0);
+                    c.escape.formula_params.insert("beam".to_string(), beam as f32);
+                    c.escape.coloring_params.insert("interior".to_string(), 0.5);
+
+                    let (device, queue) = device();
+                    let job = crate::renderer::RenderJob::new(&c, 384, 384);
+                    let out = pollster::block_on(crate::renderer::render(
+                        &device,
+                        &queue,
+                        job,
+                        &mut crate::renderer::NoProgress,
+                    ))
+                    .expect("render");
+                    let dir = std::path::Path::new("output/ifs");
+                    std::fs::create_dir_all(dir).expect("output dir");
+                    let path = dir.join(format!("d9-{name}-beam{beam}-{coloring}.png"));
+                    image::save_buffer(&path, &out.rgba_data, 384, 384, image::ColorType::Rgba8)
+                        .expect("write png");
+                    let lit = out
+                        .rgba_data
+                        .chunks(4)
+                        .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
+                        .count();
+                    println!("  {} ({lit} lit)", path.display());
+                }
+            }
+        }
     }
 
     /// Render the classical affine IFSs for inspection (plan phase 1:

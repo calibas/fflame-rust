@@ -2770,7 +2770,7 @@ impl App {
                 ) {
                     self.escape_dirty = true;
                 }
-                // Mode C renders the FLAME as a distance field, so a
+                // Mode D renders the FLAME as a distance field, so a
                 // flame edit has to reach the escape image — and
                 // nothing else marks it dirty, because every other
                 // escape formula is a function of the escape config

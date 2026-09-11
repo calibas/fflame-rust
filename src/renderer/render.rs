@@ -960,7 +960,7 @@ async fn render_escape(
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = job.config.escape.supersample.max(1);
     escape_renderer.resize(device, job.width, job.height, want_ss);
-    // Mode C reads the flame as an IFS, so the analysis runs once per
+    // Mode D reads the flame as an IFS, so the analysis runs once per
     // job here rather than per pixel in the shader. A flame that does
     // not qualify hands the renderer `None` and draws nothing — the
     // panel is where the reason is explained.

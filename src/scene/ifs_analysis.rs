@@ -4,7 +4,7 @@
 //! Phase 0 of `docs/projects/ifs-distance-rendering.md`, built as
 //! common analysis because three plans want the same numbers: that one
 //! (its distance estimate is inverse iteration with a σ_min product),
-//! the escape plan's Mode C (its pass count is a function of the
+//! the escape plan's Mode D (its pass count is a function of the
 //! largest singular value), and `flame-deep-zoom.md` §7 (its window,
 //! its bounds and its conditioning). None of it existed: the only
 //! contractiveness measure in the tree, `mean_log_scale`, is a
