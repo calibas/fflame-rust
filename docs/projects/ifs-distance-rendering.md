@@ -336,7 +336,12 @@ machinery; it is a phase-3 item, not a new one.
   vocabulary, and the index map is the part that carries the flame's
   structure.
 - **D7 — Normals and occlusion are the marcher's own.** In 3D the
-  gradient of `d` is the normal and the march is the occlusion. The
+  gradient of `d` is the normal and the occlusion is asked of `d` too.
+  (Written as "the march is the occlusion", and built that way first:
+  one minus the fraction of the step allowance a ray used. That
+  measured almost nothing — a ray reaching a flat face and one reaching
+  the floor of a recess both converge in a handful of steps — and it is
+  five samples along the normal now. See the phase 3 record.) The
   shade pass is reused for lights, materials, fog and temporal
   smoothing through an extension that accepts a normal buffer and an
   occlusion buffer when present; its screen-space reconstruction is
@@ -1146,8 +1151,87 @@ partially-lit population must shrink as the edge hardens, which a
 uniform darkening cannot fake. Both check the render was not clipping
 before they believe anything they measured.
 
-**Still to come in this phase**: the shade-pass extension (D7) and
-**3D seeding**, which the camera has now given a shape. A ray
+**3D seeding, 2026-09-11 — a solid zoom reaches 2⁸⁰.** Measured against
+a CPU reference marching the same rays: agreement was 100% to 2¹² and
+fell to 92% by 2²⁰; it is now **100% through 2⁸⁰**, and degrades
+gracefully rather than cliffing past that (95% at 2⁹⁶, 85% at 2¹¹²).
+
+The idea is §2.5's, with one structural difference that comes from what
+a MARCHER asks. A plane render hands over once: every pixel sits in the
+same shrinking view, so a single level serves them all. A ray asks
+about a LINE — its samples run from a pixel's width at the target out
+to the far side of the bounding sphere, which at a deep zoom is the
+whole zoom in span — so no one level is the handover for all of them.
+The handover is therefore a **chain**: the beam's state at every level
+from the target outward, and each sample takes the deepest link whose
+matrix still carries its delta no further than the cap. A sample near
+the target takes a deep link and one out at the sphere takes a shallow
+one, which is the same statement as "the address prefix containing a
+point is shorter the further away the point is". One chain serves the
+whole view because every ray starts at the same place.
+
+The CPU half is `seed_chain3`/`estimate_seeded3`, gated by
+`a_seeded_3d_walk_holds_a_target_f64_cannot_express`: `S₁∘S₂∘S₃` is a
+similarity of ratio ⅛ fixing `(6,5,3)/7`, so `d(T+δ)·8ᵏ` is a constant
+and the gate needs no ground truth of its own. It holds to nine digits
+at `|δ| = 5e-42`, where the naive f64 walk is out by twenty-six orders
+of magnitude — and the naive walk is REQUIRED to fail, because without
+that control the constancy would also be passed by a chain that never
+left f64.
+
+**Three faults stood between 2¹² and 2⁸⁰, and each was found by
+printing a quantity rather than by reasoning about it.**
+
+1. **An epsilon floor of `1e-7` on the march's hit test.** It was a
+   guard against an absolute position's own f32 resolution — the right
+   scale while the marcher worked in absolute coordinates. Seeded, it
+   is not: past about 2²⁰ a pixel is smaller than that floor, so the
+   surface was found a fixed distance early and the picture stopped
+   sharpening with the zoom. Removing it took agreement from 2¹² to
+   2⁴⁸. The same floor sat in the test's own CPU reference at `1e-12`,
+   where it made every ray hit at `t = 0` once the whole view was
+   smaller than it — the reference had the bug it was there to find.
+
+2. **`eye − target` computed as a subtraction.** The camera carried an
+   absolute f64 eye and the offset was derived from it, which is the
+   subtraction of two nearly equal numbers — exactly the cancellation
+   the seeded path exists to avoid. Past 2⁴⁸ the difference rounded to
+   **zero**, so every ray in the frame started at the target itself.
+   The camera now carries `eye_rel = −forward·distance` directly,
+   products and sums of numbers its own size. This was visible the
+   moment the quantity was printed and invisible before.
+
+3. **`length()`, which squares before it adds.** By 2⁶⁴ a delta is
+   around `1e-19` and its square is `1e-38`, which is where f32 stops
+   having normal numbers — so `length(delta)` returned 0 in the link
+   choice, every link then qualified, and the walk started from a
+   prefix whose piece the sample was not in. Not a blurred surface: an
+   address that is simply WRONG, which reads as holes through the
+   interior. The disagreement being mostly INTERIOR rather than at the
+   silhouette is what said "structural" rather than "precision", and
+   that split is now printed by the test. The link choice compares the
+   largest component instead, which is within √3 of the length and
+   needs no square. That took 2⁶⁴ to 2⁸⁰.
+
+`what_limits_a_solid_deep_zoom_now_the_eye_is_an_offset` measures all
+three ceilings and pins them: the offset resolves a pixel at **every**
+zoom (both sides shrink together, so the ratio is a constant — that is
+the whole point of carrying an offset), it stays a normal f32 to 2¹²⁷,
+and its SQUARE only to 2⁶⁴. The last number is why nothing on this path
+may take a length, and it is the same 2⁶⁴ the picture broke at.
+
+**What is packed.** `IfsLinkGpu` is six `vec4`s — reference position,
+the accumulated inverse matrix split into a unit-ish part and a binary
+exponent applied with `ldexp`, the σ product, the running bound, the
+address fraction and the escape state. The exponent split is what lets
+a matrix running like 2^level and a delta running like 2^−zoom both be
+f32 when only their product is O(1). The reach is stored as a LOGARITHM
+for the same reason. The chain is a second storage binding in group 1,
+bound for the planar walk too at one empty link — a layout that
+differed by dimension would need two pipeline layouts for one shader
+family, and the planar template simply never reads it.
+
+**Still to come in this phase**: the shade-pass extension (D7). A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
 offset — and the ray origins are all the same point, the eye, which is

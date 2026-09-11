@@ -633,6 +633,17 @@ pub struct EscapeRenderer {
     /// centre, the zoom and the depth as much as of the maps.
     ifs_seeds: Option<[[f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS]>,
     ifs_seed_key: String,
+    /// The SOLID handover: the beam's state at every level from the
+    /// target outward (see `escape::ifs::pack_chain3`).
+    ///
+    /// A chain rather than the plane's single handover because a ray
+    /// asks about a LINE, whose samples span the whole zoom — a pixel
+    /// from the target at one end and the far side of the attractor at
+    /// the other — so no one level is the handover for all of them.
+    ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
+    ifs_chain_key: String,
+    ifs_chain_buffer: Buffer,
+    ifs_chain_capacity: u32,
     /// The analysed flame, or `None` when the loaded one does not
     /// qualify (or mode D is not active). A mode-D render with no maps
     /// draws nothing rather than garbage.
@@ -1410,20 +1421,43 @@ impl EscapeRenderer {
         // pays 32 bytes.
         let ifs_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Escape IFS Bind Group Layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // The seed chain. Bound for the planar walk too, at
+                // one empty link: a layout that differed by dimension
+                // would need two pipeline layouts for one shader
+                // family, and the planar template simply never reads
+                // it.
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape IFS Maps"),
             size: std::mem::size_of::<super::ifs::IfsMapGpu>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_chain_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Seed Chain"),
+            size: std::mem::size_of::<super::ifs::IfsLinkGpu>() as u64,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1443,6 +1477,10 @@ impl EscapeRenderer {
             ifs_token: 0,
             ifs_seeds: None,
             ifs_seed_key: String::new(),
+            ifs_chain: None,
+            ifs_chain_key: String::new(),
+            ifs_chain_buffer,
+            ifs_chain_capacity: 0,
             ifs: None,
             ifs_uploaded: None,
             pipelines: HashMap::new(),
@@ -3453,6 +3491,110 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         self.ifs_uploaded_solid = Some(solid);
     }
 
+    /// Walk the solid handover chain for this view, if it is not
+    /// already walked.
+    ///
+    /// The 3D half of §2.5, and it differs from the plane's in shape
+    /// rather than in principle. A plane render hands over ONCE: every
+    /// pixel sits in the same shrinking view, so one level serves them
+    /// all. A ray's samples run from a pixel's width at the target out
+    /// to the far side of the bounding sphere, which at a deep zoom is
+    /// the entire zoom in span — so the handover is the beam's state
+    /// at EVERY level, and each sample takes the deepest one that
+    /// still holds it.
+    ///
+    /// Cached on the view, because a banded render calls this once per
+    /// band and the walk is the same every time.
+    fn ensure_ifs_chain(
+        &mut self,
+        escape: &EscapeConfig,
+        packed: &super::ifs::PackedIfs,
+        def: &super::ifs::IfsDef,
+    ) {
+        let Some((ifs3, _)) = packed.solid.as_ref() else {
+            self.ifs_chain = None;
+            self.ifs_chain_key.clear();
+            return;
+        };
+        let param = |name: &str, fallback: f32| {
+            escape.formula_params.get(name).copied().unwrap_or_else(|| {
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+            })
+        };
+        let beam = param("beam", 1.0).clamp(1.0, 8.0) as u32;
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}x{}|{beam}|{}",
+            escape.cam_target_x,
+            escape.cam_target_y,
+            escape.cam_target_z,
+            escape.zoom_log2,
+            escape.cam_pitch,
+            escape.cam_fov,
+            self.width,
+            self.height,
+            self.ifs_token,
+        );
+        if self.ifs_chain_key == key {
+            return;
+        }
+
+        let cam = super::ifs::solid_camera(escape, ifs3);
+        // One pixel at the target: the smallest offset any sample will
+        // ask about, and so where the chain can stop.
+        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance
+            / self.height.max(1) as f64;
+        // Enough levels to reach the finest offset at any zoom this
+        // build claims, bounded so a pathological IFS cannot spin here
+        // and by what the packing can carry.
+        let budget = (escape.zoom_log2.max(0.0) as u32 + 64)
+            .min(super::ifs::MAX_CHAIN_LINKS as u32);
+
+        // The target at the precision the zoom asks for. Falling back
+        // to the camera's own f64 target when the strings will not
+        // parse keeps a malformed config rendering something rather
+        // than nothing -- at f64's depth, which is where it was.
+        let chain = match super::ifs::target_at_precision(escape, ifs3) {
+            Some(target) => crate::scene::ifs_estimate::seed_chain3(
+                ifs3, target, finest, budget, beam,
+            ),
+            None => crate::scene::ifs_estimate::seed_chain3(
+                ifs3, cam.target, finest, budget, beam,
+            ),
+        };
+
+        self.ifs_chain = Some(super::ifs::pack_chain3(
+            &chain,
+            packed.rows.len(),
+            &packed.colors,
+            beam as usize,
+        ));
+        self.ifs_chain_key = key;
+    }
+
+    /// Grow the chain buffer if needed and write the links.
+    ///
+    /// Always writes at least one link, because a bound storage buffer
+    /// may not be empty — and an empty chain is also a real state: a
+    /// flame that does not qualify has no target to walk from.
+    fn upload_ifs_chain(&mut self, device: &Device, queue: &Queue) {
+        let empty = [super::ifs::IfsLinkGpu::default()];
+        let links: &[super::ifs::IfsLinkGpu] = match self.ifs_chain.as_deref() {
+            Some(l) if !l.is_empty() => l,
+            _ => &empty,
+        };
+        let bytes = (links.len() * std::mem::size_of::<super::ifs::IfsLinkGpu>()) as u32;
+        if bytes > self.ifs_chain_capacity {
+            self.ifs_chain_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Escape IFS Seed Chain"),
+                size: bytes as u64,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.ifs_chain_capacity = bytes;
+        }
+        queue.write_buffer(&self.ifs_chain_buffer, 0, bytemuck::cast_slice(links));
+    }
+
     /// Walk the reference orbit for this view, if it is not already
     /// walked.
     ///
@@ -3469,15 +3611,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         };
         let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
         if def.solid {
-            // No seeding in three dimensions yet: a ray marches
-            // THROUGH space, so what a handover would carry is
-            // per-ray rather than per-pixel, and how far along the ray
-            // a sample sits is part of the offset. The marcher's shape
-            // should decide that, not the other way round.
             self.ifs_seeds = None;
             self.ifs_seed_key.clear();
+            self.ensure_ifs_chain(escape, &packed, def);
             return;
         }
+        self.ifs_chain = None;
+        self.ifs_chain_key.clear();
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
                 def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
@@ -5866,7 +6006,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if def.solid {
                 if let Some((ifs3, _)) = self.ifs.as_ref().and_then(|p| p.solid.as_ref()) {
                     let cam = super::ifs::solid_camera(escape, ifs3);
-                    super::ifs::pack_globals3(ifs3, &cam, &mut fdata);
+                    let beam = escape
+                        .formula_params
+                        .get("beam")
+                        .copied()
+                        .unwrap_or(1.0)
+                        .clamp(1.0, 8.0) as usize;
+                    let links = self.ifs_chain.as_ref().map_or(0, |l| l.len());
+                    super::ifs::pack_globals3(
+                        ifs3,
+                        &cam,
+                        links / beam.max(1),
+                        beam,
+                        &mut fdata,
+                    );
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.
@@ -6414,13 +6567,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // when the packed data actually changed.
         let ifs_bind_group = if let Some(def) = super::ifs::get_ifs(&escape.formula) {
             self.upload_ifs(device, queue, def.solid);
+            self.upload_ifs_chain(device, queue);
             Some(device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Escape IFS Bind Group"),
                 layout: &self.ifs_bind_group_layout,
-                entries: &[BindGroupEntry {
-                    binding: 0,
-                    resource: self.ifs_buffer.as_entire_binding(),
-                }],
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: self.ifs_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: self.ifs_chain_buffer.as_entire_binding(),
+                    },
+                ],
             }))
         } else {
             None

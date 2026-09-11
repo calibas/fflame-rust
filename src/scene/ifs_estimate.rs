@@ -60,7 +60,7 @@
 //! is MEASURED rather than proved: `estimate_never_exceeds_a_sampled_upper_bound`
 //! checks the walk against a dense sample of a real attractor.
 
-use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, Ifs2, IfsMap};
+use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, Ifs2, Ifs3, IfsMap};
 
 /// What the walk needs of one map. Implemented for the affine cases
 /// now; §8's ladder adds the nonlinear ones by making the inverse and
@@ -463,7 +463,7 @@ pub struct Seeds {
 /// follows the centre — while no pixel's branch choice can differ from
 /// the reference's. A quarter of the ball's radius is well inside
 /// that, and close enough to O(1) for f32 to take over.
-const HANDOVER_FRACTION: f64 = 0.25;
+pub const HANDOVER_FRACTION: f64 = 0.25;
 
 /// Walk the beam from the view centre and stop while the whole view
 /// still behaves as one point.
@@ -731,6 +731,417 @@ pub fn estimate_seeded(
             deepest_level,
         },
     }
+}
+
+// ===================================================== 3D seeding
+//
+// The same split as the seeding above — a reference half the CPU walks
+// in whatever precision it likes and a delta half that is exact — with
+// one structural difference, and it comes from what a MARCHER asks.
+//
+// A plane render asks about a REGION: the view, which shrinks with the
+// zoom, so one handover level serves every pixel in it. A ray asks
+// about a LINE. Its samples run from the bounding sphere's near face
+// to its far one, so the nearest sit a pixel from the target and the
+// furthest are the whole attractor away — a span equal to the entire
+// zoom. No single level makes the delta small for all of them.
+//
+// So the handover is a CHAIN rather than a point: the beam's state at
+// every level, and a sample takes the deepest link whose delta is
+// still inside the ball's neighbourhood. A sample near the target
+// takes a deep link and a sample out at the sphere takes a shallow
+// one, which is the same statement as "the address prefix containing a
+// point gets shorter the further away the point is".
+//
+// One chain serves the whole view because every ray starts at the same
+// place. The eye is one point, so `p − target` is the only thing that
+// varies and the reference orbit is shared.
+
+/// A position the 3D seeding walk can carry, at whatever precision the
+/// view needs. The 3D twin of [`SeedPoint`], and for the same reason:
+/// only the POSITION needs more than f64, because after `k` levels the
+/// walk has computed `A_k·T + b_k` with `A_k ~ 2ᵏ` and an O(1) answer,
+/// so `k` bits of the target are spent getting there.
+pub trait SeedPoint3: Clone {
+    fn apply_affine3(&self, a: &Affine3) -> Self;
+    fn distance_to(&self, p: [f64; 3]) -> f64;
+    fn to_f64(&self) -> [f64; 3];
+}
+
+impl SeedPoint3 for [f64; 3] {
+    fn apply_affine3(&self, a: &Affine3) -> Self {
+        a.apply(*self)
+    }
+
+    fn distance_to(&self, p: [f64; 3]) -> f64 {
+        Affine3::distance(*self, p)
+    }
+
+    fn to_f64(&self) -> [f64; 3] {
+        *self
+    }
+}
+
+/// One beam candidate at one level of the chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Seed3 {
+    /// The reference: where this candidate's address has carried the
+    /// TARGET. Always O(1) — the chain stops before anything leaves
+    /// the ball's neighbourhood — so f32 holds it.
+    pub position: [f64; 3],
+    /// The accumulated inverse LINEAR part, taking a delta measured at
+    /// the target straight to this candidate's delta. The translations
+    /// are carried entirely by `position`, which is what makes the
+    /// split exact for affine maps.
+    ///
+    /// Kept apart from any view basis, unlike the 2D seed's: there is
+    /// no linear map from pixel to delta to compose with, because a
+    /// sample's offset has the distance along the ray in it.
+    pub matrix: [[f64; 3]; 3],
+    /// An upper bound on `|matrix·d| / |d|` — the Frobenius norm,
+    /// which bounds the operator norm and is what the level choice
+    /// compares against. Stored because it is asked for once per
+    /// sample and computing it is nine multiplies.
+    pub reach: f64,
+    /// Product of the σ_min applied so far. World units here, not per
+    /// pixel: a marcher steps BY the distance.
+    pub sigma: f64,
+    /// σ_min of the last map applied, for the annulus residual.
+    pub last_sigma: f64,
+    /// Running maximum of `σ·(r − R)`, world units.
+    pub bound: f64,
+    /// Branch history so far, which the address colouring continues.
+    pub address: Vec<u32>,
+    /// Where this candidate left the ball, if it already has.
+    pub escape: Option<(f64, [f64; 3])>,
+    /// Past [`FAR`] already: converged, and not expanded further.
+    pub done: bool,
+}
+
+/// The beam's state at every level from the target outward.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedChain3 {
+    /// `levels[j]` is the beam after `j` inverse maps. `levels[0]` is
+    /// the target itself, after the final map if there is one, so a
+    /// chain is never empty and a sample too far out for any link
+    /// still has one to start from.
+    pub levels: Vec<Vec<Seed3>>,
+    /// How large a delta a link may carry before it is too deep for a
+    /// sample — the same quarter radius the 2D handover uses.
+    pub cap: f64,
+}
+
+impl SeedChain3 {
+    /// The deepest link whose delta still lands inside the cap.
+    ///
+    /// `reach` rises monotonically with the level — every map's
+    /// inverse expands — so this is the last link that qualifies, and
+    /// a scan from the deep end finds it. The chain is at most a few
+    /// hundred long and this is asked once per distance evaluation, so
+    /// the scan is a binary search.
+    pub fn level_for(&self, delta_len: f64) -> usize {
+        if !(delta_len > 0.0) {
+            return self.levels.len() - 1;
+        }
+        let ok = |j: usize| {
+            self.levels[j].iter().all(|s| s.reach * delta_len <= self.cap)
+        };
+        let (mut lo, mut hi) = (0usize, self.levels.len() - 1);
+        if ok(hi) {
+            return hi;
+        }
+        // `lo` always qualifies and `hi` never does.
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if ok(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+}
+
+/// Walk the beam from the target and record it at every level.
+///
+/// `finest` is the smallest offset the view will ever ask about — one
+/// pixel at the target — and it is what stops the walk: past the level
+/// where a single pixel's delta fills the cap, no sample can use a
+/// deeper link, so computing one is work for nothing.
+pub fn seed_chain3<P: SeedPoint3>(
+    ifs: &Ifs3,
+    target: P,
+    finest: f64,
+    max_levels: u32,
+    beam: u32,
+) -> SeedChain3 {
+    let ball = ifs.ball.centre;
+    let radius = ifs.ball.radius;
+    let beam = beam.max(1) as usize;
+    let cap = radius * HANDOVER_FRACTION;
+    let mean = mean_sigma_min(&ifs.maps);
+    let far = radius.max(1.0) * FAR;
+
+    let (q0, sigma0, m0) = match &ifs.final_map {
+        Some(f) => (target.apply_affine3(&f.inverse), f.sigma_min, f.inverse.m),
+        None => (target, 1.0, Affine3::IDENTITY.m),
+    };
+
+    let r0 = q0.distance_to(ball);
+    let mut live = vec![Cand {
+        q: q0,
+        sigma: sigma0,
+        bound: f64::NEG_INFINITY,
+        r: r0,
+        address: Vec::new(),
+        escape: None,
+        done: false,
+    }];
+    let mut mats = vec![m0];
+    let mut levels: Vec<Vec<Seed3>> = Vec::new();
+
+    for level in 0..=max_levels {
+        // Score exactly as the walk does, so the prefix is a prefix
+        // and not an approximation of one.
+        let mut all_done = true;
+        for c in live.iter_mut() {
+            if c.done {
+                continue;
+            }
+            c.bound = c.bound.max(c.sigma * (c.r - radius));
+            if c.r > radius && c.escape.is_none() {
+                let last = c
+                    .address
+                    .last()
+                    .map(|&i| ifs.maps[i as usize].sigma_min)
+                    .unwrap_or(mean);
+                c.escape = Some((
+                    level as f64 + escape_residual(c.r, radius, last),
+                    c.address.clone(),
+                    c.q.clone(),
+                ));
+            }
+            if !c.r.is_finite() || c.r > far {
+                c.done = true;
+            } else {
+                all_done = false;
+            }
+        }
+
+        levels.push(
+            live.iter()
+                .zip(&mats)
+                .map(|(c, m)| Seed3 {
+                    position: c.q.to_f64(),
+                    matrix: *m,
+                    reach: frobenius3(*m),
+                    sigma: c.sigma,
+                    last_sigma: c
+                        .address
+                        .last()
+                        .map(|&i| ifs.maps[i as usize].sigma_min)
+                        .unwrap_or(mean),
+                    bound: c.bound,
+                    address: c.address.clone(),
+                    escape: c.escape.clone().map(|(lvl, _, p)| (lvl, p.to_f64())),
+                    done: c.done,
+                })
+                .collect(),
+        );
+
+        if all_done || level == max_levels {
+            break;
+        }
+        // A single pixel already fills the cap: no sample can reach a
+        // deeper link.
+        if mats.iter().any(|m| frobenius3(*m) * finest >= cap) {
+            break;
+        }
+
+        let mut next: Vec<Cand<P>> = Vec::with_capacity(live.len() * ifs.maps.len());
+        let mut next_mats: Vec<[[f64; 3]; 3]> = Vec::with_capacity(next.capacity());
+        for (c, m) in live.iter().zip(&mats) {
+            if c.done {
+                next.push(c.clone());
+                next_mats.push(*m);
+                continue;
+            }
+            for (i, map) in ifs.maps.iter().enumerate() {
+                let q = c.q.apply_affine3(&map.inverse);
+                let sigma = c.sigma * map.sigma_min;
+                let r = q.distance_to(ball);
+                let mut child = c.clone();
+                child.q = q;
+                child.sigma = sigma;
+                child.bound = c.bound.max(sigma * (r - radius));
+                child.r = r;
+                child.address.push(i as u32);
+                next.push(child);
+                next_mats.push(compose3(&map.inverse, *m));
+            }
+        }
+        // The same ranking the walk uses — and the matrices have to
+        // follow their candidates through the sort, or every delta
+        // ends up attached to the wrong path.
+        let mut order: Vec<usize> = (0..next.len()).collect();
+        order.sort_by(|&a, &b| by_rank(&next[a], &next[b]));
+        order.truncate(beam);
+        live = order.iter().map(|&i| next[i].clone()).collect();
+        mats = order.iter().map(|&i| next_mats[i]).collect();
+    }
+
+    SeedChain3 { levels, cap }
+}
+
+/// Continue a seeded 3D walk for one sample — the reference for what
+/// the shader does after the handover.
+///
+/// `delta` is the sample's offset from the TARGET, never its absolute
+/// position: forming the absolute position is exactly the cancellation
+/// the chain exists to avoid.
+pub fn estimate_seeded3(
+    ifs: &Ifs3,
+    chain: &SeedChain3,
+    delta: [f64; 3],
+    max_levels: u32,
+    beam: u32,
+) -> Estimate<[f64; 3]> {
+    let centre = ifs.ball.centre;
+    let radius = ifs.ball.radius;
+    let far = radius.max(1.0) * FAR;
+    let beam = beam.max(1) as usize;
+
+    let len = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+    let j = chain.level_for(len);
+    let seeds = &chain.levels[j];
+
+    let mut live: Vec<Cand<[f64; 3]>> = seeds
+        .iter()
+        .map(|s| {
+            let d = apply3(s.matrix, delta);
+            let q = [s.position[0] + d[0], s.position[1] + d[1], s.position[2] + d[2]];
+            Cand {
+                q,
+                sigma: s.sigma,
+                bound: s.bound,
+                r: Affine3::distance(q, centre),
+                address: s.address.clone(),
+                escape: s.escape.map(|(lvl, p)| (lvl, s.address.clone(), p)),
+                done: s.done,
+            }
+        })
+        .collect();
+
+    let sigma_of = |c: &Cand<[f64; 3]>| {
+        c.address
+            .last()
+            .map(|&i| ifs.maps[i as usize].sigma_min)
+            .unwrap_or_else(|| mean_sigma_min(&ifs.maps))
+    };
+
+    for k in 0..max_levels {
+        let mut all_done = true;
+        for c in live.iter_mut() {
+            if c.done {
+                continue;
+            }
+            let r = Affine3::distance(c.q, centre);
+            c.r = r;
+            c.bound = c.bound.max(c.sigma * (r - radius));
+            if r > radius && c.escape.is_none() {
+                let level = (j as u32 + k) as f64 + escape_residual(r, radius, sigma_of(c));
+                c.escape = Some((level, c.address.clone(), c.q));
+            }
+            if !r.is_finite() || r > far {
+                c.done = true;
+            } else {
+                all_done = false;
+            }
+        }
+        if all_done || k + 1 >= max_levels {
+            break;
+        }
+
+        let mut next: Vec<Cand<[f64; 3]>> = Vec::with_capacity(live.len() * ifs.maps.len());
+        for c in &live {
+            if c.done {
+                next.push(c.clone());
+                continue;
+            }
+            for (i, m) in ifs.maps.iter().enumerate() {
+                let q = m.inverse.apply(c.q);
+                let sigma = c.sigma * m.sigma_min;
+                let r = Affine3::distance(q, centre);
+                let mut child = c.clone();
+                child.q = q;
+                child.sigma = sigma;
+                child.bound = c.bound.max(sigma * (r - radius));
+                child.r = r;
+                child.address.push(i as u32);
+                next.push(child);
+            }
+        }
+        next.sort_by(by_rank);
+        next.truncate(beam);
+        live = next;
+    }
+
+    let total = j as u32 + max_levels;
+    let deepest_level = live
+        .iter()
+        .map(|c| c.escape.as_ref().map_or(total as f64, |(lvl, _, _)| *lvl))
+        .fold(f64::NEG_INFINITY, f64::max);
+    let best = live
+        .into_iter()
+        .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
+        .expect("the beam is never empty");
+    let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
+    match best.escape {
+        Some((level, address, point)) => {
+            Estimate { distance, level, address, point, escaped: true, deepest_level }
+        }
+        None => Estimate {
+            distance,
+            level: total as f64,
+            address: best.address,
+            point: best.q,
+            escaped: false,
+            deepest_level,
+        },
+    }
+}
+
+/// Compose an inverse map's LINEAR part onto a delta matrix.
+fn compose3(inv: &Affine3, m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for (i, row) in out.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = (0..3).map(|k| inv.m[i][k] * m[k][j]).sum();
+        }
+    }
+    out
+}
+
+fn apply3(m: [[f64; 3]; 3], d: [f64; 3]) -> [f64; 3] {
+    [
+        m[0][0] * d[0] + m[0][1] * d[1] + m[0][2] * d[2],
+        m[1][0] * d[0] + m[1][1] * d[1] + m[1][2] * d[2],
+        m[2][0] * d[0] + m[2][1] * d[1] + m[2][2] * d[2],
+    ]
+}
+
+/// Bounds the operator norm from above, which is the direction that
+/// keeps the level choice SOUND: overstating the reach picks a
+/// shallower link, and a shallower link is always valid.
+fn frobenius3(m: [[f64; 3]; 3]) -> f64 {
+    let mut acc = 0.0;
+    for row in &m {
+        for v in row {
+            acc += v * v;
+        }
+    }
+    acc.sqrt()
 }
 
 /// The furthest a normalised offset can be carried by this basis —

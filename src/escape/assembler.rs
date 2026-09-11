@@ -4800,6 +4800,32 @@ struct IfsMap3Gpu {
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
 
+// One link of the seed chain -- the beam's state after some number of
+// inverse maps applied to the TARGET, walked on the CPU at a precision
+// this shader does not have. Laid out by `escape::ifs::pack_chain3`.
+//
+// Six vec4s and no vec3 anywhere, for the reason on `IfsMap3Gpu`: a
+// vec3 aligns to sixteen bytes here and four in Rust, and the render
+// that mismatch produces is a plausible blob rather than an error.
+struct IfsLink {
+    // Reference position xyz; the matrix's binary exponent in w.
+    pos: vec4<f32>,
+    // Rows of the SCALED matrix in xyz. The true matrix is
+    // `mat * 2^pos.w`, applied with `ldexp` so that neither half has
+    // to be a number f32 can hold on its own -- the matrix runs like
+    // 2^level and the delta like 2^-zoom, and only their product is
+    // O(1).
+    r0: vec4<f32>,  // ... w = log2 of the matrix's reach
+    r1: vec4<f32>,  // ... w = the sigma product so far
+    r2: vec4<f32>,  // ... w = the running bound
+    // Address fraction, last sigma, escape level (-1 = none), flags.
+    extra: vec4<f32>,
+    // The point this link escaped at in xyz, first map's colour in w.
+    esc: vec4<f32>,
+}
+
+@group(1) @binding(1) var<storage, read> ifs_links: array<IfsLink>;
+
 struct IfsRecord {
     distance: f32,
     level: f32,
@@ -4834,10 +4860,22 @@ fn cparam(i: u32) -> f32 {
 // The whole-IFS constants. Laid out by `escape::ifs::pack_globals3`:
 // 0. ball centre xyz, radius
 // 1. mean sigma, map count, unused, unused
-// 2. camera position xyz, field of view (radians)
+// 2. eye RELATIVE TO THE TARGET xyz, field of view (radians)
 // 3. camera forward xyz, unused
 // 4. camera right xyz, unused
 // 5. camera up xyz, unused
+// 6. target minus ball centre xyz, number of links in the chain
+// 7. beam slots per link, the handover cap, unused, unused
+//
+// Slot 2 is the reason a solid view can zoom at all. An ABSOLUTE eye
+// is quantised against a coordinate of order one, so by about 2^13 its
+// rounding is wider than a pixel and every ray in the frame starts
+// from the same wrong place. The eye's offset from the target has a
+// magnitude equal to the distance itself, so it shrinks WITH the zoom
+// and f32 resolves it to a part in ten million however deep the view
+// goes. Nothing below ever forms `target + delta`: that sum is the
+// cancellation the chain exists to avoid, and it is avoided by never
+// writing it down.
 // The ball's centre in three dimensions: the walk and the marcher's
 // sphere test.
 fn ifs_ball_centre() -> vec3<f32> {
@@ -4863,6 +4901,113 @@ fn ifs_mean_sigma() -> f32 {
 
 fn ifs_count() -> u32 {
     return u32(max(params.fdata[1].y, 0.0));
+}
+
+// Where the target sits relative to the ball's centre, which is what
+// turns a delta back into something the bounding sphere can be tested
+// against. O(1), and used for nothing finer than that test.
+fn ifs_target_offset() -> vec3<f32> {
+    return params.fdata[6].xyz;
+}
+
+fn ifs_link_levels() -> u32 {
+    return u32(max(params.fdata[6].w, 0.0));
+}
+
+fn ifs_beam_slots() -> u32 {
+    return u32(max(params.fdata[7].x, 1.0));
+}
+
+fn ifs_cap() -> f32 {
+    return params.fdata[7].y;
+}
+
+// The deepest link whose matrix still carries this delta no further
+// than the cap.
+//
+// The reach rises with the level -- every inverse map expands -- so
+// the qualifying links are a prefix and a binary search finds its end.
+// Compared in LOGARITHMS because the reach itself runs like 2^level
+// and stops being an f32 halfway down a deep chain, while the product
+// it stands for is a sum either way.
+//
+// Overstating the reach is the safe direction and the packing takes
+// it: a link that is rejected sends the sample to a SHALLOWER one, and
+// a shallower link is always valid -- it is the same walk with fewer
+// levels done in advance.
+fn ifs_pick_link(delta: vec3<f32>) -> u32 {
+    let levels = ifs_link_levels();
+    if (levels <= 1u) {
+        return 0u;
+    }
+    let slots = ifs_beam_slots();
+
+    // The delta's size in logarithms, WITHOUT ever forming its length.
+    //
+    // `length()` squares its components, and a square is the one
+    // operation a deep zoom cannot afford: by 2^64 a delta is around
+    // 1e-19 and its square is 1e-38, which is where f32 stops having
+    // normal numbers. Measured, `length()` returned 0 from there on,
+    // every link then qualified, and the walk started from a prefix
+    // whose piece the sample was not in -- an address that is simply
+    // WRONG, which reads as holes through the interior of a surface
+    // rather than as a blurred one. The largest component is within
+    // √3 of the length and needs no square at all.
+    //
+    // Over-stating the delta is the safe direction, as it is for the
+    // reach: it sends the sample to a SHALLOWER link, and a shallower
+    // link is the same walk with fewer levels done in advance.
+    let biggest = max(abs(delta.x), max(abs(delta.y), abs(delta.z)));
+    // log2 of the smallest subnormal is about -149; a delta under that
+    // is zero, and zero is the target itself, which belongs at the
+    // deepest link.
+    let log_len = log2(max(biggest, 1e-45)) + 0.7925;
+    let log_cap = log2(max(ifs_cap(), 1e-38));
+
+    var lo = 0u;
+    var hi = levels - 1u;
+    // `ok(j)` for a level is "every slot in it holds", because the
+    // walk starts from all of them.
+    var fits = true;
+    for (var b = 0u; b < slots; b = b + 1u) {
+        if (ifs_links[hi * slots + b].r0.w + log_len > log_cap) {
+            fits = false;
+            break;
+        }
+    }
+    if (fits) {
+        return hi;
+    }
+    loop {
+        if (hi - lo <= 1u) {
+            break;
+        }
+        let mid = (lo + hi) / 2u;
+        var ok = true;
+        for (var b = 0u; b < slots; b = b + 1u) {
+            if (ifs_links[mid * slots + b].r0.w + log_len > log_cap) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// Where this link puts a sample: its reference, plus the sample's
+// delta carried through the accumulated inverse map.
+fn ifs_link_point(link: IfsLink, delta: vec3<f32>) -> vec3<f32> {
+    let d = vec3<f32>(
+        dot(link.r0.xyz, delta),
+        dot(link.r1.xyz, delta),
+        dot(link.r2.xyz, delta),
+    );
+    return link.pos.xyz + ldexp(d, vec3<i32>(i32(link.pos.w)));
 }
 
 fn ff_atan2(y: f32, x: f32) -> f32 {
@@ -4957,7 +5102,9 @@ fn ifs_ao(p: vec3<f32>, n: vec3<f32>, reach: f32) -> f32 {
 fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32) -> f32 {
     // The ray leaves at the bounding sphere: past it every point is
     // provably outside the set, so there is nothing left to occlude.
-    let oc = p - ifs_ball_centre();
+    // `p` is an offset from the target, so the ball's centre is a
+    // target-offset away.
+    let oc = p + ifs_target_offset();
     let b = dot(oc, light);
     let disc = b * b - (dot(oc, oc) - ifs_radius() * ifs_radius());
     if (!(disc > 0.0)) {
@@ -4976,7 +5123,7 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32)
     // in at an angle is every point on a textured face. Measured, that
     // erased the sponge's sub-squares entirely: not a shadow but a
     // flat repaint of the face.
-    let eps = max(ifs_radius() * 1e-4, 1e-7);
+    let eps = max(ifs_radius() * 1e-4, 1e-30);
     var t = bias;
     var shade = 1.0;
     var i = 0u;
@@ -5030,6 +5177,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // A pinhole camera (D8). Not the flame's `zr = 1 - persp*z`, which
     // is depth scaling for splats rather than a projection, and which
     // a marcher would have to be contorted to match.
+    //
+    // The eye is where the TARGET is, plus this: everything below is
+    // an offset from the target and the absolute position is never
+    // formed. See the note on slot 2 above for why.
     let eye = params.fdata[2].xyz;
     let fov = params.fdata[2].w;
     let fwd = params.fdata[3].xyz;
@@ -5043,7 +5194,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The march starts at the bounding sphere, not at the eye: every
     // step before it is a step through provably empty space, and the
     // ray may miss the sphere entirely.
-    let oc = eye - ifs_ball_centre();
+    let oc = eye + ifs_target_offset();
     let b = dot(oc, dir);
     let c_term = dot(oc, oc) - ifs_radius() * ifs_radius();
     let disc = b * b - c_term;
@@ -5086,8 +5237,17 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 break;
             }
             let p = eye + dir * t;
-            d = ifs_distance_at(p);
-            let eps = max(px_at * t, 1e-7);
+            d = ifs_distance_at(p);  // an offset from the target
+            // A pixel's width at this depth, and nothing else. The
+            // floor here used to be 1e-7 -- a guard against an
+            // absolute position's own f32 resolution, which was the
+            // right scale while the marcher worked in absolute
+            // coordinates. Seeded, it is not: past about 2^20 a pixel
+            // is SMALLER than that floor, so the surface was found a
+            // fixed distance early and the picture stopped sharpening
+            // with the zoom. The remaining floor exists only so a
+            // sample at t = 0 cannot give an epsilon of zero.
+            let eps = max(px_at * t, 1e-30);
             if (d < eps) {
                 hit = true;
                 break;
@@ -5101,7 +5261,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let res = ifs_evaluate3(p);
             let shade = ifs_color(res);
 
-            let eps0 = max(px_at * t, 1e-6);
+            let eps0 = max(px_at * t, 1e-30);
             let n = ifs_normal(p, eps0);
             // The occlusion reach is a fraction of the attractor, not
             // of the pixel: it is asking how enclosed this point is,

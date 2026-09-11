@@ -558,7 +558,7 @@ struct IfsCand3 {
 // each part. What differs is the arithmetic and that the distance is
 // in WORLD units here rather than pixels: a marcher steps by it, so
 // it has to be a length in the space the ray is crossing.
-fn ifs_walk3(p0: vec3<f32>) -> IfsResult {
+fn ifs_walk3(delta: vec3<f32>) -> IfsResult {
     let c = ifs_ball_centre();
     let radius = ifs_radius();
     let n = ifs_count();
@@ -581,23 +581,52 @@ fn ifs_walk3(p0: vec3<f32>) -> IfsResult {
     let beam = u32(clamp(fparam(1u), 1.0, f32(IFS_MAX_BEAM)));
     let far = max(radius, 1.0) * 1e12;
 
+    // The handover. `delta` is the sample's offset from the TARGET,
+    // never its absolute position, and the chain is what turns one
+    // into the other: the link's reference is where the target has got
+    // to after `link` inverse maps -- walked on the CPU, where the
+    // cancellation that costs a bit of the target per level could be
+    // paid in real digits -- and its matrix carries the delta the same
+    // way. Their SUM is O(1), which is why f32 can hold it however
+    // deep the zoom is.
+    //
+    // A sample close to the target takes a deep link and one out at
+    // the bounding sphere takes a shallow one. That is not a
+    // compromise: it is the statement that the address prefix
+    // containing a point is shorter the further the point is away.
+    let link = ifs_pick_link(delta);
+    let slots = ifs_beam_slots();
+    let base_level = f32(link);
+
     var live: array<IfsCand3, IFS_MAX_BEAM>;
     var next: array<IfsCand3, IFS_MAX_BEAM>;
-    var live_count = 1u;
-    var root: IfsCand3;
-    root.q = p0;
-    root.point = p0;
-    root.sigma = 1.0;
-    root.bound = -1e30;
-    root.r = length(p0 - c);
-    root.addr = 0.0;
-    root.level = 0.0;
-    root.color = 0.0;
-    root.last_sigma = ifs_mean_sigma();
-    root.flags = 0u;
-    live[0] = root;
+    var live_count = min(max(slots, 1u), beam);
+    for (var b = 0u; b < live_count; b = b + 1u) {
+        let L = ifs_links[link * slots + b];
+        var root: IfsCand3;
+        root.q = ifs_link_point(L, delta);
+        root.sigma = L.r1.w;
+        root.bound = L.r2.w;
+        root.r = length(root.q - c);
+        root.addr = L.extra.x;
+        root.color = L.esc.w;
+        root.last_sigma = L.extra.y;
+        root.flags = bitcast<u32>(L.extra.w);
+        // An escape carried by the link keeps the level it happened
+        // at. Recomputing it here would report a candidate that left
+        // the ball at level three of a fifty-level prefix as leaving
+        // at level fifty -- a constant shift through the whole
+        // exterior of the picture.
+        root.level = L.extra.z;
+        root.point = L.esc.xyz;
+        if ((root.flags & 1u) == 0u) {
+            root.level = 0.0;
+            root.point = root.q;
+        }
+        live[b] = root;
+    }
 
-    var addr_scale = 1.0 / f32(n);
+    var addr_scale = pow(1.0 / f32(n), base_level + 1.0);
     var deepest = -1.0;
 
     for (var k = 0u; k < max_levels; k = k + 1u) {
@@ -611,7 +640,8 @@ fn ifs_walk3(p0: vec3<f32>) -> IfsResult {
             live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
             if (r > radius && (live[ci].flags & 1u) == 0u) {
                 live[ci].flags = live[ci].flags | 1u;
-                live[ci].level = f32(k) + ifs_residual(r, radius, live[ci].last_sigma);
+                live[ci].level =
+                    base_level + f32(k) + ifs_residual(r, radius, live[ci].last_sigma);
                 live[ci].point = live[ci].q;
             }
             if (!(r < far)) {
@@ -675,7 +705,11 @@ fn ifs_walk3(p0: vec3<f32>) -> IfsResult {
                 child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
                 if ((live[parent].flags & 1u) == 0u) {
                     child.addr = live[parent].addr + f32(bi) * addr_scale;
-                    if (k == 0u) {
+                    // The colour belongs to the FIRST map applied, and
+                    // with a seeded start that map was applied on the
+                    // CPU -- so this only fires at the very top of the
+                    // chain, where the link is the target itself.
+                    if (k == 0u && link == 0u) {
                         child.color = ifs_maps[bi].extra.y;
                     }
                 }
@@ -695,7 +729,7 @@ fn ifs_walk3(p0: vec3<f32>) -> IfsResult {
             win = ci;
         }
     }
-    let unescaped = f32(max_levels);
+    let unescaped = base_level + f32(max_levels);
     for (var ci = 0u; ci < live_count; ci = ci + 1u) {
         var lvl = unescaped;
         if ((live[ci].flags & 1u) != 0u) {
@@ -718,13 +752,19 @@ fn ifs_walk3(p0: vec3<f32>) -> IfsResult {
 }
 
 // What the marcher steps by.
-fn ifs_distance_at(p: vec3<f32>) -> f32 {
-    return ifs_walk3(p).distance;
+//
+// The argument is an offset from the camera's TARGET, not a position.
+// Every sample the marcher takes is `eye_rel + dir*t`, both terms of
+// which shrink with the zoom, so the offset keeps its relative
+// precision where an absolute position would have spent it all on
+// leading digits that are the same for the whole frame.
+fn ifs_distance_at(delta: vec3<f32>) -> f32 {
+    return ifs_walk3(delta).distance;
 }
 
-// What the marcher colours with, at the point it stopped.
-fn ifs_evaluate3(p: vec3<f32>) -> IfsResult {
-    return ifs_walk3(p);
+// What the marcher colours with, at the offset it stopped at.
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta);
 }
 "#,
 };
@@ -1246,6 +1286,36 @@ pub fn pack_seeds(
     }
 }
 
+/// The 3D twin, and for the same reason: the target is the only thing
+/// that needs digits, and only until the chain hands over.
+impl crate::scene::ifs_estimate::SeedPoint3 for [super::bigfloat::BigFloat; 3] {
+    fn apply_affine3(&self, a: &crate::scene::ifs_analysis::Affine3) -> Self {
+        let n = self[0].n_limbs().max(self[1].n_limbs()).max(self[2].n_limbs());
+        let big = |v: f64| super::bigfloat::BigFloat::from_f64(v, n);
+        let row = |i: usize| {
+            big(a.m[i][0])
+                .mul(&self[0])
+                .add(&big(a.m[i][1]).mul(&self[1]))
+                .add(&big(a.m[i][2]).mul(&self[2]))
+                .add(&big(a.t[i]))
+        };
+        [row(0), row(1), row(2)]
+    }
+
+    fn distance_to(&self, p: [f64; 3]) -> f64 {
+        let d = [
+            self[0].to_f64() - p[0],
+            self[1].to_f64() - p[1],
+            self[2].to_f64() - p[2],
+        ];
+        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+    }
+
+    fn to_f64(&self) -> [f64; 3] {
+        [self[0].to_f64(), self[1].to_f64(), self[2].to_f64()]
+    }
+}
+
 /// A seeding position at arbitrary precision.
 ///
 /// The impl lives here rather than beside the trait because `BigFloat`
@@ -1304,6 +1374,43 @@ pub fn centre_at_precision(
     ])
 }
 
+/// The camera's target at whatever precision the zoom asks for.
+///
+/// The 3D twin of [`centre_at_precision`], and the reason is the same
+/// one: after `k` inverse maps the seeding walk has computed
+/// `A_k·T + b_k` with `A_k ~ 2ᵏ` and an O(1) answer, so the target
+/// pays `k` bits to get there and `k` is about the zoom. An empty
+/// axis means the attractor's own centre, exactly as the camera reads
+/// it — a centre that is already O(1) and needs no digits.
+pub fn target_at_precision(
+    escape: &crate::config::escape::EscapeConfig,
+    ifs: &crate::scene::ifs_analysis::Ifs3,
+) -> Option<[super::bigfloat::BigFloat; 3]> {
+    let axes = [
+        &escape.cam_target_x,
+        &escape.cam_target_y,
+        &escape.cam_target_z,
+    ];
+    let n = axes
+        .iter()
+        .map(|a| super::fixedpoint::limbs_for_view(a, a, escape.zoom_log2))
+        .max()
+        .unwrap_or(1);
+    let mut out = Vec::with_capacity(3);
+    for (k, a) in axes.iter().enumerate() {
+        let big = if a.trim().is_empty() {
+            super::bigfloat::BigFloat::from_f64(ifs.ball.centre[k], n)
+        } else {
+            super::bigfloat::BigFloat::from_fixed(&super::fixedpoint::FixedPoint::from_decimal(
+                a, n,
+            )?)
+        };
+        out.push(big);
+    }
+    let mut it = out.into_iter();
+    Some([it.next()?, it.next()?, it.next()?])
+}
+
 /// The view basis: takes a pixel's normalised offset — the screen
 /// spanning [-½, ½] on each axis — to a world offset from the centre.
 ///
@@ -1328,6 +1435,17 @@ pub struct SolidCamera {
     pub fov: f32,
     /// How far the eye sits from the target, in world units.
     pub distance: f64,
+    /// The eye's offset from the target — `−forward · distance`.
+    ///
+    /// Carried rather than derived, because `eye − target` is the
+    /// subtraction of two nearly equal numbers and it is EXACTLY the
+    /// cancellation the whole seeded path exists to avoid. Measured:
+    /// past a zoom of 2⁴⁸ the difference rounds to zero in f64, so
+    /// every ray in the frame started at the target itself and the
+    /// picture stopped changing with the zoom. This quantity is
+    /// products and sums of numbers the same size as itself, so it
+    /// keeps its relative precision at any depth.
+    pub eye_rel: [f64; 3],
 }
 
 /// How many ball radii away `zoom_log2 = 0` puts the eye.
@@ -1379,10 +1497,13 @@ pub fn solid_camera(
         pitch.cos() * yaw.sin(),
         pitch.sin(),
     ];
+    let eye_rel = [dir[0] * distance, dir[1] * distance, dir[2] * distance];
+    // The absolute eye is for callers that want a position; nothing on
+    // the deep-zoom path reads it, and past 2⁴⁸ it IS the target.
     let eye = [
-        target[0] + dir[0] * distance,
-        target[1] + dir[1] * distance,
-        target[2] + dir[2] * distance,
+        target[0] + eye_rel[0],
+        target[1] + eye_rel[1],
+        target[2] + eye_rel[2],
     ];
     let forward = [-dir[0], -dir[1], -dir[2]];
 
@@ -1391,7 +1512,16 @@ pub fn solid_camera(
     let right = normalize3(cross3(forward, [0.0, 0.0, 1.0]));
     let up = cross3(right, forward);
 
-    SolidCamera { eye, target, forward, right, up, fov: escape.cam_fov.clamp(0.05, 3.0), distance }
+    SolidCamera {
+        eye,
+        target,
+        forward,
+        right,
+        up,
+        fov: escape.cam_fov.clamp(0.05, 3.0),
+        distance,
+        eye_rel,
+    }
 }
 
 /// Pack the whole-IFS constants and the camera for a solid render.
@@ -1403,8 +1533,14 @@ pub fn solid_camera(
 /// 3. `forward xyz, 0`
 /// 4. `right xyz, 0`
 /// 5. `up xyz, 0`
-pub fn pack_globals3(ifs: &Ifs3, cam: &SolidCamera, out: &mut [[f32; 4]]) {
-    if out.len() < 6 {
+pub fn pack_globals3(
+    ifs: &Ifs3,
+    cam: &SolidCamera,
+    link_levels: usize,
+    beam: usize,
+    out: &mut [[f32; 4]],
+) {
+    if out.len() < 8 {
         return;
     }
     out[0] = [
@@ -1419,10 +1555,43 @@ pub fn pack_globals3(ifs: &Ifs3, cam: &SolidCamera, out: &mut [[f32; 4]]) {
         ifs.maps.iter().map(|m| m.sigma_min).sum::<f64>() / ifs.maps.len() as f64
     };
     out[1] = [mean as f32, ifs.maps.len() as f32, 0.0, 0.0];
-    out[2] = [cam.eye[0] as f32, cam.eye[1] as f32, cam.eye[2] as f32, cam.fov];
+    // The eye RELATIVE TO THE TARGET, which is the whole of the 3D
+    // deep zoom. `eye = target − forward·distance`, so this is
+    // `−forward·distance` and its magnitude IS the distance: an f32
+    // holds it to a part in ten million however deep the zoom goes,
+    // where the absolute eye is quantised against a coordinate of
+    // order one and stops resolving a pixel at about 2¹³.
+    //
+    // Nothing downstream ever forms `target + δ`. That sum is the
+    // cancellation the chain exists to avoid, and it is avoided by
+    // never writing it.
+    out[2] = [
+        cam.eye_rel[0] as f32,
+        cam.eye_rel[1] as f32,
+        cam.eye_rel[2] as f32,
+        cam.fov,
+    ];
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
     out[5] = [cam.up[0] as f32, cam.up[1] as f32, cam.up[2] as f32, 0.0];
+    // The target's offset from the ball's centre, which is what turns
+    // a delta back into something the bounding sphere can be tested
+    // against. O(1), and only ever used for that test.
+    out[6] = [
+        (cam.target[0] - ifs.ball.centre[0]) as f32,
+        (cam.target[1] - ifs.ball.centre[1]) as f32,
+        (cam.target[2] - ifs.ball.centre[2]) as f32,
+        link_levels.min(MAX_CHAIN_LINKS) as f32,
+    ];
+    // The handover cap, which is the whole of the level choice: a link
+    // holds a sample while its matrix carries the sample's delta no
+    // further than this.
+    out[7] = [
+        beam.max(1) as f32,
+        (ifs.ball.radius * crate::scene::ifs_estimate::HANDOVER_FRACTION) as f32,
+        0.0,
+        0.0,
+    ];
 }
 
 fn normalize3(v: [f64; 3]) -> [f64; 3] {
@@ -1440,6 +1609,115 @@ fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
+}
+
+/// The most links a packed chain may hold.
+///
+/// One link per level, and a level buys about a bit of zoom at σ = ½,
+/// so this is the zoom ceiling in another form. Past it the chain is
+/// truncated rather than refused: a shorter chain is still SOUND —
+/// every link is a valid place to start — it simply hands over
+/// earlier and so loses precision, which is the graceful end of a
+/// deep zoom rather than a black frame.
+pub const MAX_CHAIN_LINKS: usize = 256;
+
+/// One link of the 3D seed chain, GPU layout.
+///
+/// Six `vec4`s and no `vec3` anywhere, for the reason recorded on
+/// [`IfsMap3Gpu`]: a `vec3` aligns to sixteen bytes in WGSL and four
+/// in Rust, and the render that mismatch produces is a plausible blob
+/// rather than an error.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IfsLinkGpu {
+    /// The reference position in `xyz`, and the matrix's binary
+    /// exponent in `w`.
+    pub pos: [f32; 4],
+    /// Rows of the SCALED matrix in `xyz` — the true matrix is
+    /// `mat · 2^pos.w`, applied with `ldexp` so neither half has to be
+    /// representable on its own. `w` carries, in order: `log2` of the
+    /// matrix's reach, the σ product, and the running bound.
+    ///
+    /// The reach is kept as a LOGARITHM because the thing itself runs
+    /// like `2^level` and overflows f32 halfway down a deep chain,
+    /// while the comparison it exists for — reach × |δ| against the
+    /// cap — is a sum of logarithms either way.
+    pub rows: [[f32; 4]; 3],
+    /// Address fraction, σ of the last map, escape level (−1 for
+    /// none), and flag bits (bit 0 escaped, bit 1 done).
+    pub extra: [f32; 4],
+    /// The point this link escaped at in `xyz`, and the transform
+    /// colour of its first map in `w`.
+    pub esc: [f32; 4],
+}
+
+/// Pack a seed chain for the shader, padded to `beam` links a level.
+///
+/// Levels shallower than the beam is wide have fewer candidates than
+/// the slot count, and the short ones are filled by REPEATING the last
+/// candidate rather than by marking slots empty. A duplicate costs one
+/// redundant walk and changes no answer — the result is a minimum over
+/// candidates — where an empty-slot flag would put a branch in the
+/// inner loop of every sample at every depth.
+pub fn pack_chain3(
+    chain: &crate::scene::ifs_estimate::SeedChain3,
+    n_maps: usize,
+    colors: &[f32],
+    beam: usize,
+) -> Vec<IfsLinkGpu> {
+    let beam = beam.max(1);
+    let levels = chain.levels.len().min(MAX_CHAIN_LINKS);
+    let mut out = Vec::with_capacity(levels * beam);
+    for cands in chain.levels.iter().take(levels) {
+        for b in 0..beam {
+            // Repeat the last rather than leave a hole.
+            let c = &cands[b.min(cands.len() - 1)];
+            let reach = c.reach.max(f64::MIN_POSITIVE);
+            // Split the matrix into a unit-ish part and an exponent.
+            // `exp2` of the exponent is never formed — `ldexp` applies
+            // it — so the split holds wherever f64 held the matrix.
+            let exp = reach.log2().ceil();
+            let scale = (-exp).exp2();
+            let m = |i: usize, j: usize| (c.matrix[i][j] * scale) as f32;
+            let (esc_level, esc_point, escaped) = match c.escape {
+                Some((lvl, p)) => (lvl as f32, [p[0] as f32, p[1] as f32, p[2] as f32], 1u32),
+                None => (-1.0, [0.0, 0.0, 0.0], 0u32),
+            };
+            let flags = escaped | if c.done { 2 } else { 0 };
+            let colour = c
+                .address
+                .first()
+                .and_then(|&i| colors.get(i as usize))
+                .copied()
+                .unwrap_or(0.0);
+            out.push(IfsLinkGpu {
+                pos: [
+                    c.position[0] as f32,
+                    c.position[1] as f32,
+                    c.position[2] as f32,
+                    exp as f32,
+                ],
+                rows: [
+                    [m(0, 0), m(0, 1), m(0, 2), reach.log2() as f32],
+                    [m(1, 0), m(1, 1), m(1, 2), c.sigma as f32],
+                    [
+                        m(2, 0),
+                        m(2, 1),
+                        m(2, 2),
+                        if c.bound.is_finite() { c.bound as f32 } else { -1e30 },
+                    ],
+                ],
+                extra: [
+                    crate::scene::ifs_estimate::address_fraction(&c.address, n_maps as u32) as f32,
+                    c.last_sigma as f32,
+                    esc_level,
+                    f32::from_bits(flags),
+                ],
+                esc: [esc_point[0], esc_point[1], esc_point[2], colour],
+            });
+        }
+    }
+    out
 }
 
 /// Whether this formula names a SOLID distance function.
@@ -2023,6 +2301,191 @@ mod tests {
         out
     }
 
+    /// The fixed point of S₁∘S₂∘S₃ on the Sierpiński tetrahedron,
+    /// which is `(6, 5, 3)/7`.
+    ///
+    /// Sevenths, and that is the whole point. Every f64 is dyadic, and
+    /// the maps here halve — so a dyadic target's inverse orbit lands
+    /// exactly on a fixed point and its picture is self-similar at any
+    /// precision, which is how the plane's first deep-zoom gate
+    /// managed to pass while measuring nothing. A seventh is not
+    /// dyadic, so holding it costs real digits.
+    fn tetra_cycle_target(limbs: usize) -> [crate::escape::bigfloat::BigFloat; 3] {
+        let big = |num: u64| {
+            crate::escape::bigfloat::BigFloat::from_fixed(
+                &crate::escape::fixedpoint::FixedPoint::from_decimal(
+                    &super::tests::decimal(num, 7, 80),
+                    limbs,
+                )
+                .expect("parses"),
+            )
+        };
+        [big(6), big(5), big(3)]
+    }
+
+    /// The seeded 3D walk holds its place where f64 cannot — asserted,
+    /// with the naive walk as the control.
+    ///
+    /// `C = S₁∘S₂∘S₃` is a similarity of ratio ⅛ fixing the target and
+    /// mapping the attractor into itself, so the set looks the same
+    /// about that point at every scale and `d(T + δ)·8ᵏ` is a
+    /// CONSTANT. That is the whole gate, and it needs no ground truth
+    /// of its own.
+    ///
+    /// The control is the point. A test that only asserted the seeded
+    /// column is constant would also pass if the chain quietly formed
+    /// the absolute position like the naive walk does — so the naive
+    /// column is required to FAIL, and by a wide margin, before the
+    /// seeded column's constancy is allowed to mean anything.
+    ///
+    /// See [`how_deep_a_seeded_3d_walk_still_knows_where_it_is`] for
+    /// the same measurement printed rather than asserted.
+    #[test]
+    fn a_seeded_3d_walk_holds_a_target_f64_cannot_express() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let target = tetra_cycle_target(8);
+        let t64 = {
+            use crate::scene::ifs_estimate::SeedPoint3;
+            target.to_f64()
+        };
+        let dir = {
+            let v = [0.37f64, -0.61, 0.7];
+            let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            [v[0] / n, v[1] / n, v[2] / n]
+        };
+        let chain = crate::scene::ifs_estimate::seed_chain3(
+            &ifs3,
+            target,
+            2f64.powi(-140),
+            256,
+            1,
+        );
+
+        let mut reference = 0.0f64;
+        let mut worst_seeded = 0.0f64;
+        let mut worst_naive = 0.0f64;
+        for k in 0..=45u32 {
+            let scale = 8f64.powi(-(k as i32));
+            let delta = [dir[0] * 0.2 * scale, dir[1] * 0.2 * scale, dir[2] * 0.2 * scale];
+            let levels = (3 * k + 40).min(256);
+
+            let seeded = crate::scene::ifs_estimate::estimate_seeded3(
+                &ifs3, &chain, delta, levels, 1,
+            )
+            .distance
+                / scale;
+            let naive = crate::scene::ifs_estimate::estimate(
+                &ifs3,
+                [t64[0] + delta[0], t64[1] + delta[1], t64[2] + delta[2]],
+                levels,
+                1,
+            )
+            .distance
+                / scale;
+
+            if k == 0 {
+                reference = seeded;
+                assert!(reference > 1e-3, "the sample is not off the set: {reference}");
+                assert!(
+                    (naive / reference - 1.0).abs() < 1e-9,
+                    "the two disagree at the SHALLOW end, where both should be exact: \
+                     {naive} against {reference}"
+                );
+            }
+            worst_seeded = worst_seeded.max((seeded / reference - 1.0).abs());
+            worst_naive = worst_naive.max((naive / reference - 1.0).abs());
+        }
+
+        assert!(
+            worst_seeded < 1e-9,
+            "the seeded walk drifted by {worst_seeded:.3e} over 45 octaves of ⅛ -- \
+             it is not holding the target"
+        );
+        // The control. Without this the assertion above is also passed
+        // by a chain that never left f64.
+        assert!(
+            worst_naive > 1.0,
+            "the NAIVE walk did not fail ({worst_naive:.3e}) -- this fixture is not \
+             deep enough to be measuring precision at all, so the line above proves \
+             nothing"
+        );
+    }
+
+    /// How deep the seeded 3D walk still knows where it is.
+    ///
+    /// `C = S₁∘S₂∘S₃` is a similarity of ratio ⅛ that fixes the target
+    /// and maps the attractor into itself, so the set looks the same
+    /// about that point at every scale: `d(T + δ/8)` must be `d(T + δ)/8`.
+    /// Printing `d · 8ᵏ` therefore prints a CONSTANT, for as long as
+    /// the arithmetic can still tell where `T + δ` is — and the level
+    /// at which the column stops being constant is the answer.
+    ///
+    /// Both ways are printed side by side because one of them is the
+    /// control. The naive column forms the absolute position in f64
+    /// and loses it at about 2⁻⁵², which is the wall; without that
+    /// column, a chain that was quietly doing the same thing would
+    /// look like a result.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn how_deep_a_seeded_3d_walk_still_knows_where_it_is() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+
+        let target = tetra_cycle_target(8);
+        let t64 = {
+            use crate::scene::ifs_estimate::SeedPoint3;
+            target.to_f64()
+        };
+        // An offset in a direction the set actually has structure in.
+        let dir = {
+            let v = [0.37f64, -0.61, 0.7];
+            let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            [v[0] / n, v[1] / n, v[2] / n]
+        };
+
+        let chain = crate::scene::ifs_estimate::seed_chain3(
+            &ifs3,
+            target.clone(),
+            2f64.powi(-140),
+            256,
+            1,
+        );
+        println!(
+            "  chain: {} links, cap {:.4}",
+            chain.levels.len(),
+            chain.cap
+        );
+        println!("   k    |delta|     naive f64 * 8^k    seeded * 8^k     link");
+        for k in (0..46).step_by(3) {
+            let scale = 8f64.powi(-(k as i32));
+            let delta = [dir[0] * 0.2 * scale, dir[1] * 0.2 * scale, dir[2] * 0.2 * scale];
+            let len = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+            let levels = (3 * k as u32 + 40).min(256);
+
+            let naive = crate::scene::ifs_estimate::estimate(
+                &ifs3,
+                [t64[0] + delta[0], t64[1] + delta[1], t64[2] + delta[2]],
+                levels,
+                1,
+            )
+            .distance;
+            let seeded =
+                crate::scene::ifs_estimate::estimate_seeded3(&ifs3, &chain, delta, levels, 1);
+            let link = chain.level_for(len);
+            println!(
+                "  {k:>2}  {len:>10.3e}  {:>16.9e}  {:>14.9e}  {link:>4}",
+                naive / scale,
+                seeded.distance / scale
+            );
+        }
+    }
+
     /// A deep zoom must hold a centre f64 cannot express.
     ///
     /// The earlier gates all centred somewhere exactly representable —
@@ -2384,27 +2847,32 @@ mod tests {
         );
     }
 
-    /// A solid deep zoom is limited by the EYE, not the target — and
-    /// that is what 3D seeding is for.
+    /// What limits a solid deep zoom now that the eye is an OFFSET.
     ///
-    /// The camera puts the precision where a deep zoom needs it: the
-    /// target holds still and carries digits, the distance shrinks
-    /// around it. But the marcher is handed an ABSOLUTE eye position
-    /// in `f32`, and near a target of 0.5 that is quantised to 6e-8 —
-    /// so past a zoom of about **2¹³** a PIXEL is smaller than the
-    /// eye's own rounding and the ray starts somewhere else. Exactly
-    /// the wall the plane hit before §2.5's reference orbit, moved one
-    /// step along.
+    /// This test used to pin 2¹³, and the reason was the eye: the
+    /// marcher was handed an absolute position in f32, which near a
+    /// coordinate of order one is quantised to 6e-8, so past 2¹³ a
+    /// pixel was finer than the eye's own rounding and every ray in
+    /// the frame started from the same wrong place. The camera now
+    /// carries `eye − target` directly — as a product of numbers its
+    /// own size, never as a subtraction of two nearly equal ones —
+    /// and that quantity shrinks WITH the zoom, so it never stops
+    /// resolving a pixel.
     ///
-    /// The plane's answer was to stop sending a position at all and
-    /// send an offset instead. The solid answer is the same, and it is
-    /// the 3D seeding phase 3 has not built: a ray marches THROUGH
-    /// space, so what a handover carries is per-ray, and how far along
-    /// the ray a sample sits is part of the offset.
+    /// What is left is f32's exponent, and the binding constraint is
+    /// not the offset itself but any SQUARE of it: the sphere trace
+    /// and the link choice both once took a `length`, and a length
+    /// squares before it adds. The link choice does not any more (see
+    /// `ifs_pick_link`), which is what took the measured agreement
+    /// from 2⁶⁴ to 2⁸⁰.
     ///
-    /// This pins the number so raising it is a deliberate act.
+    /// So this measures the offset against f32's smallest NORMAL
+    /// number, and against the smallest whose square is still normal —
+    /// the two ceilings, and the gap between them is what the squaring
+    /// question is worth. `how_deep_a_solid_render_agrees_with_the_reference`
+    /// is the other half: what the picture actually does.
     #[test]
-    fn a_solid_deep_zoom_is_limited_by_the_eye_not_the_target() {
+    fn what_limits_a_solid_deep_zoom_now_the_eye_is_an_offset() {
         let guard = global_registry();
         let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::tetrahedron_flame(), &guard)
             .expect("qualifies");
@@ -2413,28 +2881,60 @@ mod tests {
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.cam_target_x = "0.3333333333333333333333333333".to_string();
 
-        // Where the eye's f32 rounding is still smaller than what the
-        // frame shows.
-        let mut deepest = 0.0f64;
-        for zoom in 0..40 {
+        let mut resolves = 0.0f64;
+        let mut normal = 0.0f64;
+        let mut square_normal = 0.0f64;
+        for zoom in 0..300 {
             esc.zoom_log2 = zoom as f64;
             let c = solid_camera(&esc, &ifs3);
+            let off = c.eye_rel[0]
+                .abs()
+                .max(c.eye_rel[1].abs())
+                .max(c.eye_rel[2].abs());
             // One pixel across a 1080-tall frame, at the target.
             let px = 2.0 * (c.fov as f64 * 0.5).tan() * c.distance / 1080.0;
-            // What an f32 can resolve about the eye's position.
-            let quantum = (c.eye[0].abs().max(1.0) as f32) * f32::EPSILON;
-            if (quantum as f64) < px {
-                deepest = zoom as f64;
+            // The offset keeps its RELATIVE precision, so what it can
+            // resolve about itself is a part in ten million of itself
+            // -- not of a coordinate of order one, which was the old
+            // wall.
+            if (off * f32::EPSILON as f64) < px {
+                resolves = zoom as f64;
+            }
+            if off > f32::MIN_POSITIVE as f64 {
+                normal = zoom as f64;
+            }
+            if off * off > f32::MIN_POSITIVE as f64 {
+                square_normal = zoom as f64;
             }
         }
-        println!("  a solid view stays inside f32's eye at zoom 2^{deepest}");
-        // MEASURED at 2^13, and lower than a guess would put it: the
-        // eye's rounding has to stay under a PIXEL, which is the view
-        // span over a thousand-odd, so it binds about ten bits earlier
-        // than "under the view" would.
+        println!(
+            "  the eye offset resolves a pixel to 2^{resolves}, stays normal in f32 to \
+             2^{normal}, and its SQUARE stays normal only to 2^{square_normal}"
+        );
+
+        // The offset resolves a pixel at every zoom this loop reaches:
+        // both sides shrink together, so the ratio is a constant and
+        // there is no crossing to find. That is the whole point of
+        // carrying an offset.
         assert!(
-            (12.0..=16.0).contains(&deepest),
-            "the solid zoom limit moved to 2^{deepest} -- if it went UP, 3D seeding              landed and this test should say so; if DOWN, something regressed"
+            resolves >= 299.0,
+            "the eye offset stopped resolving a pixel at 2^{resolves} -- it should never \
+             stop, because a relative precision divided by a relative precision is a \
+             constant"
+        );
+        // And the ceilings, which are about the exponent rather than
+        // the mantissa. MEASURED: an f32 holds the offset itself to
+        // about 2^125, and its square only to about 2^62 -- so any
+        // squaring of a delta halves the reachable zoom, which is
+        // exactly what `length()` was doing in the link choice.
+        assert!(
+            (120.0..=130.0).contains(&normal),
+            "f32's normal range for the eye offset moved to 2^{normal}"
+        );
+        assert!(
+            (58.0..=68.0).contains(&square_normal),
+            "the squaring ceiling moved to 2^{square_normal} -- it is half the other \
+             one, and it is the reason nothing on this path may take a length"
         );
     }
 
@@ -4079,6 +4579,228 @@ mod gpu_tests {
             );
         }
         }
+    }
+
+    /// How deep a SOLID zoom agrees with the reference — asked of the
+    /// picture, not of the arithmetic.
+    ///
+    /// At each zoom the same rays are marched on the CPU, seeded from
+    /// the same chain, and the hits compared with the render's. The
+    /// reference runs in f64 against the shader's f32, which is where
+    /// its authority comes from; that it is sound at these depths is
+    /// not taken on trust either, because the fixture is EXACTLY
+    /// self-similar (see below) and a reference that had drifted
+    /// would stop repeating. It does repeat, to the pixel, across
+    /// sixteen cycles.
+    ///
+    /// The target is a point ON the attractor with an eventually
+    /// periodic address — the fixed point of S₁∘S₂∘S₃, at (6,5,3)/7.
+    /// The sevenths are the point. A dyadic target is the trap the
+    /// plane's deep-zoom gate fell into: every f64 is dyadic, and a
+    /// dyadic target's inverse orbit lands exactly on a fixed point,
+    /// so the picture is self-similar whatever the precision. And
+    /// because that composition is a similarity of ratio ⅛, the
+    /// picture repeats every three octaves of zoom — which is what
+    /// makes the reference auditable.
+    ///
+    /// Asserted to **2⁸⁰**, measured clean to there and printed
+    /// beyond. Before the chain this was 2¹², and the three faults
+    /// between those numbers are recorded in the plan.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn how_deep_a_solid_render_agrees_with_the_reference() {
+        const N: u32 = 96;
+        let guard = global_registry();
+        let flame = tetrahedron_flame();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&flame, &guard).expect("qualifies");
+        drop(guard);
+
+        let (device, queue) = device();
+        println!("  zoom  levels   agree   (hit / miss on the reference)");
+        // Gated to 2^80; printed past it, because what happens past
+        // it is a graceful loss of precision rather than a cliff and
+        // the number it happens at is worth watching.
+        const GATED_TO: f64 = 80.0;
+        let mut worst_gated = 100.0f64;
+        for &zoom in &[0.0f64, 16.0, 32.0, 48.0, 64.0, 80.0, 96.0, 112.0, 140.0] {
+            let levels = (zoom as u32 + 24).min(256);
+            let mut c = config_for(flame.clone());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            // The DISTANCE colouring, with a mid-palette interior: a
+            // hit is lit whatever address it has. The address
+            // colouring maps some addresses near black, and "lit"
+            // would then be measuring the palette rather than the
+            // geometry.
+            c.escape.coloring = "ifs_distance".to_string();
+            c.escape.coloring_params.insert("interior".to_string(), 0.5);
+            c.escape.coloring_params.insert("bands".to_string(), 0.0);
+            c.escape.coloring_params.insert("edge".to_string(), 1.0);
+            c.escape.formula_params.insert("levels".to_string(), levels as f32);
+            c.escape.cam_target_x = super::tests::decimal(6, 7, 60);
+            c.escape.cam_target_y = super::tests::decimal(5, 7, 60);
+            c.escape.cam_target_z = super::tests::decimal(3, 7, 60);
+            c.escape.zoom_log2 = zoom;
+
+            let job = crate::renderer::RenderJob::new(&c, N, N);
+            let rgba = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data;
+
+            // The same rays, marched on the CPU. Transcribed from the
+            // solid template rather than approximated -- a reference
+            // that marches differently measures the difference between
+            // two marchers, not the precision of one -- and seeded
+            // from the same chain, because the shader's total depth is
+            // its link plus its level count and a reference that
+            // stopped shallower would read the difference in DEPTH as
+            // a difference in precision.
+            let cam = solid_camera(&c.escape, &ifs3);
+            let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / N as f64;
+            let chain = crate::scene::ifs_estimate::seed_chain3(
+                &ifs3,
+                super::target_at_precision(&c.escape, &ifs3).expect("target parses"),
+                finest,
+                (zoom as u32 + 64).min(super::MAX_CHAIN_LINKS as u32),
+                1,
+            );
+            let tan_half = (cam.fov as f64 * 0.5).tan();
+            let steps = 96u32;
+            {
+                let d = cam.eye_rel[0]
+                    .hypot(cam.eye_rel[1])
+                    .hypot(cam.eye_rel[2]);
+                println!(
+                    "        chain {} links, cap {:.4}, eye |delta| {:.3e}, link {}, finest {:.3e}",
+                    chain.levels.len(),
+                    chain.cap,
+                    d,
+                    chain.level_for(d),
+                    finest
+                );
+            }
+            let mut refhit = vec![false; (N * N) as usize];
+            let mut agree = 0usize;
+            let mut hits = 0usize;
+            for y in 0..N {
+                for x in 0..N {
+                    let u = (x as f64 + 0.5) / N as f64 - 0.5;
+                    let v = (y as f64 + 0.5) / N as f64 - 0.5;
+                    let mut dir = [0.0f64; 3];
+                    for k in 0..3 {
+                        dir[k] = cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half)
+                            - cam.up[k] * (v * 2.0 * tan_half);
+                    }
+                    let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                    for d in dir.iter_mut() {
+                        *d /= n;
+                    }
+
+                    // Everything below is an offset from the TARGET,
+                    // exactly as the shader has it.
+                    let eye_rel = cam.eye_rel;
+                    let to_ball = [
+                        cam.target[0] - ifs3.ball.centre[0],
+                        cam.target[1] - ifs3.ball.centre[1],
+                        cam.target[2] - ifs3.ball.centre[2],
+                    ];
+                    let oc = [
+                        eye_rel[0] + to_ball[0],
+                        eye_rel[1] + to_ball[1],
+                        eye_rel[2] + to_ball[2],
+                    ];
+                    let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
+                    let cc = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2]
+                        - ifs3.ball.radius * ifs3.ball.radius;
+                    let disc = b * b - cc;
+                    let mut hit = false;
+                    if disc >= 0.0 {
+                        let root = disc.sqrt();
+                        let mut t = (-b - root).max(0.0);
+                        let t_max = -b + root;
+                        let px_at = 2.0 * tan_half / N as f64;
+                        for _ in 0..steps {
+                            if t > t_max {
+                                break;
+                            }
+                            let q = [
+                                eye_rel[0] + dir[0] * t,
+                                eye_rel[1] + dir[1] * t,
+                                eye_rel[2] + dir[2] * t,
+                            ];
+                            let d = crate::scene::ifs_estimate::estimate_seeded3(
+                                &ifs3, &chain, q, levels, 1,
+                            )
+                            .distance;
+                            // The floor is only against t = 0; a
+                            // larger one would find the surface early
+                            // once the whole view is smaller than it,
+                            // which is the shader bug this test found.
+                            if d < (px_at * t).max(1e-300) {
+                                hit = true;
+                                break;
+                            }
+                            t += d;
+                        }
+                    }
+                    refhit[(y * N + x) as usize] = hit;
+                    if hit {
+                        hits += 1;
+                    }
+                    let i = ((y * N + x) * 4) as usize;
+                    let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                    if lit == hit {
+                        agree += 1;
+                    }
+                }
+            }
+            let total = (N * N) as usize;
+            let pct = 100.0 * agree as f64 / total as f64;
+            if zoom <= GATED_TO {
+                worst_gated = worst_gated.min(pct);
+            }
+            // Where the disagreement sits. A precision fault shows at
+            // the SILHOUETTE, where a pixel is a hair from the
+            // surface either way; a structural fault is spread through
+            // the interior.
+            let mut edge_dis = 0usize;
+            let mut interior_dis = 0usize;
+            for y in 1..N - 1 {
+                for x in 1..N - 1 {
+                    let at = |xx: u32, yy: u32| refhit[(yy * N + xx) as usize];
+                    let me = at(x, y);
+                    let boundary = [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)]
+                        .iter()
+                        .any(|(dx, dy)| at((x as i32 + dx) as u32, (y as i32 + dy) as u32) != me);
+                    let i = ((y * N + x) * 4) as usize;
+                    let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                    if lit != me {
+                        if boundary {
+                            edge_dis += 1;
+                        } else {
+                            interior_dis += 1;
+                        }
+                    }
+                }
+            }
+            println!(
+                "        disagreement: {edge_dis} at the silhouette, {interior_dis} inside"
+            );
+            println!(
+                "  2^{zoom:<4} {levels:<7} {pct:>5.1}%   ({hits} hit / {} miss)",
+                total - hits
+            );
+        }
+        assert!(
+            worst_gated >= 100.0,
+            "a solid render disagrees with the reference at {worst_gated:.1}% somewhere \
+             up to 2^{GATED_TO} -- if this DROPPED, the seed chain regressed; if you \
+             raised the ceiling, raise GATED_TO and say so"
+        );
     }
 
     /// What the second march costs.
