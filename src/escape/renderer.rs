@@ -3992,16 +3992,31 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 })
             };
             // A solid render's per-pixel cost has the march in it, and
-            // its budget is scaled to match. Shadows add a SECOND
-            // march, of at most the same step count, so a shadowed
-            // pixel is counted as two -- which halves the band rather
-            // than letting a band quietly take twice as long. Measured
-            // at the defaults the real cost is about a fifth more, not
-            // twice, but the thing a band size protects against is the
-            // driver's watchdog, and that is a ceiling question.
+            // its budget is scaled to match. Every walk a pixel can
+            // cost is counted: the primary march, one more march per
+            // LIGHT that casts a shadow, the twelve occlusion probes
+            // and the six the normal takes. It used to count shadows
+            // as one march whatever the light count, and neither the
+            // probes nor the normal at all -- an under-estimate of
+            // about 2x with four lights, which is the wrong direction
+            // for a number whose job is to keep a band under the
+            // driver's watchdog. The walks self-limit now, so the
+            // model is conservative in practice; it is still the
+            // model.
             let (steps, budget) = if def.solid {
-                let marches = if param("shadow", 0.7) > 0.0 { 2 } else { 1 };
-                (param("steps", 96.0) as u32 * marches, IFS_SOLID_BUDGET)
+                let steps = param("steps", 96.0) as u32;
+                let shadowed = if param("shadow", 0.7) > 0.0 {
+                    let (sh, _, _, _) = &self.solid_lighting;
+                    if crate::config::SolidShadingSettings::is_default(sh) {
+                        1
+                    } else {
+                        sh.lights.iter().filter(|l| l.enabled && l.intensity > 0.0).count() as u32
+                    }
+                } else {
+                    0
+                };
+                let occlusion = if param("occlusion", 0.15) > 0.0 { 12 } else { 0 };
+                (steps * (1 + shadowed) + occlusion + 6, IFS_SOLID_BUDGET)
             } else {
                 (1, IFS_DISPATCH_BUDGET)
             };
