@@ -373,7 +373,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -864,7 +865,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -4053,7 +4055,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -4212,7 +4215,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -4364,7 +4368,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -4542,8 +4547,13 @@ fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
 
 @compute @workgroup_size(8, 8, 1)
 fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let py = gid.y + params.tile_y0;
-    if (gid.x >= params.width || py >= params.height) {
+    // The interaction stride: at 2, this thread owns a 2x2 block and
+    // walks its top-left pixel once. The band starts on a block
+    // boundary, so the block never straddles two bands.
+    let stride = max(params.stride, 1u);
+    let px = gid.x * stride;
+    let py = gid.y * stride + params.tile_y0;
+    if (px >= params.width || py >= params.height) {
         return;
     }
 
@@ -4551,7 +4561,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // position: at a deep zoom there is no position an f32 could hold,
     // and the walk starts from the beam state the CPU handed over
     // instead. `rot_cs` and `span` are folded into the seeds' basis.
-    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
+    let uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
         / vec2<f32>(f32(params.width), f32(params.height))
         - vec2<f32>(0.5, 0.5);
 
@@ -4560,9 +4570,10 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Cache the walk before colouring it. A band cannot be
     // re-coloured after the fact without this -- the walk that
     // produced it is gone -- which is what made a palette edit cost a
-    // full re-render.
+    // full re-render. One record per BLOCK; the recolor pass reads
+    // block-aligned.
     if ((params.flags & 8u) != 0u) {
-        let idx = py * params.width + gid.x;
+        let idx = py * params.width + px;
         results[idx].distance = res.distance;
         results[idx].level = res.level;
         results[idx].address = res.address;
@@ -4578,8 +4589,17 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t, 0.5), 0.0).rgb;
     let rgb = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
 
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, 1.0));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    // The whole block, from the one walk.
+    for (var dy = 0u; dy < stride; dy = dy + 1u) {
+        for (var dx = 0u; dx < stride; dx = dx + 1u) {
+            let x = px + dx;
+            let y = py + dy;
+            if (x < params.width && y < params.height) {
+                textureStore(out_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(rgb, 1.0));
+                textureStore(height_tex, vec2<i32>(i32(x), i32(y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+            }
+        }
+    }
 }
 "#;
 
@@ -4688,7 +4708,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -4799,7 +4820,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.width || gid.y >= params.height) {
         return;
     }
-    let r = results[gid.y * params.width + gid.x];
+    // Block-aligned: a preview walk wrote one record per 2x2 block.
+    let stride = max(params.stride, 1u);
+    let sx = (gid.x / stride) * stride;
+    let sy = (gid.y / stride) * stride;
+    let r = results[sy * params.width + sx];
     var res: IfsResult;
     res.distance = r.distance;
     res.level = r.level;
@@ -4863,7 +4888,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -5004,7 +5030,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.width || gid.y >= params.height) {
         return;
     }
-    let idx = gid.y * params.width + gid.x;
+    // Block-aligned: a preview walk wrote one record per 2x2 block.
+    // The ray is this pixel's own, so the block is lit as four pixels
+    // rather than copied as one, which is the difference between
+    // "blockier" and "blocky".
+    let stride = max(params.stride, 1u);
+    let sx = (gid.x / stride) * stride;
+    let sy = (gid.y / stride) * stride;
+    let idx = sy * params.width + sx;
     let r = results[idx];
     let g = ifs_geom[idx];
     let t = bitcast<f32>(g.w);
@@ -5068,7 +5101,8 @@ struct EscapeParams {
     tile_y0: u32,
     damping: vec2<f32>,
     shade_flags: u32,
-    _pad_shade0: u32,
+    // Mode D's interaction stride (1 or 2); the other engines read 1.
+    stride: u32,
     _pad_shade1: u32,
     _pad_shade2: u32,
     fparams: array<vec4<f32>, 4>,
@@ -5533,8 +5567,12 @@ fn ifs_normal(p: vec3<f32>, h: f32) -> vec3<f32> {
 
 @compute @workgroup_size(8, 8, 1)
 fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let py = gid.y + params.tile_y0;
-    if (gid.x >= params.width || py >= params.height) {
+    // The interaction stride: at 2, this thread owns a 2x2 block and
+    // walks its top-left pixel once; the relight reads block-aligned.
+    let stride = max(params.stride, 1u);
+    let px = gid.x * stride;
+    let py = gid.y * stride + params.tile_y0;
+    if (px >= params.width || py >= params.height) {
         return;
     }
 
@@ -5548,7 +5586,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let eye = params.fdata[2].xyz;
     let fov = params.fdata[2].w;
     let tan_half = tan(fov * 0.5);
-    let dir = ifs_ray(gid.x, py);
+    let dir = ifs_ray(px, py);
 
     // The march starts at the bounding sphere, not at the eye: every
     // step before it is a step through provably empty space, and the
@@ -5583,8 +5621,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // One pixel's width at the ray's depth: the march stops when
         // the surface is closer than the pixel is wide, because past
-        // that it cannot show the difference.
-        let px_at = 2.0 * tan_half / f32(max(params.height, 1u));
+        // that it cannot show the difference. In a preview the block
+        // is the pixel.
+        let px_at = 2.0 * tan_half * f32(stride) / f32(max(params.height, 1u));
 
         let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
         var steps = 0u;
@@ -5678,7 +5717,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // records has nothing for the relight pass to draw from, and the
     // renderer says so rather than drawing garbage.
     if ((params.flags & 8u) != 0u) {
-        let idx = py * params.width + gid.x;
+        let idx = py * params.width + px;
         results[idx] = rec;
         ifs_geom[idx] = geom;
     }

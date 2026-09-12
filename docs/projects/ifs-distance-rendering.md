@@ -1580,6 +1580,37 @@ last-place tolerance because the old scalar multiplied where the walk
 summed; with both paths ending in the same relight pass, the
 comparison is byte-identical again.
 
+**The interaction tier, 2026-09-12: a drag is a quarter-resolution
+preview, and the full render lands when it stops.** A mode-D walk at
+1080p is hundreds of milliseconds, and a drag that re-walks at every
+mouse event is a slideshow. Inside a 250 ms window measured from the
+LAST edit, the walk computes one pixel in each 2×2 block and the
+relight (or, for the plane, the walk itself) fills the block from it;
+when the edits stop, one full render lands. Measured at 384²: solid
+102 → 54 ms, planar 57 → 37, each including about 34 ms of harness
+floor, so the walks themselves are ~3.4× and ~6× cheaper.
+
+It is a stride, not a resize. The buffers stay full-size and the tail
+is untouched; the walk dispatches a quarter of the threads at
+`(2x, 2y)`, the band edges land on block boundaries so no block
+straddles two bands, and the readers index block-aligned. The stride
+is in BOTH render identities, so a preview's records never masquerade
+as a full pass's and turning the preview off is a cache miss that
+re-walks — which is also why the app has to keep the frame loop
+turning until the window lapses: the last preview frame settles, and
+nothing else would ask for the full one.
+
+**Shadows and occlusion stay on during the preview, deliberately.**
+They were the obvious extra ~1.75×, but they change what the picture
+IS, and the full render landing would pop — a hole going dark a
+quarter-second after you let go of the slider. A resolution change
+only sharpens. If the extra speed is wanted it is one condition in
+the walk, and it should be a choice rather than a default.
+
+The relight lights each of the block's four pixels with its OWN ray,
+so a solid preview is blockier rather than blocky: the surface is
+sampled at half rate, the shading is not.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
@@ -1871,13 +1902,11 @@ the commit.
    phase 3 record. A light-intensity edit is 36 ms against 163 for a
    walk at 512², and coloured lights, specular and fog are on the
    exact list.
-2. **Interaction tier.** While a drag is in progress render at half
-   resolution with shadows and occlusion off, refine when idle:
-   half res ×4, shadows ~×1.4, occlusion ~×1.25, about ×7 together —
-   the 1080p sponge from ~450 ms to ~65 during interaction. Plumbing
-   half-exists (chunk time target, the config manager's overwrite
-   window); needs a preview flag and render-small-then-upscale in the
-   tail. With item 1, a LIGHTING drag needs no tier at all.
+2. ~~**Interaction tier.**~~ Landed 2026-09-12 as a stride, not a
+   resize; see the phase 3 record. Shadows and occlusion stay on
+   during the preview so the full render does not pop; switching them
+   off would be one more condition in the walk, worth ~1.75×, and is
+   left as a choice rather than a default.
 3. **Shadow-only re-march.** With item 1 in place, a light DIRECTION
    change still re-walks everything; a third kernel that re-marches
    only the shadows from cached hit and normal would make that cost
