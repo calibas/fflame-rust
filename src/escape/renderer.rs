@@ -5968,9 +5968,23 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // shader that also binds group 1.
         if let Some(def) = super::ifs::get_ifs(&escape.formula) {
             let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
-            let key = format!("ifs|{}|{}", def.name, coloring.name);
+            // The beam is compiled in (see `assemble_ifs`), so it is
+            // part of the pipeline's identity. Eight values at most,
+            // and a panel that flips it recompiles once per value.
+            let beam = escape
+                .formula_params
+                .get("beam")
+                .copied()
+                .unwrap_or_else(|| {
+                    def.parameters
+                        .iter()
+                        .find(|p| p.name == "beam")
+                        .map_or(1.0, |p| p.default)
+                })
+                .clamp(1.0, assembler::IFS_MAX_BEAM as f32) as u32;
+            let key = format!("ifs|{}|{}|b{beam}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
-                let source = assembler::assemble_ifs(def, coloring);
+                let source = assembler::assemble_ifs(def, coloring, beam);
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),
                     source: ShaderSource::Wgsl(source.into()),

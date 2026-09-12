@@ -5121,7 +5121,7 @@ fn ifs_ao(p: vec3<f32>, n: vec3<f32>, reach: f32) -> f32 {
             let h = reach * 0.35 * f32(k);
             // How far the field lets the probe travel, against how far
             // it asked to. Open space gives 1, a wall gives 0.
-            let vis = clamp(ifs_distance_at(p + dir * h) / h, 0.0, 1.0);
+            let vis = clamp(ifs_distance_at(p + dir * h, h * 0.01) / h, 0.0, 1.0);
             open = open + vis * cosd;
             // What an unobstructed HALF-SPACE would have returned: a
             // probe at angle t from the normal is only h*cos(t) above
@@ -5194,7 +5194,7 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32)
         if (i >= max_steps || t > t_max) {
             break;
         }
-        let d = ifs_distance_at(p + light * t);
+        let d = ifs_distance_at(p + light * t, eps);
         if (d < eps) {
             return 0.0;
         }
@@ -5213,10 +5213,11 @@ fn ifs_normal(p: vec3<f32>, h: f32) -> vec3<f32> {
     let dx = vec3<f32>(h, 0.0, 0.0);
     let dy = vec3<f32>(0.0, h, 0.0);
     let dz = vec3<f32>(0.0, 0.0, h);
+    let e = h * 0.01;
     let n = vec3<f32>(
-        ifs_distance_at(p + dx) - ifs_distance_at(p - dx),
-        ifs_distance_at(p + dy) - ifs_distance_at(p - dy),
-        ifs_distance_at(p + dz) - ifs_distance_at(p - dz),
+        ifs_distance_at(p + dx, e) - ifs_distance_at(p - dx, e),
+        ifs_distance_at(p + dy, e) - ifs_distance_at(p - dy, e),
+        ifs_distance_at(p + dz, e) - ifs_distance_at(p - dz, e),
     );
     let len = length(n);
     if (!(len > 0.0)) {
@@ -5300,8 +5301,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 break;
             }
             let p = eye + dir * t;
-            d = ifs_distance_at(p);  // an offset from the target
-            // A pixel's width at this depth, and nothing else. The
+            // A pixel's width at this depth is both the hit tolerance
+            // and the precision the walk is asked for. The
             // floor here used to be 1e-7 -- a guard against an
             // absolute position's own f32 resolution, which was the
             // right scale while the marcher worked in absolute
@@ -5311,6 +5312,15 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // with the zoom. The remaining floor exists only so a
             // sample at t = 0 cannot give an epsilon of zero.
             let eps = max(px_at * t, 1e-30);
+            // The walk is asked for a HUNDREDTH of that. A pixel of
+            // slack in the distance is a pixel of slack in where the
+            // ray lands, and on structure that is itself a pixel
+            // across -- the sponge's pits at 512 -- that is a different
+            // face, a different normal, a different shade. Measured:
+            // at one pixel 2882 pixels changed by more than 24 of 765
+            // and 253 flipped between hit and miss; at a hundredth, 18
+            // and 2, which is f32 noise, for an extra 15% of the time.
+            d = ifs_distance_at(p, eps * 0.01);  // an offset from the target
             if (d < eps) {
                 hit = true;
                 break;
@@ -5471,16 +5481,34 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
 /// Assemble a mode-D distance shader: splice one distance function
 /// and one coloring into [`IFS_TEMPLATE`]. Same marker discipline as
 /// [`assemble`].
-pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef) -> String {
+/// The widest beam a mode-D shader may be compiled for, and the value
+/// the templates carry before [`assemble_ifs`] replaces it.
+pub const IFS_MAX_BEAM: u32 = 8;
+
+/// `beam` is COMPILED IN, not read at run time, and the reason is
+/// registers. The walk keeps two arrays of candidates, each candidate
+/// a dozen scalars, and those arrays live in registers because that is
+/// what a function-scope `var` is. Sized for the widest beam they cost
+/// the same at a beam of one -- where the walk never touches slot two
+/// -- and what they cost is occupancy. Measured on the sponge at 512²,
+/// which walks at beam one: 245 ms with the arrays sized for eight,
+/// 146 ms sized for one. Same picture to the byte, because nothing in
+/// the algorithm changes; only how many registers the compiler has to
+/// reserve for slots that stay empty.
+pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
     // The two templates share the walk's shape and all four
     // colourings; what differs is everything around the walk -- a
     // camera, a march, a normal and a shade.
     let template = if def.solid { IFS_3D_TEMPLATE } else { IFS_TEMPLATE };
+    let beam = beam.clamp(1, IFS_MAX_BEAM);
     let mut out = Vec::new();
     for line in template.lines() {
         match line.trim() {
             "//__IFS__" => out.push(def.wgsl.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            "const IFS_MAX_BEAM: u32 = 8u;" => {
+                out.push(format!("const IFS_MAX_BEAM: u32 = {beam}u;"))
+            }
             _ => out.push(line.to_string()),
         }
     }

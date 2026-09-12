@@ -1453,6 +1453,73 @@ the frame's edge but inside it — outside the frame is outside what the
 seeding promises — and requires it to read zero at spans from 8 down to
 1/16.
 
+**Performance, 2026-09-12: a solid render at 2.8× for the same
+pixels.** A review of where the time goes, with the two largest levers
+measured and pulled. The sponge at 512² with the shipped rig:
+419 ms → 150 ms. The shipped 1080p presets: the tetrahedron
+652 → 521 ms, the sponge 1180 → 623 ms *before* the second lever,
+which the 512² figure includes.
+
+**Where the time went.** Switching each part off in turn: shadows
+29%, occlusion 17%, the primary march and normal 54% — and within the
+march, `steps` is not a lever at all (96 → 32 changed 3%; the sphere
+trace converges in far fewer) while `levels` is the whole of it. A
+walk ran every level it was given, its only early exit being a
+candidate a trillion radii away.
+
+**1. The walk stops when the picture cannot see the rest.** Measured
+on the CPU: at 1080p home zoom, the sponge's distance is within one
+pixel of its level-40 value by **level 6**, at every distance from the
+set, against a default of 24. The reason is the bound's shape — it is
+a running maximum, and once a candidate has left the ball each further
+level can move it by at most about `σ_k·R`. So the walk takes the
+precision its caller needs and marks a candidate done when `σ_k·R`
+drops below it. The marcher's steps, the normal, the occlusion probes
+and the shadow rays each pass their own tolerance; the single
+evaluation at the hit point that feeds the colourings passes zero,
+because the level and the address are only known when a candidate
+escapes and stopping first would report it as interior.
+
+The tolerance that matters is the march's own, and it is a
+**hundredth** of a pixel rather than a pixel: a pixel of slack in the
+distance is a pixel of slack in where the ray lands, and on structure
+that is itself a pixel across — the sponge's pits at 512 — that is a
+different face and a different shade. Measured against the full-depth
+render: at one pixel 2 882 pixels changed by more than 24 of 765 and
+253 flipped between hit and miss; at a hundredth, 18 and 2, which is
+f32 noise, for 15% more time. The normal, occlusion and shadow
+tolerances are free — with only the march at full depth the picture
+was byte-identical. 419 → 245 ms.
+
+A consequence worth more than the speed: **`levels` is a ceiling now,
+not a setting.** The walk goes as deep as the pixel needs and no
+deeper, so a deep zoom no longer requires raising it by hand, and
+raising it costs nothing when the pixel does not ask.
+
+**2. The beam is compiled in.** The walk keeps two arrays of
+candidates, a dozen scalars each, and they are registers because that
+is what a function-scope `var` is. Sized for the widest beam, they
+cost the same at a beam of one — where the walk never touches slot
+two — and what they cost is occupancy. `assemble_ifs` takes the
+config's beam and substitutes the array bound; the pipeline is keyed
+on it. Same bytes out, because nothing in the algorithm changes.
+245 → 150 ms on the solid; the planar walk at beam one went from about
+16 ms over the harness floor to about 2.
+
+The deep-zoom gate now distinguishes what a precision change can touch
+from what it cannot: a handful of silhouette pixels may land on the
+other side of a hit against a full-depth reference — measured at one
+to five of 9 216 per zoom — and the tolerance INSIDE the surface is
+zero, because that is where a wrong link or a squared length shows.
+
+**Where this stops.** The early-exit criterion is measured on
+similarity maps (every shipped solid) and stated for them; for an
+anisotropic map, `σ_min` understates how fast the bound can still move,
+and nothing here has measured by how much. The planar walk is
+untouched — it produces all four quantities in one pass for the record
+cache, and an early exit would leave the level and address wrong for a
+later colouring switch.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
