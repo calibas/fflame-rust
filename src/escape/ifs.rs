@@ -3742,6 +3742,15 @@ mod gpu_tests {
                 // Every beam width too: each is its own compiled
                 // shader, and a width the walk has never been compiled
                 // at is one it may not compile at.
+                // And the solid relight pass, which is a third
+                // template with the same colouring spliced in.
+                if def.solid {
+                    let source = crate::escape::assembler::assemble_ifs_relight(coloring);
+                    let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(&format!("relight|{}", coloring.name)),
+                        source: wgpu::ShaderSource::Wgsl(source.into()),
+                    });
+                }
                 for beam in [1u32, 2, 8] {
                     let source = crate::escape::assembler::assemble_ifs(def, coloring, beam);
                     let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -4484,26 +4493,18 @@ mod gpu_tests {
         let path = crate::escape::diag::snapshot().path;
         assert_eq!(path, "recolor", "a colouring change stopped using the cache");
         let fresh_level = shot(None, 1.3, "ifs_level");
-        // Not byte-identity, and the reason is arithmetic rather than
-        // staleness: the fresh walk builds its lighting by summing a
-        // term per light, while the recolour multiplies the new albedo
-        // by the single factor the record carries. Both compute the
-        // same number and they round differently in the last place.
-        // What a STALE record looks like is nothing like that -- it is
-        // whole regions of the previous view, so the bound here is on
-        // both how many bytes may differ and by how much.
-        let worst = recoloured
-            .iter()
-            .zip(&fresh_level)
-            .map(|(a, b)| a.abs_diff(*b))
-            .max()
-            .unwrap_or(0);
+        // Byte-identity, again. It was relaxed to a last-place
+        // tolerance while a solid's record carried its lighting as one
+        // scalar (the walk summed a term per light, the recolour
+        // multiplied by the scalar, and the two rounded differently).
+        // Both paths end in the same relight pass over the same
+        // geometry now, so there is no second arithmetic route to
+        // round differently and nothing to tolerate.
         let differing = recoloured.iter().zip(&fresh_level).filter(|(a, b)| a != b).count();
-        assert!(
-            worst <= 1 && differing * 1000 < recoloured.len(),
+        assert_eq!(
+            differing, 0,
             "the cached recolour of a solid differs from a fresh walk in {differing} of \
-             {} bytes, worst by {worst} -- a last-place rounding difference is at most \
-             1, so this is stale records rather than arithmetic",
+             {} bytes -- stale records, or the walk and the relight disagree about the rig",
             recoloured.len(),
         );
 
@@ -5372,6 +5373,132 @@ mod gpu_tests {
         run("defaults at 256x256 (for the pixel scaling)", &|c| {
             c.escape.supersample = 1;
         });
+    }
+
+    /// A lighting change on a solid is a RELIGHT, and it is exact.
+    ///
+    /// Every input the rig applies at relight -- intensity, colour,
+    /// ambient, diffuse, specular, shininess, occlusion strength,
+    /// shadow strength, fog -- must hit the cache and come out
+    /// byte-identical to a fresh walk, because both end in the same
+    /// relight pass over the same geometry. That includes the three
+    /// the old scalar cache had to refuse: a coloured light, a
+    /// specular, a fog.
+    ///
+    /// And every input the WALK reads -- a light's direction, whether
+    /// it is on, whether shadows are traced at all -- must miss the
+    /// cache, re-walk, and still match a fresh render. The two lists
+    /// are the whole design, so both are asserted.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_lighting_change_on_a_solid_is_a_relight_and_it_is_exact() {
+        let (device, queue) = device();
+        let shot = |engines: Option<&mut crate::renderer::RenderEngines>,
+                    f: &dyn Fn(&mut crate::config::FractalConfig)|
+         -> Vec<u8> {
+            let mut c = config_for(menger_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 14.0);
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.lights[0].enabled = true;
+            c.solid_shading.lights[1].enabled = true;
+            f(&mut c);
+            let mut job = crate::renderer::RenderJob::new(&c, 160, 160);
+            if let Some(e) = engines {
+                job = job.with_engines(e);
+            }
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let diff = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+
+        let mut engines = crate::renderer::RenderEngines::default();
+        let base = shot(Some(&mut engines), &|_| {});
+
+        // Relight-only inputs: cache hit, exact.
+        let relights: Vec<(&str, Box<dyn Fn(&mut crate::config::FractalConfig)>)> = vec![
+            ("intensity", Box::new(|c| c.solid_shading.lights[0].intensity = 1.7)),
+            ("a coloured light", Box::new(|c| c.solid_shading.lights[1].color = [1.0, 0.3, 0.2])),
+            ("ambient", Box::new(|c| c.solid_shading.ambient = 0.5)),
+            ("diffuse", Box::new(|c| c.solid_shading.diffuse = 0.4)),
+            ("specular", Box::new(|c| { c.solid_shading.specular = 0.6; c.solid_shading.shininess = 12.0; })),
+            ("occlusion strength", Box::new(|c| c.solid_shading.ssao_strength = 0.2)),
+            ("shadow strength", Box::new(|c| { c.escape.formula_params.insert("shadow".to_string(), 0.25); })),
+            ("fog", Box::new(|c| { c.fog_strength = 0.8; c.fog_start = 0.2; c.background_color = [0.1, 0.2, 0.4]; })),
+        ];
+        for (name, f) in &relights {
+            let warm = shot(Some(&mut engines), f.as_ref());
+            let path = crate::escape::diag::snapshot().path;
+            assert_eq!(path, "recolor", "changing {name} did not take the cache");
+            let fresh = shot(None, f.as_ref());
+            let d = diff(&warm, &fresh);
+            assert_eq!(
+                d, 0,
+                "changing {name} through the cache differs from a fresh render in {d} bytes"
+            );
+            assert!(diff(&warm, &base) > 0, "changing {name} changed nothing");
+        }
+
+        // Geometry inputs: cache miss, re-walk, still exact.
+        let walks: Vec<(&str, Box<dyn Fn(&mut crate::config::FractalConfig)>)> = vec![
+            ("a light's direction", Box::new(|c| c.solid_shading.lights[0].azimuth = -60.0)),
+            ("a light switched off", Box::new(|c| c.solid_shading.lights[1].enabled = false)),
+            ("shadows off entirely", Box::new(|c| { c.escape.formula_params.insert("shadow".to_string(), 0.0); })),
+            ("occlusion reach", Box::new(|c| { c.escape.formula_params.insert("occlusion".to_string(), 0.3); })),
+        ];
+        for (name, f) in &walks {
+            let warm = shot(Some(&mut engines), f.as_ref());
+            let path = crate::escape::diag::snapshot().path;
+            assert_ne!(path, "recolor", "changing {name} took the cache, but the walk reads it");
+            let fresh = shot(None, f.as_ref());
+            let d = diff(&warm, &fresh);
+            assert_eq!(d, 0, "changing {name} on a warm renderer differs from fresh in {d} bytes");
+        }
+    }
+
+    /// What a lighting edit costs, against the walk it replaces.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn what_a_lighting_change_costs_with_the_geometry_cache() {
+        let (device, queue) = device();
+        let mut c = config_for(menger_flame());
+        c.escape.formula = "ifs_flame_3d".to_string();
+        c.escape.coloring = "ifs_address".to_string();
+        c.escape.cam_yaw = 0.9;
+        c.escape.coloring_params.insert("reach".to_string(), 0.0);
+        c.solid_shading.shading_strength = 1.0;
+        c.solid_shading.lights[0].enabled = true;
+        let mut engines = crate::renderer::RenderEngines::default();
+        let mut go = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| {
+            let job = crate::renderer::RenderJob::new(c, 512, 512).with_engines(engines);
+            let t0 = web_time::Instant::now();
+            let _ = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            (t0.elapsed().as_secs_f64() * 1000.0, crate::escape::diag::snapshot().path)
+        };
+        let _ = go(&c, &mut engines);
+        let (walk_ms, walk_path) = go(&c, &mut engines);
+        c.solid_shading.lights[0].intensity = 1.5;
+        let (relight_ms, relight_path) = go(&c, &mut engines);
+        c.solid_shading.lights[0].azimuth = 80.0;
+        let (rewalk_ms, rewalk_path) = go(&c, &mut engines);
+        println!("  a repeat render      {walk_ms:>8.1} ms  ({walk_path})");
+        println!("  light intensity      {relight_ms:>8.1} ms  ({relight_path})");
+        println!("  light direction      {rewalk_ms:>8.1} ms  ({rewalk_path})");
     }
 
     /// What the rig costs, per light.

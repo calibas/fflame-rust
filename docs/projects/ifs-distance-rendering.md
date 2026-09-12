@@ -1520,6 +1520,66 @@ untouched — it produces all four quantities in one pass for the record
 cache, and an early exit would leave the level and address wrong for a
 later colouring switch.
 
+**The geometry cache, 2026-09-12: a lighting edit is a relight, not a
+walk.** The solid walk no longer shades. It writes two records a pixel
+— the four colouring quantities, as before, and sixteen bytes of what
+it found at the surface: the normal and raw occlusion as f16, the four
+raw per-light shadow terms as unorm8, the hit depth as f32 — and a
+**relight pass** owns the picture. That pass is the recolor kernel
+with the rig spliced in, and it runs over the whole frame after every
+band of a walk and again on any change that is not a geometry input.
+It contains no walk, so at 512² it costs about 2 ms over the harness
+floor against 150 for the walk it replaces; measured on a warm
+renderer, a light-intensity edit is 36 ms and a light-direction edit
+163.
+
+**What is geometry and what is not** — the whole design is these two
+lists. The walk reads a light's direction and whether it is on (they
+decide which shadow rays are traced), whether shadows are traced at
+all, the sharpness, and the occlusion reach; those are in both keys.
+Intensity, colour, ambient, diffuse, specular, shininess, occlusion
+strength, shadow strength, fog, the palette and the colouring are
+applied by the relight and are in neither. The gate asserts both
+lists: each relight-only input must hit the cache and come out
+byte-identical to a fresh walk, and each geometry input must miss,
+re-walk, and still match.
+
+Three consequences beyond the speed:
+
+- **The scalar cache is gone and so is its exception.** A record
+  carried the lighting as one number, exact only while the lighting
+  was a multiplier, so a coloured light, a specular or a fog refused
+  the cache. Now the cache holds what the lighting is COMPUTED from,
+  and all three are on the exact list.
+- **A light edit part-way through a banded pass cannot stripe the
+  frame.** Every band relights everything walked so far with the
+  lighting of now; there is no band with old lighting baked in.
+- **Rows the walk has not reached read as absent**, because the
+  geometry buffer is cleared on a pass restart and a zero depth means
+  no surface. That is what lets the relight run over the whole frame
+  rather than needing a second uniform for a row range — which a
+  single params buffer written once per submission could not carry
+  anyway.
+
+The rig is one text, `IFS_RIG`, spliced into the walk template and the
+relight template at the same marker. That they cannot drift is the
+basis of the cache being exact, and the factoring caught a drift on
+its first use: the rewritten rig had dropped `ao` from the direct
+term, and the before/after comparison showed it as 9% of bytes
+differing by up to 69. With it restored, 0.33% differ by exactly one —
+the f16 and unorm8 packing, at the last place.
+
+One more key fault surfaced by the gate: the walk's parameter key was
+built from whatever the map happened to hold, so a parameter absent
+(the default) and the same parameter set explicitly to its default
+were different keys, and the first touch of any slider re-walked. It
+is built from the def's parameter list with defaults filled in now.
+
+The recolor path's byte-identity test on solids had been relaxed to a
+last-place tolerance because the old scalar multiplied where the walk
+summed; with both paths ending in the same relight pass, the
+comparison is byte-identical again.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
@@ -1800,3 +1860,49 @@ hypertexture. The sphere-tracing half of the attribution was right and
 the linear-fractal half was invented. `Hart's inverse iteration`
 appeared in three source files as well and is now named for what it
 is.
+
+## 10. Performance backlog
+
+From the 2026-09-12 review, ranked by measured or estimated gain
+against effort. Items are struck through here when they land, with
+the commit.
+
+1. ~~**Geometry cache and relight pass.**~~ Landed 2026-09-12; see the
+   phase 3 record. A light-intensity edit is 36 ms against 163 for a
+   walk at 512², and coloured lights, specular and fog are on the
+   exact list.
+2. **Interaction tier.** While a drag is in progress render at half
+   resolution with shadows and occlusion off, refine when idle:
+   half res ×4, shadows ~×1.4, occlusion ~×1.25, about ×7 together —
+   the 1080p sponge from ~450 ms to ~65 during interaction. Plumbing
+   half-exists (chunk time target, the config manager's overwrite
+   window); needs a preview flag and render-small-then-upscale in the
+   tail. With item 1, a LIGHTING drag needs no tier at all.
+3. **Shadow-only re-march.** With item 1 in place, a light DIRECTION
+   change still re-walks everything; a third kernel that re-marches
+   only the shadows from cached hit and normal would make that cost
+   ~25% per light instead. Needs the walk spliced into a banded
+   relight-like pass.
+4. **Planar beam default.** Beam 8 is 128 ms against 37 at beam 1 on
+   512²; for tiling sets beam 1 is exact. Measure the D9 overlapping
+   cases at 2 and 4 and pick the smallest that keeps them, or
+   auto-detect: pairwise-disjoint image balls ⇒ beam 1 is safe.
+5. **Chunk budget model.** The solid budget counts two marches when
+   shadows are on regardless of light count, and neither the
+   occlusion probes nor the normal. With four lights it
+   under-estimates about 2×. Harmless now that walks self-limit, but
+   the model is what protects against the watchdog.
+6. **Deeper 3D zoom.** The remaining wall is f32's exponent on the
+   delta (~2¹²⁶); a global 2ᵉ scale applied with `ldexp` lifts it to
+   the chain cap — ~2²⁵⁰ at σ=½, ~2⁴⁰⁰ at σ=⅓. Only matters past 2⁸⁰.
+7. **Tetrahedron normals.** Six walks to four per hit. Trivial, ~5% of
+   the primary cost.
+8. **Address colouring at depth.** Its digit scale `pow(1/n, level)`
+   underflows f32 past about 2⁶⁰ and the colouring flattens.
+   Cosmetic; either ldexp the scale or document the limit in the
+   tooltip.
+
+Not on the list, and why: the planar walk has no early exit because it
+produces all four quantities in one pass for the record cache, and
+stopping early would leave the level and address wrong for a later
+colouring switch; and `steps` is not a lever (96 → 32 changed 3%).
