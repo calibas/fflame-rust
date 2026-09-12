@@ -542,7 +542,21 @@ struct IfsCand3 {
 // each part. What differs is the arithmetic and that the distance is
 // in WORLD units here rather than pixels: a marcher steps by it, so
 // it has to be a length in the space the ray is crossing.
-fn ifs_walk3(delta: vec3<f32>) -> IfsResult {
+// `eps` is the precision the CALLER needs of the distance, in world
+// units, and 0 means all of it.
+//
+// A candidate's bound is a running maximum, and once it has left the
+// ball each further level can move that maximum by at most about
+// sigma_k * R -- the candidate's remaining contraction times the ball.
+// When that is below what the caller can show, the rest of the walk is
+// work the picture cannot see. Measured on the sponge at 1080p: the
+// answer is within a pixel by level SIX, against a default of 24, at
+// every distance from the set. The marcher's steps, the normal, the
+// occlusion probes and the shadow rays all pass their own tolerance;
+// the one evaluation at the hit point that feeds the COLOURINGS passes
+// zero, because the level and the address are only known when a
+// candidate escapes and stopping first would report it as interior.
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     let c = ifs_ball_centre();
     let radius = ifs_radius();
     let n = ifs_count();
@@ -628,7 +642,9 @@ fn ifs_walk3(delta: vec3<f32>) -> IfsResult {
                     base_level + f32(k) + ifs_residual(r, radius, live[ci].last_sigma);
                 live[ci].point = live[ci].q;
             }
-            if (!(r < far)) {
+            // Done when past FAR, or when this candidate can no longer
+            // move the answer by what the caller asked for.
+            if (!(r < far) || live[ci].sigma * radius < eps) {
                 live[ci].flags = live[ci].flags | 2u;
             } else {
                 all_done = false;
@@ -742,13 +758,15 @@ fn ifs_walk3(delta: vec3<f32>) -> IfsResult {
 // which shrink with the zoom, so the offset keeps its relative
 // precision where an absolute position would have spent it all on
 // leading digits that are the same for the whole frame.
-fn ifs_distance_at(delta: vec3<f32>) -> f32 {
-    return ifs_walk3(delta).distance;
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
 }
 
-// What the marcher colours with, at the offset it stopped at.
+// What the marcher colours with, at the offset it stopped at. Full
+// depth: the colourings want the level and the address, which are only
+// known once a candidate escapes.
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
-    return ifs_walk3(delta);
+    return ifs_walk3(delta, 0.0);
 }
 "#,
 };
@@ -2675,6 +2693,65 @@ mod tests {
         );
     }
 
+    /// How many levels a walk actually NEEDS before its answer stops
+    /// changing at pixel precision.
+    ///
+    /// The walk runs every level it is given -- its only early exit is
+    /// a candidate a trillion radii away -- so this asks, for points at
+    /// a range of distances from the sponge, at which level the running
+    /// bound gets within one pixel of where it will finish. Everything
+    /// past that level is work the picture cannot show.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn how_many_levels_a_walk_actually_needs() {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&gpu_tests::menger_flame(), &guard)
+            .expect("qualifies");
+        drop(guard);
+        let r = ifs3.ball.radius;
+        // A 1080p pixel at the home zoom, in world units.
+        let px = 2.0 * (0.35f64).tan() * (3.2 * r) / 1080.0;
+
+        let mut rng = 12345u64;
+        let mut next = || {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((rng >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+
+        println!("  px = {px:.2e}   (levels needed = first level within one px of the level-40 answer)");
+        println!("  distance band      samples   mean needed   p90   max   (of 40)");
+        for &(lo, hi) in &[(0.0f64, 0.01), (0.01, 0.05), (0.05, 0.2), (0.2, 0.5), (0.5, 1.0)] {
+            let mut needed = Vec::new();
+            let mut tries = 0;
+            while needed.len() < 400 && tries < 200_000 {
+                tries += 1;
+                let p = [next() * 1.4 - 0.2, next() * 1.4 - 0.2, next() * 1.4 - 0.2];
+                let full = crate::scene::ifs_estimate::estimate(&ifs3, p, 40, 1).distance;
+                if full < lo || full >= hi {
+                    continue;
+                }
+                let mut need = 40u32;
+                for lv in 1..=40u32 {
+                    let d = crate::scene::ifs_estimate::estimate(&ifs3, p, lv, 1).distance;
+                    if (full - d).abs() <= px {
+                        need = lv;
+                        break;
+                    }
+                }
+                needed.push(need);
+            }
+            needed.sort_unstable();
+            let n = needed.len().max(1);
+            let mean = needed.iter().map(|&x| x as f64).sum::<f64>() / n as f64;
+            println!(
+                "  [{lo:>4.2}, {hi:<4.2})       {:>5}     {mean:>6.1}      {:>3}   {:>3}",
+                needed.len(),
+                needed.get(n * 9 / 10).copied().unwrap_or(0),
+                needed.last().copied().unwrap_or(0)
+            );
+        }
+    }
+
     /// A deep zoom must hold a centre f64 cannot express.
     ///
     /// The earlier gates all centred somewhere exactly representable —
@@ -2863,7 +2940,7 @@ mod tests {
         assert_eq!(std::mem::offset_of!(IfsMap3Gpu, extra), 48);
         // And no vec3 in the shader's declaration either, which is the
         // half a size assertion cannot see.
-        let src = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_ADDRESS);
+        let src = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_ADDRESS, 8);
         let start = src.find("struct IfsMap3Gpu {").expect("declared");
         let decl = &src[start..start + src[start..].find("
 }").expect("closes")];
@@ -3643,7 +3720,7 @@ mod gpu_tests {
             let end = rest.find("\n}").expect("closing brace") + 2;
             rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
         };
-        let template = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_TRAP);
+        let template = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_TRAP, 8);
         assert_eq!(
             body(utilities),
             body(&template),
@@ -3662,11 +3739,16 @@ mod gpu_tests {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         for def in IFS_DEFS {
             for coloring in IFS_COLORINGS {
-                let source = crate::escape::assembler::assemble_ifs(def, coloring);
-                let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(&format!("{}|{}", def.name, coloring.name)),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
+                // Every beam width too: each is its own compiled
+                // shader, and a width the walk has never been compiled
+                // at is one it may not compile at.
+                for beam in [1u32, 2, 8] {
+                    let source = crate::escape::assembler::assemble_ifs(def, coloring, beam);
+                    let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(&format!("{}|{}|b{beam}", def.name, coloring.name)),
+                        source: wgpu::ShaderSource::Wgsl(source.into()),
+                    });
+                }
             }
         }
         let err = pollster::block_on(scope.pop());
@@ -3823,8 +3905,8 @@ mod gpu_tests {
     /// colours, with no validation error to point at.
     #[test]
     fn both_mode_d_templates_declare_the_same_record() {
-        let walk = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_DISTANCE);
-        let solid = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_DISTANCE);
+        let walk = crate::escape::assembler::assemble_ifs(&IFS_FLAME, &IFS_DISTANCE, 8);
+        let solid = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_DISTANCE, 8);
         let recolor = crate::escape::assembler::assemble_ifs_recolor(&IFS_DISTANCE);
         let decl = |src: &str| -> String {
             let start = src.find("struct IfsRecord {").expect("IfsRecord declared");
@@ -4828,6 +4910,7 @@ mod gpu_tests {
         // the number it happens at is worth watching.
         const GATED_TO: f64 = 80.0;
         let mut worst_gated = 100.0f64;
+        let mut worst_interior = 0usize;
         for &zoom in &[0.0f64, 16.0, 32.0, 48.0, 64.0, 80.0, 96.0, 112.0, 140.0] {
             let levels = (zoom as u32 + 24).min(256);
             let mut c = config_for(flame.clone());
@@ -4978,9 +5061,6 @@ mod gpu_tests {
             }
             let total = (N * N) as usize;
             let pct = 100.0 * agree as f64 / total as f64;
-            if zoom <= GATED_TO {
-                worst_gated = worst_gated.min(pct);
-            }
             // Where the disagreement sits. A precision fault shows at
             // the SILHOUETTE, where a pixel is a hair from the
             // surface either way; a structural fault is spread through
@@ -5008,16 +5088,34 @@ mod gpu_tests {
             println!(
                 "        disagreement: {edge_dis} at the silhouette, {interior_dis} inside"
             );
+            if zoom <= GATED_TO {
+                worst_gated = worst_gated.min(pct);
+                worst_interior = worst_interior.max(interior_dis);
+            }
             println!(
                 "  2^{zoom:<4} {levels:<7} {pct:>5.1}%   ({hits} hit / {} miss)",
                 total - hits
             );
         }
+        // Two bounds, because they catch different things. The
+        // reference walks at full depth and the render walks to a
+        // hundredth of a pixel, so a handful of SILHOUETTE pixels may
+        // land on the other side of a hit -- measured at one to five
+        // of 9216 per zoom. A precision fault shows there. A
+        // structural fault -- a wrong link, a squared length, an
+        // absolute floor -- shows INSIDE the surface, and there the
+        // tolerance is zero.
         assert!(
-            worst_gated >= 100.0,
+            worst_interior == 0,
+            "a solid render disagrees with the reference INSIDE the surface at \
+             {worst_interior} pixels somewhere up to 2^{GATED_TO} -- that is structural, \
+             not precision: the seed chain, the link choice or an epsilon regressed"
+        );
+        assert!(
+            worst_gated >= 99.8,
             "a solid render disagrees with the reference at {worst_gated:.1}% somewhere \
-             up to 2^{GATED_TO} -- if this DROPPED, the seed chain regressed; if you \
-             raised the ceiling, raise GATED_TO and say so"
+             up to 2^{GATED_TO} -- more than a hundredth of a pixel at the silhouette \
+             accounts for; if you raised the ceiling, raise GATED_TO and say so"
         );
     }
 
@@ -5214,6 +5312,66 @@ mod gpu_tests {
                  the shadow is keyed to the pixel rather than to the geometry"
             );
         }
+    }
+
+    /// Where a solid render's time goes, by switching each part off.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn where_a_solid_renders_time_goes() {
+        let (device, queue) = device();
+        let run = |name: &str, f: &dyn Fn(&mut crate::config::FractalConfig)| {
+            let mut c = config_for(menger_flame());
+            c.escape.formula = "ifs_flame_3d".to_string();
+            c.escape.coloring = "ifs_address".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.coloring_params.insert("reach".to_string(), 0.0);
+            c.solid_shading.shading_strength = 1.0;
+            c.solid_shading.lights[0].enabled = true;
+            f(&mut c);
+            let once = || {
+                let job = crate::renderer::RenderJob::new(&c, 512, 512);
+                pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render")
+                .rgba_data
+            };
+            let _ = once();
+            let t0 = web_time::Instant::now();
+            let _ = once();
+            let _ = once();
+            let ms = t0.elapsed().as_secs_f64() * 500.0;
+            println!("  {name:<44} {ms:>8.1} ms");
+        };
+        run("defaults (levels 24, steps 96, ao, shadow .7)", &|_| {});
+        run("shadow off", &|c| {
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+        });
+        run("shadow off, occlusion off", &|c| {
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+            c.escape.formula_params.insert("occlusion".to_string(), 0.0);
+        });
+        run("shadow off, occlusion off, levels 12", &|c| {
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+            c.escape.formula_params.insert("occlusion".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 12.0);
+        });
+        run("shadow off, occlusion off, levels 6", &|c| {
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+            c.escape.formula_params.insert("occlusion".to_string(), 0.0);
+            c.escape.formula_params.insert("levels".to_string(), 6.0);
+        });
+        run("shadow off, occlusion off, steps 32", &|c| {
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+            c.escape.formula_params.insert("occlusion".to_string(), 0.0);
+            c.escape.formula_params.insert("steps".to_string(), 32.0);
+        });
+        run("defaults at 256x256 (for the pixel scaling)", &|c| {
+            c.escape.supersample = 1;
+        });
     }
 
     /// What the rig costs, per light.
