@@ -4306,6 +4306,11 @@ mod gpu_tests {
         fl
     }
 
+    /// The planar gasket, for tests that compare the two walks.
+    pub(super) fn gpu_tests_sierpinski() -> Flame {
+        sierpinski_flame()
+    }
+
     /// Four half-scale maps to alternating cube corners.
     pub(super) fn tetrahedron_flame() -> Flame {
         solid_flame(vec![
@@ -5499,6 +5504,117 @@ mod gpu_tests {
         println!("  a repeat render      {walk_ms:>8.1} ms  ({walk_path})");
         println!("  light intensity      {relight_ms:>8.1} ms  ({relight_path})");
         println!("  light direction      {rewalk_ms:>8.1} ms  ({rewalk_path})");
+    }
+
+    /// The interaction preview: a quarter of the walks, and no trace
+    /// of it once the full render lands.
+    ///
+    /// Three claims. A preview is materially cheaper than a full
+    /// render of the same frame -- measured, because "stride 2" could
+    /// dispatch a quarter of the threads and still be paid for
+    /// somewhere else. A preview's pixels come from the block's one
+    /// walk, so the picture it draws is the full picture at a coarser
+    /// grid rather than a different picture. And a full render that
+    /// FOLLOWS a preview on the same renderer is byte-identical to one
+    /// that never previewed: the preview's records must not
+    /// masquerade as a full pass's, which is what putting the stride
+    /// in both keys is for.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_preview_is_a_quarter_of_the_walks_and_leaves_no_trace() {
+        let (device, queue) = device();
+        for (name, flame, formula) in [
+            ("solid", menger_flame(), "ifs_flame_3d"),
+            ("planar", gpu_tests_sierpinski(), "ifs_flame"),
+        ] {
+            let shot = |engines: &mut crate::renderer::RenderEngines, preview: bool| -> (Vec<u8>, f64) {
+                let mut c = config_for(flame.clone());
+                c.escape.formula = formula.to_string();
+                c.escape.coloring = "ifs_address".to_string();
+                c.escape.cam_yaw = 0.9;
+                c.escape.coloring_params.insert("reach".to_string(), 0.0);
+                c.solid_shading.shading_strength = 1.0;
+                c.solid_shading.lights[0].enabled = true;
+                if let Some(e) = engines.escape.as_mut() {
+                    e.set_preview(preview);
+                }
+                let job = crate::renderer::RenderJob::new(&c, 384, 384).with_engines(engines);
+                let t0 = web_time::Instant::now();
+                let px = pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render")
+                .rgba_data;
+                (px, t0.elapsed().as_secs_f64() * 1000.0)
+            };
+
+            // Each timed render must be a WALK, not a cache hit: a
+            // repeat of the same frame on a warm renderer takes the
+            // relight path in a few milliseconds and would make any
+            // preview look slow. So the timed renders alternate --
+            // preview, full, preview, full -- and each is a miss on
+            // the other's records. The first pair also pays the
+            // pipeline compiles and is discarded.
+            let mut engines = crate::renderer::RenderEngines::default();
+            let (_, _) = shot(&mut engines, true);
+            let (_, _) = shot(&mut engines, false);
+            let (fast, fast_ms) = shot(&mut engines, true);
+            let (full, full_ms) = shot(&mut engines, false);
+            let (_, fast2_ms) = shot(&mut engines, true);
+            let (again, _) = shot(&mut engines, false);
+            let fast_ms = fast_ms.min(fast2_ms);
+            println!("  {name:<7} full {full_ms:>7.1} ms   preview {fast_ms:>7.1} ms");
+
+            // Cheaper. The floor (tonemap, readback, the relight) is
+            // shared, so the ratio is well under four; but a preview
+            // that cost as much as a full render would mean the stride
+            // reached the dispatch and nothing else.
+            assert!(
+                fast_ms * 1.5 < full_ms,
+                "{name}: the preview ({fast_ms:.0} ms) is not materially cheaper than the \
+                 full render ({full_ms:.0} ms)"
+            );
+
+            // Blocky, not different: sample the preview's 2x2 blocks
+            // against the full render's mean over the same block. Most
+            // blocks must agree closely -- edges legitimately differ.
+            let lum = |p: &[u8], x: usize, y: usize| {
+                let i = (y * 384 + x) * 4;
+                p[i] as f64 + p[i + 1] as f64 + p[i + 2] as f64
+            };
+            let mut close = 0usize;
+            let mut total = 0usize;
+            for by in (0..384).step_by(2) {
+                for bx in (0..384).step_by(2) {
+                    let mean_full = (lum(&full, bx, by) + lum(&full, bx + 1, by)
+                        + lum(&full, bx, by + 1) + lum(&full, bx + 1, by + 1)) / 4.0;
+                    let mean_fast = (lum(&fast, bx, by) + lum(&fast, bx + 1, by)
+                        + lum(&fast, bx, by + 1) + lum(&fast, bx + 1, by + 1)) / 4.0;
+                    if mean_full > 24.0 || mean_fast > 24.0 {
+                        total += 1;
+                        if (mean_full - mean_fast).abs() < 60.0 {
+                            close += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                close * 10 > total * 8,
+                "{name}: only {close} of {total} lit blocks agree between the preview and \
+                 the full render -- the preview is drawing something else"
+            );
+
+            // No trace.
+            let differing = again.iter().zip(&full).filter(|(a, b)| a != b).count();
+            assert_eq!(
+                differing, 0,
+                "{name}: a full render after a preview differs from one that never previewed \
+                 in {differing} bytes -- the preview's records leaked into the full pass"
+            );
+        }
     }
 
     /// What the rig costs, per light.

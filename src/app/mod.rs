@@ -394,6 +394,15 @@ pub(super) enum UrlLoadedData {
     },
 }
 
+/// How long after the last edit a mode-D render stays a preview.
+///
+/// Long enough that a drag never sees a full render between two of
+/// its own events, short enough that the full picture is there before
+/// the eye asks for it. The coalescing window in the config manager is
+/// 500 ms; this is deliberately shorter, because that one is about
+/// UNDO granularity and this one is about what is on screen.
+const ESCAPE_INTERACTION_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
+
 pub struct App {
     // Window reference (needed for fullscreen toggle)
     pub(super) window: Arc<Window>,
@@ -414,6 +423,11 @@ pub struct App {
     /// the escape pass (escape params, palette, structural loads).
     /// Starts true so the first escape frame always renders.
     pub(super) escape_dirty: bool,
+    /// When the user last EDITED something the escape pass renders.
+    /// For the interaction window: within it a mode-D render is a
+    /// quarter-resolution preview, after it a full one. See
+    /// `ESCAPE_INTERACTION_WINDOW`.
+    pub(super) escape_last_edit: Option<web_time::Instant>,
 
     /// The simulation's grid and step state. Lazily created on first
     /// use so a flame session never allocates it.
@@ -799,6 +813,7 @@ impl App {
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
             escape_dirty: true,
+            escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
             // Runs on entry: a simulation that sits still looks broken,
@@ -2794,6 +2809,28 @@ impl App {
                     ) {
                         self.escape_dirty = true;
                     }
+                }
+                // The interaction window. A mode-D walk at 1080p is
+                // hundreds of milliseconds; a drag that re-walks at
+                // every mouse event is a slideshow. Inside the window
+                // the render is a quarter-resolution preview -- same
+                // lighting, same look, blockier -- and when the edits
+                // stop, one full render lands. The window is measured
+                // from the LAST edit, so a drag stays in preview for
+                // as long as it lasts and the full render arrives a
+                // quarter-second after it ends.
+                let preview = self
+                    .escape_last_edit
+                    .is_some_and(|t| t.elapsed() < ESCAPE_INTERACTION_WINDOW);
+                if escape.set_preview(preview) {
+                    // The last preview settled; nothing else would
+                    // trigger the full render.
+                    self.escape_dirty = true;
+                }
+                if preview {
+                    // Keep the loop turning until the window lapses,
+                    // or the full render never gets asked for.
+                    self.window.request_redraw();
                 }
                 if self.escape_dirty {
                     let settled = escape.render(

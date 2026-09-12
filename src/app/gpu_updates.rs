@@ -399,6 +399,10 @@ impl App {
             || actions.reset_accumulation
         {
             self.escape_dirty = true;
+            // An EDIT, as opposed to the other reasons the pass
+            // re-runs (a resize, a mode switch): this is what opens
+            // the interaction window.
+            self.escape_last_edit = Some(web_time::Instant::now());
         }
 
         // Simulation: the three actions differ in how much of the run

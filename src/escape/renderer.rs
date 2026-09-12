@@ -495,7 +495,12 @@ struct EscapeParamsGpu {
     /// 1 = the relief pass slopes the WRAPPED palette coordinate
     /// rather than the coloring's raw value (`ShadingField::Banded`).
     shade_flags: u32,
-    _pad_shade: [u32; 3],
+    /// Mode D's interaction stride: 1 renders every pixel, 2 renders
+    /// one pixel in each 2×2 block and the relight (or the planar
+    /// walk) fills the block from it. Occupies a padding word, so the
+    /// layout is unchanged. See [`EscapeRenderer::set_preview`].
+    stride: u32,
+    _pad_shade: [u32; 2],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
@@ -661,6 +666,10 @@ pub struct EscapeRenderer {
     /// run over rows the walk has not reached yet.
     ifs_geom_buffer: Buffer,
     ifs_geom_px: u32,
+    /// Interaction preview (mode D): render one pixel in each 2×2
+    /// block while the user is still moving something, every pixel
+    /// once they stop. See [`Self::set_preview`].
+    preview: bool,
     /// The analysed flame, or `None` when the loaded one does not
     /// qualify (or mode D is not active). A mode-D render with no maps
     /// draws nothing rather than garbage.
@@ -1519,6 +1528,7 @@ impl EscapeRenderer {
             ifs_chain_capacity: 0,
             ifs_geom_buffer,
             ifs_geom_px: 0,
+            preview: false,
             ifs: None,
             ifs_uploaded: None,
             pipelines: HashMap::new(),
@@ -3013,7 +3023,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the escape config.
         if super::ifs::get_ifs(&escape.formula).is_some() {
             return format!(
-                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|{}|{}|{}",
+                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}",
                 escape.formula,
                 Self::walk_params_key(escape),
                 escape.center_re,
@@ -3022,6 +3032,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 escape.rotation,
                 self.width,
                 self.height,
+                self.stride(escape),
                 self.ifs_token,
                 camera_key(escape),
                 // A light is an input to the walk's PICTURE, and the
@@ -3279,9 +3290,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             )
         }
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
+            "{}|{}|s{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
             escape.formula,
             Self::walk_params_key(escape),
+            self.stride(escape),
             escape.coloring,
             escape.center_re,
             escape.center_im,
@@ -3685,6 +3697,39 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             })
             .collect::<Vec<_>>()
             .join(",")
+    }
+
+    /// Interaction preview: while the user is still dragging, render
+    /// one pixel in each 2×2 block and fill the block from it.
+    ///
+    /// A quarter of the walks for the same frame, with the same
+    /// lighting and the same look -- a blockier one, for as long as
+    /// the drag lasts. Shadows and occlusion are NOT switched off here
+    /// on purpose: they change what the picture IS, so the full render
+    /// landing would pop, where a resolution change only sharpens. The
+    /// stride is part of both render identities, so the preview's
+    /// records never masquerade as a full pass's, and turning the
+    /// preview off is a miss that re-walks at full resolution.
+    ///
+    /// Returns whether it changed, so the caller can mark the frame
+    /// dirty: the last preview frame settled, and nothing else would
+    /// trigger the full one.
+    pub fn set_preview(&mut self, on: bool) -> bool {
+        if self.preview == on {
+            return false;
+        }
+        self.preview = on;
+        true
+    }
+
+    /// The stride this render uses: 2 in preview for a mode-D formula,
+    /// 1 otherwise. Mode A and mode B are untouched.
+    fn stride(&self, escape: &EscapeConfig) -> u32 {
+        if self.preview && super::ifs::get_ifs(&escape.formula).is_some() {
+            2
+        } else {
+            1
+        }
     }
 
     /// Size the geometry cache to the frame, and say whether the frame
@@ -6346,7 +6391,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             tile_y0: 0,
             damping: [escape.damping_re, escape.damping_im],
             shade_flags: escape.shading.field.to_gpu(),
-            _pad_shade: [0; 3],
+            stride: self.stride(escape),
+            _pad_shade: [0; 2],
             fparams,
             cparams,
             fdata,
@@ -6807,7 +6853,15 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 }
             }
         }
-        let rows = self.direct_rows_per_dispatch(escape);
+        // A band of `rows` costs a quarter at stride 2, so it may be
+        // four times as tall; and its edges land on block boundaries,
+        // or a block straddling two bands would be walked by neither.
+        let stride = self.stride(escape);
+        let rows = (self.direct_rows_per_dispatch(escape) * stride * stride)
+            .min(self.height)
+            .max(stride)
+            / stride
+            * stride;
         if self.direct_tile_y >= self.height {
             self.direct_tile_y = 0;
         }
@@ -6890,7 +6944,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some(bg) = ifs_bind_group.as_ref() {
             pass.set_bind_group(1, bg, &[]);
         }
-        pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
+        pass.dispatch_workgroups(
+            self.width.div_ceil(stride).div_ceil(8),
+            band.div_ceil(stride).div_ceil(8),
+            1,
+        );
         drop(pass);
         if solid_geom {
             // The picture, from everything walked so far and the
