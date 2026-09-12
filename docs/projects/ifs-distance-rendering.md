@@ -1611,6 +1611,11 @@ The relight lights each of the block's four pixels with its OWN ray,
 so a solid preview is blockier rather than blocky: the surface is
 sampled at half rate, the shading is not.
 
+**Beam default and budget model, 2026-09-12.** See §10 items 4 and 5
+for the measurement. 1080p presets across the day's work: gasket
+437 → 250 ms, carpet 401 → 284, tetrahedron 652 → 173, sponge
+1180 → 301; the dragon and the Koch keep beam 8 and their times.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
@@ -1912,24 +1917,34 @@ the commit.
    only the shadows from cached hit and normal would make that cost
    ~25% per light instead. Needs the walk spliced into a banded
    relight-like pass.
-4. **Planar beam default.** Beam 8 is 128 ms against 37 at beam 1 on
-   512²; for tiling sets beam 1 is exact. Measure the D9 overlapping
-   cases at 2 and 4 and pick the smallest that keeps them, or
-   auto-detect: pairwise-disjoint image balls ⇒ beam 1 is safe.
-5. **Chunk budget model.** The solid budget counts two marches when
-   shadows are on regardless of light count, and neither the
-   occlusion probes nor the normal. With four lights it
-   under-estimates about 2×. Harmless now that walks self-limit, but
-   the model is what protects against the watchdog.
+4. ~~**Planar beam default.**~~ Measured 2026-09-12 on the three D9
+   overlap fixtures, the dragon and the gasket at 384²: **nearly all
+   of the beam's cost is the last doubling** (8 → 4 is 60–77 ms → ~41)
+   and 4 matches 8 exactly on three of five sets, 16 pixels short on
+   the dragon and 47 on the turned pair. Below 4 the dragon loses
+   thousands, and even the gasket loses 178 at beam 1 where its pieces
+   touch. Default is 4. The dragon and the Koch presets are pinned at
+   8 because a preset is a still and their pieces meet (the Koch
+   moved 358 pixels of 305 000 at 1080p at the default). Auto-detection
+   from disjoint image balls was not pursued: the gasket's pieces have
+   overlapping bounding circles and are exact at 4, so the proxy
+   would say the wrong thing about the commonest case.
+5. ~~**Chunk budget model.**~~ Counts every walk a pixel can cost now:
+   the primary march, one march per shadowed light, twelve occlusion
+   probes, six for the normal.
 6. **Deeper 3D zoom.** The remaining wall is f32's exponent on the
    delta (~2¹²⁶); a global 2ᵉ scale applied with `ldexp` lifts it to
-   the chain cap — ~2²⁵⁰ at σ=½, ~2⁴⁰⁰ at σ=⅓. Only matters past 2⁸⁰.
-7. **Tetrahedron normals.** Six walks to four per hit. Trivial, ~5% of
-   the primary cost.
-8. **Address colouring at depth.** Its digit scale `pow(1/n, level)`
-   underflows f32 past about 2⁶⁰ and the colouring flattens.
-   Cosmetic; either ldexp the scale or document the limit in the
-   tooltip.
+   the chain cap — ~2²⁵⁰ at σ=½, ~2⁴⁰⁰ at σ=⅓. Only matters past 2⁸⁰,
+   which nobody has asked for yet.
+7. ~~**Tetrahedron normals.**~~ Not done, on the numbers: two walks of
+   the forty-odd a lit pixel costs, each already six levels deep, is
+   under 5% — and it changes the stencil, so the picture moves for
+   it. Not worth a picture change.
+8. ~~**Address colouring at depth.**~~ Not a bug, on analysis. The
+   fraction is an f32 with a 24-bit mantissa, so digits past about
+   the twelfth (base 4) cannot change it whatever the scale does; the
+   underflow past 2⁶⁰ only makes explicit a limit the type already
+   had. The colouring resolves ~24 bits of address by construction.
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and

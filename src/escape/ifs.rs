@@ -119,18 +119,21 @@ pub static IFS_FLAME: IfsDef = IfsDef {
         EscapeParamDef {
             name: "beam",
             display_name: "Beam Width",
-            default: 8.0,
+            default: 4.0,
             min: 1.0,
             max: 8.0,
             tooltip: "How many branch addresses the walk follows at once. Every \
                       address bounds the distance to ITS piece and the truth is the \
-                      smallest, so following one can only read too far — which \
+                      smallest, so following one can only read too far -- which \
                       erodes an attractor whose pieces share a boundary. 1 is the \
-                      greedy walk. Measured on the Heighway dragon, whose two \
-                      pieces share a boundary: 1 renders less than half its area, \
-                      4 leaves a scatter of holes, 8 is exact — for 68% more time \
-                      than 1. An IFS with disjoint pieces (a Sierpiński, a Koch) \
-                      is already exact at 1, so lower it if the picture does not \
+                      greedy walk. Measured at 384 on five sets: 4 matches 8 on \
+                      three of them exactly and differs by 16 pixels on the \
+                      Heighway dragon, whose two pieces share a boundary, while 8 \
+                      costs half again as much -- nearly all of the beam's price \
+                      is the last doubling. 2 loses thousands of pixels on the \
+                      dragon and 1 loses hundreds even on a Sierpinski, where the \
+                      pieces touch at points. Raise it to 8 for a still of an \
+                      overlapping set; lower it to 1 when the picture does not \
                       change.",
             choices: &[],
         },
@@ -1969,6 +1972,15 @@ mod tests {
 
                 c.escape.formula = "ifs_flame".to_string();
                 c.escape.coloring = coloring.to_string();
+                // A preset is a still, so the two whose pieces meet keep
+                // the exact beam rather than the default: the dragon's
+                // two pieces share a boundary and the Koch's four touch
+                // end to end, and at the default of 4 the dragon
+                // measured 16 pixels short at 384 and the Koch 358 at
+                // 1080p. The gasket and the carpet measured identical.
+                if name == "Heighway Dragon" || name == "Koch Curve" {
+                    c.escape.formula_params.insert("beam".to_string(), 8.0);
+                }
                 c.escape.center_re = format!("{}", ifs.ball.centre[0]);
                 c.escape.center_im = format!("{}", ifs.ball.centre[1]);
                 // The home view spans 4 units, so 2.4 radii leaves the
@@ -2331,16 +2343,16 @@ mod tests {
     fn a_solid_view_bands_and_the_march_is_in_the_estimate() {
         use crate::escape::renderer::{ifs_rows_per_dispatch, IFS_SOLID_BUDGET};
         // The Menger sponge at 1080p and the shipped defaults: twenty
-        // maps, depth 24, beam 1, 96 steps -- and shadows on, which is
-        // a second march of the same length, so the caller passes
-        // twice the step count.
-        let rows = ifs_rows_per_dispatch(1920, 1080, 24, 2 * 96, 20, IFS_SOLID_BUDGET);
+        // maps, depth 24, beam 1, 96 steps -- with two shadowed lights
+        // (two more marches), the twelve occlusion probes and the six
+        // the normal takes, which is what the caller adds up.
+        let rows = ifs_rows_per_dispatch(1920, 1080, 24, 3 * 96 + 12 + 6, 20, IFS_SOLID_BUDGET);
         assert!(rows < 1080, "1080p should band, got {rows} of 1080");
         assert!(rows > 50, "and not into slivers: {rows} rows");
 
         // Turning shadows off is half the work and must buy back the
         // band, or the second march is not in the estimate at all.
-        let unshadowed = ifs_rows_per_dispatch(1920, 1080, 24, 1 * 96, 20, IFS_SOLID_BUDGET);
+        let unshadowed = ifs_rows_per_dispatch(1920, 1080, 24, 1 * 96 + 12 + 6, 20, IFS_SOLID_BUDGET);
         assert!(
             unshadowed > rows,
             "the shadow march is not in the band estimate ({unshadowed} against {rows})"
@@ -3425,7 +3437,7 @@ mod gpu_tests {
     pub(super) const LEVELS: u32 = 24;
     /// The def parameter default, mirrored so the CPU reference walks
     /// the same beam the shader does.
-    pub(super) const BEAM: u32 = 8;
+    pub(super) const BEAM: u32 = 4;
 
     pub(super) fn device() -> (wgpu::Device, wgpu::Queue) {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -5662,6 +5674,100 @@ mod gpu_tests {
                     println!(
                         "  {name:<12} shadow {shadow:.0}  {lights} light(s): {ms:>8.1} ms"
                     );
+                }
+            }
+        }
+    }
+
+    /// What each beam width gives up on the overlapping sets, so the
+    /// planar default can be chosen on a measurement.
+    ///
+    /// The shipped planar default is 8 and it costs three and a half
+    /// times beam 1 (measured: 128 ms against 37 at 512²). For a
+    /// tiling set the beam changes nothing; it exists for the sets
+    /// whose pieces OVERLAP, where one address reads too far. This
+    /// renders the three D9 overlap fixtures and the dragon at every
+    /// width and reports how many pixels differ from the widest, and
+    /// by how much -- the number the default should be chosen on.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn what_each_planar_beam_width_gives_up() {
+        use std::collections::HashMap;
+        let xform = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, colour: f32| {
+            let mut t = Transform::default();
+            t.a = a;
+            t.b = b;
+            t.c = c;
+            t.d = d;
+            t.e = e;
+            t.f = f;
+            t.color = colour;
+            t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+            t.variation_order = vec!["linear".to_string()];
+            t
+        };
+        let flame_of = |ts: Vec<Transform>| {
+            let mut fl = Flame::default();
+            fl.transforms = ts;
+            fl.final_transforms.clear();
+            fl.xaos = None;
+            fl
+        };
+        let cases: Vec<(&str, Flame)> = vec![
+            ("fat-gasket", flame_of(vec![
+                xform(0.6, 0.0, 0.0, 0.6, 0.0, 0.0, 0.1),
+                xform(0.6, 0.0, 0.0, 0.6, 0.4, 0.0, 0.5),
+                xform(0.6, 0.0, 0.0, 0.6, 0.2, 0.4, 0.9),
+            ])),
+            ("overlapping-band", flame_of(vec![
+                xform(0.7, 0.0, 0.0, 0.7, 0.0, 0.0, 0.2),
+                xform(0.7, 0.0, 0.0, 0.7, 0.3, 0.3, 0.8),
+            ])),
+            ("turned-pair", flame_of(vec![
+                xform(0.46, -0.46, 0.46, 0.46, 0.0, 0.0, 0.2),
+                xform(0.46, 0.46, -0.46, 0.46, 0.5, 0.1, 0.8),
+            ])),
+            ("dragon", dragon_flame()),
+            ("gasket (tiles)", sierpinski_flame()),
+        ];
+        let (device, queue) = device();
+        println!("  set               beam   ms     px differing from beam 8   >24 lum");
+        for (name, flame) in cases {
+            let mut widest: Option<Vec<u8>> = None;
+            for beam in [8u32, 4, 2, 1] {
+                let mut c = config_for(flame.clone());
+                c.escape.coloring = "ifs_distance".to_string();
+                c.escape.formula_params.insert("beam".to_string(), beam as f32);
+                let once = || {
+                    let job = crate::renderer::RenderJob::new(&c, 384, 384);
+                    pollster::block_on(crate::renderer::render(
+                        &device,
+                        &queue,
+                        job,
+                        &mut crate::renderer::NoProgress,
+                    ))
+                    .expect("render")
+                    .rgba_data
+                };
+                let _ = once();
+                let t0 = web_time::Instant::now();
+                let px = once();
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+                let (differ, big) = match &widest {
+                    Some(w) => {
+                        let d: Vec<i32> = w
+                            .chunks(4)
+                            .zip(px.chunks(4))
+                            .map(|(a, b)| (lum(a) - lum(b)).abs())
+                            .collect();
+                        (d.iter().filter(|&&x| x > 0).count(), d.iter().filter(|&&x| x > 24).count())
+                    }
+                    None => (0, 0),
+                };
+                println!("  {name:<16} {beam:>3}  {ms:>6.1}   {differ:>8}                 {big:>6}");
+                if widest.is_none() {
+                    widest = Some(px);
                 }
             }
         }

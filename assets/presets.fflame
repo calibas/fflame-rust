@@ -1424,6 +1424,9 @@
       "center_re": "0.39999999999999997",
       "coloring": "ifs_distance",
       "formula": "ifs_flame",
+      "formula_params": {
+        "beam": 8.0
+      },
       "max_iter": 256,
       "zoom_log2": 0.6263763368089926
     },
@@ -1533,6 +1536,9 @@
       "center_re": "0.5000000151672536",
       "coloring": "ifs_address",
       "formula": "ifs_flame",
+      "formula_params": {
+        "beam": 8.0
+      },
       "max_iter": 256,
       "zoom_log2": 1.7260081204836983
     },
