@@ -5535,6 +5535,31 @@ mod gpu_tests {
     #[ignore = "needs a GPU"]
     fn a_preview_is_a_quarter_of_the_walks_and_leaves_no_trace() {
         let (device, queue) = device();
+        // The control: a mode-A render through the same harness, which
+        // is the fixed cost of device, palette, tonemap and readback.
+        // Without it the ratio below compares floors, not walks -- at
+        // beam 4 the planar walk is a few milliseconds over a
+        // thirty-odd millisecond floor, and the first version of this
+        // test failed on exactly that.
+        let floor_ms = {
+            let mut c = config_for(dragon_flame());
+            c.escape.formula = "mandelbrot".to_string();
+            c.escape.coloring = "smooth".to_string();
+            let once = || {
+                let job = crate::renderer::RenderJob::new(&c, 384, 384);
+                let _ = pollster::block_on(crate::renderer::render(
+                    &device,
+                    &queue,
+                    job,
+                    &mut crate::renderer::NoProgress,
+                ))
+                .expect("render");
+            };
+            once();
+            let t0 = web_time::Instant::now();
+            once();
+            t0.elapsed().as_secs_f64() * 1000.0
+        };
         for (name, flame, formula) in [
             ("solid", menger_flame(), "ifs_flame_3d"),
             ("planar", gpu_tests_sierpinski(), "ifs_flame"),
@@ -5578,17 +5603,26 @@ mod gpu_tests {
             let (_, fast2_ms) = shot(&mut engines, true);
             let (again, _) = shot(&mut engines, false);
             let fast_ms = fast_ms.min(fast2_ms);
-            println!("  {name:<7} full {full_ms:>7.1} ms   preview {fast_ms:>7.1} ms");
-
-            // Cheaper. The floor (tonemap, readback, the relight) is
-            // shared, so the ratio is well under four; but a preview
-            // that cost as much as a full render would mean the stride
-            // reached the dispatch and nothing else.
-            assert!(
-                fast_ms * 1.5 < full_ms,
-                "{name}: the preview ({fast_ms:.0} ms) is not materially cheaper than the \
-                 full render ({full_ms:.0} ms)"
+            let full_walk = full_ms - floor_ms;
+            let fast_walk = fast_ms - floor_ms;
+            println!(
+                "  {name:<7} full {full_ms:>7.1} ms   preview {fast_ms:>7.1} ms   \
+                 (floor {floor_ms:.1}; walks {full_walk:.1} and {fast_walk:.1})"
             );
+
+            // Cheaper -- of the WALK, with the floor taken out. A
+            // preview that cost as much as a full render would mean
+            // the stride reached the dispatch and nothing else. When
+            // the walk itself is within the noise of the floor there
+            // is nothing to measure, and the two picture assertions
+            // below still hold it to account.
+            if full_walk > 10.0 {
+                assert!(
+                    fast_walk * 2.0 < full_walk,
+                    "{name}: the preview's walk ({fast_walk:.1} ms) is not materially cheaper \
+                     than the full one ({full_walk:.1} ms)"
+                );
+            }
 
             // Blocky, not different: sample the preview's 2x2 blocks
             // against the full render's mean over the same block. Most
