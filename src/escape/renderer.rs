@@ -653,6 +653,14 @@ pub struct EscapeRenderer {
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
     ifs_chain_capacity: u32,
+    /// The SOLID geometry cache: sixteen bytes a pixel of what the walk
+    /// found at the surface (see the assembler's `ifs_pack_geom`),
+    /// beside the 32-byte record. Sized with the results buffer;
+    /// CLEARED at every restart of a banded pass, because a zero
+    /// record means "no surface", and that is what lets the relight
+    /// run over rows the walk has not reached yet.
+    ifs_geom_buffer: Buffer,
+    ifs_geom_px: u32,
     /// The analysed flame, or `None` when the loaded one does not
     /// qualify (or mode D is not active). A mode-D render with no maps
     /// draws nothing rather than garbage.
@@ -1456,6 +1464,18 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // The geometry cache, written by the solid walk and
+                // read by the relight pass. Same reasoning: one layout.
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1467,6 +1487,12 @@ impl EscapeRenderer {
         let ifs_chain_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape IFS Seed Chain"),
             size: std::mem::size_of::<super::ifs::IfsLinkGpu>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Geometry"),
+            size: 16,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1491,6 +1517,8 @@ impl EscapeRenderer {
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
             ifs_chain_capacity: 0,
+            ifs_geom_buffer,
+            ifs_geom_px: 0,
             ifs: None,
             ifs_uploaded: None,
             pipelines: HashMap::new(),
@@ -2985,9 +3013,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the escape config.
         if super::ifs::get_ifs(&escape.formula).is_some() {
             return format!(
-                "ifs|{}|{:?}|{}|{}|{}|{}|{}x{}|{}|{}|{}",
+                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|{}|{}|{}",
                 escape.formula,
-                escape.formula_params,
+                Self::walk_params_key(escape),
                 escape.center_re,
                 escape.center_im,
                 escape.zoom_log2,
@@ -3251,9 +3279,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             )
         }
         format!(
-            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{}x{}|{}|{}",
             escape.formula,
-            escape.formula_params,
+            Self::walk_params_key(escape),
             escape.coloring,
             escape.center_re,
             escape.center_im,
@@ -3606,58 +3634,191 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         true
     }
 
-    /// Whether a cached recolour of a SOLID walk would be exact.
-    ///
-    /// A record is thirty-two bytes and every one of them is spoken
-    /// for, so the lighting it carries is a single scalar: what a new
-    /// albedo would have to be multiplied by. That is the whole of the
-    /// answer exactly when the lighting IS a multiplier — no specular
-    /// (which adds a term rather than scaling one), white lights (a
-    /// coloured one is three different multipliers), and no fog (which
-    /// mixes toward a colour rather than scaling).
-    ///
-    /// Outside those, the cache is refused and a colouring change
-    /// re-walks. That is slower and it is CORRECT, which is the way
-    /// round this has to fail: the alternative is a recoloured frame
-    /// that is quietly lit differently from the one before it.
-    fn solid_recolour_is_exact(&self, escape: &EscapeConfig) -> bool {
-        let Some(def) = super::ifs::get_ifs(&escape.formula) else { return true };
-        if !def.solid {
-            return true;
-        }
-        let (sh, fog_strength, _, _) = &self.solid_lighting;
-        if *fog_strength > 0.0 {
-            return false;
-        }
-        // The fallback rig (nothing set in the panel) is a single
-        // white light with no specular, so it qualifies.
-        if !sh.active() || !sh.lights.iter().any(|l| l.enabled) {
-            return true;
-        }
-        if sh.specular > 0.0 {
-            return false;
-        }
-        sh.lights.iter().all(|l| {
-            !l.enabled
-                || (l.color[0] == l.color[1] && l.color[1] == l.color[2])
-        })
-    }
-
     /// A cheap identity for that lighting, for the band and chunk keys.
+    ///
+    /// Only what the WALK reads. A light's direction and whether it is
+    /// on decide which shadow rays are traced, so they are geometry;
+    /// its colour and intensity, the material, the occlusion strength,
+    /// the shadow strength and the fog are applied by the relight pass
+    /// and are deliberately NOT here -- a change to any of them must
+    /// hit the cache, not miss it. That is the whole point of caching
+    /// the geometry.
     fn lighting_key(&self) -> String {
-        let (s, fs, f0, bg) = &self.solid_lighting;
-        let mut k = format!(
-            "{}/{}/{}/{}/{}/{}/{fs}/{f0}/{:?}",
-            s.shading_strength, s.ambient, s.diffuse, s.specular, s.shininess,
-            s.ssao_strength, bg,
-        );
+        let (s, _, _, _) = &self.solid_lighting;
+        // The fallback rig has a light of its own; whether it is in
+        // force is a geometry fact.
+        let mut k = format!("{}", crate::config::SolidShadingSettings::is_default(s));
         for l in &s.lights {
-            k.push_str(&format!(
-                "|{}:{}:{}:{}:{:?}",
-                l.enabled, l.azimuth, l.elevation, l.intensity, l.color
-            ));
+            k.push_str(&format!("|{}:{}:{}", l.enabled, l.azimuth, l.elevation));
         }
         k
+    }
+
+    /// The walk's own parameters, for the keys -- with the one that is
+    /// not a walk input taken out. `shadow` is a STRENGTH the relight
+    /// applies; whether it is zero is what the walk reads, since that
+    /// decides if the shadow rays are traced at all.
+    ///
+    /// Built from the def's parameter LIST with defaults filled in, not
+    /// from whatever the map happens to hold: a parameter that is
+    /// absent (the default applies) and the same parameter set
+    /// explicitly to its default are the same walk, and a key that
+    /// told them apart would re-walk on the first touch of any slider.
+    /// Measured: setting `shadow` for the first time missed the cache
+    /// for exactly that reason.
+    fn walk_params_key(escape: &EscapeConfig) -> String {
+        let Some(def) = super::ifs::get_ifs(&escape.formula) else {
+            let mut items: Vec<String> =
+                escape.formula_params.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            items.sort();
+            return items.join(",");
+        };
+        def.parameters
+            .iter()
+            .map(|p| {
+                let v = escape.formula_params.get(p.name).copied().unwrap_or(p.default);
+                if def.solid && p.name == "shadow" {
+                    format!("{}={}", p.name, v > 0.0)
+                } else {
+                    format!("{}={v}", p.name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Size the geometry cache to the frame, and say whether the frame
+    /// has one.
+    ///
+    /// Allocated beside the results buffer and only when the results
+    /// are (a solid render that cannot hold its records has nothing to
+    /// relight from either). A resize invalidates it the way it
+    /// invalidates the records: the next walk rewrites every row.
+    fn ensure_ifs_geom(&mut self, device: &Device, results_active: bool) -> bool {
+        if !results_active {
+            return false;
+        }
+        let px = self.width.max(1) * self.height.max(1);
+        if self.ifs_geom_px != px {
+            self.ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Escape IFS Geometry"),
+                size: (px as u64) * 16,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.ifs_geom_px = px;
+        }
+        true
+    }
+
+    /// The relight pass, over the whole frame: the colouring, the
+    /// palette and the rig from the records and the geometry cache.
+    ///
+    /// Runs after EVERY band of a solid walk and on the cache path. It
+    /// is the only thing that writes a solid's pixels, and it contains
+    /// no walk, so it costs a full-screen pass -- about a millisecond
+    /// at 1080p -- rather than a render. Rows the walk has not reached
+    /// yet read as absent from a cleared geometry record.
+    fn run_relight(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        escape: &EscapeConfig,
+        palette_view: &TextureView,
+    ) {
+        let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
+        let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
+        let key = format!("ifs_relight|{}", coloring.name);
+        if !self.pipelines.contains_key(&key) {
+            let source = assembler::assemble_ifs_relight(coloring);
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some(&format!("Escape Shader {key}")),
+                source: ShaderSource::Wgsl(source.into()),
+            });
+            let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Escape IFS Relight Pipeline Layout"),
+                bind_group_layouts: &[
+                    Some(&self.recolor_bind_group_layout),
+                    Some(&self.ifs_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(&format!("Escape Pipeline {key}")),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some("escape_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.pipelines.insert(key.clone(), pipeline);
+        }
+        // The recolor layout is shared with mode A, which applies a
+        // contrast fit; the relight does not, but the binding must be
+        // there. Identity.
+        queue_contrast(queue, &self.contrast_params, &escape.contrast, None);
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Relight Bind Group"),
+            layout: &self.recolor_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&self.output_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(palette_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Sampler(&self.palette_sampler),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(&self.height_view),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.results_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: self.contrast_params.as_entire_binding(),
+                },
+            ],
+        });
+        let ifs_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Relight IFS Bind Group"),
+            layout: &self.ifs_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.ifs_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: self.ifs_chain_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: self.ifs_geom_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let pipeline = &self.pipelines[&key];
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Escape Relight Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_bind_group(1, &ifs_group, &[]);
+        pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
     }
 
     /// Grow the chain buffer if needed and write the links.
@@ -6238,18 +6399,25 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // recolor cache to key. Mode D does write them: its walk is the
         // engine's most expensive pass and none of it depends on the
         // colouring.
-        let iterate_key = if super::fields::get_field(&escape.formula).is_none()
-            && self.solid_recolour_is_exact(escape)
-        {
+        let iterate_key = if super::fields::get_field(&escape.formula).is_none() {
             Some(self.iterate_key_for(escape))
         } else {
             None
         };
+        let solid = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid);
+        let geom_active = if solid { self.ensure_ifs_geom(device, results_active) } else { false };
         if let Some(ik) = iterate_key.as_deref() {
             if results_active && self.results_key.as_deref() == Some(ik) {
                 let t0 = web_time::Instant::now();
                 self.measure_contrast(device, queue, escape, ik);
-                self.run_recolor(device, queue, encoder, escape, palette_view);
+                if solid && geom_active {
+                    // A solid's cache path IS the relight: the same
+                    // pass every band of the walk ended with, with
+                    // whatever the lighting is now.
+                    self.run_relight(device, queue, encoder, escape, palette_view);
+                } else {
+                    self.run_recolor(device, queue, encoder, escape, palette_view);
+                }
                 self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
                 DIRECT_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
                 PERTURB_RENDER_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -6600,11 +6768,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // (direct and field). A band is a complete render of its own
         // rows, so no resume state is needed and the output texture
         // accumulates the frame top to bottom.
+        let solid_geom = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid)
+            && self.ifs_geom_px == self.width.max(1) * self.height.max(1)
+            && results_active;
         let key = self.band_key(escape, palette_generation);
         if self.chunk_key.as_deref() != Some(key.as_str()) {
             self.chunk_key = Some(key);
             self.direct_tile_y = 0;
             self.direct_last = None;
+            if solid_geom {
+                // Zero is "no surface" (see `ifs_pack_geom`): rows the
+                // new pass has not reached yet must read as absent,
+                // not as the previous view relit.
+                encoder.clear_buffer(&self.ifs_geom_buffer, 0, None);
+            }
             super::diag::update(|d| {
                 d.restarts += 1;
                 d.inflight_frames = 0;
@@ -6691,6 +6868,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         binding: 1,
                         resource: self.ifs_chain_buffer.as_entire_binding(),
                     },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: self.ifs_geom_buffer.as_entire_binding(),
+                    },
                 ],
             }))
         } else {
@@ -6711,6 +6892,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
         pass.dispatch_workgroups(self.width.div_ceil(8), band.div_ceil(8), 1);
         drop(pass);
+        if solid_geom {
+            // The picture, from everything walked so far and the
+            // lighting of now. The walk wrote no pixels.
+            self.run_relight(device, queue, encoder, escape, palette_view);
+        }
         self.run_resolve(device, queue, encoder, &escape.shading, escape.downsample);
         self.direct_tile_y = tile_y0.saturating_add(band);
         let mut done = self.direct_tile_y >= self.height;

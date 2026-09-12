@@ -4583,6 +4583,87 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// The lighting rig and the geometry packing, spliced into both the walk
+/// template and the relight template at `//__IFS_RIG__` so the two cannot
+/// drift. That they are one text is the basis of the cache being exact.
+const IFS_RIG: &str = r#"
+// The lighting rig, as ONE function spliced into both the walk and the
+// relight pass at `//__IFS_RIG__` -- so the two cannot drift, which is
+// the whole basis of the cache being exact. Blinn-Phong over the
+// Solid Rendering panel's lights, the vocabulary the splat pipeline
+// shades in: occlusion on the AMBIENT term, the traced shadow on the
+// DIRECT one, which is the way round the two names already say.
+//
+// `ao` is the raw occlusion and `sun` the four raw shadow terms; the
+// panel's strengths are applied HERE, not where they were measured, so
+// a strength change is a relight and not a walk.
+fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32) -> vec3<f32> {
+    let ao = mix(1.0, ao_raw, clamp(ifs_occlusion_strength(), 0.0, 1.0));
+    let shadow_amount = clamp(ifs_shadow_strength(), 0.0, 1.0);
+    let v = -dir;
+    var lit_rgb = albedo * (ifs_ambient() * ao);
+    let lights = ifs_light_count();
+    for (var li = 0u; li < lights; li = li + 1u) {
+        let ld = ifs_light_dir(li);
+        let ndotl = max(dot(n, ld), 0.0);
+        if (ndotl <= 0.0) {
+            continue;
+        }
+        let lcol = ifs_light_color(li) * ifs_light_power(li);
+        let s = mix(1.0, sun[li], shadow_amount);
+        lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * ndotl * ao * s);
+        if (ifs_specular() > 0.0) {
+            let hh = normalize(ld + v);
+            let spec = pow(max(dot(n, hh), 0.0), max(ifs_shininess(), 1.0));
+            lit_rgb = lit_rgb + lcol * (ifs_specular() * spec * s);
+        }
+    }
+    var rgb = mix(albedo, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
+    // Depth fog AFTER lighting, so distant lit surfaces fade toward
+    // the background like atmosphere rather than being lit on top of
+    // it -- the ordering the shade pass settled on.
+    if (ifs_fog_strength() > 0.0) {
+        let depth = t * dot(dir, ifs_forward());
+        let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
+        rgb = mix(rgb, ifs_fog_color(), f);
+    }
+    return rgb;
+}
+
+// The geometry record: what a walk found at a pixel that a relight
+// needs and a colouring change does not touch. Sixteen bytes, packed,
+// because at 1080p this sits beside a 32-byte record per pixel and
+// four unpacked floats for the normal alone would double it:
+//   0. normal.xy as two f16
+//   1. normal.z and the raw occlusion as two f16
+//   2. the four raw per-light shadow terms as unorm8
+//   3. the hit depth along the ray, f32 -- and ZERO means no surface,
+//      which is what a cleared buffer says and why the relight can
+//      run over rows a banded walk has not reached yet
+fn ifs_pack_geom(n: vec3<f32>, ao: f32, sun: vec4<f32>, t: f32) -> vec4<u32> {
+    return vec4<u32>(
+        pack2x16float(n.xy),
+        pack2x16float(vec2<f32>(n.z, ao)),
+        pack4x8unorm(clamp(sun, vec4<f32>(0.0), vec4<f32>(1.0))),
+        bitcast<u32>(t),
+    );
+}
+
+// A pixel's ray, from its coordinates and the camera: the one thing
+// both the walk and the relight derive rather than store.
+fn ifs_ray(px: u32, py: u32) -> vec3<f32> {
+    let uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height))
+        - vec2<f32>(0.5, 0.5);
+    let aspect = f32(params.width) / f32(max(params.height, 1u));
+    let tan_half = tan(ifs_fov() * 0.5);
+    return normalize(
+        ifs_forward() + ifs_right() * (uv.x * aspect * 2.0 * tan_half)
+            - ifs_up() * (uv.y * 2.0 * tan_half)
+    );
+}
+"#;
+
 const IFS_RECOLOR_TEMPLATE: &str = r#"
 // Mode-D recolor pass: a colouring and a palette, over cached walk
 // records. See assemble_ifs_recolor.
@@ -4750,6 +4831,219 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
 }"#;
 
+const IFS_RELIGHT_TEMPLATE: &str = r#"
+// Mode-D relight pass (solid): a colouring, a palette and the lighting
+// rig, over the walk's records and its geometry cache.
+//
+// The walk does not shade. It records the four colouring quantities in
+// one buffer and what it found at the surface -- normal, occlusion,
+// per-light shadow, depth -- in another, and this pass owns the
+// picture. It runs over the WHOLE frame after every band of a walk and
+// again on any change that is not a geometry input, and it is cheap
+// because it contains no walk: a few hundred arithmetic operations a
+// pixel against the hundred distance evaluations a march costs.
+//
+// That division is what makes a Solid Rendering panel edit a relight
+// instead of a re-walk, what makes the recolour cache exact for a
+// coloured light or a specular where a single scalar could not be, and
+// what stops a light edit part-way through a banded pass from striping
+// the frame: every band relights everything walked so far, with the
+// lighting of NOW.
+
+struct EscapeParams {
+    center: vec2<f32>,
+    julia_c: vec2<f32>,
+    span: vec2<f32>,
+    rot_cs: vec2<f32>,
+    width: u32,
+    height: u32,
+    max_iter: u32,
+    flags: u32,
+    bailout: f32,
+    tile_y0: u32,
+    damping: vec2<f32>,
+    shade_flags: u32,
+    _pad_shade0: u32,
+    _pad_shade1: u32,
+    _pad_shade2: u32,
+    fparams: array<vec4<f32>, 4>,
+    cparams: array<vec4<f32>, 4>,
+    fdata: array<vec4<f32>, 64>,
+}
+
+struct IfsRecord {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    shade: f32,
+}
+
+@group(0) @binding(0) var<uniform> params: EscapeParams;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var palette_texture: texture_2d<f32>;
+@group(0) @binding(3) var palette_sampler: sampler;
+@group(0) @binding(4) var height_tex: texture_storage_2d<r32float, write>;
+@group(0) @binding(5) var<storage, read> results: array<IfsRecord>;
+
+struct ContrastParams {
+    plane: vec3<f32>,
+    lo: f32,
+    hi: f32,
+    strength: f32,
+    turns: f32,
+    enabled: u32,
+}
+@group(0) @binding(6) var<uniform> contrast: ContrastParams;
+
+// Group 1 is the walk's own: the maps and the chain are bound because
+// the layout is shared, and only the geometry is read here.
+struct IfsMap3Gpu {
+    r0: vec4<f32>,
+    r1: vec4<f32>,
+    r2: vec4<f32>,
+    extra: vec4<f32>,
+}
+@group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
+struct IfsLink {
+    pos: vec4<f32>,
+    r0: vec4<f32>,
+    r1: vec4<f32>,
+    r2: vec4<f32>,
+    extra: vec4<f32>,
+    esc: vec4<f32>,
+}
+@group(1) @binding(1) var<storage, read> ifs_links: array<IfsLink>;
+@group(1) @binding(2) var<storage, read_write> ifs_geom: array<vec4<u32>>;
+
+fn cparam(i: u32) -> f32 {
+    return params.cparams[i / 4u][i % 4u];
+}
+
+fn fparam(i: u32) -> f32 {
+    return params.fparams[i / 4u][i % 4u];
+}
+
+// The SOLID layout of the whole-IFS constants -- the same slots the
+// solid walk reads, which the planar recolor pass does not share.
+fn ifs_ball_centre() -> vec3<f32> {
+    return params.fdata[0].xyz;
+}
+
+fn ifs_centre() -> vec2<f32> {
+    return params.fdata[0].xy;
+}
+
+fn ifs_radius() -> f32 {
+    return params.fdata[0].w;
+}
+
+fn ifs_count() -> u32 {
+    return u32(max(params.fdata[1].y, 0.0));
+}
+
+fn ifs_fov() -> f32 { return params.fdata[2].w; }
+fn ifs_forward() -> vec3<f32> { return params.fdata[3].xyz; }
+fn ifs_right() -> vec3<f32> { return params.fdata[4].xyz; }
+fn ifs_up() -> vec3<f32> { return params.fdata[5].xyz; }
+fn ifs_shading_strength() -> f32 { return params.fdata[8].x; }
+fn ifs_ambient() -> f32 { return params.fdata[8].y; }
+fn ifs_diffuse() -> f32 { return params.fdata[8].z; }
+fn ifs_specular() -> f32 { return params.fdata[8].w; }
+fn ifs_shininess() -> f32 { return params.fdata[9].x; }
+fn ifs_occlusion_strength() -> f32 { return params.fdata[9].y; }
+fn ifs_fog_strength() -> f32 { return params.fdata[9].z; }
+fn ifs_fog_start() -> f32 { return params.fdata[9].w; }
+fn ifs_fog_color() -> vec3<f32> { return params.fdata[10].xyz; }
+// The `shadow` formula param -- a strength the RELIGHT applies.
+fn ifs_shadow_strength() -> f32 { return fparam(3u); }
+fn ifs_light_count() -> u32 { return u32(clamp(params.fdata[7].z, 0.0, 4.0)); }
+fn ifs_light_dir(i: u32) -> vec3<f32> { return params.fdata[11u + i * 2u].xyz; }
+fn ifs_light_power(i: u32) -> f32 { return params.fdata[11u + i * 2u].w; }
+fn ifs_light_color(i: u32) -> vec3<f32> { return params.fdata[12u + i * 2u].xyz; }
+
+fn ff_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+struct IfsResult {
+    distance: f32,
+    level: f32,
+    address: f32,
+    color: f32,
+    point: vec2<f32>,
+    escaped: u32,
+    depth: u32,
+}
+
+struct IfsShade {
+    t: f32,
+    lum: f32,
+}
+
+fn ifs_halo(res: IfsResult, reach: f32) -> f32 {
+    if (!(reach > 0.0)) {
+        return 1.0;
+    }
+    return exp(-res.distance / reach);
+}
+
+//__IFS_COLORING__
+
+//__IFS_RIG__
+
+@compute @workgroup_size(8, 8, 1)
+fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= params.width || gid.y >= params.height) {
+        return;
+    }
+    let idx = gid.y * params.width + gid.x;
+    let r = results[idx];
+    let g = ifs_geom[idx];
+    let t = bitcast<f32>(g.w);
+
+    // Absent: the walk found nothing here, or has not reached this row
+    // yet (a cleared geometry record reads as depth zero). Left
+    // transparent so the tonemap's background fills it.
+    if ((r.escaped & 2u) != 0u || !(t > 0.0)) {
+        textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(0.0));
+        return;
+    }
+
+    var res: IfsResult;
+    res.distance = r.distance;
+    res.level = r.level;
+    res.address = r.address;
+    res.color = r.color;
+    res.point = r.point;
+    res.escaped = r.escaped & 1u;
+    res.depth = 0u;
+
+    let shade = ifs_color(res);
+    let tt = fract(shade.t);
+    let height = select(shade.t, tt, params.shade_flags == 1u);
+    let srgb = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(tt, 0.5), 0.0).rgb;
+    let albedo = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2)) * clamp(shade.lum, 0.0, 4.0);
+
+    let nxy = unpack2x16float(g.x);
+    let nz_ao = unpack2x16float(g.y);
+    let n = vec3<f32>(nxy, nz_ao.x);
+    let sun = unpack4x8unorm(g.z);
+    let dir = ifs_ray(gid.x, gid.y);
+
+    let rgb = ifs_rig(albedo, n, nz_ao.y, sun, dir, t);
+    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
+    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, 0.0, 0.0, 0.0));
+}"#;
+
 const IFS_3D_TEMPLATE: &str = r#"
 // Distance-march compute pass (mode D, 3D): each pixel casts one ray
 // and sphere-traces the attractor's distance function.
@@ -4825,6 +5119,9 @@ struct IfsLink {
 }
 
 @group(1) @binding(1) var<storage, read> ifs_links: array<IfsLink>;
+
+// The geometry cache, one `vec4<u32>` a pixel; see `ifs_pack_geom`.
+@group(1) @binding(2) var<storage, read_write> ifs_geom: array<vec4<u32>>;
 
 struct IfsRecord {
     distance: f32,
@@ -4926,6 +5223,12 @@ fn ifs_cap() -> f32 {
 // `escape::ifs::pack_rig3`). Slots 8-10 are the material and the fog;
 // 11 onward are the lights, two vec4s each, already rotated into world
 // space so the marcher does not do it per pixel.
+fn ifs_fov() -> f32 { return params.fdata[2].w; }
+fn ifs_forward() -> vec3<f32> { return params.fdata[3].xyz; }
+fn ifs_right() -> vec3<f32> { return params.fdata[4].xyz; }
+fn ifs_up() -> vec3<f32> { return params.fdata[5].xyz; }
+// The `shadow` formula param -- a strength the RELIGHT applies.
+fn ifs_shadow_strength() -> f32 { return fparam(3u); }
 fn ifs_shading_strength() -> f32 { return params.fdata[8].x; }
 fn ifs_ambient() -> f32 { return params.fdata[8].y; }
 fn ifs_diffuse() -> f32 { return params.fdata[8].z; }
@@ -5226,17 +5529,14 @@ fn ifs_normal(p: vec3<f32>, h: f32) -> vec3<f32> {
     return n / len;
 }
 
+//__IFS_RIG__
+
 @compute @workgroup_size(8, 8, 1)
 fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let py = gid.y + params.tile_y0;
     if (gid.x >= params.width || py >= params.height) {
         return;
     }
-
-    let uv = (vec2<f32>(f32(gid.x), f32(py)) + vec2<f32>(0.5, 0.5))
-        / vec2<f32>(f32(params.width), f32(params.height))
-        - vec2<f32>(0.5, 0.5);
-    let aspect = f32(params.width) / f32(max(params.height, 1u));
 
     // A pinhole camera (D8). Not the flame's `zr = 1 - persp*z`, which
     // is depth scaling for splats rather than a projection, and which
@@ -5247,13 +5547,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // formed. See the note on slot 2 above for why.
     let eye = params.fdata[2].xyz;
     let fov = params.fdata[2].w;
-    let fwd = params.fdata[3].xyz;
-    let right = params.fdata[4].xyz;
-    let up = params.fdata[5].xyz;
     let tan_half = tan(fov * 0.5);
-    let dir = normalize(
-        fwd + right * (uv.x * aspect * 2.0 * tan_half) - up * (uv.y * 2.0 * tan_half)
-    );
+    let dir = ifs_ray(gid.x, py);
 
     // The march starts at the bounding sphere, not at the eye: every
     // step before it is a step through provably empty space, and the
@@ -5263,9 +5558,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c_term = dot(oc, oc) - ifs_radius() * ifs_radius();
     let disc = b * b - c_term;
 
-    var rgb = vec3<f32>(0.0, 0.0, 0.0);
-    var coverage = 0.0;
-    var height = 0.0;
+    // Zero geometry is "no surface here" (see `ifs_pack_geom`).
+    var geom = vec4<u32>(0u, 0u, 0u, 0u);
 
     // A MISS still writes a record. The recolor cache reads every
     // pixel's, so a pixel left unwritten keeps whatever the last view
@@ -5332,7 +5626,6 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (hit) {
             let p = eye + dir * t;
             let res = ifs_evaluate3(p);
-            let shade = ifs_color(res);
 
             let eps0 = max(px_at * t, 1e-30);
             let n = ifs_normal(p, eps0);
@@ -5341,100 +5634,34 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // which is a fact about the shape at the scale being
             // looked at. Tied to the view instead, the same geometry
             // would change how occluded it was as you zoomed.
-            let ao = mix(
-                1.0,
-                ifs_ao(p, n, ifs_radius() * fparam(5u)),
-                clamp(ifs_occlusion_strength(), 0.0, 1.0)
-            );
+            let ao = ifs_ao(p, n, ifs_radius() * fparam(5u));
 
-            let tt = fract(shade.t);
-            height = select(shade.t, tt, params.shade_flags == 1u);
-            let srgb = textureSampleLevel(
-                palette_texture, palette_sampler, vec2<f32>(tt, 0.5), 0.0
-            ).rgb;
-            let albedo = pow(max(srgb, vec3<f32>(0.0)), vec3<f32>(2.2))
-                * clamp(shade.lum, 0.0, 4.0);
-
-            // Blinn-Phong over the Solid Rendering panel's own lights.
-            // The same vocabulary the splat pipeline shades in, and
-            // the same arithmetic -- occlusion on the AMBIENT term and
-            // the shadow on the DIRECT one, which is the way round the
-            // two names already say.
-            //
-            // What differs is where the two hard numbers come from. A
-            // splat render reconstructs its occlusion from neighbouring
-            // depths and its shadows from light-space depth maps; a
-            // marcher asks the distance field, once per light, and gets
-            // a soft-edged answer for free because a sphere trace
-            // already knows how close it passed. That is also the
-            // cost: one more walk per LIGHT per lit pixel, which is why
-            // the price is set by how many lights are switched on.
-            let v = -dir;
-            let shadow_amount = clamp(fparam(3u), 0.0, 1.0);
-            let sharpness = fparam(4u);
-            var lit_rgb = albedo * (ifs_ambient() * ao);
-            let lights = ifs_light_count();
-            for (var li = 0u; li < lights; li = li + 1u) {
-                let ld = ifs_light_dir(li);
-                let ndotl = max(dot(n, ld), 0.0);
-                // A surface facing away cannot be lit, so there is
-                // nothing for a shadow to darken and no march to pay.
-                if (ndotl <= 0.0) {
-                    continue;
-                }
-                let lcol = ifs_light_color(li) * ifs_light_power(li);
-                var sun = 1.0;
-                if (shadow_amount > 0.0) {
-                    let reaching = ifs_shadow(
-                        p + n * eps0 * 2.0,
-                        ld,
-                        sharpness,
-                        eps0 * 4.0,
-                        max_steps,
-                    );
-                    sun = mix(1.0, reaching, shadow_amount);
-                }
-                // No `ao` on the direct term. Occlusion says how much of
-                // the SKY a point can see, and the shadow march says
-                // whether THIS light reaches it -- so multiplying the
-                // direct light by both asks the same question twice,
-                // and asks the wrong one of the two. It is also a
-                // failure and not just a fudge: a fully enclosed
-                // reading is zero, so a face that plainly points at a
-                // light came out pure black. Measured on the sponge,
-                // 2317 pixels of it, sitting in the creases where the
-                // cubes meet.
-                lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * ndotl * ao * sun);
-                if (ifs_specular() > 0.0) {
-                    let hh = normalize(ld + v);
-                    let spec = pow(max(dot(n, hh), 0.0), max(ifs_shininess(), 1.0));
-                    lit_rgb = lit_rgb + lcol * (ifs_specular() * spec * sun);
+            // One traced shadow per light, RAW -- the panel's shadow
+            // strength is applied at relight, so that changing it is
+            // not a walk. Skipped where the surface faces away from
+            // the light, since nothing lit is there to darken, and
+            // skipped entirely when shadows are off: that is the one
+            // shadow setting that IS a geometry input, because it
+            // decides whether these terms exist.
+            var sun = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+            if (fparam(3u) > 0.0) {
+                let lights = ifs_light_count();
+                for (var li = 0u; li < lights; li = li + 1u) {
+                    let ld = ifs_light_dir(li);
+                    if (dot(n, ld) <= 0.0) {
+                        continue;
+                    }
+                    sun[li] = ifs_shadow(p + n * eps0 * 2.0, ld, fparam(4u), eps0 * 4.0, max_steps);
                 }
             }
 
-            rgb = mix(albedo, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
-
-            // Depth fog AFTER lighting, so distant lit surfaces fade
-            // toward the background like atmosphere rather than being
-            // lit on top of it -- the ordering the shade pass settled
-            // on, for the reason recorded there.
-            if (ifs_fog_strength() > 0.0) {
-                let depth = t * dot(dir, fwd);
-                let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
-                rgb = mix(rgb, ifs_fog_color(), f);
-            }
-            // The cached-recolour factor: what a colouring change would
-            // have to multiply the new albedo by. Exact only while the
-            // lighting IS a single achromatic multiplier -- no
-            // specular, white lights, no fog -- and the host disables
-            // the cache when it is not (see `solid_recolour_is_exact`).
-            let lit = select(
-                1.0,
-                dot(lit_rgb, vec3<f32>(0.3333333, 0.3333333, 0.3333333))
-                    / max(dot(albedo, vec3<f32>(0.3333333, 0.3333333, 0.3333333)), 1e-12),
-                dot(albedo, vec3<f32>(1.0, 1.0, 1.0)) > 0.0
-            );
-            coverage = 1.0;
+            // The walk does not shade. It records what it found and the
+            // relight pass -- the same `ifs_rig`, over this record and
+            // the geometry -- owns the picture, every frame. That is
+            // what makes a lighting change a relight instead of a
+            // walk, and what stops a light edit part-way through a
+            // banded pass from striping the frame.
+            geom = ifs_pack_geom(n, ao, sun, t);
 
             rec.distance = res.distance;
             rec.level = res.level;
@@ -5443,21 +5670,21 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             rec.point = res.point;
             // Bit 1 clear: there IS a surface at this pixel.
             rec.escaped = res.escaped & 1u;
-            rec.shade = lit;
+            rec.shade = 1.0;
         }
     }
 
+    // Both records, or neither: a solid render that cannot hold its
+    // records has nothing for the relight pass to draw from, and the
+    // renderer says so rather than drawing garbage.
     if ((params.flags & 8u) != 0u) {
         let idx = py * params.width + gid.x;
         results[idx] = rec;
+        ifs_geom[idx] = geom;
     }
-
-    // Coverage, not colour: a ray that hit nothing is left ABSENT so
-    // the tonemap's background blend fills it, which is what makes the
-    // background colour apply and a transparent export stay
-    // transparent.
-    textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
-    textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, 0.0, 0.0, 0.0));
+    // No colour and no height: the relight pass writes both, from
+    // these two records, for every row -- including this one, this
+    // frame. See `IFS_RELIGHT_TEMPLATE`.
 }"#;
 
 /// Assemble the mode-D recolor pass for one coloring.
@@ -5471,6 +5698,21 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
     for line in IFS_RECOLOR_TEMPLATE.lines() {
         match line.trim() {
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("
+")
+}
+
+/// Assemble the SOLID relight pass: one colouring and the shared rig
+/// over the records and the geometry cache. See `IFS_RELIGHT_TEMPLATE`.
+pub fn assemble_ifs_relight(coloring: &IfsColoringDef) -> String {
+    let mut out = Vec::new();
+    for line in IFS_RELIGHT_TEMPLATE.lines() {
+        match line.trim() {
+            "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            "//__IFS_RIG__" => out.push(IFS_RIG.trim().to_string()),
             _ => out.push(line.to_string()),
         }
     }
@@ -5506,6 +5748,7 @@ pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> Strin
         match line.trim() {
             "//__IFS__" => out.push(def.wgsl.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
+            "//__IFS_RIG__" => out.push(IFS_RIG.trim().to_string()),
             "const IFS_MAX_BEAM: u32 = 8u;" => {
                 out.push(format!("const IFS_MAX_BEAM: u32 = {beam}u;"))
             }
