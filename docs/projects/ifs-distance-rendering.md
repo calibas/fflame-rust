@@ -2240,31 +2240,58 @@ discs.** The gates, then what they showed:
    inversion or a bubble is a whole region: inversion swaps the
    inside and outside of a circle, bubble folds the plane onto a
    disc, and points bounce inside the union of those discs without
-   leaving. The flame's structure — the Apollonian circles, the
-   bubble rings — is the MEASURE on that region, which D6 said this
-   engine does not draw, and here that is the whole picture rather
-   than a nuance. No spherical or bubble preset ships: there is no
-   picture worth a preset, and the rule is to render before
-   shipping. The kernels stay: they are correct, they cost nothing
-   on an affine or julia row, the panel says what they draw, and a
-   flame built from them with contracting affines beside them may
-   yet find a set worth seeing.
+   leaving.
 6. Census: **17 of 168** planar; the preset library **10 of 18**,
-   JuliaN Bubble the first catalogue flame reached — as a disc.
+   JuliaN Bubble the first catalogue flame reached.
    `Spherical3` stays out for a different reason: two of its
    transforms are pure translations, σ_max = 1, and a set that
-   contains its own translate is unbounded. What the flame shows is
-   the measure again.
+   contains its own translate is unbounded.
 
-What this rung settled about the ladder: past affine, "which
-variations are invertible" was the wrong question. Roots draw the
-filled Julia set, which is a picture people know; inversions and
-folds draw regions. The variations that would move the LIBRARY next
-(`disc`, `blob`, `hemisphere`) fold or blur the plane the same way,
-so the honest expectation for them is the same disc. The escape-time
-IFS's natural catalogue is the affine sets and the julia family, and
-growing it further is a question of what the picture is, measured
-one candidate at a time, before it is a question of inverses.
+**The disc was the distance, not the picture — corrected the same
+day.** The paragraph that stood here concluded from gate 5 that
+there was nothing worth shipping and that the ladder should stop.
+It was drawn from ONE colouring per candidate, which is the mistake
+the reader should take from this section: a rung was nearly
+abandoned on a single sample of a four-way choice, and the user's
+"I suspect that sheet doesn't give us the whole story" is what
+caught it.
+
+The distance IS a disc, and that part of the measurement stands:
+the set is a region and the walk reports every interior point as
+being on it. But the walk produces FOUR quantities (§2.3) and three
+of them are defined everywhere inside a region — which branch was
+taken (the address), how deep the walk went (the level), and where
+the inverse orbit ended (the trap). They carry the structure the
+distance cannot:
+
+- **Three tangent circles under the orbit trap** draw an Apollonian
+  circle packing — the limit set of the Schottky group those
+  inversions generate, which is what an inversion IFS is. With a
+  contracting seed transform beside them it is the classical
+  gasket, discs within discs to the resolution.
+- **JuliaN Bubble under the branch address** draws a spiral
+  partition with nested copies of itself at two of its arms; the
+  catalogue flame the census names, and a picture in its own right
+  rather than a diagram of one.
+- The inversion PAIR stays noisy under every colouring, which is
+  S3's measured ball showing as it should: its set is unbounded
+  through the pre-origin and the ball is a percentile.
+
+`render_every_colouring_of_the_kernel_candidates` is the gate that
+should have existed: four colourings × two parameter settings × six
+candidates, one sheet. And the obvious objection is answered —
+`does_the_interior_structure_depend_on_the_walks_depth` compares
+24, 48 and 96 levels and finds **0.02% then 0.00%** of pixels
+changing, so the structure is the set's and not the parameter's.
+
+What this rung settles about the ladder, restated: past affine, the
+question is still what the picture IS, but "the distance field" is
+not the answer for every set. An IFS whose maps fold or invert has
+a region for its never-escaping set, and its structure lives in the
+address and the trap. That reframes the variations that would move
+the library next (`disc`, `blob`, `hemisphere`): they fold the
+plane too, so their distance will be a disc too — and that is no
+longer a reason not to take them.
 
 ## 9. Where this comes from
 
@@ -2444,9 +2471,11 @@ the commit.
     screen and nothing else, turning the same way it turns the plane.
 
 **Growing the set, 2026-09-13:** §8.7 (affine per space), §8.8 (the
-julia family, three presets), §8.9 (`spherical` and `bubble`: correct,
-and they draw discs — recorded there, with what it means for the
-ladder).
+julia family, three presets), §8.9 (`spherical` and `bubble`: their
+DISTANCE is a disc, and their structure is in the address and the
+trap — an Apollonian packing among it. The first conclusion there
+was drawn from one colouring per candidate and was wrong; the
+correction is recorded beside it).
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and
