@@ -480,6 +480,20 @@ extension to conformal invertible maps (Möbius, spherical inversion)
 the thing that would change the number. `spherical` alone is 13 of
 159.
 
+**Re-run 2026-09-13, after the per-space rule (§8.7):** 165 shipped
+flames (the two solid presets joined the library), **12** qualify as
+planar — the six presets plus six configs, three of them newly:
+`Flatten 3D Smoke`, `Simple 3D Zcone`, `ZCone 3D Smoke`. No shipped
+flame fails on `flatten`, `zcone` or `zblur` in the plane any more.
+Solid is still 0 of 34. The preset library alone reads **6 of 15**,
+and the census now says what each of the other nine needs:
+`spherical` (3 presets), `julian` (4), `bubble` (3), `blur`/`pre_blur`/
+`noise` (4 — measures, never), `disc`, `blob`, `hemisphere`,
+`julia3Dz`. The §8.4 column: 140 of the 153 non-qualifying flames
+have one nonlinear variation per transform, but the corpus is mostly
+one-variation smoke tests, so that number flatters; the preset list
+above is the honest one.
+
 ### Phase 1 — 2D distance field
 
 - `IfsDef` / `IfsColoringDef`, the template, the group-1 inverse-map
@@ -1896,7 +1910,8 @@ deep-zoomable; every rung above it gets the hard version.
 ### 8.6 Where the data belongs
 
 [`AFFINE_VARIATIONS`](../../src/scene/ifs_analysis.rs) is a `&[&str]`
-const. That is right at five entries and wrong at a hundred: it keeps
+const (a per-space role function since §8.7, still a central match).
+That is right at a dozen entries and wrong at a hundred: it keeps
 knowledge about a variation somewhere other than the variation, so
 every addition edits a central list instead of one file.
 
@@ -1918,6 +1933,47 @@ move and the append-only registration order is untouched. Then:
 
 None of this is phase 1's work. Phase 1's only obligation is not to
 foreclose it, which costs one line (§5, phase 1).
+
+### 8.7 The first rung, taken 2026-09-13: affine per space
+
+Asked from use: how does the list of five grow, and why is `flatten`
+rejected in the plane when the plane never sees z?
+
+The list was a name allowlist, and a name is the wrong unit: what a
+variation contributes depends on the SPACE being analysed. `flatten`
+is post-phase `z ← 0`; in 2D its body returns its input, and the
+chaos game in 2D never had a z to zero. Same for `zcone` and `zblur`
+(2D bodies return zero, summed — nothing) and for the four
+`pre/post_rotate_x/y` (2D bodies return their input). So
+[`AFFINE_VARIATIONS`](../../src/scene/ifs_analysis.rs) became
+[`affine_role`](../../src/scene/ifs_analysis.rs): per name and per
+space, *nothing*, a *summed* affine, a *pre-phase* affine or a
+*post-phase* affine. The composition mirrors the shader's phase order
+— affine, pre-variations replacing the point, the sum, post-variations
+replacing the result, post-affine — and its ORDER: pre/post
+variations compose in the flame's first-occurrence order
+(`resolve_phase_buckets` walks `active_variation_names_ordered`), not
+the transform's, which matters the moment two rotations about
+different axes meet (`two_pre_rotations_compose_in_the_flames_order`).
+
+What that adds, exactly and deep-zoomably:
+
+- **Plane:** `flatten`, `zcone`, `zblur`, `pre/post_rotate_x/y` are
+  nothing and accepted. Three shipped configs newly qualify (§5's
+  re-run).
+- **Solid:** `pre/post_rotate_x/y` are rotations by the weight in
+  radians about the named axis — affine isometries, composed in their
+  phase, no singular value changed. `flatten` is affine and
+  **singular** there, and the criterion now says *singular* rather
+  than *non-affine*.
+
+What it does not add: any nonlinear variation. The next rungs, from
+the census: the `julia` family (single-valued inverse `z ↦ zⁿ`, no
+branch rule — the forward map's RNG picks a branch the inverse never
+needs — with the escape-time DE in place of the σ-product; 4 presets),
+`spherical` (an involution; 3 presets), `bubble` (3). The `VariationDef`-
+carries-its-inverse shape of §8.6 is the vehicle for those; growing
+`affine_role` further is not.
 
 ## 9. Where this comes from
 
