@@ -2877,5 +2877,79 @@
     "render_mode": "escape",
     "tonemap_mode": "linear",
     "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_level",
+      "formula": "quaternion_julia_solid",
+      "formula_params": {
+        "cw": 0.0,
+        "cx": -1.0,
+        "cy": 0.2,
+        "cz": 0.0,
+        "slice_axis": 3.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.7
+    },
+    "flame": {
+      "name": "Quaternion Julia",
+      "transforms": []
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
   }
 ]
