@@ -19,14 +19,19 @@
 //! # What a flame transform IS, as an affine
 //!
 //! The chaos game applies, per transform: the affine, then the
-//! weighted sum of variations, then the post-affine. When every
+//! PRE-phase variations (each replacing the point), then the weighted
+//! sum of normal-phase variations, then the POST-phase variations
+//! (each replacing the result), then the post-affine. When every
 //! variation is affine the whole thing is one affine map, and the
 //! composition here mirrors the shader exactly — the flat and full
 //! paths of `affine_3d.wgsl`, the translation summed from three
 //! sources, `g` dropped under active plane maps (a documented
-//! limitation the shader has and this reproduces rather than fixes).
-//! Which variations count as affine is the allowlist in
-//! [`AFFINE_VARIATIONS`], and it is small on purpose.
+//! limitation the shader has and this reproduces rather than fixes),
+//! and pre/post variations composed in the order the shader emits
+//! them, which is the FLAME's first-occurrence order and not the
+//! transform's. Which variations count as affine, and what each one
+//! contributes in each space, is [`affine_role`], and the list is
+//! small on purpose.
 //!
 //! # Two kinds of "3D flame"
 //!
@@ -42,24 +47,103 @@
 use crate::scene::transforms::{Flame, Transform};
 use crate::variations::{VariationPhase, VariationRegistry};
 
-/// The variations whose 3D bodies are affine in the point, so that a
-/// transform using only these composes to one affine map. Deliberately
-/// short: growing it means proving each addition is affine
-/// (conformal invertible maps — Möbius, spherical inversion — are the
-/// next candidates and are NOT affine; see the plan's §7).
+/// The variations the analysis knows: every name [`affine_role`] can
+/// answer for in at least one space. Deliberately short: growing it
+/// means proving each addition is affine, in each space, by reading
+/// its body (conformal invertible maps — Möbius, spherical inversion,
+/// the julia family — are the next candidates and are NOT affine; see
+/// the plan's §8).
+pub const AFFINE_VARIATIONS: &[&str] = &[
+    "linear",
+    "linear3D",
+    "zscale",
+    "ztranslate",
+    "affine3D",
+    "flatten",
+    "zcone",
+    "zblur",
+    "pre_rotate_x",
+    "pre_rotate_y",
+    "post_rotate_x",
+    "post_rotate_y",
+];
+
+/// What a variation does to a transform's map, in one space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AffineRole {
+    /// Contributes nothing: a z-only variation in the plane, where the
+    /// chaos game has no z, or a 2D stub that returns its input.
+    Nothing,
+    /// Summed into the normal phase: contributes `w · (M, t)`.
+    Sum(Affine3),
+    /// A pre-phase variation: replaces the affine's output with `R p`.
+    Pre(Affine3),
+    /// A post-phase variation: replaces the sum with `R p`.
+    Post(Affine3),
+}
+
+/// What variation `name` at weight `w` contributes in `space`, or
+/// `None` when it is not affine there. Read from the bodies:
 ///
-/// - `linear` / `linear3D`: the identity on the point.
-/// - `zscale`: contributes `weight·z` to z.
-/// - `ztranslate`: contributes `weight` to z.
+/// - `linear` / `linear3D`: the identity on the point, summed.
+/// - `zscale` / `ztranslate`: `w·z` and `w` on z, summed; in the
+///   plane their 2D stubs return zero, so nothing.
 /// - `affine3D`: JWildfire's general 3D affine — per-axis scale, six
 ///   shears, a Z·Y·X rotation and a translation, all fifteen
-///   parameters. **This is the one that makes a solid affine IFS
-///   buildable**: without it every 3D transform is an XY affine with
-///   a unit z scale, and the census found none that qualified.
+///   parameters, summed. **This is the one that makes a solid affine
+///   IFS buildable**: without it every 3D transform is an XY affine
+///   with a unit z scale, and the census found none that qualified.
+/// - `flatten`: post-phase `z ← 0`. In the plane its stub returns its
+///   input, so nothing; as a solid it is affine and SINGULAR, and the
+///   criterion says so — a map with no inverse collapses the attractor.
+/// - `zcone`, `zblur`: their 2D stubs return zero, so nothing in the
+///   plane; as solids one is nonlinear and the other a measure.
+/// - `pre_rotate_x/y`, `post_rotate_x/y`: rotations by the weight in
+///   radians about the named axis, replacing the point in their
+///   phase; isometries, so they change no singular value. 2D stubs
+///   return their input, so nothing in the plane.
 ///
-/// `flatten` is affine but singular (it projects to z = 0), so it is
-/// excluded: a singular map has no inverse and collapses the attractor.
-pub const AFFINE_VARIATIONS: &[&str] = &["linear", "linear3D", "zscale", "ztranslate", "affine3D"];
+/// The census before this rule counted five shipped flames lost to
+/// `flatten` alone, on a transform whose plane map was affine.
+pub fn affine_role(
+    name: &str,
+    w: f64,
+    t: &Transform,
+    registry: &VariationRegistry,
+    space: Space,
+) -> Option<AffineRole> {
+    let planar = space == Space::Planar;
+    let diag = |x: f64, y: f64, z: f64| Affine3 { m: [[x, 0.0, 0.0], [0.0, y, 0.0], [0.0, 0.0, z]], t: [0.0; 3] };
+    Some(match name {
+        "linear" | "linear3D" => AffineRole::Sum(diag(w, w, w)),
+        "zscale" if planar => AffineRole::Nothing,
+        "zscale" => AffineRole::Sum(diag(0.0, 0.0, w)),
+        "ztranslate" if planar => AffineRole::Nothing,
+        "ztranslate" => AffineRole::Sum(Affine3 { m: [[0.0; 3]; 3], t: [0.0, 0.0, w] }),
+        "affine3D" => {
+            let a = affine3d_map(t, registry);
+            AffineRole::Sum(Affine3 { m: a.m.map(|r| r.map(|v| w * v)), t: a.t.map(|v| w * v) })
+        }
+        "flatten" if planar => AffineRole::Nothing,
+        "flatten" => AffineRole::Post(diag(1.0, 1.0, 0.0)),
+        "zcone" | "zblur" if planar => AffineRole::Nothing,
+        "pre_rotate_x" | "pre_rotate_y" | "post_rotate_x" | "post_rotate_y" if planar => {
+            AffineRole::Nothing
+        }
+        // pre_rotate_x: (x, s·z + c·y, c·z − s·y); _y: (c·x − s·z, y, s·x + c·z).
+        "pre_rotate_x" | "post_rotate_x" | "pre_rotate_y" | "post_rotate_y" => {
+            let (sn, cs) = w.sin_cos();
+            let m = if name.ends_with('x') {
+                [[1.0, 0.0, 0.0], [0.0, cs, sn], [0.0, -sn, cs]]
+            } else {
+                [[cs, 0.0, -sn], [0.0, 1.0, 0.0], [sn, 0.0, cs]]
+            };
+            let r = Affine3 { m, t: [0.0; 3] };
+            if name.starts_with("pre") { AffineRole::Pre(r) } else { AffineRole::Post(r) }
+        }
+        _ => return None,
+    })
+}
 
 // ---------------------------------------------------------------- 2D
 
@@ -289,7 +373,7 @@ fn symmetric3_eigenvalues(a: &[[f64; 3]; 3]) -> [f64; 3] {
 /// Why a transform is not one affine map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotAffine {
-    /// A variation outside [`AFFINE_VARIATIONS`].
+    /// A variation [`affine_role`] cannot answer for in this space.
     Variation(String),
     /// An affine variation whose `fx_priority` moved it out of the
     /// weighted sum, so it composes instead of summing. Rare, and the
@@ -343,69 +427,105 @@ fn affine3d_map(t: &Transform, registry: &VariationRegistry) -> Affine3 {
     rot.then_after(&shs)
 }
 
-/// The weighted variation sum a transform applies to the affine's
-/// output, `Σ wᵢ·vᵢ(q)`, as one affine map `V` — a sum of affine maps
-/// is affine. `linear` contributes `w·I`; `zscale` contributes `w`
-/// on the z diagonal; `ztranslate` contributes `w` to the z
-/// translation; `affine3D` contributes `w` times its whole map.
-fn affine_sum(t: &Transform, registry: &VariationRegistry) -> Result<Affine3, NotAffine> {
-    let mut sum = Affine3 { m: [[0.0; 3]; 3], t: [0.0; 3] };
+/// A transform's variations as three affine maps: the pre-phase
+/// composition `P`, the weighted normal-phase sum `V`, and the
+/// post-phase composition `Q`, so that the variation stage is
+/// `q ↦ Q(V(P(q)))`.
+struct VariationStage {
+    pre: Affine3,
+    sum: Affine3,
+    post: Affine3,
+}
+
+/// The variation stage, or why it is not affine in `space`.
+///
+/// `order` is the order the shader emits variations in — the flame's
+/// first-occurrence order (`Flame::active_variation_names_ordered`),
+/// which is what decides how two pre-rotations about different axes
+/// compose. A sum does not care; a composition does.
+fn variation_stage(
+    t: &Transform,
+    registry: &VariationRegistry,
+    space: Space,
+    order: &[String],
+) -> Result<VariationStage, NotAffine> {
+    let mut stage = VariationStage {
+        pre: Affine3::IDENTITY,
+        sum: Affine3 { m: [[0.0; 3]; 3], t: [0.0; 3] },
+        post: Affine3::IDENTITY,
+    };
     let mut any = false;
-    for name in t.ordered_variation_names(registry) {
-        let w = t.variations.get(&name).copied().unwrap_or(0.0) as f64;
+    // Every active variation, in the shader's order; the transform's
+    // own order is the fallback for names the flame order lacks.
+    let own = t.ordered_variation_names(registry);
+    let names = order.iter().filter(|n| t.variations.contains_key(*n)).chain(own.iter().filter(|n| !order.contains(n)));
+    for name in names {
+        let w = t.variations.get(name).copied().unwrap_or(0.0) as f64;
         if w == 0.0 {
             continue;
         }
-        if !AFFINE_VARIATIONS.contains(&name.as_str()) {
-            return Err(NotAffine::Variation(name));
-        }
-        // The same rule `mean_log_scale` mirrors from the shader
-        // builder: `Any`-phase variations sum unless a non-zero
-        // priority moved them.
-        let summed = match registry.get(&name).map(|i| i.phase.clone()) {
-            Some(VariationPhase::Normal) => true,
-            Some(VariationPhase::Any) => {
-                t.variation_priorities.get(&name).copied().unwrap_or(0) == 0
-            }
-            Some(_) => false,
-            None => true,
+        let Some(role) = affine_role(name, w, t, registry, space) else {
+            return Err(NotAffine::Variation(name.clone()));
         };
-        if !summed {
-            return Err(NotAffine::Priority(name));
-        }
-        any = true;
-        match name.as_str() {
-            "linear" | "linear3D" => {
-                for k in 0..3 {
-                    sum.m[k][k] += w;
+        match role {
+            AffineRole::Nothing => {}
+            AffineRole::Sum(a) => {
+                // The same rule `mean_log_scale` mirrors from the shader
+                // builder: `Any`-phase variations sum unless a non-zero
+                // priority moved them.
+                let summed = match registry.get(name).map(|i| i.phase.clone()) {
+                    Some(VariationPhase::Normal) => true,
+                    Some(VariationPhase::Any) => {
+                        t.variation_priorities.get(name).copied().unwrap_or(0) == 0
+                    }
+                    Some(_) => false,
+                    None => true,
+                };
+                if !summed {
+                    return Err(NotAffine::Priority(name.clone()));
                 }
-            }
-            "zscale" => sum.m[2][2] += w,
-            "ztranslate" => sum.t[2] += w,
-            "affine3D" => {
-                let a = affine3d_map(t, registry);
+                any = true;
                 for i in 0..3 {
                     for j in 0..3 {
-                        sum.m[i][j] += w * a.m[i][j];
+                        stage.sum.m[i][j] += a.m[i][j];
                     }
-                    sum.t[i] += w * a.t[i];
+                    stage.sum.t[i] += a.t[i];
                 }
             }
-            _ => unreachable!("allowlisted above"),
+            // Later variations apply after earlier ones.
+            AffineRole::Pre(r) => stage.pre = r.then_after(&stage.pre),
+            AffineRole::Post(r) => stage.post = r.then_after(&stage.post),
         }
     }
     if !any {
         return Err(NotAffine::NoVariations);
     }
-    Ok(sum)
+    Ok(stage)
+}
+
+/// The 2D affine a transform composes to, or why it does not, with
+/// the variations in the transform's own order — which is the
+/// shader's whenever the transform is alone in its flame.
+pub fn transform_affine_2d(t: &Transform, registry: &VariationRegistry) -> Result<Affine2, NotAffine> {
+    transform_affine_2d_ordered(t, registry, &t.ordered_variation_names(registry))
 }
 
 /// The 2D affine a transform composes to, or why it does not.
 ///
-/// The z-only variations contribute nothing in 2D and are accepted;
-/// `linear3D` is the identity in 2D as `linear` is.
-pub fn transform_affine_2d(t: &Transform, registry: &VariationRegistry) -> Result<Affine2, NotAffine> {
-    let sum = affine_sum(t, registry)?;
+/// The z-only variations, the 2D stubs and `flatten` contribute
+/// nothing in the plane and are accepted; `linear3D` is the identity
+/// in 2D as `linear` is.
+pub fn transform_affine_2d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Affine2, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Planar, order)?;
+    // Nothing composes in the plane: every pre/post variation the
+    // analysis knows is a stub there.
+    debug_assert_eq!(stage.pre, Affine3::IDENTITY);
+    debug_assert_eq!(stage.post, Affine3::IDENTITY);
+    let sum = stage.sum;
     let affine = Affine2 {
         m: [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
         t: [t.e as f64, t.f as f64],
@@ -480,13 +600,26 @@ fn plane(coefs: [f32; 6]) -> Option<[f64; 6]> {
     }
 }
 
+/// The 3D affine a transform composes to, or why it does not, with
+/// the variations in the transform's own order — the shader's whenever
+/// the transform is alone in its flame.
+pub fn transform_affine_3d(t: &Transform, registry: &VariationRegistry) -> Result<Affine3, NotAffine> {
+    transform_affine_3d_ordered(t, registry, &t.ordered_variation_names(registry))
+}
+
 /// The 3D affine a transform composes to, or why it does not.
 ///
-/// This is the map the chaos game applies when `preserve_z` is ON.
-/// With it off the trajectory is 2D and this map's z row describes the
-/// plotted height, not the dynamics; see [`analyse`].
-pub fn transform_affine_3d(t: &Transform, registry: &VariationRegistry) -> Result<Affine3, NotAffine> {
-    let sum = affine_sum(t, registry)?;
+/// This is the map the chaos game applies when `preserve_z` is ON:
+/// the affine, the pre-phase composition, the sum, the post-phase
+/// composition, the post-affine. With `preserve_z` off the trajectory
+/// is 2D and this map's z row describes the plotted height, not the
+/// dynamics; see [`analyse_2d`].
+pub fn transform_affine_3d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Affine3, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Solid, order)?;
     let affine = plane_affine(
         [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
         [t.e as f64, t.f as f64],
@@ -494,7 +627,7 @@ pub fn transform_affine_3d(t: &Transform, registry: &VariationRegistry) -> Resul
         plane(t.yz_coefs),
         plane(t.zx_coefs),
     );
-    let mut map = sum.then_after(&affine);
+    let mut map = stage.post.then_after(&stage.sum.then_after(&stage.pre.then_after(&affine)));
     if t.post_affine_enabled {
         let post = plane_affine(
             [[t.post_a as f64, t.post_b as f64], [t.post_c as f64, t.post_d as f64]],
@@ -613,8 +746,9 @@ pub enum Space {
 /// panel can list them: a flame with two non-affine transforms should
 /// say so once, not make the user fix one to discover the next.
 pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, Vec<Disqualification>> {
-    let maps = collect(flame, |t| transform_affine_2d(t, registry).map(|a| (a, a.inverse(), a.singular_values())));
-    let final_map = collect_final(flame, |t| transform_affine_2d(t, registry).map(|a| (a, a.inverse(), a.singular_values())));
+    let order = flame.active_variation_names_ordered(registry);
+    let maps = collect(flame, |t| transform_affine_2d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
+    let final_map = collect_final(flame, |t| transform_affine_2d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
     let (maps, final_map, errs) = merge(maps, final_map, flame);
     if !errs.is_empty() {
         return Err(errs);
@@ -626,8 +760,9 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
 /// The 3D criterion, for a flame run with `preserve_z` on. A flame
 /// run with it off is a planar IFS and should be analysed as one.
 pub fn analyse_3d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs3, Vec<Disqualification>> {
-    let maps = collect(flame, |t| transform_affine_3d(t, registry).map(|a| (a, a.inverse(), a.singular_values())));
-    let final_map = collect_final(flame, |t| transform_affine_3d(t, registry).map(|a| (a, a.inverse(), a.singular_values())));
+    let order = flame.active_variation_names_ordered(registry);
+    let maps = collect(flame, |t| transform_affine_3d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
+    let final_map = collect_final(flame, |t| transform_affine_3d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
     let (maps, final_map, errs) = merge(maps, final_map, flame);
     if !errs.is_empty() {
         return Err(errs);
@@ -871,6 +1006,133 @@ mod tests {
     /// tighter than f32's own rounding would fail on 0.3 itself.
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    // ---- what each variation contributes, per space -----------------
+
+    fn with(mut t: Transform, name: &str, w: f32) -> Transform {
+        t.variations.insert(name.to_string(), w);
+        t.variation_order.push(name.to_string());
+        t
+    }
+
+    /// In the plane the chaos game has no z, and a variation that
+    /// only writes z -- or whose 2D body returns its input -- does
+    /// nothing there. The analysis used to reject them by name; the
+    /// census counted five shipped flames lost to `flatten` alone.
+    /// With them present the gasket is still the gasket, map for map.
+    #[test]
+    fn flatten_and_the_z_only_variations_are_nothing_in_the_plane() {
+        let guard = global_registry();
+        let r = &*guard;
+        let plain = flame_of(vec![
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0),
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.0),
+            affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.5),
+        ]);
+        let mut dressed = plain.clone();
+        dressed.transforms[0] = with(dressed.transforms[0].clone(), "flatten", 1.0);
+        dressed.transforms[1] = with(dressed.transforms[1].clone(), "zcone", 0.7);
+        dressed.transforms[1] = with(dressed.transforms[1].clone(), "zblur", 0.3);
+        dressed.transforms[2] = with(dressed.transforms[2].clone(), "pre_rotate_x", 1.2);
+        dressed.transforms[2] = with(dressed.transforms[2].clone(), "post_rotate_y", -0.4);
+        dressed.transforms[2] = with(dressed.transforms[2].clone(), "ztranslate", 2.0);
+        let a = analyse_2d(&plain, r).expect("the gasket qualifies");
+        let b = analyse_2d(&dressed, r).expect("dressed in z-only variations it still does");
+        for (x, y) in a.maps.iter().zip(&b.maps) {
+            assert_eq!(x.forward, y.forward);
+        }
+        assert_eq!(a.ball, b.ball);
+    }
+
+    /// As a solid `flatten` is affine and singular: it projects to
+    /// z = 0 and has no inverse. The criterion says which, rather than
+    /// calling it non-affine.
+    #[test]
+    fn flatten_is_singular_as_a_solid() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut t = affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
+        t.variations.clear();
+        t.variation_order.clear();
+        let t = with(with(t, "linear3D", 1.0), "flatten", 1.0);
+        let m = transform_affine_3d(&t, r).expect("affine");
+        assert_eq!(m.apply([1.0, 2.0, 3.0]), [0.5, 1.0, 0.0]);
+        let errs = analyse_3d(&flame_of(vec![t]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::Singular { index: 0 })), "{errs:?}");
+        assert!(!errs.iter().any(|e| matches!(e, Disqualification::NotAffine { .. })), "{errs:?}");
+    }
+
+    /// A pre-rotation turns the affine's output before the sum and a
+    /// post-rotation turns the sum, each by its weight in radians
+    /// about its axis, exactly as the bodies write them. Worked by
+    /// hand: (1, 2, 3) through a unit affine, pre_rotate_x by π/2
+    /// ((x, z, −y) → (1, 3, −2)), a half-scale sum ((0.5, 1.5, −1)),
+    /// post_rotate_y by π/2 ((−z, y, x) → (1, 1.5, 0.5)).
+    #[test]
+    fn a_pre_rotation_turns_the_affines_output_and_a_post_rotation_the_sum() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        t.variations.clear();
+        t.variation_order.clear();
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let t = with(with(with(t, "linear3D", 0.5), "pre_rotate_x", half_pi), "post_rotate_y", half_pi);
+        let m = transform_affine_3d(&t, r).expect("affine");
+        let p = m.apply([1.0, 2.0, 3.0]);
+        assert!(close(p[0], 1.0) && close(p[1], 1.5) && close(p[2], 0.5), "{p:?}");
+        // Isometries: the singular values are the sum's.
+        let (lo, hi) = m.singular_values();
+        assert!(close(lo, 0.5) && close(hi, 0.5), "({lo}, {hi})");
+        // And it qualifies as a solid, contractive with an inverse.
+        let ifs = analyse_3d(&flame_of(vec![t]), r).expect("qualifies");
+        let q = [0.3, -0.2, 0.9];
+        let back = ifs.maps[0].inverse.apply(ifs.maps[0].forward.apply(q));
+        for k in 0..3 {
+            assert!(close(back[k], q[k]));
+        }
+    }
+
+    /// Two pre-rotations about different axes do not commute, and the
+    /// shader applies them in the FLAME's first-occurrence order, not
+    /// the transform's: `resolve_phase_buckets` walks
+    /// `active_variation_names_ordered`. So a transform listing x then
+    /// y, in a flame whose first transform listed y then x, rotates
+    /// about y first. The analysis takes the order it is given, and
+    /// `analyse_3d` gives it the flame's.
+    #[test]
+    fn two_pre_rotations_compose_in_the_flames_order() {
+        let guard = global_registry();
+        let r = &*guard;
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let base = |names: [&str; 2]| {
+            let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+            t.variations.clear();
+            t.variation_order.clear();
+            let t = with(t, "linear3D", 0.5);
+            with(with(t, names[0], half_pi), names[1], half_pi)
+        };
+        let xy = base(["pre_rotate_x", "pre_rotate_y"]);
+        let yx = base(["pre_rotate_y", "pre_rotate_x"]);
+        // Alone, each transform's own order is the shader's.
+        // x then y: (1,2,3) → (1, 3, −2) → (c·x − s·z, y, s·x + c·z) = (2, 3, 1); half → (1, 1.5, 0.5).
+        let a = transform_affine_3d(&xy, r).unwrap().apply([1.0, 2.0, 3.0]);
+        assert!(close(a[0], 1.0) && close(a[1], 1.5) && close(a[2], 0.5), "{a:?}");
+        // y then x: (1,2,3) → (−3, 2, 1) → (x, z, −y) = (−3, 1, −2); half → (−1.5, 0.5, −1).
+        let b = transform_affine_3d(&yx, r).unwrap().apply([1.0, 2.0, 3.0]);
+        assert!(close(b[0], -1.5) && close(b[1], 0.5) && close(b[2], -1.0), "{b:?}");
+
+        // In a flame led by the y-then-x transform, the x-then-y one
+        // is emitted y first too, and analyses to the same map.
+        let fl = flame_of(vec![yx.clone(), xy.clone()]);
+        let order = fl.active_variation_names_ordered(r);
+        assert_eq!(
+            order.iter().position(|n| n == "pre_rotate_y").unwrap() < order.iter().position(|n| n == "pre_rotate_x").unwrap(),
+            true
+        );
+        let ifs = analyse_3d(&fl, r).expect("qualifies");
+        let c = ifs.maps[1].forward.apply([1.0, 2.0, 3.0]);
+        assert!(close(c[0], b[0]) && close(c[1], b[1]) && close(c[2], b[2]), "{c:?} vs {b:?}");
     }
 
     /// Sierpiński: three half-scale maps. Every singular value is 0.5,
@@ -1214,6 +1476,46 @@ mod census {
             .iter()
             .filter(|(_, c)| c.render_mode == crate::scene::transforms::RenderMode::ThreeD && c.preserve_z)
             .count();
+        // The second column, plan §8.4: past affine the practical rule
+        // is ONE nonlinear normal-phase variation per transform, with
+        // affine variations summed beside it and the pre/post affines
+        // composing around it. Which shipped flames have that shape,
+        // and which variation each would need supported? Structural
+        // only -- it says nothing about whether the variation has a
+        // closed-form inverse or whether the map contracts.
+        let mut one_nonlinear: BTreeMap<String, usize> = BTreeMap::new();
+        let mut needs: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, c) in &all {
+            if c.flame.xaos.is_some() || c.flame.final_transforms.len() > 1 {
+                continue;
+            }
+            let mut set = std::collections::BTreeSet::new();
+            let mut shape_ok = true;
+            for t in c.flame.transforms.iter().chain(&c.flame.final_transforms) {
+                let mut nonlinear = Vec::new();
+                for name in t.ordered_variation_names(r) {
+                    let w = t.variations.get(&name).copied().unwrap_or(0.0) as f64;
+                    if w == 0.0 {
+                        continue;
+                    }
+                    if affine_role(&name, w, t, r, Space::Planar).is_none() {
+                        nonlinear.push(name);
+                    }
+                }
+                if nonlinear.len() > 1 {
+                    shape_ok = false;
+                    break;
+                }
+                set.extend(nonlinear);
+            }
+            if shape_ok && !set.is_empty() {
+                for n in &set {
+                    *needs.entry(n.clone()).or_default() += 1;
+                }
+                let key: Vec<&str> = set.iter().map(|s| s.as_str()).collect();
+                *one_nonlinear.entry(key.join(" + ")).or_default() += 1;
+            }
+        }
         let presets = all.iter().filter(|(n, _)| n.starts_with("preset[")).count();
         println!("\n=== affine-IFS census over {} shipped flames ===", all.len());
         println!(
@@ -1232,6 +1534,42 @@ mod census {
         let mut v: Vec<_> = reasons.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1));
         for (k, n) in v.iter().take(25) {
+            println!("    {n:4}  {k}");
+        }
+        // The preset library alone is the catalogue a user meets; the
+        // visual-regression configs are mostly one-variation smoke
+        // tests and inflate every count above.
+        println!("the preset library alone: {} of {presets} qualify; the others need", planar_ok.iter().filter(|n| n.starts_with("preset[")).count());
+        for (name, c) in all.iter().filter(|(n, _)| n.starts_with("preset[")) {
+            if planar_ok.contains(name) {
+                continue;
+            }
+            let mut set = std::collections::BTreeSet::new();
+            for t in c.flame.transforms.iter().chain(&c.flame.final_transforms) {
+                for v in t.ordered_variation_names(r) {
+                    let w = t.variations.get(&v).copied().unwrap_or(0.0) as f64;
+                    if w != 0.0 && affine_role(&v, w, t, r, Space::Planar).is_none() {
+                        set.insert(v);
+                    }
+                }
+            }
+            let set: Vec<String> = set.into_iter().collect();
+            println!("    {name}: {}", if set.is_empty() { "(affine, but fails another condition)".to_string() } else { set.join(", ") });
+        }
+        let shaped: usize = one_nonlinear.values().sum();
+        println!(
+            "of the rest, {shaped} have ONE nonlinear variation per transform (plan §8.4's shape), \
+             and would need these supported:"
+        );
+        let mut v: Vec<_> = needs.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        for (k, n) in v.iter().take(20) {
+            println!("    {n:4}  {k}");
+        }
+        println!("  by the set a flame needs:");
+        let mut v: Vec<_> = one_nonlinear.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        for (k, n) in v.iter().take(12) {
             println!("    {n:4}  {k}");
         }
         assert!(!all.is_empty(), "the census found no shipped flames at all");
