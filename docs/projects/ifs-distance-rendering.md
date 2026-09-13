@@ -2511,6 +2511,94 @@ flame. Not in this step: deep zoom (the walk is `delta +
 target_offset` in f32), and CPU agreement — there is no CPU twin of
 this walk, and the unit ball is the check that stands in for one.
 
+**Step 2 (plan, 2026-09-13): 3D kernels on the flame side.**
+`Ifs3` becomes `Ifs<Map3, ..>` with `Map3::{Affine, Nonlinear,
+NonlinearInverse}` exactly as the plane's `Map2`, and two kernels
+from the julia family's 3D bodies:
+
+- **`julia3D`** (Apophysis, Joel Faber): with `z′ = z/|n|` and
+  `ρ² = x² + y² + z′²`, the output is `ρ^{1/n − 1} · (xy rotated to
+  (θ + 2πk)/n, z′)` — a root whose radius is `ρ^{1/n}`, whose
+  elevation is kept and whose azimuth is divided. Inverse: radius
+  `|v|ⁿ`, azimuth `n·φ`, elevation kept, `z` scaled back by `|n|`;
+  single-valued, every branch undone by it (J1 again). In spherical
+  frames the map's singular values are `(1/|n|)·ρ^{1/n−1}` twice and
+  `ρ^{1/n−1}` once, and the `z` pre-scale contributes `1/|n|`, so the
+  constant part of σ_min is `1/n²` and the local factor `|v|^{1−n}`.
+- **`julia3Dz`**: the 2D root on `xy` — radius `r^{1/n}`, azimuth
+  divided — with `z` scaled by `r^{1/n − 1}/|n|`. Inverse: `xy` as the
+  plane's, `z` by `|n|·|v_xy|^{n−1}`. Its Jacobian in the `(r, θ, z)`
+  frame is the 2D root's block plus a shear from `z` into `r`, and
+  σ_min is the smaller singular value of that 2×2, as blob's was.
+
+Both are unbounded at the pre-origin for a negative power. One
+kernel per transform, alone in its sum, affines composing around
+(J4). The ball for a nonlinear solid is found numerically as the
+plane's was (J5/S3), on a Fibonacci sphere. The 3D chain hands over
+at level 0 for a nonlinear IFS (J6; the walk already handles an
+empty chain). The row grows from sixty-four to one hundred and
+twenty-eight bytes: the post-inverse with `1/w`, the pre-inverse,
+the kind and the power. The relight template declares the same row.
+
+**Gates:** round trips per kernel; the sampled upper bound on a
+3D chaos sample; the GPU walk against a CPU march of the same rays
+(there is no 2D-style pixel class for a solid, so the CPU sphere-
+traces each pixel's ray on `estimate` and the hit masks are
+compared); the six affine and one quaternion solid presets
+byte-identical over the row change; every colouring of each
+candidate, then the depth check; the census's 34 solid candidates.
+
+**Step 2 built 2026-09-13.** `Map3` and the two kernels landed as
+planned, and three things were found on the way that the plan did
+not name:
+
+- **A solid IFS need not be a planar one, and `pack_flame` assumed
+  it was.** It analysed the plane first and returned its error
+  before trying the solid, which was fine while every solid flame
+  was also a planar affine one (an `affine3D` is an XY affine seen
+  from above) and is not fine for a `julia3D`, which has no 2D
+  role. Either analysis may fail on its own now; a solid-only flame
+  packs an empty plane whose zero map count draws nothing in the
+  planar formula, with the solid ball's shadow for its view.
+- **The 3D walk read link slots that were not there.** With no
+  chain, `ifs_pick_link` returned link zero and the root loop read
+  whatever the slot buffer last held — never flagged empty, so the
+  "walk from the delta" fallback below it never ran, and the first
+  julia3D render was black. The quaternion solid of step 1 had not
+  found this because its walk never looks at links. The loop is
+  gated on the chain having any links at all.
+- **The ball's 5% margin is not quite invariance.** On a sphere
+  sampled ten times finer than the search's, images of the julia3D
+  pair's ball reach **1.0014** of its radius. Recorded as
+  "invariant to sampling", with a set point able to sit a seventh
+  of a percent outside; gated at half a percent.
+
+The gates: round trips on every branch of four transforms (two
+powers each), with each local factor below the forward stretch
+along all three axes. The sampled bound on a 300 000-point 3D chaos
+sample, tolerance a thirtieth of the ball (the sample's mean
+spacing is a forty-first): **at beam 2, 24 of 1472 points over on
+the julia3D pair (worst 1.33×) and 26 on the julia3Dz pair (worst
+2.69×); at beam 4, zero on both.** So those over-reads were the
+beam's — one address bounding the distance to its own piece, D4's
+weakness — and not the kernels', and the gate stands at beam 4. GPU
+against a CPU march of the same 96² rays: **98.0%** agreement on the
+julia3D pair (1769 GPU hits, 1939 CPU) and **99.2%** on the julia3Dz
+pair, the difference being the boundary band where the two stop at
+their own tolerances. The eleven presets byte-identical over the
+128-byte row. Every colouring of both candidates rendered, and the
+address colouring moves **0.38% then 0.00%** of pixels across
+12 → 24 → 48 levels on one and **0.08% then 0.00%** on the other.
+
+The pictures are lobed shells — real, lit, three-dimensional, and
+at these arbitrary constants not worth a preset; none ships from
+this step. The census's 34 solid candidates still read **0**: no
+shipped 3D flame is a 3D root alone with contracting affines
+beside it. What the step buys is the machinery: a flame of several
+3D roots is a solid the way a julia pair is a plane, and step 3's
+quaternion transforms are one more kernel in a row that already
+has a kind and a power.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a
@@ -2697,7 +2785,9 @@ correction is recorded beside it), §8.10 (`disc`, `blob`,
 `hemisphere`: Blob Flower ships, three catalogue flames reached,
 and the depth check separates a picture from a parameter), §8.11
 (towards quaternions: step 1, a flame-less quaternion Julia solid on
-Hart's estimate, ships as a preset; steps 2 and 3 planned).
+Hart's estimate, ships as a preset; step 2, `julia3D` and `julia3Dz`
+as kernels on the flame's solid side, gated and shipping nothing;
+step 3 planned).
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and

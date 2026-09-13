@@ -48,7 +48,7 @@
 //! modes A and B.
 
 use super::EscapeParamDef;
-use crate::scene::ifs_analysis::{Affine2, Ifs2, Ifs3, Map2};
+use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs2, Ifs3, Map2, Map3};
 
 /// A mode-D distance function.
 pub struct IfsDef {
@@ -696,13 +696,81 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
     ],
     wgsl: r#"
 // Inverse of map i, in three dimensions.
-fn ifs_inv_point3(i: u32, p: vec3<f32>) -> vec3<f32> {
+// The 3D kernels' inverses on v (plan 8.11 step 2). julia3D (kind 1):
+// radius |v|^n, azimuth n*phi, elevation kept, z scaled back by |n|.
+// julia3Dz (kind 2): the plane's root on xy, z by |n| |v_xy|^(n-1).
+fn ifs_kernel_inverse3(i: u32, v: vec3<f32>) -> vec3<f32> {
+    let kind = ifs_maps[i].extra.z;
+    let n = ifs_maps[i].extra.w;
+    let rxy = length(v.xy);
+    let theta = n * ff_atan2(v.y, v.x);
+    if (kind == 1.0) {
+        let rho_out = length(v);
+        if (rho_out < 1e-30) {
+            return vec3<f32>(0.0, 0.0, 0.0);
+        }
+        let rho = pow(rho_out, n);
+        let sqrt_r2d = rho * (rxy / rho_out);
+        let zz = rho * (v.z / rho_out);
+        return vec3<f32>(sqrt_r2d * cos(theta), sqrt_r2d * sin(theta), zz * abs(n));
+    }
+    if (rxy < 1e-30) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    let sqrt_r2d = pow(rxy, n);
+    return vec3<f32>(sqrt_r2d * cos(theta), sqrt_r2d * sin(theta), v.z * abs(n) * pow(rxy, n - 1.0));
+}
+
+// The factor on the row's constant sigma_min at v.
+fn ifs_kernel_sigma3(i: u32, v: vec3<f32>) -> f32 {
+    let kind = ifs_maps[i].extra.z;
+    let n = ifs_maps[i].extra.w;
+    if (kind == 1.0) {
+        return pow(max(length(v), 1e-30), 1.0 - n);
+    }
+    let rxy = max(length(v.xy), 1e-30);
+    let r = pow(rxy, n);
+    let z = v.z * abs(n) * pow(rxy, n - 1.0);
+    let a = pow(r, 1.0 / n - 1.0) / abs(n);
+    let b = z * (1.0 / n - 1.0) * pow(r, 1.0 / n - 2.0) / abs(n);
+    let s = a * a + b * b + a * a;
+    let d = sqrt(max(s * s - 4.0 * a * a * a * a, 0.0));
+    return min(sqrt(max((s - d) * 0.5, 0.0)), a);
+}
+
+fn ifs_inv_affine3(i: u32, p: vec3<f32>) -> vec3<f32> {
     let m = ifs_maps[i];
     return vec3<f32>(
         dot(m.r0.xyz, p) + m.r0.w,
         dot(m.r1.xyz, p) + m.r1.w,
         dot(m.r2.xyz, p) + m.r2.w,
     );
+}
+
+// Inverse of map i: one affine on an affine row (kind 0); the
+// post-inverse with 1/w folded in, the kernel's inverse, then the
+// pre-inverse on a nonlinear row.
+fn ifs_inv_point3(i: u32, p: vec3<f32>) -> vec3<f32> {
+    let q = ifs_inv_affine3(i, p);
+    if (ifs_maps[i].extra.z == 0.0) {
+        return q;
+    }
+    let u = ifs_kernel_inverse3(i, q);
+    let m = ifs_maps[i];
+    return vec3<f32>(
+        dot(m.p0.xyz, u) + m.p0.w,
+        dot(m.p1.xyz, u) + m.p1.w,
+        dot(m.p2.xyz, u) + m.p2.w,
+    );
+}
+
+// The forward map's sigma_min at the point whose image is p.
+fn ifs_inv_sigma3(i: u32, p: vec3<f32>) -> f32 {
+    let s = ifs_maps[i].extra.x;
+    if (ifs_maps[i].extra.z == 0.0) {
+        return s;
+    }
+    return s * ifs_kernel_sigma3(i, ifs_inv_affine3(i, p));
 }
 
 fn ifs_residual(r: f32, radius: f32, sigma: f32) -> f32 {
@@ -795,7 +863,11 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     var live: array<IfsCand3, IFS_MAX_BEAM>;
     var next: array<IfsCand3, IFS_MAX_BEAM>;
     var live_count = 0u;
-    for (var b = 0u; b < max(slots, 1u); b = b + 1u) {
+    // No links at all -- a nonlinear solid, whose maps have no matrix
+    // to carry a delta (plan 8.11 step 2) -- and the slots hold
+    // whatever was last bound: the walk starts from the delta below.
+    let has_chain = ifs_link_levels() > 0u;
+    for (var b = 0u; has_chain && b < max(slots, 1u); b = b + 1u) {
         let L = ifs_links[link * slots + b];
         let flags = bitcast<u32>(L.extra.w);
         if ((flags & 4u) != 0u) {
@@ -934,7 +1006,7 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
             var child = live[parent];
             if (bi < n) {
                 child.q = ifs_inv_point3(bi, live[parent].q);
-                child.sigma = live[parent].sigma * ifs_maps[bi].extra.x;
+                child.sigma = live[parent].sigma * ifs_inv_sigma3(bi, live[parent].q);
                 child.last_sigma = ifs_maps[bi].extra.x;
                 child.r = key[k2];
                 child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
@@ -1635,9 +1707,10 @@ pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IfsMap3Gpu {
     /// Row `i` of the inverse 3×3 in `xyz`, and the translation's
-    /// `i`-th component in `w`.
+    /// `i`-th component in `w`. On a nonlinear row (plan §8.11 step
+    /// 2) this is the POST-inverse with `1/w` folded in.
     ///
-    /// Four `vec4`s and no `vec3` anywhere, which is deliberate. A
+    /// Eight `vec4`s and no `vec3` anywhere, which is deliberate. A
     /// `vec3<f32>` aligns to SIXTEEN bytes in WGSL and to four in
     /// Rust, so the obvious struct — three padded rows, a `vec3`
     /// translation, two scalars — is eighty bytes on one side and
@@ -1645,33 +1718,54 @@ pub struct IfsMap3Gpu {
     /// the wrong offset and the render comes out as noise that still
     /// looks vaguely like something, which is how this was found.
     pub rows: [[f32; 4]; 3],
-    /// `σ_min` of the forward map, the transform's colour, and the
-    /// padding that makes the stride sixty-four.
+    /// `σ_min` of the forward map (its constant part on a nonlinear
+    /// row), the transform's colour, the kind (0 affine, 1 julia3D,
+    /// 2 julia3Dz) and the signed power.
     pub extra: [f32; 4],
+    /// A nonlinear row's pre-inverse, as `rows`; zero on an affine row.
+    pub pre: [[f32; 4]; 3],
+    /// Padding to one hundred and twenty-eight bytes.
+    pub extra2: [f32; 4],
 }
 
 /// The 3D rows, in the flame's transform order.
 pub fn pack_maps3(ifs: &Ifs3, colors: &[f32]) -> Vec<IfsMap3Gpu> {
+    let rows_of = |a: &Affine3| -> [[f32; 4]; 3] {
+        let row = |i: usize| [a.m[i][0] as f32, a.m[i][1] as f32, a.m[i][2] as f32, a.t[i] as f32];
+        [row(0), row(1), row(2)]
+    };
     ifs.maps
         .iter()
         .map(|m| {
-            let inv = m.inverse;
-            let row = |i: usize| {
-                [
-                    inv.m[i][0] as f32,
-                    inv.m[i][1] as f32,
-                    inv.m[i][2] as f32,
-                    inv.t[i] as f32,
-                ]
-            };
-            IfsMap3Gpu {
-                rows: [row(0), row(1), row(2)],
-                extra: [
-                    m.sigma_min as f32,
-                    colors.get(m.transform_index).copied().unwrap_or(0.0),
-                    0.0,
-                    0.0,
-                ],
+            let color = colors.get(m.transform_index).copied().unwrap_or(0.0);
+            match m.inverse {
+                Map3::Affine(inv) => IfsMap3Gpu {
+                    rows: rows_of(&inv),
+                    extra: [m.sigma_min as f32, color, 0.0, 0.0],
+                    pre: [[0.0; 4]; 3],
+                    extra2: [0.0; 4],
+                },
+                Map3::NonlinearInverse(r) | Map3::Nonlinear(r) => {
+                    use crate::scene::ifs_analysis::Kernel3;
+                    let scale = 1.0 / r.w;
+                    let mut post = r.post_inv;
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            post.m[i][j] *= scale;
+                        }
+                        post.t[i] *= scale;
+                    }
+                    let kind = match r.kernel {
+                        Kernel3::Root3 { .. } => 1.0,
+                        Kernel3::RootZ3 { .. } => 2.0,
+                    };
+                    IfsMap3Gpu {
+                        rows: rows_of(&post),
+                        extra: [m.sigma_min as f32, color, kind, r.kernel.power() as f32],
+                        pre: rows_of(&r.pre_inv),
+                        extra2: [0.0; 4],
+                    }
+                }
             }
         })
         .collect()
@@ -1739,19 +1833,38 @@ pub fn pack_flame(
     flame: &crate::scene::transforms::Flame,
     registry: &crate::variations::VariationRegistry,
 ) -> Result<PackedIfs, Vec<crate::scene::ifs_analysis::Disqualification>> {
-    let ifs = crate::scene::ifs_analysis::analyse_2d(flame, registry)?;
     let colors: Vec<f32> = flame.transforms.iter().map(|t| t.color).collect();
-    let mut globals = [[0.0f32; 4]; 4];
-    pack_globals(&ifs, &mut globals);
-    let rows = pack_maps(&ifs, &colors);
-    // The solid analysis is attempted and allowed to fail: a flame
-    // that is a planar IFS need not be a solid one.
+    // Either analysis may fail on its own: a flame that is a planar
+    // IFS need not be a solid one, and since plan 8.11 step 2 a flame
+    // of 3D roots is a solid one and not a planar one. Both failing
+    // is what "does not qualify" means; the planar reasons are the
+    // ones reported, as the panel's criterion is the planar one.
+    let planar = crate::scene::ifs_analysis::analyse_2d(flame, registry);
     let solid = crate::scene::ifs_analysis::analyse_3d(flame, registry)
         .ok()
         .map(|ifs3| {
             let rows3 = pack_maps3(&ifs3, &colors);
             (ifs3, rows3)
         });
+    let ifs = match (planar, &solid) {
+        (Ok(ifs), _) => ifs,
+        (Err(why), None) => return Err(why),
+        // A solid with no planar reading: an empty plane, whose zero
+        // map count draws nothing in the planar formula, and whose
+        // ball is the solid's shadow so the view has something to
+        // frame.
+        (Err(_), Some((ifs3, _))) => crate::scene::ifs_analysis::Ifs {
+            maps: Vec::new(),
+            final_map: None,
+            ball: crate::scene::ifs_analysis::Ball {
+                centre: [ifs3.ball.centre[0], ifs3.ball.centre[1]],
+                radius: ifs3.ball.radius,
+            },
+        },
+    };
+    let mut globals = [[0.0f32; 4]; 4];
+    pack_globals(&ifs, &mut globals);
+    let rows = pack_maps(&ifs, &colors);
     Ok(PackedIfs { globals, rows, ifs, colors, solid })
 }
 
@@ -4074,9 +4187,11 @@ mod tests {
     /// is how it was found and why this test exists.
     #[test]
     fn the_solid_row_is_the_layout_the_shader_declares() {
-        assert_eq!(std::mem::size_of::<IfsMap3Gpu>(), 64);
+        assert_eq!(std::mem::size_of::<IfsMap3Gpu>(), 128);
         assert_eq!(std::mem::offset_of!(IfsMap3Gpu, rows), 0);
         assert_eq!(std::mem::offset_of!(IfsMap3Gpu, extra), 48);
+        assert_eq!(std::mem::offset_of!(IfsMap3Gpu, pre), 64);
+        assert_eq!(std::mem::offset_of!(IfsMap3Gpu, extra2), 112);
         // And no vec3 in the shader's declaration either, which is the
         // half a size assertion cannot see.
         let src = crate::escape::assembler::assemble_ifs(&IFS_FLAME_3D, &IFS_ADDRESS, 8);
@@ -5556,6 +5671,184 @@ mod gpu_tests {
                 let path = dir.join(format!("quat-{name}-{coloring}.png"));
                 image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
                 println!("    {} ({lit} lit)", path.display());
+            }
+        }
+    }
+
+    /// A solid of 3D roots: two `julia3D`s and a contracting affine.
+    pub(super) fn julia3d_pair_flame() -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms.clear();
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        for (i, (variation, power, e, f, g, w)) in [
+            ("julia3D", 2.0f32, 0.3f32, -0.2f32, 0.1f32, 0.9f32),
+            ("julia3D", 2.0, -0.4, 0.3, -0.2, 0.9),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut t = Transform::default();
+            t.a = 1.0;
+            t.b = 0.0;
+            t.c = 0.0;
+            t.d = 1.0;
+            t.e = e;
+            t.f = f;
+            t.g = g;
+            t.color = 0.2 + 0.5 * i as f32;
+            t.variations = HashMap::from([(variation.to_string(), w)]);
+            t.variation_order = vec![variation.to_string()];
+            t.set_variation_param(variation, "power", power);
+            fl.transforms.push(t);
+        }
+        let mut aff = Transform::default();
+        aff.a = 1.0;
+        aff.b = 0.0;
+        aff.c = 0.0;
+        aff.d = 1.0;
+        aff.e = 0.6;
+        aff.f = 0.0;
+        aff.g = 0.2;
+        aff.color = 0.9;
+        aff.variations = HashMap::from([("linear3D".to_string(), 0.5)]);
+        aff.variation_order = vec!["linear3D".to_string()];
+        fl.transforms.push(aff);
+        fl
+    }
+
+    pub(super) fn julia3dz_pair_flame() -> Flame {
+        let mut fl = julia3d_pair_flame();
+        for t in fl.transforms.iter_mut().take(2) {
+            t.variations = HashMap::from([("julia3Dz".to_string(), 0.9)]);
+            t.variation_order = vec!["julia3Dz".to_string()];
+            t.set_variation_param("julia3Dz", "power", 2.0);
+        }
+        fl
+    }
+
+    fn solid_config_for(flame: Flame, coloring: &str) -> crate::config::FractalConfig {
+        let mut c = crate::config::FractalConfig::default();
+        c.render_mode = RenderMode::Escape;
+        c.flame = flame;
+        c.escape.formula = "ifs_flame_3d".to_string();
+        c.escape.coloring = coloring.to_string();
+        c.escape.zoom_log2 = 0.0;
+        c.escape.cam_yaw = 0.9;
+        c.escape.cam_pitch = 0.42;
+        c.escape.formula_params.insert("levels".to_string(), 24.0);
+        c.escape.coloring_params.insert("interior".to_string(), 0.5);
+        c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+        c.gamma = crate::config::defaults::DEFAULT_GAMMA;
+        c
+    }
+
+    /// Plan 8.11 step 2, gate 3: the GPU solid of a julia3D pair
+    /// agrees with a CPU march of the same rays. There is no pixel
+    /// class for a solid as there is for the plane, so the CPU
+    /// sphere-traces each pixel's ray on `estimate` and the hit masks
+    /// are compared; the boundary band is where the two may
+    /// legitimately differ by their tolerances.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_gpu_solid_agrees_with_a_cpu_march_on_a_julia3d_pair() {
+        for (name, flame) in [("julia3D", julia3d_pair_flame()), ("julia3Dz", julia3dz_pair_flame())] {
+            let config = solid_config_for(flame, "ifs_distance");
+            let guard = global_registry();
+            let ifs3 = crate::scene::ifs_analysis::analyse_3d(&config.flame, &guard).expect("qualifies");
+            drop(guard);
+            assert!(ifs3.maps.iter().any(|m| !m.forward.is_affine()));
+            let (device, queue) = device();
+            const N: u32 = 96;
+            let job = crate::renderer::RenderJob::new(&config, N, N);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render");
+            let cam = solid_camera(&config.escape, &ifs3);
+            let tan_half = (cam.fov as f64 * 0.5).tan();
+            let (mut agree, mut total, mut gpu_hits, mut cpu_hits) = (0usize, 0usize, 0usize, 0usize);
+            for y in 0..N {
+                for x in 0..N {
+                    let i = ((y * N + x) * 4) as usize;
+                    let gpu_hit = out.rgba_data[i] as u32 + out.rgba_data[i + 1] as u32 + out.rgba_data[i + 2] as u32 > 24;
+                    let u = (x as f64 + 0.5) / N as f64 - 0.5;
+                    let v = (y as f64 + 0.5) / N as f64 - 0.5;
+                    let mut dir = [0.0f64; 3];
+                    for k in 0..3 {
+                        dir[k] = cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half) - cam.up[k] * (v * 2.0 * tan_half);
+                    }
+                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                    for k in 0..3 {
+                        dir[k] /= len;
+                    }
+                    // The ray against the ball, then a sphere trace.
+                    let oc: [f64; 3] = std::array::from_fn(|k| cam.eye[k] - ifs3.ball.centre[k]);
+                    let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
+                    let c_term = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - ifs3.ball.radius * ifs3.ball.radius;
+                    let disc = b * b - c_term;
+                    let mut cpu_hit = false;
+                    if disc >= 0.0 {
+                        let root = disc.sqrt();
+                        let mut t = (-b - root).max(0.0);
+                        let t_max = -b + root;
+                        let px_at = 2.0 * tan_half / N as f64;
+                        for _ in 0..96 {
+                            if t > t_max {
+                                break;
+                            }
+                            let p: [f64; 3] = std::array::from_fn(|k| cam.eye[k] + dir[k] * t);
+                            let d = estimate(&ifs3, p, 24, 1).distance;
+                            if d < px_at * t {
+                                cpu_hit = true;
+                                break;
+                            }
+                            t += d;
+                        }
+                    }
+                    total += 1;
+                    gpu_hits += gpu_hit as usize;
+                    cpu_hits += cpu_hit as usize;
+                    agree += (gpu_hit == cpu_hit) as usize;
+                }
+            }
+            let pct = 100.0 * agree as f64 / total as f64;
+            println!("  {name}: GPU hits {gpu_hits}, CPU hits {cpu_hits}, agreement {pct:.1}% of {total}");
+            assert!(gpu_hits > 300 && cpu_hits > 300, "{name}: too few hits to compare");
+            assert!(pct > 95.0, "{name}: GPU and CPU disagree on {:.1}% of pixels", 100.0 - pct);
+        }
+    }
+
+    /// Every colouring of the two solid candidates, then the depth
+    /// check (plan 8.11 step 2's gate 5; 8.9's lesson).
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/solid-kern-*.png"]
+    fn render_the_solid_kernel_candidates_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        for (name, flame) in [("julia3d-pair", julia3d_pair_flame()), ("julia3dz-pair", julia3dz_pair_flame())] {
+            for coloring in ["ifs_distance", "ifs_level", "ifs_address", "ifs_trap"] {
+                let c = solid_config_for(flame.clone(), coloring);
+                let job = crate::renderer::RenderJob::new(&c, 384, 384);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                    .expect("render");
+                let path = dir.join(format!("solid-kern-{name}-{coloring}.png"));
+                image::save_buffer(&path, &out.rgba_data, 384, 384, image::ColorType::Rgba8).expect("write png");
+            }
+            let mut shots = Vec::new();
+            for levels in [12u32, 24, 48] {
+                let mut c = solid_config_for(flame.clone(), "ifs_address");
+                c.escape.formula_params.insert("levels".to_string(), levels as f32);
+                let job = crate::renderer::RenderJob::new(&c, 256, 256);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                    .expect("render");
+                shots.push((levels, out.rgba_data));
+            }
+            for w in shots.windows(2) {
+                let diff = w[0].1.chunks(4).zip(w[1].1.chunks(4))
+                    .filter(|(p, q)| (p[0] as i32 - q[0] as i32).abs() + (p[1] as i32 - q[1] as i32).abs() + (p[2] as i32 - q[2] as i32).abs() > 24)
+                    .count();
+                println!("  {name} / ifs_address: levels {} -> {} changes {:.2}% of pixels", w[0].0, w[1].0, 100.0 * diff as f64 / (256.0 * 256.0));
             }
         }
     }

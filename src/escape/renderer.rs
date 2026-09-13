@@ -3568,8 +3568,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         packed: &super::ifs::PackedIfs,
         def: &super::ifs::IfsDef,
     ) {
-        let Some((ifs3, _)) = packed.solid.as_ref().filter(|(i, _)| !i.maps.is_empty()) else {
-            // No maps, no chain: a flame-less def walks from the delta.
+        let Some((ifs3, _)) = packed
+            .solid
+            .as_ref()
+            .filter(|(i, _)| !i.maps.is_empty() && i.maps.iter().all(|m| m.inverse.is_affine()))
+        else {
+            // No maps, no chain: a flame-less def walks from the delta,
+            // and so does a nonlinear solid (plan 8.11 step 2), whose
+            // maps have no matrix to carry a delta through.
             self.ifs_chain = None;
             self.ifs_chain_key.clear();
             return;
