@@ -472,6 +472,35 @@ pub const HANDOVER_FRACTION: f64 = 0.25;
 /// `view_basis` maps a normalised pixel offset — the screen spanning
 /// [-½, ½] on each axis — to a world offset from the centre. `px` is
 /// the world width of one pixel.
+///
+/// **The handover stops at the first level the view does not agree
+/// on.** The beam is chosen per pixel by ranking, and the CPU walks
+/// from the centre; a branch may be pruned only if every pixel in the
+/// view would prune it too. A branch outside the beam is safely pruned
+/// when its most optimistic key, at the pixel nearest it, is still
+/// worse than the most pessimistic key of everything kept; the first
+/// level at which any branch fails that test is not taken, and the
+/// prefix ends one level short. That costs one level of f32 and
+/// nothing else, and it makes the seeded walk EXACTLY each pixel's own
+/// walk up to the handover -- measured at 0% disagreement over five
+/// zooms, four beams and two sets, one of them overlapping.
+///
+/// Without the rule, every pixel continued from the centre's
+/// surviving branches, and a pixel whose own nearest piece had been
+/// pruned read a distance to some other piece and rendered as
+/// exterior. Which pixels depended on how deep the handover went,
+/// which depended on the zoom: 41% of the outer frame on the dragon at
+/// one zoom and beam and 0% at the next -- "the structure warps as I
+/// zoom, and no beam setting fixes it".
+///
+/// Carrying the ambiguous branches instead (a closure wider than the
+/// beam, ranked once per pixel at the handover) was tried and is not
+/// the same walk: greedy selection is level by level, and a lineage
+/// that ranks best at the handover need not be the one greedy would
+/// have followed. Measured on the gasket it moved a halo edge by a
+/// pixel or two, which is the artefact being fixed. Replaying the
+/// selection per level would be exact and about eight times the cost
+/// at depth.
 pub fn seed_beam<P: SeedPoint>(
     ifs: &Ifs2,
     centre: P,
@@ -601,6 +630,30 @@ pub fn seed_beam<P: SeedPoint>(
         // ends up attached to the wrong path.
         let mut order: Vec<usize> = (0..next.len()).collect();
         order.sort_by(|&a, &b| by_rank(&next[a], &next[b]));
+
+        // The handover may prune a branch only if EVERY pixel in the
+        // view would prune it too.
+        //
+        // The ranking key is the distance to the ball's centre at the
+        // CENTRE's position; a pixel's own key for the same branch is
+        // within that branch's reach of it. So a branch outside the
+        // beam is safely pruned only when its most optimistic key is
+        // still worse than the most pessimistic key of anything kept.
+        // If any branch fails that test the view does not agree on
+        // the beam, and the handover stops HERE, one level short --
+        // which costs one level of f32 and nothing else.
+        //
+        // Without this, every pixel continued from the centre's
+        // surviving branches, and a pixel whose own nearest piece had
+        // been pruned read a distance to some other piece and rendered
+        // as exterior. Which pixels depended on how deep the handover
+        // went, which depended on the zoom: measured at 41% of the
+        // outer frame on the dragon at one zoom and beam and 0% at the
+        // next, which is what "the structure warps as I zoom, and no
+        // beam setting fixes it" was.
+        if !view_agrees(&order, |i| next[i].r, |i| basis_reach(next_bases[i]), beam) {
+            break;
+        }
         order.truncate(beam);
         live = order.iter().map(|&i| next[i].clone()).collect();
         bases = order.iter().map(|&i| next_bases[i]).collect();
@@ -670,6 +723,9 @@ pub fn estimate_seeded(
             }
         })
         .collect();
+    // Ranked by THIS pixel's position, as the walk ranks every level.
+    live.sort_by(by_rank);
+    live.truncate(beam);
 
     let mut best_escape: Option<(f64, Vec<u32>, [f64; 2])> = None;
     let sigma_of = |c: &Cand<[f64; 2]>| {
@@ -892,6 +948,17 @@ impl SeedChain3 {
 /// pixel at the target — and it is what stops the walk: past the level
 /// where a single pixel's delta fills the cap, no sample can use a
 /// deeper link, so computing one is work for nothing.
+///
+/// The chain ends at the first level the samples do not agree on, by
+/// the same rule as [`seed_beam`]'s, with the cap as every level's
+/// reach since a sample sits within the cap of its link's reference by
+/// construction. A consequence worth knowing: on a set whose branches
+/// TIE -- the sponge's two equidistant neighbours, for a beam of two
+/// -- the chain ends at once and the walk is the unseeded f32 one,
+/// which is the 2¹³ wall again. A beam of one is exact for a tiling
+/// set and is the solid default, so that costs nothing shipped; an
+/// overlapping solid wanting both a wide beam and a deep zoom is a
+/// case nobody has yet.
 pub fn seed_chain3<P: SeedPoint3>(
     ifs: &Ifs3,
     target: P,
@@ -1018,6 +1085,18 @@ pub fn seed_chain3<P: SeedPoint3>(
         // ends up attached to the wrong path.
         let mut order: Vec<usize> = (0..next.len()).collect();
         order.sort_by(|&a, &b| by_rank(&next[a], &next[b]));
+
+        // The same rule as the plane's handover: a branch may be pruned
+        // only if every SAMPLE that could use this link would prune it
+        // too. A sample sits within the cap of the link's reference by
+        // construction -- that is what `level_for` enforces -- so the
+        // cap is the reach here, at every level. If the view does not
+        // agree on the beam the chain ends one link short, and samples
+        // that would have used the missing link use the one above it,
+        // with one more level walked per sample in f32.
+        if !view_agrees(&order, |i| next[i].r, |_| cap, beam) {
+            break;
+        }
         order.truncate(beam);
         live = order.iter().map(|&i| next[i].clone()).collect();
         mats = order.iter().map(|&i| next_mats[i]).collect();
@@ -1064,6 +1143,9 @@ pub fn estimate_seeded3(
             }
         })
         .collect();
+    // Ranked by THIS sample's position, as the walk ranks every level.
+    live.sort_by(by_rank);
+    live.truncate(beam);
 
     let sigma_of = |c: &Cand<[f64; 3]>| {
         c.address
@@ -1142,6 +1224,32 @@ pub fn estimate_seeded3(
             deepest_level,
         },
     }
+}
+
+/// Would every pixel in the view keep the same top `beam` of these
+/// ranked candidates?
+///
+/// `key(i)` is the ranking key at the centre and `reach(i)` how far a
+/// pixel's own key for that candidate can be from it. The answer is
+/// yes exactly when the most optimistic key of the best pruned
+/// candidate is still worse than the most pessimistic key of the worst
+/// kept one. The order is by key, so the best pruned is the first past
+/// the beam.
+fn view_agrees(
+    order: &[usize],
+    key: impl Fn(usize) -> f64,
+    reach: impl Fn(usize) -> f64,
+    beam: usize,
+) -> bool {
+    if order.len() <= beam {
+        return true;
+    }
+    let kept_worst = order[..beam]
+        .iter()
+        .map(|&i| key(i) + reach(i))
+        .fold(f64::NEG_INFINITY, f64::max);
+    let j = order[beam];
+    key(j) - reach(j) > kept_worst
 }
 
 /// Compose an inverse map's LINEAR part onto a delta matrix.
@@ -1643,9 +1751,19 @@ mod tests {
     #[test]
     fn the_handover_level_tracks_the_zoom() {
         let ifs = sierpinski();
-        let mut target = ifs.ball.centre;
-        for k in 0..30u32 {
-            target = ifs.maps[(k as usize) % 3].forward.apply(target);
+        // A point of the set with an APERIODIC address. The ball centre
+        // pushed through thirty maps was the first choice, and it is a
+        // trap: thirty levels of inverse iteration bring it back to
+        // the ball centre, which is equidistant from all three pieces,
+        // and at an exact tie the handover stops -- correctly, since
+        // pixels either side of it need different branches -- so the
+        // level stalls at thirty however deep the zoom.
+        let mut target = [
+            ifs.ball.centre[0] + 0.137 * ifs.ball.radius,
+            ifs.ball.centre[1] - 0.211 * ifs.ball.radius,
+        ];
+        for k in 0..40u32 {
+            target = ifs.maps[(k as usize * 7 / 5) % 3].forward.apply(target);
         }
 
         let level_at = |zoom: f64| {
@@ -1654,13 +1772,21 @@ mod tests {
         };
 
         // At sigma = 1/2 each level doubles the delta, so the handover
-        // should sit about one level deeper per bit of zoom.
+        // should sit about one level deeper per bit of zoom -- less
+        // the levels the view does not agree on. On a generic point
+        // near-ties come along every so often, and each stops the
+        // handover one level short of where the reach alone would
+        // have taken it; measured, 53 levels for 60 bits. What the
+        // shader is left with is the difference, as bits of f32 spent
+        // on the frame before the pixel: eight is a comfortable
+        // fraction of the twenty-four it has.
         let shallow = level_at(0.0);
         let deep = level_at(60.0);
         println!("  handover level: zoom 0 -> {shallow}, zoom 60 -> {deep}");
         assert!(shallow <= 3, "a home view should hand over almost at once, got {shallow}");
+        let short = 60 - (deep as i64 - shallow as i64);
         assert!(
-            (deep as i64 - shallow as i64 - 60).abs() <= 4,
+            (0..=8).contains(&short),
             "handover moved {} levels for 60 bits of zoom",
             deep as i64 - shallow as i64
         );

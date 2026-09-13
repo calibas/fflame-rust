@@ -1616,6 +1616,75 @@ for the measurement. 1080p presets across the day's work: gasket
 437 → 250 ms, carpet 401 → 284, tetrahedron 652 → 173, sponge
 1180 → 301; the dragon and the Koch keep beam 8 and their times.
 
+**The handover stops where the view stops agreeing, 2026-09-12.**
+Reported from use: sections disappear when zooming in or out, the
+structure warps rather than magnifying, regions in 2D seem to swap
+which is drawn above the other, and Beam Width changes it while no
+setting fixes it. The suspicion was the handover, and the measurement
+confirmed it. The CPU walks the beam from the view CENTRE and every
+pixel continued from the centre's surviving branches; a pixel whose
+own nearest piece had been pruned from that beam read a distance to
+some other piece and rendered as exterior. Which pixels that hit
+depended on how deep the handover went, which depended on the zoom.
+Measured against each pixel's own unseeded walk at the same world
+point (exact at these zooms, and it knows nothing of any centre),
+with disagreement counted past a pixel or one percent: the gasket at
+z8 disagreed on 15% of the frame, the dragon at z8 beam 2 on **41%**,
+the dragon at z14 beam 1 on 6%, and 0% in the cells between. That is
+the zoom dependence the report describes, and the beam dependence.
+
+The rule: a branch may be pruned only if every pixel in the view
+would prune it too. The ranking key is a distance to the ball centre
+in the inverse-iterated frame, and a pixel's own key for a candidate
+is within the candidate's REACH of the centre's (the view basis
+pushed through the candidate's inverse maps in 2D; the chain cap in
+3D, since a sample sits within the cap of its link's reference by
+construction). So the view agrees on the beam exactly when the most
+optimistic key of the best pruned candidate is still worse than the
+most pessimistic key of the worst kept one, and the first level at
+which that fails is not taken. After: 0% in every cell of both
+tables — five zooms, four beams, the gasket and the overlapping
+dragon; five zooms, three beams, the tetrahedron and the sponge.
+
+Two things it costs, both accepted. The handover ends earlier than
+the reach alone would have taken it — 53 levels for 60 bits of zoom
+on a generic point of the gasket, where it was 60 — and the shader
+walks the difference in f32, eight bits of its twenty-four spent on
+the frame before the pixel; the deep-zoom gates (2D to 2²⁰⁰ against
+the reference, solids to 2⁸⁰) are unchanged. And on a set whose
+branches TIE, the chain ends at the tie: the tetrahedron and the
+sponge tile, so at beam 2 or 4 their two nearest branches are
+equidistant from every sample and the chain is one or two links —
+the unseeded f32 walk, and the 2¹³ wall again. A beam of one is exact
+for a tiling set and is the solid default, so nothing shipped pays;
+an overlapping solid wanting both a wide beam and a deep zoom has no
+one asking for it yet. The same tie stops a 2D handover at a centre
+the set is exactly symmetric about — the test target that was the
+ball centre pushed through thirty maps came back to the ball centre
+after thirty levels and stalled there — which a typed centre of
+exactly zero on a symmetric set could reach; from the tie down the
+shader is on its own in f32, which is the wall of §2.5 measured from
+that level rather than from the top. Not measured on a real view,
+because no preset centres on one; the exact answer for that case is
+below.
+
+What was tried first and is not the answer: carrying the ambiguous
+branches too — a closure wider than the beam, up to eight seeds or
+eight slots a link, ranked once per pixel at the handover by the
+pixel's own position. It restored the 3D depth at beam 2 and it is
+not the same walk: greedy selection is level by level, and a lineage
+that ranks best at the handover level need not be the one greedy
+would have followed from the level it was pruned at, so the seeded
+distance differed from the pixel's own — on the gasket by a pixel or
+two along a halo edge, on the dragon at z8 beam 2 by half — and a
+seeded walk that differs from the per-pixel one is, by construction,
+one whose picture depends on the centre, which is the artefact.
+Replaying the selection per level per pixel from the carried tree
+would be exact and about eight times the CPU cost at depth; it is the
+answer to the tie case if anyone hits it, and the wide-closure
+packing (empty-slot flags, insertion ranking on the GPU) is kept
+because it is what that replay would hand over.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
@@ -1945,6 +2014,28 @@ the commit.
    the twelfth (base 4) cannot change it whatever the scale does; the
    underflow past 2⁶⁰ only makes explicit a limit the type already
    had. The colouring resolves ~24 bits of address by construction.
+
+**Added 2026-09-12, from use:**
+
+9. ~~**Glitchiness under zoom.**~~ Sections disappear when zooming in
+   or out; the structure warps rather than staying perceptually fixed
+   the way the Mandelbrot does; in 2D, regions appear to swap which is
+   drawn "above" the other. Affected by Beam Width, and no setting
+   fixes it. Found and fixed 2026-09-12: the handover pruned branches
+   the view did not agree on. See the phase 3 record; the two
+   measurement tables are in `does_the_seeded_walk_agree_with_each_pixels_own`
+   and `does_the_seeded_chain_agree_with_each_samples_own`, gated by
+   `the_seeded_walk_is_each_pixels_own` and
+   `the_seeded_chain_is_each_samples_own`.
+10. **Solid camera: no Bank.** Pitch and yaw only; the flame's 3D
+    camera has the third axis.
+11. **Solid camera: panning does nothing.** The View panel's pan writes
+    `center_re`/`center_im`, which the solid camera does not read — it
+    orbits `cam_target`. The flame's 3D camera pans in the rotated
+    frame (quaternion-based) and is the reference for how it should
+    feel.
+12. **Solid camera: rotation does nothing.** Should roll the viewport
+    independently of the 3D angles, as the 3D flame's `rotation` does.
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and

@@ -227,13 +227,15 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
     // Seed from the reference orbit the CPU walked. Every one of these
     // candidates is where the view centre's own beam had got to, and
     // `basis` carries this pixel's offset the same distance.
+    // The seeds are every pixel's top `beam` -- the handover stops at
+    // the first level the view does not agree on that -- ranked here
+    // by THIS pixel's position, as the walk ranks every level, by
+    // insertion so no array wider than the beam is declared.
     var live: array<IfsCand, IFS_MAX_BEAM>;
     var next: array<IfsCand, IFS_MAX_BEAM>;
-    var live_count = min(ifs_seed_count(), beam);
-    if (live_count == 0u) {
-        live_count = 1u;
-    }
-    for (var j = 0u; j < live_count; j = j + 1u) {
+    var live_count = 0u;
+    let seed_count = max(ifs_seed_count(), 1u);
+    for (var j = 0u; j < seed_count; j = j + 1u) {
         let a = ifs_seed(j, 0u);
         let b = ifs_seed(j, 1u);
         let d = ifs_seed(j, 2u);
@@ -254,7 +256,25 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         cand.flags = bitcast<u32>(d.w);
         cand.point = vec2<f32>(e.x, e.y);
         cand.color = e.z;
-        live[j] = cand;
+        var pos = live_count;
+        for (var i = 0u; i < live_count; i = i + 1u) {
+            if (cand.r < live[i].r) {
+                pos = i;
+                break;
+            }
+        }
+        if (pos < beam) {
+            var i = min(live_count, beam - 1u);
+            loop {
+                if (i <= pos) {
+                    break;
+                }
+                live[i] = live[i - 1u];
+                i = i - 1u;
+            }
+            live[pos] = cand;
+            live_count = min(live_count + 1u, beam);
+        }
     }
 
     for (var k = 0u; k < max_levels; k = k + 1u) {
@@ -599,11 +619,21 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     let slots = ifs_beam_slots();
     let base_level = f32(link);
 
+    // The link's candidates, ranked by THIS sample's position as the
+    // walk ranks every level, by insertion so no array wider than the
+    // beam is declared. A slot flagged empty (bit 2) is padding: a
+    // level shallower than the slot count -- the top of the chain has
+    // one candidate -- and a padding slot that repeated a real one
+    // would fill the beam with copies of itself.
     var live: array<IfsCand3, IFS_MAX_BEAM>;
     var next: array<IfsCand3, IFS_MAX_BEAM>;
-    var live_count = min(max(slots, 1u), beam);
-    for (var b = 0u; b < live_count; b = b + 1u) {
+    var live_count = 0u;
+    for (var b = 0u; b < max(slots, 1u); b = b + 1u) {
         let L = ifs_links[link * slots + b];
+        let flags = bitcast<u32>(L.extra.w);
+        if ((flags & 4u) != 0u) {
+            continue;
+        }
         var root: IfsCand3;
         root.q = ifs_link_point(L, delta);
         root.sigma = L.r1.w;
@@ -612,7 +642,7 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         root.addr = L.extra.x;
         root.color = L.esc.w;
         root.last_sigma = L.extra.y;
-        root.flags = bitcast<u32>(L.extra.w);
+        root.flags = flags & 3u;
         // An escape carried by the link keeps the level it happened
         // at. Recomputing it here would report a candidate that left
         // the ball at level three of a fifty-level prefix as leaving
@@ -624,7 +654,42 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
             root.level = 0.0;
             root.point = root.q;
         }
-        live[b] = root;
+        var pos = live_count;
+        for (var i = 0u; i < live_count; i = i + 1u) {
+            if (root.r < live[i].r) {
+                pos = i;
+                break;
+            }
+        }
+        if (pos < beam) {
+            var i = min(live_count, beam - 1u);
+            loop {
+                if (i <= pos) {
+                    break;
+                }
+                live[i] = live[i - 1u];
+                i = i - 1u;
+            }
+            live[pos] = root;
+            live_count = min(live_count + 1u, beam);
+        }
+    }
+    if (live_count == 0u) {
+        // No usable link (a chain that is empty): walk from the delta
+        // itself, which is what link zero would have been.
+        var root: IfsCand3;
+        root.q = delta + ifs_target_offset() + c;
+        root.sigma = 1.0;
+        root.bound = -1e30;
+        root.r = length(root.q - c);
+        root.addr = 0.0;
+        root.color = 0.0;
+        root.last_sigma = ifs_mean_sigma();
+        root.flags = 0u;
+        root.level = 0.0;
+        root.point = root.q;
+        live[0] = root;
+        live_count = 1u;
     }
 
     var addr_scale = pow(1.0 / f32(n), base_level + 1.0);
@@ -1752,27 +1817,37 @@ pub struct IfsLinkGpu {
     pub esc: [f32; 4],
 }
 
-/// Pack a seed chain for the shader, padded to `beam` links a level.
+/// Pack a seed chain for the shader, padded to `slots` links a level.
 ///
-/// Levels shallower than the beam is wide have fewer candidates than
-/// the slot count, and the short ones are filled by REPEATING the last
-/// candidate rather than by marking slots empty. A duplicate costs one
-/// redundant walk and changes no answer — the result is a minimum over
-/// candidates — where an empty-slot flag would put a branch in the
-/// inner loop of every sample at every depth.
+/// Levels shallower than the beam is wide -- the top of the chain has
+/// one candidate -- have fewer candidates than the slot count, and the
+/// short ones are padded with slots flagged EMPTY (bit 2), which the
+/// walk's ranking skips. Padding by repeating a real candidate was
+/// tried first, as cheaper, and is wrong: the sample ranks the slots
+/// by its own position, and a repeated branch fills its beam with
+/// copies of itself.
 pub fn pack_chain3(
     chain: &crate::scene::ifs_estimate::SeedChain3,
     n_maps: usize,
     colors: &[f32],
-    beam: usize,
+    slots: usize,
 ) -> Vec<IfsLinkGpu> {
-    let beam = beam.max(1);
+    let slots = slots.max(1);
     let levels = chain.levels.len().min(MAX_CHAIN_LINKS);
-    let mut out = Vec::with_capacity(levels * beam);
+    let mut out = Vec::with_capacity(levels * slots);
     for cands in chain.levels.iter().take(levels) {
-        for b in 0..beam {
-            // Repeat the last rather than leave a hole.
-            let c = &cands[b.min(cands.len() - 1)];
+        for b in 0..slots {
+            // A level shallower than the slot count pads with EMPTY
+            // slots, flagged so the walk skips them. Padding by
+            // repeating a real candidate would let a pixel fill its
+            // beam with copies of one branch.
+            if b >= cands.len() {
+                let mut empty = IfsLinkGpu::default();
+                empty.extra[3] = f32::from_bits(4);
+                out.push(empty);
+                continue;
+            }
+            let c = &cands[b];
             let reach = c.reach.max(f64::MIN_POSITIVE);
             // Split the matrix into a unit-ish part and an exponent.
             // `exp2` of the exponent is never formed — `ldexp` applies
@@ -2764,6 +2839,267 @@ mod tests {
         }
     }
 
+    /// Does the seeded walk draw the same picture as each pixel's own
+    /// walk would?
+    ///
+    /// Reported as glitchiness: sections disappearing as the zoom
+    /// changes, structure warping rather than magnifying, regions
+    /// swapping in 2D, and Beam Width mattering. The suspicion is the
+    /// handover. The CPU walks the beam from the view CENTRE and every
+    /// pixel continues from the centre's surviving branches -- so if a
+    /// pixel's own nearest piece was pruned from that beam, its
+    /// continuation never sees it, reads a distance to some other
+    /// piece, and renders as exterior. Which pixels that hits depends
+    /// on how deep the handover went, which depends on the zoom: the
+    /// picture would change with the zoom in ways that are not
+    /// magnification.
+    ///
+    /// Measured against the unseeded walk at the same world point,
+    /// which is exact at these zooms and knows nothing of any centre.
+    ///
+    /// Before the handover stopped at the first level the view did not
+    /// agree on: gasket z8 15%, dragon z8 beam 2 **41%**, dragon z14
+    /// beam 1 6%, and 0% in the cells between -- the zoom dependence
+    /// the report describes. After: 0% in every cell of both tables.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn does_the_seeded_walk_agree_with_each_pixels_own() {
+        for (name, flame) in [
+            ("gasket", gpu_tests::sierpinski_flame()),
+            ("dragon", gpu_tests::dragon_flame()),
+        ] {
+            println!("  {name}");
+            println!("   zoom  beam  seeded levels   disagree (inner / outer quarter of the frame)");
+            for &zoom in &[2.0f64, 5.0, 8.0, 11.0, 14.0] {
+                for &beam in &[1u32, 2, 4, 8] {
+                    let (level, inner, outer) = seeded_walk_disagreement(&flame, zoom, beam, 128);
+                    println!(
+                        "   {zoom:>4}  {beam:>3}       {level:>3}          {:>5.1}%  /  {:>5.1}%",
+                        100.0 * inner,
+                        100.0 * outer
+                    );
+                }
+            }
+        }
+    }
+
+    /// The gate on the measurement above: the cells that were worst,
+    /// and one that was clean, at a quarter of the resolution.
+    #[test]
+    fn the_seeded_walk_is_each_pixels_own() {
+        for (name, flame) in [
+            ("gasket", gpu_tests::sierpinski_flame()),
+            ("dragon", gpu_tests::dragon_flame()),
+        ] {
+            for &(zoom, beam) in &[(8.0f64, 1u32), (8.0, 2), (8.0, 4), (14.0, 1), (14.0, 8)] {
+                let (level, inner, outer) = seeded_walk_disagreement(&flame, zoom, beam, 32);
+                assert!(
+                    inner == 0.0 && outer == 0.0,
+                    "{name} z{zoom} beam {beam} (handover at level {level}): \
+                     {:.1}% of the inner and {:.1}% of the outer frame disagree",
+                    100.0 * inner,
+                    100.0 * outer
+                );
+            }
+        }
+    }
+
+    /// The fraction of pixels, inner and outer quarter of an `n`² frame,
+    /// on which the seeded walk and the pixel's own walk disagree by
+    /// more than a pixel or one percent -- with the level the handover
+    /// reached.
+    fn seeded_walk_disagreement(
+        flame: &crate::scene::transforms::Flame,
+        zoom: f64,
+        beam: u32,
+        n: u32,
+    ) -> (u32, f64, f64) {
+        let guard = global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(flame, &guard).expect("qualifies");
+        let r = ifs.ball.radius;
+        // A centre on the set but not dyadic, a little off the ball's
+        // centre so the beam has something to choose.
+        let centre = [ifs.ball.centre[0] + 0.137 * r, ifs.ball.centre[1] - 0.211 * r];
+        let span = 4.0 / 2f64.powf(zoom);
+        let px = span / n as f64;
+        let basis = view_basis(span, span, 0.0);
+        let levels = 40u32;
+        let seeds = crate::scene::ifs_estimate::seed_beam(&ifs, centre, basis, px, 64, beam);
+        let (mut inner, mut inner_bad, mut outer, mut outer_bad) = (0, 0, 0, 0);
+        for y in 0..n {
+            for x in 0..n {
+                let uv = [(x as f64 + 0.5) / n as f64 - 0.5, (y as f64 + 0.5) / n as f64 - 0.5];
+                let world = [centre[0] + span * uv[0], centre[1] - span * uv[1]];
+                let seeded =
+                    crate::scene::ifs_estimate::estimate_seeded(&ifs, &seeds, uv, levels, beam)
+                        .distance
+                        * px;
+                let own =
+                    crate::scene::ifs_estimate::estimate(&ifs, world, levels + seeds.level, beam)
+                        .distance;
+                // A pixel, or one percent, whichever is larger: far
+                // outside the set the distance is hundreds of frames
+                // and nothing is drawn, and there two equally valid
+                // lineages of an overlapping set converge a fraction
+                // of a percent apart.
+                let bad = (seeded - own).abs() > px.max(0.01 * own);
+                let is_inner = uv[0].abs() < 0.25 && uv[1].abs() < 0.25;
+                if is_inner {
+                    inner += 1;
+                    inner_bad += bad as usize;
+                } else {
+                    outer += 1;
+                    outer_bad += bad as usize;
+                }
+            }
+        }
+        (seeds.level, inner_bad as f64 / inner as f64, outer_bad as f64 / outer as f64)
+    }
+
+    /// The 3D twin: does the seeded chain agree with each sample's own
+    /// walk?
+    ///
+    /// A link commits every sample that uses it to the target's
+    /// branches, and a sample can sit up to the cap from the target in
+    /// the link's frame -- a quarter of the ball, which on the sponge
+    /// is most of a sub-cube. So the samples along a ray at the frame's
+    /// edge may need a branch the target's beam pruned, exactly as the
+    /// plane's pixels did. Measured against the unseeded walk at the
+    /// same world point, which is exact at these zooms.
+    ///
+    /// Measured: 0% in every cell, with the chain at beam 1 as deep as
+    /// before the rule (17 links on the tetrahedron at z14, 11 on the
+    /// sponge) and at beams 2 and 4 one or two links -- these sets
+    /// tile, so their branches tie and the samples never agree on the
+    /// second. See [`seed_chain3`] for why that is accepted.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn does_the_seeded_chain_agree_with_each_samples_own() {
+        for (name, flame) in [
+            ("tetrahedron", gpu_tests::tetrahedron_flame()),
+            ("menger", gpu_tests::menger_flame()),
+        ] {
+            println!("  {name}");
+            println!("   zoom  beam  links   disagree (inner / outer quarter of the frame)");
+            for &zoom in &[2.0f64, 5.0, 8.0, 11.0, 14.0] {
+                for &beam in &[1u32, 2, 4] {
+                    let (links, inner, outer) = seeded_chain_disagreement(&flame, zoom, beam, 48);
+                    println!(
+                        "   {zoom:>4}  {beam:>3}   {links:>3}      {:>5.1}%  /  {:>5.1}%",
+                        100.0 * inner,
+                        100.0 * outer
+                    );
+                }
+            }
+        }
+    }
+
+    /// The gate on the measurement above, at the shipped beam and at a
+    /// wider one, a third of the resolution. The chain must also be
+    /// DEEP at the shipped beam: a rule that made the walk exact by
+    /// ending the chain at once would pass the agreement and lose the
+    /// zoom. The depth expected is the measurement's less the levels a
+    /// three-times-coarser finest pixel does not need (17 and 11 at
+    /// 48 across; 15 and 9 at 16).
+    #[test]
+    fn the_seeded_chain_is_each_samples_own() {
+        for (name, flame, deep) in [
+            ("tetrahedron", gpu_tests::tetrahedron_flame(), 15),
+            ("menger", gpu_tests::menger_flame(), 9),
+        ] {
+            for &(zoom, beam) in &[(8.0f64, 1u32), (14.0, 1), (8.0, 2)] {
+                let (links, inner, outer) = seeded_chain_disagreement(&flame, zoom, beam, 16);
+                assert!(
+                    inner == 0.0 && outer == 0.0,
+                    "{name} z{zoom} beam {beam} ({links} links): \
+                     {:.1}% of the inner and {:.1}% of the outer frame disagree",
+                    100.0 * inner,
+                    100.0 * outer
+                );
+                if zoom == 14.0 && beam == 1 {
+                    assert!(links >= deep, "{name} z14 beam 1: {links} links, expected {deep}");
+                }
+            }
+        }
+    }
+
+    /// The fraction of samples -- five per ray, from near the eye to
+    /// past the target, on an `n`² frame split into its inner and outer
+    /// quarter -- on which the seeded chain and the sample's own walk
+    /// disagree by more than the finest pixel or one percent, with the
+    /// chain's length.
+    fn seeded_chain_disagreement(
+        flame: &crate::scene::transforms::Flame,
+        zoom: f64,
+        beam: u32,
+        n: u32,
+    ) -> (usize, f64, f64) {
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(flame, &guard).expect("qualifies");
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.zoom_log2 = zoom;
+        esc.cam_yaw = 0.9;
+        esc.cam_pitch = 0.42;
+        // A target on the set, off any symmetry.
+        esc.cam_target_x = super::tests::decimal(6, 7, 30);
+        esc.cam_target_y = super::tests::decimal(5, 7, 30);
+        esc.cam_target_z = super::tests::decimal(3, 7, 30);
+        let cam = solid_camera(&esc, &ifs3);
+        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / n as f64;
+        let chain = crate::scene::ifs_estimate::seed_chain3(&ifs3, cam.target, finest, 64, beam);
+        let tan_half = (cam.fov as f64 * 0.5).tan();
+        let (mut inner, mut inner_bad, mut outer, mut outer_bad) = (0, 0, 0, 0);
+        for y in 0..n {
+            for x in 0..n {
+                let u = (x as f64 + 0.5) / n as f64 - 0.5;
+                let v = (y as f64 + 0.5) / n as f64 - 0.5;
+                let mut dir = [0.0f64; 3];
+                for k in 0..3 {
+                    dir[k] = cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half)
+                        - cam.up[k] * (v * 2.0 * tan_half);
+                }
+                let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                for &f in &[0.5f64, 0.9, 1.0, 1.1, 1.5] {
+                    let t = cam.distance * f;
+                    let delta = [
+                        cam.eye_rel[0] + dir[0] / len * t,
+                        cam.eye_rel[1] + dir[1] / len * t,
+                        cam.eye_rel[2] + dir[2] / len * t,
+                    ];
+                    let world = [
+                        cam.target[0] + delta[0],
+                        cam.target[1] + delta[1],
+                        cam.target[2] + delta[2],
+                    ];
+                    let seeded =
+                        crate::scene::ifs_estimate::estimate_seeded3(&ifs3, &chain, delta, 40, beam)
+                            .distance;
+                    let own = crate::scene::ifs_estimate::estimate(
+                        &ifs3,
+                        world,
+                        40 + chain.levels.len() as u32,
+                        beam,
+                    )
+                    .distance;
+                    let bad = (seeded - own).abs() > finest.max(0.01 * own);
+                    let is_inner = u.abs() < 0.25 && v.abs() < 0.25;
+                    if is_inner {
+                        inner += 1;
+                        inner_bad += bad as usize;
+                    } else {
+                        outer += 1;
+                        outer_bad += bad as usize;
+                    }
+                }
+            }
+        }
+        (
+            chain.levels.len(),
+            inner_bad as f64 / inner as f64,
+            outer_bad as f64 / outer as f64,
+        )
+    }
+
     /// A deep zoom must hold a centre f64 cannot express.
     ///
     /// The earlier gates all centred somewhere exactly representable —
@@ -3520,7 +3856,7 @@ mod gpu_tests {
 
     /// The Heighway dragon: two similarities of ratio 1/sqrt(2), each
     /// a 45-degree rotation.
-    fn dragon_flame() -> Flame {
+    pub(super) fn dragon_flame() -> Flame {
         flame_of(vec![
             xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
             xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
