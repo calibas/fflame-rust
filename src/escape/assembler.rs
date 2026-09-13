@@ -4387,12 +4387,18 @@ struct EscapeParams {
 
 // One map of the IFS, as `escape::ifs::IfsMapGpu` packs it. Group 1 so
 // mode D is the only pipeline whose layout mentions it and no existing
-// shader's bindings move (D5).
+// shader's bindings move (D5). Sixty-four bytes: the second half is a
+// root map's pre-inverse and its exponents, and `power == 0` marks an
+// affine row (plan 8.8, J7).
 struct IfsMapGpu {
     inv_m: vec4<f32>,
     inv_t: vec2<f32>,
     sigma_min: f32,
     color: f32,
+    pre_m: vec4<f32>,
+    pre_t: vec2<f32>,
+    power: f32,
+    dist: f32,
 }
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMapGpu>;

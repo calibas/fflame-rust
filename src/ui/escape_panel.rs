@@ -1322,7 +1322,7 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     // Analyse first and drop the borrow, so the Frame button below can
     // write through the same manager.
     enum Verdict {
-        Ok { maps: usize, lo: f64, hi: f64, has_final: bool, centre: [f64; 2], radius: f64 },
+        Ok { maps: usize, roots: usize, lo: f64, hi: f64, has_final: bool, centre: [f64; 2], radius: f64 },
         No(Vec<String>),
     }
     let verdict = {
@@ -1331,6 +1331,7 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
         match crate::scene::ifs_analysis::analyse_2d(&cfg.flame, &registry) {
             Ok(ifs) => Verdict::Ok {
                 maps: ifs.maps.len(),
+                roots: ifs.maps.iter().filter(|m| !m.forward.is_affine()).count(),
                 lo: ifs.maps.iter().map(|m| m.sigma_min).fold(f64::INFINITY, f64::min),
                 hi: ifs.maps.iter().map(|m| m.sigma_max).fold(0.0f64, f64::max),
                 has_final: ifs.final_map.is_some(),
@@ -1342,16 +1343,24 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     };
 
     match verdict {
-        Verdict::Ok { maps, lo, hi, has_final, centre, radius } => {
+        Verdict::Ok { maps, roots, lo, hi, has_final, centre, radius } => {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(
                     egui::Color32::from_rgb(120, 190, 120),
-                    t!(
-                        "escape_panel.ifs_qualifies",
-                        count = maps.to_string(),
-                        lo = format!("{lo:.3}"),
-                        hi = format!("{hi:.3}")
-                    ),
+                    if roots == 0 {
+                        t!(
+                            "escape_panel.ifs_qualifies",
+                            count = maps.to_string(),
+                            lo = format!("{lo:.3}"),
+                            hi = format!("{hi:.3}")
+                        )
+                    } else {
+                        t!(
+                            "escape_panel.ifs_qualifies_roots",
+                            count = maps.to_string(),
+                            roots = roots.to_string()
+                        )
+                    },
                 );
                 if has_final {
                     ui.label(
@@ -1362,6 +1371,12 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
             ui.label(
                 egui::RichText::new(t!("escape_panel.ifs_set_not_measure")).small().weak(),
             );
+            if roots > 0 {
+                // Plan 8.8 J2: a root map's set is the FILLED one, and
+                // the flame draws its boundary. Said here, where the
+                // difference stops being a surprise.
+                ui.label(egui::RichText::new(t!("escape_panel.ifs_roots_filled")).small().weak());
+            }
             if radius > 0.0
                 && ui
                     .button(t!("escape_panel.ifs_frame"))

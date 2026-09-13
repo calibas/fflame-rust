@@ -1975,6 +1975,154 @@ needs — with the escape-time DE in place of the σ-product; 4 presets),
 carries-its-inverse shape of §8.6 is the vehicle for those; growing
 `affine_role` further is not.
 
+### 8.8 The second rung: the julia family (plan, 2026-09-13)
+
+The first nonlinear maps. `julia` is `julian` with power 2 and
+distance 1; `julian` is `q = |z|^{d/|n|}·e^{i(θ + 2πk)/n}`, `k` drawn
+at random from `[0, |n|)`. What follows is the plan as it will be
+built, with its decisions numbered so the record can say which ones
+held.
+
+**J1 — The inverse is one map, and the RNG is not in it.** Every
+branch `k` of the forward map is undone by the same
+`z = |q|^{|n|/d}·e^{i·n·arg q}`. So `q ∈ T(A)` iff
+`A_pre⁻¹(P(A_post⁻¹(q)/w)) ∈ A` with `P` that single map: inverse
+iteration needs no branch rule for a root, and the walk's shape —
+one child per map — is unchanged. (`juliascope`'s mirror branches
+have TWO preimages, `±n·arg q`; not this rung.)
+
+**J2 — What the walk draws is the FILLED set.** A root map expands
+near the origin, so it is not a contraction and its chaos-game set
+is a repeller — the Julia set, a curve or a dust — not a Hutchinson
+attractor. The walk reports distance 0 for a point it never pushes
+out of the ball, which for a root map is the filled set: the same
+picture mode A draws for `z² + c`, with the DE halo outside it. The
+flame draws the boundary. The two agree exactly when the set is
+totally disconnected, which is the usual flame case (a `julian` at
+weight w with a translation is a dust whenever the pre-affine's
+image misses the critical value's basin); for a connected set the
+distance render fills what the flame outlines. The panel says so,
+the way D6 says "the set, not the measure".
+
+**J3 — The scale is the chain rule at the orbit point, and the bound
+is an estimate.** Per level, `σ` multiplies by the forward map's
+local σ_min at the point the walk is at: `σ_min(A_post)·w·σ_min(A_pre)·
+(min(d,1)/|n|)·|v|^{1 − |n|/d}`, `v` the point before the root's
+inverse. That is the product-of-norms form the affine walk already
+uses, made local. It is not a proven lower bound past affine —
+Koebe's ¼ is the slack for a univalent map, and near a critical
+point (`v → 0`, where the root's derivative is infinite) the
+estimate is large where the set is not far. The running maximum
+over levels is kept: past escape the estimate DECAYS by a factor
+`|n|` per level (`r ↦ rⁿ` against a derivative `n·rⁿ⁻¹`), so the
+maximum lands a level or two after the escape, which is where a
+Green-function DE would put it up to that factor. Measured, not
+argued: gate 1 below.
+
+**J4 — One root per transform, alone in the normal phase.** A root
+summed with an affine (`0.5·julian + 0.5·linear`) has no closed-form
+inverse. The pre-affine, pre-phase affines, post-phase affines and
+the post-affine compose around it; any summed variation beside it
+is `NotAffine::MixedSum`. `n = 0` or `d = 0` is `NotAffine::
+Degenerate`. The final transform stays affine.
+
+**J5 — The ball is found numerically.** No fixed-point formula and
+no global σ_max. The centre is the mean of a short CPU chaos game
+(the forward maps with a random branch); the radius starts at that
+sample's extent and grows until every map sends the sampled disc
+(boundary circle and interior rings) into the disc, then takes a
+5% margin. A radius that does not settle in sixty rounds is
+`Disqualification::NoBall`. For an affine IFS the existing
+closed-form ball is used unchanged.
+
+**J6 — No deep zoom.** §8.5: the reference/delta split is affine. A
+nonlinear IFS hands over at level 0 with the pixel's absolute f32
+position, and the zoom wall is the one the plane had before §2.5
+(~2¹⁶–2²⁰, resolution-dependent). The seeding code takes its affine
+path or stops; nothing in it is generalised.
+
+**J7 — On the GPU the map row grows to sixty-four bytes** — the
+post-inverse (with `1/w` folded in), the pre-inverse, the kind, `n`,
+`d`, the constant part of σ — and `ifs_inv_point` becomes a kernel
+switch on the kind. Kind 0 is the affine row and its arithmetic is
+exactly today's, so every affine preset renders byte-identically:
+gate 3. The kernels are a fixed switch in the walk template for this
+rung — two kinds — and move to the per-`VariationDef` splice of §8.6
+when there are enough of them to be worth a splice.
+
+**J8 — On the CPU the 2D map is an enum**, `Map2::{Affine, Root}`,
+and the walk's step is `(point, local σ_min) = map.step(q)`. The
+affine arm returns what it returns today. `Ifs2` is `Ifs<Map2, ..>`;
+the 3D types do not move (J9).
+
+**J9 — Not this rung:** `julia3D`, `julia3Dz` (solids), `juliascope`
+(two preimages), any second nonlinear kind. Each is a kind and a
+kernel once J7 exists.
+
+**Gates:**
+
+1. *The math:* one `julia` transform with pre-translation `−c` IS the
+   inverse-iteration system of `z² + c`. On a grid of exterior points
+   the walk's distance is within a factor of 4 of the classic
+   escape-time DE `|z|·ln|z| / |z′|` at depth, and membership (never
+   escapes within L levels) agrees with the escape-time test at the
+   same L, on a connected `c` (the rabbit) and a dust `c`.
+2. *The transcription:* the GPU walk agrees with the CPU estimate on
+   a two-transform julia flame, the way it does on the gasket.
+3. *Nothing moved:* the four planar affine presets render
+   byte-identically before and after the row change.
+4. *Shipped:* at least one julia preset, rendered and inspected, with
+   J2's caveat visible in the picture and stated in the panel.
+5. *The census*, re-run, with the presets that now qualify named.
+
+**Built 2026-09-13. Every decision held; the gates read:**
+
+1. `a_julia_walk_agrees_with_the_classic_distance_estimate`: on the
+   rabbit, a dust and the basilica, 96² points each, membership
+   agrees on every point (late escapes on either side of the ball's
+   radius versus the classic bailout excluded, eight levels each way),
+   and the walk's distance over the classic estimate reads
+   **min 0.36, median 0.40–0.54, max 0.61** — below it throughout, by
+   a bounded factor, which is J3's mechanism exactly: no `ln|z|`, and
+   the maximum over levels landing a level or two past the escape.
+   Gated at [0.25, 1.0], what was measured with room for a different
+   `c` and none for a different mechanism.
+2. `the_gpu_walk_agrees_with_the_cpu_reference_on_a_julia_pair`:
+   5510 interior and 2967 exterior pixels of 96², agreement above 97%
+   by the same test the gasket passes.
+3. The six shipped affine presets (four planar, two solid) at 512²,
+   **byte-identical** before and after the row change, compared as
+   files.
+4. Three presets ship: **Douady Rabbit** (`ifs_level` — the filled
+   set with escape bands, J2 in plain sight), **Julia Dendrite**
+   (`ifs_distance`, `c = 0.36 + 0.1i`, thin enough that the picture
+   is its outline) and **Cubic Pair** (two `julian` roots of power 3
+   under `ifs_address`, a set no single Julia set is). Chosen from
+   seven candidates rendered side by side
+   (`render_the_julia_candidates_for_inspection`). The panel says
+   "N maps, M of them julia roots" and states J2 under it.
+5. Census: **15 of 168** planar (the three new presets); the preset
+   library reads **9 of 18**. The nine that still fail need, with
+   the roots now taken: `bubble` (Grand Julian, JuliaN Bubble,
+   Bubbles), `disc` (Julian Disc), `blob` (Flower), `spherical`
+   (Plastic, Spherical3, Cup), `hemisphere` (Cup), `julia3Dz`
+   (Bubbles), and the measures. So `bubble` and `spherical` are the
+   rungs that would move the library next, three presets each.
+
+What it cost: the map row is sixty-four bytes instead of thirty-two
+(J7), one `power == 0` branch per inverse step on an affine row, and
+`pow`, `atan2` and `sincos` per step on a root row. Not measured as
+time; the byte-identity gate says the affine arithmetic did not move.
+
+What is recorded and not fixed: an `Ifs2` is `Ifs<Map2, ..>` and the
+3D types are untouched (J9), so the solid formula still rejects
+`julia3D`; seeding hands over at level 0 for a root IFS (J6) and a
+deep zoom into a julia set stops where f32 does — the panel's note
+says so; the walk's `last_sigma` for the level residual is a root
+row's constant part, which is a coarser residual than an affine
+row's, visible as slightly uneven band widths under `ifs_level` and
+not worth a second word in the row.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a

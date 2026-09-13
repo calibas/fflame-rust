@@ -229,6 +229,193 @@ impl Affine2 {
     }
 }
 
+// --------------------------------------------------- the root maps
+
+/// Which root variation a [`RootMap2`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootKind {
+    /// `julia`: power 2, distance 1.
+    Julia,
+    /// `julian`: its `power` and `dist` parameters.
+    Julian,
+}
+
+impl RootKind {
+    pub fn variation(self) -> &'static str {
+        match self {
+            RootKind::Julia => "julia",
+            RootKind::Julian => "julian",
+        }
+    }
+}
+
+/// A transform whose one nonlinear variation is a root (plan §8.8):
+/// forward `p ↦ post(w · J_k(pre(p)))` with
+/// `J_k(z) = |z|^{d/|n|} · e^{i(arg z + 2πk)/n}`, `k` the chaos game's
+/// random branch. Every branch is undone by the same map,
+/// `P(v) = |v|^{|n|/d} · e^{i·n·arg v}`, so the inverse is
+/// `q ↦ pre⁻¹(P(post⁻¹(q) / w))` and single-valued (J1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RootMap2 {
+    pub kind: RootKind,
+    /// The affine applied before the root: the transform's affine
+    /// composed with its pre-phase variations.
+    pub pre: Affine2,
+    /// The affine applied after: the post-phase variations composed
+    /// with the post-affine.
+    pub post: Affine2,
+    pub pre_inv: Affine2,
+    pub post_inv: Affine2,
+    /// The variation's weight; the root's output is scaled by it.
+    pub w: f64,
+    /// `power`, signed.
+    pub n: i32,
+    /// `dist`.
+    pub d: f64,
+}
+
+impl RootMap2 {
+    /// The forward map along branch `k` of `|n|`.
+    pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
+        let z = self.pre.apply(p);
+        let r = (z[0] * z[0] + z[1] * z[1]).sqrt();
+        let theta = z[1].atan2(z[0]);
+        let n = self.n as f64;
+        let rr = r.powf(self.d / n.abs());
+        let a = (theta + std::f64::consts::TAU * k as f64) / n;
+        self.post.apply([self.w * rr * a.cos(), self.w * rr * a.sin()])
+    }
+
+    /// The point before the root's inverse, `post⁻¹(q) / w`.
+    fn before_root(&self, q: [f64; 2]) -> [f64; 2] {
+        let v = self.post_inv.apply(q);
+        [v[0] / self.w, v[1] / self.w]
+    }
+
+    /// The inverse, single-valued.
+    pub fn apply_inverse(&self, q: [f64; 2]) -> [f64; 2] {
+        let v = self.before_root(q);
+        let r = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        let phi = v[1].atan2(v[0]);
+        let n = self.n as f64;
+        let rr = r.powf(n.abs() / self.d);
+        let a = n * phi;
+        self.pre_inv.apply([rr * a.cos(), rr * a.sin()])
+    }
+
+    /// The local factor on the forward map's σ_min at the point whose
+    /// image is `q`: `|v|^{1 − |n|/d}` (J3). Infinite at the critical
+    /// point, where the forward root's derivative is.
+    pub fn local_sigma_factor(&self, q: [f64; 2]) -> f64 {
+        let v = self.before_root(q);
+        let r = (v[0] * v[0] + v[1] * v[1]).sqrt().max(f64::MIN_POSITIVE);
+        r.powf(1.0 - (self.n as f64).abs() / self.d)
+    }
+
+    /// The constant parts of the forward map's singular values:
+    /// `σ(post) · |w| · σ(pre) · (min(d,1) or max(d,1)) / |n|`, to be
+    /// multiplied by the local factor.
+    pub fn singular_values(&self) -> (f64, f64) {
+        let (pre_lo, pre_hi) = self.pre.singular_values();
+        let (post_lo, post_hi) = self.post.singular_values();
+        let n = (self.n as f64).abs();
+        let w = self.w.abs();
+        (
+            post_lo * w * pre_lo * self.d.min(1.0) / n,
+            post_hi * w * pre_hi * self.d.max(1.0) / n,
+        )
+    }
+}
+
+/// What a 2D map is: the affine case, or a root map (J8), in either
+/// direction. `Root` applies the forward map's principal branch;
+/// `RootInverse` the single-valued inverse.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Map2 {
+    Affine(Affine2),
+    Root(RootMap2),
+    RootInverse(RootMap2),
+}
+
+impl Map2 {
+    pub fn apply(&self, p: [f64; 2]) -> [f64; 2] {
+        match self {
+            Map2::Affine(a) => a.apply(p),
+            Map2::Root(r) => r.apply_branch(p, 0),
+            Map2::RootInverse(r) => r.apply_inverse(p),
+        }
+    }
+
+    pub fn inverse(&self) -> Option<Map2> {
+        match self {
+            Map2::Affine(a) => a.inverse().map(Map2::Affine),
+            Map2::Root(r) => Some(Map2::RootInverse(*r)),
+            Map2::RootInverse(r) => Some(Map2::Root(*r)),
+        }
+    }
+
+    /// The singular values, or for a root the constant parts of them.
+    pub fn singular_values(&self) -> (f64, f64) {
+        match self {
+            Map2::Affine(a) => a.singular_values(),
+            Map2::Root(r) | Map2::RootInverse(r) => r.singular_values(),
+        }
+    }
+
+    /// An affine map's fixed point; a root map has no closed form.
+    pub fn fixed_point(&self) -> Option<[f64; 2]> {
+        match self {
+            Map2::Affine(a) => a.fixed_point(),
+            _ => None,
+        }
+    }
+
+    pub fn as_affine(&self) -> Option<Affine2> {
+        match self {
+            Map2::Affine(a) => Some(*a),
+            _ => None,
+        }
+    }
+
+    pub fn is_affine(&self) -> bool {
+        matches!(self, Map2::Affine(_))
+    }
+
+    /// The root behind a root map, either direction.
+    pub fn root(&self) -> Option<&RootMap2> {
+        match self {
+            Map2::Affine(_) => None,
+            Map2::Root(r) | Map2::RootInverse(r) => Some(r),
+        }
+    }
+}
+
+/// Whether the criterion checks a map's σ_max against 1. An affine
+/// map contracts or does not; a root map expands near its critical
+/// point and contracts far from it, and whether the IFS is bounded is
+/// the ball's question (J5), not this one.
+pub trait MapKind {
+    fn contraction_is_checked(&self) -> bool;
+}
+
+impl MapKind for Affine2 {
+    fn contraction_is_checked(&self) -> bool {
+        true
+    }
+}
+
+impl MapKind for Affine3 {
+    fn contraction_is_checked(&self) -> bool {
+        true
+    }
+}
+
+impl MapKind for Map2 {
+    fn contraction_is_checked(&self) -> bool {
+        self.is_affine()
+    }
+}
+
 // ---------------------------------------------------------------- 3D
 
 /// A 3D affine map `p ↦ M p + t`, row-major.
@@ -384,6 +571,13 @@ pub enum NotAffine {
     /// origin, so the map is constant. Affine, but degenerate; the
     /// attractor of a constant map is a point.
     NoVariations,
+    /// A root variation summed with something else in the normal
+    /// phase: a weighted sum of a root and an affine has no
+    /// closed-form inverse (plan §8.4, J4).
+    MixedSum(String),
+    /// A root variation with a power or distance of zero, which is
+    /// not a map with an inverse.
+    Degenerate(String),
 }
 
 /// `affine3D`'s map from its fifteen parameters, mirroring the
@@ -435,6 +629,10 @@ struct VariationStage {
     pre: Affine3,
     sum: Affine3,
     post: Affine3,
+    /// Whether anything was summed.
+    any: bool,
+    /// The root variations met, with their weights (planar only).
+    roots: Vec<(RootKind, f64)>,
 }
 
 /// The variation stage, or why it is not affine in `space`.
@@ -453,6 +651,8 @@ fn variation_stage(
         pre: Affine3::IDENTITY,
         sum: Affine3 { m: [[0.0; 3]; 3], t: [0.0; 3] },
         post: Affine3::IDENTITY,
+        any: false,
+        roots: Vec::new(),
     };
     let mut any = false;
     // Every active variation, in the shader's order; the transform's
@@ -465,7 +665,29 @@ fn variation_stage(
             continue;
         }
         let Some(role) = affine_role(name, w, t, registry, space) else {
-            return Err(NotAffine::Variation(name.clone()));
+            // A root in the plane is a nonlinear map the analysis
+            // knows (plan §8.8); the transform's kind is decided once
+            // the whole stage is known.
+            let root = match (name.as_str(), space) {
+                ("julia", Space::Planar) => Some(RootKind::Julia),
+                ("julian", Space::Planar) => Some(RootKind::Julian),
+                _ => None,
+            };
+            let Some(root) = root else {
+                return Err(NotAffine::Variation(name.clone()));
+            };
+            let summed = match registry.get(name).map(|i| i.phase.clone()) {
+                Some(VariationPhase::Any) => {
+                    t.variation_priorities.get(name).copied().unwrap_or(0) == 0
+                }
+                Some(VariationPhase::Normal) | None => true,
+                Some(_) => false,
+            };
+            if !summed {
+                return Err(NotAffine::Priority(name.clone()));
+            }
+            stage.roots.push((root, w));
+            continue;
         };
         match role {
             AffineRole::Nothing => {}
@@ -497,10 +719,63 @@ fn variation_stage(
             AffineRole::Post(r) => stage.post = r.then_after(&stage.post),
         }
     }
-    if !any {
+    stage.any = any;
+    if !any && stage.roots.is_empty() {
         return Err(NotAffine::NoVariations);
     }
     Ok(stage)
+}
+
+/// The 2D map a transform composes to -- affine, or a root map -- or
+/// why it is neither.
+///
+/// A root must be ALONE in the normal phase (J4): summed with an
+/// affine it has no closed-form inverse. The pre-affine and pre-phase
+/// affines compose before it, the post-phase affines and the
+/// post-affine after.
+pub fn transform_map_2d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Map2, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Planar, order)?;
+    if stage.roots.is_empty() {
+        return transform_affine_2d_ordered(t, registry, order).map(Map2::Affine);
+    }
+    let (kind, w) = stage.roots[0];
+    if stage.roots.len() > 1 || stage.any {
+        return Err(NotAffine::MixedSum(kind.variation().to_string()));
+    }
+    let (n, d) = match kind {
+        RootKind::Julia => (2, 1.0),
+        RootKind::Julian => {
+            let p = |name: &str| t.get_variation_param_or_default("julian", name, registry) as f64;
+            (p("power").round() as i32, p("dist"))
+        }
+    };
+    if n == 0 || !(d != 0.0) || !d.is_finite() || !(w != 0.0) {
+        return Err(NotAffine::Degenerate(kind.variation().to_string()));
+    }
+    let xy = |a: &Affine3| Affine2 { m: [[a.m[0][0], a.m[0][1]], [a.m[1][0], a.m[1][1]]], t: [a.t[0], a.t[1]] };
+    let affine = Affine2 {
+        m: [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
+        t: [t.e as f64, t.f as f64],
+    };
+    let pre = xy(&stage.pre).then_after(&affine);
+    let mut post = xy(&stage.post);
+    if t.post_affine_enabled {
+        let post_affine = Affine2 {
+            m: [[t.post_a as f64, t.post_b as f64], [t.post_c as f64, t.post_d as f64]],
+            t: [t.post_e as f64, t.post_f as f64],
+        };
+        post = post_affine.then_after(&post);
+    }
+    // A singular pre or post affine is a singular map; the caller's
+    // `inverse()` reports it, so hand back a map whose inverse is None.
+    let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
+        return Ok(Map2::Affine(Affine2 { m: [[0.0; 2]; 2], t: [0.0; 2] }));
+    };
+    Ok(Map2::Root(RootMap2 { kind, pre, post, pre_inv, post_inv, w, n, d }))
 }
 
 /// The 2D affine a transform composes to, or why it does not, with
@@ -521,6 +796,9 @@ pub fn transform_affine_2d_ordered(
     order: &[String],
 ) -> Result<Affine2, NotAffine> {
     let stage = variation_stage(t, registry, Space::Planar, order)?;
+    if let Some((kind, _)) = stage.roots.first() {
+        return Err(NotAffine::Variation(kind.variation().to_string()));
+    }
     // Nothing composes in the plane: every pre/post variation the
     // analysis knows is a stub there.
     debug_assert_eq!(stage.pre, Affine3::IDENTITY);
@@ -669,6 +947,9 @@ pub enum Disqualification {
     /// too, but the chaos game picks among them, which is a choice this
     /// analysis does not model.
     MultipleFinals { count: usize },
+    /// No ball every map sends into itself was found (plan §8.8 J5):
+    /// the root maps do not keep the set bounded.
+    NoBall,
 }
 
 impl std::fmt::Display for Disqualification {
@@ -679,6 +960,11 @@ impl std::fmt::Display for Disqualification {
                 NotAffine::Variation(v) => write!(f, "transform {index} uses `{v}`, which is not affine"),
                 NotAffine::Priority(v) => write!(f, "transform {index} moves `{v}` out of the weighted sum"),
                 NotAffine::NoVariations => write!(f, "transform {index} has no variations"),
+                NotAffine::MixedSum(v) => write!(
+                    f,
+                    "transform {index} sums `{v}` with another variation; a root must be alone in its sum"
+                ),
+                NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a power or distance of zero"),
             },
             Self::Singular { index } => write!(f, "transform {index} is singular (no inverse)"),
             Self::NotContractive { index, sigma_max } => {
@@ -691,6 +977,7 @@ impl std::fmt::Display for Disqualification {
             Self::FinalNotAffine { why: Some(w) } => write!(f, "the final transform is not affine ({w:?})"),
             Self::FinalNotAffine { why: None } => write!(f, "the final transform is singular"),
             Self::MultipleFinals { count } => write!(f, "{count} final transforms; at most one is supported"),
+            Self::NoBall => write!(f, "no bounding ball: the root maps do not keep the set bounded"),
         }
     }
 }
@@ -726,7 +1013,7 @@ pub struct Ifs<A, P> {
     pub ball: Ball<P>,
 }
 
-pub type Ifs2 = Ifs<Affine2, [f64; 2]>;
+pub type Ifs2 = Ifs<Map2, [f64; 2]>;
 pub type Ifs3 = Ifs<Affine3, [f64; 3]>;
 
 /// Which dynamics to analyse.
@@ -747,13 +1034,20 @@ pub enum Space {
 /// say so once, not make the user fix one to discover the next.
 pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, Vec<Disqualification>> {
     let order = flame.active_variation_names_ordered(registry);
-    let maps = collect(flame, |t| transform_affine_2d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
-    let final_map = collect_final(flame, |t| transform_affine_2d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
-    let (maps, final_map, errs) = merge(maps, final_map, flame);
+    let maps = collect(flame, |t| transform_map_2d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
+    // The final transform stays affine (J4).
+    let final_map = collect_final(flame, |t| {
+        transform_affine_2d_ordered(t, registry, &order)
+            .map(|a| (Map2::Affine(a), a.inverse().map(Map2::Affine), a.singular_values()))
+    });
+    let (maps, final_map, mut errs) = merge(maps, final_map, flame);
     if !errs.is_empty() {
         return Err(errs);
     }
-    let ball = ball_2d(&maps);
+    let Some(ball) = ball_2d(&maps) else {
+        errs.push(Disqualification::NoBall);
+        return Err(errs);
+    };
     Ok(Ifs { maps, final_map, ball })
 }
 
@@ -781,7 +1075,7 @@ fn collect_final<A: Copy>(flame: &Flame, f: impl Fn(&Transform) -> Raw<A>) -> Ve
     flame.final_transforms.iter().map(f).collect()
 }
 
-fn merge<A: Copy>(
+fn merge<A: Copy + MapKind>(
     maps: Vec<(usize, Raw<A>)>,
     finals: Vec<Raw<A>>,
     flame: &Flame,
@@ -799,7 +1093,7 @@ fn merge<A: Copy>(
                 errs.push(Disqualification::Singular { index });
             }
             Ok((forward, Some(inverse), (sigma_min, sigma_max))) => {
-                if !(sigma_max < 1.0) {
+                if forward.contraction_is_checked() && !(sigma_max < 1.0) {
                     errs.push(Disqualification::NotContractive { index, sigma_max });
                 }
                 out.push(IfsMap { forward, inverse, sigma_min, sigma_max, transform_index: index });
@@ -876,7 +1170,98 @@ const BALL_REFINEMENTS: usize = 64;
 /// the distance walk reads it as having escaped at level 0. Growing
 /// the ball is always safe (any radius above the bound still satisfies
 /// `S(B) subset B`) and costs 1e-9 of relative tightness.
-fn ball_2d(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
+fn ball_2d(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
+    if maps.iter().all(|m| m.forward.is_affine()) {
+        let affine: Vec<IfsMap<Affine2>> = maps
+            .iter()
+            .map(|m| IfsMap {
+                forward: m.forward.as_affine().expect("affine"),
+                inverse: m.inverse.as_affine().expect("affine"),
+                sigma_min: m.sigma_min,
+                sigma_max: m.sigma_max,
+                transform_index: m.transform_index,
+            })
+            .collect();
+        return Some(ball_2d_affine(&affine));
+    }
+    ball_2d_numeric(maps)
+}
+
+/// A ball every map sends into itself, found numerically (J5), for
+/// an IFS with root maps -- which have no fixed-point formula and no
+/// global σ_max.
+///
+/// The centre is the mean of a short chaos game over the forward maps
+/// (a root's branch drawn at random). The radius starts at that
+/// sample's extent and grows until every map sends the sampled disc
+/// -- its boundary circle and interior rings -- into the disc; a
+/// margin of 5% then covers the sampling. A radius that has not
+/// settled in sixty rounds is no ball: the maps do not keep the set
+/// bounded.
+fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
+    // A fixed-seed LCG: the ball must be the same ball every time.
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let branch = |m: &Map2, p: [f64; 2], u: f64| -> [f64; 2] {
+        match m {
+            Map2::Root(r) => r.apply_branch(p, (u * (r.n.abs() as f64)).floor() as u32),
+            other => other.apply(p),
+        }
+    };
+
+    let mut p = [0.0, 0.0];
+    let mut sample = Vec::with_capacity(4000);
+    for i in 0..4200 {
+        let m = &maps[(next() * maps.len() as f64).floor() as usize % maps.len()];
+        p = branch(&m.forward, p, next());
+        if !(p[0].is_finite() && p[1].is_finite()) {
+            return None;
+        }
+        if i >= 200 {
+            sample.push(p);
+        }
+    }
+    let n = sample.len() as f64;
+    let centre = [sample.iter().map(|p| p[0]).sum::<f64>() / n, sample.iter().map(|p| p[1]).sum::<f64>() / n];
+    let dist = |p: [f64; 2]| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2)).sqrt();
+    let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
+
+    // Grow until the sampled disc maps into the disc.
+    for _ in 0..60 {
+        let mut reach = 0.0f64;
+        for ring in [1.0f64, 0.75, 0.5, 0.25] {
+            let count = if ring == 1.0 { 256 } else { 64 };
+            for j in 0..count {
+                let a = std::f64::consts::TAU * j as f64 / count as f64;
+                let q = [centre[0] + radius * ring * a.cos(), centre[1] + radius * ring * a.sin()];
+                for m in maps {
+                    let branches = m.forward.root().map_or(1, |r| r.n.unsigned_abs());
+                    for k in 0..branches {
+                        let img = match &m.forward {
+                            Map2::Root(r) => r.apply_branch(q, k),
+                            other => other.apply(q),
+                        };
+                        let d = dist(img);
+                        if !d.is_finite() {
+                            return None;
+                        }
+                        reach = reach.max(d);
+                    }
+                }
+            }
+        }
+        if reach <= radius {
+            return Some(Ball { centre, radius: radius * (1.0 + BALL_MARGIN) });
+        }
+        radius = reach;
+    }
+    None
+}
+
+fn ball_2d_affine(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
     let fixed: Vec<[f64; 2]> = maps.iter().filter_map(|m| m.forward.fixed_point()).collect();
     let centre = if fixed.is_empty() {
         [0.0, 0.0]
@@ -1133,6 +1518,131 @@ mod tests {
         let ifs = analyse_3d(&fl, r).expect("qualifies");
         let c = ifs.maps[1].forward.apply([1.0, 2.0, 3.0]);
         assert!(close(c[0], b[0]) && close(c[1], b[1]) && close(c[2], b[2]), "{c:?} vs {b:?}");
+    }
+
+    // ---- the root maps (plan 8.8) -----------------------------------
+
+    /// One `julia` transform with pre-translation `−c`: forward
+    /// `±sqrt(p − c)`, inverse `q² + c`.
+    fn julia_xform(c: [f32; 2]) -> Transform {
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, -c[0], -c[1]);
+        t.variations.clear();
+        t.variation_order.clear();
+        with(t, "julia", 1.0)
+    }
+
+    /// A julia transform is a root map whose single-valued inverse
+    /// undoes EVERY branch of the forward map (J1), and whose local
+    /// scale factor is `|v|^(1 − |n|/d)`.
+    #[test]
+    fn a_julia_transform_is_a_root_map_with_one_inverse() {
+        let guard = global_registry();
+        let r = &*guard;
+        let t = julia_xform([0.3, -0.4]);
+        let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a root map");
+        let Map2::Root(root) = m else { panic!("expected a root map, got {m:?}") };
+        assert_eq!((root.kind, root.n, root.d, root.w), (RootKind::Julia, 2, 1.0, 1.0));
+        // ±sqrt(p − c): both branches square back to p − c, and the
+        // inverse returns p.
+        let p = [0.7, 0.2];
+        for k in 0..2 {
+            let q = root.apply_branch(p, k);
+            let back = root.apply_inverse(q);
+            assert!(close(back[0], p[0]) && close(back[1], p[1]), "branch {k}: {back:?} vs {p:?}");
+            // The inverse is q² + c.
+            let want = [q[0] * q[0] - q[1] * q[1] + 0.3, 2.0 * q[0] * q[1] - 0.4];
+            assert!(close(back[0], want[0]) && close(back[1], want[1]));
+        }
+        // The two branches differ by a sign.
+        let (q0, q1) = (root.apply_branch(p, 0), root.apply_branch(p, 1));
+        assert!(close(q0[0], -q1[0]) && close(q0[1], -q1[1]));
+        // Local factor at q: |q|^(1 − 2) = 1/|q|, so the forward σ_min
+        // there is (1/2)/|q| -- the chain rule of z² + c.
+        let q = [0.5, 0.5];
+        let (lo, _) = root.singular_values();
+        assert!(close(lo, 0.5));
+        assert!(close(root.local_sigma_factor(q) * lo, 0.5 / q[0].hypot(q[1])));
+
+        // julian carries its own power and distance.
+        let mut j = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        j.variations.clear();
+        j.variation_order.clear();
+        let mut j = with(j, "julian", 0.8);
+        j.set_variation_param("julian", "power", 3.0);
+        j.set_variation_param("julian", "dist", 1.5);
+        let m = transform_map_2d_ordered(&j, r, &j.ordered_variation_names(r)).expect("a root map");
+        let root = m.root().copied().expect("root");
+        assert_eq!((root.kind, root.n, root.d), (RootKind::Julian, 3, 1.5));
+        assert!(close(root.w, 0.8));
+        for k in 0..3 {
+            let back = root.apply_inverse(root.apply_branch(p, k));
+            assert!(close(back[0], p[0]) && close(back[1], p[1]), "branch {k}: {back:?}");
+        }
+    }
+
+    /// A root summed with an affine has no closed-form inverse (J4);
+    /// a root with a power of zero is not a map. Both are said, not
+    /// silently treated as affine or as unknown.
+    #[test]
+    fn a_root_must_be_alone_in_its_sum_and_have_a_power() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mixed = with(julia_xform([0.0, 0.0]), "linear", 0.5);
+        let errs = analyse_2d(&flame_of(vec![mixed]), r).unwrap_err();
+        assert!(
+            errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::MixedSum(v), .. } if v == "julia")),
+            "{errs:?}"
+        );
+        let mut j = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        j.variations.clear();
+        j.variation_order.clear();
+        let mut j = with(j, "julian", 1.0);
+        j.set_variation_param("julian", "power", 0.0);
+        let errs = analyse_2d(&flame_of(vec![j]), r).unwrap_err();
+        assert!(
+            errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Degenerate(v), .. } if v == "julian")),
+            "{errs:?}"
+        );
+        // And the affine-only reading still says what it always did.
+        let why = transform_affine_2d(&julia_xform([0.0, 0.0]), r).unwrap_err();
+        assert_eq!(why, NotAffine::Variation("julia".to_string()));
+    }
+
+    /// The ball is found numerically (J5) and holds the set: for
+    /// `c = −1` the filled Julia set reaches the fixed point
+    /// `(1 + √5)/2 ≈ 1.618` on the real axis, so the ball must reach
+    /// past it, and every branch of the map must send the ball into
+    /// itself.
+    #[test]
+    fn a_julia_ifs_gets_a_ball_every_branch_keeps() {
+        let guard = global_registry();
+        let r = &*guard;
+        let ifs = analyse_2d(&flame_of(vec![julia_xform([-1.0, 0.0])]), r).expect("qualifies");
+        assert_eq!(ifs.maps.len(), 1);
+        let b = ifs.ball;
+        let reach = |p: [f64; 2]| (p[0] - b.centre[0]).hypot(p[1] - b.centre[1]);
+        let phi = (1.0 + 5f64.sqrt()) / 2.0;
+        assert!(reach([phi, 0.0]) <= b.radius, "the ball {b:?} misses the fixed point");
+        assert!(b.radius < 6.0, "the ball {b:?} is looser than it should be");
+        let root = ifs.maps[0].forward.root().unwrap();
+        for j in 0..360 {
+            let a = (j as f64).to_radians();
+            let q = [b.centre[0] + b.radius * a.cos(), b.centre[1] + b.radius * a.sin()];
+            for k in 0..2 {
+                assert!(reach(root.apply_branch(q, k)) <= b.radius * (1.0 + 1e-9), "branch {k} leaves the ball at {j} degrees");
+            }
+        }
+        // A root that does not keep the set bounded has no ball: a
+        // julian with dist = 4 on power 2 is |z|² -- the map doubles
+        // the exponent and nothing contains it.
+        let mut j = affine_xform(1.0, 0.0, 0.0, 1.0, 1.0, 0.0);
+        j.variations.clear();
+        j.variation_order.clear();
+        let mut j = with(j, "julian", 1.0);
+        j.set_variation_param("julian", "power", 2.0);
+        j.set_variation_param("julian", "dist", 4.0);
+        let errs = analyse_2d(&flame_of(vec![j]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NoBall)), "{errs:?}");
     }
 
     /// Sierpiński: three half-scale maps. Every singular value is 0.5,
@@ -1454,6 +1964,7 @@ mod census {
                             Disqualification::FinalNotAffine { .. } => "non-affine final".to_string(),
                             Disqualification::MultipleFinals { .. } => "multiple finals".to_string(),
                             Disqualification::Empty => "empty".to_string(),
+                            Disqualification::NoBall => "no invariant ball".to_string(),
                         };
                         seen.insert(key);
                     }
@@ -1485,6 +1996,11 @@ mod census {
         // closed-form inverse or whether the map contracts.
         let mut one_nonlinear: BTreeMap<String, usize> = BTreeMap::new();
         let mut needs: BTreeMap<String, usize> = BTreeMap::new();
+        // What the plane can already invert: an affine role, or a
+        // root (plan 8.8).
+        let known = |name: &str, w: f64, t: &Transform| {
+            affine_role(name, w, t, r, Space::Planar).is_some() || matches!(name, "julia" | "julian")
+        };
         for (_, c) in &all {
             if c.flame.xaos.is_some() || c.flame.final_transforms.len() > 1 {
                 continue;
@@ -1498,7 +2014,7 @@ mod census {
                     if w == 0.0 {
                         continue;
                     }
-                    if affine_role(&name, w, t, r, Space::Planar).is_none() {
+                    if !known(&name, w, t) {
                         nonlinear.push(name);
                     }
                 }
@@ -1548,7 +2064,7 @@ mod census {
             for t in c.flame.transforms.iter().chain(&c.flame.final_transforms) {
                 for v in t.ordered_variation_names(r) {
                     let w = t.variations.get(&v).copied().unwrap_or(0.0) as f64;
-                    if w != 0.0 && affine_role(&v, w, t, r, Space::Planar).is_none() {
+                    if w != 0.0 && !known(&v, w, t) {
                         set.insert(v);
                     }
                 }

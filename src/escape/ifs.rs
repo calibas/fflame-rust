@@ -48,7 +48,7 @@
 //! modes A and B.
 
 use super::EscapeParamDef;
-use crate::scene::ifs_analysis::{Affine2, Ifs2, Ifs3};
+use crate::scene::ifs_analysis::{Affine2, Ifs2, Ifs3, Map2};
 
 /// A mode-D distance function.
 pub struct IfsDef {
@@ -140,13 +140,50 @@ pub static IFS_FLAME: IfsDef = IfsDef {
     ],
     wgsl: r#"
 // Inverse of map i.
+//
+// An affine row (power == 0) is one affine. A root row (plan 8.8) is
+// the post-inverse with 1/w folded in, then the single-valued inverse
+// of the root, |v|^(|n|/d) at angle n*arg(v), then the pre-inverse.
 fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
     let m = ifs_maps[i].inv_m;
     let t = ifs_maps[i].inv_t;
-    return vec2<f32>(
+    let q = vec2<f32>(
         m.x * p.x + m.y * p.y + t.x,
         m.z * p.x + m.w * p.y + t.y,
     );
+    let n = ifs_maps[i].power;
+    if (n == 0.0) {
+        return q;
+    }
+    let r = length(q);
+    let a = n * ff_atan2(q.y, q.x);
+    let rr = pow(r, abs(n) / ifs_maps[i].dist);
+    let u = vec2<f32>(rr * cos(a), rr * sin(a));
+    let pm = ifs_maps[i].pre_m;
+    let pt = ifs_maps[i].pre_t;
+    return vec2<f32>(
+        pm.x * u.x + pm.y * u.y + pt.x,
+        pm.z * u.x + pm.w * u.y + pt.y,
+    );
+}
+
+// The forward map's sigma_min at the point whose image is p: the
+// row's constant, times |v|^(1 - |n|/d) for a root (J3) -- the chain
+// rule at the orbit point, infinite at the critical point.
+fn ifs_inv_sigma(i: u32, p: vec2<f32>) -> f32 {
+    let s = ifs_maps[i].sigma_min;
+    let n = ifs_maps[i].power;
+    if (n == 0.0) {
+        return s;
+    }
+    let m = ifs_maps[i].inv_m;
+    let t = ifs_maps[i].inv_t;
+    let v = vec2<f32>(
+        m.x * p.x + m.y * p.y + t.x,
+        m.z * p.x + m.w * p.y + t.y,
+    );
+    let r = max(length(v), 1e-30);
+    return s * pow(r, 1.0 - abs(n) / ifs_maps[i].dist);
 }
 
 // Where in the annulus [R, R/sigma] an escaped point sits, counted
@@ -364,7 +401,7 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             var child = live[parent];
             if (bi < n) {
                 child.q = ifs_inv_point(bi, live[parent].q);
-                child.sigma = live[parent].sigma * ifs_maps[bi].sigma_min;
+                child.sigma = live[parent].sigma * ifs_inv_sigma(bi, live[parent].q);
                 child.last_sigma = ifs_maps[bi].sigma_min;
                 child.r = key[k2];
                 // Score the child as it is made: one that inherited
@@ -1099,6 +1136,13 @@ pub fn get_ifs_coloring(name: &str, def: &IfsDef) -> &'static IfsColoringDef {
 ///
 /// The forward map is never uploaded — the walk only ever inverts, and
 /// `σ_min` is the only thing it needs of the forward direction.
+///
+/// Sixty-four bytes since the root maps (plan §8.8, J7). An affine
+/// row uses the first half and has `power == 0`, which is what the
+/// shader switches on; a root row's first half is the POST-inverse
+/// with `1/w` folded in, its second half the PRE-inverse, and its
+/// `sigma_min` the constant part of the forward σ_min, multiplied in
+/// the shader by the local factor.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IfsMapGpu {
@@ -1111,6 +1155,13 @@ pub struct IfsMapGpu {
     pub sigma_min: f32,
     /// The transform's colour index, for the address colouring.
     pub color: f32,
+    /// A root row's pre-inverse, `[a, b, c, d]`; zero on an affine row.
+    pub pre_m: [f32; 4],
+    pub pre_t: [f32; 2],
+    /// The root's signed power; zero marks an affine row.
+    pub power: f32,
+    /// The root's distance.
+    pub dist: f32,
 }
 
 /// The whole-IFS constants, packed into the `fdata` block the escape
@@ -1996,20 +2047,46 @@ pub fn formula_is_solid(name: &str) -> bool {
 /// The per-map rows of the storage buffer, in the flame's transform
 /// order — so a branch index in the address IS a transform index.
 pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
+    let m4 = |a: &Affine2| [a.m[0][0] as f32, a.m[0][1] as f32, a.m[1][0] as f32, a.m[1][1] as f32];
+    let t2 = |a: &Affine2| [a.t[0] as f32, a.t[1] as f32];
     ifs.maps
         .iter()
         .map(|m| {
-            let inv: Affine2 = m.inverse;
-            IfsMapGpu {
-                inv_m: [
-                    inv.m[0][0] as f32,
-                    inv.m[0][1] as f32,
-                    inv.m[1][0] as f32,
-                    inv.m[1][1] as f32,
-                ],
-                inv_t: [inv.t[0] as f32, inv.t[1] as f32],
-                sigma_min: m.sigma_min as f32,
-                color: colors.get(m.transform_index).copied().unwrap_or(0.0),
+            let color = colors.get(m.transform_index).copied().unwrap_or(0.0);
+            match m.inverse {
+                Map2::Affine(inv) => IfsMapGpu {
+                    inv_m: m4(&inv),
+                    inv_t: t2(&inv),
+                    sigma_min: m.sigma_min as f32,
+                    color,
+                    pre_m: [0.0; 4],
+                    pre_t: [0.0; 2],
+                    power: 0.0,
+                    dist: 0.0,
+                },
+                Map2::RootInverse(r) | Map2::Root(r) => {
+                    // post⁻¹ with the 1/w folded in: the shader's first
+                    // affine takes q straight to the point before the
+                    // root's inverse.
+                    let scale = 1.0 / r.w;
+                    let post = Affine2 {
+                        m: [
+                            [r.post_inv.m[0][0] * scale, r.post_inv.m[0][1] * scale],
+                            [r.post_inv.m[1][0] * scale, r.post_inv.m[1][1] * scale],
+                        ],
+                        t: [r.post_inv.t[0] * scale, r.post_inv.t[1] * scale],
+                    };
+                    IfsMapGpu {
+                        inv_m: m4(&post),
+                        inv_t: t2(&post),
+                        sigma_min: m.sigma_min as f32,
+                        color,
+                        pre_m: m4(&r.pre_inv),
+                        pre_t: t2(&r.pre_inv),
+                        power: r.n as f32,
+                        dist: r.d as f32,
+                    }
+                }
             }
         })
         .collect()
@@ -2449,6 +2526,7 @@ mod tests {
         let json: Vec<serde_json::Value> = classical_presets()
             .into_iter()
             .chain(solid_presets())
+            .chain(super::gpu_tests::julia_presets())
             .collect::<Vec<_>>()
             .iter()
             .map(|c| {
@@ -2529,7 +2607,7 @@ mod tests {
                 ifs.ball.radius
             );
         }
-        assert_eq!(planar, 4, "expected four planar IFS presets, found {planar}");
+        assert_eq!(planar, 7, "expected seven planar IFS presets (four classical, three julia), found {planar}");
         assert_eq!(solid, 2, "expected two solid IFS presets, found {solid}");
     }
 
@@ -3988,17 +4066,21 @@ mod tests {
         }
     }
 
-    /// The GPU row must match what WGSL's std430 rules read: 32 bytes,
-    /// with the scalars trailing a vec2 rather than straddling a
-    /// 16-byte boundary.
+    /// The GPU row must match what WGSL's std430 rules read: 64 bytes,
+    /// two halves of the same shape, with the scalars trailing a vec2
+    /// rather than straddling a 16-byte boundary.
     #[test]
     fn the_gpu_row_is_the_layout_the_shader_declares() {
-        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 32);
+        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 64);
         assert_eq!(std::mem::align_of::<IfsMapGpu>(), 4);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_m), 0);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_t), 16);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, sigma_min), 24);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, color), 28);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, pre_m), 32);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, pre_t), 48);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, power), 56);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, dist), 60);
     }
 }
 
@@ -4262,6 +4344,204 @@ mod gpu_tests {
             inside.len(),
             outside.len()
         );
+    }
+
+    /// Two julia transforms, `±sqrt(p − c₁)` and `±sqrt(p − c₂)`: the
+    /// invariant set of a pair of quadratic inverse systems, which no
+    /// single Julia set is.
+    pub(super) fn julia_pair_flame() -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms.clear();
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        for (i, c) in [[-0.123f32, 0.745f32], [0.285, 0.01]].into_iter().enumerate() {
+            let mut t = Transform::default();
+            t.a = 1.0;
+            t.b = 0.0;
+            t.c = 0.0;
+            t.d = 1.0;
+            t.e = -c[0];
+            t.f = -c[1];
+            t.color = i as f32;
+            t.variations = HashMap::from([("julia".to_string(), 1.0)]);
+            t.variation_order = vec!["julia".to_string()];
+            fl.transforms.push(t);
+        }
+        fl
+    }
+
+    /// Gate 2 of plan 8.8: the GPU walk agrees with the CPU estimate
+    /// on a root-map IFS, the way it does on the gasket -- the root
+    /// kernel and the local sigma are transcriptions, and this is what
+    /// checks the transcription.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_gpu_walk_agrees_with_the_cpu_reference_on_a_julia_pair() {
+        let config = config_for(julia_pair_flame());
+        let rgba = render(&config);
+        let guard = global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&config.flame, &guard)
+            .expect("a julia pair qualifies");
+        assert!(ifs.maps.iter().all(|m| !m.forward.is_affine()), "both maps should be roots");
+        let px = (4.0 / 2f64.powf(ZOOM_LOG2)) / H as f64;
+        let (mut inside, mut outside) = (Vec::new(), Vec::new());
+        for y in 0..H {
+            for x in 0..W {
+                let d = estimate(&ifs, pixel_to_plane(x, y), LEVELS, BEAM).distance;
+                if d < 0.25 * px {
+                    inside.push(brightness(&rgba, x, y));
+                } else if d > 3.0 * px {
+                    outside.push(brightness(&rgba, x, y));
+                }
+            }
+        }
+        println!("interior {} / exterior {} of {} pixels", inside.len(), outside.len(), W * H);
+        assert!(inside.len() > 150, "too few interior pixels: {}", inside.len());
+        assert!(outside.len() > 1500, "too few exterior pixels: {}", outside.len());
+        let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len() as f64;
+        let (mi, mo) = (mean(&inside), mean(&outside));
+        assert!(mi > 0.05, "the set rendered dark ({mi:.4})");
+        assert!(mi > mo * 8.0 + 0.02, "interior ({mi:.4}) and exterior ({mo:.4}) are not separated");
+        let cut = (mi + mo) * 0.5;
+        let lit_in = inside.iter().filter(|&&b| b > cut).count();
+        let lit_out = outside.iter().filter(|&&b| b > cut).count();
+        let agree = (lit_in + (outside.len() - lit_out)) as f64 / (inside.len() + outside.len()) as f64;
+        assert!(
+            agree > 0.97,
+            "GPU and CPU disagree on {:.1}% of pixels (interior lit {lit_in}/{}, exterior lit {lit_out}/{})",
+            (1.0 - agree) * 100.0,
+            inside.len(),
+            outside.len()
+        );
+    }
+
+    /// A julia-family transform: `A_pre = (p − c)`, the root at
+    /// weight `w`, an optional post-rotation.
+    fn julia_xform(variation: &str, c: [f32; 2], w: f32, power: f32, dist: f32, color: f32) -> Transform {
+        let mut t = Transform::default();
+        t.a = 1.0;
+        t.b = 0.0;
+        t.c = 0.0;
+        t.d = 1.0;
+        t.e = -c[0];
+        t.f = -c[1];
+        t.color = color;
+        t.weight = 1.0;
+        t.variations = HashMap::from([(variation.to_string(), w)]);
+        t.variation_order = vec![variation.to_string()];
+        if variation == "julian" {
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", dist);
+        }
+        t
+    }
+
+    /// The julia presets that ship (plan 8.8 gate 4), chosen from the
+    /// candidates below after rendering them all: the classic filled
+    /// rabbit under the level colouring, which is J2's caveat made
+    /// visible; a dendrite under the distance colouring, where the
+    /// filled set is thin enough that the picture is its outline; and
+    /// a pair of cubic roots under the address colouring, which no
+    /// single Julia set is.
+    pub(super) fn julia_presets() -> Vec<crate::config::FractalConfig> {
+        let chosen = ["Douady Rabbit", "Julia Dendrite", "Cubic Pair"];
+        julia_candidates()
+            .into_iter()
+            .filter(|(name, _, _)| chosen.contains(name))
+            .map(|(name, coloring, transforms)| ifs_preset_config(name, coloring, transforms))
+            .collect()
+    }
+
+    /// Candidate julia presets, rendered for inspection before any
+    /// ships (plan 8.8 gate 4). Each is (name, colouring, transforms).
+    pub(super) fn julia_candidates() -> Vec<(&'static str, &'static str, Vec<Transform>)> {
+        vec![
+            ("Douady Rabbit", "ifs_level", vec![julia_xform("julia", [-0.123, 0.745], 1.0, 2.0, 1.0, 0.5)]),
+            ("Julia Dendrite", "ifs_distance", vec![julia_xform("julia", [0.36, 0.1], 1.0, 2.0, 1.0, 0.5)]),
+            (
+                "Julia Pair",
+                "ifs_address",
+                vec![
+                    julia_xform("julia", [-0.123, 0.745], 1.0, 2.0, 1.0, 0.15),
+                    julia_xform("julia", [0.285, 0.01], 1.0, 2.0, 1.0, 0.85),
+                ],
+            ),
+            (
+                "Julia Pair Distance",
+                "ifs_distance",
+                vec![
+                    julia_xform("julia", [-0.123, 0.745], 1.0, 2.0, 1.0, 0.15),
+                    julia_xform("julia", [0.285, 0.01], 1.0, 2.0, 1.0, 0.85),
+                ],
+            ),
+            (
+                "Cubic Pair",
+                "ifs_address",
+                vec![
+                    julia_xform("julian", [0.4, 0.3], 1.0, 3.0, 1.0, 0.2),
+                    julia_xform("julian", [-0.5, 0.2], 1.0, 3.0, 1.0, 0.8),
+                ],
+            ),
+            (
+                "Rabbit and Basilica",
+                "ifs_level",
+                vec![
+                    julia_xform("julia", [-0.123, 0.745], 1.0, 2.0, 1.0, 0.2),
+                    julia_xform("julia", [-1.0, 0.0], 1.0, 2.0, 1.0, 0.8),
+                ],
+            ),
+            (
+                "Julia Trio",
+                "ifs_address",
+                vec![
+                    julia_xform("julia", [-0.123, 0.745], 1.0, 2.0, 1.0, 0.1),
+                    julia_xform("julia", [0.285, 0.01], 1.0, 2.0, 1.0, 0.5),
+                    julia_xform("julia", [-0.8, 0.156], 1.0, 2.0, 1.0, 0.9),
+                ],
+            ),
+        ]
+    }
+
+    /// Build a mode-D config around a set of transforms the way
+    /// `classical_presets` does, framed on the analysed ball.
+    pub(super) fn ifs_preset_config(name: &str, coloring: &str, transforms: Vec<Transform>) -> crate::config::FractalConfig {
+        let registry = global_registry();
+        let mut c = crate::config::FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        c.flame.name = name.to_string();
+        c.flame.transforms = transforms;
+        c.flame.final_transforms.clear();
+        c.flame.xaos = None;
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&c.flame, &registry)
+            .unwrap_or_else(|why| panic!("{name} must qualify, but: {why:?}"));
+        c.escape.formula = "ifs_flame".to_string();
+        c.escape.coloring = coloring.to_string();
+        c.escape.center_re = format!("{}", ifs.ball.centre[0]);
+        c.escape.center_im = format!("{}", ifs.ball.centre[1]);
+        c.escape.zoom_log2 = (4.0 / (ifs.ball.radius * 2.4)).log2();
+        c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+        c.gamma = crate::config::defaults::DEFAULT_GAMMA;
+        c
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/julia-*.png"]
+    fn render_the_julia_candidates_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        for (name, coloring, transforms) in julia_candidates() {
+            let mut c = ifs_preset_config(name, coloring, transforms);
+            c.escape.formula_params.insert("levels".to_string(), 64.0);
+            let job = crate::renderer::RenderJob::new(&c, 512, 512);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render");
+            let slug = name.to_lowercase().replace(' ', "-");
+            let path = dir.join(format!("julia-{slug}.png"));
+            image::save_buffer(&path, &out.rgba_data, 512, 512, image::ColorType::Rgba8).expect("write png");
+            println!("    {}", path.display());
+        }
     }
 
     /// A flame that fails the criterion must render EMPTY, not a
@@ -4874,7 +5154,7 @@ mod gpu_tests {
                 cfg.flame.name
             );
         }
-        assert_eq!(seen, 6, "expected six IFS presets, found {seen}");
+        assert_eq!(seen, 9, "expected nine IFS presets (four classical, two solid, three julia), found {seen}");
     }
 
     /// A 3D flame: the XY affine is identity plus a translation and

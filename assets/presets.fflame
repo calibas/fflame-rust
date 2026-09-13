@@ -2445,5 +2445,296 @@
     },
     "tonemap_mode": "linear",
     "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "-0.007065506963206407",
+      "center_re": "0.031929445761839655",
+      "coloring": "ifs_level",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 0.102213983953004
+    },
+    "flame": {
+      "name": "Douady Rabbit",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.123,
+          "f": -0.745,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julia"
+          ],
+          "variation_params": {},
+          "variations": {
+            "julia": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.002000280974576803",
+      "center_re": "0.019778474402273028",
+      "coloring": "ifs_distance",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 0.38172232409522944
+    },
+    "flame": {
+      "name": "Julia Dendrite",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.5,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": -0.36,
+          "f": -0.1,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julia"
+          ],
+          "variation_params": {},
+          "variations": {
+            "julia": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "-0.0004921343834416683",
+      "center_re": "0.028764033263990258",
+      "coloring": "ifs_address",
+      "formula": "ifs_flame",
+      "max_iter": 256,
+      "zoom_log2": 0.434244626696665
+    },
+    "flame": {
+      "name": "Cubic Pair",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.2,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": -0.4,
+          "f": -0.3,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julian"
+          ],
+          "variation_params": {
+            "julian.dist": 1.0,
+            "julian.power": 3.0
+          },
+          "variations": {
+            "julian": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.8,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": -0.2,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "julian"
+          ],
+          "variation_params": {
+            "julian.dist": 1.0,
+            "julian.power": 3.0
+          },
+          "variations": {
+            "julian": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
   }
 ]
