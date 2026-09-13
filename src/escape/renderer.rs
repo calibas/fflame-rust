@@ -3568,7 +3568,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         packed: &super::ifs::PackedIfs,
         def: &super::ifs::IfsDef,
     ) {
-        let Some((ifs3, _)) = packed.solid.as_ref() else {
+        let Some((ifs3, _)) = packed.solid.as_ref().filter(|(i, _)| !i.maps.is_empty()) else {
+            // No maps, no chain: a flame-less def walks from the delta.
             self.ifs_chain = None;
             self.ifs_chain_key.clear();
             return;

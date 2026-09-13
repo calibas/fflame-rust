@@ -2792,10 +2792,9 @@ impl App {
                 // alone. Re-analysing each frame is a handful of
                 // affines and a ball refinement; `set_ifs` reports
                 // whether it actually changed, which is the cue.
-                if crate::escape::ifs::get_ifs(&final_config.escape.formula).is_some() {
+                if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
                     let registry = crate::variations::global_registry();
-                    let packed =
-                        crate::escape::ifs::pack_flame(&final_config.flame, &registry).ok();
+                    let packed = crate::escape::ifs::pack_for(def, &final_config, &registry);
                     if escape.set_ifs(packed) {
                         self.escape_dirty = true;
                     }

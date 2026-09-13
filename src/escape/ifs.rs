@@ -1232,7 +1232,297 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 
 /// Ordered mode-D registry. **Append-only** — same contract as
 /// [`super::FORMULAS`].
-pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D];
+pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D, &IFS_QUATERNION_JULIA];
+
+/// A quaternion Julia set as a solid, needing no flame (plan §8.11,
+/// step 1): `q ↦ qⁿ + c` in ℍ on a 3D slice, by the escape-time
+/// distance estimate of Hart, Sandin and Kauffman (1989). The solid
+/// template supplies the camera, the march, the normals, the shadows,
+/// the occlusion and the cache; this supplies `ifs_walk3`.
+///
+/// The parameter slots the template reads are the solid flame's, in
+/// its order -- levels, beam, steps, shadow, shadow sharpness,
+/// occlusion -- then this set's own. `beam` means nothing here and
+/// keeps its slot so `fparam(2)` is still the march.
+pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
+    name: "quaternion_julia_solid",
+    display_name: "Quaternion Julia (Solid)",
+    solid: true,
+    needs_flame: false,
+    default_coloring: "ifs_level",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Iterations",
+            default: 32.0,
+            min: 1.0,
+            max: 256.0,
+            tooltip: "How many times to apply q -> q^n + c before calling the point \
+                      part of the set. The distance is taken where |q| has run past \
+                      10^4, so a few beyond the bailout are spent sharpening it.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 1.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "Unused here: a quaternion power has one inverse orbit. Kept so \
+                      the march, shadow and occlusion slots line up with the flame \
+                      solid's.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 96.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.7,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Penumbra width: higher is harder-edged.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cx",
+            display_name: "Constant X",
+            default: -1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The scalar (real) part of the Julia constant c. Bourke writes \
+                      c scalar-first; his (-1, 0.2, 0, 0) is this at -1.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cy",
+            display_name: "Constant Y",
+            default: 0.2,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The i component of c.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cz",
+            display_name: "Constant Z",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The j component of c.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cw",
+            display_name: "Constant W",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The k component of c.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "power",
+            display_name: "Power",
+            default: 2.0,
+            min: 2.0,
+            max: 8.0,
+            tooltip: "The n in q^n + c. 2 is the classic quadratic set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "bailout",
+            display_name: "Bailout",
+            default: 2.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "A point whose orbit passes this radius is outside the set. Also \
+                      the radius of the ball the camera frames.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "slice_axis",
+            display_name: "Slice Axis",
+            default: 3.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "Which quaternion component the 3D slice pins: 0 = scalar, \
+                      1 = i, 2 = j, 3 = k. For a complex c (j = k = 0) the k slice \
+                      contains the complex plane and shows the classic solid.",
+            choices: &["Scalar", "i", "j", "k"],
+        },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Where along the slice axis the 3D slice sits. Sweep it to walk \
+                      through the 4D solid.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+// The quaternion as (scalar, i, j, k) in a vec4's (x, y, z, w). A
+// power via the polar form: q = |q| (cos a + n^ sin a) with n^ the
+// unit vector part, q^n = |q|^n (cos na + n^ sin na).
+fn qj_pow(q: vec4<f32>, n: f32) -> vec4<f32> {
+    let mag = length(q);
+    if (mag < 1e-30) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let rad = pow(mag, n);
+    let ang = acos(clamp(q.x / mag, -1.0, 1.0)) * n;
+    let vlen = length(q.yzw);
+    let nhat = select(vec3<f32>(1.0, 0.0, 0.0), q.yzw / vlen, vlen > 1e-12);
+    return vec4<f32>(rad * cos(ang), rad * sin(ang) * nhat);
+}
+
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    // The ball is centred on the origin, so the world point is the
+    // delta plus the target's offset. f32 and absolute: no deep zoom
+    // in this step (plan 8.11 Q3).
+    let p3 = delta + ifs_target_offset();
+    let levels = u32(clamp(fparam(0u), 1.0, 256.0));
+    let c = vec4<f32>(fparam(6u), fparam(7u), fparam(8u), fparam(9u));
+    let n = clamp(round(fparam(10u)), 2.0, 8.0);
+    let bail = max(fparam(11u), 1.0);
+    let axis = u32(clamp(fparam(12u), 0.0, 3.0));
+    let slice = fparam(13u);
+
+    // Lift to 4D: the slice axis takes the slice value and the other
+    // three take the point, in order.
+    var q: vec4<f32>;
+    if (axis == 0u) {
+        q = vec4<f32>(slice, p3.x, p3.y, p3.z);
+    } else if (axis == 1u) {
+        q = vec4<f32>(p3.x, slice, p3.y, p3.z);
+    } else if (axis == 2u) {
+        q = vec4<f32>(p3.x, p3.y, slice, p3.z);
+    } else {
+        q = vec4<f32>(p3.x, p3.y, p3.z, slice);
+    }
+
+    // dq is |dq_k / dq_0|, a scalar because the quaternion norm is
+    // multiplicative: each step multiplies it by n |q|^(n-1) (Q1).
+    var dq = 1.0;
+    var mag = length(q);
+    var escape_k = -1.0;
+    var escape_mag = 0.0;
+    var k = 0u;
+    loop {
+        if (k >= levels || mag > 1.0e4) {
+            break;
+        }
+        dq = n * pow(mag, n - 1.0) * dq;
+        q = qj_pow(q, n) + c;
+        mag = length(q);
+        k = k + 1u;
+        if (escape_k < 0.0 && mag > bail) {
+            escape_k = f32(k);
+            escape_mag = mag;
+        }
+    }
+
+    if (escape_k >= 0.0) {
+        res.escaped = 1u;
+        // Hart's estimate, with his half for the march's sake.
+        res.distance = 0.5 * mag * log(mag) / max(dq, 1e-30);
+        // The smooth escape count, rising toward the set.
+        let smooth_k = escape_k + 1.0 - log(max(log(escape_mag), 1e-30) / log(bail)) / log(n);
+        res.level = max(f32(levels) - smooth_k, 0.0);
+        res.depth = u32(max(f32(levels) - escape_k, 0.0));
+        // The binary decomposition: the escaped quaternion's azimuth
+        // in the (i, j) plane.
+        res.address = fract(ff_atan2(q.z, q.y) / 6.28318530718 + 0.5);
+        res.point = q.yz;
+    } else {
+        res.level = f32(levels);
+        res.depth = levels;
+        res.point = q.yz;
+    }
+    return res;
+}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta, 0.0);
+}
+"#,
+};
+
+/// The packing for a def that needs no flame (plan §8.11 Q3): no
+/// maps, and a ball of the bailout's radius at the origin, which is
+/// what frames the camera and bounds the march. Everything downstream
+/// -- `set_ifs`, the globals, the keys -- works as for a flame.
+pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> PackedIfs {
+    let radius = def
+        .parameters
+        .iter()
+        .find(|p| p.name == "bailout")
+        .map(|p| escape.formula_params.get("bailout").copied().unwrap_or(p.default) as f64)
+        .unwrap_or(2.0)
+        .max(1e-3);
+    let ball2 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0], radius };
+    let ball3 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0, 0.0], radius };
+    let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball2 };
+    let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball3 };
+    let mut globals = [[0.0f32; 4]; 4];
+    pack_globals(&ifs, &mut globals);
+    PackedIfs { globals, rows: Vec::new(), ifs, colors: Vec::new(), solid: Some((ifs3, Vec::new())) }
+}
+
+/// The packing a config's formula wants: the flame's analysis for a
+/// def that reads the flame, the def's own for one that does not.
+pub fn pack_for(
+    def: &IfsDef,
+    config: &crate::config::FractalConfig,
+    registry: &crate::variations::VariationRegistry,
+) -> Option<PackedIfs> {
+    if def.needs_flame {
+        pack_flame(&config.flame, registry).ok()
+    } else {
+        Some(pack_standalone(def, &config.escape))
+    }
+}
 
 /// Ordered mode-D coloring registry. **Append-only.**
 pub static IFS_COLORINGS: &[&IfsColoringDef] =
@@ -1913,7 +2203,10 @@ pub fn pack_globals3(
     } else {
         ifs.maps.iter().map(|m| m.sigma_min).sum::<f64>() / ifs.maps.len() as f64
     };
-    out[1] = [mean as f32, ifs.maps.len() as f32, 0.0, 0.0];
+    // At least one, so the template's "no qualifying flame" guard does
+    // not fire on a flame-less def (plan 8.11 Q3); a flame with no
+    // maps never gets this far.
+    out[1] = [mean as f32, ifs.maps.len().max(1) as f32, 0.0, 0.0];
     // The eye RELATIVE TO THE TARGET, which is the whole of the 3D
     // deep zoom. `eye = target − forward·distance`, so this is
     // `−forward·distance` and its magnitude IS the distance: an f32
@@ -2678,6 +2971,7 @@ mod tests {
             .chain(solid_presets())
             .chain(super::gpu_tests::julia_presets())
             .chain(super::gpu_tests::kernel_presets())
+            .chain(super::gpu_tests::quaternion_presets())
             .collect::<Vec<_>>()
             .iter()
             .map(|c| {
@@ -2706,6 +3000,16 @@ mod tests {
         for cfg in crate::resources::presets::load_embedded_presets().expect("presets parse") {
             let Some(def) = get_ifs(&cfg.escape.formula) else { continue };
             let name = cfg.flame.name.clone();
+            if !def.needs_flame {
+                // No criterion to pass: the set is the def's own, and
+                // its view is a camera about the origin.
+                assert!(
+                    IFS_COLORINGS.iter().any(|c| c.name == cfg.escape.coloring),
+                    "preset {name:?} names coloring {:?}, not a mode-D one",
+                    cfg.escape.coloring
+                );
+                continue;
+            }
 
             // A SOLID preset answers a different question: qualifying
             // in 3D is not qualifying in 2D, and its view is a camera
@@ -5152,6 +5456,110 @@ mod gpu_tests {
         }
     }
 
+    /// A quaternion Julia solid config: Bourke's constant on the k
+    /// slice unless told otherwise, framed by the standalone packing's
+    /// ball at the origin.
+    pub(super) fn quaternion_config(c: [f32; 4], slice_axis: f32, coloring: &str) -> crate::config::FractalConfig {
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.render_mode = RenderMode::Escape;
+        cfg.flame.name = "Quaternion Julia".to_string();
+        cfg.escape.formula = IFS_QUATERNION_JULIA.name.to_string();
+        cfg.escape.coloring = coloring.to_string();
+        cfg.escape.formula_params.insert("cx".to_string(), c[0]);
+        cfg.escape.formula_params.insert("cy".to_string(), c[1]);
+        cfg.escape.formula_params.insert("cz".to_string(), c[2]);
+        cfg.escape.formula_params.insert("cw".to_string(), c[3]);
+        cfg.escape.formula_params.insert("slice_axis".to_string(), slice_axis);
+        cfg.escape.cam_yaw = 0.9;
+        cfg.escape.cam_pitch = 0.42;
+        cfg.escape.zoom_log2 = 0.0;
+        cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        cfg.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+        cfg.gamma = crate::config::defaults::DEFAULT_GAMMA;
+        cfg
+    }
+
+    /// The presets that ship from plan 8.11 step 1: Bourke's
+    /// `c = (-1, 0.2, 0, 0)` on the k slice, under the escape-level
+    /// colouring. Inspected before shipping
+    /// (`render_the_quaternion_julia_for_inspection`).
+    pub(super) fn quaternion_presets() -> Vec<crate::config::FractalConfig> {
+        let mut c = quaternion_config([-1.0, 0.2, 0.0, 0.0], 3.0, "ifs_level");
+        // The ball is the bailout's radius and the set is about half
+        // of it: a closer frame than the ball's own.
+        c.escape.zoom_log2 = 0.7;
+        vec![c]
+    }
+
+    /// Plan 8.11 gate 2, the math: with `c = 0` the orbit of `q` is
+    /// `|q|^(2^k)`, so the set is exactly the unit ball, and its
+    /// silhouette on the pinhole is a disc whose pixel radius the
+    /// camera predicts. The march finds the surface where Hart's
+    /// estimate says it is; a wrong estimate, a wrong lift to 4D or a
+    /// wrong ball would all move this disc.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_quaternion_julia_with_c_zero_is_the_unit_ball() {
+        let mut cfg = quaternion_config([0.0, 0.0, 0.0, 0.0], 3.0, "ifs_distance");
+        cfg.escape.coloring_params.insert("interior".to_string(), 0.5);
+        const N: u32 = 256;
+        let (device, queue) = device();
+        let job = crate::renderer::RenderJob::new(&cfg, N, N);
+        let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+            .expect("render");
+        let lit = out.rgba_data.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
+        // The camera: the standalone ball has the bailout's radius (2)
+        // and the frame distance is 3.2 radii; a unit sphere at that
+        // distance subtends asin(1/D), and the vertical field of view
+        // spans N pixels.
+        let packed = pack_standalone(&IFS_QUATERNION_JULIA, &cfg.escape);
+        let ifs3 = packed.solid.as_ref().map(|(i, _)| i).expect("standalone solid");
+        let cam = solid_camera(&cfg.escape, ifs3);
+        let tan_half = (cam.fov as f64 * 0.5).tan();
+        let predicted = (N as f64 / 2.0) * (1.0 / cam.distance).asin().tan() / tan_half;
+        let measured = (lit as f64 / std::f64::consts::PI).sqrt();
+        println!("  unit ball: {lit} lit pixels, silhouette radius {measured:.2} px, camera predicts {predicted:.2} px");
+        // Hart's half (Q1) makes the estimate exactly HALF the true
+        // distance on the unit ball -- with c = 0, d = ½·|q0|·ln|q0|
+        // for every k -- so the march, which stops at a pixel of
+        // estimated distance, stops at two pixels of true distance and
+        // the silhouette comes out two pixels wide. Measured +1.97 px
+        // at 256; that is the estimate doing what it says, not the
+        // camera or the lift being wrong, and it is gated as such.
+        let excess = measured - predicted;
+        assert!(
+            (-0.5..=2.5).contains(&excess),
+            "the silhouette is {measured:.2} px where the camera predicts {predicted:.2} (+2 for the half)"
+        );
+    }
+
+    /// Bourke's set and two others, each under two colourings, for
+    /// inspection before a preset ships (plan 8.11 gate 3).
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/quat-*.png"]
+    fn render_the_quaternion_julia_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        for (name, c, axis) in [
+            ("bourke", [-1.0f32, 0.2, 0.0, 0.0], 3.0f32),
+            ("bourke-i-slice", [-1.0, 0.2, 0.0, 0.0], 1.0),
+            ("dendrite", [-0.2, 0.8, 0.0, 0.0], 3.0),
+            ("general", [-0.3, 0.5, 0.4, 0.1], 3.0),
+        ] {
+            for coloring in ["ifs_level", "ifs_distance", "ifs_address"] {
+                let cfg = quaternion_config(c, axis, coloring);
+                let job = crate::renderer::RenderJob::new(&cfg, 448, 448);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                    .expect("render");
+                let lit = out.rgba_data.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
+                let path = dir.join(format!("quat-{name}-{coloring}.png"));
+                image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
+                println!("    {} ({lit} lit)", path.display());
+            }
+        }
+    }
+
     /// A flame that fails the criterion must render EMPTY, not a
     /// frame-filling interior. `distance == 0` is what a point on the
     /// attractor returns, so "no maps" has to mean far away, not near.
@@ -5762,7 +6170,7 @@ mod gpu_tests {
                 cfg.flame.name
             );
         }
-        assert_eq!(seen, 10, "expected ten IFS presets (four classical, two solid, three julia, one blob), found {seen}");
+        assert_eq!(seen, 11, "expected eleven IFS presets (four classical, two solid, three julia, one blob, one quaternion), found {seen}");
     }
 
     /// A 3D flame: the XY affine is identity plus a translation and

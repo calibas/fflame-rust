@@ -964,9 +964,9 @@ async fn render_escape(
     // job here rather than per pixel in the shader. A flame that does
     // not qualify hands the renderer `None` and draws nothing — the
     // panel is where the reason is explained.
-    if crate::escape::ifs::get_ifs(&job.config.escape.formula).is_some() {
+    if let Some(def) = crate::escape::ifs::get_ifs(&job.config.escape.formula) {
         let registry = crate::variations::global_registry();
-        escape_renderer.set_ifs(crate::escape::ifs::pack_flame(&job.config.flame, &registry).ok());
+        escape_renderer.set_ifs(crate::escape::ifs::pack_for(def, &job.config, &registry));
         // A SOLID walk lights itself, from the app's own lighting
         // settings rather than a second vocabulary of its own.
         escape_renderer.set_solid_lighting(

@@ -2420,6 +2420,97 @@ had to be rendered under every colouring and checked against the
 depth before anyone could say which, and that — not the inverse — is
 the cost of the next one.
 
+### 8.11 Towards quaternions: the road, and its first step (plan, 2026-09-13)
+
+The eventual goal is 3D quaternion sets. Three steps, each a thing
+on its own:
+
+1. **A quaternion Julia solid that needs no flame** — this step.
+   `q ↦ qⁿ + c` in ℍ on a 3D slice, rendered by the escape-time
+   distance estimate of Hart, Sandin and Kauffman (1989), which is
+   the paper sphere tracing comes from (§9). It is an `IfsDef` with
+   `needs_flame: false`, the shape phase 4's note reserved for the
+   Mandelbulb and its kin: its WGSL supplies `ifs_walk3` and the
+   solid template supplies everything else — the camera, the march,
+   the normals, the shadows, the occlusion, the relight cache, the
+   four colourings. The chaos game already has this set as
+   `quaternion_julia_set`, and the def takes its conventions: `c` as
+   `(cx, cy, cz, cw)` with the scalar last, the power, the bailout,
+   a slice axis and a slice value.
+2. **3D kernels on the flame side** — `Map3::{Affine, Nonlinear}` as
+   §8.8–8.10 built for the plane, starting with `julia3D` (a root
+   whose radius is the 3D radius with `z` scaled by `1/|n|`, whose
+   elevation is kept and whose azimuth is divided), so that a flame
+   of several 3D root transforms is a solid the way a julia pair is
+   a plane.
+3. **The quaternion IFS** — several `quaternion_julia` transforms
+   with the scalar part carried, which is where step 2's kernels
+   and step 1's arithmetic meet, and where the 4D caveat that
+   variation's own docs record (the inverse root collapses onto a
+   plane) has to be faced rather than inherited.
+
+**Q1 — The distance is the classic estimate, and it is an
+estimate.** With `dq` the scalar `|∂q_k/∂q_0|`, which under
+`q ↦ qⁿ + c` multiplies by `n·|q|ⁿ⁻¹` each step because the
+quaternion norm is multiplicative, `d = ½·|q|·ln|q| / dq` once `|q|`
+is large. The half is Hart's, for the march's sake. The iteration
+runs past the bailout to `|q| > 10⁴` or the depth, whichever first,
+so the estimate is taken where the logarithm has settled; membership
+is `|q|` never exceeding the bailout within the depth.
+
+**Q2 — The four quantities.** Distance as above; level the smooth
+escape count, rising toward the set as the walk's does; address the
+escaped quaternion's azimuth in `[0, 1)`, which is the binary
+decomposition; the trap point its `xy`. So every colouring works
+unchanged.
+
+**Q3 — The wiring is the flame-less packing.** `pack_standalone`
+makes a `PackedIfs` with no maps and a ball of the bailout's radius
+at the origin, so `set_ifs`, the camera, the globals and the keys
+all work as they do; the map count in the globals is at least one
+so the template's "no qualifying flame" guard does not fire; the
+handover chain is skipped for a map-less IFS. The walk works in
+`delta + target_offset`, f32 and absolute: no deep zoom in this
+step, as §8.5 says of anything nonlinear.
+
+**Gates:** (1) every mode-D combination compiles, which the new def
+joins by being in `IFS_DEFS`; (2) *the math:* with `c = 0` the set
+is the unit ball, so its rendered silhouette is a disc whose pixel
+radius the camera predicts, gated within a pixel; (3) a preset —
+Bourke's `c = (−1, 0.2, 0, 0)` on the `k` slice — rendered and
+inspected before it ships; (4) the preset gate learns that a
+flame-less preset has no criterion to pass.
+
+**Step 1 built 2026-09-13.** `quaternion_julia_solid` is in
+`IFS_DEFS`, every colouring compiles over it, and the wiring is what
+Q3 said: `pack_for` chooses the flame's analysis or the def's own
+`pack_standalone`; the globals report at least one map; a map-less
+IFS gets no chain. Two WGSL rules learned on the way — `smooth` is a
+reserved word and `let _ = x;` is not a statement — cost one compile
+gate each.
+
+The unit-ball gate measured **57.44 px against a predicted 55.47**,
+and the two-pixel excess is the estimate doing exactly what Q1 says:
+with `c = 0` the orbit is `|q₀|^(2ᵏ)` and Hart's half makes
+`d = ½·|q₀|·ln|q₀|` at every depth — half the true distance — so a
+march that stops at one pixel of estimated distance stops at two of
+true distance, and the silhouette is two pixels wide. Gated at
+`[−0.5, +2.5]` with that written beside it; taking the half out would
+land the ball exactly and cost the march its safety on a real set.
+
+Bourke's constant on the `k` slice, `c = (−1, 0.2, 0, 0)`, renders
+as the ringed lobes everyone knows, lit and shadowed, under the
+level, distance and address colourings alike — the `i` slice, a
+dendrite-like `c` and a fully general one all render
+(`render_the_quaternion_julia_for_inspection`) — and ships as
+**Quaternion Julia**, framed at `zoom_log2 = 0.7` because the ball
+is the bailout's radius and the set is half of it. Relight, preview
+stride, the geometry cache and the four-angle camera all work
+unchanged, having been written against `ifs_walk3` and not the
+flame. Not in this step: deep zoom (the walk is `delta +
+target_offset` in f32), and CPU agreement — there is no CPU twin of
+this walk, and the unit ball is the check that stands in for one.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a
@@ -2604,7 +2695,9 @@ trap — an Apollonian packing among it. The first conclusion there
 was drawn from one colouring per candidate and was wrong; the
 correction is recorded beside it), §8.10 (`disc`, `blob`,
 `hemisphere`: Blob Flower ships, three catalogue flames reached,
-and the depth check separates a picture from a parameter).
+and the depth check separates a picture from a parameter), §8.11
+(towards quaternions: step 1, a flame-less quaternion Julia solid on
+Hart's estimate, ships as a preset; steps 2 and 3 planned).
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and
