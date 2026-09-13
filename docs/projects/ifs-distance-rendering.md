@@ -2599,6 +2599,129 @@ beside it. What the step buys is the machinery: a flame of several
 quaternion transforms are one more kernel in a row that already
 has a kind and a power.
 
+**Step 3 (plan, 2026-09-13): the quaternion IFS.** Several
+`quaternion_julia` transforms as kernels on the solid side, with the
+scalar part carried.
+
+- **The fourth coordinate is carried, not sliced.** A candidate in
+  both walks gets an `aux` -- the scalar `w` -- that affine maps and
+  the 3D root kernels pass through untouched and the quaternion
+  kernel reads and writes. The march still samples 3D points; a ray
+  sample starts at `w = w_slice`, a new parameter of the solid
+  formula, so the picture is a 3D slice of the 4D set, as step 1's
+  is, while the orbit inside the walk is the true 4D one. The
+  variation's own docs record that its inverse-mode chaos game
+  collapses onto the plane through `1` and `c`; the walk does not
+  care, because it never runs the chaos game -- it inverts.
+- **Inverse mode only, vector projection only.** The flame transform
+  whose forward map is the root `(q − c)^{1/n}` -- the Inverse
+  Iteration Method, which is how a quaternion Julia flame is built --
+  has for its walk-inverse the polynomial `qⁿ + c`, single-valued.
+  Forward mode, whose walk-inverse would be the root, folds: the
+  quaternion power has a zero singular value at every pure-imaginary
+  point (`uv + vu = 0` for perpendicular pure units), and a bound
+  honest about that reads zero on a whole 3-sphere. A transform in
+  forward mode, or with a projection other than the vector one, is
+  `NotAffine::Mode`, said in the panel.
+- **The bound stands.** `σ_min` of the root is at least
+  `min(d,1)/|n| · |u|^{d/n − 1}`, the plane's formula: along the
+  root's complex plane it is the complex root's, and transverse to
+  it the root's axis turns by `sin(a/n)/sin a ≥ 1/n` of the input's,
+  so the transverse stretch is no smaller. Rigorous, unlike step 1's
+  Hart estimate, and the same product-of-parts form as every other
+  kernel.
+- **The ball is 4D.** The chaos-game sample and the invariance
+  search run in four dimensions; the IFS keeps the centre's `w` as
+  `aux_centre`, and the walk's escape radius is the 4D distance.
+  A 3D slice point's distance to the slice-set is at least its 4D
+  distance to the 4D set, so the bound carries to the picture.
+- **The row:** kind 3, the power in `extra.w`, `(c_w, dist)` in
+  `extra2`, and `c_xyz` folded into the pre-inverse's translation.
+
+**Gates:** round trips in 4D on every branch; the sampled bound on a
+4D chaos sample; **a single inverse-mode `quaternion_julia`
+transform with an identity affine IS step 1's set**, so the IFS walk
+and the standalone def rendered from the same camera must agree on
+the hit mask -- the one gate that ties the two arithmetics
+together; GPU against a CPU march on a quaternion pair; every
+colouring and the depth check; byte identity of the eleven presets.
+
+**Step 3 built 2026-09-13.** The plan held and the gates found four
+things, three of them in code that had passed every earlier gate:
+
+1. **`length()` overflows at the ninth level of a polynomial orbit.**
+   The module's own warning about it (`ifs_pick_link` avoids
+   `length()` for a delta's underflow) has a twin at the other end:
+   a quaternion orbit squares its radius per level and sits at
+   1.8·10¹⁹ by level nine, whose square is past f32. The ranking key
+   came out infinite, the child's bound with it, and at beam one that
+   was the answer -- the march overshot and missed. Measured by
+   bisection: GPU and CPU agreed at **100% to eight levels and the
+   GPU found 37 of its 2410 hits at ten.** The radius is
+   `m·|d/m|` past 10¹⁵ now, exact and overflow-free, and `length()`
+   itself below, so every affine walk's arithmetic and every affine
+   preset's bytes are what they were. (Calling anything past 10¹⁵
+   "far" was tried first and found no hits at all: the bound needs
+   the true radius, because σ times it is the estimate's convergent
+   tail.) The plane's walk has the same exposure and the same guard,
+   and it was not at the margin: two shipped julia presets changed,
+   **Cubic Pair by 9013 of 262 144 pixels and Julia Dendrite by
+   2015**, none of the others. Side by side, the old Cubic Pair's
+   halo has a jagged cut where its cubic orbits overflowed by their
+   fifth level and the old Dendrite is eroded at its edge; the new
+   ones are smooth and fuller. The rows and the affine arithmetic
+   did not move -- the four affine planes and the two affine solids
+   are byte-identical -- so this is the overflow, found in 3D and
+   fixed in both, and the two presets' baseline renders are the new
+   ones.
+2. **The precision early exit is an affine argument.** "This
+   candidate can move the answer by less than eps" assumed σ only
+   shrinks, which a contraction guarantees and a root does not --
+   its forward derivative exceeds one near its critical point, so σ
+   can grow after the exit has fired, and an unescaped candidate
+   frozen there escapes at full depth with a bound far above eps.
+   Seen as rings of exterior colour on a surface the march had hit:
+   the level colouring showed a full ball, the distance colouring
+   showed rings, and the difference was the colouring's full-depth
+   evaluation walking on where the march's had stopped. Off for any
+   solid with a nonlinear row (`fdata[1].w`).
+3. **Two layouts, two slices.** The standalone def (step 1) writes a
+   quaternion as `(scalar, i, j, k)` and the variation as
+   `(i, j, k, scalar)`; the IFS's 3D point is the vector part with
+   the scalar sliced, the standalone's is `(scalar, i, j)` with `k`
+   sliced. The first equivalence gate compared different constants
+   on different slices and passed at 95% on the coincidence of two
+   blobs. Corrected -- constant mapped, the standalone's slice axis
+   set to the scalar -- it reads **99.6%**.
+4. **Pure-vector constants are dusts on the vector slice.** The
+   first fixtures had `c` with a zero scalar, and the direct
+   iteration found **0 of 4096** bounded points for them; a
+   scalar-dominant `c` such as `−0.6 + 0.3i` has 360. Every fixture
+   moved to those.
+
+With those: the 4D round trips on every branch, with each local
+factor below the forward stretch along all four axes; the walk's
+membership against the direct 4D iteration on one transform,
+**1228 of 1228 interior points, 0 disagreements**; the 4D sampled
+bound, **0 of 1472** at beam 4; GPU against the CPU march on the
+quaternion pair, **100.0%**, and 99.4% / 99.3% on the julia3D and
+julia3Dz pairs (up from 98.0 / 99.2 with the early exit gone);
+every colouring, depth-converged at 0.00%; eleven presets
+byte-identical.
+
+**The pictures are balls.** The quaternion pair and trio render as
+smooth balls of revolution under every colouring but the trap, whose
+concentric shells are depth-converged and so the set's own. That is
+what the variation's docs say the vector slice of a scalar-dominant
+`c` is, and the direct iteration agrees. Bourke's lobes live in the
+slice that keeps the scalar IN the 3D point -- the variation's
+projection 1, which swaps `z` and `w` -- which this step excluded
+(`NotAffine::Mode`) and which is the obvious next one: a kernel
+variant whose lift and projection swap two coordinates, nothing
+else new. No preset ships from step 3; the standalone solid of step
+1 is the quaternion picture until then, and the IFS route is now
+exact where it can be checked.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a
@@ -2787,7 +2910,11 @@ and the depth check separates a picture from a parameter), §8.11
 (towards quaternions: step 1, a flame-less quaternion Julia solid on
 Hart's estimate, ships as a preset; step 2, `julia3D` and `julia3Dz`
 as kernels on the flame's solid side, gated and shipping nothing;
-step 3 planned).
+step 3, the quaternion IFS with the scalar carried, exact to 100%
+against the CPU and 99.6% against step 1, its pictures balls on the
+vector slice, and two latent f32 faults found -- `length()` past
+level nine and the early exit under a root; the projection-1 slice
+next).
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and

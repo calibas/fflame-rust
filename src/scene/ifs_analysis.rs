@@ -669,74 +669,157 @@ pub enum Kernel3 {
     /// `julia3Dz`: the plane's root on `xy`, with `z` scaled by
     /// `r^{1/n − 1}/|n|`.
     RootZ3 { n: i32 },
+    /// `quaternion_julia` in inverse mode (plan §8.11 step 3): the
+    /// forward map is the root `(q − c)^{1/n}` with radius exponent
+    /// `d/n`, on the quaternion `(xyz, w)` whose scalar `w` is the
+    /// walk's `aux`; the walk's inverse is `qⁿ + c`.
+    Quaternion { n: i32, d: f64, c: [f64; 4] },
+}
+
+/// The Hamilton product of `(x, y, z, w)` quaternions, scalar `w`.
+fn qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    let (av, aw) = ([a[0], a[1], a[2]], a[3]);
+    let (bv, bw) = ([b[0], b[1], b[2]], b[3]);
+    let cross = [av[1] * bv[2] - av[2] * bv[1], av[2] * bv[0] - av[0] * bv[2], av[0] * bv[1] - av[1] * bv[0]];
+    [
+        aw * bv[0] + bw * av[0] + cross[0],
+        aw * bv[1] + bw * av[1] + cross[1],
+        aw * bv[2] + bw * av[2] + cross[2],
+        aw * bw - (av[0] * bv[0] + av[1] * bv[1] + av[2] * bv[2]),
+    ]
+}
+
+/// A quaternion `(x, y, z, w)`, scalar part `w`, to an INTEGER power
+/// by Hamilton products -- exact, where the polar form's `acos(w/|q|)`
+/// loses half its digits near the real axis, which is exactly where
+/// the walk's first inverse step lands every slice point (`(xyz, 0)²`
+/// is real). A negative power is the conjugate's, over `|q|^{2|n|}`.
+fn qpow(q: [f64; 4], n: f64) -> [f64; 4] {
+    let k = n.round() as i32;
+    let mut base = if k < 0 {
+        let m2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+        if m2 < 1e-300 {
+            return [0.0; 4];
+        }
+        [-q[0] / m2, -q[1] / m2, -q[2] / m2, q[3] / m2]
+    } else {
+        q
+    };
+    let mut e = k.unsigned_abs();
+    let mut out = [0.0, 0.0, 0.0, 1.0];
+    while e > 0 {
+        if e & 1 == 1 {
+            out = qmul(out, base);
+        }
+        base = qmul(base, base);
+        e >>= 1;
+    }
+    out
+}
+
+/// One of the `|n|` quaternion roots of `q`, branch `k`, with radius
+/// exponent `d/n` -- the variation's `qjulia_qroot`.
+fn qroot(q: [f64; 4], n: f64, k: u32, d: f64) -> [f64; 4] {
+    let mag = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if mag < 1e-300 {
+        return [0.0; 4];
+    }
+    let rad = mag.powf(d / n);
+    let ang = ((q[3] / mag).clamp(-1.0, 1.0).acos() + std::f64::consts::TAU * k as f64) / n;
+    let vlen = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt();
+    let nhat = if vlen > 1e-300 { [q[0] / vlen, q[1] / vlen, q[2] / vlen] } else { [1.0, 0.0, 0.0] };
+    let sn = rad * ang.sin();
+    [sn * nhat[0], sn * nhat[1], sn * nhat[2], rad * ang.cos()]
 }
 
 impl Kernel3 {
     pub fn power(&self) -> i32 {
         match *self {
-            Kernel3::Root3 { n } | Kernel3::RootZ3 { n } => n,
+            Kernel3::Root3 { n } | Kernel3::RootZ3 { n } | Kernel3::Quaternion { n, .. } => n,
         }
     }
 
-    /// The forward kernel on `z` in the pre-frame, along branch `k`.
-    pub fn forward(&self, z: [f64; 3], k: u32) -> [f64; 3] {
+    /// The forward kernel on `z` in the pre-frame with the scalar
+    /// `aux`, along branch `k`; the 3D roots pass `aux` through.
+    pub fn forward(&self, z: [f64; 3], aux: f64, k: u32) -> ([f64; 3], f64) {
         let n = self.power() as f64;
         let r2d = z[0] * z[0] + z[1] * z[1];
         let a = (z[1].atan2(z[0]) + std::f64::consts::TAU * k as f64) / n;
         match *self {
+            Kernel3::Quaternion { d, c, .. } => {
+                let q = [z[0] - c[0], z[1] - c[1], z[2] - c[2], aux - c[3]];
+                let r = qroot(q, n, k, d);
+                ([r[0], r[1], r[2]], r[3])
+            }
             Kernel3::Root3 { .. } => {
                 let zz = z[2] / n.abs();
                 let rho = (r2d + zz * zz).sqrt();
                 if rho == 0.0 {
-                    return [0.0; 3];
+                    return ([0.0; 3], aux);
                 }
                 let f = rho.powf(1.0 / n - 1.0);
                 let rxy = r2d.sqrt();
-                [f * rxy * a.cos(), f * rxy * a.sin(), f * zz]
+                ([f * rxy * a.cos(), f * rxy * a.sin(), f * zz], aux)
             }
             Kernel3::RootZ3 { .. } => {
                 if r2d == 0.0 {
-                    return [0.0; 3];
+                    return ([0.0; 3], aux);
                 }
                 let r = r2d.powf(1.0 / (2.0 * n));
                 let z_out = r * z[2] / (r2d.sqrt() * n.abs());
-                [r * a.cos(), r * a.sin(), z_out]
+                ([r * a.cos(), r * a.sin(), z_out], aux)
             }
         }
     }
 
-    /// The inverse kernel on `v`, single-valued.
-    pub fn inverse(&self, v: [f64; 3]) -> [f64; 3] {
+    /// The inverse kernel on `v` with the scalar `aux`, single-valued.
+    pub fn inverse(&self, v: [f64; 3], aux: f64) -> ([f64; 3], f64) {
         let n = self.power() as f64;
         let rxy = v[0].hypot(v[1]);
         let theta = n * v[1].atan2(v[0]);
         match *self {
+            Kernel3::Quaternion { d, c, .. } => {
+                // The polynomial: the root's radius exponent d/n undone
+                // by n/d on the magnitude, the angle by n.
+                let q = [v[0], v[1], v[2], aux];
+                let mag = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+                let p = qpow(q, n);
+                let scale = if mag > 1e-300 { mag.powf(n / d) / mag.powf(n) } else { 0.0 };
+                ([p[0] * scale + c[0], p[1] * scale + c[1], p[2] * scale + c[2]], p[3] * scale + c[3])
+            }
             Kernel3::Root3 { .. } => {
                 let rho_out = (rxy * rxy + v[2] * v[2]).sqrt();
                 if rho_out == 0.0 {
-                    return [0.0; 3];
+                    return ([0.0; 3], aux);
                 }
                 let rho = rho_out.powf(n);
                 let (cos_e, sin_e) = (rxy / rho_out, v[2] / rho_out);
                 let sqrt_r2d = rho * cos_e;
                 let zz = rho * sin_e;
-                [sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), zz * n.abs()]
+                ([sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), zz * n.abs()], aux)
             }
             Kernel3::RootZ3 { .. } => {
                 if rxy == 0.0 {
-                    return [0.0; 3];
+                    return ([0.0; 3], aux);
                 }
                 let sqrt_r2d = rxy.powf(n);
-                [sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), v[2] * n.abs() * rxy.powf(n - 1.0)]
+                ([sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), v[2] * n.abs() * rxy.powf(n - 1.0)], aux)
             }
         }
     }
 
     /// The factor on the constant σ_min at the point whose image is
-    /// `v`.
-    pub fn local_sigma_factor(&self, v: [f64; 3]) -> f64 {
+    /// `v` with scalar `aux`.
+    pub fn local_sigma_factor(&self, v: [f64; 3], aux: f64) -> f64 {
         let n = self.power() as f64;
         match *self {
+            // The plane's root formula on the 4D magnitude (step 3):
+            // |v|^(1 - n/d), the transverse directions being no
+            // smaller a stretch than the root's own plane.
+            Kernel3::Quaternion { d, .. } => {
+                let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + aux * aux).sqrt().max(f64::MIN_POSITIVE);
+                mag.powf(1.0 - n / d)
+            }
             Kernel3::Root3 { .. } => {
                 let rho_out = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(f64::MIN_POSITIVE);
                 rho_out.powf(1.0 - n)
@@ -766,17 +849,30 @@ impl Kernel3 {
                 (1.0 / (n * n), 1.0)
             }
             Kernel3::RootZ3 { .. } => (1.0, 1.0),
+            Kernel3::Quaternion { n, d, .. } => {
+                let (n, d) = ((n as f64).abs(), d.abs());
+                (d.min(1.0) / n, d.max(1.0) / n)
+            }
         }
     }
 
     pub fn unbounded_at_origin(&self) -> bool {
-        self.power() < 0
+        match *self {
+            Kernel3::Quaternion { d, .. } => d < 0.0,
+            _ => self.power() < 0,
+        }
+    }
+
+    /// Whether the kernel reads and writes the walk's scalar `aux`.
+    pub fn uses_aux(&self) -> bool {
+        matches!(self, Kernel3::Quaternion { .. })
     }
 
     pub fn variation(&self) -> &'static str {
         match self {
             Kernel3::Root3 { .. } => "julia3D",
             Kernel3::RootZ3 { .. } => "julia3Dz",
+            Kernel3::Quaternion { .. } => "quaternion_julia",
         }
     }
 }
@@ -795,26 +891,39 @@ pub struct NonlinearMap3 {
 }
 
 impl NonlinearMap3 {
-    pub fn apply_branch(&self, p: [f64; 3], k: u32) -> [f64; 3] {
-        let z = self.kernel.forward(self.pre.apply(p), k);
-        self.post.apply([self.w * z[0], self.w * z[1], self.w * z[2]])
+    /// The forward map along `k`, carrying the scalar `aux`. The
+    /// affines act on xyz; the weight scales the kernel's whole
+    /// quaternion, as the variation's weighted sum does.
+    pub fn apply_branch_aux(&self, p: [f64; 3], aux: f64, k: u32) -> ([f64; 3], f64) {
+        let (z, aux) = self.kernel.forward(self.pre.apply(p), aux, k);
+        (self.post.apply([self.w * z[0], self.w * z[1], self.w * z[2]]), self.w * aux)
     }
 
-    fn before_kernel(&self, q: [f64; 3]) -> [f64; 3] {
+    pub fn apply_branch(&self, p: [f64; 3], k: u32) -> [f64; 3] {
+        self.apply_branch_aux(p, 0.0, k).0
+    }
+
+    fn before_kernel(&self, q: [f64; 3], aux: f64) -> ([f64; 3], f64) {
         let v = self.post_inv.apply(q);
-        [v[0] / self.w, v[1] / self.w, v[2] / self.w]
+        ([v[0] / self.w, v[1] / self.w, v[2] / self.w], aux / self.w)
+    }
+
+    pub fn apply_inverse_aux(&self, q: [f64; 3], aux: f64) -> ([f64; 3], f64) {
+        let (v, a) = self.before_kernel(q, aux);
+        let (u, a) = self.kernel.inverse(v, a);
+        if !(u[0].is_finite() && u[1].is_finite() && u[2].is_finite() && a.is_finite()) {
+            return ([f64::INFINITY; 3], a);
+        }
+        (self.pre_inv.apply(u), a)
     }
 
     pub fn apply_inverse(&self, q: [f64; 3]) -> [f64; 3] {
-        let u = self.kernel.inverse(self.before_kernel(q));
-        if !(u[0].is_finite() && u[1].is_finite() && u[2].is_finite()) {
-            return [f64::INFINITY; 3];
-        }
-        self.pre_inv.apply(u)
+        self.apply_inverse_aux(q, 0.0).0
     }
 
-    pub fn local_sigma_factor(&self, q: [f64; 3]) -> f64 {
-        self.kernel.local_sigma_factor(self.before_kernel(q))
+    pub fn local_sigma_factor(&self, q: [f64; 3], aux: f64) -> f64 {
+        let (v, a) = self.before_kernel(q, aux);
+        self.kernel.local_sigma_factor(v, a)
     }
 
     pub fn singular_values(&self) -> (f64, f64) {
@@ -1047,6 +1156,10 @@ pub enum NotAffine {
     /// A root variation with a power or distance of zero, which is
     /// not a map with an inverse.
     Degenerate(String),
+    /// A variation in a mode the walk does not invert: a
+    /// `quaternion_julia` in forward mode or with a projection other
+    /// than the vector one (plan §8.11 step 3).
+    Mode(String),
 }
 
 /// `affine3D`'s map from its fifteen parameters, mirroring the
@@ -1147,6 +1260,7 @@ fn variation_stage(
                 ("blob", Space::Planar) => Some("blob"),
                 ("julia3D", Space::Solid) => Some("julia3D"),
                 ("julia3Dz", Space::Solid) => Some("julia3Dz"),
+                ("quaternion_julia", Space::Solid) => Some("quaternion_julia"),
                 _ => None,
             };
             let Some(root) = root else {
@@ -1464,6 +1578,7 @@ impl std::fmt::Display for Disqualification {
                     "transform {index} sums `{v}` with another variation; a root must be alone in its sum"
                 ),
                 NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a parameter that leaves it no single inverse (a zero power or distance, a scale that reaches zero)"),
+                NotAffine::Mode(v) => write!(f, "transform {index}'s `{v}` must be in inverse mode with the vector projection"),
             },
             Self::Singular { index } => write!(f, "transform {index} is singular (no inverse)"),
             Self::NotContractive { index, sigma_max } => {
@@ -1510,6 +1625,9 @@ pub struct Ifs<A, P> {
     pub maps: Vec<IfsMap<A>>,
     pub final_map: Option<IfsMap<A>>,
     pub ball: Ball<P>,
+    /// The ball centre's scalar coordinate, for a solid whose kernels
+    /// carry a fourth one (plan §8.11 step 3); zero otherwise.
+    pub aux_centre: f64,
 }
 
 pub type Ifs2 = Ifs<Map2, [f64; 2]>;
@@ -1550,6 +1668,7 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
         errs.push(Disqualification::NoBall);
         return Err(errs);
     };
+    let aux_centre = 0.0;
     // One map per (transform, branch): a kernel with several
     // preimages is several maps that share a transform and differ in
     // the branch (S1), so the walk's loops and the address keep their
@@ -1568,7 +1687,7 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
             })
         })
         .collect();
-    Ok(Ifs { maps, final_map, ball })
+    Ok(Ifs { maps, final_map, ball, aux_centre })
 }
 
 /// The 3D criterion, for a flame run with `preserve_z` on. A flame
@@ -1585,11 +1704,11 @@ pub fn analyse_3d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs3, V
     if !errs.is_empty() {
         return Err(errs);
     }
-    let Some(ball) = ball_3d(&maps) else {
+    let Some((ball, aux_centre)) = ball_3d(&maps) else {
         errs.push(Disqualification::NoBall);
         return Err(errs);
     };
-    Ok(Ifs { maps, final_map, ball })
+    Ok(Ifs { maps, final_map, ball, aux_centre })
 }
 
 /// The 3D map a transform composes to -- affine, or a nonlinear map
@@ -1615,6 +1734,17 @@ pub fn transform_map_3d_ordered(
     let kernel = match kind {
         "julia3D" => Kernel3::Root3 { n },
         "julia3Dz" => Kernel3::RootZ3 { n },
+        "quaternion_julia" => {
+            let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
+            if p("inverse") < 0.5 || p("projection").round() != 0.0 {
+                return Err(NotAffine::Mode(kind.to_string()));
+            }
+            let d = p("dist");
+            if !(d != 0.0) || !d.is_finite() {
+                return Err(NotAffine::Degenerate(kind.to_string()));
+            }
+            Kernel3::Quaternion { n, d, c: [p("cx"), p("cy"), p("cz"), p("cw")] }
+        }
         _ => unreachable!("collected above"),
     };
     let affine = plane_affine(
@@ -1930,7 +2060,7 @@ fn ball_2d_affine(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
     Ball { centre: best_c, radius: best_r * (1.0 + BALL_MARGIN) }
 }
 
-fn ball_3d(maps: &[IfsMap<Map3>]) -> Option<Ball<[f64; 3]>> {
+fn ball_3d(maps: &[IfsMap<Map3>]) -> Option<(Ball<[f64; 3]>, f64)> {
     if maps.iter().all(|m| m.forward.is_affine()) {
         let affine: Vec<IfsMap<Affine3>> = maps
             .iter()
@@ -1942,7 +2072,7 @@ fn ball_3d(maps: &[IfsMap<Map3>]) -> Option<Ball<[f64; 3]>> {
                 transform_index: m.transform_index,
             })
             .collect();
-        return Some(ball_3d_affine(&affine));
+        return Some((ball_3d_affine(&affine), 0.0));
     }
     ball_3d_numeric(maps)
 }
@@ -1952,86 +2082,125 @@ fn ball_3d(maps: &[IfsMap<Map3>]) -> Option<Ball<[f64; 3]>> {
 /// until every map sends the sampled ball -- a Fibonacci sphere and
 /// interior shells -- into it, or the sample's bulk when a kernel is
 /// unbounded at its pre-origin.
-fn ball_3d_numeric(maps: &[IfsMap<Map3>]) -> Option<Ball<[f64; 3]>> {
+/// Returns the ball and the centre's scalar coordinate. The sample and
+/// the search run in four dimensions when a kernel carries the scalar
+/// (step 3): the walk's escape radius is the 4D distance, and a 3D
+/// slice point's distance to the slice-set is at least its 4D distance
+/// to the 4D set.
+fn ball_3d_numeric(maps: &[IfsMap<Map3>]) -> Option<(Ball<[f64; 3]>, f64)> {
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = || {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (state >> 11) as f64 / (1u64 << 53) as f64
     };
+    let four_d = maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.uses_aux()));
     let branches_of = |m: &Map3| m.nonlinear().map_or(1, |n| n.kernel.power().unsigned_abs());
-    let step = |m: &Map3, p: [f64; 3], k: u32| -> [f64; 3] {
+    let step = |m: &Map3, p: [f64; 3], aux: f64, k: u32| -> ([f64; 3], f64) {
         match m {
-            Map3::Nonlinear(r) => r.apply_branch(p, k),
-            other => other.apply(p),
+            Map3::Nonlinear(r) => r.apply_branch_aux(p, aux, k),
+            other => (other.apply(p), aux),
         }
     };
 
     let mut p = [0.0; 3];
-    let mut sample = Vec::with_capacity(4000);
+    let mut aux = 0.0;
+    let mut sample: Vec<[f64; 4]> = Vec::with_capacity(4000);
     let mut lost = 0usize;
     for i in 0..4200 {
         let m = &maps[(next() * maps.len() as f64).floor() as usize % maps.len()];
         let k = (next() * branches_of(&m.forward) as f64).floor() as u32;
-        p = step(&m.forward, p, k);
-        if !(p[0].is_finite() && p[1].is_finite() && p[2].is_finite()) {
+        let (np, na) = step(&m.forward, p, aux, k);
+        p = np;
+        aux = na;
+        if !(p[0].is_finite() && p[1].is_finite() && p[2].is_finite() && aux.is_finite()) {
             lost += 1;
             if lost > 400 {
                 return None;
             }
             p = [0.1234, 0.0567, 0.0891];
+            aux = 0.0;
             continue;
         }
         if i >= 200 {
-            sample.push(p);
+            sample.push([p[0], p[1], p[2], aux]);
         }
     }
     if sample.len() < 1000 {
         return None;
     }
     let n = sample.len() as f64;
-    let centre = [
+    let centre4 = [
         sample.iter().map(|p| p[0]).sum::<f64>() / n,
         sample.iter().map(|p| p[1]).sum::<f64>() / n,
         sample.iter().map(|p| p[2]).sum::<f64>() / n,
+        if four_d { sample.iter().map(|p| p[3]).sum::<f64>() / n } else { 0.0 },
     ];
-    let dist = |p: [f64; 3]| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2) + (p[2] - centre[2]).powi(2)).sqrt();
+    let centre = [centre4[0], centre4[1], centre4[2]];
+    let dist = |p: [f64; 4]| {
+        ((p[0] - centre4[0]).powi(2) + (p[1] - centre4[1]).powi(2) + (p[2] - centre4[2]).powi(2) + (p[3] - centre4[3]).powi(2)).sqrt()
+    };
 
     if maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.unbounded_at_origin())) {
         let mut radii: Vec<f64> = sample.iter().map(|&p| dist(p)).collect();
         radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let bulk = radii[(radii.len() as f64 * 0.995) as usize].max(1e-9);
-        return Some(Ball { centre, radius: bulk * 1.3 });
+        return Some((Ball { centre, radius: bulk * 1.3 }, centre4[3]));
     }
 
     let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
     let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+    // Directions: a Fibonacci sphere in 3D, and in 4D a fixed set of
+    // pseudo-random unit vectors, which is even enough for a maximum.
+    let mut dirs: Vec<[f64; 4]> = Vec::new();
+    if four_d {
+        let mut st: u64 = 0x1234_5678_9ABC_DEF1;
+        let mut rnd = || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        while dirs.len() < 512 {
+            let v = [rnd(), rnd(), rnd(), rnd()];
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]).sqrt();
+            if (0.2..=1.0).contains(&l) {
+                dirs.push([v[0] / l, v[1] / l, v[2] / l, v[3] / l]);
+            }
+        }
+    } else {
+        for j in 0..256 {
+            let y = 1.0 - 2.0 * (j as f64 + 0.5) / 256.0;
+            let rr = (1.0 - y * y).sqrt();
+            let phi = golden * j as f64;
+            dirs.push([rr * phi.cos(), y, rr * phi.sin(), 0.0]);
+        }
+    }
     for round in 0..80 {
         let mut reach = 0.0f64;
         for shell in [1.0f64, 0.7, 0.4] {
-            let count = if shell == 1.0 { 256 } else { 96 };
-            for j in 0..count {
-                // A Fibonacci sphere: even cover from an index.
-                let y = 1.0 - 2.0 * (j as f64 + 0.5) / count as f64;
-                let rr = (1.0 - y * y).sqrt();
-                let phi = golden * j as f64;
+            let stride = if shell == 1.0 { 1 } else { 3 };
+            for (j, d) in dirs.iter().enumerate() {
+                if j % stride != 0 {
+                    continue;
+                }
                 let q = [
-                    centre[0] + radius * shell * rr * phi.cos(),
-                    centre[1] + radius * shell * y,
-                    centre[2] + radius * shell * rr * phi.sin(),
+                    centre4[0] + radius * shell * d[0],
+                    centre4[1] + radius * shell * d[1],
+                    centre4[2] + radius * shell * d[2],
                 ];
+                let qa = centre4[3] + radius * shell * d[3];
                 for m in maps {
                     for k in 0..branches_of(&m.forward) {
-                        let d = dist(step(&m.forward, q, k));
-                        if !d.is_finite() {
+                        let (img, ia) = step(&m.forward, q, qa, k);
+                        let dd = dist([img[0], img[1], img[2], ia]);
+                        if !dd.is_finite() {
                             return None;
                         }
-                        reach = reach.max(d);
+                        reach = reach.max(dd);
                     }
                 }
             }
         }
         if reach <= radius {
-            return Some(Ball { centre, radius: radius * (1.0 + BALL_MARGIN) });
+            return Some((Ball { centre, radius: radius * (1.0 + BALL_MARGIN) }, centre4[3]));
         }
         radius = if round < 60 { reach } else { reach * 1.05 };
     }
@@ -2605,7 +2774,7 @@ mod tests {
                 // every axis direction.
                 let q = base.apply_branch(p, 0);
                 let (c_lo, _) = base.singular_values();
-                let sg = c_lo * base.local_sigma_factor(q);
+                let sg = c_lo * base.local_sigma_factor(q, 0.0);
                 let h = 1e-6;
                 for axis in 0..3 {
                     let mut pp = p;
@@ -2667,6 +2836,178 @@ mod tests {
         let mixed = with(cases[0].0.clone(), "linear3D", 0.5);
         let errs = analyse_3d(&flame_of(vec![mixed]), r).unwrap_err();
         assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::MixedSum(v), .. } if v == "julia3D")), "{errs:?}");
+    }
+
+    /// An inverse-mode `quaternion_julia` transform at `c`, identity
+    /// affine, weight `w`.
+    fn qjulia_xform(c: [f32; 4], power: f32, dist: f32, w: f32) -> Transform {
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        t.variations.clear();
+        t.variation_order.clear();
+        let mut t = with(t, "quaternion_julia", w);
+        t.set_variation_param("quaternion_julia", "cx", c[0]);
+        t.set_variation_param("quaternion_julia", "cy", c[1]);
+        t.set_variation_param("quaternion_julia", "cz", c[2]);
+        t.set_variation_param("quaternion_julia", "cw", c[3]);
+        t.set_variation_param("quaternion_julia", "power", power);
+        t.set_variation_param("quaternion_julia", "dist", dist);
+        t.set_variation_param("quaternion_julia", "inverse", 1.0);
+        t
+    }
+
+    /// Plan 8.11 step 3, gate 1: the quaternion kernel round-trips in
+    /// four dimensions on every branch, with the scalar carried, and
+    /// its local factor is below the forward stretch in every axis of
+    /// the 4D point. Forward mode and the other projections are
+    /// refused by name.
+    #[test]
+    fn the_quaternion_kernel_undoes_each_of_its_branches_in_4d() {
+        let guard = global_registry();
+        let r = &*guard;
+        for (c, power, dist, w) in [
+            ([-1.0f32, 0.2, 0.0, 0.0], 2.0f32, 1.0f32, 1.0f32),
+            ([-0.3, 0.5, 0.4, 0.1], 3.0, 1.0, 0.9),
+            ([0.2, -0.4, 0.1, -0.3], 2.0, 1.4, 1.1),
+        ] {
+            let t = qjulia_xform(c, power, dist, w);
+            let m = transform_map_3d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            let Kernel3::Quaternion { n, d, c: kc } = base.kernel else { panic!("{:?}", base.kernel) };
+            assert_eq!(n, power as i32);
+            assert!(close(d, dist as f64));
+            for i in 0..4 {
+                assert!(close(kc[i], c[i] as f64));
+            }
+            for (p, aux) in [([0.3, 0.4, 0.2], 0.1), ([-1.2, 0.7, -0.5], -0.6), ([2.0, -1.5, 1.1], 0.8), ([0.05, -0.02, 0.4], 0.0)] {
+                for k in 0..(power as u32) {
+                    let (q, qa) = base.apply_branch_aux(p, aux, k);
+                    let (back, ba) = base.apply_inverse_aux(q, qa);
+                    for i in 0..3 {
+                        assert!((back[i] - p[i]).abs() < 1e-6, "c {c:?} branch {k}: {p:?}/{aux} -> {q:?}/{qa} -> {back:?}/{ba}");
+                    }
+                    assert!((ba - aux).abs() < 1e-6, "c {c:?} branch {k}: aux {aux} came back {ba}");
+                }
+                let (q, qa) = base.apply_branch_aux(p, aux, 0);
+                let (c_lo, _) = base.singular_values();
+                let sg = c_lo * base.local_sigma_factor(q, qa);
+                let h = 1e-6;
+                for axis in 0..4 {
+                    let (mut pp, mut aa) = (p, aux);
+                    if axis < 3 { pp[axis] += h } else { aa += h }
+                    let (dq, da) = base.apply_branch_aux(pp, aa, 0);
+                    let g = ((dq[0] - q[0]).powi(2) + (dq[1] - q[1]).powi(2) + (dq[2] - q[2]).powi(2) + (da - qa).powi(2)).sqrt() / h;
+                    assert!(sg <= g * (1.0 + 1e-3) + 1e-9, "c {c:?} at {p:?}/{aux} axis {axis}: sigma {sg} exceeds stretch {g}");
+                }
+            }
+        }
+        // Forward mode is refused, and so is a non-vector projection.
+        let mut fwd = qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0);
+        fwd.set_variation_param("quaternion_julia", "inverse", 0.0);
+        let errs = analyse_3d(&flame_of(vec![fwd]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Mode(v), .. } if v == "quaternion_julia")), "{errs:?}");
+        let mut depth = qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0);
+        depth.set_variation_param("quaternion_julia", "projection", 1.0);
+        let errs = analyse_3d(&flame_of(vec![depth]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Mode(_), .. })), "{errs:?}");
+        // And a single transform qualifies, with a 4D ball.
+        let ifs3 = analyse_3d(&flame_of(vec![qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0)]), r).expect("qualifies");
+        assert_eq!(ifs3.maps.len(), 1);
+        assert!(ifs3.ball.radius > 1.0 && ifs3.ball.radius < 4.0, "{:?}", ifs3.ball);
+    }
+
+    /// A single inverse-mode quaternion transform: the walk's
+    /// membership (never leaves the ball within L levels) against the
+    /// direct 4D iteration q -> q^2 + c from the same slice point,
+    /// which is what the set IS for one transform. Prints a
+    /// measurement of disagreement on a grid through the ball.
+    #[test]
+    fn a_single_quaternion_transforms_walk_is_the_direct_iteration() {
+        let guard = global_registry();
+        let r = &*guard;
+        // Which constants have an interior on the pure-vector slice
+        // (scalar w = 0)? Printed, so the fixtures below can be chosen
+        // from what the set is rather than from a guess: a c in the
+        // variation's (i, j, k, scalar) layout.
+        for cand in [
+            [-1.0f32, 0.2, 0.0, 0.0],
+            [0.2, 0.0, 0.0, -1.0],
+            [0.0, 0.0, 0.0, -1.0],
+            [0.0, 0.0, 0.0, -0.5],
+            [0.3, 0.0, 0.0, -0.6],
+            [0.3, 0.5, 0.4, 0.1],
+            [-0.2, 0.8, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.25],
+        ] {
+            let cf = [cand[0] as f64, cand[1] as f64, cand[2] as f64, cand[3] as f64];
+            let mut inside = 0usize;
+            let mut total = 0usize;
+            for iz in 0..16 {
+                for iy in 0..16 {
+                    for ix in 0..16 {
+                        let f = |i: usize| 3.0 * (i as f64 + 0.5) / 16.0 - 1.5;
+                        let mut q = [f(ix), f(iy), f(iz), 0.0];
+                        let mut escaped = false;
+                        for _ in 0..40 {
+                            if q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] > 16.0 {
+                                escaped = true;
+                                break;
+                            }
+                            let sq = qmul(q, q);
+                            q = [sq[0] + cf[0], sq[1] + cf[1], sq[2] + cf[2], sq[3] + cf[3]];
+                        }
+                        total += 1;
+                        inside += (!escaped) as usize;
+                    }
+                }
+            }
+            println!("  c {cand:?}: {inside} of {total} grid points bounded on the w = 0 slice");
+        }
+        // -0.6 + 0.3i as a quaternion, scalar -0.6, i 0.3: 360 of 4096
+        // bounded above, an interior to agree on.
+        let c = [0.3f32, 0.0, 0.0, -0.6];
+        let ifs3 = analyse_3d(&flame_of(vec![qjulia_xform(c, 2.0, 1.0, 1.0)]), r).expect("qualifies");
+        let cf = [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64];
+        let radius = ifs3.ball.radius;
+        let centre = ifs3.ball.centre;
+        let (mut n, mut bad, mut walk_in, mut direct_in) = (0usize, 0usize, 0usize, 0usize);
+        const G: usize = 24;
+        for iz in 0..G {
+            for iy in 0..G {
+                for ix in 0..G {
+                    let f = |i: usize| 2.0 * (i as f64 + 0.5) / G as f64 - 1.0;
+                    let (u, v, w) = (f(ix), f(iy), f(iz));
+                    if (u * u + v * v + w * w).sqrt() > 0.8 {
+                        continue;
+                    }
+                    let p = [centre[0] + radius * u, centre[1] + radius * v, centre[2] + radius * w];
+                    let e = crate::scene::ifs_estimate::estimate_aux(&ifs3, p, 0.0, 24, 1);
+                    // Direct: q0 = (p, 0), iterate q^2 + c, escaped when the
+                    // 4D distance to the ball's centre passes its radius.
+                    let mut q = [p[0], p[1], p[2], 0.0];
+                    let mut escaped = false;
+                    for _ in 0..24 {
+                        let d4 = ((q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2) + (q[2] - centre[2]).powi(2) + (q[3] - ifs3.aux_centre).powi(2)).sqrt();
+                        if d4 > radius {
+                            escaped = true;
+                            break;
+                        }
+                        let sq = qmul(q, q);
+                        q = [sq[0] + cf[0], sq[1] + cf[1], sq[2] + cf[2], sq[3] + cf[3]];
+                    }
+                    n += 1;
+                    walk_in += (!e.escaped) as usize;
+                    direct_in += (!escaped) as usize;
+                    if e.escaped == !escaped {
+                        // (both escaped, or both not) is agreement
+                    }
+                    if e.escaped != escaped {
+                        bad += 1;
+                    }
+                }
+            }
+        }
+        println!("  single quaternion: {n} points, walk interior {walk_in}, direct interior {direct_in}, membership disagreements {bad}");
+        assert_eq!(bad, 0, "the walk and the direct iteration disagree on {bad} of {n} points");
     }
 
     /// Sierpiński: three half-scale maps. Every singular value is 0.5,

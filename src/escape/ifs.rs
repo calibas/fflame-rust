@@ -305,6 +305,18 @@ fn ifs_inv_sigma(i: u32, p: vec2<f32>) -> f32 {
     return s * ifs_kernel_sigma(i, v);
 }
 
+// The plane's radius, without `length()`'s overflow: a julia orbit
+// squares its radius per level and passes f32's square by its ninth.
+// See ifs_radius4 in the solid walk.
+fn ifs_radius2(q: vec2<f32>, c: vec2<f32>) -> f32 {
+    let d = q - c;
+    let m = max(abs(d.x), abs(d.y));
+    if (m > 1e15) {
+        return m * length(d / m);
+    }
+    return length(d);
+}
+
 // Where in the annulus [R, R/sigma] an escaped point sits, counted
 // DOWN so the level rises toward the set and joins continuously onto
 // the next band.
@@ -408,7 +420,7 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         );
         cand.sigma = b.z;
         cand.bound = b.w;
-        cand.r = length(cand.q - c);
+        cand.r = ifs_radius2(cand.q, c);
         cand.addr = d.x;
         cand.last_sigma = d.y;
         cand.level = d.z;
@@ -442,7 +454,7 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             if ((live[ci].flags & 2u) != 0u) {
                 continue;
             }
-            let r = length(live[ci].q - c);
+            let r = ifs_radius2(live[ci].q, c);
             live[ci].r = r;
             live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
 
@@ -496,7 +508,7 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
                         dead_min = min(dead_min, max(live[ci].bound, live[ci].sigma * gap));
                         continue;
                     }
-                    cand_key = length(ifs_inv_point(bi, live[ci].q) - c);
+                    cand_key = ifs_radius2(ifs_inv_point(bi, live[ci].q), c);
                 }
                 var pos = next_count;
                 for (var j = 0u; j < next_count; j = j + 1u) {
@@ -693,38 +705,100 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
                       cannot reach into it, and that is Shadows.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "For a solid of quaternion maps (plan 8.11 step 3): the scalar                       coordinate the 3D picture is a slice of. Sweep it to walk                       through the 4D set. Nothing else reads it.",
+            choices: &[],
+        },
     ],
     wgsl: r#"
 // Inverse of map i, in three dimensions.
-// The 3D kernels' inverses on v (plan 8.11 step 2). julia3D (kind 1):
-// radius |v|^n, azimuth n*phi, elevation kept, z scaled back by |n|.
-// julia3Dz (kind 2): the plane's root on xy, z by |n| |v_xy|^(n-1).
-fn ifs_kernel_inverse3(i: u32, v: vec3<f32>) -> vec3<f32> {
+// The Hamilton product of (x, y, z, w) quaternions, scalar w.
+fn ifs_qmul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz),
+        a.w * b.w - dot(a.xyz, b.xyz),
+    );
+}
+
+// A quaternion to an INTEGER power by Hamilton products: exact, where
+// the polar form's acos(w/|q|) loses half its digits near the real
+// axis -- and the walk's first inverse step lands every slice point
+// there, since (xyz, 0)^2 is real. A negative power is the conjugate's
+// over |q|^(2|n|).
+fn ifs_qpow(q: vec4<f32>, n: f32) -> vec4<f32> {
+    let k = i32(round(n));
+    var base = q;
+    if (k < 0) {
+        let m2 = dot(q, q);
+        if (m2 < 1e-30) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+        base = vec4<f32>(-q.xyz, q.w) / m2;
+    }
+    var e = u32(abs(k));
+    var out = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    loop {
+        if (e == 0u) {
+            break;
+        }
+        if ((e & 1u) == 1u) {
+            out = ifs_qmul(out, base);
+        }
+        base = ifs_qmul(base, base);
+        e = e >> 1u;
+    }
+    return out;
+}
+
+// The 3D kernels' inverses on (v, w) (plan 8.11 steps 2 and 3).
+// julia3D (kind 1): radius |v|^n, azimuth n*phi, elevation kept, z
+// scaled back by |n|. julia3Dz (kind 2): the plane's root on xy, z
+// by |n| |v_xy|^(n-1). Both pass w through. quaternion_julia (kind 3):
+// the polynomial on the 4D point, its radius exponent d/n undone, c_w
+// added here and c_xyz in the pre-inverse's translation.
+fn ifs_kernel_inverse3(i: u32, v: vec3<f32>, w: f32) -> vec4<f32> {
     let kind = ifs_maps[i].extra.z;
     let n = ifs_maps[i].extra.w;
+    if (kind == 3.0) {
+        let q = vec4<f32>(v, w);
+        let mag = length(q);
+        let d = ifs_maps[i].extra2.y;
+        let p = ifs_qpow(q, n);
+        let scale = select(0.0, pow(mag, n / d) / pow(mag, n), mag > 1e-30);
+        return vec4<f32>(p.xyz * scale, p.w * scale + ifs_maps[i].extra2.x);
+    }
     let rxy = length(v.xy);
     let theta = n * ff_atan2(v.y, v.x);
     if (kind == 1.0) {
         let rho_out = length(v);
         if (rho_out < 1e-30) {
-            return vec3<f32>(0.0, 0.0, 0.0);
+            return vec4<f32>(0.0, 0.0, 0.0, w);
         }
         let rho = pow(rho_out, n);
         let sqrt_r2d = rho * (rxy / rho_out);
         let zz = rho * (v.z / rho_out);
-        return vec3<f32>(sqrt_r2d * cos(theta), sqrt_r2d * sin(theta), zz * abs(n));
+        return vec4<f32>(sqrt_r2d * cos(theta), sqrt_r2d * sin(theta), zz * abs(n), w);
     }
     if (rxy < 1e-30) {
-        return vec3<f32>(0.0, 0.0, 0.0);
+        return vec4<f32>(0.0, 0.0, 0.0, w);
     }
     let sqrt_r2d = pow(rxy, n);
-    return vec3<f32>(sqrt_r2d * cos(theta), sqrt_r2d * sin(theta), v.z * abs(n) * pow(rxy, n - 1.0));
+    return vec4<f32>(sqrt_r2d * cos(theta), sqrt_r2d * sin(theta), v.z * abs(n) * pow(rxy, n - 1.0), w);
 }
 
-// The factor on the row's constant sigma_min at v.
-fn ifs_kernel_sigma3(i: u32, v: vec3<f32>) -> f32 {
+// The factor on the row's constant sigma_min at (v, w).
+fn ifs_kernel_sigma3(i: u32, v: vec3<f32>, w: f32) -> f32 {
     let kind = ifs_maps[i].extra.z;
     let n = ifs_maps[i].extra.w;
+    if (kind == 3.0) {
+        let d = ifs_maps[i].extra2.y;
+        return pow(max(length(vec4<f32>(v, w)), 1e-30), 1.0 - n / d);
+    }
     if (kind == 1.0) {
         return pow(max(length(v), 1e-30), 1.0 - n);
     }
@@ -747,30 +821,40 @@ fn ifs_inv_affine3(i: u32, p: vec3<f32>) -> vec3<f32> {
     );
 }
 
-// Inverse of map i: one affine on an affine row (kind 0); the
-// post-inverse with 1/w folded in, the kernel's inverse, then the
-// pre-inverse on a nonlinear row.
-fn ifs_inv_point3(i: u32, p: vec3<f32>) -> vec3<f32> {
+// Inverse of map i on (p, w): one affine on an affine row (kind 0),
+// w through; the post-inverse with 1/weight folded in (on w too, as
+// the variation's weight scales the whole quaternion), the kernel's
+// inverse, then the pre-inverse on a nonlinear row.
+fn ifs_inv_step3(i: u32, p: vec3<f32>, w: f32) -> vec4<f32> {
     let q = ifs_inv_affine3(i, p);
     if (ifs_maps[i].extra.z == 0.0) {
-        return q;
+        return vec4<f32>(q, w);
     }
-    let u = ifs_kernel_inverse3(i, q);
+    // The weight scales the whole quaternion, so w is divided by it
+    // before the kernel as xyz were by the post-inverse's fold; the
+    // row carries that 1/weight in extra2.z (one on a row whose
+    // kernel passes w through).
+    let u = ifs_kernel_inverse3(i, q, w * ifs_maps[i].extra2.z);
     let m = ifs_maps[i];
-    return vec3<f32>(
-        dot(m.p0.xyz, u) + m.p0.w,
-        dot(m.p1.xyz, u) + m.p1.w,
-        dot(m.p2.xyz, u) + m.p2.w,
+    return vec4<f32>(
+        dot(m.p0.xyz, u.xyz) + m.p0.w,
+        dot(m.p1.xyz, u.xyz) + m.p1.w,
+        dot(m.p2.xyz, u.xyz) + m.p2.w,
+        u.w,
     );
 }
 
-// The forward map's sigma_min at the point whose image is p.
-fn ifs_inv_sigma3(i: u32, p: vec3<f32>) -> f32 {
+fn ifs_inv_point3(i: u32, p: vec3<f32>, w: f32) -> vec3<f32> {
+    return ifs_inv_step3(i, p, w).xyz;
+}
+
+// The forward map's sigma_min at the point whose image is (p, w).
+fn ifs_inv_sigma3(i: u32, p: vec3<f32>, w: f32) -> f32 {
     let s = ifs_maps[i].extra.x;
     if (ifs_maps[i].extra.z == 0.0) {
         return s;
     }
-    return s * ifs_kernel_sigma3(i, ifs_inv_affine3(i, p));
+    return s * ifs_kernel_sigma3(i, ifs_inv_affine3(i, p), w * ifs_maps[i].extra2.z);
 }
 
 fn ifs_residual(r: f32, radius: f32, sigma: f32) -> f32 {
@@ -792,6 +876,35 @@ struct IfsCand3 {
     color: f32,
     last_sigma: f32,
     flags: u32,
+    // The scalar coordinate a quaternion kernel carries (plan 8.11
+    // step 3); affine and 3D-root rows pass it through.
+    w: f32,
+}
+
+// The walk's radius: the 4D distance to the ball's centre, whose
+// scalar coordinate is the globals' aux centre.
+//
+// Not `length()`: it squares its components, and a polynomial orbit
+// reaches 1.8e19 by its ninth level, whose square is past f32. The
+// key came out as infinity, the child's bound with it, and with a
+// beam of one that was the answer -- the march overshot and missed.
+// Measured: the GPU agreed with the CPU at 100% to eight levels and
+// found 37 of its 2410 hits at ten. (Calling anything past 1e15 "far"
+// instead was tried first and found none at all: the bound needs the
+// true radius, 1.8e19 and not 1e30, because sigma times it is the
+// convergent tail of the estimate.)
+fn ifs_radius4(q: vec3<f32>, w: f32, c: vec3<f32>) -> f32 {
+    let d = vec4<f32>(q - c, w - ifs_ball_w());
+    let m = max(max(abs(d.x), abs(d.y)), max(abs(d.z), abs(d.w)));
+    // Exact and overflow-free where overflow is possible: the largest
+    // component times the norm of the vector scaled by it, whose
+    // components are at most one. Below that, `length()` itself, so
+    // every affine walk's arithmetic -- and every affine preset's
+    // bytes -- is exactly what it was.
+    if (m > 1e15) {
+        return m * length(d / m);
+    }
+    return length(d);
 }
 
 // The walk, in three dimensions. The same algorithm the planar one
@@ -814,10 +927,13 @@ struct IfsCand3 {
 // the one evaluation at the hit point that feeds the COLOURINGS passes
 // zero, because the level and the address are only known when a
 // candidate escapes and stopping first would report it as interior.
-fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
     let c = ifs_ball_centre();
     let radius = ifs_radius();
     let n = ifs_count();
+    // The precision early exit is an affine argument (see
+    // pack_globals3): a nonlinear solid walks to full depth.
+    let eps = select(eps_asked, 0.0, ifs_has_nonlinear());
 
     var res: IfsResult;
     res.distance = 0.0;
@@ -877,7 +993,8 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         root.q = ifs_link_point(L, delta);
         root.sigma = L.r1.w;
         root.bound = L.r2.w;
-        root.r = length(root.q - c);
+        root.w = ifs_slice_w();
+        root.r = ifs_radius4(root.q, root.w, c);
         root.addr = L.extra.x;
         root.color = L.esc.w;
         root.last_sigma = L.extra.y;
@@ -920,7 +1037,8 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         root.q = delta + ifs_target_offset() + c;
         root.sigma = 1.0;
         root.bound = -1e30;
-        root.r = length(root.q - c);
+        root.w = ifs_slice_w();
+        root.r = ifs_radius4(root.q, root.w, c);
         root.addr = 0.0;
         root.color = 0.0;
         root.last_sigma = ifs_mean_sigma();
@@ -940,7 +1058,7 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
             if ((live[ci].flags & 2u) != 0u) {
                 continue;
             }
-            let r = length(live[ci].q - c);
+            let r = ifs_radius4(live[ci].q, live[ci].w, c);
             live[ci].r = r;
             live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
             if (r > radius && (live[ci].flags & 1u) == 0u) {
@@ -975,7 +1093,8 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
             for (var bi = first; bi < last; bi = bi + 1u) {
                 var cand_key = live[ci].r;
                 if (bi < n) {
-                    cand_key = length(ifs_inv_point3(bi, live[ci].q) - c);
+                    let s = ifs_inv_step3(bi, live[ci].q, live[ci].w);
+                    cand_key = ifs_radius4(s.xyz, s.w, c);
                 }
                 var pos = next_count;
                 for (var j = 0u; j < next_count; j = j + 1u) {
@@ -1005,8 +1124,10 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
             let bi = src[k2] % stride;
             var child = live[parent];
             if (bi < n) {
-                child.q = ifs_inv_point3(bi, live[parent].q);
-                child.sigma = live[parent].sigma * ifs_inv_sigma3(bi, live[parent].q);
+                let s = ifs_inv_step3(bi, live[parent].q, live[parent].w);
+                child.q = s.xyz;
+                child.w = s.w;
+                child.sigma = live[parent].sigma * ifs_inv_sigma3(bi, live[parent].q, live[parent].w);
                 child.last_sigma = ifs_maps[bi].extra.x;
                 child.r = key[k2];
                 child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
@@ -1383,6 +1504,15 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
             choices: &[],
         },
         EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Unused here; the quaternion Julia solid's own slice follows.",
+            choices: &[],
+        },
+        EscapeParamDef {
             name: "cx",
             display_name: "Constant X",
             default: -1.0,
@@ -1491,11 +1621,11 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     // in this step (plan 8.11 Q3).
     let p3 = delta + ifs_target_offset();
     let levels = u32(clamp(fparam(0u), 1.0, 256.0));
-    let c = vec4<f32>(fparam(6u), fparam(7u), fparam(8u), fparam(9u));
-    let n = clamp(round(fparam(10u)), 2.0, 8.0);
-    let bail = max(fparam(11u), 1.0);
-    let axis = u32(clamp(fparam(12u), 0.0, 3.0));
-    let slice = fparam(13u);
+    let c = vec4<f32>(fparam(7u), fparam(8u), fparam(9u), fparam(10u));
+    let n = clamp(round(fparam(11u)), 2.0, 8.0);
+    let bail = max(fparam(12u), 1.0);
+    let axis = u32(clamp(fparam(13u), 0.0, 3.0));
+    let slice = fparam(14u);
 
     // Lift to 4D: the slice axis takes the slice value and the other
     // three take the point, in order.
@@ -1575,8 +1705,8 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
         .max(1e-3);
     let ball2 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0], radius };
     let ball3 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0, 0.0], radius };
-    let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball2 };
-    let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball3 };
+    let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball2, aux_centre: 0.0 };
+    let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball3, aux_centre: 0.0 };
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
     PackedIfs { globals, rows: Vec::new(), ifs, colors: Vec::new(), solid: Some((ifs3, Vec::new())) }
@@ -1755,15 +1885,30 @@ pub fn pack_maps3(ifs: &Ifs3, colors: &[f32]) -> Vec<IfsMap3Gpu> {
                         }
                         post.t[i] *= scale;
                     }
-                    let kind = match r.kernel {
-                        Kernel3::Root3 { .. } => 1.0,
-                        Kernel3::RootZ3 { .. } => 2.0,
+                    // A quaternion row folds c's xyz into the
+                    // pre-inverse's translation -- the kernel's inverse
+                    // is v^n + c, and pre_inv(u + c_xyz) is one affine
+                    // -- and carries c_w and the distance in extra2.
+                    let (kind, pre, extra2) = match r.kernel {
+                        // z is the factor on the carried w before the
+                        // kernel: one for a kernel that passes it through.
+                        Kernel3::Root3 { .. } => (1.0, r.pre_inv, [0.0f32, 0.0, 1.0, 0.0]),
+                        Kernel3::RootZ3 { .. } => (2.0, r.pre_inv, [0.0, 0.0, 1.0, 0.0]),
+                        Kernel3::Quaternion { d, c, .. } => {
+                            let mut pre = r.pre_inv;
+                            let shift = pre.apply([c[0], c[1], c[2]]);
+                            let origin = pre.apply([0.0; 3]);
+                            for i in 0..3 {
+                                pre.t[i] += shift[i] - origin[i];
+                            }
+                            (3.0, pre, [c[3] as f32, d as f32, scale as f32, 0.0])
+                        }
                     };
                     IfsMap3Gpu {
                         rows: rows_of(&post),
                         extra: [m.sigma_min as f32, color, kind, r.kernel.power() as f32],
-                        pre: rows_of(&r.pre_inv),
-                        extra2: [0.0; 4],
+                        pre: rows_of(&pre),
+                        extra2,
                     }
                 }
             }
@@ -1860,6 +2005,7 @@ pub fn pack_flame(
                 centre: [ifs3.ball.centre[0], ifs3.ball.centre[1]],
                 radius: ifs3.ball.radius,
             },
+            aux_centre: 0.0,
         },
     };
     let mut globals = [[0.0f32; 4]; 4];
@@ -2319,7 +2465,16 @@ pub fn pack_globals3(
     // At least one, so the template's "no qualifying flame" guard does
     // not fire on a flame-less def (plan 8.11 Q3); a flame with no
     // maps never gets this far.
-    out[1] = [mean as f32, ifs.maps.len().max(1) as f32, 0.0, 0.0];
+    // w: whether any map is nonlinear. The walk's precision early exit
+    // -- "this candidate can no longer move the answer by eps" --
+    // assumes sigma only shrinks, which a contraction guarantees and a
+    // root does not: its forward derivative exceeds one near its
+    // critical point, so sigma can grow after the exit has fired, and
+    // an unescaped candidate frozen there escapes at full depth with a
+    // bound far above eps. Measured as rings of exterior colour on a
+    // surface the march had hit. Off for a nonlinear solid.
+    let nonlinear = ifs.maps.iter().any(|m| !m.inverse.is_affine());
+    out[1] = [mean as f32, ifs.maps.len().max(1) as f32, ifs.aux_centre as f32, if nonlinear { 1.0 } else { 0.0 }];
     // The eye RELATIVE TO THE TARGET, which is the whole of the 3D
     // deep zoom. `eye = target − forward·distance`, so this is
     // `−forward·distance` and its magnitude IS the distance: an f32
@@ -5753,8 +5908,14 @@ mod gpu_tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn the_gpu_solid_agrees_with_a_cpu_march_on_a_julia3d_pair() {
-        for (name, flame) in [("julia3D", julia3d_pair_flame()), ("julia3Dz", julia3dz_pair_flame())] {
-            let config = solid_config_for(flame, "ifs_distance");
+        for (name, flame) in [
+            ("julia3D", julia3d_pair_flame()),
+            ("julia3Dz", julia3dz_pair_flame()),
+            ("quaternion", quaternion_ifs_flame(&[[0.3, 0.0, 0.0, -0.6], [0.0, 0.0, 0.0, -0.5]])),
+        ] {
+            let mut config = solid_config_for(flame, "ifs_distance");
+            let levels: u32 = std::env::var("IFS_LEVELS").ok().and_then(|v| v.parse().ok()).unwrap_or(24);
+            config.escape.formula_params.insert("levels".to_string(), levels as f32);
             let guard = global_registry();
             let ifs3 = crate::scene::ifs_analysis::analyse_3d(&config.flame, &guard).expect("qualifies");
             drop(guard);
@@ -5767,6 +5928,7 @@ mod gpu_tests {
             let cam = solid_camera(&config.escape, &ifs3);
             let tan_half = (cam.fov as f64 * 0.5).tan();
             let (mut agree, mut total, mut gpu_hits, mut cpu_hits) = (0usize, 0usize, 0usize, 0usize);
+            let mut cpu_mask = vec![0u8; (N * N) as usize];
             for y in 0..N {
                 for x in 0..N {
                     let i = ((y * N + x) * 4) as usize;
@@ -5797,7 +5959,8 @@ mod gpu_tests {
                                 break;
                             }
                             let p: [f64; 3] = std::array::from_fn(|k| cam.eye[k] + dir[k] * t);
-                            let d = estimate(&ifs3, p, 24, 1).distance;
+                            // The slice is w = 0, the config's default.
+                            let d = crate::scene::ifs_estimate::estimate_aux(&ifs3, p, 0.0, levels, 1).distance;
                             if d < px_at * t {
                                 cpu_hit = true;
                                 break;
@@ -5805,6 +5968,7 @@ mod gpu_tests {
                             t += d;
                         }
                     }
+                    cpu_mask[(y * N + x) as usize] = cpu_hit as u8;
                     total += 1;
                     gpu_hits += gpu_hit as usize;
                     cpu_hits += cpu_hit as usize;
@@ -5813,6 +5977,26 @@ mod gpu_tests {
             }
             let pct = 100.0 * agree as f64 / total as f64;
             println!("  {name}: GPU hits {gpu_hits}, CPU hits {cpu_hits}, agreement {pct:.1}% of {total}");
+            if std::env::var("IFS_MASK_DUMP").is_ok() {
+                let dir = std::path::Path::new("output/ifs");
+                std::fs::create_dir_all(dir).expect("output dir");
+                let mut img = vec![0u8; (N * N * 4) as usize];
+                for y in 0..N {
+                    for x in 0..N {
+                        let i = ((y * N + x) * 4) as usize;
+                        let gpu_hit = out.rgba_data[i] as u32 + out.rgba_data[i + 1] as u32 + out.rgba_data[i + 2] as u32 > 24;
+                        img[i] = if gpu_hit { 255 } else { 0 };
+                        img[i + 3] = 255;
+                    }
+                }
+                image::save_buffer(dir.join(format!("mask-{name}-gpu.png")), &img, N, N, image::ColorType::Rgba8).expect("png");
+                let mut img = vec![0u8; (N * N * 4) as usize];
+                for i in 0..(N * N) as usize {
+                    img[i * 4] = if cpu_mask[i] != 0 { 255 } else { 0 };
+                    img[i * 4 + 3] = 255;
+                }
+                image::save_buffer(dir.join(format!("mask-{name}-cpu.png")), &img, N, N, image::ColorType::Rgba8).expect("png");
+            }
             assert!(gpu_hits > 300 && cpu_hits > 300, "{name}: too few hits to compare");
             assert!(pct > 95.0, "{name}: GPU and CPU disagree on {:.1}% of pixels", 100.0 - pct);
         }
@@ -5826,7 +6010,12 @@ mod gpu_tests {
         let dir = std::path::Path::new("output/ifs");
         std::fs::create_dir_all(dir).expect("output dir");
         let (device, queue) = device();
-        for (name, flame) in [("julia3d-pair", julia3d_pair_flame()), ("julia3dz-pair", julia3dz_pair_flame())] {
+        for (name, flame) in [
+            ("julia3d-pair", julia3d_pair_flame()),
+            ("julia3dz-pair", julia3dz_pair_flame()),
+            ("quaternion-pair", quaternion_ifs_flame(&[[0.3, 0.0, 0.0, -0.6], [0.0, 0.0, 0.0, -0.5]])),
+            ("quaternion-trio", quaternion_ifs_flame(&[[0.3, 0.0, 0.0, -0.6], [0.0, 0.0, 0.0, -0.5], [0.2, 0.0, 0.0, -1.0]])),
+        ] {
             for coloring in ["ifs_distance", "ifs_level", "ifs_address", "ifs_trap"] {
                 let c = solid_config_for(flame.clone(), coloring);
                 let job = crate::renderer::RenderJob::new(&c, 384, 384);
@@ -5851,6 +6040,103 @@ mod gpu_tests {
                 println!("  {name} / ifs_address: levels {} -> {} changes {:.2}% of pixels", w[0].0, w[1].0, 100.0 * diff as f64 / (256.0 * 256.0));
             }
         }
+    }
+
+    /// Inverse-mode quaternion_julia transforms at the given constants,
+    /// identity affines, weight one.
+    pub(super) fn quaternion_ifs_flame(cs: &[[f32; 4]]) -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms.clear();
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        for (i, c) in cs.iter().enumerate() {
+            let mut t = Transform::default();
+            t.a = 1.0;
+            t.b = 0.0;
+            t.c = 0.0;
+            t.d = 1.0;
+            t.e = 0.0;
+            t.f = 0.0;
+            t.color = (i as f32 + 0.5) / cs.len() as f32;
+            t.variations = HashMap::from([("quaternion_julia".to_string(), 1.0)]);
+            t.variation_order = vec!["quaternion_julia".to_string()];
+            for (k, v) in [("cx", c[0]), ("cy", c[1]), ("cz", c[2]), ("cw", c[3]), ("power", 2.0), ("inverse", 1.0)] {
+                t.set_variation_param("quaternion_julia", k, v);
+            }
+            fl.transforms.push(t);
+        }
+        fl
+    }
+
+    /// Plan 8.11 step 3's tying gate: a single inverse-mode
+    /// `quaternion_julia` transform with an identity affine IS step
+    /// 1's set, so the IFS walk and the standalone def, rendered from
+    /// the same eye along the same rays, must agree on the hit mask.
+    /// The two distances differ -- Hart's estimate against the
+    /// σ-product bound -- so the boundary band may, and the interior
+    /// and exterior may not.
+    ///
+    /// The standalone def's ball is the bailout's radius and the IFS's
+    /// is found numerically, so the zoom is adjusted to put both eyes
+    /// at the same distance from the same target.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_quaternion_ifs_of_one_transform_is_the_standalone_solid() {
+        // -0.6 + 0.3i: in the variation's (i, j, k, scalar) layout that
+        // is (0.3, 0, 0, -0.6); in the standalone def's (scalar, i, j,
+        // k) layout it is (-0.6, 0.3, 0, 0). The IFS's 3D point is the
+        // vector part with the scalar at w = 0, so the standalone must
+        // pin its SCALAR (axis 0) at 0 for the two to be the same set.
+        let c = [0.3f32, 0.0, 0.0, -0.6];
+        let c_std = [c[3], c[0], c[1], c[2]];
+        let (device, queue) = device();
+        const N: u32 = 128;
+
+        let mut std_cfg = quaternion_config(c_std, 0.0, "ifs_distance");
+        std_cfg.escape.cam_target_x = "0".to_string();
+        std_cfg.escape.cam_target_y = "0".to_string();
+        std_cfg.escape.cam_target_z = "0".to_string();
+        std_cfg.escape.formula_params.insert("levels".to_string(), 24.0);
+        let std_packed = pack_standalone(&IFS_QUATERNION_JULIA, &std_cfg.escape);
+        let std_r = std_packed.solid.as_ref().unwrap().0.ball.radius;
+
+        let flame = quaternion_ifs_flame(&[c]);
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&flame, &guard).expect("qualifies");
+        drop(guard);
+        let mut ifs_cfg = solid_config_for(flame, "ifs_distance");
+        ifs_cfg.escape.cam_target_x = "0".to_string();
+        ifs_cfg.escape.cam_target_y = "0".to_string();
+        ifs_cfg.escape.cam_target_z = "0".to_string();
+        ifs_cfg.escape.cam_yaw = std_cfg.escape.cam_yaw;
+        ifs_cfg.escape.cam_pitch = std_cfg.escape.cam_pitch;
+        ifs_cfg.escape.formula_params.insert("levels".to_string(), 24.0);
+        // Same eye: distance = 3.2 R / 2^zoom for each.
+        ifs_cfg.escape.zoom_log2 = std_cfg.escape.zoom_log2 + (ifs3.ball.radius / std_r).log2();
+        let cam_std = solid_camera(&std_cfg.escape, &std_packed.solid.as_ref().unwrap().0);
+        let cam_ifs = solid_camera(&ifs_cfg.escape, &ifs3);
+        assert!((cam_std.distance - cam_ifs.distance).abs() < 1e-9 * cam_std.distance);
+
+        let render = |cfg: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(cfg, N, N);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let a = render(&std_cfg);
+        let b = render(&ifs_cfg);
+        let (mut agree, mut hits_a, mut hits_b) = (0usize, 0usize, 0usize);
+        for i in 0..(N * N) as usize {
+            let la = a[i * 4] as u32 + a[i * 4 + 1] as u32 + a[i * 4 + 2] as u32 > 24;
+            let lb = b[i * 4] as u32 + b[i * 4 + 1] as u32 + b[i * 4 + 2] as u32 > 24;
+            hits_a += la as usize;
+            hits_b += lb as usize;
+            agree += (la == lb) as usize;
+        }
+        let pct = 100.0 * agree as f64 / (N * N) as f64;
+        println!("  standalone hits {hits_a}, IFS hits {hits_b}, agreement {pct:.1}% of {}", N * N);
+        assert!(hits_a > 500 && hits_b > 500, "too few hits to compare ({hits_a} / {hits_b})");
+        assert!(pct > 95.0, "the two arithmetics disagree on {:.1}% of pixels", 100.0 - pct);
     }
 
     /// A flame that fails the criterion must render EMPTY, not a
