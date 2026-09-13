@@ -61,16 +61,23 @@
 //! is MEASURED rather than proved: `estimate_never_exceeds_a_sampled_upper_bound`
 //! checks the walk against a dense sample of a real attractor.
 
-use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, Ifs2, Ifs3, IfsMap};
+use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, Ifs2, Ifs3, IfsMap, Map2};
 
-/// What the walk needs of one map. Implemented for the affine cases
-/// now; §8's ladder adds the nonlinear ones by making the inverse and
-/// the scale functions of the point rather than constants.
+/// What the walk needs of one map: the inverse step, and the local
+/// contraction it costs. For an affine map the contraction is the
+/// constant the analysis computed; for a root map (plan §8.8, J3) it
+/// is that constant times a factor read at the point.
 pub trait IfsSpace: Copy {
     type Point: Copy + PartialEq + std::fmt::Debug;
 
     fn apply(&self, p: Self::Point) -> Self::Point;
     fn distance(a: Self::Point, b: Self::Point) -> f64;
+
+    /// One inverse step from `q`: the point, and the forward map's
+    /// σ_min there, given its constant part.
+    fn step(&self, q: Self::Point, sigma_min: f64) -> (Self::Point, f64) {
+        (self.apply(q), sigma_min)
+    }
 }
 
 impl IfsSpace for Affine2 {
@@ -82,6 +89,25 @@ impl IfsSpace for Affine2 {
 
     fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
         ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+    }
+}
+
+impl IfsSpace for Map2 {
+    type Point = [f64; 2];
+
+    fn apply(&self, p: [f64; 2]) -> [f64; 2] {
+        Map2::apply(self, p)
+    }
+
+    fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
+        Affine2::distance(a, b)
+    }
+
+    fn step(&self, q: [f64; 2], sigma_min: f64) -> ([f64; 2], f64) {
+        match self {
+            Map2::RootInverse(r) => (r.apply_inverse(q), sigma_min * r.local_sigma_factor(q)),
+            other => (other.apply(q), sigma_min),
+        }
     }
 }
 
@@ -277,8 +303,8 @@ where
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                let q = m.inverse.apply(c.q);
-                let sigma = c.sigma * m.sigma_min;
+                let (q, s) = m.inverse.step(c.q, m.sigma_min);
+                let sigma = c.sigma * s;
                 let r = A::distance(q, centre);
                 let mut child = c.clone();
                 child.q = q;
@@ -516,13 +542,16 @@ pub fn seed_beam<P: SeedPoint>(
     let scale = if px > 0.0 { 1.0 / px } else { 1.0 };
 
     let (q0, sigma0, basis0) = match &ifs.final_map {
-        Some(f) => (
-            centre.apply_affine(&f.inverse),
-            f.sigma_min,
-            compose_basis(&f.inverse, view_basis),
-        ),
+        Some(f) => {
+            let inv = f.inverse.as_affine().expect("the final transform is affine (J4)");
+            (centre.apply_affine(&inv), f.sigma_min, compose_basis(&inv, view_basis))
+        }
         None => (centre, 1.0, view_basis),
     };
+    // The reference/delta split is an affine property (plan §8.5): a
+    // nonlinear IFS hands over at level 0, and the shader walks from
+    // the pixel's own f32 position (J6).
+    let affine = ifs.maps.iter().all(|m| m.inverse.is_affine());
 
     let r0 = q0.distance_to(ball);
     let mut live = vec![Cand {
@@ -599,7 +628,7 @@ pub fn seed_beam<P: SeedPoint>(
         // carried; stopping on it ends the prefix at level 1, because
         // a beam wider than the branching factor prunes nothing and so
         // keeps every escapee from the first level onward.
-        if bases.iter().any(|b| basis_reach(*b) >= cap) {
+        if !affine || bases.iter().any(|b| basis_reach(*b) >= cap) {
             break;
         }
 
@@ -612,7 +641,8 @@ pub fn seed_beam<P: SeedPoint>(
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                let q = c.q.apply_affine(&m.inverse);
+                let inv = m.inverse.as_affine().expect("checked affine above");
+                let q = c.q.apply_affine(&inv);
                 let sigma = c.sigma * m.sigma_min;
                 let r = q.distance_to(ball);
                 let mut child = c.clone();
@@ -622,7 +652,7 @@ pub fn seed_beam<P: SeedPoint>(
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
-                next_bases.push(compose_basis(&m.inverse, *basis));
+                next_bases.push(compose_basis(&inv, *basis));
             }
         }
         // The same ranking the walk uses — and the bases have to
@@ -766,8 +796,8 @@ pub fn estimate_seeded(
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                let q = m.inverse.apply(c.q);
-                let sigma = c.sigma * m.sigma_min;
+                let (q, s) = m.inverse.step(c.q, m.sigma_min);
+                let sigma = c.sigma * s;
                 let r = Affine2::distance(q, centre);
                 let mut child = c.clone();
                 child.q = q;
@@ -1380,6 +1410,106 @@ mod tests {
     /// distance to it is closed form.
     fn unit_square() -> Ifs2 {
         analyse(vec![half(0.0, 0.0), half(0.5, 0.0), half(0.0, 0.5), half(0.5, 0.5)])
+    }
+
+    // ---- the root maps (plan 8.8, gate 1) ----------------------------
+
+    /// One `julia` transform with pre-translation `−c`: the inverse
+    /// iteration system of `z² + c`.
+    fn julia(c: [f64; 2]) -> Ifs2 {
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, -(c[0] as f32), -(c[1] as f32));
+        t.variations = HashMap::from([("julia".to_string(), 1.0)]);
+        t.variation_order = vec!["julia".to_string()];
+        analyse(vec![t])
+    }
+
+    /// The classic escape-time distance estimate for `z² + c`:
+    /// `|z|·ln|z| / |z′|` at escape, or `None` for a point that does
+    /// not escape within `levels`. Returns the escape level too.
+    fn classic_de(c: [f64; 2], z0: [f64; 2], levels: u32) -> Option<(f64, u32)> {
+        let (mut z, mut dz): ([f64; 2], [f64; 2]) = (z0, [1.0, 0.0]);
+        for k in 0..levels {
+            let r2 = z[0] * z[0] + z[1] * z[1];
+            if r2 > 1e16 {
+                let r = r2.sqrt();
+                let dr = (dz[0] * dz[0] + dz[1] * dz[1]).sqrt();
+                return Some((r * r.ln() / dr, k));
+            }
+            // dz ← 2 z dz, z ← z² + c
+            dz = [2.0 * (z[0] * dz[0] - z[1] * dz[1]), 2.0 * (z[0] * dz[1] + z[1] * dz[0])];
+            z = [z[0] * z[0] - z[1] * z[1] + c[0], 2.0 * z[0] * z[1] + c[1]];
+        }
+        None
+    }
+
+    /// Gate 1 of plan 8.8: on `z² + c` the walk IS the escape-time
+    /// iteration -- the inverse map is `q² + c` and the local σ_min is
+    /// `1/(2|q|)`, so the σ product is `1/|z′|` -- and its distance
+    /// must agree with the classic estimate up to the factor J3
+    /// admits. Membership (never escapes) must agree exactly where the
+    /// classic test is not itself on the fence.
+    ///
+    /// Two `c`s: the Douady rabbit (connected, so the walk draws the
+    /// FILLED set, J2) and a dust.
+    #[test]
+    fn a_julia_walk_agrees_with_the_classic_distance_estimate() {
+        for (name, c) in [("rabbit", [-0.123, 0.745]), ("dust", [0.36, 0.1]), ("basilica", [-1.0, 0.0])] {
+            let ifs = julia(c);
+            const L: u32 = 80;
+            let (mut n, mut member_bad, mut ratios) = (0usize, 0usize, Vec::new());
+            for iy in 0..96 {
+                for ix in 0..96 {
+                    let z0 = [-2.0 + 4.0 * (ix as f64 + 0.5) / 96.0, -2.0 + 4.0 * (iy as f64 + 0.5) / 96.0];
+                    let ours = estimate(&ifs, z0, L, 1);
+                    let classic = classic_de(c, z0, L);
+                    n += 1;
+                    match classic {
+                        // Not escaped by L for the classic test, whose
+                        // bailout is 1e8 -- five squarings past the
+                        // ball. So the walk may have left the ball a
+                        // few levels before L on a point the classic
+                        // test has not yet let go of; a disagreement is
+                        // the walk escaping CLEARLY earlier.
+                        None => {
+                            if ours.escaped && ours.level < (L - 8) as f64 {
+                                member_bad += 1;
+                            }
+                        }
+                        Some((d, k)) => {
+                            // A point escaping late is one the ball's
+                            // radius versus the bailout could put on
+                            // either side of L; leave those out.
+                            if k + 8 > L {
+                                continue;
+                            }
+                            if !ours.escaped || !(ours.distance > 0.0) {
+                                member_bad += 1;
+                                continue;
+                            }
+                            ratios.push(ours.distance / d);
+                        }
+                    }
+                }
+            }
+            ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let (lo, hi) = (ratios[0], ratios[ratios.len() - 1]);
+            let med = ratios[ratios.len() / 2];
+            println!(
+                "  {name}: {n} points, {} compared, membership disagreements {member_bad}, \
+                 distance ratio walk/classic: min {lo:.3} median {med:.3} max {hi:.3}",
+                ratios.len()
+            );
+            assert_eq!(member_bad, 0, "{name}: membership disagrees on {member_bad} points");
+            assert!(ratios.len() > 2000, "{name}: only {} exterior points compared", ratios.len());
+            // Measured: [0.36, 0.61] over the three sets. Below the
+            // classic estimate throughout, and by a bounded factor:
+            // the walk's value has no ln|z| in it, and its maximum
+            // over levels lands a level or two past the escape, where
+            // (r − R) stands in for r·ln r. Asserted at what was
+            // measured, with room for a different c but not for a
+            // different mechanism.
+            assert!(lo > 0.25 && hi < 1.0, "{name}: ratio range [{lo:.3}, {hi:.3}] is outside what J3 measured");
+        }
     }
 
     /// Three half-scale maps to a triangle's corners: the Sierpiński
