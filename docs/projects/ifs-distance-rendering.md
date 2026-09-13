@@ -363,10 +363,11 @@ machinery; it is a phase-3 item, not a new one.
   escape config.** The flame's `zr = 1 − persp·z` is depth scaling,
   not a camera, and generating rays for it would be contorting the
   marcher to match a convention that exists for the chaos game's
-  splats. The escape config gains a camera (position, the same three
+  splats. The escape config gains a camera (position, the same four
   angles, FOV) written by the same View-panel controls and driven by
   the same fly mode, so the *interaction* is shared even though the
-  projection differs. Recorded as a decision to argue with: the
+  projection differs. (Built with two angles first; the other two and
+  the pan arrived 2026-09-12 — see the phase 3 record.) Recorded as a decision to argue with: the
   alternative is sharing the flame's camera fields outright and
   teaching the shade-pass extension the pinhole, which is less
   duplication and more coupling.
@@ -1685,6 +1686,60 @@ answer to the tie case if anyone hits it, and the wide-closure
 packing (empty-slot flags, insertion ranking on the GPU) is kept
 because it is what that replay would hand over.
 
+**The solid camera has all four angles, and a pan, 2026-09-12.**
+Reported from use, three at once: Pitch and Yaw but no Bank; panning
+changed `center_re`/`center_im`, which a solid does not read, so the
+drag did nothing; and the view's Rotation did nothing either. The
+3D flame's camera was offered as the reference — it pans in the
+rotated frame and has all four angles.
+
+The frame is the flame's chain now: `Rz(roll)·Rx(pitch)·Ry(bank)·
+Rz(−yaw)`, the same factorisation as `build_camera_matrix` in
+`utilities.wgsl` and `CameraMatrix::build` in fly mode, with `cam_bank`
+in the bank slot and the view's `rotation` in the roll slot — the
+outermost factor, so it turns the screen and leaves the other three
+alone, which is what "rotates the viewport independently" asks for.
+Bank sits between pitch and yaw as it does on a flame, and does there
+what it does here (`the_solid_chain_is_the_flames_camera_matrix`
+transcribes the WGSL and compares). Two conventions are the escape
+engine's rather than the flame's, and both are deliberate. The
+solid's pitch is measured from the horizon, the flame's from looking
+straight down, and every shipped preset and saved solid carries angles
+in the solid's terms — so pitch and yaw are re-expressed on the way
+into the chain, and with bank and rotation at zero the frame is
+EXACTLY the old one (`the_frame_is_what_it_was_with_the_new_angles_at_zero`);
+the presets did not move. And the flame draws its y axis DOWN the
+screen, Apophysis's way, so its frame is the mirror of a physical
+camera's, while the plane draws Im up and the solid always looked the
+physical way, right = forward × up — the chain's screen-x row is
+negated for that, and the roll is applied as `Rz(−rotation)` so that
+a positive rotation turns the solid's picture the way it turns the
+plane's (clockwise on screen; measured on the rendered sponge). The
+pitch clamp short of the poles is gone with the cross product that
+needed it: the chain has an up at every angle
+(`the_frame_is_a_frame_at_every_angle_including_the_poles`).
+
+A pan slides the target across the screen plane at the target's own
+depth: `dx · right − dy · up` pixels, each a step of `2·tan(fov/2)·
+distance / height` in world units, so the surface under the cursor
+follows the cursor. The step is a mantissa and a power of two added
+to the decimal target in fixed point — the plane's
+`escape_pan_delta_symbolic` again — because a solid's zoom shrinks
+the distance without limit and an f64 step underflows past ~2¹⁰⁶⁰
+while the target's digits do not; gated at 2¹²⁰⁰. A zoom towards the
+cursor moves the target by the offset's change of scale, so the point
+of the target's plane under the cursor stays under it. Right and up
+are the camera's rolled ones, so the pan follows the rotation. An
+empty target — the attractor's own centre — becomes explicit the
+moment the camera moves. A drag re-runs the IFS analysis to get the
+ball and the camera: measured at 0.26 ms per event on the sponge's
+twenty maps, in release.
+
+Not done, and known: fly mode still does not drive this camera (D2
+asks for it; the chain being the fly camera's makes it a matter of
+wiring), and the field of view's doc string said "horizontal" when
+`ifs_ray` spreads it vertically — corrected in passing.
+
 **Phase 3 is done.** A ray
 marches THROUGH space, so what a handover carries is per-ray rather
 than per-pixel and how far along the ray a sample sits is part of the
@@ -2027,15 +2082,19 @@ the commit.
    and `does_the_seeded_chain_agree_with_each_samples_own`, gated by
    `the_seeded_walk_is_each_pixels_own` and
    `the_seeded_chain_is_each_samples_own`.
-10. **Solid camera: no Bank.** Pitch and yaw only; the flame's 3D
-    camera has the third axis.
-11. **Solid camera: panning does nothing.** The View panel's pan writes
-    `center_re`/`center_im`, which the solid camera does not read — it
-    orbits `cam_target`. The flame's 3D camera pans in the rotated
-    frame (quaternion-based) and is the reference for how it should
-    feel.
-12. **Solid camera: rotation does nothing.** Should roll the viewport
-    independently of the 3D angles, as the 3D flame's `rotation` does.
+10. ~~**Solid camera: no Bank.**~~ Pitch and yaw only; the flame's 3D
+    camera has the third axis. Landed 2026-09-12: the frame is the
+    flame's four-angle chain now, `cam_bank` in the flame's slot. See
+    the phase 3 record.
+11. ~~**Solid camera: panning does nothing.**~~ The View panel's pan
+    wrote `center_re`/`center_im`, which the solid camera does not
+    read — it orbits `cam_target`. Landed 2026-09-12: a drag, the
+    arrow keys and a zoom towards the cursor move the target across
+    the screen plane at its own depth, through the camera's rolled
+    right and up, in fixed point.
+12. ~~**Solid camera: rotation does nothing.**~~ Landed 2026-09-12: the
+    view's rotation is the chain's outermost factor, a roll of the
+    screen and nothing else, turning the same way it turns the plane.
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and

@@ -3003,12 +3003,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // geometry re-coloured.
         fn camera_key(escape: &EscapeConfig) -> String {
             format!(
-                "{}/{}/{}/{}/{}/{}",
+                "{}/{}/{}/{}/{}/{}/{}",
                 escape.cam_target_x,
                 escape.cam_target_y,
                 escape.cam_target_z,
                 escape.cam_pitch,
                 escape.cam_yaw,
+                escape.cam_bank,
                 escape.cam_fov,
             )
         }
@@ -3280,12 +3281,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // geometry re-coloured.
         fn camera_key(escape: &EscapeConfig) -> String {
             format!(
-                "{}/{}/{}/{}/{}/{}",
+                "{}/{}/{}/{}/{}/{}/{}",
                 escape.cam_target_x,
                 escape.cam_target_y,
                 escape.cam_target_z,
                 escape.cam_pitch,
                 escape.cam_yaw,
+                escape.cam_bank,
                 escape.cam_fov,
             )
         }

@@ -1799,6 +1799,7 @@ impl ConfigManager {
             }
             ConfigPath::EscapeCamPitch => Ok(config.escape.cam_pitch.into()),
             ConfigPath::EscapeCamYaw => Ok(config.escape.cam_yaw.into()),
+            ConfigPath::EscapeCamBank => Ok(config.escape.cam_bank.into()),
             ConfigPath::EscapeCamFov => Ok(config.escape.cam_fov.into()),
             // f32 view of an f64 field — see the ConfigPath doc for why
             // the precision ceiling is acceptable until phase 4.
@@ -2841,13 +2842,17 @@ impl ConfigManager {
                 self.current.escape.cam_target_z = value.try_into()?;
             }
             ConfigPath::EscapeCamPitch => {
-                // Clamped short of the poles, where the up vector is
-                // undefined and the frame flips.
+                // To the poles and no further: past them the elevation
+                // would mean the same view with the yaw reversed, and
+                // a slider that wraps a view is a slider that jumps.
                 let v: f32 = value.try_into()?;
-                self.current.escape.cam_pitch = v.clamp(-1.5533, 1.5533);
+                self.current.escape.cam_pitch = v.clamp(-1.5708, 1.5708);
             }
             ConfigPath::EscapeCamYaw => {
                 self.current.escape.cam_yaw = value.try_into()?;
+            }
+            ConfigPath::EscapeCamBank => {
+                self.current.escape.cam_bank = value.try_into()?;
             }
             ConfigPath::EscapeCamFov => {
                 let v: f32 = value.try_into()?;
