@@ -157,6 +157,40 @@ fn ifs_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
     if (kind == 2.0) {
         return v / max(r2, 1e-30);
     }
+    if (kind == 4.0) {
+        // hemisphere: v / sqrt(1 - |v|^2) (plan 8.10 D1)
+        if (r2 >= 1.0) {
+            return v * 1e30;
+        }
+        return v / sqrt(1.0 - r2);
+    }
+    if (kind == 5.0) {
+        // disc: rho = |v| is |theta|/pi; phi, the angle of v from +y,
+        // is pi*r modulo 2pi; the branch m is the ring, and its parity
+        // the sign of theta (D2).
+        let rho = sqrt(r2);
+        if (rho > 1.0) {
+            return v * 1e30;
+        }
+        let pi = 3.14159265358979;
+        let m = ifs_maps[i].branch;
+        let r = ff_atan2(v.x, v.y) / pi + m;
+        if (r < 0.0) {
+            return vec2<f32>(1e30, 1e30);
+        }
+        let even = fract(m * 0.5) == 0.0;
+        let theta = select(-pi * rho, pi * rho, even);
+        return vec2<f32>(r * sin(theta), r * cos(theta));
+    }
+    if (kind == 6.0) {
+        // blob: swap(v) / s(theta), theta the angle of v from +x (D3).
+        let theta = ff_atan2(v.y, v.x);
+        let high = ifs_maps[i].params.x;
+        let low = ifs_maps[i].params.y;
+        let waves = ifs_maps[i].params.z;
+        let s = low + (high - low) * 0.5 * (sin(waves * theta) + 1.0);
+        return vec2<f32>(v.y, v.x) / s;
+    }
     // bubble
     if (r2 > 1.0) {
         return v * 1e30;
@@ -178,6 +212,29 @@ fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
     if (kind == 2.0) {
         return r2;
     }
+    if (kind == 4.0) {
+        return pow(max(1.0 - r2, 0.0), 1.5);
+    }
+    if (kind == 5.0) {
+        let pi = 3.14159265358979;
+        let rho = sqrt(r2);
+        let r = ff_atan2(v.x, v.y) / pi + ifs_maps[i].branch;
+        if (r <= 0.0) {
+            return 0.0;
+        }
+        return min(pi * rho, 1.0 / (pi * r));
+    }
+    if (kind == 6.0) {
+        let theta = ff_atan2(v.y, v.x);
+        let high = ifs_maps[i].params.x;
+        let low = ifs_maps[i].params.y;
+        let waves = ifs_maps[i].params.z;
+        let s = low + (high - low) * 0.5 * (sin(waves * theta) + 1.0);
+        let ds = (high - low) * 0.5 * waves * cos(waves * theta);
+        let a = 2.0 * s * s + ds * ds;
+        let d = sqrt(max(a * a - 4.0 * s * s * s * s, 0.0));
+        return sqrt(max((a - d) * 0.5, 0.0));
+    }
     if (r2 >= 1.0) {
         return 1.0;
     }
@@ -188,9 +245,11 @@ fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
 
 // When p is outside map i's IMAGE, a lower bound on its distance to
 // the map's piece, in p's frame; negative when it is inside (S4).
-// Only bubble has one: its image is the unit disc of v.
+// The kernels whose image is the unit disc of v have one: bubble,
+// hemisphere and disc (kinds 3, 4, 5).
 fn ifs_image_gap(i: u32, p: vec2<f32>) -> f32 {
-    if (ifs_maps[i].kind != 3.0) {
+    let kind = ifs_maps[i].kind;
+    if (kind != 3.0 && kind != 4.0 && kind != 5.0) {
         return -1.0;
     }
     let m = ifs_maps[i].inv_m;
@@ -2153,15 +2212,18 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
                         t: [r.post_inv.t[0] * scale, r.post_inv.t[1] * scale],
                     };
                     use crate::scene::ifs_analysis::Kernel;
+                    // z of a unit-disc kernel: the scale of the image
+                    // gap (S4), |w| times the post-affine's smallest
+                    // stretch.
+                    let (post_lo, _) = r.post.singular_values();
+                    let gap = (r.w.abs() * post_lo) as f32;
                     let (kind, params) = match r.kernel {
                         Kernel::Root { n, d } => (1.0, [n as f32, d as f32, 0.0, 0.0]),
                         Kernel::Spherical => (2.0, [0.0; 4]),
-                        // z: the scale of the image gap (S4), |w| times
-                        // the post-affine's smallest stretch.
-                        Kernel::Bubble => {
-                            let (post_lo, _) = r.post.singular_values();
-                            (3.0, [0.0, 0.0, (r.w.abs() * post_lo) as f32, 0.0])
-                        }
+                        Kernel::Bubble => (3.0, [0.0, 0.0, gap, 0.0]),
+                        Kernel::Hemisphere => (4.0, [0.0, 0.0, gap, 0.0]),
+                        Kernel::Disc => (5.0, [0.0, 0.0, gap, 0.0]),
+                        Kernel::Blob { high, low, waves } => (6.0, [high as f32, low as f32, waves as f32, 0.0]),
                     };
                     IfsMapGpu {
                         inv_m: m4(&post),
@@ -2615,6 +2677,7 @@ mod tests {
             .into_iter()
             .chain(solid_presets())
             .chain(super::gpu_tests::julia_presets())
+            .chain(super::gpu_tests::kernel_presets())
             .collect::<Vec<_>>()
             .iter()
             .map(|c| {
@@ -2695,7 +2758,7 @@ mod tests {
                 ifs.ball.radius
             );
         }
-        assert_eq!(planar, 7, "expected seven planar IFS presets (four classical, three julia), found {planar}");
+        assert_eq!(planar, 8, "expected eight planar IFS presets (four classical, three julia, one blob), found {planar}");
         assert_eq!(solid, 2, "expected two solid IFS presets, found {solid}");
     }
 
@@ -4674,6 +4737,33 @@ mod gpu_tests {
         ])
     }
 
+    pub(super) fn hemisphere_ifs_flame() -> Flame {
+        kernel_flame(vec![
+            ("hemisphere", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.5, 0.2),
+            ("hemisphere", [0.7, 0.7, -0.7, 0.7, 0.4, 0.0], 1.2, 0.5),
+            ("linear", [0.5, 0.0, 0.0, 0.5, 0.8, 0.3], 1.0, 0.8),
+        ])
+    }
+
+    pub(super) fn disc_ifs_flame() -> Flame {
+        kernel_flame(vec![
+            ("disc", [0.9, 0.4, -0.4, 0.9, 0.0, 0.0], 1.0, 0.3),
+            ("linear", [0.55, 0.0, 0.0, 0.55, 0.0, 0.0], 1.0, 0.8),
+        ])
+    }
+
+    pub(super) fn blob_ifs_flame() -> Flame {
+        let mut fl = kernel_flame(vec![
+            ("blob", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.8, 0.3),
+            ("linear", [0.6, 0.3, -0.3, 0.6, 0.5, 0.0], 1.0, 0.6),
+            ("linear", [0.5, 0.0, 0.0, 0.5, -0.4, 0.3], 1.0, 0.9),
+        ]);
+        fl.transforms[0].set_variation_param("blob", "high", 1.2);
+        fl.transforms[0].set_variation_param("blob", "low", 0.5);
+        fl.transforms[0].set_variation_param("blob", "waves", 5.0);
+        fl
+    }
+
     /// Gate 3 of plan 8.9: the GPU walk agrees with the CPU estimate
     /// on a spherical IFS and on a bubble IFS, by the gasket's test.
     /// The view is framed on each set's ball rather than the harness
@@ -4681,7 +4771,13 @@ mod gpu_tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn the_gpu_walk_agrees_with_the_cpu_reference_on_spherical_and_bubble() {
-        for (name, flame) in [("spherical", spherical_ifs_flame()), ("bubble", bubble_ifs_flame())] {
+        for (name, flame) in [
+            ("spherical", spherical_ifs_flame()),
+            ("bubble", bubble_ifs_flame()),
+            ("hemisphere", hemisphere_ifs_flame()),
+            ("disc", disc_ifs_flame()),
+            ("blob", blob_ifs_flame()),
+        ] {
             let guard = global_registry();
             let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
             drop(guard);
@@ -4822,14 +4918,36 @@ mod gpu_tests {
                 ]),
             ),
         ];
-        if let Some(c) = crate::resources::presets::load_embedded_presets()
-            .expect("presets parse")
-            .into_iter()
-            .find(|c| c.flame.name == "JuliaN Bubble (3D)")
-        {
-            out.push(("JuliaN Bubble", "ifs_distance", c.flame));
+        out.push(("Hemisphere Pair", "ifs_trap", hemisphere_ifs_flame()));
+        out.push(("Disc Spiral", "ifs_address", disc_ifs_flame()));
+        out.push(("Blob Flower", "ifs_trap", blob_ifs_flame()));
+        for (preset, name) in [
+            ("JuliaN Bubble (3D)", "JuliaN Bubble"),
+            ("Julian Disc", "Julian Disc"),
+            ("Cup (3D)", "Cup"),
+        ] {
+            if let Some(c) = crate::resources::presets::load_embedded_presets()
+                .expect("presets parse")
+                .into_iter()
+                .find(|c| c.flame.name == preset)
+            {
+                out.push((name, "ifs_distance", c.flame));
+            }
         }
         out
+    }
+
+    /// The preset that ships from plan 8.10's candidates: the blob
+    /// flower under the distance colouring with contours on and a
+    /// dark interior -- the one thin set among the fold kernels, whose
+    /// distance field is the picture (0.4% of pixels move between 24
+    /// and 48 levels, 0.3% between 48 and 96).
+    pub(super) fn kernel_presets() -> Vec<crate::config::FractalConfig> {
+        let mut c = ifs_preset_config("Blob Flower", "ifs_distance", blob_ifs_flame().transforms);
+        c.escape.coloring_params.insert("bands".to_string(), 12.0);
+        c.escape.coloring_params.insert("interior".to_string(), 0.0);
+        c.escape.formula_params.insert("levels".to_string(), 48.0);
+        vec![c]
     }
 
     #[test]
@@ -4988,10 +5106,14 @@ mod gpu_tests {
         std::fs::create_dir_all(dir).expect("output dir");
         let (device, queue) = device();
         for (name, coloring, flame) in kernel_candidates() {
-            if !matches!(name, "Three Circles and a Seed" | "JuliaN Bubble") {
+            if !matches!(name, "Three Circles and a Seed" | "JuliaN Bubble" | "Julian Disc" | "Cup" | "Disc Spiral" | "Blob Flower") {
                 continue;
             }
-            let coloring = if name == "JuliaN Bubble" { "ifs_address" } else { "ifs_trap" };
+            let coloring = match name {
+                "JuliaN Bubble" | "Julian Disc" => "ifs_address",
+                "Blob Flower" => "ifs_distance",
+                _ => "ifs_trap",
+            };
             let mut shots: Vec<(u32, Vec<u8>)> = Vec::new();
             for levels in [24u32, 48, 96] {
                 let mut c = ifs_preset_config(name, coloring, flame.transforms.clone());
@@ -5640,7 +5762,7 @@ mod gpu_tests {
                 cfg.flame.name
             );
         }
-        assert_eq!(seen, 9, "expected nine IFS presets (four classical, two solid, three julia), found {seen}");
+        assert_eq!(seen, 10, "expected ten IFS presets (four classical, two solid, three julia, one blob), found {seen}");
     }
 
     /// A 3D flame: the XY affine is identity plus a translation and
