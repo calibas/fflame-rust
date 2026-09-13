@@ -697,6 +697,28 @@ fn escape_pan_view(
     drag_delta: egui::Vec2,
     panel_size: egui::Vec2,
 ) {
+    // A solid has no centre to move: its view is a camera about a
+    // target, and a drag slides the target across the screen plane at
+    // its own depth, so the surface under the cursor follows the
+    // cursor. The centre strings are the plane's and the solid does
+    // not read them.
+    if let Some((ifs3, cam)) = solid_view(config_manager.active_config()) {
+        let esc = config_manager.active_config().escape.clone();
+        let shifted = solid_target_shifted(
+            &esc,
+            &ifs3,
+            &cam,
+            &[(&esc, -1.0)],
+            f64::from(drag_delta.x),
+            f64::from(drag_delta.y),
+            f64::from(panel_size.y),
+        );
+        let _ = config_manager.update_batch(
+            solid_target_updates(shifted),
+            "history.param.escape_cam_target_x".to_string(),
+        );
+        return;
+    }
     let esc = config_manager.active_config().escape.clone();
     // The center accumulates in FIXED-POINT with a SYMBOLIC delta
     // (mantissa · 2^exponent): an f64 round-trip caps the step at the
@@ -725,6 +747,75 @@ fn escape_pan_view(
         ],
         "history.param.escape_center_re".to_string(),
     );
+}
+
+/// The solid a config renders, if it renders one: the analysis and
+/// the camera it is looked at through. `None` for the plane, and for
+/// a solid formula over a flame that does not qualify, which renders
+/// nothing there is to steer.
+fn solid_view(
+    config: &crate::config::FractalConfig,
+) -> Option<(crate::scene::ifs_analysis::Ifs3, crate::escape::ifs::SolidCamera)> {
+    if !crate::escape::ifs::formula_is_solid(&config.escape.formula) {
+        return None;
+    }
+    let registry = crate::variations::global_registry();
+    let ifs3 = crate::scene::ifs_analysis::analyse_3d(&config.flame, &registry).ok()?;
+    let cam = crate::escape::ifs::solid_camera(&config.escape, &ifs3);
+    Some((ifs3, cam))
+}
+
+/// The solid's target after a screen offset `(dx, dy)` in pixels is
+/// applied in the target's plane -- once per `(view, sign)` in
+/// `terms`, each at that view's zoom, so a pan is one term and a
+/// zoom-to-cursor is the difference of two.
+///
+/// The offset becomes `dx · right − dy · up` (screen y grows
+/// downward) times the pixel's step at the target, which is the
+/// plane's `escape_pan_delta_symbolic` again: a mantissa and a
+/// power of two, added to the decimal target in fixed point so the
+/// step survives any depth. An empty target is the attractor's own
+/// centre, and becomes explicit here -- the moment the camera moves.
+fn solid_target_shifted(
+    digits_at: &crate::config::escape::EscapeConfig,
+    ifs3: &crate::scene::ifs_analysis::Ifs3,
+    cam: &crate::escape::ifs::SolidCamera,
+    terms: &[(&crate::config::escape::EscapeConfig, f64)],
+    dx_px: f64,
+    dy_px: f64,
+    height_px: f64,
+) -> [String; 3] {
+    use crate::escape::fixedpoint::FixedPoint;
+    let z = digits_at.zoom_log2;
+    let mut out: [String; 3] = std::array::from_fn(|k| {
+        let s = [&digits_at.cam_target_x, &digits_at.cam_target_y, &digits_at.cam_target_z][k];
+        if s.trim().is_empty() {
+            format!("{}", ifs3.ball.centre[k])
+        } else {
+            s.trim().to_string()
+        }
+    });
+    for &(view, sign) in terms {
+        let (m, e) = crate::escape::ifs::solid_pixel_step(view, ifs3, height_px);
+        for k in 0..3 {
+            let v = dx_px * cam.right[k] - dy_px * cam.up[k];
+            if let Some(next) = FixedPoint::decimal_add_floatexp(&out[k], sign * v * m, e, z) {
+                out[k] = next;
+            }
+        }
+    }
+    out
+}
+
+fn solid_target_updates(
+    target: [String; 3],
+) -> Vec<(crate::config::ConfigPath, crate::config::ConfigValue)> {
+    let [x, y, z] = target;
+    vec![
+        (crate::config::ConfigPath::EscapeCamTargetX, crate::config::ConfigValue::String(x)),
+        (crate::config::ConfigPath::EscapeCamTargetY, crate::config::ConfigValue::String(y)),
+        (crate::config::ConfigPath::EscapeCamTargetZ, crate::config::ConfigValue::String(z)),
+    ]
 }
 
 /// Wheel zoom for the escape view: zoom-in anchors to the cursor
@@ -756,8 +847,31 @@ fn escape_zoom_view(
         crate::config::ConfigValue::Float(new_zoom_log2 as f32),
     )];
 
+    // A solid anchors the zoom the same way, in the target's plane:
+    // the point of that plane under the cursor stays under it. What
+    // the eye approaches is the target, so a zoom towards the cursor
+    // is a zoom that walks the target under the cursor.
+    let solid = solid_view(config_manager.active_config());
+
     if zoom_factor > 1.0 {
-        if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
+        if let Some((ifs3, cam)) = &solid {
+            if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
+                let off_x = f64::from(mouse_pos.x - panel_rect.center().x);
+                let off_y = f64::from(mouse_pos.y - panel_rect.center().y);
+                let mut esc_new = esc.clone();
+                esc_new.zoom_log2 = new_zoom_log2;
+                let shifted = solid_target_shifted(
+                    &esc_new,
+                    ifs3,
+                    cam,
+                    &[(&esc, 1.0), (&esc_new, -1.0)],
+                    off_x,
+                    off_y,
+                    f64::from(panel_size.y),
+                );
+                updates.extend(solid_target_updates(shifted));
+            }
+        } else if let Some(mouse_pos) = mouse_pos.filter(|_| zoom_to_cursor) {
             // Keep the point under the cursor fixed: with the offset o
             // (screen → world) and scale ratio k = old/new span,
             // center' = center + o·(1 − 1/k) — computed here as the
@@ -2162,5 +2276,147 @@ impl<'a> PanelViewer<'a> {
             self.context.load_signal_file,
             self.context.save_signal_file,
         );
+    }
+}
+#[cfg(test)]
+mod solid_navigation_tests {
+    use super::*;
+    use crate::config::FractalConfig;
+
+    /// A shipped solid preset -- a real flame, a real camera.
+    fn solid_preset() -> FractalConfig {
+        crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .find(|c| crate::escape::ifs::formula_is_solid(&c.escape.formula))
+            .expect("a solid preset ships")
+    }
+
+    fn target_f64(t: &[String; 3]) -> [f64; 3] {
+        std::array::from_fn(|k| t[k].parse::<f64>().expect("decimal"))
+    }
+
+    /// A plane is not a solid, and neither is a solid formula over a
+    /// flame that does not qualify.
+    #[test]
+    fn only_a_qualifying_solid_has_a_solid_view() {
+        let plane = FractalConfig::default();
+        assert!(solid_view(&plane).is_none());
+        let mut broken = solid_preset();
+        assert!(solid_view(&broken).is_some());
+        // A non-affine variation disqualifies the flame.
+        broken.flame.transforms[0].variations.insert("spherical".to_string(), 1.0);
+        broken.flame.transforms[0].variation_order.push("spherical".to_string());
+        assert!(solid_view(&broken).is_none());
+    }
+
+    /// A drag slides the target across the screen plane at its own
+    /// depth: right by `dx` pixels moves the target `dx` steps along
+    /// −right (content follows the cursor), down by `dy` moves it
+    /// `dy` steps along +up. An empty target becomes explicit, from
+    /// the attractor's centre.
+    #[test]
+    fn a_solid_pan_moves_the_target_across_the_screen_plane() {
+        let cfg = solid_preset();
+        let (ifs3, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        assert!(esc.cam_target_x.is_empty(), "the preset frames itself");
+        let (m, e) = crate::escape::ifs::solid_pixel_step(esc, &ifs3, 480.0);
+        let step = m * 2f64.powi(e as i32);
+
+        let right = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 30.0, 0.0, 480.0);
+        let down = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 0.0, 12.0, 480.0);
+        let r = target_f64(&right);
+        let d = target_f64(&down);
+        for k in 0..3 {
+            let want_r = ifs3.ball.centre[k] - 30.0 * step * cam.right[k];
+            let want_d = ifs3.ball.centre[k] + 12.0 * step * cam.up[k];
+            assert!((r[k] - want_r).abs() < 1e-12 * ifs3.ball.radius, "axis {k}: {} vs {want_r}", r[k]);
+            assert!((d[k] - want_d).abs() < 1e-12 * ifs3.ball.radius, "axis {k}: {} vs {want_d}", d[k]);
+        }
+    }
+
+    /// The pan follows the camera: with the screen rolled by the
+    /// view's rotation, a horizontal drag moves the target along the
+    /// rolled right, which is not the unrolled one.
+    #[test]
+    fn a_solid_pan_follows_the_rolled_screen() {
+        let mut cfg = solid_preset();
+        let (ifs3, cam0) = solid_view(&cfg).unwrap();
+        cfg.escape.rotation = 0.6;
+        let (_, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        let shifted = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 20.0, 0.0, 480.0);
+        let t = target_f64(&shifted);
+        let d: [f64; 3] = std::array::from_fn(|k| t[k] - ifs3.ball.centre[k]);
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let len = dot(d, d).sqrt();
+        // Along the rolled right, and visibly off the unrolled one.
+        assert!((dot(d, cam.right) / len + 1.0).abs() < 1e-9);
+        assert!((dot(d, cam0.right) / len + 1.0).abs() > 0.1);
+    }
+
+    /// Zooming towards the cursor keeps the point of the target's
+    /// plane under the cursor where it is: the target moves by the
+    /// offset's change of scale, and the point itself does not.
+    #[test]
+    fn a_solid_zoom_to_cursor_keeps_the_point_under_it() {
+        let cfg = solid_preset();
+        let (ifs3, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        let mut esc_new = esc.clone();
+        esc_new.zoom_log2 = esc.zoom_log2 + 0.7;
+        let (ox, oy) = (137.0, -52.0);
+        let step_at = |e: &crate::config::escape::EscapeConfig| {
+            let (m, ex) = crate::escape::ifs::solid_pixel_step(e, &ifs3, 480.0);
+            m * 2f64.powi(ex as i32)
+        };
+        let shifted = solid_target_shifted(
+            &esc_new, &ifs3, &cam, &[(esc, 1.0), (&esc_new, -1.0)], ox, oy, 480.0,
+        );
+        let t = target_f64(&shifted);
+        for k in 0..3 {
+            let v = ox * cam.right[k] - oy * cam.up[k];
+            let before = ifs3.ball.centre[k] + v * step_at(esc);
+            let after = t[k] + v * step_at(&esc_new);
+            assert!((before - after).abs() < 1e-12 * ifs3.ball.radius, "axis {k}: {before} vs {after}");
+        }
+    }
+
+    /// And at a depth f64 cannot step: the target still moves, by a
+    /// pixel's worth, because the step is a mantissa and an exponent
+    /// added in fixed point -- the same arrangement that lets the
+    /// plane pan past zoom 1060.
+    #[test]
+    fn a_solid_pan_still_moves_at_a_depth_f64_cannot_step() {
+        let mut cfg = solid_preset();
+        cfg.escape.zoom_log2 = 1200.0;
+        let (ifs3, cam) = solid_view(&cfg).unwrap();
+        let esc = &cfg.escape;
+        let once = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 1.0, 0.0, 480.0);
+        let (m, e) = crate::escape::ifs::solid_pixel_step(esc, &ifs3, 480.0);
+        assert!(e < -1100, "the step's exponent should be far below f64's range, got {e}");
+        // Moved: every axis with a non-zero right component changed.
+        for k in 0..3 {
+            let unmoved = format!("{}", ifs3.ball.centre[k]);
+            if cam.right[k].abs() > 1e-6 {
+                assert_ne!(once[k], unmoved, "axis {k} did not move at zoom 2^1200");
+            }
+        }
+        // And by the right amount: two one-pixel pans land where one
+        // two-pixel pan does, to every digit but the last, which is
+        // the decimal formatting's rounding and may differ by one.
+        let mut esc_moved = esc.clone();
+        esc_moved.cam_target_x = once[0].clone();
+        esc_moved.cam_target_y = once[1].clone();
+        esc_moved.cam_target_z = once[2].clone();
+        let twice = solid_target_shifted(&esc_moved, &ifs3, &cam, &[(esc, -1.0)], 1.0, 0.0, 480.0);
+        let direct = solid_target_shifted(esc, &ifs3, &cam, &[(esc, -1.0)], 2.0, 0.0, 480.0);
+        for k in 0..3 {
+            assert_eq!(twice[k].len(), direct[k].len());
+            assert!(twice[k].len() > 360, "axis {k} carries {} digits", twice[k].len());
+            assert_eq!(twice[k][..twice[k].len() - 1], direct[k][..direct[k].len() - 1], "axis {k}");
+        }
+        assert!((1.0..2.0).contains(&m));
     }
 }

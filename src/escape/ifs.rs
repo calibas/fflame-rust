@@ -1530,8 +1530,6 @@ pub struct SolidCamera {
 /// `2·asin(1/3.2) ≈ 0.64` radians, against a 0.7-radian default.
 const FRAME_DISTANCE: f64 = 3.2;
 
-/// Short of the pole by this much, where an up vector does not exist.
-const PITCH_LIMIT: f32 = 1.5533;
 
 /// Build the camera for a solid render.
 ///
@@ -1563,16 +1561,15 @@ pub fn solid_camera(
     let r = ifs.ball.radius.max(1e-12);
     let distance = FRAME_DISTANCE * r / 2f64.powf(escape.zoom_log2);
 
-    let pitch = escape.cam_pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT) as f64;
-    let yaw = escape.cam_yaw as f64;
-    // The eye sits on the sphere of that radius about the target; the
-    // view looks back down the same line.
-    let dir = [
-        pitch.cos() * yaw.cos(),
-        pitch.cos() * yaw.sin(),
-        pitch.sin(),
-    ];
-    let eye_rel = [dir[0] * distance, dir[1] * distance, dir[2] * distance];
+    let (right, up, forward) = solid_frame(
+        escape.cam_pitch as f64,
+        escape.cam_yaw as f64,
+        escape.cam_bank as f64,
+        escape.rotation as f64,
+    );
+    // The eye sits on the sphere of that radius about the target and
+    // looks back down the same line.
+    let eye_rel = [-forward[0] * distance, -forward[1] * distance, -forward[2] * distance];
     // The absolute eye is for callers that want a position; nothing on
     // the deep-zoom path reads it, and past 2⁴⁸ it IS the target.
     let eye = [
@@ -1580,12 +1577,6 @@ pub fn solid_camera(
         target[1] + eye_rel[1],
         target[2] + eye_rel[2],
     ];
-    let forward = [-dir[0], -dir[1], -dir[2]];
-
-    // World up is +z, which is the axis a flame treats as depth. The
-    // pitch clamp is what keeps this from being parallel to the view.
-    let right = normalize3(cross3(forward, [0.0, 0.0, 1.0]));
-    let up = cross3(right, forward);
 
     SolidCamera {
         eye,
@@ -1597,6 +1588,112 @@ pub fn solid_camera(
         distance,
         eye_rel,
     }
+}
+
+/// The solid camera's frame -- `(right, up, forward)`, world-space
+/// unit vectors -- from its four angles.
+///
+/// It is the flame's camera chain, `Rz(roll)·Rx(pitch)·Ry(bank)·
+/// Rz(−yaw)` (`build_camera_matrix` in `utilities.wgsl`, and
+/// `CameraMatrix::build` in fly mode), with the same meaning for each
+/// slot: bank sits between pitch and yaw as it does there, and the
+/// roll -- the View's `rotation`, the plane's -- is the outermost
+/// factor, a turn of the screen that leaves the other three alone. So
+/// what Bank does to a solid is what it does to a 3D flame, and a
+/// camera that later flies this one can reuse the fly mode's algebra.
+///
+/// Two things differ, and both are the escape engine's conventions
+/// rather than the flame's. Where zero is: the flame's pitch is
+/// measured from looking straight DOWN, its home view; the solid's is
+/// measured from the horizon, which was its home view before it had a
+/// bank, and the shipped presets and every saved solid carry angles
+/// in those terms -- so `pitch_flame = π/2 − pitch` and
+/// `yaw_flame = yaw − π/2` on the way in. And handedness: the flame
+/// draws its y axis DOWN the screen (Apophysis does), so its frame is
+/// the mirror of a physical camera's, while the plane draws Im up and
+/// the solid always looked the physical way, right = forward × up.
+/// The chain's screen-x row is negated for that, and the roll is
+/// applied as `Rz(−rotation)` so that a positive rotation turns the
+/// solid's screen the way it turns the plane's
+/// (`rotation_rolls_the_solid_screen_as_it_rolls_the_plane`).
+///
+/// With bank and rotation both zero this is EXACTLY the frame the
+/// camera had before (`the_frame_is_what_it_was_with_the_new_angles_at_zero`):
+/// the eye on the sphere by elevation and azimuth, world +z's
+/// projection for up. It also exists at the poles now, so the pitch
+/// clamp that kept the old cross product off them is gone.
+///
+/// Rows of the matrix: row 0 is screen-right, row 1 is screen-DOWN
+/// (pixel y grows downward), row 2 is the camera's +z, which is the
+/// direction it looks AWAY from.
+pub fn solid_frame(pitch: f64, yaw: f64, bank: f64, rotation: f64) -> ([f64; 3], [f64; 3], [f64; 3]) {
+    let m = solid_matrix(pitch, yaw, bank, rotation);
+    let right = m[0];
+    let up = [-m[1][0], -m[1][1], -m[1][2]];
+    let forward = [-m[2][0], -m[2][1], -m[2][2]];
+    (right, up, forward)
+}
+
+/// The matrix, row-major, world → camera: the flame's chain with the
+/// solid's zero, its roll direction, and its handedness (the screen-x
+/// row negated).
+fn solid_matrix(pitch: f64, yaw: f64, bank: f64, rotation: f64) -> [[f64; 3]; 3] {
+    let pitch_f = std::f64::consts::FRAC_PI_2 - pitch;
+    let yaw_f = yaw - std::f64::consts::FRAC_PI_2;
+    let mut m = mat_mul3(
+        mat_mul3(rot_z(-rotation), rot_x(pitch_f)),
+        mat_mul3(rot_y(bank), rot_z(-yaw_f)),
+    );
+    for v in m[0].iter_mut() {
+        *v = -*v;
+    }
+    m
+}
+
+fn rot_x(a: f64) -> [[f64; 3]; 3] {
+    let (s, c) = a.sin_cos();
+    [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]
+}
+
+fn rot_y(a: f64) -> [[f64; 3]; 3] {
+    let (s, c) = a.sin_cos();
+    [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]]
+}
+
+fn rot_z(a: f64) -> [[f64; 3]; 3] {
+    let (s, c) = a.sin_cos();
+    [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]
+}
+
+fn mat_mul3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for (i, row) in out.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    out
+}
+
+/// How much world one screen pixel covers at the target's depth, as
+/// `mantissa · 2^exponent` -- the step a pan of one pixel moves the
+/// target by, along the camera's right or up.
+///
+/// Symbolic for the same reason the plane's pan delta is: a solid's
+/// zoom shrinks the distance without limit and an f64 step underflows
+/// past ~2¹⁰⁶⁰ while the target's decimal digits do not. Vertical
+/// field of view over the frame's height, which is how `ifs_ray`
+/// spreads the rays.
+pub fn solid_pixel_step(
+    escape: &crate::config::escape::EscapeConfig,
+    ifs: &Ifs3,
+    height_px: f64,
+) -> (f64, i64) {
+    let r = ifs.ball.radius.max(1e-12);
+    let tan_half = (escape.cam_fov.clamp(0.05, 3.0) as f64 * 0.5).tan();
+    let x = (2.0 * tan_half * FRAME_DISTANCE * r).log2() - escape.zoom_log2 - height_px.max(1.0).log2();
+    let e = x.floor();
+    ((x - e).exp2(), e as i64)
 }
 
 /// Pack the whole-IFS constants and the camera for a solid render.
@@ -1769,14 +1866,6 @@ fn normalize3(v: [f64; 3]) -> [f64; 3] {
     }
 }
 
-fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
 /// The most links a packed chain may hold.
 ///
 /// One link per level, and a level buys about a bit of zoom at σ = ½,
@@ -1946,6 +2035,175 @@ mod tests {
         t.variations = HashMap::from([("linear".to_string(), 1.0)]);
         t.variation_order = vec!["linear".to_string()];
         t
+    }
+
+    // ---- the solid camera's frame ---------------------------------
+
+    fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    }
+
+    fn close3(a: [f64; 3], b: [f64; 3], tol: f64) -> bool {
+        (0..3).all(|k| (a[k] - b[k]).abs() <= tol)
+    }
+
+    /// With bank and rotation at zero the four-angle chain is the
+    /// frame the camera had before it had them: the eye on the sphere
+    /// by elevation and azimuth, world +z projected for up. Every
+    /// shipped solid and every saved one carries its angles in those
+    /// terms, so this is what keeps them where they were.
+    #[test]
+    fn the_frame_is_what_it_was_with_the_new_angles_at_zero() {
+        for &pitch in &[-1.5f64, -0.42, 0.0, 0.25, 0.42, 1.2, 1.5] {
+            for &yaw in &[0.0f64, 0.9, 2.6, -2.0, 3.1] {
+                // The old construction, verbatim.
+                let dir = [pitch.cos() * yaw.cos(), pitch.cos() * yaw.sin(), pitch.sin()];
+                let forward = [-dir[0], -dir[1], -dir[2]];
+                let right = normalize3(cross3(forward, [0.0, 0.0, 1.0]));
+                let up = cross3(right, forward);
+
+                let (r, u, f) = solid_frame(pitch, yaw, 0.0, 0.0);
+                assert!(close3(r, right, 1e-12), "right at pitch {pitch} yaw {yaw}: {r:?} vs {right:?}");
+                assert!(close3(u, up, 1e-12), "up at pitch {pitch} yaw {yaw}: {u:?} vs {up:?}");
+                assert!(close3(f, forward, 1e-12), "forward at pitch {pitch} yaw {yaw}: {f:?} vs {forward:?}");
+            }
+        }
+    }
+
+    /// The chain IS the flame's: `build_camera_matrix` from
+    /// `utilities.wgsl`, transcribed, with the call-site slot mapping
+    /// (yaw slot ← −roll, pitch ← −pitch, bank ← −bank, roll slot ←
+    /// yaw), the solid's re-expression of pitch and yaw, its roll
+    /// direction (`roll = −rotation`) and its handedness (the screen-x
+    /// row mirrored). So what Bank does here is what it does to a 3D
+    /// flame, seen in a mirror.
+    #[test]
+    fn the_solid_chain_is_the_flames_camera_matrix() {
+        fn wgsl(yaw: f64, pitch: f64, bank: f64, roll: f64) -> [[f64; 3]; 3] {
+            let (sy, cy) = yaw.sin_cos();
+            let (sp, cp) = pitch.sin_cos();
+            let (sb, cb) = bank.sin_cos();
+            let (sr, cr) = roll.sin_cos();
+            // Columns as the shader writes them: column c holds
+            // (m[0][c], m[1][c], m[2][c]) of the row-major matrix.
+            let col0 = [
+                cy * cb * cr - sy * cp * sr + sy * sp * sb * cr,
+                -sy * cb * cr - cy * cp * sr + cy * sp * sb * cr,
+                sp * sr + cp * sb * cr,
+            ];
+            let col1 = [
+                cy * cb * sr + sy * cp * cr + sy * sp * sb * sr,
+                -sy * cb * sr + cy * cp * cr + cy * sp * sb * sr,
+                -sp * cr + cp * sb * sr,
+            ];
+            let col2 = [-cy * sb + sy * sp * cb, sy * sb + cy * sp * cb, cp * cb];
+            let mut m = [[0.0; 3]; 3];
+            for r in 0..3 {
+                m[r] = [col0[r], col1[r], col2[r]];
+            }
+            m
+        }
+        for &(pitch, yaw, bank, rotation) in &[
+            (0.42f64, 0.0f64, 0.0f64, 0.0f64),
+            (0.25, 2.6, 0.7, 0.0),
+            (0.42, 0.9, -1.1, 0.3),
+            (-0.8, -2.0, 0.4, -2.2),
+            (1.3, 3.0, 2.5, 1.0),
+        ] {
+            let pitch_f = std::f64::consts::FRAC_PI_2 - pitch;
+            let yaw_f = yaw - std::f64::consts::FRAC_PI_2;
+            let roll = -rotation;
+            let mut want = wgsl(-roll, -pitch_f, -bank, yaw_f);
+            for v in want[0].iter_mut() {
+                *v = -*v;
+            }
+            let got = solid_matrix(pitch, yaw, bank, rotation);
+            for r in 0..3 {
+                assert!(
+                    close3(got[r], want[r], 1e-12),
+                    "row {r} at ({pitch}, {yaw}, {bank}, {rotation}): {:?} vs {:?}",
+                    got[r],
+                    want[r]
+                );
+            }
+        }
+    }
+
+    /// Rotation rolls the screen and nothing else: the view direction
+    /// stays, and right and up turn in the screen plane by the angle,
+    /// in the direction the plane's rotation turns its own screen
+    /// (`escape_screen_to_world` rotates a screen offset by +rotation
+    /// into the world, so screen-right lands at `(cos, sin)` in the
+    /// unrotated right/up basis).
+    #[test]
+    fn rotation_rolls_the_solid_screen_as_it_rolls_the_plane() {
+        for &(pitch, yaw, bank) in &[(0.42f64, 0.9f64, 0.0f64), (0.25, 2.6, 0.7), (-1.0, -1.0, -0.5)] {
+            let (r0, u0, f0) = solid_frame(pitch, yaw, bank, 0.0);
+            for &theta in &[0.3f64, -1.2, 2.9] {
+                let (r, u, f) = solid_frame(pitch, yaw, bank, theta);
+                let (s, c) = theta.sin_cos();
+                let want_r = [c * r0[0] + s * u0[0], c * r0[1] + s * u0[1], c * r0[2] + s * u0[2]];
+                let want_u = [-s * r0[0] + c * u0[0], -s * r0[1] + c * u0[1], -s * r0[2] + c * u0[2]];
+                assert!(close3(f, f0, 1e-12), "the roll moved the view direction");
+                assert!(close3(r, want_r, 1e-12), "right at {theta}: {r:?} vs {want_r:?}");
+                assert!(close3(u, want_u, 1e-12), "up at {theta}: {u:?} vs {want_u:?}");
+            }
+        }
+    }
+
+    /// Whatever the four angles, the frame is orthonormal and a
+    /// physical camera's -- right = forward × up, the plane's
+    /// handedness -- including at the poles, which the old cross
+    /// product could not reach and the clamp kept it from.
+    #[test]
+    fn the_frame_is_a_frame_at_every_angle_including_the_poles() {
+        let angles = [-std::f64::consts::FRAC_PI_2, -1.0, 0.0, 0.7, std::f64::consts::FRAC_PI_2];
+        for &pitch in &angles {
+            for &yaw in &[0.0f64, 1.1, -2.5] {
+                for &bank in &[0.0f64, 0.8, -2.0] {
+                    for &rotation in &[0.0f64, -0.4, 2.0] {
+                        let (r, u, f) = solid_frame(pitch, yaw, bank, rotation);
+                        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                        assert!((dot(r, r) - 1.0).abs() < 1e-12 && (dot(u, u) - 1.0).abs() < 1e-12);
+                        assert!(dot(r, u).abs() < 1e-12 && dot(r, f).abs() < 1e-12 && dot(u, f).abs() < 1e-12);
+                        assert!(close3(cross3(f, u), r, 1e-12), "not a physical camera at ({pitch}, {yaw}, {bank}, {rotation})");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A pixel's step at the target: the frame's height in world units
+    /// over its pixels, as a mantissa and a power of two, agreeing with
+    /// the camera's own distance wherever f64 can hold that.
+    #[test]
+    fn the_pixel_step_is_the_frames_height_over_its_pixels() {
+        let guard = global_registry();
+        let flame = gpu_tests::menger_flame();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&flame, &guard).expect("qualifies");
+        for &zoom in &[0.0f64, 7.5, 40.0, 900.0] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.zoom_log2 = zoom;
+            let cam = solid_camera(&esc, &ifs3);
+            let want = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / 480.0;
+            let (m, e) = solid_pixel_step(&esc, &ifs3, 480.0);
+            let got = m * 2f64.powi(e as i32);
+            assert!(
+                ((got - want) / want).abs() < 1e-12,
+                "zoom {zoom}: {got:e} vs {want:e}"
+            );
+            assert!((1.0..2.0).contains(&m), "mantissa {m} is not normalised");
+        }
+        // And past f64: the mantissa is still a number, the exponent
+        // carries the depth.
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.zoom_log2 = 5000.0;
+        let (m, e) = solid_pixel_step(&esc, &ifs3, 480.0);
+        assert!(m.is_finite() && (1.0..2.0).contains(&m) && e < -5000);
     }
 
     fn square() -> Ifs2 {
@@ -4778,6 +5036,55 @@ mod gpu_tests {
                     "{name}/{coloring} rendered almost nothing ({lit} lit)"
                 );
             }
+        }
+    }
+
+    /// The solid's camera angles, rendered for inspection: the shipped
+    /// sponge preset as is, then banked, then rolled, then panned a
+    /// third of the frame to the right. The roll must be a turn of
+    /// the picture and nothing else; the pan must slide it.
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/solid-camera-*.png"]
+    fn render_the_solid_camera_angles_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let base = crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .find(|c| c.escape.formula == "ifs_flame_3d" && c.flame.transforms.len() == 20)
+            .expect("the sponge ships");
+        let guard = global_registry();
+        let ifs3 = crate::scene::ifs_analysis::analyse_3d(&base.flame, &guard).expect("qualifies");
+        drop(guard);
+        let cam = solid_camera(&base.escape, &ifs3);
+        let (m, e) = solid_pixel_step(&base.escape, &ifs3, 448.0);
+        let step = m * 2f64.powi(e as i32);
+
+        let mut panned = base.clone();
+        for k in 0..3 {
+            let v = ifs3.ball.centre[k] - 150.0 * step * cam.right[k];
+            *[&mut panned.escape.cam_target_x, &mut panned.escape.cam_target_y, &mut panned.escape.cam_target_z][k] =
+                format!("{v}");
+        }
+        let mut banked = base.clone();
+        banked.escape.cam_bank = 0.5;
+        let mut rolled = base.clone();
+        rolled.escape.rotation = 0.5;
+
+        let (device, queue) = device();
+        for (name, c) in [("base", &base), ("bank", &banked), ("roll", &rolled), ("pan", &panned)] {
+            let job = crate::renderer::RenderJob::new(c, 448, 448);
+            let out = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                job,
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let path = dir.join(format!("solid-camera-{name}.png"));
+            image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8)
+                .expect("write png");
+            println!("    {}", path.display());
         }
     }
 

@@ -1278,7 +1278,7 @@ fn show_solid_camera(
         t!("escape_panel.camera_pitch").to_string(),
         ConfigPath::EscapeCamPitch,
         esc.cam_pitch,
-        -89.0..=89.0,
+        -90.0..=90.0,
         t!("escape_panel.camera_pitch_tip").to_string(),
     );
     angle(
@@ -1288,6 +1288,14 @@ fn show_solid_camera(
         esc.cam_yaw,
         -180.0..=180.0,
         t!("escape_panel.camera_yaw_tip").to_string(),
+    );
+    angle(
+        ui,
+        t!("escape_panel.camera_bank").to_string(),
+        ConfigPath::EscapeCamBank,
+        esc.cam_bank,
+        -180.0..=180.0,
+        t!("escape_panel.camera_bank_tip").to_string(),
     );
     angle(
         ui,

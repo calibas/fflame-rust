@@ -139,14 +139,25 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cam_target_z: String,
 
-    /// Elevation above the target's horizon, radians. Clamped short of
-    /// the poles, where the up vector is undefined.
+    /// Elevation above the target's horizon, radians.
+    ///
+    /// The camera's frame is the flame's 4-angle chain
+    /// (`Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)`, see
+    /// `solid_camera`), in which this and `cam_yaw` are re-expressed
+    /// so that zero here is the horizon and not the flame's top-down
+    /// view. The poles are ordinary: the chain always has an up.
     #[serde(default = "default_cam_pitch", skip_serializing_if = "is_default_cam_pitch")]
     pub cam_pitch: f32,
     /// Rotation about the target, radians.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub cam_yaw: f32,
-    /// Horizontal field of view, radians.
+    /// The third angle, radians: the flame camera's bank, in the same
+    /// slot of the same chain. The screen roll is `rotation`, shared
+    /// with the plane.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cam_bank: f32,
+    /// Vertical field of view, radians -- the frame's height; the
+    /// width follows the aspect.
     #[serde(default = "default_cam_fov", skip_serializing_if = "is_default_cam_fov")]
     pub cam_fov: f32,
 
@@ -781,6 +792,7 @@ impl Default for EscapeConfig {
             cam_target_z: String::new(),
             cam_pitch: default_cam_pitch(),
             cam_yaw: 0.0,
+            cam_bank: 0.0,
             cam_fov: default_cam_fov(),
             max_iter: default_max_iter(),
             bailout: default_bailout(),

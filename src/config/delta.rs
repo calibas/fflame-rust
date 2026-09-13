@@ -317,8 +317,10 @@ pub enum ConfigPath {
     EscapeCamTargetZ,
     EscapeCamPitch,
     EscapeCamYaw,
+    EscapeCamBank,
     EscapeCamFov,
-    /// View rotation, radians.
+    /// View rotation, radians. The plane's, and the solid camera's
+    /// screen roll.
     EscapeRotation,
     /// Per-pixel iteration ceiling.
     EscapeMaxIter,
@@ -962,6 +964,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeCamTargetZ => write!(f, "Camera Target Z"),
             ConfigPath::EscapeCamPitch => write!(f, "Camera Pitch"),
             ConfigPath::EscapeCamYaw => write!(f, "Camera Yaw"),
+            ConfigPath::EscapeCamBank => write!(f, "Camera Bank"),
             ConfigPath::EscapeCamFov => write!(f, "Camera Field of View"),
             ConfigPath::EscapeRotation => write!(f, "Escape Rotation"),
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
@@ -1263,6 +1266,7 @@ impl ConfigPath {
             }
             ConfigPath::EscapeCamPitch => I18nKey::simple("history.param.escape_cam_pitch"),
             ConfigPath::EscapeCamYaw => I18nKey::simple("history.param.escape_cam_yaw"),
+            ConfigPath::EscapeCamBank => I18nKey::simple("history.param.escape_cam_bank"),
             ConfigPath::EscapeCamFov => I18nKey::simple("history.param.escape_cam_fov"),
             ConfigPath::EscapeRotation => I18nKey::simple("history.param.escape_rotation"),
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
@@ -2672,6 +2676,7 @@ impl ConfigPath {
             | ConfigPath::EscapeCamTargetZ
             | ConfigPath::EscapeCamPitch
             | ConfigPath::EscapeCamYaw
+            | ConfigPath::EscapeCamBank
             | ConfigPath::EscapeCamFov
             | ConfigPath::EscapeRotation
             | ConfigPath::EscapeMaxIter
@@ -3017,6 +3022,7 @@ impl ConfigPath {
             ConfigPath::EscapeCamTargetZ => "Escape.CamTargetZ".to_string(),
             ConfigPath::EscapeCamPitch => "Escape.CamPitch".to_string(),
             ConfigPath::EscapeCamYaw => "Escape.CamYaw".to_string(),
+            ConfigPath::EscapeCamBank => "Escape.CamBank".to_string(),
             ConfigPath::EscapeCamFov => "Escape.CamFov".to_string(),
             ConfigPath::EscapeRotation => "Escape.Rotation".to_string(),
             ConfigPath::EscapeMaxIter => "Escape.MaxIter".to_string(),
@@ -3273,6 +3279,7 @@ impl ConfigPath {
                 ["CamTargetZ"] => return Some(ConfigPath::EscapeCamTargetZ),
                 ["CamPitch"] => return Some(ConfigPath::EscapeCamPitch),
                 ["CamYaw"] => return Some(ConfigPath::EscapeCamYaw),
+                ["CamBank"] => return Some(ConfigPath::EscapeCamBank),
                 ["CamFov"] => return Some(ConfigPath::EscapeCamFov),
                 ["Rotation"] => return Some(ConfigPath::EscapeRotation),
                 ["MaxIter"] => return Some(ConfigPath::EscapeMaxIter),
@@ -4097,9 +4104,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
 
         // The camera's angles are ordinary floats, and orbiting one is
         // exactly the sort of thing an animation track is for.
-        ConfigPath::EscapeCamPitch | ConfigPath::EscapeCamYaw | ConfigPath::EscapeCamFov => {
-            json.as_f64().map(|v| ConfigValue::Float(v as f32))
-        }
+        ConfigPath::EscapeCamPitch
+        | ConfigPath::EscapeCamYaw
+        | ConfigPath::EscapeCamBank
+        | ConfigPath::EscapeCamFov => json.as_f64().map(|v| ConfigValue::Float(v as f32)),
 
         // Complex types not supported for animation (yet)
         ConfigPath::TonemapCurve | ConfigPath::Palette => None,
