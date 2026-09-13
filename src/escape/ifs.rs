@@ -4873,6 +4873,163 @@ mod gpu_tests {
         }
     }
 
+    /// The kernel candidates as loadable `.fflame` files, one per
+    /// candidate, so the colourings can be tried in the app rather
+    /// than only in the one the sheet rendered.
+    ///
+    /// Through the config's OWN serialiser, for the reason
+    /// `write_the_classical_ifs_presets` documents: a config written
+    /// by serde directly carries no `version` and is migrated on load
+    /// as if it were v2, which turns a mode-D config back into a
+    /// flame.
+    #[test]
+    #[ignore = "writes output/ifs-candidates/*.fflame"]
+    fn write_the_kernel_candidates_as_configs() {
+        let dir = std::path::Path::new("output/ifs-candidates");
+        std::fs::create_dir_all(dir).expect("output dir");
+        for (name, coloring, flame) in kernel_candidates() {
+            let mut c = ifs_preset_config(name, coloring, flame.transforms.clone());
+            c.escape.formula_params.insert("levels".to_string(), 48.0);
+            let slug = name.to_lowercase().replace(' ', "-");
+            let path = dir.join(format!("{slug}.fflame"));
+            std::fs::write(&path, c.to_json().expect("serialise")).expect("write");
+            println!("    {}", path.display());
+        }
+        // And the julia ones, for the same reason.
+        for (name, coloring, transforms) in julia_candidates() {
+            let mut c = ifs_preset_config(name, coloring, transforms);
+            c.escape.formula_params.insert("levels".to_string(), 64.0);
+            let slug = name.to_lowercase().replace(' ', "-");
+            let path = dir.join(format!("julia-{slug}.fflame"));
+            std::fs::write(&path, c.to_json().expect("serialise")).expect("write");
+            println!("    {}", path.display());
+        }
+    }
+
+    /// Every mode-D colouring over every kernel candidate: what the
+    /// one-colouring sheet could have hidden.
+    ///
+    /// The distance colouring's contour bands are ON here (the sheet
+    /// left them at the flat default), because a filled disc under a
+    /// flat interior colour is exactly the picture that would hide
+    /// structure inside it.
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/sweep-*.png"]
+    fn render_every_colouring_of_the_kernel_candidates() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        for (name, _, flame) in kernel_candidates() {
+            let slug = name.to_lowercase().replace(' ', "-");
+            for coloring in ["ifs_distance", "ifs_level", "ifs_address", "ifs_trap"] {
+                for (tag, tune) in [
+                    ("plain", false),
+                    ("tuned", true),
+                ] {
+                    let mut c = ifs_preset_config(name, coloring, flame.transforms.clone());
+                    c.escape.formula_params.insert("levels".to_string(), 48.0);
+                    if tune {
+                        match coloring {
+                            // Contours inside the exterior, and an
+                            // interior at the palette's dark end so the
+                            // set reads as a silhouette.
+                            "ifs_distance" => {
+                                c.escape.coloring_params.insert("bands".to_string(), 12.0);
+                                c.escape.coloring_params.insert("interior".to_string(), 0.0);
+                            }
+                            // Many more cycles per level: a region that
+                            // never escapes has no level, but its
+                            // NEIGHBOURS do, and the bands say how the
+                            // walk reached them.
+                            "ifs_level" => {
+                                c.escape.coloring_params.insert("scale".to_string(), 0.8);
+                                c.escape.coloring_params.insert("smooth".to_string(), 0.0);
+                            }
+                            "ifs_address" => {
+                                c.escape.coloring_params.insert("source".to_string(), 1.0);
+                            }
+                            "ifs_trap" => {
+                                c.escape.coloring_params.insert("scale".to_string(), 2.0);
+                            }
+                            _ => {}
+                        }
+                    }
+                    let job = crate::renderer::RenderJob::new(&c, 384, 384);
+                    let out = pollster::block_on(crate::renderer::render(
+                        &device,
+                        &queue,
+                        job,
+                        &mut crate::renderer::NoProgress,
+                    ))
+                    .expect("render");
+                    let path = dir.join(format!("sweep-{slug}-{coloring}-{tag}.png"));
+                    image::save_buffer(&path, &out.rgba_data, 384, 384, image::ColorType::Rgba8)
+                        .expect("write png");
+                }
+            }
+            println!("    {name}: eight renders");
+        }
+    }
+
+    /// Does the structure the trap and address colourings show inside
+    /// a nonlinear region depend on the WALK'S DEPTH rather than on
+    /// the set?
+    ///
+    /// It is a fair suspicion: a point that never escapes has no
+    /// escape level and no escape point, so its trap coordinate is
+    /// wherever the inverse orbit happened to be when the walk gave
+    /// up, and its address is however many branches it had taken by
+    /// then. If the picture moved with `levels` it would be an
+    /// artefact of the parameter. Compared at 24, 48 and 96.
+    #[test]
+    #[ignore = "needs a GPU; prints a measurement"]
+    fn does_the_interior_structure_depend_on_the_walks_depth() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        for (name, coloring, flame) in kernel_candidates() {
+            if !matches!(name, "Three Circles and a Seed" | "JuliaN Bubble") {
+                continue;
+            }
+            let coloring = if name == "JuliaN Bubble" { "ifs_address" } else { "ifs_trap" };
+            let mut shots: Vec<(u32, Vec<u8>)> = Vec::new();
+            for levels in [24u32, 48, 96] {
+                let mut c = ifs_preset_config(name, coloring, flame.transforms.clone());
+                c.escape.formula_params.insert("levels".to_string(), levels as f32);
+                if coloring == "ifs_address" {
+                    c.escape.coloring_params.insert("source".to_string(), 1.0);
+                }
+                let job = crate::renderer::RenderJob::new(&c, 384, 384);
+                let out = pollster::block_on(crate::renderer::render(
+                    &device, &queue, job, &mut crate::renderer::NoProgress,
+                ))
+                .expect("render");
+                let path = dir.join(format!("depth-{}-{levels}.png", name.to_lowercase().replace(' ', "-")));
+                image::save_buffer(&path, &out.rgba_data, 384, 384, image::ColorType::Rgba8).expect("write png");
+                shots.push((levels, out.rgba_data));
+            }
+            for w in shots.windows(2) {
+                let (a, b) = (&w[0], &w[1]);
+                let diff = a.1
+                    .chunks(4)
+                    .zip(b.1.chunks(4))
+                    .filter(|(p, q)| {
+                        (p[0] as i32 - q[0] as i32).abs()
+                            + (p[1] as i32 - q[1] as i32).abs()
+                            + (p[2] as i32 - q[2] as i32).abs()
+                            > 24
+                    })
+                    .count();
+                println!(
+                    "  {name} / {coloring}: levels {} -> {} changes {:.2}% of pixels",
+                    a.0,
+                    b.0,
+                    100.0 * diff as f64 / (384.0 * 384.0)
+                );
+            }
+        }
+    }
+
     /// A flame that fails the criterion must render EMPTY, not a
     /// frame-filling interior. `distance == 0` is what a point on the
     /// attractor returns, so "no maps" has to mean far away, not near.
