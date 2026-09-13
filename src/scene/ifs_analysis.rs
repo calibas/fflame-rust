@@ -651,6 +651,240 @@ impl MapKind for Map2 {
     }
 }
 
+impl MapKind for Map3 {
+    fn contraction_is_checked(&self) -> bool {
+        self.is_affine()
+    }
+}
+
+// ------------------------------------------------ the 3D nonlinear maps
+
+/// The nonlinear part of a [`NonlinearMap3`] (plan §8.11 step 2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Kernel3 {
+    /// `julia3D`: a root whose radius is the 3D radius with `z` scaled
+    /// by `1/|n|`, whose elevation is kept and whose azimuth is
+    /// divided by `n`.
+    Root3 { n: i32 },
+    /// `julia3Dz`: the plane's root on `xy`, with `z` scaled by
+    /// `r^{1/n − 1}/|n|`.
+    RootZ3 { n: i32 },
+}
+
+impl Kernel3 {
+    pub fn power(&self) -> i32 {
+        match *self {
+            Kernel3::Root3 { n } | Kernel3::RootZ3 { n } => n,
+        }
+    }
+
+    /// The forward kernel on `z` in the pre-frame, along branch `k`.
+    pub fn forward(&self, z: [f64; 3], k: u32) -> [f64; 3] {
+        let n = self.power() as f64;
+        let r2d = z[0] * z[0] + z[1] * z[1];
+        let a = (z[1].atan2(z[0]) + std::f64::consts::TAU * k as f64) / n;
+        match *self {
+            Kernel3::Root3 { .. } => {
+                let zz = z[2] / n.abs();
+                let rho = (r2d + zz * zz).sqrt();
+                if rho == 0.0 {
+                    return [0.0; 3];
+                }
+                let f = rho.powf(1.0 / n - 1.0);
+                let rxy = r2d.sqrt();
+                [f * rxy * a.cos(), f * rxy * a.sin(), f * zz]
+            }
+            Kernel3::RootZ3 { .. } => {
+                if r2d == 0.0 {
+                    return [0.0; 3];
+                }
+                let r = r2d.powf(1.0 / (2.0 * n));
+                let z_out = r * z[2] / (r2d.sqrt() * n.abs());
+                [r * a.cos(), r * a.sin(), z_out]
+            }
+        }
+    }
+
+    /// The inverse kernel on `v`, single-valued.
+    pub fn inverse(&self, v: [f64; 3]) -> [f64; 3] {
+        let n = self.power() as f64;
+        let rxy = v[0].hypot(v[1]);
+        let theta = n * v[1].atan2(v[0]);
+        match *self {
+            Kernel3::Root3 { .. } => {
+                let rho_out = (rxy * rxy + v[2] * v[2]).sqrt();
+                if rho_out == 0.0 {
+                    return [0.0; 3];
+                }
+                let rho = rho_out.powf(n);
+                let (cos_e, sin_e) = (rxy / rho_out, v[2] / rho_out);
+                let sqrt_r2d = rho * cos_e;
+                let zz = rho * sin_e;
+                [sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), zz * n.abs()]
+            }
+            Kernel3::RootZ3 { .. } => {
+                if rxy == 0.0 {
+                    return [0.0; 3];
+                }
+                let sqrt_r2d = rxy.powf(n);
+                [sqrt_r2d * theta.cos(), sqrt_r2d * theta.sin(), v[2] * n.abs() * rxy.powf(n - 1.0)]
+            }
+        }
+    }
+
+    /// The factor on the constant σ_min at the point whose image is
+    /// `v`.
+    pub fn local_sigma_factor(&self, v: [f64; 3]) -> f64 {
+        let n = self.power() as f64;
+        match *self {
+            Kernel3::Root3 { .. } => {
+                let rho_out = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(f64::MIN_POSITIVE);
+                rho_out.powf(1.0 - n)
+            }
+            Kernel3::RootZ3 { .. } => {
+                // In the (r, theta, z) frame: the 2D root's a on xy, c on
+                // z, and a shear b from z into r; the smaller singular
+                // value of [[a, 0], [b, c]] against a.
+                let rxy = v[0].hypot(v[1]).max(f64::MIN_POSITIVE);
+                let r = rxy.powf(n);
+                let z = v[2] * n.abs() * rxy.powf(n - 1.0);
+                let a = r.powf(1.0 / n - 1.0) / n.abs();
+                let c = a;
+                let b = z * (1.0 / n - 1.0) * r.powf(1.0 / n - 2.0) / n.abs();
+                let s = a * a + b * b + c * c;
+                let disc = (s * s - 4.0 * a * a * c * c).max(0.0).sqrt();
+                ((s - disc) * 0.5).max(0.0).sqrt().min(a)
+            }
+        }
+    }
+
+    /// The constant parts of the kernel's singular values.
+    fn sigma_const(&self) -> (f64, f64) {
+        match *self {
+            Kernel3::Root3 { n } => {
+                let n = (n as f64).abs();
+                (1.0 / (n * n), 1.0)
+            }
+            Kernel3::RootZ3 { .. } => (1.0, 1.0),
+        }
+    }
+
+    pub fn unbounded_at_origin(&self) -> bool {
+        self.power() < 0
+    }
+
+    pub fn variation(&self) -> &'static str {
+        match self {
+            Kernel3::Root3 { .. } => "julia3D",
+            Kernel3::RootZ3 { .. } => "julia3Dz",
+        }
+    }
+}
+
+/// A 3D transform whose one nonlinear variation the walk can invert:
+/// forward `p ↦ post(w · K(pre(p)))`, inverse
+/// `q ↦ pre⁻¹(K⁻¹(post⁻¹(q) / w))`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NonlinearMap3 {
+    pub kernel: Kernel3,
+    pub pre: Affine3,
+    pub post: Affine3,
+    pub pre_inv: Affine3,
+    pub post_inv: Affine3,
+    pub w: f64,
+}
+
+impl NonlinearMap3 {
+    pub fn apply_branch(&self, p: [f64; 3], k: u32) -> [f64; 3] {
+        let z = self.kernel.forward(self.pre.apply(p), k);
+        self.post.apply([self.w * z[0], self.w * z[1], self.w * z[2]])
+    }
+
+    fn before_kernel(&self, q: [f64; 3]) -> [f64; 3] {
+        let v = self.post_inv.apply(q);
+        [v[0] / self.w, v[1] / self.w, v[2] / self.w]
+    }
+
+    pub fn apply_inverse(&self, q: [f64; 3]) -> [f64; 3] {
+        let u = self.kernel.inverse(self.before_kernel(q));
+        if !(u[0].is_finite() && u[1].is_finite() && u[2].is_finite()) {
+            return [f64::INFINITY; 3];
+        }
+        self.pre_inv.apply(u)
+    }
+
+    pub fn local_sigma_factor(&self, q: [f64; 3]) -> f64 {
+        self.kernel.local_sigma_factor(self.before_kernel(q))
+    }
+
+    pub fn singular_values(&self) -> (f64, f64) {
+        let (pre_lo, pre_hi) = self.pre.singular_values();
+        let (post_lo, post_hi) = self.post.singular_values();
+        let (k_lo, k_hi) = self.kernel.sigma_const();
+        let w = self.w.abs();
+        (post_lo * w * pre_lo * k_lo, post_hi * w * pre_hi * k_hi)
+    }
+}
+
+/// What a 3D map is: the affine case, or a nonlinear map in either
+/// direction (plan §8.11 step 2), as the plane's [`Map2`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Map3 {
+    Affine(Affine3),
+    Nonlinear(NonlinearMap3),
+    NonlinearInverse(NonlinearMap3),
+}
+
+impl Map3 {
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        match self {
+            Map3::Affine(a) => a.apply(p),
+            Map3::Nonlinear(r) => r.apply_branch(p, 0),
+            Map3::NonlinearInverse(r) => r.apply_inverse(p),
+        }
+    }
+
+    pub fn inverse(&self) -> Option<Map3> {
+        match self {
+            Map3::Affine(a) => a.inverse().map(Map3::Affine),
+            Map3::Nonlinear(r) => Some(Map3::NonlinearInverse(*r)),
+            Map3::NonlinearInverse(r) => Some(Map3::Nonlinear(*r)),
+        }
+    }
+
+    pub fn singular_values(&self) -> (f64, f64) {
+        match self {
+            Map3::Affine(a) => a.singular_values(),
+            Map3::Nonlinear(r) | Map3::NonlinearInverse(r) => r.singular_values(),
+        }
+    }
+
+    pub fn fixed_point(&self) -> Option<[f64; 3]> {
+        match self {
+            Map3::Affine(a) => a.fixed_point(),
+            _ => None,
+        }
+    }
+
+    pub fn as_affine(&self) -> Option<Affine3> {
+        match self {
+            Map3::Affine(a) => Some(*a),
+            _ => None,
+        }
+    }
+
+    pub fn is_affine(&self) -> bool {
+        matches!(self, Map3::Affine(_))
+    }
+
+    pub fn nonlinear(&self) -> Option<&NonlinearMap3> {
+        match self {
+            Map3::Affine(_) => None,
+            Map3::Nonlinear(r) | Map3::NonlinearInverse(r) => Some(r),
+        }
+    }
+}
+
 // ---------------------------------------------------------------- 3D
 
 /// A 3D affine map `p ↦ M p + t`, row-major.
@@ -911,6 +1145,8 @@ fn variation_stage(
                 ("hemisphere", Space::Planar) => Some("hemisphere"),
                 ("disc", Space::Planar) => Some("disc"),
                 ("blob", Space::Planar) => Some("blob"),
+                ("julia3D", Space::Solid) => Some("julia3D"),
+                ("julia3Dz", Space::Solid) => Some("julia3Dz"),
                 _ => None,
             };
             let Some(root) = root else {
@@ -1158,6 +1394,9 @@ pub fn transform_affine_3d_ordered(
     order: &[String],
 ) -> Result<Affine3, NotAffine> {
     let stage = variation_stage(t, registry, Space::Solid, order)?;
+    if let Some((kind, _)) = stage.roots.first() {
+        return Err(NotAffine::Variation(kind.to_string()));
+    }
     let affine = plane_affine(
         [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
         [t.e as f64, t.f as f64],
@@ -1274,7 +1513,7 @@ pub struct Ifs<A, P> {
 }
 
 pub type Ifs2 = Ifs<Map2, [f64; 2]>;
-pub type Ifs3 = Ifs<Affine3, [f64; 3]>;
+pub type Ifs3 = Ifs<Map3, [f64; 3]>;
 
 /// Which dynamics to analyse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1336,14 +1575,71 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
 /// run with it off is a planar IFS and should be analysed as one.
 pub fn analyse_3d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs3, Vec<Disqualification>> {
     let order = flame.active_variation_names_ordered(registry);
-    let maps = collect(flame, |t| transform_affine_3d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
-    let final_map = collect_final(flame, |t| transform_affine_3d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
-    let (maps, final_map, errs) = merge(maps, final_map, flame);
+    let maps = collect(flame, |t| transform_map_3d_ordered(t, registry, &order).map(|a| (a, a.inverse(), a.singular_values())));
+    // The final transform stays affine (J4).
+    let final_map = collect_final(flame, |t| {
+        transform_affine_3d_ordered(t, registry, &order)
+            .map(|a| (Map3::Affine(a), a.inverse().map(Map3::Affine), a.singular_values()))
+    });
+    let (maps, final_map, mut errs) = merge(maps, final_map, flame);
     if !errs.is_empty() {
         return Err(errs);
     }
-    let ball = ball_3d(&maps);
+    let Some(ball) = ball_3d(&maps) else {
+        errs.push(Disqualification::NoBall);
+        return Err(errs);
+    };
     Ok(Ifs { maps, final_map, ball })
+}
+
+/// The 3D map a transform composes to -- affine, or a nonlinear map
+/// with its kernel -- or why it is neither (plan §8.11 step 2). The
+/// same rules as the plane's [`transform_map_2d_ordered`].
+pub fn transform_map_3d_ordered(
+    t: &Transform,
+    registry: &VariationRegistry,
+    order: &[String],
+) -> Result<Map3, NotAffine> {
+    let stage = variation_stage(t, registry, Space::Solid, order)?;
+    if stage.roots.is_empty() {
+        return transform_affine_3d_ordered(t, registry, order).map(Map3::Affine);
+    }
+    let (kind, w) = stage.roots[0];
+    if stage.roots.len() > 1 || stage.any {
+        return Err(NotAffine::MixedSum(kind.to_string()));
+    }
+    let n = t.get_variation_param_or_default(kind, "power", registry).round() as i32;
+    if n == 0 || !(w != 0.0) || !w.is_finite() {
+        return Err(NotAffine::Degenerate(kind.to_string()));
+    }
+    let kernel = match kind {
+        "julia3D" => Kernel3::Root3 { n },
+        "julia3Dz" => Kernel3::RootZ3 { n },
+        _ => unreachable!("collected above"),
+    };
+    let affine = plane_affine(
+        [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
+        [t.e as f64, t.f as f64],
+        t.g as f64,
+        plane(t.yz_coefs),
+        plane(t.zx_coefs),
+    );
+    let pre = stage.pre.then_after(&affine);
+    let mut post = stage.post;
+    if t.post_affine_enabled {
+        let post_affine = plane_affine(
+            [[t.post_a as f64, t.post_b as f64], [t.post_c as f64, t.post_d as f64]],
+            [t.post_e as f64, t.post_f as f64],
+            t.post_g as f64,
+            plane(t.yz_post_coefs),
+            plane(t.zx_post_coefs),
+        );
+        post = post_affine.then_after(&post);
+    }
+    let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
+        return Ok(Map3::Affine(Affine3 { m: [[0.0; 3]; 3], t: [0.0; 3] }));
+    };
+    Ok(Map3::Nonlinear(NonlinearMap3 { kernel, pre, post, pre_inv, post_inv, w }))
 }
 
 type Raw<A> = Result<(A, Option<A>, (f64, f64)), NotAffine>;
@@ -1634,7 +1930,115 @@ fn ball_2d_affine(maps: &[IfsMap<Affine2>]) -> Ball<[f64; 2]> {
     Ball { centre: best_c, radius: best_r * (1.0 + BALL_MARGIN) }
 }
 
-fn ball_3d(maps: &[IfsMap<Affine3>]) -> Ball<[f64; 3]> {
+fn ball_3d(maps: &[IfsMap<Map3>]) -> Option<Ball<[f64; 3]>> {
+    if maps.iter().all(|m| m.forward.is_affine()) {
+        let affine: Vec<IfsMap<Affine3>> = maps
+            .iter()
+            .map(|m| IfsMap {
+                forward: m.forward.as_affine().expect("affine"),
+                inverse: m.inverse.as_affine().expect("affine"),
+                sigma_min: m.sigma_min,
+                sigma_max: m.sigma_max,
+                transform_index: m.transform_index,
+            })
+            .collect();
+        return Some(ball_3d_affine(&affine));
+    }
+    ball_3d_numeric(maps)
+}
+
+/// The 3D ball for an IFS with nonlinear maps, found as the plane's
+/// (J5, S3): a chaos-game sample for the centre, then a radius grown
+/// until every map sends the sampled ball -- a Fibonacci sphere and
+/// interior shells -- into it, or the sample's bulk when a kernel is
+/// unbounded at its pre-origin.
+fn ball_3d_numeric(maps: &[IfsMap<Map3>]) -> Option<Ball<[f64; 3]>> {
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let branches_of = |m: &Map3| m.nonlinear().map_or(1, |n| n.kernel.power().unsigned_abs());
+    let step = |m: &Map3, p: [f64; 3], k: u32| -> [f64; 3] {
+        match m {
+            Map3::Nonlinear(r) => r.apply_branch(p, k),
+            other => other.apply(p),
+        }
+    };
+
+    let mut p = [0.0; 3];
+    let mut sample = Vec::with_capacity(4000);
+    let mut lost = 0usize;
+    for i in 0..4200 {
+        let m = &maps[(next() * maps.len() as f64).floor() as usize % maps.len()];
+        let k = (next() * branches_of(&m.forward) as f64).floor() as u32;
+        p = step(&m.forward, p, k);
+        if !(p[0].is_finite() && p[1].is_finite() && p[2].is_finite()) {
+            lost += 1;
+            if lost > 400 {
+                return None;
+            }
+            p = [0.1234, 0.0567, 0.0891];
+            continue;
+        }
+        if i >= 200 {
+            sample.push(p);
+        }
+    }
+    if sample.len() < 1000 {
+        return None;
+    }
+    let n = sample.len() as f64;
+    let centre = [
+        sample.iter().map(|p| p[0]).sum::<f64>() / n,
+        sample.iter().map(|p| p[1]).sum::<f64>() / n,
+        sample.iter().map(|p| p[2]).sum::<f64>() / n,
+    ];
+    let dist = |p: [f64; 3]| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2) + (p[2] - centre[2]).powi(2)).sqrt();
+
+    if maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.unbounded_at_origin())) {
+        let mut radii: Vec<f64> = sample.iter().map(|&p| dist(p)).collect();
+        radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let bulk = radii[(radii.len() as f64 * 0.995) as usize].max(1e-9);
+        return Some(Ball { centre, radius: bulk * 1.3 });
+    }
+
+    let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
+    let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+    for round in 0..80 {
+        let mut reach = 0.0f64;
+        for shell in [1.0f64, 0.7, 0.4] {
+            let count = if shell == 1.0 { 256 } else { 96 };
+            for j in 0..count {
+                // A Fibonacci sphere: even cover from an index.
+                let y = 1.0 - 2.0 * (j as f64 + 0.5) / count as f64;
+                let rr = (1.0 - y * y).sqrt();
+                let phi = golden * j as f64;
+                let q = [
+                    centre[0] + radius * shell * rr * phi.cos(),
+                    centre[1] + radius * shell * y,
+                    centre[2] + radius * shell * rr * phi.sin(),
+                ];
+                for m in maps {
+                    for k in 0..branches_of(&m.forward) {
+                        let d = dist(step(&m.forward, q, k));
+                        if !d.is_finite() {
+                            return None;
+                        }
+                        reach = reach.max(d);
+                    }
+                }
+            }
+        }
+        if reach <= radius {
+            return Some(Ball { centre, radius: radius * (1.0 + BALL_MARGIN) });
+        }
+        radius = if round < 60 { reach } else { reach * 1.05 };
+    }
+    None
+}
+
+fn ball_3d_affine(maps: &[IfsMap<Affine3>]) -> Ball<[f64; 3]> {
     let fixed: Vec<[f64; 3]> = maps.iter().filter_map(|m| m.forward.fixed_point()).collect();
     let centre = if fixed.is_empty() {
         [0.0; 3]
@@ -2159,6 +2563,112 @@ mod tests {
         assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Degenerate(v), .. } if v == "blob")), "{errs:?}");
     }
 
+    /// A 3D transform carrying one julia-family 3D root at `power`,
+    /// with the given XY affine and z offset; `linear3D` is dropped.
+    fn root3_xform(variation: &str, power: f32, a: [f32; 6], g: f32, w: f32) -> Transform {
+        let mut t = affine_xform(a[0], a[1], a[2], a[3], a[4], a[5]);
+        t.g = g;
+        t.variations.clear();
+        t.variation_order.clear();
+        let mut t = with(t, variation, w);
+        t.set_variation_param(variation, "power", power);
+        t
+    }
+
+    /// Plan 8.11 step 2, gate 1: julia3D and julia3Dz round-trip on
+    /// every branch, and each local factor is the forward map's
+    /// smallest stretch to a finite difference in three directions.
+    #[test]
+    fn the_3d_root_kernels_undo_each_of_their_branches() {
+        let guard = global_registry();
+        let r = &*guard;
+        let cases = [
+            (root3_xform("julia3D", 3.0, [1.0, 0.0, 0.0, 1.0, 0.3, -0.2], 0.1, 0.9), Kernel3::Root3 { n: 3 }),
+            (root3_xform("julia3D", 2.0, [0.9, 0.2, -0.2, 0.9, 0.0, 0.4], -0.3, 1.1), Kernel3::Root3 { n: 2 }),
+            (root3_xform("julia3Dz", 2.0, [1.0, 0.0, 0.0, 1.0, -0.4, 0.1], 0.2, 0.8), Kernel3::RootZ3 { n: 2 }),
+            (root3_xform("julia3Dz", 4.0, [0.8, 0.0, 0.0, 0.8, 0.1, 0.1], 0.0, 1.0), Kernel3::RootZ3 { n: 4 }),
+        ];
+        for (t, kernel) in &cases {
+            let m = transform_map_3d_ordered(t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            assert_eq!(base.kernel, *kernel);
+            let n = kernel.power().unsigned_abs();
+            for p in [[0.3, 0.4, 0.2], [-1.2, 0.7, -0.5], [2.0, -1.5, 1.1], [0.05, -0.02, 0.4]] {
+                for k in 0..n {
+                    let q = base.apply_branch(p, k);
+                    let back = base.apply_inverse(q);
+                    for i in 0..3 {
+                        assert!((back[i] - p[i]).abs() < 1e-6, "{kernel:?} branch {k}: {p:?} -> {q:?} -> {back:?}");
+                    }
+                }
+                // The local factor is below the forward stretch in
+                // every axis direction.
+                let q = base.apply_branch(p, 0);
+                let (c_lo, _) = base.singular_values();
+                let sg = c_lo * base.local_sigma_factor(q);
+                let h = 1e-6;
+                for axis in 0..3 {
+                    let mut pp = p;
+                    pp[axis] += h;
+                    let d = base.apply_branch(pp, 0);
+                    let g = ((d[0] - q[0]).powi(2) + (d[1] - q[1]).powi(2) + (d[2] - q[2]).powi(2)).sqrt() / h;
+                    assert!(sg <= g * (1.0 + 1e-3) + 1e-9, "{kernel:?} at {p:?} axis {axis}: sigma {sg} exceeds stretch {g}");
+                }
+            }
+        }
+
+        // A pair of 3D roots with a contracting affine qualifies as a
+        // solid and gets a ball every branch keeps.
+        // A unit affine with linear3D at a half: the sum is 0.5·I in
+        // all three axes. (linear3D at one on a half-scale XY affine
+        // leaves z at unit scale and is not a contraction.)
+        let mut aff = affine_xform(1.0, 0.0, 0.0, 1.0, 0.6, 0.0);
+        aff.g = 0.2;
+        aff.variations.clear();
+        aff.variation_order.clear();
+        let aff = with(aff, "linear3D", 0.5);
+        let fl = flame_of(vec![cases[0].0.clone(), cases[1].0.clone(), aff]);
+        let ifs3 = analyse_3d(&fl, r).expect("qualifies");
+        assert_eq!(ifs3.maps.len(), 3);
+        assert!(ifs3.ball.radius.is_finite() && ifs3.ball.radius > 0.0);
+        // Sampled more finely than the search samples, and on a
+        // different lattice: the search's sampling plus its margin
+        // must cover what it did not visit.
+        let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+        let mut worst = 0.0f64;
+        for j in 0..2000 {
+            let y = 1.0 - 2.0 * (j as f64 + 0.37) / 2000.0;
+            let rr = (1.0 - y * y).sqrt();
+            let phi = golden * j as f64 + 0.5;
+            let q = [
+                ifs3.ball.centre[0] + ifs3.ball.radius * rr * phi.cos(),
+                ifs3.ball.centre[1] + ifs3.ball.radius * y,
+                ifs3.ball.centre[2] + ifs3.ball.radius * rr * phi.sin(),
+            ];
+            for m in &ifs3.maps {
+                let branches = m.forward.nonlinear().map_or(1, |nl| nl.kernel.power().unsigned_abs());
+                for k in 0..branches {
+                    let img = match &m.forward {
+                        Map3::Nonlinear(nl) => nl.apply_branch(q, k),
+                        other => other.apply(q),
+                    };
+                    let d = ((img[0] - ifs3.ball.centre[0]).powi(2) + (img[1] - ifs3.ball.centre[1]).powi(2) + (img[2] - ifs3.ball.centre[2]).powi(2)).sqrt();
+                    worst = worst.max(d / ifs3.ball.radius);
+                }
+            }
+        }
+        println!("  the ball's images reach {worst:.4} of its radius on a finer sphere than the search's");
+        // Measured 1.0014: the search samples 256 directions and adds
+        // 5%, and a finer sphere finds images a seventh of a percent
+        // past the reported radius. Invariant to sampling, then, and
+        // a set point can sit at most that far outside the ball.
+        assert!(worst <= 1.005, "an image reaches {worst:.4} of the ball's radius");
+        // And a root summed with an affine is refused, as in the plane.
+        let mixed = with(cases[0].0.clone(), "linear3D", 0.5);
+        let errs = analyse_3d(&flame_of(vec![mixed]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::MixedSum(v), .. } if v == "julia3D")), "{errs:?}");
+    }
+
     /// Sierpiński: three half-scale maps. Every singular value is 0.5,
     /// every map inverts to a doubling, and the fixed points are the
     /// triangle's corners.
@@ -2251,12 +2761,12 @@ mod tests {
         let fl3 = flame_of(vec![t3]);
         let ifs3 = analyse_3d(&fl3, r).expect("with zscale it is contractive in z");
         // z scale = w_linear + w_zscale = 1 - 0.5 = 0.5.
-        assert!(close(ifs3.maps[0].forward.m[2][2], 0.5), "{:?}", ifs3.maps[0].forward);
+        assert!(close(ifs3.maps[0].forward.as_affine().unwrap().m[2][2], 0.5), "{:?}", ifs3.maps[0].forward);
         assert!(close(ifs3.maps[0].sigma_max, 0.5));
         // ...and the g offset survives on the flat path -- SCALED, because
         // the affine (which carries g) runs before the variation sum
         // (which scales z by 0.5): 0.5 · (z + 0.3) has offset 0.15.
-        assert!(close(ifs3.maps[0].forward.t[2], 0.15), "{:?}", ifs3.maps[0].forward.t);
+        assert!(close(ifs3.maps[0].forward.as_affine().unwrap().t[2], 0.15), "{:?}", ifs3.maps[0].forward.as_affine().unwrap().t);
     }
 
     /// The 3D composition follows the shader's full path exactly, and

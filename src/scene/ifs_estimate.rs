@@ -61,7 +61,7 @@
 //! is MEASURED rather than proved: `estimate_never_exceeds_a_sampled_upper_bound`
 //! checks the walk against a dense sample of a real attractor.
 
-use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, Ifs2, Ifs3, IfsMap, Map2};
+use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs, Ifs2, Ifs3, IfsMap, Map2, Map3};
 
 /// What the walk needs of one map: the inverse step, and the local
 /// contraction it costs. For an affine map the contraction is the
@@ -135,6 +135,25 @@ impl IfsSpace for Affine3 {
 
     fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
         ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+}
+
+impl IfsSpace for Map3 {
+    type Point = [f64; 3];
+
+    fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        Map3::apply(self, p)
+    }
+
+    fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
+        Affine3::distance(a, b)
+    }
+
+    fn step(&self, q: [f64; 3], sigma_min: f64) -> ([f64; 3], f64) {
+        match self {
+            Map3::NonlinearInverse(r) => (r.apply_inverse(q), sigma_min * r.local_sigma_factor(q)),
+            other => (other.apply(q), sigma_min),
+        }
     }
 }
 
@@ -1041,9 +1060,15 @@ pub fn seed_chain3<P: SeedPoint3>(
     let far = radius.max(1.0) * FAR;
 
     let (q0, sigma0, m0) = match &ifs.final_map {
-        Some(f) => (target.apply_affine3(&f.inverse), f.sigma_min, f.inverse.m),
+        Some(f) => {
+            let inv = f.inverse.as_affine().expect("the final transform is affine (J4)");
+            (target.apply_affine3(&inv), f.sigma_min, inv.m)
+        }
         None => (target, 1.0, Affine3::IDENTITY.m),
     };
+    // The reference/delta split is affine (plan §8.5): a nonlinear
+    // solid hands over at level 0 and the walk starts from the delta.
+    let affine = ifs.maps.iter().all(|m| m.inverse.is_affine());
 
     let r0 = q0.distance_to(ball);
     let mut live = vec![Cand {
@@ -1120,8 +1145,8 @@ pub fn seed_chain3<P: SeedPoint3>(
             break;
         }
         // A single pixel already fills the cap: no sample can reach a
-        // deeper link.
-        if mats.iter().any(|m| frobenius3(*m) * finest >= cap) {
+        // deeper link. A nonlinear map has no matrix to carry a delta.
+        if !affine || mats.iter().any(|m| frobenius3(*m) * finest >= cap) {
             break;
         }
 
@@ -1134,7 +1159,8 @@ pub fn seed_chain3<P: SeedPoint3>(
                 continue;
             }
             for (i, map) in ifs.maps.iter().enumerate() {
-                let q = c.q.apply_affine3(&map.inverse);
+                let inv = map.inverse.as_affine().expect("checked affine above");
+                let q = c.q.apply_affine3(&inv);
                 let sigma = c.sigma * map.sigma_min;
                 let r = q.distance_to(ball);
                 let mut child = c.clone();
@@ -1144,7 +1170,7 @@ pub fn seed_chain3<P: SeedPoint3>(
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
-                next_mats.push(compose3(&map.inverse, *m));
+                next_mats.push(compose3(&inv, *m));
             }
         }
         // The same ranking the walk uses — and the matrices have to
@@ -1251,8 +1277,8 @@ pub fn estimate_seeded3(
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                let q = m.inverse.apply(c.q);
-                let sigma = c.sigma * m.sigma_min;
+                let (q, s) = m.inverse.step(c.q, m.sigma_min);
+                let sigma = c.sigma * s;
                 let r = Affine3::distance(q, centre);
                 let mut child = c.clone();
                 child.q = q;
@@ -1597,6 +1623,97 @@ mod tests {
             // against finite differences and the ball is invariant, so
             // the product-of-parts bound should hold. Pinned as found.
             "blob" => 30,
+            _ => usize::MAX,
+        }
+    }
+
+    /// Plan 8.11 step 2, gate 2: on a solid of two 3D roots and an
+    /// affine, the walk's distance never exceeds the distance to a
+    /// dense 3D chaos-game sample of the set by more than the sample's
+    /// spacing. Measured first, then pinned.
+    #[test]
+    fn nonlinear_solid_walks_never_exceed_a_sampled_upper_bound() {
+        let guard = global_registry();
+        let mk = |variation: &str, power: f32, e: f32, f: f32, g: f32, w: f32| {
+            let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, e, f);
+            t.g = g;
+            t.variations = HashMap::from([(variation.to_string(), w)]);
+            t.variation_order = vec![variation.to_string()];
+            t.set_variation_param(variation, "power", power);
+            t
+        };
+        let mut aff = affine_xform(1.0, 0.0, 0.0, 1.0, 0.6, 0.0);
+        aff.g = 0.2;
+        aff.variations = HashMap::from([("linear3D".to_string(), 0.5)]);
+        aff.variation_order = vec!["linear3D".to_string()];
+        for (name, transforms) in [
+            ("julia3D pair", vec![mk("julia3D", 2.0, 0.3, -0.2, 0.1, 0.9), mk("julia3D", 2.0, -0.4, 0.3, -0.2, 0.9), aff.clone()]),
+            ("julia3Dz pair", vec![mk("julia3Dz", 2.0, 0.3, -0.2, 0.1, 0.9), mk("julia3Dz", 3.0, -0.4, 0.3, -0.2, 0.8), aff.clone()]),
+        ] {
+            let ifs = crate::scene::ifs_analysis::analyse_3d(&flame_of(transforms), &guard).expect("qualifies");
+            // A 3D chaos-game sample, branches drawn at random.
+            let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+            let mut next = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let mut p = ifs.ball.centre;
+            let mut sample = Vec::with_capacity(300_000);
+            for i in 0..300_500 {
+                let m = &ifs.maps[(next() * ifs.maps.len() as f64).floor() as usize % ifs.maps.len()];
+                let k = m.forward.nonlinear().map_or(0, |nl| (next() * nl.kernel.power().unsigned_abs() as f64).floor() as u32);
+                p = match &m.forward {
+                    Map3::Nonlinear(nl) => nl.apply_branch(p, k),
+                    other => other.apply(p),
+                };
+                if i >= 500 && p.iter().all(|x| x.is_finite()) {
+                    sample.push(p);
+                }
+            }
+            let radius = ifs.ball.radius;
+            let (mut n, mut over, mut worst) = (0usize, 0usize, 0.0f64);
+            const G: usize = 14;
+            for iz in 0..G {
+                for iy in 0..G {
+                    for ix in 0..G {
+                        let f = |i: usize| 2.0 * (i as f64 + 0.5) / G as f64 - 1.0;
+                        let (u, v, w) = (f(ix), f(iy), f(iz));
+                        if (u * u + v * v + w * w).sqrt() > 1.0 {
+                            continue;
+                        }
+                        let q = [ifs.ball.centre[0] + radius * u, ifs.ball.centre[1] + radius * v, ifs.ball.centre[2] + radius * w];
+                        let e = estimate(&ifs, q, 32, 4);
+                        let upper = sample
+                            .iter()
+                            .map(|&a| Affine3::distance(q, a))
+                            .fold(f64::INFINITY, f64::min);
+                        // A 300 000-point sample of a solid is sparser
+                        // than a plane's: the mean spacing in a ball of
+                        // radius R is R·(4π/3 / 300 000)^(1/3) ≈ R/41, so
+                        // the tolerance is a thirtieth of the ball.
+                        let tol = radius / 30.0;
+                        n += 1;
+                        if e.distance > upper + tol {
+                            over += 1;
+                            worst = worst.max(e.distance / upper.max(1e-12));
+                        }
+                    }
+                }
+            }
+            println!("  {name}: {over} of {n} points over the sampled bound, worst ratio {worst:.3}");
+            assert!(over <= solid_over_limit(name), "{name}: {over} of {n} points read farther than the set is ({worst:.3}x)");
+        }
+    }
+
+    /// What the 3D kernels measured, pinned. At beam 2 the julia3D
+    /// pair read 24 of 1472 points over (worst 1.33x) and the julia3Dz
+    /// pair 26 (worst 2.69x); at beam 4 both read ZERO. So the
+    /// over-reads were the beam's -- one address bounding the distance
+    /// to ITS piece, D4's known weakness -- and not the kernels', and
+    /// the gate is at the beam that shows the kernels.
+    fn solid_over_limit(name: &str) -> usize {
+        match name {
+            "julia3D pair" | "julia3Dz pair" => 0,
             _ => usize::MAX,
         }
     }

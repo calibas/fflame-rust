@@ -4939,6 +4939,10 @@ struct IfsMap3Gpu {
     r1: vec4<f32>,
     r2: vec4<f32>,
     extra: vec4<f32>,
+    p0: vec4<f32>,
+    p1: vec4<f32>,
+    p2: vec4<f32>,
+    extra2: vec4<f32>,
 }
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
 struct IfsLink {
@@ -5132,6 +5136,10 @@ struct IfsMap3Gpu {
     r1: vec4<f32>,
     r2: vec4<f32>,
     extra: vec4<f32>,
+    p0: vec4<f32>,
+    p1: vec4<f32>,
+    p2: vec4<f32>,
+    extra2: vec4<f32>,
 }
 
 @group(1) @binding(0) var<storage, read> ifs_maps: array<IfsMap3Gpu>;
