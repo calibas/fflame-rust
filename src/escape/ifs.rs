@@ -139,11 +139,78 @@ pub static IFS_FLAME: IfsDef = IfsDef {
         },
     ],
     wgsl: r#"
+// The kernel's inverse on v, along the row's branch (plan 8.8 J1,
+// 8.9 S2/S4): a root is |v|^(|n|/d) at angle n*arg(v); spherical is
+// v/|v|^2; bubble's inner (branch 0) or outer preimage is v scaled
+// by (2 -/+ 2*sqrt(1 - |v|^2))/|v|^2, and a v outside the unit disc
+// has none and lands at infinity, which the walk reads as that piece
+// having escaped.
+fn ifs_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
+    let kind = ifs_maps[i].kind;
+    let r2 = dot(v, v);
+    if (kind == 1.0) {
+        let n = ifs_maps[i].params.x;
+        let a = n * ff_atan2(v.y, v.x);
+        let rr = pow(sqrt(r2), abs(n) / ifs_maps[i].params.y);
+        return vec2<f32>(rr * cos(a), rr * sin(a));
+    }
+    if (kind == 2.0) {
+        return v / max(r2, 1e-30);
+    }
+    // bubble
+    if (r2 > 1.0) {
+        return v * 1e30;
+    }
+    let root = sqrt(max(1.0 - r2, 0.0));
+    let f = select(2.0 + 2.0 * root, 2.0 - 2.0 * root, ifs_maps[i].branch == 0.0);
+    return v * (f / max(r2, 1e-30));
+}
+
+// The factor on the row's constant sigma_min at v (J3, S2, S4): the
+// chain rule at the orbit point for a root, |f'| = |v|^2 for the
+// inversion, and bubble's tangential derivative |v|/|p|.
+fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
+    let kind = ifs_maps[i].kind;
+    let r2 = max(dot(v, v), 1e-30);
+    if (kind == 1.0) {
+        return pow(sqrt(r2), 1.0 - abs(ifs_maps[i].params.x) / ifs_maps[i].params.y);
+    }
+    if (kind == 2.0) {
+        return r2;
+    }
+    if (r2 >= 1.0) {
+        return 1.0;
+    }
+    let root = sqrt(1.0 - r2);
+    let f = select(2.0 + 2.0 * root, 2.0 - 2.0 * root, ifs_maps[i].branch == 0.0);
+    return r2 / f;
+}
+
+// When p is outside map i's IMAGE, a lower bound on its distance to
+// the map's piece, in p's frame; negative when it is inside (S4).
+// Only bubble has one: its image is the unit disc of v.
+fn ifs_image_gap(i: u32, p: vec2<f32>) -> f32 {
+    if (ifs_maps[i].kind != 3.0) {
+        return -1.0;
+    }
+    let m = ifs_maps[i].inv_m;
+    let t = ifs_maps[i].inv_t;
+    let v = vec2<f32>(
+        m.x * p.x + m.y * p.y + t.x,
+        m.z * p.x + m.w * p.y + t.y,
+    );
+    let r = length(v);
+    if (r > 1.0) {
+        return (r - 1.0) * ifs_maps[i].params.z;
+    }
+    return -1.0;
+}
+
 // Inverse of map i.
 //
-// An affine row (power == 0) is one affine. A root row (plan 8.8) is
-// the post-inverse with 1/w folded in, then the single-valued inverse
-// of the root, |v|^(|n|/d) at angle n*arg(v), then the pre-inverse.
+// An affine row (kind == 0) is one affine. A nonlinear row is the
+// post-inverse with 1/w folded in, then the kernel's inverse along
+// the row's branch, then the pre-inverse.
 fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
     let m = ifs_maps[i].inv_m;
     let t = ifs_maps[i].inv_t;
@@ -151,14 +218,10 @@ fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
         m.x * p.x + m.y * p.y + t.x,
         m.z * p.x + m.w * p.y + t.y,
     );
-    let n = ifs_maps[i].power;
-    if (n == 0.0) {
+    if (ifs_maps[i].kind == 0.0) {
         return q;
     }
-    let r = length(q);
-    let a = n * ff_atan2(q.y, q.x);
-    let rr = pow(r, abs(n) / ifs_maps[i].dist);
-    let u = vec2<f32>(rr * cos(a), rr * sin(a));
+    let u = ifs_kernel_inverse(i, q);
     let pm = ifs_maps[i].pre_m;
     let pt = ifs_maps[i].pre_t;
     return vec2<f32>(
@@ -168,12 +231,10 @@ fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
 }
 
 // The forward map's sigma_min at the point whose image is p: the
-// row's constant, times |v|^(1 - |n|/d) for a root (J3) -- the chain
-// rule at the orbit point, infinite at the critical point.
+// row's constant, times the kernel's local factor.
 fn ifs_inv_sigma(i: u32, p: vec2<f32>) -> f32 {
     let s = ifs_maps[i].sigma_min;
-    let n = ifs_maps[i].power;
-    if (n == 0.0) {
+    if (ifs_maps[i].kind == 0.0) {
         return s;
     }
     let m = ifs_maps[i].inv_m;
@@ -182,8 +243,7 @@ fn ifs_inv_sigma(i: u32, p: vec2<f32>) -> f32 {
         m.x * p.x + m.y * p.y + t.x,
         m.z * p.x + m.w * p.y + t.y,
     );
-    let r = max(length(v), 1e-30);
-    return s * pow(r, 1.0 - abs(n) / ifs_maps[i].dist);
+    return s * ifs_kernel_sigma(i, v);
 }
 
 // Where in the annulus [R, R/sigma] an escaped point sits, counted
@@ -260,6 +320,9 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
     let far = max(radius, 1.0) * 1e12;
     let handover = ifs_handover_level();
     var addr_scale = ifs_addr_scale();
+    // The smallest bound among pieces the walk could not enter (S4):
+    // the answer is the minimum over ALL pieces, reachable or not.
+    var dead_min = 1e30;
 
     // Seed from the reference orbit the CPU walked. Every one of these
     // candidates is where the view centre's own beam had got to, and
@@ -369,6 +432,11 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             for (var bi = first; bi < last; bi = bi + 1u) {
                 var cand_key = live[ci].r;
                 if (bi < n) {
+                    let gap = ifs_image_gap(bi, live[ci].q);
+                    if (gap >= 0.0) {
+                        dead_min = min(dead_min, max(live[ci].bound, live[ci].sigma * gap));
+                        continue;
+                    }
                     cand_key = length(ifs_inv_point(bi, live[ci].q) - c);
                 }
                 var pos = next_count;
@@ -395,6 +463,9 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             }
         }
 
+        if (next_count == 0u) {
+            break;
+        }
         for (var k2 = 0u; k2 < next_count; k2 = k2 + 1u) {
             let parent = src[k2] / stride;
             let bi = src[k2] % stride;
@@ -456,7 +527,7 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         deepest = max(deepest, lvl);
     }
 
-    res.distance = max(best.bound, 0.0);
+    res.distance = max(min(best.bound, dead_min), 0.0);
     res.address = best.addr;
     res.color = best.color;
     res.level = deepest;
@@ -1137,12 +1208,13 @@ pub fn get_ifs_coloring(name: &str, def: &IfsDef) -> &'static IfsColoringDef {
 /// The forward map is never uploaded — the walk only ever inverts, and
 /// `σ_min` is the only thing it needs of the forward direction.
 ///
-/// Sixty-four bytes since the root maps (plan §8.8, J7). An affine
-/// row uses the first half and has `power == 0`, which is what the
-/// shader switches on; a root row's first half is the POST-inverse
-/// with `1/w` folded in, its second half the PRE-inverse, and its
-/// `sigma_min` the constant part of the forward σ_min, multiplied in
-/// the shader by the local factor.
+/// Eighty bytes since the nonlinear maps (plan §8.8 J7, §8.9 S1). An
+/// affine row uses the first half and has `kind == 0`, which is what
+/// the shader switches on; a nonlinear row's first half is the
+/// POST-inverse with `1/w` folded in, its second half the
+/// PRE-inverse, its `sigma_min` the constant part of the forward
+/// σ_min, multiplied in the shader by the kernel's local factor, and
+/// its last vec4 the kernel's parameters.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IfsMapGpu {
@@ -1155,13 +1227,16 @@ pub struct IfsMapGpu {
     pub sigma_min: f32,
     /// The transform's colour index, for the address colouring.
     pub color: f32,
-    /// A root row's pre-inverse, `[a, b, c, d]`; zero on an affine row.
+    /// A nonlinear row's pre-inverse, `[a, b, c, d]`; zero on an
+    /// affine row.
     pub pre_m: [f32; 4],
     pub pre_t: [f32; 2],
-    /// The root's signed power; zero marks an affine row.
-    pub power: f32,
-    /// The root's distance.
-    pub dist: f32,
+    /// The kernel: 0 affine, 1 root, 2 spherical, 3 bubble.
+    pub kind: f32,
+    /// The branch this row follows, of the kernel's preimages.
+    pub branch: f32,
+    /// The kernel's parameters: a root's signed power and distance.
+    pub params: [f32; 4],
 }
 
 /// The whole-IFS constants, packed into the `fdata` block the escape
@@ -2061,13 +2136,14 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
                     color,
                     pre_m: [0.0; 4],
                     pre_t: [0.0; 2],
-                    power: 0.0,
-                    dist: 0.0,
+                    kind: 0.0,
+                    branch: 0.0,
+                    params: [0.0; 4],
                 },
-                Map2::RootInverse(r) | Map2::Root(r) => {
+                Map2::NonlinearInverse(r) | Map2::Nonlinear(r) => {
                     // post⁻¹ with the 1/w folded in: the shader's first
                     // affine takes q straight to the point before the
-                    // root's inverse.
+                    // kernel's inverse.
                     let scale = 1.0 / r.w;
                     let post = Affine2 {
                         m: [
@@ -2076,6 +2152,17 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
                         ],
                         t: [r.post_inv.t[0] * scale, r.post_inv.t[1] * scale],
                     };
+                    use crate::scene::ifs_analysis::Kernel;
+                    let (kind, params) = match r.kernel {
+                        Kernel::Root { n, d } => (1.0, [n as f32, d as f32, 0.0, 0.0]),
+                        Kernel::Spherical => (2.0, [0.0; 4]),
+                        // z: the scale of the image gap (S4), |w| times
+                        // the post-affine's smallest stretch.
+                        Kernel::Bubble => {
+                            let (post_lo, _) = r.post.singular_values();
+                            (3.0, [0.0, 0.0, (r.w.abs() * post_lo) as f32, 0.0])
+                        }
+                    };
                     IfsMapGpu {
                         inv_m: m4(&post),
                         inv_t: t2(&post),
@@ -2083,8 +2170,9 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
                         color,
                         pre_m: m4(&r.pre_inv),
                         pre_t: t2(&r.pre_inv),
-                        power: r.n as f32,
-                        dist: r.d as f32,
+                        kind,
+                        branch: r.branch as f32,
+                        params,
                     }
                 }
             }
@@ -4066,12 +4154,13 @@ mod tests {
         }
     }
 
-    /// The GPU row must match what WGSL's std430 rules read: 64 bytes,
-    /// two halves of the same shape, with the scalars trailing a vec2
-    /// rather than straddling a 16-byte boundary.
+    /// The GPU row must match what WGSL's std430 rules read: 80 bytes,
+    /// two halves of the same shape and a vec4 of kernel parameters,
+    /// with the scalars trailing a vec2 rather than straddling a
+    /// 16-byte boundary.
     #[test]
     fn the_gpu_row_is_the_layout_the_shader_declares() {
-        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 64);
+        assert_eq!(std::mem::size_of::<IfsMapGpu>(), 80);
         assert_eq!(std::mem::align_of::<IfsMapGpu>(), 4);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_m), 0);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, inv_t), 16);
@@ -4079,8 +4168,9 @@ mod tests {
         assert_eq!(std::mem::offset_of!(IfsMapGpu, color), 28);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, pre_m), 32);
         assert_eq!(std::mem::offset_of!(IfsMapGpu, pre_t), 48);
-        assert_eq!(std::mem::offset_of!(IfsMapGpu, power), 56);
-        assert_eq!(std::mem::offset_of!(IfsMapGpu, dist), 60);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, kind), 56);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, branch), 60);
+        assert_eq!(std::mem::offset_of!(IfsMapGpu, params), 64);
     }
 }
 
@@ -4218,10 +4308,13 @@ mod gpu_tests {
 
     /// A flame that fails the criterion: `spherical` is not affine,
     /// and it is the commonest reason in the phase-0 census.
-    fn spherical_flame() -> Flame {
+    /// The gasket with one transform folded by `sinusoidal`, which
+    /// nothing inverts. (It was `spherical` until plan 8.9 made that a
+    /// kernel and the fixture started qualifying.)
+    fn folded_flame() -> Flame {
         let mut fl = sierpinski_flame();
-        fl.transforms[1].variations = HashMap::from([("spherical".to_string(), 1.0)]);
-        fl.transforms[1].variation_order = vec!["spherical".to_string()];
+        fl.transforms[1].variations = HashMap::from([("sinusoidal".to_string(), 1.0)]);
+        fl.transforms[1].variation_order = vec!["sinusoidal".to_string()];
         fl
     }
 
@@ -4544,6 +4637,242 @@ mod gpu_tests {
         }
     }
 
+    fn kernel_flame(transforms: Vec<(&str, [f32; 6], f32, f32)>) -> Flame {
+        let mut fl = Flame::default();
+        fl.transforms.clear();
+        fl.final_transforms.clear();
+        fl.xaos = None;
+        for (variation, a, w, color) in transforms {
+            let mut t = Transform::default();
+            t.a = a[0];
+            t.b = a[1];
+            t.c = a[2];
+            t.d = a[3];
+            t.e = a[4];
+            t.f = a[5];
+            t.color = color;
+            t.variations = HashMap::from([(variation.to_string(), w)]);
+            t.variation_order = vec![variation.to_string()];
+            fl.transforms.push(t);
+        }
+        fl
+    }
+
+    pub(super) fn spherical_ifs_flame() -> Flame {
+        kernel_flame(vec![
+            ("spherical", [0.0, -1.0, 1.0, 0.0, 1.0, 0.0], 1.0, 0.2),
+            ("spherical", [0.0, 1.0, -1.0, 0.0, 0.0, 0.0], 1.0, 0.5),
+            ("linear", [0.5, 0.0, 0.0, 0.5, 0.8, 0.0], 1.0, 0.8),
+        ])
+    }
+
+    pub(super) fn bubble_ifs_flame() -> Flame {
+        kernel_flame(vec![
+            ("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6, 0.2),
+            ("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2, 0.5),
+            ("linear", [0.5, 0.0, 0.0, 0.5, 1.0, 0.5], 1.0, 0.8),
+        ])
+    }
+
+    /// Gate 3 of plan 8.9: the GPU walk agrees with the CPU estimate
+    /// on a spherical IFS and on a bubble IFS, by the gasket's test.
+    /// The view is framed on each set's ball rather than the harness
+    /// default, which was chosen for the gasket.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_gpu_walk_agrees_with_the_cpu_reference_on_spherical_and_bubble() {
+        for (name, flame) in [("spherical", spherical_ifs_flame()), ("bubble", bubble_ifs_flame())] {
+            let guard = global_registry();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+            let mut config = config_for(flame);
+            config.escape.center_re = format!("{}", ifs.ball.centre[0]);
+            config.escape.center_im = format!("{}", ifs.ball.centre[1]);
+            let span = ifs.ball.radius * 2.4;
+            config.escape.zoom_log2 = (4.0 / span).log2();
+            let rgba = render(&config);
+            let px = span / H as f64;
+            let plane = |x: u32, y: u32| -> [f64; 2] {
+                let u = (x as f64 + 0.5) / W as f64 - 0.5;
+                let v = (y as f64 + 0.5) / H as f64 - 0.5;
+                [ifs.ball.centre[0] + u * span * W as f64 / H as f64, ifs.ball.centre[1] - v * span]
+            };
+            let (mut inside, mut outside) = (Vec::new(), Vec::new());
+            for y in 0..H {
+                for x in 0..W {
+                    let d = estimate(&ifs, plane(x, y), LEVELS, BEAM).distance;
+                    if d < 0.25 * px {
+                        inside.push(brightness(&rgba, x, y));
+                    } else if d > 3.0 * px {
+                        outside.push(brightness(&rgba, x, y));
+                    }
+                }
+            }
+            println!("  {name}: interior {} / exterior {} of {} pixels", inside.len(), outside.len(), W * H);
+            assert!(inside.len() > 150, "{name}: too few interior pixels: {}", inside.len());
+            assert!(outside.len() > 1500, "{name}: too few exterior pixels: {}", outside.len());
+            let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len() as f64;
+            let (mi, mo) = (mean(&inside), mean(&outside));
+            assert!(mi > 0.05, "{name}: the set rendered dark ({mi:.4})");
+            assert!(mi > mo * 8.0 + 0.02, "{name}: interior ({mi:.4}) and exterior ({mo:.4}) are not separated");
+            let cut = (mi + mo) * 0.5;
+            let lit_in = inside.iter().filter(|&&b| b > cut).count();
+            let lit_out = outside.iter().filter(|&&b| b > cut).count();
+            let agree = (lit_in + (outside.len() - lit_out)) as f64 / (inside.len() + outside.len()) as f64;
+            assert!(
+                agree > 0.97,
+                "{name}: GPU and CPU disagree on {:.1}% of pixels (interior lit {lit_in}/{}, exterior lit {lit_out}/{})",
+                (1.0 - agree) * 100.0,
+                inside.len(),
+                outside.len()
+            );
+        }
+    }
+
+    /// Candidate spherical and bubble presets (plan 8.9 gate 5), and
+    /// the catalogue flame the census names, each rendered as a
+    /// distance field AND as the flame it is, side by side.
+    pub(super) fn kernel_candidates() -> Vec<(&'static str, &'static str, Flame)> {
+        // Inversion in the circle of radius sqrt(w) about c: pre
+        // translation -c, spherical at weight w, post translation +c.
+        fn inversion(c: [f32; 2], w: f32, color: f32) -> Transform {
+            let mut t = Transform::default();
+            t.a = 1.0;
+            t.b = 0.0;
+            t.c = 0.0;
+            t.d = 1.0;
+            t.e = -c[0];
+            t.f = -c[1];
+            t.post_affine_enabled = true;
+            t.post_a = 1.0;
+            t.post_b = 0.0;
+            t.post_c = 0.0;
+            t.post_d = 1.0;
+            t.post_e = c[0];
+            t.post_f = c[1];
+            t.color = color;
+            t.variations = HashMap::from([("spherical".to_string(), w)]);
+            t.variation_order = vec!["spherical".to_string()];
+            t
+        }
+        fn contraction(s: f32, e: f32, f: f32, color: f32) -> Transform {
+            let mut t = Transform::default();
+            t.a = s;
+            t.b = 0.0;
+            t.c = 0.0;
+            t.d = s;
+            t.e = e;
+            t.f = f;
+            t.color = color;
+            t.variations = HashMap::from([("linear".to_string(), 1.0)]);
+            t.variation_order = vec!["linear".to_string()];
+            t
+        }
+        let flame_of = |transforms: Vec<Transform>| {
+            let mut fl = Flame::default();
+            fl.transforms = transforms;
+            fl.final_transforms.clear();
+            fl.xaos = None;
+            fl
+        };
+        // Three unit circles about the corners of an equilateral
+        // triangle of side 2 are mutually tangent.
+        let h = 3f32.sqrt();
+        let mut out = vec![
+            ("Inversion Pair", "ifs_distance", spherical_ifs_flame()),
+            (
+                "Three Circles",
+                "ifs_address",
+                flame_of(vec![
+                    inversion([-1.0, 0.0], 1.0, 0.1),
+                    inversion([1.0, 0.0], 1.0, 0.5),
+                    inversion([0.0, h], 1.0, 0.9),
+                ]),
+            ),
+            (
+                "Three Circles and a Seed",
+                "ifs_level",
+                flame_of(vec![
+                    inversion([-1.0, 0.0], 1.0, 0.1),
+                    inversion([1.0, 0.0], 1.0, 0.5),
+                    inversion([0.0, h], 1.0, 0.9),
+                    contraction(0.3, 0.0, h / 3.0, 0.3),
+                ]),
+            ),
+            ("Bubble Pair", "ifs_distance", bubble_ifs_flame()),
+            (
+                "Bubble Ring",
+                "ifs_address",
+                flame_of(vec![
+                    contraction(0.5, 0.0, 0.0, 0.5),
+                    {
+                        let mut t = contraction(1.0, 0.0, 0.0, 0.1);
+                        t.variations = HashMap::from([("bubble".to_string(), 2.0)]);
+                        t.variation_order = vec!["bubble".to_string()];
+                        t.e = 1.0;
+                        t
+                    },
+                    {
+                        let mut t = contraction(1.0, 0.0, 0.0, 0.9);
+                        t.variations = HashMap::from([("bubble".to_string(), 2.0)]);
+                        t.variation_order = vec!["bubble".to_string()];
+                        t.e = -1.0;
+                        t
+                    },
+                ]),
+            ),
+        ];
+        if let Some(c) = crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .find(|c| c.flame.name == "JuliaN Bubble (3D)")
+        {
+            out.push(("JuliaN Bubble", "ifs_distance", c.flame));
+        }
+        out
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/kern-*.png"]
+    fn render_the_kernel_candidates_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        let guard = global_registry();
+        for (name, coloring, flame) in kernel_candidates() {
+            let slug = name.to_lowercase().replace(' ', "-");
+            let ifs = match crate::scene::ifs_analysis::analyse_2d(&flame, &guard) {
+                Ok(ifs) => ifs,
+                Err(why) => {
+                    println!("    {name}: does not qualify: {why:?}");
+                    continue;
+                }
+            };
+            // The distance field.
+            let mut c = ifs_preset_config(name, coloring, flame.transforms.clone());
+            c.escape.formula_params.insert("levels".to_string(), 48.0);
+            let job = crate::renderer::RenderJob::new(&c, 448, 448);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render");
+            let path = dir.join(format!("kern-{slug}-distance.png"));
+            image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
+            // The flame, framed on the same ball.
+            let mut f = crate::config::FractalConfig::default();
+            f.flame = flame;
+            f.flame.name = name.to_string();
+            f.pan_x = ifs.ball.centre[0] as f32;
+            f.pan_y = ifs.ball.centre[1] as f32;
+            f.zoom = (4.0 / (ifs.ball.radius * 2.4)) as f32;
+            f.max_iterations = 400;
+            let job = crate::renderer::RenderJob::new(&f, 448, 448);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render");
+            let path = dir.join(format!("kern-{slug}-flame.png"));
+            image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
+            println!("    {name}: {} maps, ball r {:.3}", ifs.maps.len(), ifs.ball.radius);
+        }
+    }
+
     /// A flame that fails the criterion must render EMPTY, not a
     /// frame-filling interior. `distance == 0` is what a point on the
     /// attractor returns, so "no maps" has to mean far away, not near.
@@ -4552,12 +4881,12 @@ mod gpu_tests {
     fn a_flame_that_does_not_qualify_renders_nothing() {
         let guard = global_registry();
         assert!(
-            pack_flame(&spherical_flame(), &guard).is_err(),
+            pack_flame(&folded_flame(), &guard).is_err(),
             "the fixture must actually fail the criterion"
         );
         drop(guard);
 
-        let rgba = render(&config_for(spherical_flame()));
+        let rgba = render(&config_for(folded_flame()));
         let lit = (0..H)
             .flat_map(|y| (0..W).map(move |x| (x, y)))
             .filter(|&(x, y)| brightness(&rgba, x, y) > 0.02)

@@ -229,36 +229,155 @@ impl Affine2 {
     }
 }
 
-// --------------------------------------------------- the root maps
+// ---------------------------------------------- the nonlinear maps
 
-/// Which root variation a [`RootMap2`] came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RootKind {
-    /// `julia`: power 2, distance 1.
-    Julia,
-    /// `julian`: its `power` and `dist` parameters.
-    Julian,
+/// The nonlinear part of a [`NonlinearMap2`], as the walk inverts it:
+/// with `v = post⁻¹(q) / w`, the kernel's inverse takes `v` to the
+/// point in the pre-frame, and its local factor multiplies the
+/// constant part of the forward map's σ_min (plan §8.8 J3, §8.9).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Kernel {
+    /// `julia` / `julian`: forward `|z|^{d/|n|} · e^{i(arg z + 2πk)/n}`,
+    /// every branch undone by `|v|^{|n|/d} · e^{i·n·arg v}` (J1).
+    Root { n: i32, d: f64 },
+    /// `spherical`: inversion in the circle, its own inverse (S2).
+    Spherical,
+    /// `bubble`: `4p/(|p|² + 4)`, onto the unit disc and 2-to-1; the
+    /// branch picks the inner (0) or outer (1) preimage (S4).
+    Bubble,
 }
 
-impl RootKind {
-    pub fn variation(self) -> &'static str {
+impl Kernel {
+    /// How many preimages the walk follows per map.
+    pub fn branches(&self) -> u32 {
         match self {
-            RootKind::Julia => "julia",
-            RootKind::Julian => "julian",
+            Kernel::Bubble => 2,
+            _ => 1,
+        }
+    }
+
+    /// The forward kernel on `z` in the pre-frame, along `k` -- a
+    /// root's branch, or the flame's ε-guarded body for the others.
+    pub fn forward(&self, z: [f64; 2], k: u32) -> [f64; 2] {
+        let r2 = z[0] * z[0] + z[1] * z[1];
+        match *self {
+            Kernel::Root { n, d } => {
+                let n = n as f64;
+                let rr = r2.sqrt().powf(d / n.abs());
+                let a = (z[1].atan2(z[0]) + std::f64::consts::TAU * k as f64) / n;
+                [rr * a.cos(), rr * a.sin()]
+            }
+            Kernel::Spherical => {
+                let s = 1.0 / (r2 + 1e-6);
+                [z[0] * s, z[1] * s]
+            }
+            Kernel::Bubble => {
+                let s = 4.0 / (r2 + 4.0);
+                [z[0] * s, z[1] * s]
+            }
+        }
+    }
+
+    /// The inverse kernel on `v`, along `branch`. A `v` with no
+    /// preimage on that branch lands at infinity; the walk never asks
+    /// for one, because [`NonlinearMap2::image_gap`] answers first
+    /// with the piece's distance (S4, amended).
+    pub fn inverse(&self, v: [f64; 2], branch: u32) -> [f64; 2] {
+        let r2 = v[0] * v[0] + v[1] * v[1];
+        match *self {
+            Kernel::Root { n, d } => {
+                let n = n as f64;
+                let rr = r2.sqrt().powf(n.abs() / d);
+                let a = n * v[1].atan2(v[0]);
+                [rr * a.cos(), rr * a.sin()]
+            }
+            Kernel::Spherical => {
+                let s = 1.0 / r2.max(f64::MIN_POSITIVE);
+                [v[0] * s, v[1] * s]
+            }
+            Kernel::Bubble => {
+                if r2 > 1.0 || !(r2 > 0.0) {
+                    if r2 > 1.0 {
+                        return [v[0] * 1e30, v[1] * 1e30];
+                    }
+                    // The origin: the inner preimage is the origin,
+                    // the outer is at infinity.
+                    return if branch == 0 { [0.0, 0.0] } else { [1e30, 0.0] };
+                }
+                let root = (1.0 - r2).sqrt();
+                let f = if branch == 0 { 2.0 - 2.0 * root } else { 2.0 + 2.0 * root };
+                let s = f / r2;
+                [v[0] * s, v[1] * s]
+            }
+        }
+    }
+
+    /// The factor on the constant σ_min at the point whose image is
+    /// `v`, along `branch`.
+    pub fn local_sigma_factor(&self, v: [f64; 2], branch: u32) -> f64 {
+        let r2 = (v[0] * v[0] + v[1] * v[1]).max(f64::MIN_POSITIVE);
+        match *self {
+            Kernel::Root { n, d } => r2.sqrt().powf(1.0 - (n as f64).abs() / d),
+            Kernel::Spherical => r2,
+            Kernel::Bubble => {
+                // The tangential derivative |v|/|p| (S4).
+                if r2 >= 1.0 {
+                    return 1.0;
+                }
+                let root = (1.0 - r2).sqrt();
+                let f = if branch == 0 { 2.0 - 2.0 * root } else { 2.0 + 2.0 * root };
+                r2 / f
+            }
+        }
+    }
+
+    /// The constant parts of the kernel's singular values, before the
+    /// local factor: the root's `min(d,1)/|n|` and `max(d,1)/|n|`;
+    /// one for the others.
+    fn sigma_const(&self) -> (f64, f64) {
+        match *self {
+            Kernel::Root { n, d } => {
+                // A negative distance is a root of the inverted
+                // radius; the derivative's magnitude is what a
+                // singular value is.
+                let (n, d) = ((n as f64).abs(), d.abs());
+                (d.min(1.0) / n, d.max(1.0) / n)
+            }
+            _ => (1.0, 1.0),
+        }
+    }
+
+    /// Whether the forward kernel sends a neighbourhood of the
+    /// pre-origin to infinity, so that no ball is invariant and the
+    /// ball has to be measured (S3): the inversion, and a root with a
+    /// negative distance, which is a root of the inverted radius.
+    pub fn unbounded_at_origin(&self) -> bool {
+        match *self {
+            Kernel::Spherical => true,
+            Kernel::Root { d, .. } => d < 0.0,
+            Kernel::Bubble => false,
+        }
+    }
+
+    pub fn variation(&self) -> &'static str {
+        match self {
+            Kernel::Root { n: 2, d } if *d == 1.0 => "julia",
+            Kernel::Root { .. } => "julian",
+            Kernel::Spherical => "spherical",
+            Kernel::Bubble => "bubble",
         }
     }
 }
 
-/// A transform whose one nonlinear variation is a root (plan §8.8):
-/// forward `p ↦ post(w · J_k(pre(p)))` with
-/// `J_k(z) = |z|^{d/|n|} · e^{i(arg z + 2πk)/n}`, `k` the chaos game's
-/// random branch. Every branch is undone by the same map,
-/// `P(v) = |v|^{|n|/d} · e^{i·n·arg v}`, so the inverse is
-/// `q ↦ pre⁻¹(P(post⁻¹(q) / w))` and single-valued (J1).
+/// A transform whose one nonlinear variation the walk can invert
+/// (plan §8.8, §8.9): forward `p ↦ post(w · K(pre(p)))`, inverse
+/// `q ↦ pre⁻¹(K⁻¹(post⁻¹(q) / w))` along this map's `branch`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RootMap2 {
-    pub kind: RootKind,
-    /// The affine applied before the root: the transform's affine
+pub struct NonlinearMap2 {
+    pub kernel: Kernel,
+    /// Which preimage this map follows, of `kernel.branches()`.
+    pub branch: u32,
+    /// The affine applied before the kernel: the transform's affine
     /// composed with its pre-phase variations.
     pub pre: Affine2,
     /// The affine applied after: the post-phase variations composed
@@ -266,103 +385,114 @@ pub struct RootMap2 {
     pub post: Affine2,
     pub pre_inv: Affine2,
     pub post_inv: Affine2,
-    /// The variation's weight; the root's output is scaled by it.
+    /// The variation's weight; the kernel's output is scaled by it.
     pub w: f64,
-    /// `power`, signed.
-    pub n: i32,
-    /// `dist`.
-    pub d: f64,
 }
 
-impl RootMap2 {
-    /// The forward map along branch `k` of `|n|`.
+impl NonlinearMap2 {
+    /// The forward map along `k` (a root's branch; the others ignore
+    /// it).
     pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
-        let z = self.pre.apply(p);
-        let r = (z[0] * z[0] + z[1] * z[1]).sqrt();
-        let theta = z[1].atan2(z[0]);
-        let n = self.n as f64;
-        let rr = r.powf(self.d / n.abs());
-        let a = (theta + std::f64::consts::TAU * k as f64) / n;
-        self.post.apply([self.w * rr * a.cos(), self.w * rr * a.sin()])
+        let z = self.kernel.forward(self.pre.apply(p), k);
+        self.post.apply([self.w * z[0], self.w * z[1]])
     }
 
-    /// The point before the root's inverse, `post⁻¹(q) / w`.
-    fn before_root(&self, q: [f64; 2]) -> [f64; 2] {
+    /// The point before the kernel's inverse, `post⁻¹(q) / w`.
+    fn before_kernel(&self, q: [f64; 2]) -> [f64; 2] {
         let v = self.post_inv.apply(q);
         [v[0] / self.w, v[1] / self.w]
     }
 
-    /// The inverse, single-valued.
+    /// The inverse along this map's branch.
     pub fn apply_inverse(&self, q: [f64; 2]) -> [f64; 2] {
-        let v = self.before_root(q);
-        let r = (v[0] * v[0] + v[1] * v[1]).sqrt();
-        let phi = v[1].atan2(v[0]);
-        let n = self.n as f64;
-        let rr = r.powf(n.abs() / self.d);
-        let a = n * phi;
-        self.pre_inv.apply([rr * a.cos(), rr * a.sin()])
+        let u = self.kernel.inverse(self.before_kernel(q), self.branch);
+        if !(u[0].is_finite() && u[1].is_finite()) || u[0].abs() > 1e29 || u[1].abs() > 1e29 {
+            return [f64::INFINITY, f64::INFINITY];
+        }
+        self.pre_inv.apply(u)
     }
 
     /// The local factor on the forward map's σ_min at the point whose
-    /// image is `q`: `|v|^{1 − |n|/d}` (J3). Infinite at the critical
-    /// point, where the forward root's derivative is.
+    /// image is `q`.
     pub fn local_sigma_factor(&self, q: [f64; 2]) -> f64 {
-        let v = self.before_root(q);
-        let r = (v[0] * v[0] + v[1] * v[1]).sqrt().max(f64::MIN_POSITIVE);
-        r.powf(1.0 - (self.n as f64).abs() / self.d)
+        self.kernel.local_sigma_factor(self.before_kernel(q), self.branch)
+    }
+
+    /// When `q` is outside this map's IMAGE, a lower bound on its
+    /// distance to the image -- and so to this map's piece of the set
+    /// -- in `q`'s own frame; `None` when `q` is inside it (S4).
+    ///
+    /// Only `bubble` has one: its image is the disc `|v| ≤ 1`, so a
+    /// `q` with `|v| > 1` has no preimage on either branch, and its
+    /// distance to the piece is at least `(|v| − 1)` scaled back
+    /// through `w` and the post-affine's smallest stretch. Reporting
+    /// "no preimage" as infinitely far was wrong by exactly this: the
+    /// piece is not far, it is just not reachable by inversion.
+    pub fn image_gap(&self, q: [f64; 2]) -> Option<f64> {
+        match self.kernel {
+            Kernel::Bubble => {
+                let v = self.before_kernel(q);
+                let r = v[0].hypot(v[1]);
+                if r > 1.0 {
+                    let (post_lo, _) = self.post.singular_values();
+                    Some((r - 1.0) * self.w.abs() * post_lo)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The constant parts of the forward map's singular values:
-    /// `σ(post) · |w| · σ(pre) · (min(d,1) or max(d,1)) / |n|`, to be
+    /// `σ(post) · |w| · σ(pre)` times the kernel's constants, to be
     /// multiplied by the local factor.
     pub fn singular_values(&self) -> (f64, f64) {
         let (pre_lo, pre_hi) = self.pre.singular_values();
         let (post_lo, post_hi) = self.post.singular_values();
-        let n = (self.n as f64).abs();
+        let (k_lo, k_hi) = self.kernel.sigma_const();
         let w = self.w.abs();
-        (
-            post_lo * w * pre_lo * self.d.min(1.0) / n,
-            post_hi * w * pre_hi * self.d.max(1.0) / n,
-        )
+        (post_lo * w * pre_lo * k_lo, post_hi * w * pre_hi * k_hi)
     }
 }
 
-/// What a 2D map is: the affine case, or a root map (J8), in either
-/// direction. `Root` applies the forward map's principal branch;
-/// `RootInverse` the single-valued inverse.
+/// What a 2D map is: the affine case, or a nonlinear map (J8), in
+/// either direction. `Nonlinear` applies the forward map's principal
+/// branch; `NonlinearInverse` the inverse along the map's branch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Map2 {
     Affine(Affine2),
-    Root(RootMap2),
-    RootInverse(RootMap2),
+    Nonlinear(NonlinearMap2),
+    NonlinearInverse(NonlinearMap2),
 }
 
 impl Map2 {
     pub fn apply(&self, p: [f64; 2]) -> [f64; 2] {
         match self {
             Map2::Affine(a) => a.apply(p),
-            Map2::Root(r) => r.apply_branch(p, 0),
-            Map2::RootInverse(r) => r.apply_inverse(p),
+            Map2::Nonlinear(r) => r.apply_branch(p, 0),
+            Map2::NonlinearInverse(r) => r.apply_inverse(p),
         }
     }
 
     pub fn inverse(&self) -> Option<Map2> {
         match self {
             Map2::Affine(a) => a.inverse().map(Map2::Affine),
-            Map2::Root(r) => Some(Map2::RootInverse(*r)),
-            Map2::RootInverse(r) => Some(Map2::Root(*r)),
+            Map2::Nonlinear(r) => Some(Map2::NonlinearInverse(*r)),
+            Map2::NonlinearInverse(r) => Some(Map2::Nonlinear(*r)),
         }
     }
 
-    /// The singular values, or for a root the constant parts of them.
+    /// The singular values, or for a nonlinear map the constant parts
+    /// of them.
     pub fn singular_values(&self) -> (f64, f64) {
         match self {
             Map2::Affine(a) => a.singular_values(),
-            Map2::Root(r) | Map2::RootInverse(r) => r.singular_values(),
+            Map2::Nonlinear(r) | Map2::NonlinearInverse(r) => r.singular_values(),
         }
     }
 
-    /// An affine map's fixed point; a root map has no closed form.
+    /// An affine map's fixed point; a nonlinear map has no closed form.
     pub fn fixed_point(&self) -> Option<[f64; 2]> {
         match self {
             Map2::Affine(a) => a.fixed_point(),
@@ -381,11 +511,11 @@ impl Map2 {
         matches!(self, Map2::Affine(_))
     }
 
-    /// The root behind a root map, either direction.
-    pub fn root(&self) -> Option<&RootMap2> {
+    /// The nonlinear map behind a map, either direction.
+    pub fn nonlinear(&self) -> Option<&NonlinearMap2> {
         match self {
             Map2::Affine(_) => None,
-            Map2::Root(r) | Map2::RootInverse(r) => Some(r),
+            Map2::Nonlinear(r) | Map2::NonlinearInverse(r) => Some(r),
         }
     }
 }
@@ -631,8 +761,8 @@ struct VariationStage {
     post: Affine3,
     /// Whether anything was summed.
     any: bool,
-    /// The root variations met, with their weights (planar only).
-    roots: Vec<(RootKind, f64)>,
+    /// The nonlinear variations met, with their weights (planar only).
+    roots: Vec<(&'static str, f64)>,
 }
 
 /// The variation stage, or why it is not affine in `space`.
@@ -665,12 +795,14 @@ fn variation_stage(
             continue;
         }
         let Some(role) = affine_role(name, w, t, registry, space) else {
-            // A root in the plane is a nonlinear map the analysis
-            // knows (plan §8.8); the transform's kind is decided once
-            // the whole stage is known.
+            // A kernel in the plane is a nonlinear map the analysis
+            // knows (plan §8.8, §8.9); the transform's kind is decided
+            // once the whole stage is known.
             let root = match (name.as_str(), space) {
-                ("julia", Space::Planar) => Some(RootKind::Julia),
-                ("julian", Space::Planar) => Some(RootKind::Julian),
+                ("julia", Space::Planar) => Some("julia"),
+                ("julian", Space::Planar) => Some("julian"),
+                ("spherical", Space::Planar) => Some("spherical"),
+                ("bubble", Space::Planar) => Some("bubble"),
                 _ => None,
             };
             let Some(root) = root else {
@@ -726,10 +858,11 @@ fn variation_stage(
     Ok(stage)
 }
 
-/// The 2D map a transform composes to -- affine, or a root map -- or
-/// why it is neither.
+/// The 2D map a transform composes to -- affine, or a nonlinear map
+/// with its kernel -- or why it is neither. A `bubble` returns its
+/// inner branch; `analyse_2d` adds the outer (S1).
 ///
-/// A root must be ALONE in the normal phase (J4): summed with an
+/// A kernel must be ALONE in the normal phase (J4): summed with an
 /// affine it has no closed-form inverse. The pre-affine and pre-phase
 /// affines compose before it, the post-phase affines and the
 /// post-affine after.
@@ -744,17 +877,24 @@ pub fn transform_map_2d_ordered(
     }
     let (kind, w) = stage.roots[0];
     if stage.roots.len() > 1 || stage.any {
-        return Err(NotAffine::MixedSum(kind.variation().to_string()));
+        return Err(NotAffine::MixedSum(kind.to_string()));
     }
-    let (n, d) = match kind {
-        RootKind::Julia => (2, 1.0),
-        RootKind::Julian => {
+    let kernel = match kind {
+        "julia" => Kernel::Root { n: 2, d: 1.0 },
+        "julian" => {
             let p = |name: &str| t.get_variation_param_or_default("julian", name, registry) as f64;
-            (p("power").round() as i32, p("dist"))
+            let (n, d) = (p("power").round() as i32, p("dist"));
+            if n == 0 || !(d != 0.0) || !d.is_finite() {
+                return Err(NotAffine::Degenerate(kind.to_string()));
+            }
+            Kernel::Root { n, d }
         }
+        "spherical" => Kernel::Spherical,
+        "bubble" => Kernel::Bubble,
+        _ => unreachable!("collected above"),
     };
-    if n == 0 || !(d != 0.0) || !d.is_finite() || !(w != 0.0) {
-        return Err(NotAffine::Degenerate(kind.variation().to_string()));
+    if !(w != 0.0) || !w.is_finite() {
+        return Err(NotAffine::Degenerate(kind.to_string()));
     }
     let xy = |a: &Affine3| Affine2 { m: [[a.m[0][0], a.m[0][1]], [a.m[1][0], a.m[1][1]]], t: [a.t[0], a.t[1]] };
     let affine = Affine2 {
@@ -775,7 +915,7 @@ pub fn transform_map_2d_ordered(
     let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
         return Ok(Map2::Affine(Affine2 { m: [[0.0; 2]; 2], t: [0.0; 2] }));
     };
-    Ok(Map2::Root(RootMap2 { kind, pre, post, pre_inv, post_inv, w, n, d }))
+    Ok(Map2::Nonlinear(NonlinearMap2 { kernel, branch: 0, pre, post, pre_inv, post_inv, w }))
 }
 
 /// The 2D affine a transform composes to, or why it does not, with
@@ -797,7 +937,7 @@ pub fn transform_affine_2d_ordered(
 ) -> Result<Affine2, NotAffine> {
     let stage = variation_stage(t, registry, Space::Planar, order)?;
     if let Some((kind, _)) = stage.roots.first() {
-        return Err(NotAffine::Variation(kind.variation().to_string()));
+        return Err(NotAffine::Variation(kind.to_string()));
     }
     // Nothing composes in the plane: every pre/post variation the
     // analysis knows is a stub there.
@@ -1044,6 +1184,23 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
     if !errs.is_empty() {
         return Err(errs);
     }
+    // One map per (transform, branch): a kernel with two preimages
+    // is two maps that share a transform and differ in the branch
+    // (S1), so the walk's loops and the address keep their shape.
+    let maps: Vec<IfsMap<Map2>> = maps
+        .into_iter()
+        .flat_map(|m| {
+            let branches = m.forward.nonlinear().map_or(1, |n| n.kernel.branches());
+            (0..branches).map(move |b| {
+                let mut mb = m;
+                if let (Map2::Nonlinear(f), Map2::NonlinearInverse(i)) = (&mut mb.forward, &mut mb.inverse) {
+                    f.branch = b;
+                    i.branch = b;
+                }
+                mb
+            })
+        })
+        .collect();
     let Some(ball) = ball_2d(&maps) else {
         errs.push(Disqualification::NoBall);
         return Err(errs);
@@ -1207,26 +1364,56 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
     };
     let branch = |m: &Map2, p: [f64; 2], u: f64| -> [f64; 2] {
         match m {
-            Map2::Root(r) => r.apply_branch(p, (u * (r.n.abs() as f64)).floor() as u32),
+            Map2::Nonlinear(r) => match r.kernel {
+                Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
+                _ => r.apply_branch(p, 0),
+            },
             other => other.apply(p),
         }
     };
 
     let mut p = [0.0, 0.0];
     let mut sample = Vec::with_capacity(4000);
+    let mut lost = 0usize;
     for i in 0..4200 {
         let m = &maps[(next() * maps.len() as f64).floor() as usize % maps.len()];
         p = branch(&m.forward, p, next());
         if !(p[0].is_finite() && p[1].is_finite()) {
-            return None;
+            // A kernel unbounded at its pre-origin sends the odd point
+            // to infinity, as the flame's chaos game respawns it; the
+            // sample restarts and the point is not kept. A game that
+            // keeps leaving has no bulk to measure.
+            lost += 1;
+            if lost > 400 {
+                return None;
+            }
+            p = [0.0, 0.0];
+            continue;
         }
         if i >= 200 {
             sample.push(p);
         }
     }
+    if sample.len() < 1000 {
+        return None;
+    }
     let n = sample.len() as f64;
     let centre = [sample.iter().map(|p| p[0]).sum::<f64>() / n, sample.iter().map(|p| p[1]).sum::<f64>() / n];
     let dist = |p: [f64; 2]| ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2)).sqrt();
+
+    // A set built from a kernel that sends the pre-origin to infinity
+    // -- an inversion, a root of a negative distance -- is unbounded
+    // through it, and no ball is invariant. Its ball is the BULK of
+    // the sample -- the 99.5th percentile radius with a 30% margin --
+    // and not a proof (S3): the sparse tail beyond it is drawn as
+    // exterior.
+    if maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.unbounded_at_origin())) {
+        let mut radii: Vec<f64> = sample.iter().map(|&p| dist(p)).collect();
+        radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let bulk = radii[(radii.len() as f64 * 0.995) as usize].max(1e-9);
+        return Some(Ball { centre, radius: bulk * 1.3 });
+    }
+
     let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
 
     // Grow until the sampled disc maps into the disc.
@@ -1238,10 +1425,13 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
                 let a = std::f64::consts::TAU * j as f64 / count as f64;
                 let q = [centre[0] + radius * ring * a.cos(), centre[1] + radius * ring * a.sin()];
                 for m in maps {
-                    let branches = m.forward.root().map_or(1, |r| r.n.unsigned_abs());
+                    let branches = match m.forward.nonlinear().map(|r| r.kernel) {
+                        Some(Kernel::Root { n, .. }) => n.unsigned_abs(),
+                        _ => 1,
+                    };
                     for k in 0..branches {
                         let img = match &m.forward {
-                            Map2::Root(r) => r.apply_branch(q, k),
+                            Map2::Nonlinear(r) => r.apply_branch(q, k),
                             other => other.apply(q),
                         };
                         let d = dist(img);
@@ -1540,8 +1730,8 @@ mod tests {
         let r = &*guard;
         let t = julia_xform([0.3, -0.4]);
         let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a root map");
-        let Map2::Root(root) = m else { panic!("expected a root map, got {m:?}") };
-        assert_eq!((root.kind, root.n, root.d, root.w), (RootKind::Julia, 2, 1.0, 1.0));
+        let Map2::Nonlinear(root) = m else { panic!("expected a root map, got {m:?}") };
+        assert_eq!((root.kernel, root.w), (Kernel::Root { n: 2, d: 1.0 }, 1.0));
         // ±sqrt(p − c): both branches square back to p − c, and the
         // inverse returns p.
         let p = [0.7, 0.2];
@@ -1571,8 +1761,8 @@ mod tests {
         j.set_variation_param("julian", "power", 3.0);
         j.set_variation_param("julian", "dist", 1.5);
         let m = transform_map_2d_ordered(&j, r, &j.ordered_variation_names(r)).expect("a root map");
-        let root = m.root().copied().expect("root");
-        assert_eq!((root.kind, root.n, root.d), (RootKind::Julian, 3, 1.5));
+        let root = m.nonlinear().copied().expect("root");
+        assert_eq!(root.kernel, Kernel::Root { n: 3, d: 1.5 });
         assert!(close(root.w, 0.8));
         for k in 0..3 {
             let back = root.apply_inverse(root.apply_branch(p, k));
@@ -1624,7 +1814,7 @@ mod tests {
         let phi = (1.0 + 5f64.sqrt()) / 2.0;
         assert!(reach([phi, 0.0]) <= b.radius, "the ball {b:?} misses the fixed point");
         assert!(b.radius < 6.0, "the ball {b:?} is looser than it should be");
-        let root = ifs.maps[0].forward.root().unwrap();
+        let root = ifs.maps[0].forward.nonlinear().unwrap();
         for j in 0..360 {
             let a = (j as f64).to_radians();
             let q = [b.centre[0] + b.radius * a.cos(), b.centre[1] + b.radius * a.sin()];
@@ -1643,6 +1833,103 @@ mod tests {
         j.set_variation_param("julian", "dist", 4.0);
         let errs = analyse_2d(&flame_of(vec![j]), r).unwrap_err();
         assert!(errs.iter().any(|e| matches!(e, Disqualification::NoBall)), "{errs:?}");
+    }
+
+    /// Gate 2 of plan 8.9: every kernel's inverse undoes each of its
+    /// branches, and a bubble transform is two maps that share its
+    /// colour and differ in the branch.
+    #[test]
+    fn every_kernel_inverse_undoes_each_of_its_branches() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut sph = affine_xform(0.6, 0.2, -0.1, 0.5, 0.3, -0.2);
+        sph.variations.clear();
+        sph.variation_order.clear();
+        let sph = with(sph, "spherical", 0.7);
+        let mut bub = affine_xform(0.9, -0.3, 0.3, 0.9, -0.4, 0.1);
+        bub.variations.clear();
+        bub.variation_order.clear();
+        let bub = with(bub, "bubble", 1.3);
+        let mut neg = affine_xform(1.0, 0.0, 0.0, 1.0, 0.2, 0.1);
+        neg.variations.clear();
+        neg.variation_order.clear();
+        let mut neg = with(neg, "julian", 0.5);
+        neg.set_variation_param("julian", "power", 3.0);
+        neg.set_variation_param("julian", "dist", -1.0);
+
+        for (t, kernel) in [(&sph, Kernel::Spherical), (&bub, Kernel::Bubble), (&neg, Kernel::Root { n: 3, d: -1.0 })] {
+            let m = transform_map_2d_ordered(t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            assert_eq!(base.kernel, kernel);
+            let (lo, hi) = base.singular_values();
+            assert!(lo > 0.0 && hi >= lo, "({lo}, {hi})");
+            // Points on both sides of bubble's fold circle |pre(p)| = 2,
+            // and off the origin for the others.
+            for p in [[0.3, 0.4], [-1.7, 2.6], [4.0, -3.5], [0.05, -0.02]] {
+                let q = base.apply_branch(p, 0);
+                // Which branch of a bubble holds p is decided by |pre(p)|.
+                let z = base.pre.apply(p);
+                let inner = z[0].hypot(z[1]) <= 2.0;
+                let branch = if kernel == Kernel::Bubble && !inner { 1 } else { 0 };
+                let mut mb = base;
+                mb.branch = branch;
+                let back = mb.apply_inverse(q);
+                // The inversion's forward keeps the flame's 1e-6 and
+                // its inverse drops it (S2): the round trip is off by
+                // about ε/|z|², which at |z| ~ 0.5 is 4e-6.
+                let tol = if kernel == Kernel::Spherical { 1e-4 } else { 1e-6 };
+                assert!((back[0] - p[0]).abs() < tol && (back[1] - p[1]).abs() < tol, "{kernel:?} branch {branch}: {p:?} -> {q:?} -> {back:?}");
+                // The local factor is the forward derivative's scale,
+                // checked by finite differences along the tangent for
+                // bubble and along both axes for the conformal ones.
+                let (c_lo, _) = base.singular_values();
+                let s = c_lo * mb.local_sigma_factor(q);
+                let h = 1e-6;
+                let d1 = base.apply_branch([p[0] + h, p[1]], 0);
+                let d2 = base.apply_branch([p[0], p[1] + h], 0);
+                let g1 = ((d1[0] - q[0]).hypot(d1[1] - q[1])) / h;
+                let g2 = ((d2[0] - q[0]).hypot(d2[1] - q[1])) / h;
+                if kernel != Kernel::Bubble {
+                    // Conformal times affine: the product of parts is a
+                    // lower bound on the stretch in any direction.
+                    assert!(s <= g1.min(g2) * (1.0 + 1e-4) + 1e-9, "{kernel:?} at {p:?}: sigma {s} exceeds stretch {g1}/{g2}");
+                }
+            }
+        }
+
+        // A bubble transform is two maps of the IFS.
+        let ifs = analyse_2d(&flame_of(vec![bub.clone()]), r).expect("qualifies");
+        assert_eq!(ifs.maps.len(), 2);
+        assert_eq!(ifs.maps[0].transform_index, ifs.maps[1].transform_index);
+        assert_eq!(ifs.maps[0].inverse.nonlinear().unwrap().branch, 0);
+        assert_eq!(ifs.maps[1].inverse.nonlinear().unwrap().branch, 1);
+        // Its ball is invariant: the image is the post-affine of the
+        // unit disc scaled by w.
+        for j in 0..90 {
+            let a = (j as f64 * 4.0).to_radians();
+            let q = [ifs.ball.centre[0] + ifs.ball.radius * a.cos(), ifs.ball.centre[1] + ifs.ball.radius * a.sin()];
+            let img = ifs.maps[0].forward.apply(q);
+            let d = (img[0] - ifs.ball.centre[0]).hypot(img[1] - ifs.ball.centre[1]);
+            assert!(d <= ifs.ball.radius * (1.0 + 1e-9));
+        }
+        // A point outside the unit disc in the pre-frame of the inverse
+        // has no preimage on either branch: it lands at infinity.
+        let far = ifs.maps[0].inverse.apply(ifs.maps[0].forward.apply([100.0, 0.0]).map(|x| x * 1.5 + 5.0));
+        let _ = far;
+        let mut mb = ifs.maps[0].inverse.nonlinear().copied().unwrap();
+        let q_out = mb.post.apply([2.0 * mb.w, 0.0]);
+        for b in 0..2 {
+            mb.branch = b;
+            let u = mb.apply_inverse(q_out);
+            assert!(!u[0].is_finite(), "branch {b} of a point with no preimage should be at infinity, got {u:?}");
+        }
+
+        // A spherical IFS gets the measured ball (S3), and a
+        // negative-distance root does too.
+        let ifs = analyse_2d(&flame_of(vec![sph.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 1.0, 0.0)]), r).expect("qualifies");
+        assert!(ifs.ball.radius > 0.0 && ifs.ball.radius.is_finite());
+        let ifs = analyse_2d(&flame_of(vec![neg.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 1.0, 0.0)]), r).expect("qualifies");
+        assert!(ifs.ball.radius > 0.0 && ifs.ball.radius.is_finite());
     }
 
     /// Sierpiński: three half-scale maps. Every singular value is 0.5,
@@ -1872,14 +2159,14 @@ mod tests {
         let guard = global_registry();
         let r = &*guard;
         let mut bad = affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
-        bad.variations.insert("spherical".to_string(), 0.5);
-        bad.variation_order.push("spherical".to_string());
+        bad.variations.insert("sinusoidal".to_string(), 0.5);
+        bad.variation_order.push("sinusoidal".to_string());
         let big = affine_xform(1.5, 0.0, 0.0, 0.5, 0.0, 0.0);
         let mut fl = flame_of(vec![affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0), bad, big]);
         fl.xaos = Some(vec![vec![1.0; 3]; 3]);
         let errs = analyse_2d(&fl, r).unwrap_err();
         let text: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
-        assert!(text.iter().any(|s| s == "transform 1 uses `spherical`, which is not affine"), "{text:?}");
+        assert!(text.iter().any(|s| s == "transform 1 uses `sinusoidal`, which is not affine"), "{text:?}");
         assert!(text.iter().any(|s| s.starts_with("transform 2 is not contractive")), "{text:?}");
         assert!(text.iter().any(|s| s == "xaos is not supported"), "{text:?}");
         assert_eq!(errs.len(), 3, "{text:?}");
@@ -1999,7 +2286,8 @@ mod census {
         // What the plane can already invert: an affine role, or a
         // root (plan 8.8).
         let known = |name: &str, w: f64, t: &Transform| {
-            affine_role(name, w, t, r, Space::Planar).is_some() || matches!(name, "julia" | "julian")
+            affine_role(name, w, t, r, Space::Planar).is_some()
+                || matches!(name, "julia" | "julian" | "spherical" | "bubble")
         };
         for (_, c) in &all {
             if c.flame.xaos.is_some() || c.flame.final_transforms.len() > 1 {
@@ -2070,7 +2358,12 @@ mod census {
                 }
             }
             let set: Vec<String> = set.into_iter().collect();
-            println!("    {name}: {}", if set.is_empty() { "(affine, but fails another condition)".to_string() } else { set.join(", ") });
+            if set.is_empty() {
+                let why: Vec<String> = analyse_2d(&c.flame, r).err().unwrap_or_default().iter().map(|d| d.to_string()).collect();
+                println!("    {name}: every variation is known, but: {}", why.join("; "));
+            } else {
+                println!("    {name}: {}", set.join(", "));
+            }
         }
         let shaped: usize = one_nonlinear.values().sum();
         println!(
