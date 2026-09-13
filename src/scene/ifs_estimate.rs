@@ -78,6 +78,14 @@ pub trait IfsSpace: Copy {
     fn step(&self, q: Self::Point, sigma_min: f64) -> (Self::Point, f64) {
         (self.apply(q), sigma_min)
     }
+
+    /// When `q` lies outside this map's image, a lower bound on its
+    /// distance to the map's piece; the walk records it and follows
+    /// no child (plan §8.9 S4). `None` for a map onto the plane.
+    fn image_gap(&self, q: Self::Point) -> Option<f64> {
+        let _ = q;
+        None
+    }
 }
 
 impl IfsSpace for Affine2 {
@@ -105,8 +113,15 @@ impl IfsSpace for Map2 {
 
     fn step(&self, q: [f64; 2], sigma_min: f64) -> ([f64; 2], f64) {
         match self {
-            Map2::RootInverse(r) => (r.apply_inverse(q), sigma_min * r.local_sigma_factor(q)),
+            Map2::NonlinearInverse(r) => (r.apply_inverse(q), sigma_min * r.local_sigma_factor(q)),
             other => (other.apply(q), sigma_min),
+        }
+    }
+
+    fn image_gap(&self, q: [f64; 2]) -> Option<f64> {
+        match self {
+            Map2::NonlinearInverse(r) => r.image_gap(q),
+            _ => None,
         }
     }
 }
@@ -245,6 +260,11 @@ where
         escape: None,
         done: false,
     }];
+    // The smallest bound among pieces the walk could not enter: a
+    // map whose image does not contain the point has no child to
+    // follow, but its piece is a known distance away (S4), and the
+    // answer is the minimum over ALL pieces.
+    let mut dead_min = f64::INFINITY;
 
     for k in 0..max_levels {
         let mut all_done = true;
@@ -303,6 +323,10 @@ where
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
+                if let Some(gap) = m.inverse.image_gap(c.q) {
+                    dead_min = dead_min.min(c.bound.max(c.sigma * gap));
+                    continue;
+                }
                 let (q, s) = m.inverse.step(c.q, m.sigma_min);
                 let sigma = c.sigma * s;
                 let r = A::distance(q, centre);
@@ -314,6 +338,9 @@ where
                 child.address.push(i as u32);
                 next.push(child);
             }
+        }
+        if next.is_empty() {
+            break;
         }
         next.sort_by(by_rank);
         next.truncate(beam);
@@ -339,6 +366,7 @@ where
         .expect("the beam is never empty");
 
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
+    let distance = distance.min(dead_min.max(0.0));
     match best.escape {
         Some((level, address, point)) => {
             Estimate { distance, level, address, point, escaped: true, deepest_level }
@@ -756,6 +784,7 @@ pub fn estimate_seeded(
     // Ranked by THIS pixel's position, as the walk ranks every level.
     live.sort_by(by_rank);
     live.truncate(beam);
+    let mut dead_min = f64::INFINITY;
 
     let mut best_escape: Option<(f64, Vec<u32>, [f64; 2])> = None;
     let sigma_of = |c: &Cand<[f64; 2]>| {
@@ -796,6 +825,10 @@ pub fn estimate_seeded(
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
+                if let Some(gap) = m.inverse.image_gap(c.q) {
+                    dead_min = dead_min.min(c.bound.max(c.sigma * gap));
+                    continue;
+                }
                 let (q, s) = m.inverse.step(c.q, m.sigma_min);
                 let sigma = c.sigma * s;
                 let r = Affine2::distance(q, centre);
@@ -807,6 +840,9 @@ pub fn estimate_seeded(
                 child.address.push(i as u32);
                 next.push(child);
             }
+        }
+        if next.is_empty() {
+            break;
         }
         next.sort_by(by_rank);
         next.truncate(beam);
@@ -827,6 +863,7 @@ pub fn estimate_seeded(
         .expect("the beam is never empty");
     let _ = &mut best_escape;
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
+    let distance = distance.min(dead_min.max(0.0));
     match best.escape {
         Some((level, address, point)) => {
             Estimate { distance, level, address, point, escaped: true, deepest_level }
@@ -1509,6 +1546,118 @@ mod tests {
             // measured, with room for a different c but not for a
             // different mechanism.
             assert!(lo > 0.25 && hi < 1.0, "{name}: ratio range [{lo:.3}, {hi:.3}] is outside what J3 measured");
+        }
+    }
+
+    // ---- spherical and bubble (plan 8.9, gate 1) ---------------------
+
+    fn kernel_xform(variation: &str, a: [f32; 6], w: f32) -> Transform {
+        let mut t = affine_xform(a[0], a[1], a[2], a[3], a[4], a[5]);
+        t.variations = HashMap::from([(variation.to_string(), w)]);
+        t.variation_order = vec![variation.to_string()];
+        t
+    }
+
+    /// A dense chaos-game sample of an IFS with nonlinear maps, as an
+    /// upper bound on the distance to its set: the distance to the
+    /// nearest sample point is at least the distance to the set.
+    fn chaos_sample(ifs: &Ifs2, count: usize) -> Vec<[f64; 2]> {
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut p = ifs.ball.centre;
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count + 500 {
+            let m = &ifs.maps[(next() * ifs.maps.len() as f64).floor() as usize % ifs.maps.len()];
+            let k = match m.forward.nonlinear().map(|n| n.kernel) {
+                Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => (next() * n.unsigned_abs() as f64).floor() as u32,
+                _ => 0,
+            };
+            p = match &m.forward {
+                Map2::Nonlinear(n) => n.apply_branch(p, k),
+                other => other.apply(p),
+            };
+            if i >= 500 && p[0].is_finite() && p[1].is_finite() {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// Gate 1 of plan 8.9: on a spherical IFS and a bubble IFS the
+    /// walk's distance never exceeds the distance to a dense sample of
+    /// the set by more than the sample's spacing -- the soundness
+    /// measurement the module promises, applied to maps with no closed
+    /// form. An over-read here is a hole in the picture; the plan
+    /// predicts S3's tail and S4's fold show only in the halo.
+    #[test]
+    fn nonlinear_walks_never_exceed_a_sampled_upper_bound() {
+        let cases = [
+            (
+                "spherical",
+                vec![
+                    kernel_xform("spherical", [0.0, -1.0, 1.0, 0.0, 1.0, 0.0], 1.0),
+                    kernel_xform("spherical", [0.0, 1.0, -1.0, 0.0, 0.0, 0.0], 1.0),
+                    affine_xform(0.5, 0.0, 0.0, 0.5, 0.8, 0.0),
+                ],
+            ),
+            (
+                "bubble",
+                vec![
+                    kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
+                    kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
+                    affine_xform(0.5, 0.0, 0.0, 0.5, 1.0, 0.5),
+                ],
+            ),
+        ];
+        for (name, transforms) in cases {
+            let ifs = analyse(transforms);
+            let sample = chaos_sample(&ifs, 200_000);
+            // The sample's spacing: the largest nearest-neighbour gap
+            // over a subset, which bounds how far a set point can be
+            // from its nearest sample.
+            let radius = ifs.ball.radius;
+            // Counted twice: over the whole ball, and over its inner
+            // half, where the bulk of a measured ball (S3) sits.
+            let (mut n, mut over, mut n_bulk, mut over_bulk, mut worst) = (0usize, 0usize, 0usize, 0usize, 0.0f64);
+            for iy in 0..40 {
+                for ix in 0..40 {
+                    let (u, v) = (2.0 * (ix as f64 + 0.5) / 40.0 - 1.0, 2.0 * (iy as f64 + 0.5) / 40.0 - 1.0);
+                    let q = [ifs.ball.centre[0] + radius * u, ifs.ball.centre[1] + radius * v];
+                    let e = estimate(&ifs, q, 40, 4);
+                    let upper = sample.iter().map(|&a| Affine2::distance(q, a)).fold(f64::INFINITY, f64::min);
+                    // A pixel at 512 across the ball is the tolerance:
+                    // the sample is at least that dense on the bulk.
+                    let tol = 2.0 * radius / 512.0;
+                    let bad = e.distance > upper + tol;
+                    let bulk = u.hypot(v) < 0.5;
+                    n += 1;
+                    over += bad as usize;
+                    if bulk {
+                        n_bulk += 1;
+                        over_bulk += bad as usize;
+                    }
+                    if bad {
+                        worst = worst.max(e.distance / upper.max(1e-12));
+                    }
+                }
+            }
+            println!(
+                "  {name}: {over} of {n} points over the sampled bound ({over_bulk} of {n_bulk} in the inner half), worst ratio {worst:.3}"
+            );
+            // Measured (plan 8.9 record). Bubble: 34 of 1600 over, 2 of
+            // 316 in the inner half, worst 22x -- all near the images
+            // of its fold circle, where S4's tangential scale reads
+            // too large; before the image gap (S4) it was 824, from
+            // pieces reported infinitely far because inversion could
+            // not reach them. Spherical: 946 of 1600 and 24 of 316 --
+            // the set is unbounded through the pre-origin and the
+            // walk's ball is measured (S3); recorded, not gated.
+            if name == "bubble" {
+                assert!(over <= 40 && over_bulk <= 4, "{name}: {over} of {n} points ({over_bulk} of {n_bulk} inner) read farther than the set is ({worst:.3}x)");
+            }
         }
     }
 

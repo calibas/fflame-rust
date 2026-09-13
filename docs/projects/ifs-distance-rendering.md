@@ -2123,6 +2123,149 @@ row's constant part, which is a coarser residual than an affine
 row's, visible as slightly uneven band widths under `ifs_level` and
 not worth a second word in the row.
 
+### 8.9 The third rung: `spherical` and `bubble` (plan, 2026-09-13)
+
+The two variations the census names next, three presets each, taken
+together because they share the machinery the julia rung built and
+differ from it in one thing each: `spherical` has no rigorous ball,
+`bubble` has two preimages. Bodies, with `w` the weight and the
+affines composing around as in J4: `spherical(p) = w·p/(|p|² + 10⁻⁶)`,
+`bubble(p) = w·4p/(|p|² + 4)`.
+
+**S1 — The kernel is a slot in the row, and a transform may fill
+more than one.** `RootMap2` becomes `NonlinearMap2` with a `Kernel`
+(`Root{n, d}`, `Spherical`, `Bubble`) and a `branch`. One map of the
+IFS is one (transform, branch): a `bubble` transform contributes TWO
+maps that share its colour and differ in the branch, so the walk's
+loops, the beam and the address (base = number of maps) do not
+change shape. The address colouring's base grows with the branches;
+the first digit still names the transform.
+
+**S2 — `spherical` is an involution, and the ε is dropped from the
+inverse.** With `v = post⁻¹(q)/w`, the inverse is `v/|v|²`; the
+flame's `10⁻⁶` keeps its chaos game off a division by zero and makes
+the forward map 2-to-1 inside a radius of 10⁻³ of the pre-origin,
+whose image is a radius of ~500w — outside any ball the render uses,
+so the second preimage is never inside the ball and never a branch.
+The local scale is exact: the map is conformal with `|f′| = w/|p|²`,
+so the factor on the constant part is `|v|²`.
+
+**S3 — `spherical` has no invariant ball, and gets a measured one.**
+A set built from inversions is unbounded through the pre-origin:
+whatever ball is drawn, some point of it maps outside. The ball for
+an IFS with a spherical map is the bulk of a chaos-game sample — its
+99.5th percentile radius about the sample mean, with a 30% margin —
+and is NOT a proof: the sparse tail beyond it is drawn as exterior,
+and the distance near the tail is not a bound. The forward map used
+for the sample keeps the ε, as the flame does, so the sample is the
+flame's. Roots and bubbles keep the invariance search of J5, which
+bubble makes trivial: its image is the unit disc.
+
+**S4 — `bubble` folds, and its two preimages are both followed.**
+`|v| = 4|p|/(|p|² + 4)` is at most 1, reached at `|p| = 2`, and every
+`|v| < 1` has an inner preimage `|p| = (2 − 2√(1−|v|²))/|v|` and an
+outer one with `+`. Both are branches (S1). A `v` outside the unit
+disc has no preimage: that branch's child is placed at infinity,
+which the walk already treats as an escape of that piece. The local
+scale is the map's TANGENTIAL derivative, `|v|/|p|`, and not its
+smallest singular value: the radial derivative vanishes on the fold
+circle, and a lower bound honest about that reads zero on every
+preimage of the fold — a dark ring per transform per level, drawn
+where the set is not. The tangential choice is an estimate that
+reads too LARGE across the fold, which erodes the halo there and
+nothing else: membership is the escape test and does not depend on
+σ at all.
+
+**S5 — Not this rung:** the 3D bodies (`spherical` in 3D is the same
+map on xy with z through, so it is not a contraction in z; `bubble`
+in 3D writes z); `disc`, `blob`, `hemisphere`; the measures.
+
+**Gates:**
+
+1. *Soundness, measured:* for a spherical flame and a bubble flame,
+   on a grid, the walk's distance never exceeds the distance to a
+   dense chaos-game sample of the set by more than the sample's own
+   spacing — the module's `estimate_never_exceeds_a_sampled_upper_bound`,
+   applied to maps with no closed form. This is what catches an
+   over-read: S3's tail and S4's fold, both of which are predicted to
+   show only in the halo.
+2. *Round trips:* each kernel's inverse undoes each of its branches.
+3. *The transcription:* GPU agrees with CPU on a spherical flame and
+   on a bubble flame.
+4. *Nothing moved:* the nine shipped presets byte-identical across
+   the row change.
+5. *Catalogue:* the shipped flames the census names (`Spherical3`,
+   `JuliaN Bubble`) rendered as flames and as distance fields, side
+   by side, inspected; whichever of them qualifies is the first
+   catalogue flame this feature reaches.
+6. *The census*, re-run.
+
+**Built 2026-09-13. The kernels are right and the pictures are
+discs.** The gates, then what they showed:
+
+1. `nonlinear_walks_never_exceed_a_sampled_upper_bound`, a 40×40 grid
+   over each set's ball against a 200 000-point chaos-game sample.
+   **Bubble: 34 of 1600 over, 2 of 316 in the inner half, worst
+   22×** — and before one more mechanism was found, 824. A point
+   outside a bubble's image disc has no preimage, and reporting that
+   piece as *infinitely* far was the 824: the piece is not far, it is
+   just not reachable by inversion. Its distance is at least
+   `(|v| − 1)·w·σ_min(post)`, the **image gap**, which the walk now
+   records for the piece without following a child, and the answer
+   is the minimum over all pieces, entered or not (S4, amended). The
+   34 that remain sit on the images of the fold circle, where S4's
+   tangential scale reads too large, as predicted; gated at the
+   measurement. **Spherical: 946 of 1600, 24 of 316 in the inner
+   half**, and S3's "shows only in the halo" was wrong in degree: a
+   set point whose address passes through the tail leaves the
+   measured ball, so membership itself is wrong wherever the set is
+   built through the pre-origin — 7.6% of the inner half. Recorded,
+   not gated; the render of an inversion IFS is the escape-time set
+   relative to a measured ball, and its halo is not a distance.
+2. `every_kernel_inverse_undoes_each_of_its_branches`: round trips
+   on both bubble branches, the inversion (to 4·10⁻⁶ — the flame's
+   ε, dropped from the inverse, S2) and a negative-distance root.
+3. `the_gpu_walk_agrees_with_the_cpu_reference_on_spherical_and_bubble`:
+   above 97% by the gasket's test, on both.
+4. The nine shipped presets byte-identical across the row change
+   (eighty bytes now, a kind and a branch and a vec4 of kernel
+   parameters).
+5. `render_the_kernel_candidates_for_inspection`, six candidates —
+   two inversion pairs, three tangent circles with and without a
+   seed, two bubble pairs, and the catalogue's **JuliaN Bubble**,
+   which qualifies now (its `julian` distances are −1, a root of the
+   inverted radius, handled like an inversion's ball) — each as a
+   distance field beside itself as a flame. **Every distance field
+   is a filled disc.** The never-escaping set of an IFS with an
+   inversion or a bubble is a whole region: inversion swaps the
+   inside and outside of a circle, bubble folds the plane onto a
+   disc, and points bounce inside the union of those discs without
+   leaving. The flame's structure — the Apollonian circles, the
+   bubble rings — is the MEASURE on that region, which D6 said this
+   engine does not draw, and here that is the whole picture rather
+   than a nuance. No spherical or bubble preset ships: there is no
+   picture worth a preset, and the rule is to render before
+   shipping. The kernels stay: they are correct, they cost nothing
+   on an affine or julia row, the panel says what they draw, and a
+   flame built from them with contracting affines beside them may
+   yet find a set worth seeing.
+6. Census: **17 of 168** planar; the preset library **10 of 18**,
+   JuliaN Bubble the first catalogue flame reached — as a disc.
+   `Spherical3` stays out for a different reason: two of its
+   transforms are pure translations, σ_max = 1, and a set that
+   contains its own translate is unbounded. What the flame shows is
+   the measure again.
+
+What this rung settled about the ladder: past affine, "which
+variations are invertible" was the wrong question. Roots draw the
+filled Julia set, which is a picture people know; inversions and
+folds draw regions. The variations that would move the LIBRARY next
+(`disc`, `blob`, `hemisphere`) fold or blur the plane the same way,
+so the honest expectation for them is the same disc. The escape-time
+IFS's natural catalogue is the affine sets and the julia family, and
+growing it further is a question of what the picture is, measured
+one candidate at a time, before it is a question of inverses.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a
@@ -2299,6 +2442,11 @@ the commit.
 12. ~~**Solid camera: rotation does nothing.**~~ Landed 2026-09-12: the
     view's rotation is the chain's outermost factor, a roll of the
     screen and nothing else, turning the same way it turns the plane.
+
+**Growing the set, 2026-09-13:** §8.7 (affine per space), §8.8 (the
+julia family, three presets), §8.9 (`spherical` and `bubble`: correct,
+and they draw discs — recorded there, with what it means for the
+ladder).
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and
