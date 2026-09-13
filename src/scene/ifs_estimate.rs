@@ -73,10 +73,12 @@ pub trait IfsSpace: Copy {
     fn apply(&self, p: Self::Point) -> Self::Point;
     fn distance(a: Self::Point, b: Self::Point) -> f64;
 
-    /// One inverse step from `q`: the point, and the forward map's
-    /// σ_min there, given its constant part.
-    fn step(&self, q: Self::Point, sigma_min: f64) -> (Self::Point, f64) {
-        (self.apply(q), sigma_min)
+    /// One inverse step from `q` with the scalar `aux` (plan §8.11
+    /// step 3; a fourth coordinate only a quaternion kernel reads):
+    /// the point, the scalar, and the forward map's σ_min there given
+    /// its constant part.
+    fn step(&self, q: Self::Point, aux: f64, sigma_min: f64) -> (Self::Point, f64, f64) {
+        (self.apply(q), aux, sigma_min)
     }
 
     /// When `q` lies outside this map's image, a lower bound on its
@@ -111,10 +113,10 @@ impl IfsSpace for Map2 {
         Affine2::distance(a, b)
     }
 
-    fn step(&self, q: [f64; 2], sigma_min: f64) -> ([f64; 2], f64) {
+    fn step(&self, q: [f64; 2], aux: f64, sigma_min: f64) -> ([f64; 2], f64, f64) {
         match self {
-            Map2::NonlinearInverse(r) => (r.apply_inverse(q), sigma_min * r.local_sigma_factor(q)),
-            other => (other.apply(q), sigma_min),
+            Map2::NonlinearInverse(r) => (r.apply_inverse(q), aux, sigma_min * r.local_sigma_factor(q)),
+            other => (other.apply(q), aux, sigma_min),
         }
     }
 
@@ -149,10 +151,14 @@ impl IfsSpace for Map3 {
         Affine3::distance(a, b)
     }
 
-    fn step(&self, q: [f64; 3], sigma_min: f64) -> ([f64; 3], f64) {
+    fn step(&self, q: [f64; 3], aux: f64, sigma_min: f64) -> ([f64; 3], f64, f64) {
         match self {
-            Map3::NonlinearInverse(r) => (r.apply_inverse(q), sigma_min * r.local_sigma_factor(q)),
-            other => (other.apply(q), sigma_min),
+            Map3::NonlinearInverse(r) => {
+                let s = sigma_min * r.local_sigma_factor(q, aux);
+                let (p, a) = r.apply_inverse_aux(q, aux);
+                (p, a, s)
+            }
+            other => (other.apply(q), aux, sigma_min),
         }
     }
 }
@@ -220,6 +226,8 @@ struct Cand<P> {
     escape: Option<(f64, Vec<u32>, P)>,
     /// Past [`FAR`]: converged, and no longer expanded.
     done: bool,
+    /// The scalar coordinate a quaternion kernel carries (step 3).
+    aux: f64,
 }
 
 /// Ascending by position: deepest inside the ball first.
@@ -257,6 +265,22 @@ pub fn estimate<A>(
 where
     A: IfsSpace,
 {
+    estimate_aux(ifs, p, 0.0, max_levels, beam)
+}
+
+/// [`estimate`] from a point with a scalar coordinate `aux0` -- the
+/// slice a solid of quaternion kernels is seen at (plan §8.11 step
+/// 3). The radius the walk escapes against is the 4D one.
+pub fn estimate_aux<A>(
+    ifs: &Ifs<A, A::Point>,
+    p: A::Point,
+    aux0: f64,
+    max_levels: u32,
+    beam: u32,
+) -> Estimate<A::Point>
+where
+    A: IfsSpace,
+{
     let centre = ifs.ball.centre;
     let radius = ifs.ball.radius;
     let far = radius.max(1.0) * FAR;
@@ -270,14 +294,16 @@ where
         None => (p, 1.0),
     };
 
+    let radius4 = |q: A::Point, aux: f64| A::distance(q, centre).hypot(aux - ifs.aux_centre);
     let mut live = vec![Cand {
         q: q0,
         sigma: sigma0,
         bound: f64::NEG_INFINITY,
-        r: A::distance(q0, centre),
+        r: radius4(q0, aux0),
         address: Vec::new(),
         escape: None,
         done: false,
+        aux: aux0,
     }];
     // The smallest bound among pieces the walk could not enter: a
     // map whose image does not contain the point has no child to
@@ -291,7 +317,7 @@ where
             if c.done {
                 continue;
             }
-            let r = A::distance(c.q, centre);
+            let r = radius4(c.q, c.aux);
             c.r = r;
             // Every level's value is a lower bound; the walk keeps the
             // largest. Stopping at the first escape is what draws the
@@ -346,11 +372,12 @@ where
                     dead_min = dead_min.min(c.bound.max(c.sigma * gap));
                     continue;
                 }
-                let (q, s) = m.inverse.step(c.q, m.sigma_min);
+                let (q, aux, s) = m.inverse.step(c.q, c.aux, m.sigma_min);
                 let sigma = c.sigma * s;
-                let r = A::distance(q, centre);
+                let r = radius4(q, aux);
                 let mut child = c.clone();
                 child.q = q;
+                child.aux = aux;
                 child.sigma = sigma;
                 child.bound = c.bound.max(sigma * (r - radius));
                 child.r = r;
@@ -609,6 +636,7 @@ pub fn seed_beam<P: SeedPoint>(
         address: Vec::new(),
         escape: None,
         done: false,
+        aux: 0.0,
     }];
     let mut bases = vec![basis0];
     let mut level = 0u32;
@@ -797,6 +825,7 @@ pub fn estimate_seeded(
                 address: s.address.clone(),
                 escape: s.escape.map(|(lvl, p)| (lvl, s.address.clone(), p)),
                 done: s.done,
+                aux: 0.0,
             }
         })
         .collect();
@@ -848,7 +877,7 @@ pub fn estimate_seeded(
                     dead_min = dead_min.min(c.bound.max(c.sigma * gap));
                     continue;
                 }
-                let (q, s) = m.inverse.step(c.q, m.sigma_min);
+                let (q, _, s) = m.inverse.step(c.q, 0.0, m.sigma_min);
                 let sigma = c.sigma * s;
                 let r = Affine2::distance(q, centre);
                 let mut child = c.clone();
@@ -1079,6 +1108,7 @@ pub fn seed_chain3<P: SeedPoint3>(
         address: Vec::new(),
         escape: None,
         done: false,
+        aux: 0.0,
     }];
     let mut mats = vec![m0];
     let mut levels: Vec<Vec<Seed3>> = Vec::new();
@@ -1233,6 +1263,7 @@ pub fn estimate_seeded3(
                 address: s.address.clone(),
                 escape: s.escape.map(|(lvl, p)| (lvl, s.address.clone(), p)),
                 done: s.done,
+                aux: 0.0,
             }
         })
         .collect();
@@ -1277,9 +1308,9 @@ pub fn estimate_seeded3(
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                let (q, s) = m.inverse.step(c.q, m.sigma_min);
+                let (q, aux, s) = m.inverse.step(c.q, c.aux, m.sigma_min);
                 let sigma = c.sigma * s;
-                let r = Affine3::distance(q, centre);
+                let r = Affine3::distance(q, centre).hypot(aux - ifs.aux_centre);
                 let mut child = c.clone();
                 child.q = q;
                 child.sigma = sigma;
@@ -1646,9 +1677,21 @@ mod tests {
         aff.g = 0.2;
         aff.variations = HashMap::from([("linear3D".to_string(), 0.5)]);
         aff.variation_order = vec!["linear3D".to_string()];
+        let qj = |c: [f32; 4], power: f32| {
+            let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+            t.variations = HashMap::from([("quaternion_julia".to_string(), 1.0)]);
+            t.variation_order = vec!["quaternion_julia".to_string()];
+            for (k, v) in [("cx", c[0]), ("cy", c[1]), ("cz", c[2]), ("cw", c[3]), ("power", power), ("inverse", 1.0)] {
+                t.set_variation_param("quaternion_julia", k, v);
+            }
+            t
+        };
         for (name, transforms) in [
             ("julia3D pair", vec![mk("julia3D", 2.0, 0.3, -0.2, 0.1, 0.9), mk("julia3D", 2.0, -0.4, 0.3, -0.2, 0.9), aff.clone()]),
             ("julia3Dz pair", vec![mk("julia3Dz", 2.0, 0.3, -0.2, 0.1, 0.9), mk("julia3Dz", 3.0, -0.4, 0.3, -0.2, 0.8), aff.clone()]),
+            // Scalar-dominant constants, which have an interior on the
+            // vector slice; a pure-vector c is a dust there.
+            ("quaternion pair", vec![qj([0.3, 0.0, 0.0, -0.6], 2.0), qj([0.0, 0.0, 0.0, -0.5], 2.0)]),
         ] {
             let ifs = crate::scene::ifs_analysis::analyse_3d(&flame_of(transforms), &guard).expect("qualifies");
             // A 3D chaos-game sample, branches drawn at random.
@@ -1657,19 +1700,25 @@ mod tests {
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 (state >> 11) as f64 / (1u64 << 53) as f64
             };
+            // A 4D sample, its scalar carried; the slice compared is
+            // the ball centre's own, where the set is thickest.
             let mut p = ifs.ball.centre;
-            let mut sample = Vec::with_capacity(300_000);
+            let mut aux = ifs.aux_centre;
+            let mut sample: Vec<[f64; 4]> = Vec::with_capacity(300_000);
             for i in 0..300_500 {
                 let m = &ifs.maps[(next() * ifs.maps.len() as f64).floor() as usize % ifs.maps.len()];
                 let k = m.forward.nonlinear().map_or(0, |nl| (next() * nl.kernel.power().unsigned_abs() as f64).floor() as u32);
-                p = match &m.forward {
-                    Map3::Nonlinear(nl) => nl.apply_branch(p, k),
-                    other => other.apply(p),
+                let (np, na) = match &m.forward {
+                    Map3::Nonlinear(nl) => nl.apply_branch_aux(p, aux, k),
+                    other => (other.apply(p), aux),
                 };
-                if i >= 500 && p.iter().all(|x| x.is_finite()) {
-                    sample.push(p);
+                p = np;
+                aux = na;
+                if i >= 500 && p.iter().all(|x| x.is_finite()) && aux.is_finite() {
+                    sample.push([p[0], p[1], p[2], aux]);
                 }
             }
+            let w0 = ifs.aux_centre;
             let radius = ifs.ball.radius;
             let (mut n, mut over, mut worst) = (0usize, 0usize, 0.0f64);
             const G: usize = 14;
@@ -1682,10 +1731,13 @@ mod tests {
                             continue;
                         }
                         let q = [ifs.ball.centre[0] + radius * u, ifs.ball.centre[1] + radius * v, ifs.ball.centre[2] + radius * w];
-                        let e = estimate(&ifs, q, 32, 4);
+                        let e = estimate_aux(&ifs, q, w0, 32, 4);
+                        // The 4D distance to the sample bounds the 4D
+                        // distance to the set, which the walk's estimate
+                        // is a bound on.
                         let upper = sample
                             .iter()
-                            .map(|&a| Affine3::distance(q, a))
+                            .map(|&a| Affine3::distance(q, [a[0], a[1], a[2]]).hypot(w0 - a[3]))
                             .fold(f64::INFINITY, f64::min);
                         // A 300 000-point sample of a solid is sparser
                         // than a plane's: the mean spacing in a ball of
@@ -1713,7 +1765,8 @@ mod tests {
     /// the gate is at the beam that shows the kernels.
     fn solid_over_limit(name: &str) -> usize {
         match name {
-            "julia3D pair" | "julia3Dz pair" => 0,
+            // The quaternion pair measured 0 of 1472 at beam 4 too.
+            "julia3D pair" | "julia3Dz pair" | "quaternion pair" => 0,
             _ => usize::MAX,
         }
     }

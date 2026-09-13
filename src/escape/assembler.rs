@@ -4475,6 +4475,22 @@ fn ifs_mean_sigma() -> f32 {
     return params.fdata[1].x;
 }
 
+// The ball centre's scalar coordinate (plan 8.11 step 3), and the
+// slice the march's samples start at.
+fn ifs_ball_w() -> f32 {
+    return params.fdata[1].z;
+}
+
+fn ifs_slice_w() -> f32 {
+    return fparam(6u);
+}
+
+// Whether any map is nonlinear, which switches the walk's precision
+// early exit off (an affine argument; see pack_globals3).
+fn ifs_has_nonlinear() -> bool {
+    return params.fdata[1].w > 0.5;
+}
+
 // The beam's handover state, packed by `escape::ifs::pack_seeds`.
 fn ifs_handover_level() -> u32 {
     return u32(max(params.fdata[1].y, 0.0));
@@ -5244,6 +5260,22 @@ fn ifs_radius() -> f32 {
 
 fn ifs_mean_sigma() -> f32 {
     return params.fdata[1].x;
+}
+
+// The ball centre's scalar coordinate (plan 8.11 step 3), and the
+// slice the march's samples start at.
+fn ifs_ball_w() -> f32 {
+    return params.fdata[1].z;
+}
+
+fn ifs_slice_w() -> f32 {
+    return fparam(6u);
+}
+
+// Whether any map is nonlinear, which switches the walk's precision
+// early exit off (an affine argument; see pack_globals3).
+fn ifs_has_nonlinear() -> bool {
+    return params.fdata[1].w > 0.5;
 }
 
 fn ifs_count() -> u32 {
