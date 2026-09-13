@@ -245,15 +245,26 @@ pub enum Kernel {
     /// `bubble`: `4p/(|p|² + 4)`, onto the unit disc and 2-to-1; the
     /// branch picks the inner (0) or outer (1) preimage (S4).
     Bubble,
+    /// `hemisphere`: `p / √(|p|² + 1)`, onto the open unit disc,
+    /// 1-to-1 (plan §8.10 D1).
+    Hemisphere,
+    /// `disc`: `(θ/π)·(sin πr, cos πr)` with `θ` from the +y axis --
+    /// polar coordinates read the other way. Onto the unit disc and
+    /// periodic in `r`, so the branch `m` picks the ring
+    /// `r = φ/π + m` (D2).
+    Disc,
+    /// `blob`: `r·s(θ)·(cos θ, sin θ)`, a reflection in the diagonal
+    /// times an angular radial scale `s(θ) = low + (high − low)/2 ·
+    /// (sin(waves·θ) + 1)`; onto the plane while `s > 0` (D3).
+    Blob { high: f64, low: f64, waves: f64 },
 }
 
 impl Kernel {
-    /// How many preimages the walk follows per map.
-    pub fn branches(&self) -> u32 {
-        match self {
-            Kernel::Bubble => 2,
-            _ => 1,
-        }
+    /// Blob's angular scale at `theta`.
+    fn blob_scale(high: f64, low: f64, waves: f64, theta: f64) -> (f64, f64) {
+        let s = low + (high - low) / 2.0 * ((waves * theta).sin() + 1.0);
+        let ds = (high - low) / 2.0 * waves * (waves * theta).cos();
+        (s, ds)
     }
 
     /// The forward kernel on `z` in the pre-frame, along `k` -- a
@@ -261,6 +272,24 @@ impl Kernel {
     pub fn forward(&self, z: [f64; 2], k: u32) -> [f64; 2] {
         let r2 = z[0] * z[0] + z[1] * z[1];
         match *self {
+            Kernel::Hemisphere => {
+                let t = 1.0 / (r2 + 1.0).sqrt();
+                [z[0] * t, z[1] * t]
+            }
+            Kernel::Disc => {
+                // Apophysis: theta = atan2(x, y), the angle from +y.
+                let theta = z[0].atan2(z[1]);
+                let r = r2.sqrt();
+                let rho = theta / std::f64::consts::PI;
+                let a = std::f64::consts::PI * r;
+                [rho * a.sin(), rho * a.cos()]
+            }
+            Kernel::Blob { high, low, waves } => {
+                let theta = z[0].atan2(z[1]);
+                let (sc, _) = Kernel::blob_scale(high, low, waves, theta);
+                let r = r2.sqrt();
+                [r * sc * theta.cos(), r * sc * theta.sin()]
+            }
             Kernel::Root { n, d } => {
                 let n = n as f64;
                 let rr = r2.sqrt().powf(d / n.abs());
@@ -285,6 +314,34 @@ impl Kernel {
     pub fn inverse(&self, v: [f64; 2], branch: u32) -> [f64; 2] {
         let r2 = v[0] * v[0] + v[1] * v[1];
         match *self {
+            Kernel::Hemisphere => {
+                if r2 >= 1.0 {
+                    return [v[0] * 1e30, v[1] * 1e30];
+                }
+                let t = 1.0 / (1.0 - r2).sqrt();
+                [v[0] * t, v[1] * t]
+            }
+            Kernel::Disc => {
+                // rho is the input's |theta|/pi; phi, the angle of v
+                // from +y, is pi·r modulo 2pi; the ring m and the
+                // sign of theta come with the branch (D2).
+                let rho = r2.sqrt();
+                if rho > 1.0 {
+                    return [v[0] * 1e30, v[1] * 1e30];
+                }
+                let phi = v[0].atan2(v[1]);
+                let r = phi / std::f64::consts::PI + branch as f64;
+                if r < 0.0 {
+                    return [1e30, 1e30];
+                }
+                let theta = if branch % 2 == 0 { std::f64::consts::PI * rho } else { -std::f64::consts::PI * rho };
+                [r * theta.sin(), r * theta.cos()]
+            }
+            Kernel::Blob { high, low, waves } => {
+                let theta = v[1].atan2(v[0]);
+                let (sc, _) = Kernel::blob_scale(high, low, waves, theta);
+                [v[1] / sc, v[0] / sc]
+            }
             Kernel::Root { n, d } => {
                 let n = n as f64;
                 let rr = r2.sqrt().powf(n.abs() / d);
@@ -317,6 +374,30 @@ impl Kernel {
     pub fn local_sigma_factor(&self, v: [f64; 2], branch: u32) -> f64 {
         let r2 = (v[0] * v[0] + v[1] * v[1]).max(f64::MIN_POSITIVE);
         match *self {
+            // The radial singular value, (1 − |v|²)^{3/2}, the smaller
+            // of the two and exact (D1).
+            Kernel::Hemisphere => (1.0 - r2).max(0.0).powf(1.5),
+            // pi·|v| along the input's radius, 1/(pi·r) along its
+            // angle, orthogonal images, so the smaller is sigma_min
+            // (D2).
+            Kernel::Disc => {
+                let rho = r2.sqrt();
+                let phi = v[0].atan2(v[1]);
+                let r = phi / std::f64::consts::PI + branch as f64;
+                if r <= 0.0 {
+                    return 0.0;
+                }
+                (std::f64::consts::PI * rho).min(1.0 / (std::f64::consts::PI * r))
+            }
+            // [[s, s'], [0, s]] in the (radial, tangential) frame: the
+            // smaller singular value in closed form (D3).
+            Kernel::Blob { high, low, waves } => {
+                let theta = v[1].atan2(v[0]);
+                let (sc, ds) = Kernel::blob_scale(high, low, waves, theta);
+                let a = 2.0 * sc * sc + ds * ds;
+                let disc = (a * a - 4.0 * sc.powi(4)).max(0.0).sqrt();
+                ((a - disc) * 0.5).max(0.0).sqrt()
+            }
             Kernel::Root { n, d } => r2.sqrt().powf(1.0 - (n as f64).abs() / d),
             Kernel::Spherical => r2,
             Kernel::Bubble => {
@@ -355,8 +436,14 @@ impl Kernel {
         match *self {
             Kernel::Spherical => true,
             Kernel::Root { d, .. } => d < 0.0,
-            Kernel::Bubble => false,
+            Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc | Kernel::Blob { .. } => false,
         }
+    }
+
+    /// Whether the kernel's image is the unit disc of `v`, so that a
+    /// `v` outside it is an image gap away from the piece (S4).
+    pub fn image_is_unit_disc(&self) -> bool {
+        matches!(self, Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc)
     }
 
     pub fn variation(&self) -> &'static str {
@@ -365,6 +452,9 @@ impl Kernel {
             Kernel::Root { .. } => "julian",
             Kernel::Spherical => "spherical",
             Kernel::Bubble => "bubble",
+            Kernel::Hemisphere => "hemisphere",
+            Kernel::Disc => "disc",
+            Kernel::Blob { .. } => "blob",
         }
     }
 }
@@ -429,18 +519,33 @@ impl NonlinearMap2 {
     /// "no preimage" as infinitely far was wrong by exactly this: the
     /// piece is not far, it is just not reachable by inversion.
     pub fn image_gap(&self, q: [f64; 2]) -> Option<f64> {
+        if !self.kernel.image_is_unit_disc() {
+            return None;
+        }
+        let v = self.before_kernel(q);
+        let r = v[0].hypot(v[1]);
+        if r > 1.0 {
+            let (post_lo, _) = self.post.singular_values();
+            Some((r - 1.0) * self.w.abs() * post_lo)
+        } else {
+            None
+        }
+    }
+
+    /// How many branches this map has, given the ball: bubble's two;
+    /// disc's rings up to the ball's reach in the pre-frame,
+    /// `⌊r_max⌋ + 2` with `r_max = |pre(c)| + σ_max(pre)·R`, capped
+    /// at twelve (D2); one for the rest.
+    pub fn branch_count(&self, ball: &Ball<[f64; 2]>) -> u32 {
         match self.kernel {
-            Kernel::Bubble => {
-                let v = self.before_kernel(q);
-                let r = v[0].hypot(v[1]);
-                if r > 1.0 {
-                    let (post_lo, _) = self.post.singular_values();
-                    Some((r - 1.0) * self.w.abs() * post_lo)
-                } else {
-                    None
-                }
+            Kernel::Bubble => 2,
+            Kernel::Disc => {
+                let c = self.pre.apply(ball.centre);
+                let (_, pre_hi) = self.pre.singular_values();
+                let r_max = c[0].hypot(c[1]) + pre_hi * ball.radius;
+                (r_max.floor() as u32 + 2).min(12)
             }
-            _ => None,
+            _ => 1,
         }
     }
 
@@ -803,6 +908,9 @@ fn variation_stage(
                 ("julian", Space::Planar) => Some("julian"),
                 ("spherical", Space::Planar) => Some("spherical"),
                 ("bubble", Space::Planar) => Some("bubble"),
+                ("hemisphere", Space::Planar) => Some("hemisphere"),
+                ("disc", Space::Planar) => Some("disc"),
+                ("blob", Space::Planar) => Some("blob"),
                 _ => None,
             };
             let Some(root) = root else {
@@ -891,6 +999,18 @@ pub fn transform_map_2d_ordered(
         }
         "spherical" => Kernel::Spherical,
         "bubble" => Kernel::Bubble,
+        "hemisphere" => Kernel::Hemisphere,
+        "disc" => Kernel::Disc,
+        "blob" => {
+            let p = |name: &str| t.get_variation_param_or_default("blob", name, registry) as f64;
+            let (high, low, waves) = (p("high"), p("low"), p("waves"));
+            // The scale must stay positive for the preimage to be one
+            // point (D3).
+            if !(high > 0.0) || !(low > 0.0) || !waves.is_finite() {
+                return Err(NotAffine::Degenerate(kind.to_string()));
+            }
+            Kernel::Blob { high, low, waves }
+        }
         _ => unreachable!("collected above"),
     };
     if !(w != 0.0) || !w.is_finite() {
@@ -1104,7 +1224,7 @@ impl std::fmt::Display for Disqualification {
                     f,
                     "transform {index} sums `{v}` with another variation; a root must be alone in its sum"
                 ),
-                NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a power or distance of zero"),
+                NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a parameter that leaves it no single inverse (a zero power or distance, a scale that reaches zero)"),
             },
             Self::Singular { index } => write!(f, "transform {index} is singular (no inverse)"),
             Self::NotContractive { index, sigma_max } => {
@@ -1184,13 +1304,21 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
     if !errs.is_empty() {
         return Err(errs);
     }
-    // One map per (transform, branch): a kernel with two preimages
-    // is two maps that share a transform and differ in the branch
-    // (S1), so the walk's loops and the address keep their shape.
+    // The ball first, on the unexpanded maps -- a forward map does
+    // not depend on the branch -- because a disc's branch count is
+    // read off it (D2).
+    let Some(ball) = ball_2d(&maps) else {
+        errs.push(Disqualification::NoBall);
+        return Err(errs);
+    };
+    // One map per (transform, branch): a kernel with several
+    // preimages is several maps that share a transform and differ in
+    // the branch (S1), so the walk's loops and the address keep their
+    // shape.
     let maps: Vec<IfsMap<Map2>> = maps
         .into_iter()
         .flat_map(|m| {
-            let branches = m.forward.nonlinear().map_or(1, |n| n.kernel.branches());
+            let branches = m.forward.nonlinear().map_or(1, |n| n.branch_count(&ball));
             (0..branches).map(move |b| {
                 let mut mb = m;
                 if let (Map2::Nonlinear(f), Map2::NonlinearInverse(i)) = (&mut mb.forward, &mut mb.inverse) {
@@ -1201,10 +1329,6 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
             })
         })
         .collect();
-    let Some(ball) = ball_2d(&maps) else {
-        errs.push(Disqualification::NoBall);
-        return Err(errs);
-    };
     Ok(Ifs { maps, final_map, ball })
 }
 
@@ -1387,7 +1511,11 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
             if lost > 400 {
                 return None;
             }
-            p = [0.0, 0.0];
+            // Not the origin: `disc` sends the origin to itself and a
+            // root of a negative distance sends it to infinity, so a
+            // game restarted there never leaves (Julian Disc, which
+            // is exactly those two maps).
+            p = [0.1234, 0.0567];
             continue;
         }
         if i >= 200 {
@@ -1416,8 +1544,10 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
 
     let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
 
-    // Grow until the sampled disc maps into the disc.
-    for _ in 0..60 {
+    // Grow until the sampled disc maps into the disc: sixty rounds of
+    // the plain fixed-point iteration, which is what the julia and
+    // bubble balls were found by, then twenty more overshooting.
+    for round in 0..80 {
         let mut reach = 0.0f64;
         for ring in [1.0f64, 0.75, 0.5, 0.25] {
             let count = if ring == 1.0 { 256 } else { 64 };
@@ -1446,7 +1576,15 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
         if reach <= radius {
             return Some(Ball { centre, radius: radius * (1.0 + BALL_MARGIN) });
         }
-        radius = reach;
+        // The plain iteration `radius = reach` climbs toward its limit
+        // from below by a geometric step and can fail to satisfy
+        // `reach <= radius` exactly -- a blob IFS was still creeping
+        // at 0.51 after sixty rounds. Past sixty, five percent over
+        // the reach lands above the limit the moment the maps contract
+        // in the large. Not from the start, because the balls the
+        // shipped julia presets were framed on came from the plain
+        // iteration and an overshoot moves them.
+        radius = if round < 60 { reach } else { reach * 1.05 };
     }
     None
 }
@@ -1932,6 +2070,95 @@ mod tests {
         assert!(ifs.ball.radius > 0.0 && ifs.ball.radius.is_finite());
     }
 
+    /// Plan 8.10 gate 1: hemisphere, disc and blob round-trip, disc
+    /// on every ring the ball allows, and each local factor is the
+    /// forward map's smallest stretch to a finite difference.
+    #[test]
+    fn the_fold_kernels_undo_each_of_their_branches() {
+        let guard = global_registry();
+        let r = &*guard;
+        let mut hemi = affine_xform(0.8, 0.1, -0.2, 0.7, 0.2, -0.1);
+        hemi.variations.clear();
+        hemi.variation_order.clear();
+        let hemi = with(hemi, "hemisphere", 1.4);
+        let mut disc = affine_xform(0.9, 0.3, -0.3, 0.9, 0.5, 0.2);
+        disc.variations.clear();
+        disc.variation_order.clear();
+        let disc = with(disc, "disc", 1.1);
+        let mut blob = affine_xform(0.6, 0.0, 0.0, 0.6, 0.1, 0.3);
+        blob.variations.clear();
+        blob.variation_order.clear();
+        let mut blob = with(blob, "blob", 0.9);
+        blob.set_variation_param("blob", "high", 1.4);
+        blob.set_variation_param("blob", "low", 0.6);
+        blob.set_variation_param("blob", "waves", 5.0);
+
+        for (t, kernel) in [
+            (&hemi, Kernel::Hemisphere),
+            (&disc, Kernel::Disc),
+            (&blob, Kernel::Blob { high: 1.4, low: 0.6, waves: 5.0 }),
+        ] {
+            let m = transform_map_2d_ordered(t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            let got = base.kernel;
+            let same = match (got, kernel) {
+                (Kernel::Blob { high: a, low: b, waves: c }, Kernel::Blob { high: x, low: y, waves: z }) => {
+                    close(a, x) && close(b, y) && close(c, z)
+                }
+                (a, b) => a == b,
+            };
+            assert!(same, "{got:?} vs {kernel:?}");
+            for p in [[0.3, 0.4], [-1.7, 2.6], [4.0, -3.5], [0.05, -0.02], [2.9, 0.1]] {
+                let q = base.apply_branch(p, 0);
+                // Which ring of a disc holds p: r = |pre(p)| on the ring
+                // floor(r - phi/pi + 1/2)... simpler, try every ring and
+                // require exactly the one that lands back on p.
+                let branches = if kernel == Kernel::Disc { 12 } else { 1 };
+                let mut hits = 0;
+                for b in 0..branches {
+                    let mut mb = base;
+                    mb.branch = b;
+                    let back = mb.apply_inverse(q);
+                    if (back[0] - p[0]).abs() < 1e-6 && (back[1] - p[1]).abs() < 1e-6 {
+                        hits += 1;
+                        // The local factor is a lower bound on the
+                        // forward stretch in any direction.
+                        let (c_lo, _) = base.singular_values();
+                        let sg = c_lo * mb.local_sigma_factor(q);
+                        let h = 1e-6;
+                        let d1 = base.apply_branch([p[0] + h, p[1]], 0);
+                        let d2 = base.apply_branch([p[0], p[1] + h], 0);
+                        let g1 = (d1[0] - q[0]).hypot(d1[1] - q[1]) / h;
+                        let g2 = (d2[0] - q[0]).hypot(d2[1] - q[1]) / h;
+                        assert!(sg <= g1.min(g2) * (1.0 + 1e-3) + 1e-9, "{kernel:?} at {p:?}: sigma {sg} exceeds stretch {g1}/{g2}");
+                    }
+                }
+                assert_eq!(hits, 1, "{kernel:?}: {p:?} came back on {hits} branches");
+            }
+        }
+
+        // A disc IFS gets as many rings as its ball reaches, and no
+        // more than twelve; a hemisphere's ball is invariant.
+        let ifs = analyse_2d(&flame_of(vec![disc.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.0)]), r).expect("qualifies");
+        let rings = ifs.maps.iter().filter(|m| m.transform_index == 0).count();
+        assert!((2..=12).contains(&rings), "{rings} rings");
+        let ifs = analyse_2d(&flame_of(vec![hemi.clone(), affine_xform(0.5, 0.0, 0.0, 0.5, 0.5, 0.0)]), r).expect("qualifies");
+        for j in 0..90 {
+            let a = (j as f64 * 4.0).to_radians();
+            let q = [ifs.ball.centre[0] + ifs.ball.radius * a.cos(), ifs.ball.centre[1] + ifs.ball.radius * a.sin()];
+            for m in &ifs.maps {
+                let img = m.forward.apply(q);
+                let d = (img[0] - ifs.ball.centre[0]).hypot(img[1] - ifs.ball.centre[1]);
+                assert!(d <= ifs.ball.radius * (1.0 + 1e-9));
+            }
+        }
+        // A blob whose scale reaches zero has no single inverse.
+        let mut flat = blob.clone();
+        flat.set_variation_param("blob", "low", 0.0);
+        let errs = analyse_2d(&flame_of(vec![flat]), r).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Degenerate(v), .. } if v == "blob")), "{errs:?}");
+    }
+
     /// Sierpiński: three half-scale maps. Every singular value is 0.5,
     /// every map inverts to a doubling, and the fixed points are the
     /// triangle's corners.
@@ -2287,7 +2514,7 @@ mod census {
         // root (plan 8.8).
         let known = |name: &str, w: f64, t: &Transform| {
             affine_role(name, w, t, r, Space::Planar).is_some()
-                || matches!(name, "julia" | "julian" | "spherical" | "bubble")
+                || matches!(name, "julia" | "julian" | "spherical" | "bubble" | "hemisphere" | "disc" | "blob")
         };
         for (_, c) in &all {
             if c.flame.xaos.is_some() || c.flame.final_transforms.len() > 1 {

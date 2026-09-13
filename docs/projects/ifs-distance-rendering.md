@@ -2293,6 +2293,133 @@ the library next (`disc`, `blob`, `hemisphere`): they fold the
 plane too, so their distance will be a disc too — and that is no
 longer a reason not to take them.
 
+### 8.10 The fourth rung: `disc`, `blob`, `hemisphere` (plan, 2026-09-13)
+
+The three the census names after §8.9, taken on §8.9's corrected
+footing: their distance will be a region and their picture is in the
+address and the trap. Bodies, `θ = atan2(x, y)` (Apophysis's angle
+from the +y axis) and `r = |p|`:
+
+- `hemisphere(p) = p / √(r² + 1)` — onto the open unit disc, 1-to-1.
+- `disc(p) = (θ/π) · (sin πr, cos πr)` — polar coordinates read the
+  other way: the output's RADIUS is the input's angle over π, its
+  angle (from +y) is `πr`. Onto the unit disc, and periodic in `r`
+  with period 2, so every image point has a ring of preimages.
+- `blob(p) = r · s(θ) · (cos θ, sin θ)`, `s(θ) = low + (high − low)/2 ·
+  (sin(waves·θ) + 1)` — a reflection in the diagonal, since
+  `(cos θ, sin θ)` is the swap of `(sin θ, cos θ)`, times a radial
+  scale that depends on the angle. Onto the plane when `s > 0`.
+
+**D1 — hemisphere is a diffeomorphism onto the disc, with an honest
+σ_min.** Inverse `p = v / √(1 − |v|²)`; image gap `|v| − 1` as
+bubble's. Singular values `(1−|v|²)^{3/2}` radially and
+`(1−|v|²)^{1/2}` tangentially, both exact, no fold: the smaller is
+taken. It goes to zero at the rim because the far plane compresses
+there, and that reads as a distance too SMALL near the rim, which is
+the conservative side.
+
+**D2 — disc has a ring of preimages, and the ball says how many.**
+With `ρ = |v|` and `φ` the angle of `v` from +y, the preimages are
+`r = φ/π + m` for every integer `m` with `r ≥ 0`, at `θ = +πρ` for
+even `m` and `−πρ` for odd. Rings beyond the ball's pre-image cannot
+hold a set point, so the branch count is `⌊r_max⌋ + 2` with
+`r_max = |pre(c)| + σ_max(pre)·R`, capped at twelve — which makes the
+ball a prerequisite of the branch expansion, and the analysis now
+finds the ball on the unexpanded maps first. A branch whose `r`
+comes out negative has no preimage and its child lands at infinity;
+that is not an image gap (other branches serve) and contributes
+nothing. Image gap `|v| − 1` for the unit disc. Singular values are
+exact and orthogonal: `π|v|` along the input's radius and `1/(πr)`
+along its angle; the smaller is taken, and it vanishes at the
+output origin (the +y axis collapses there), the conservative side
+again.
+
+**D3 — blob is a reflection times an angular radial scale, and the
+scale must stay positive.** Inverse `p = swap(v) / s(θ)`, `θ` the
+angle of `v` from +x. With `low ≤ 0` or `high ≤ 0` the scale can
+vanish or change sign and the preimage count changes with the
+angle; that is `Degenerate`. Jacobian in the (radial, tangential)
+frame is `[[s, s′], [0, s]]`, whose smaller singular value is closed
+form; `s′ = (high − low)/2 · waves · cos(waves·θ)`. Onto the plane,
+no gap. The defaults (`high = low = 1`) make it the pure reflection,
+an isometry.
+
+**D4 — Nothing else changes shape.** Three more kinds in the row
+(4, 5, 6), blob's three parameters in the row's vec4, and `branch`
+carrying disc's `m`. The julia and spherical/bubble rows are
+untouched and the nine presets stay byte-identical.
+
+**Gates:** as §8.9's, with §8.9's lesson: (1) round trips per kernel
+and per branch; (2) the sampled upper bound, measured on all three
+and gated where the ball is rigorous (all three are); (3) GPU agrees
+with CPU on each; (4) byte identity; (5) every colouring of every
+candidate on one sheet, and the depth check, BEFORE any conclusion
+about the picture; (6) the census — Julian Disc, Flower and Cup are
+the presets this reaches.
+
+**Built 2026-09-13. One thin set among the three, and it ships.**
+
+1. `the_fold_kernels_undo_each_of_their_branches`: every point comes
+   back on exactly one of a disc's twelve rings and on the one
+   branch of the others, and each local σ_min is below the forward
+   stretch by finite differences. A blob with `low = 0` is
+   `Degenerate`, and the message now says what that means rather
+   than "power or distance".
+2. `nonlinear_walks_never_exceed_a_sampled_upper_bound`, the same
+   grid and sample as §8.9: **hemisphere 0 of 1600, disc 0 of 1600**
+   — rigorous balls and honest σ_min, and it shows. **Blob 22 of
+   1600, 3 inner, worst 1.56×**: small, and not explained — the
+   Jacobian's singular values check against finite differences and
+   the ball is invariant, so the product-of-parts bound should hold;
+   pinned at thirty and left as a question. Bubble re-measured at
+   27 / 9 inner / 44× after the ball search changed (below); the
+   count moves with the ball because the fold band does, the regime
+   does not.
+3. GPU agrees with CPU on all five kernels by the gasket's test.
+4. The nine presets byte-identical — after a detour. The ball
+   search's plain fixed-point iteration `radius = reach` climbs to
+   its limit from below and need not satisfy `reach ≤ radius`
+   exactly: a blob IFS was still creeping at 0.51 after sixty
+   rounds and reported `NoBall`. An overshoot of 5% past the reach
+   settles it in a round — and moved the three julia presets' balls,
+   which the byte gate caught (three of nine differed). It now
+   overshoots only past sixty plain rounds, so the balls the julia
+   presets were framed on are found exactly as before. The search
+   also restarts a lost chaos-game point off the origin, because
+   `disc` sends the origin to itself and a root of a negative
+   distance sends it to infinity; Julian Disc is exactly those two
+   maps and had no ball at all.
+5. Every colouring of every candidate, then the depth check, before
+   a word about the picture (§8.9's lesson). **Blob Flower** is the
+   find: the one thin set among the fold kernels, whose distance
+   field IS the picture — contour bands radiating from a dark set —
+   and 0.42% then 0.27% of its pixels move across 24 → 48 → 96
+   levels. It ships, under `ifs_distance` with contours on and a
+   dark interior. **Julian Disc** (a `disc` and an inverted-radius
+   `julian` of power 50) draws a spoked disc under the address
+   colouring, depth-converged at 0.00%; reached, not shipped. The
+   hemisphere pair, the disc spiral and **Cup** are discs, and where
+   their trap colourings showed structure it moved **29% and 37%**
+   of pixels with the depth — the walk's, not the set's, and the
+   depth check is what keeps that from being called a picture. Cup's
+   measured ball is radius 110 on a set whose bulk is a unit or two:
+   S3's percentile with a heavy tail, recorded.
+6. Census: **20 of 169** planar; the preset library **13 of 19** —
+   Julian Disc, Cup and JuliaN Bubble reached, Blob Flower added.
+   Flower stays out on its own terms: its blob has `low = 0` and its
+   second transform is a rotation at scale 2. The rest are measures
+   (`blur`, `noise`, `pre_blur`), `julia3Dz`, and Spherical3's
+   translations.
+
+What the three rungs together say about the ladder now: the
+question was never "invertible", and it is not "region or not"
+either. Roots draw filled Julia sets; inversions draw regions whose
+structure is in the address and the trap; a blob with a positive
+scale draws a thin set with an honest distance field. Each kernel
+had to be rendered under every colouring and checked against the
+depth before anyone could say which, and that — not the inverse — is
+the cost of the next one.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a
@@ -2475,7 +2602,9 @@ julia family, three presets), §8.9 (`spherical` and `bubble`: their
 DISTANCE is a disc, and their structure is in the address and the
 trap — an Apollonian packing among it. The first conclusion there
 was drawn from one colouring per candidate and was wrong; the
-correction is recorded beside it).
+correction is recorded beside it), §8.10 (`disc`, `blob`,
+`hemisphere`: Blob Flower ships, three catalogue flames reached,
+and the depth check separates a picture from a parameter).
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and

@@ -2736,5 +2736,146 @@
     "render_mode": "escape",
     "tonemap_mode": "linear",
     "version": 3
+  },
+  {
+    "escape": {
+      "bailout": 4.0,
+      "center_im": "0.20164597996115077",
+      "center_re": "0.1357018949998583",
+      "coloring": "ifs_distance",
+      "coloring_params": {
+        "bands": 12.0,
+        "interior": 0.0
+      },
+      "formula": "ifs_flame",
+      "formula_params": {
+        "levels": 48.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.4631669079825511
+    },
+    "flame": {
+      "name": "Blob Flower",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.3,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "blob"
+          ],
+          "variation_params": {
+            "blob.high": 1.2,
+            "blob.low": 0.5,
+            "blob.waves": 5.0
+          },
+          "variations": {
+            "blob": 0.8
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.6,
+          "b": 0.3,
+          "c": -0.3,
+          "color": 0.6,
+          "color_speed": 0.0,
+          "d": 0.6,
+          "direct_color": 1.0,
+          "e": 0.5,
+          "f": 0.0,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        },
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.9,
+          "color_speed": 0.0,
+          "d": 0.5,
+          "direct_color": 1.0,
+          "e": -0.4,
+          "f": 0.3,
+          "g": 0.0,
+          "opacity": 1.0,
+          "variation_order": [
+            "linear"
+          ],
+          "variation_params": {},
+          "variations": {
+            "linear": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 3
   }
 ]
