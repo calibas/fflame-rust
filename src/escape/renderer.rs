@@ -621,6 +621,12 @@ pub struct EscapeRenderer {
     /// own group so no existing pipeline's layout moves and every
     /// existing shader stays byte-identical.
     ifs_bind_group_layout: BindGroupLayout,
+    /// The camera lens's third bind group: the one-transform flame
+    /// whose variation warps the screen offset. Its own group for the
+    /// same reason mode D has one -- no existing pipeline's layout
+    /// moves, and a lens-free shader stays byte-identical.
+    lens_bind_group_layout: BindGroupLayout,
+    lens_gpu: Option<super::lens::LensGpu>,
     ifs_buffer: Buffer,
     /// BYTES the buffer currently holds, so it only grows. Bytes
     /// rather than rows because the planar and solid strides differ.
@@ -1515,6 +1521,8 @@ impl EscapeRenderer {
             palette_sampler,
             bind_group_layout,
             ifs_bind_group_layout,
+            lens_bind_group_layout: super::lens::lens_layout(device),
+            lens_gpu: None,
             ifs_buffer,
             ifs_capacity: 0,
             ifs_uploaded_solid: None,
@@ -6189,6 +6197,38 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     /// Compile (or fetch from cache) the pipeline for this config's
     /// (formula, coloring) pair; returns its cache key.
+    /// Rebuild the lens buffers when the lens changes, rewrite them
+    /// when only its amount or parameters do.
+    ///
+    /// The key deliberately excludes the amount, so dragging that
+    /// slider writes a buffer instead of compiling a shader. The
+    /// parameters are IN the key because a variation's enum parameter
+    /// can pick a different branch of its formula, which is a
+    /// different map and so a different pipeline.
+    fn ensure_lens(&mut self, device: &Device, queue: &Queue, escape: &EscapeConfig) {
+        let registry = crate::variations::global_registry();
+        let Some(flame) = super::lens::lens_flame(escape, &registry) else {
+            self.lens_gpu = None;
+            return;
+        };
+        let key = super::lens::lens_key(escape, &registry);
+        match self.lens_gpu.as_ref() {
+            Some(l) if l.key == key => {
+                self.lens_gpu.as_ref().unwrap().write(queue, &flame);
+            }
+            _ => {
+                let l = super::lens::LensGpu::build(
+                    device,
+                    &self.lens_bind_group_layout,
+                    &flame,
+                    key,
+                );
+                l.write(queue, &flame);
+                self.lens_gpu = Some(l);
+            }
+        }
+    }
+
     fn ensure_pipeline(&mut self, device: &Device, escape: &EscapeConfig) -> String {
         // Mode B routing: a formula name resolving in the FIELD
         // registry compiles the field template instead. Same bind
@@ -6278,16 +6318,40 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let interior = !self.disable_interior;
         #[cfg(not(test))]
         let interior = true;
-        let key = format!("{}|{}|{}|{}", formula.name, coloring.name, damped, interior);
+        let registry = crate::variations::global_registry();
+        let lens_src = super::lens::lens_source(escape, &registry);
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            formula.name,
+            coloring.name,
+            damped,
+            interior,
+            super::lens::lens_key(escape, &registry),
+        );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_with(formula, coloring, damped, interior);
+            let source = assembler::assemble_with_lens(
+                formula,
+                coloring,
+                damped,
+                interior,
+                lens_src.as_deref(),
+            );
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
             });
+            // Group 1 is mode D's and unused here, so it stays empty;
+            // the lens sits at 2 either way, so a lensed and an
+            // unlensed mode-A pipeline differ only in whether the
+            // third slot is filled.
+            let groups: Vec<Option<&BindGroupLayout>> = if lens_src.is_some() {
+                vec![Some(&self.bind_group_layout), None, Some(&self.lens_bind_group_layout)]
+            } else {
+                vec![Some(&self.bind_group_layout)]
+            };
             let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some("Escape Pipeline Layout"),
-                bind_group_layouts: &[Some(&self.bind_group_layout)],
+                bind_group_layouts: &groups,
                 immediate_size: 0,
             });
             let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -6956,6 +7020,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             None
         };
 
+        self.ensure_lens(device, queue, escape);
         let key = self.ensure_pipeline(device, escape);
         let pipeline = &self.pipelines[&key];
 
@@ -6967,6 +7032,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pass.set_bind_group(0, &bind_group, &[]);
         if let Some(bg) = ifs_bind_group.as_ref() {
             pass.set_bind_group(1, bg, &[]);
+        }
+        if let Some(l) = self.lens_gpu.as_ref() {
+            pass.set_bind_group(2, l.bind_group(), &[]);
         }
         pass.dispatch_workgroups(
             self.width.div_ceil(stride).div_ceil(8),

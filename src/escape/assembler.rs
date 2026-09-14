@@ -106,6 +106,8 @@ fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
 }
 
+//__LENS__
+
 // What the colorings read: the orbit's terminal state.
 struct OrbitSummary {
     z: vec2<f32>,
@@ -227,6 +229,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(params.width), f32(params.height));
     var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
     d.y = -d.y;
+    //__LENS_APPLY__
     let rot = params.rot_cs;
     let pixel = params.center + vec2<f32>(
         d.x * rot.x - d.y * rot.y,
@@ -5875,6 +5878,23 @@ pub fn assemble_with(
     damped: bool,
     interior_detect: bool,
 ) -> String {
+    assemble_with_lens(formula, coloring, damped, interior_detect, None)
+}
+
+/// The same, with a camera lens spliced in.
+///
+/// `lens` is what `escape::lens::lens_source` produced: the variation
+/// functions, their libraries and `esc_lens`. `None` leaves both
+/// markers empty, which is what makes a lens-free shader byte-identical
+/// to the one this engine compiled before lenses existed --
+/// `a_shader_without_a_lens_is_byte_identical` pins exactly that.
+pub fn assemble_with_lens(
+    formula: &FormulaDef,
+    coloring: &ColoringDef,
+    damped: bool,
+    interior_detect: bool,
+    lens: Option<&str>,
+) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
@@ -5914,6 +5934,24 @@ pub fn assemble_with(
     let mut out = Vec::new();
     for line in TEMPLATE.lines() {
         match line.trim() {
+            // The lens: its variation functions and helper
+            // libraries at top level, and the warp itself on the
+            // screen offset. Both empty without one, so the shader is
+            // unchanged.
+            "//__LENS__" => {
+                if let Some(src) = lens {
+                    out.push(src.to_string());
+                }
+            }
+            "//__LENS_APPLY__" => {
+                if lens.is_some() {
+                    // `d` is the y-flipped world offset. Half of the
+                    // vertical span takes it to the half-height-one
+                    // convention the lens is written in, and back.
+                    out.push("    let lens_h = max(abs(params.span.y) * 0.5, 1e-30);".to_string());
+                    out.push("    d = esc_lens(d / lens_h) * lens_h;".to_string());
+                }
+            }
             "//__FORMULA__" => {
                 out.push(format!("// formula: {}", formula.name));
                 out.push(formula.wgsl.to_string());
@@ -6756,5 +6794,93 @@ mod tests {
         for c in COLORINGS {
             assert!(c.parameters.len() <= PARAM_VEC4S * 4, "{}", c.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod lens_tests {
+    use super::*;
+    use crate::config::escape::EscapeConfig;
+
+    fn mandelbrot() -> (&'static FormulaDef, &'static ColoringDef) {
+        (
+            crate::escape::get_formula("mandelbrot"),
+            crate::escape::get_coloring("smooth"),
+        )
+    }
+
+    fn validate_lens(src: &str, what: &str) {
+        assert!(!src.contains("//__"), "{what} left a marker");
+        use wgpu::naga;
+        let module = naga::front::wgsl::parse_str(src)
+            .unwrap_or_else(|e| panic!("{what} parse: {e}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{what} validation: {e:?}"));
+    }
+
+    fn lens_for(name: &str) -> String {
+        let r = crate::variations::global_registry();
+        let mut cfg = EscapeConfig::default();
+        cfg.lens = name.to_string();
+        crate::escape::lens::lens_source(&cfg, &r)
+            .unwrap_or_else(|| panic!("{name}: no lens source"))
+    }
+
+    /// The shader an unlensed render compiles is the shader it
+    /// compiled before lenses existed. Byte identity, not "looks the
+    /// same": the markers must vanish without leaving so much as a
+    /// blank line, because every escape render in the visual suite is
+    /// compared by pixel hash.
+    #[test]
+    fn a_shader_without_a_lens_is_byte_identical() {
+        let (f, c) = mandelbrot();
+        for damped in [false, true] {
+            for interior in [false, true] {
+                let plain = assemble_with(f, c, damped, interior);
+                let none = assemble_with_lens(f, c, damped, interior, None);
+                assert_eq!(plain, none, "damped {damped} interior {interior}");
+                assert!(!plain.contains("__LENS"), "a marker survived");
+                assert!(!plain.contains("esc_lens"), "lens glue without a lens");
+            }
+        }
+    }
+
+    /// A lens actually reaches the screen offset, in the half-height
+    /// convention, and brings its variation with it.
+    #[test]
+    fn a_lens_warps_the_screen_offset() {
+        let (f, c) = mandelbrot();
+        let src = lens_for("eyefish");
+        let out = assemble_with_lens(f, c, false, true, Some(&src));
+        assert!(out.contains("d = esc_lens(d / lens_h) * lens_h;"), "not applied");
+        assert!(out.contains("fn variation_eyefish"), "the variation is missing");
+        assert!(out.contains("@group(2) @binding("), "not on the lens group");
+        validate_lens(&out, "eyefish lens");
+    }
+
+    /// EVERY variation compiles as a lens.
+    ///
+    /// The simulation's layer warp already asserts they all validate
+    /// in ITS host; this asserts the escape host too, which has its
+    /// own `params`, its own bindings and its own group. A variation
+    /// that collided with one of those would otherwise surface as a
+    /// black render for one entry in a 647-item picker.
+    #[test]
+    #[ignore = "compiles 647 shaders; run with --ignored"]
+    fn every_variation_compiles_as_a_lens() {
+        let (f, c) = mandelbrot();
+        let r = crate::variations::global_registry();
+        let mut n = 0;
+        for name in r.names() {
+            let out = assemble_with_lens(f, c, false, true, Some(&lens_for(name)));
+            validate_lens(&out, &format!("lens {name}"));
+            n += 1;
+        }
+        println!("{n} variations compile as a camera lens");
+        assert!(n > 600, "only {n} variations");
     }
 }
