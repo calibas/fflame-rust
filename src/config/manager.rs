@@ -2012,6 +2012,15 @@ impl ConfigManager {
                 .copied()
                 .unwrap_or(0.0)
                 .into()),
+            ConfigPath::EscapeLens => Ok(config.escape.lens.clone().into()),
+            ConfigPath::EscapeLensAmount => Ok(config.escape.lens_amount.into()),
+            ConfigPath::EscapeLensParam { param } => Ok(config
+                .escape
+                .lens_params
+                .get(param)
+                .copied()
+                .unwrap_or(0.0)
+                .into()),
 
             // Transforms
             ConfigPath::TransformCount => {
@@ -3313,6 +3322,17 @@ impl ConfigManager {
             ConfigPath::EscapeColoringParam { param } => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.coloring_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeLens => {
+                self.current.escape.lens = value.try_into()?;
+            }
+            ConfigPath::EscapeLensAmount => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.lens_amount = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeLensParam { param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.lens_params.insert(param.clone(), v);
             }
 
             // Transforms

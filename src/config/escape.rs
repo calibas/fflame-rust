@@ -119,6 +119,32 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
 
+    /// The **camera lens**: a variation applied to the normalised
+    /// screen offset before the view scale, by name. Empty is no lens.
+    ///
+    /// This warps the VIEW, not the fractal: the formula is untouched
+    /// and only which point each pixel samples changes, which is the
+    /// opposite direction from a flame's final transform. See
+    /// `docs/projects/escape-camera-lens.md`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lens: String,
+
+    /// The lens variation's parameters, keyed by name inside that
+    /// variation's namespace -- the same shape as `formula_params`,
+    /// and preserved across a change of lens for the same reason.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lens_params: BTreeMap<String, f32>,
+
+    /// How much of the lens to apply: `n` at 0, `L(n)` at 1, the
+    /// straight blend between at anything else.
+    ///
+    /// Without it a lens is all-or-nothing, and most of them are far
+    /// too strong at full strength to be a camera effect rather than
+    /// a subject. The simulation's layer warp reached for the same
+    /// control (`mix(q, mapped, rate)`) for the same reason.
+    #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
+    pub lens_amount: f32,
+
 
     /// Where a solid render looks: the point the camera orbits and
     /// approaches, as exact decimal strings.
@@ -647,6 +673,13 @@ pub fn biomorph_from_str(s: &str) -> Option<BiomorphMode> {
     }
 }
 
+/// A lens at full strength. One rather than zero so that choosing a
+/// lens shows it: a default of nothing would look like a broken
+/// picker.
+fn default_lens_amount() -> f32 {
+    1.0
+}
+
 fn default_formula() -> String {
     "mandelbrot".to_string()
 }
@@ -802,6 +835,9 @@ impl Default for EscapeConfig {
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
+            lens: String::new(),
+            lens_params: BTreeMap::new(),
+            lens_amount: default_lens_amount(),
             supersample: 1,
             downsample: DownsampleMode::Box,
             reference_period: None,
@@ -1057,6 +1093,9 @@ mod tests {
             ConfigPath::EscapeColoring,
             ConfigPath::EscapeFormulaParam { param: "power".into() },
             ConfigPath::EscapeColoringParam { param: "trap_radius".into() },
+            ConfigPath::EscapeLens,
+            ConfigPath::EscapeLensAmount,
+            ConfigPath::EscapeLensParam { param: "power".into() },
         ];
         for p in paths {
             let key = p.to_string_key();

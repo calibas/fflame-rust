@@ -472,6 +472,14 @@ pub enum ConfigPath {
     EscapeFormulaParam { param: String },
     /// One parameter of the active coloring, same shape.
     EscapeColoringParam { param: String },
+    /// The camera lens: a variation warping the screen offset, by
+    /// name. Empty is no lens.
+    EscapeLens,
+    /// How much of the lens to apply, 0 to 1.
+    EscapeLensAmount,
+    /// One parameter of the lens variation, keyed by name like
+    /// `EscapeFormulaParam`.
+    EscapeLensParam { param: String },
 
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
@@ -1043,6 +1051,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeColoring => write!(f, "Escape Coloring"),
             ConfigPath::EscapeFormulaParam { param } => write!(f, "Formula → {param}"),
             ConfigPath::EscapeColoringParam { param } => write!(f, "Coloring → {param}"),
+            ConfigPath::EscapeLens => write!(f, "Lens"),
+            ConfigPath::EscapeLensAmount => write!(f, "Lens Amount"),
+            ConfigPath::EscapeLensParam { param } => write!(f, "Lens → {param}"),
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
@@ -1374,6 +1385,12 @@ impl ConfigPath {
             ),
             ConfigPath::EscapeColoringParam { param } => I18nKey::with_params(
                 "history.param.escape_coloring_param",
+                vec![("param", param.clone())],
+            ),
+            ConfigPath::EscapeLens => I18nKey::simple("history.param.escape_lens"),
+            ConfigPath::EscapeLensAmount => I18nKey::simple("history.param.escape_lens_amount"),
+            ConfigPath::EscapeLensParam { param } => I18nKey::with_params(
+                "history.param.escape_lens_param",
                 vec![("param", param.clone())],
             ),
 
@@ -2707,7 +2724,10 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingTextureScale
             | ConfigPath::EscapeColoring
             | ConfigPath::EscapeFormulaParam { .. }
-            | ConfigPath::EscapeColoringParam { .. } => UpdateType::EscapeRerender,
+            | ConfigPath::EscapeColoringParam { .. }
+            | ConfigPath::EscapeLens
+            | ConfigPath::EscapeLensAmount
+            | ConfigPath::EscapeLensParam { .. } => UpdateType::EscapeRerender,
 
             // Simulation: split by how much of the run survives. This
             // grouping is the whole reason there are three update types
@@ -3101,6 +3121,9 @@ impl ConfigPath {
             ConfigPath::EscapeColoring => "Escape.Coloring".to_string(),
             ConfigPath::EscapeFormulaParam { param } => format!("Escape.FormulaParam.{param}"),
             ConfigPath::EscapeColoringParam { param } => format!("Escape.ColoringParam.{param}"),
+            ConfigPath::EscapeLens => "Escape.Lens".to_string(),
+            ConfigPath::EscapeLensAmount => "Escape.LensAmount".to_string(),
+            ConfigPath::EscapeLensParam { param } => format!("Escape.LensParam.{param}"),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
@@ -3314,6 +3337,11 @@ impl ConfigPath {
                 }
                 ["ColoringParam", param] => {
                     return Some(ConfigPath::EscapeColoringParam { param: param.to_string() })
+                }
+                ["Lens"] => return Some(ConfigPath::EscapeLens),
+                ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
+                ["LensParam", param] => {
+                    return Some(ConfigPath::EscapeLensParam { param: param.to_string() })
                 }
                 _ => return None,
             }
@@ -4015,7 +4043,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeDampingRe
         | ConfigPath::EscapeDampingIm
         | ConfigPath::EscapeFormulaParam { .. }
-        | ConfigPath::EscapeColoringParam { .. } => {
+        | ConfigPath::EscapeColoringParam { .. }
+        | ConfigPath::EscapeLensAmount
+        | ConfigPath::EscapeLensParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
         ConfigPath::EscapeMaxIter => json.as_u64().map(|v| ConfigValue::UInt(v as u32)),
@@ -4086,7 +4116,12 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingTextureKind
         | ConfigPath::EscapeDownsample
         | ConfigPath::EscapeShadingShadowBlend
-        | ConfigPath::EscapeShadingHighlightBlend => None,
+        | ConfigPath::EscapeShadingHighlightBlend
+        // The lens NAME is a choice, not a quantity: there is no
+        // meaning to a value part-way between two variations, so it
+        // cannot carry an animation track. Its amount and its
+        // parameters can, and do.
+        | ConfigPath::EscapeLens => None,
         // Selectors and the deep-zoom center strings are structural /
         // exact — not animatable (centers deliberately: see the plan's
         // open questions on center-path animation).
