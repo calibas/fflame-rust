@@ -151,7 +151,12 @@ pub fn lens_source(escape: &EscapeConfig, registry: &VariationRegistry) -> Optio
     // these two are the rest of the overlap, and the escape host is
     // the one that has to give way because the flame header is shared
     // with the simulation.
-    for name in ["palette_texture", "palette_sampler"] {
+    //
+    // `ff_atan2` is the third: mode D's walk uses the same guarded
+    // atan2 the flame does, so both blocks define it. Renaming inside
+    // the lens block is safe because every caller of it is in that
+    // block too -- the variation bodies that need it come with it.
+    for name in ["palette_texture", "palette_sampler", "ff_atan2"] {
         src = src.replace(name, &format!("lens_{name}"));
     }
     src.push_str(LENS_GLUE);
@@ -482,6 +487,50 @@ mod gpu_tests {
     /// exactly a 2x zoom -- mix(n, 0, 0.5) = n/2. Decisive between
     /// "the map is identity" and "the transforms buffer is empty".
     #[test]
+
+    /// The lens reaches every path that renders headlessly.
+    ///
+    /// The perturbed kernel is not among them -- it acquires its
+    /// reference orbit progressively, so a single headless render of
+    /// a deep zoom is entirely unlit and a pixel comparison there
+    /// compares two black images. It is gated at the shader instead,
+    /// by `every_template_applies_the_lens`.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn every_headless_path_carries_the_lens() {
+        let (device, queue) = device();
+        let n = (W * H) as usize;
+
+        let paths: Vec<(&str, fn(&mut FractalConfig))> = vec![
+            ("direct", |_c| {}),
+            ("field", |c| {
+                c.escape.formula = "weierstrass".to_string();
+                c.escape.coloring = "field_value".to_string();
+            }),
+        ];
+
+        for (label, tweak) in paths {
+            let mut plain = config("", 1.0);
+            tweak(&mut plain);
+            let mut lensed = config("eyefish", 1.0);
+            tweak(&mut lensed);
+            let mut lin = config("linear", 1.0);
+            tweak(&mut lin);
+
+            let a = render(&device, &queue, &plain);
+            let lit = a.chunks(4).filter(|p| p[0] > 4 || p[1] > 4 || p[2] > 4).count();
+            assert!(lit > n / 10, "{label}: nothing rendered, so nothing is proven");
+
+            let d = differing(&a, &render(&device, &queue, &lensed));
+            println!("  {label}: lens moved {d}/{n} px of {lit} lit");
+            assert!(d > n / 50, "{label}: the lens did not reach this path ({d}/{n})");
+            assert_eq!(
+                differing(&a, &render(&device, &queue, &lin)),
+                0,
+                "{label}: linear is not the identity"
+            );
+        }
+    }
 
     /// A lens PARAMETER reaches the shader.
     ///

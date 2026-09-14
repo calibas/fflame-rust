@@ -4419,6 +4419,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
+        if let Some(l) = self.lens_gpu.as_ref() {
+            pass.set_bind_group(2, l.bind_group(), &[]);
+        }
         pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         drop(pass);
         if measure {
@@ -4440,16 +4443,36 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let coloring = super::get_coloring(&escape.coloring);
         let tier = Self::perturb_tier(escape)
             .unwrap_or(assembler::PerturbTier::Power(2));
-        let key = format!("perturbed|{}|{}|{:?}", coloring.name, floatexp, tier);
+        let lens_registry = crate::variations::global_registry();
+        let lens_src = super::lens::lens_source(escape, &lens_registry);
+        let lens_id = super::lens::lens_key(escape, &lens_registry);
+        let key = format!(
+            "perturbed|{}|{}|{:?}|{lens_id}",
+            coloring.name, floatexp, tier
+        );
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_perturbed(coloring, floatexp, tier);
+            let source = assembler::assemble_perturbed_with_lens(
+                coloring,
+                floatexp,
+                tier,
+                lens_src.as_deref(),
+            );
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
             });
+            let groups: Vec<Option<&BindGroupLayout>> = if lens_src.is_some() {
+                vec![
+                    Some(&self.perturb_bind_group_layout),
+                    None,
+                    Some(&self.lens_bind_group_layout),
+                ]
+            } else {
+                vec![Some(&self.perturb_bind_group_layout)]
+            };
             let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some("Escape Perturbed Pipeline Layout"),
-                bind_group_layouts: &[Some(&self.perturb_bind_group_layout)],
+                bind_group_layouts: &groups,
                 immediate_size: 0,
             });
             let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -6252,19 +6275,36 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         .map_or(1.0, |p| p.default)
                 })
                 .clamp(1.0, assembler::IFS_MAX_BEAM as f32) as u32;
-            let key = format!("ifs|{}|{}|b{beam}", def.name, coloring.name);
+            let lens_registry = crate::variations::global_registry();
+            let lens_src = super::lens::lens_source(escape, &lens_registry);
+            let lens_id = super::lens::lens_key(escape, &lens_registry);
+            let key = format!("ifs|{}|{}|b{beam}|{lens_id}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
-                let source = assembler::assemble_ifs(def, coloring, beam);
+                let source = assembler::assemble_ifs_with_lens(
+                    def,
+                    coloring,
+                    beam,
+                    lens_src.as_deref(),
+                );
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),
                     source: ShaderSource::Wgsl(source.into()),
                 });
-                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                    label: Some("Escape IFS Pipeline Layout"),
-                    bind_group_layouts: &[
+                let groups: Vec<Option<&BindGroupLayout>> = if lens_src.is_some() {
+                    vec![
                         Some(&self.bind_group_layout),
                         Some(&self.ifs_bind_group_layout),
-                    ],
+                        Some(&self.lens_bind_group_layout),
+                    ]
+                } else {
+                    vec![
+                        Some(&self.bind_group_layout),
+                        Some(&self.ifs_bind_group_layout),
+                    ]
+                };
+                let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Escape IFS Pipeline Layout"),
+                    bind_group_layouts: &groups,
                     immediate_size: 0,
                 });
                 let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -6279,11 +6319,18 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             }
             return key;
         }
+        let lens_registry = crate::variations::global_registry();
+        let field_lens = super::lens::lens_source(escape, &lens_registry);
+        let field_lens_id = super::lens::lens_key(escape, &lens_registry);
         let (key, source_for) = if let Some(field) = super::fields::get_field(&escape.formula) {
             let coloring = super::fields::get_field_coloring(&escape.coloring, field);
             (
-                format!("field|{}|{}", field.name, coloring.name),
-                Some(assembler::assemble_field(field, coloring)),
+                format!("field|{}|{}|{field_lens_id}", field.name, coloring.name),
+                Some(assembler::assemble_field_with_lens(
+                    field,
+                    coloring,
+                    field_lens.as_deref(),
+                )),
             )
         } else {
             (String::new(), None)
@@ -6294,9 +6341,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     label: Some(&format!("Escape Shader {key}")),
                     source: ShaderSource::Wgsl(source.into()),
                 });
+                let groups: Vec<Option<&BindGroupLayout>> = if field_lens.is_some() {
+                    vec![Some(&self.bind_group_layout), None, Some(&self.lens_bind_group_layout)]
+                } else {
+                    vec![Some(&self.bind_group_layout)]
+                };
                 let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                     label: Some("Escape Pipeline Layout"),
-                    bind_group_layouts: &[Some(&self.bind_group_layout)],
+                    bind_group_layouts: &groups,
                     immediate_size: 0,
                 });
                 let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -6513,6 +6565,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // early return it takes (the drop guard writes on exit).
         let _diag_cpu = super::diag::CpuTimer::start();
         let results_active = self.ensure_results(device);
+        // Once, at the top: every path below -- direct, field,
+        // perturbed, mode D -- binds the same lens group, and a
+        // pipeline compiled with one must find it bound.
+        self.ensure_lens(device, queue, escape);
         self.ensure_ifs_seeds(escape);
         let mut params = self.params_for(escape);
         if results_active {
@@ -7020,7 +7076,6 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             None
         };
 
-        self.ensure_lens(device, queue, escape);
         let key = self.ensure_pipeline(device, escape);
         let pipeline = &self.pipelines[&key];
 

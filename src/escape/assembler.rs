@@ -106,8 +106,6 @@ fn cparam(i: u32) -> f32 {
     return params.cparams[i / 4u][i % 4u];
 }
 
-//__LENS__
-
 // What the colorings read: the orbit's terminal state.
 struct OrbitSummary {
     z: vec2<f32>,
@@ -624,6 +622,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         - 0.5 * vec2<f32>(f32(params.width), f32(params.height));
     var dpx = centered;
     dpx.y = -dpx.y;
+    //__LENS_APPLY_PX__
     let rot = params.rot_cs;
     let d0 = vec2<f32>(
         dpx.x * rot.x - dpx.y * rot.y,
@@ -1544,6 +1543,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         - 0.5 * vec2<f32>(f32(params.width), f32(params.height));
     var dpx = centered;
     dpx.y = -dpx.y;
+    //__LENS_APPLY_PX__
     let rot = params.rot_cs;
     let d0px = vec2<f32>(
         dpx.x * rot.x - dpx.y * rot.y,
@@ -3882,6 +3882,20 @@ fn delta_step_ducks_fe(variant: u32) -> String {
 /// orbit value every iteration for the rebase test, which is exactly
 /// the summary the colorings consume. `floatexp` picks the deep rung.
 pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbTier) -> String {
+    assemble_perturbed_with_lens(coloring, floatexp, tier, None)
+}
+
+/// The same, with a camera lens.
+///
+/// The perturbed path matters more than the direct one here: it is
+/// what renders past zoom ~14, so a lens wired only into the direct
+/// template would work until the user zoomed and then silently stop.
+pub fn assemble_perturbed_with_lens(
+    coloring: &ColoringDef,
+    floatexp: bool,
+    tier: PerturbTier,
+    lens: Option<&str>,
+) -> String {
     let needs_accum = coloring.has_feature(ColoringFeature::NeedsOrbitAccum);
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
@@ -3895,8 +3909,10 @@ pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbT
     };
 
     let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
+            "//__LENS_APPLY_PX__" => lens_apply_pixels(&mut out, lens),
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship(v.min(5)),
@@ -4318,6 +4334,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(params.width), f32(params.height));
     var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
     d.y = -d.y;
+    //__LENS_APPLY__
     let rot = params.rot_cs;
     let pixel = params.center + vec2<f32>(
         d.x * rot.x - d.y * rot.y,
@@ -4588,10 +4605,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // position: at a deep zoom there is no position an f32 could hold,
     // and the walk starts from the beam state the CPU handed over
     // instead. `rot_cs` and `span` are folded into the seeds' basis.
-    let uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
+    // `var` rather than `let`: a camera lens rewrites this offset in
+    // place, and WGSL has no shadowing in the same scope. Identical
+    // without one.
+    var uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
         / vec2<f32>(f32(params.width), f32(params.height))
         - vec2<f32>(0.5, 0.5);
 
+    //__LENS_APPLY_UV__
     let res = ifs_evaluate(uv);
 
     // Cache the walk before colouring it. A band cannot be
@@ -4699,10 +4720,14 @@ fn ifs_pack_geom(n: vec3<f32>, ao: f32, sun: vec4<f32>, t: f32) -> vec4<u32> {
 // A pixel's ray, from its coordinates and the camera: the one thing
 // both the walk and the relight derive rather than store.
 fn ifs_ray(px: u32, py: u32) -> vec3<f32> {
-    let uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
+    // `var` rather than `let`: a camera lens rewrites this offset in
+    // place, and WGSL has no shadowing in the same scope. Identical
+    // without one.
+    var uv = (vec2<f32>(f32(px), f32(py)) + vec2<f32>(0.5, 0.5))
         / vec2<f32>(f32(params.width), f32(params.height))
         - vec2<f32>(0.5, 0.5);
     let aspect = f32(params.width) / f32(max(params.height, 1u));
+    //__LENS_APPLY_RAY__
     let tan_half = tan(ifs_fov() * 0.5);
     return normalize(
         ifs_forward() + ifs_right() * (uv.x * aspect * 2.0 * tan_half)
@@ -5798,11 +5823,20 @@ pub fn assemble_ifs_recolor(coloring: &IfsColoringDef) -> String {
 /// Assemble the SOLID relight pass: one colouring and the shared rig
 /// over the records and the geometry cache. See `IFS_RELIGHT_TEMPLATE`.
 pub fn assemble_ifs_relight(coloring: &IfsColoringDef) -> String {
+    assemble_ifs_relight_with_lens(coloring, None)
+}
+
+/// The same, with a camera lens -- see [`ifs_rig`] for why relight
+/// needs one at all.
+pub fn assemble_ifs_relight_with_lens(
+    coloring: &IfsColoringDef,
+    lens: Option<&str>,
+) -> String {
     let mut out = Vec::new();
     for line in IFS_RELIGHT_TEMPLATE.lines() {
         match line.trim() {
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
-            "//__IFS_RIG__" => out.push(IFS_RIG.trim().to_string()),
+            "//__IFS_RIG__" => out.push(ifs_rig(lens)),
             _ => out.push(line.to_string()),
         }
     }
@@ -5827,18 +5861,55 @@ pub const IFS_MAX_BEAM: u32 = 8;
 /// 146 ms sized for one. Same picture to the byte, because nothing in
 /// the algorithm changes; only how many registers the compiler has to
 /// reserve for slots that stay empty.
+
+/// The shared camera rig, with the lens folded into `ifs_ray`.
+///
+/// `IFS_RIG` is spliced as a whole block, so the line loop never sees
+/// the marker inside it -- it would survive into the WGSL as a stray
+/// comment and the solid's rays would silently miss the lens while
+/// the planar walk had it. The RELIGHT pass splices the same rig, and
+/// takes the same lens for the same reason: its shading is computed
+/// from a ray it rebuilds, and an unlensed ray against a lensed walk
+/// lights the wrong surface.
+fn ifs_rig(lens: Option<&str>) -> String {
+    let mut apply = Vec::new();
+    lens_apply_uv(&mut apply, lens, "uv");
+    IFS_RIG
+        .trim()
+        .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
+}
+
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
+    assemble_ifs_with_lens(def, coloring, beam, None)
+}
+
+/// The same, with a camera lens.
+///
+/// Both of mode D's sites take it: the planar walk's screen offset,
+/// and the solid's ray direction. The relight pass derives its ray
+/// from the same `ifs_ray`, so it follows without a site of its own,
+/// and the recolor pass reads a cached walk that already has the lens
+/// baked into it.
+pub fn assemble_ifs_with_lens(
+    def: &IfsDef,
+    coloring: &IfsColoringDef,
+    beam: u32,
+    lens: Option<&str>,
+) -> String {
     // The two templates share the walk's shape and all four
     // colourings; what differs is everything around the walk -- a
     // camera, a march, a normal and a shade.
     let template = if def.solid { IFS_3D_TEMPLATE } else { IFS_TEMPLATE };
     let beam = beam.clamp(1, IFS_MAX_BEAM);
     let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
     for line in template.lines() {
         match line.trim() {
+            "//__LENS_APPLY_UV__" => lens_apply_uv(&mut out, lens, "uv"),
+            "//__LENS_APPLY_RAY__" => lens_apply_uv(&mut out, lens, "uv"),
             "//__IFS__" => out.push(def.wgsl.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
-            "//__IFS_RIG__" => out.push(IFS_RIG.trim().to_string()),
+            "//__IFS_RIG__" => out.push(ifs_rig(lens)),
             "const IFS_MAX_BEAM: u32 = 8u;" => {
                 out.push(format!("const IFS_MAX_BEAM: u32 = {beam}u;"))
             }
@@ -5852,9 +5923,20 @@ pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> Strin
 /// coloring into [`FIELD_TEMPLATE`]. Same marker discipline as
 /// [`assemble`].
 pub fn assemble_field(field: &FieldDef, coloring: &FieldColoringDef) -> String {
+    assemble_field_with_lens(field, coloring, None)
+}
+
+/// The same, with a camera lens.
+pub fn assemble_field_with_lens(
+    field: &FieldDef,
+    coloring: &FieldColoringDef,
+    lens: Option<&str>,
+) -> String {
     let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
     for line in FIELD_TEMPLATE.lines() {
         match line.trim() {
+            "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
             "//__FIELD__" => out.push(field.wgsl.trim().to_string()),
             "//__FIELD_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             _ => out.push(line.to_string()),
@@ -5872,6 +5954,54 @@ pub fn assemble(formula: &FormulaDef, coloring: &ColoringDef, damped: bool) -> S
 /// As [`assemble`], with interior detection switchable. Disabling it
 /// exists for the agreement test (which asserts the two produce the
 /// SAME image); production always enables it.
+/// Prepend the lens block, when there is one.
+///
+/// Uniform across every template: the block declares its own structs,
+/// bindings and functions and shares none of them with the host, so
+/// the top of the module is always legal and no template needs a
+/// marker placed in exactly the right spot.
+fn lens_prelude(out: &mut Vec<String>, lens: Option<&str>) {
+    if let Some(src) = lens {
+        out.push(src.to_string());
+    }
+}
+
+/// `d` is a y-flipped WORLD offset. Half of the vertical span takes it
+/// to the half-height-one convention the lens is written in, and back.
+fn lens_apply_span(out: &mut Vec<String>, lens: Option<&str>) {
+    if lens.is_some() {
+        out.push("    let lens_h = max(abs(params.span.y) * 0.5, 1e-30);".to_string());
+        out.push("    d = esc_lens(d / lens_h) * lens_h;".to_string());
+    }
+}
+
+/// `dpx` is a y-flipped offset in PIXELS -- the perturbed path never
+/// forms a world position, because at its zooms no f32 could hold one.
+/// Half the height is the same half-height-one scale, reached without
+/// a span.
+fn lens_apply_pixels(out: &mut Vec<String>, lens: Option<&str>) {
+    if lens.is_some() {
+        out.push("    let lens_h = max(f32(params.height) * 0.5, 1e-30);".to_string());
+        out.push("    dpx = esc_lens(dpx / lens_h) * lens_h;".to_string());
+    }
+}
+
+/// `uv` spans [-1/2, 1/2] on BOTH axes, with the aspect applied later,
+/// so reaching half-height-one is a doubling and the aspect has to be
+/// put in and taken back out by hand -- otherwise a lens circle would
+/// come out an ellipse on a non-square image.
+fn lens_apply_uv(out: &mut Vec<String>, lens: Option<&str>, var: &str) {
+    if lens.is_some() {
+        out.push(
+            "    let lens_a = f32(params.width) / f32(max(params.height, 1u));".to_string(),
+        );
+        out.push(format!(
+            "    {var} = esc_lens(vec2<f32>({var}.x * 2.0 * lens_a, {var}.y * 2.0)) \
+* vec2<f32>(0.5 / lens_a, 0.5);"
+        ));
+    }
+}
+
 pub fn assemble_with(
     formula: &FormulaDef,
     coloring: &ColoringDef,
@@ -5932,26 +6062,14 @@ pub fn assemble_with_lens(
     };
 
     let mut out = Vec::new();
+    lens_prelude(&mut out, lens);
     for line in TEMPLATE.lines() {
         match line.trim() {
             // The lens: its variation functions and helper
             // libraries at top level, and the warp itself on the
             // screen offset. Both empty without one, so the shader is
             // unchanged.
-            "//__LENS__" => {
-                if let Some(src) = lens {
-                    out.push(src.to_string());
-                }
-            }
-            "//__LENS_APPLY__" => {
-                if lens.is_some() {
-                    // `d` is the y-flipped world offset. Half of the
-                    // vertical span takes it to the half-height-one
-                    // convention the lens is written in, and back.
-                    out.push("    let lens_h = max(abs(params.span.y) * 0.5, 1e-30);".to_string());
-                    out.push("    d = esc_lens(d / lens_h) * lens_h;".to_string());
-                }
-            }
+            "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
             "//__FORMULA__" => {
                 out.push(format!("// formula: {}", formula.name));
                 out.push(formula.wgsl.to_string());
@@ -6810,7 +6928,15 @@ mod lens_tests {
     }
 
     fn validate_lens(src: &str, what: &str) {
-        assert!(!src.contains("//__"), "{what} left a marker");
+        // A marker is a LINE that is one, not any comment that
+        // mentions one -- the rig's own docs name `//__IFS_RIG__`.
+        if let Some(m) = src
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("//__") && l.ends_with("__"))
+        {
+            panic!("{what} left a marker: {m}");
+        }
         use wgpu::naga;
         let module = naga::front::wgsl::parse_str(src)
             .unwrap_or_else(|e| panic!("{what} parse: {e}"));
@@ -6883,4 +7009,69 @@ mod lens_tests {
         println!("{n} variations compile as a camera lens");
         assert!(n > 600, "only {n} variations");
     }
+    /// Every template that maps a pixel to a sample point applies the
+    /// lens, and none of them does without one.
+    ///
+    /// This is the gate the feature most needed. A lens wired only
+    /// into the direct template works until the user zooms past ~14,
+    /// where the perturbed kernel takes over, and then silently stops
+    /// -- the picture quietly becomes the unlensed one, with no error
+    /// anywhere to say so. Mode B and mode D are the same shape of
+    /// silence, and mode D twice: its planar walk and its solid ray.
+    #[test]
+    fn every_template_applies_the_lens() {
+        let (f, c) = mandelbrot();
+        let src = lens_for("eyefish");
+        let field = crate::escape::fields::FIELDS[0];
+        let fcol = crate::escape::fields::FIELD_COLORINGS[0];
+
+        let cases: Vec<(&str, String, String)> = vec![
+            (
+                "direct",
+                assemble_with_lens(f, c, false, true, Some(&src)),
+                assemble_with_lens(f, c, false, true, None),
+            ),
+            (
+                "perturbed",
+                assemble_perturbed_with_lens(c, false, PerturbTier::Power(2), Some(&src)),
+                assemble_perturbed_with_lens(c, false, PerturbTier::Power(2), None),
+            ),
+            (
+                "perturbed floatexp",
+                assemble_perturbed_with_lens(c, true, PerturbTier::Power(2), Some(&src)),
+                assemble_perturbed_with_lens(c, true, PerturbTier::Power(2), None),
+            ),
+            (
+                "field",
+                assemble_field_with_lens(field, fcol, Some(&src)),
+                assemble_field_with_lens(field, fcol, None),
+            ),
+        ];
+
+        for (label, lensed, plain) in &cases {
+            assert!(lensed.contains("esc_lens("), "{label}: the lens is not applied");
+            assert!(!plain.contains("esc_lens("), "{label}: lens glue without a lens");
+            assert!(
+                !plain.lines().map(str::trim).any(|l| l.starts_with("//__LENS")),
+                "{label}: a marker survived"
+            );
+            validate_lens(lensed, label);
+        }
+
+        // Mode D, both of its sites, planar and solid.
+        for def in crate::escape::ifs::IFS_DEFS {
+            let col = crate::escape::ifs::get_ifs_coloring("ifs_distance", def);
+            let lensed = assemble_ifs_with_lens(def, col, 4, Some(&src));
+            let plain = assemble_ifs_with_lens(def, col, 4, None);
+            let what = format!("ifs {}", def.name);
+            assert!(lensed.contains("esc_lens("), "{what}: the lens is not applied");
+            assert!(!plain.contains("esc_lens("), "{what}: lens glue without a lens");
+            assert!(
+                !plain.lines().map(str::trim).any(|l| l.starts_with("//__LENS")),
+                "{what}: a marker survived"
+            );
+            validate_lens(&lensed, &what);
+        }
+    }
+
 }
