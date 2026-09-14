@@ -288,6 +288,8 @@ pub fn render_escape_content(
         }
     }
 
+    show_lens_section(ui, config_manager);
+
     // ---- Julia toggle ----
     //
     // Mode A only (fields have no Julia plane), and only where the map
@@ -1318,6 +1320,166 @@ fn show_solid_camera(
 /// not apply here, and two flames differing only in weights render
 /// identically. That is D6, and the panel is where it stops being a
 /// surprise.
+/// Choosing a lens: the name, and every one of its parameters at its
+/// registry default, as ONE undo step.
+///
+/// Seeding rather than leaving them absent, for two reasons that both
+/// bite otherwise. An absent parameter reads back as 0.0 from the
+/// config manager -- a def's default is a registry concern, which is
+/// why `LensTarget` resolves it at the panel -- so an undo of the
+/// first edit would write that 0.0 as if it were the old value and
+/// leave the lens in a state the user never saw. And `lens_params` is
+/// keyed by parameter NAME alone, so a `c1` left behind by the
+/// previous lens would otherwise be inherited by the next one that
+/// happens to have a `c1`.
+///
+/// This is the same shape as `apply_preset` below, which enumerates a
+/// def's parameters into one batch for the same reason.
+fn lens_choice(name: &str) -> Vec<(ConfigPath, ConfigValue)> {
+    let mut changes = vec![(ConfigPath::EscapeLens, ConfigValue::String(name.to_string()))];
+    if let Some(info) = crate::variations::global_registry().get(name) {
+        for p in &info.parameters {
+            changes.push((
+                ConfigPath::EscapeLensParam { param: p.name.clone() },
+                p.default_value.into(),
+            ));
+        }
+    }
+    changes
+}
+
+/// The **camera lens**: a variation applied to the screen offset.
+///
+/// A lens warps the view rather than the fractal, which is the
+/// opposite direction from a flame's final transform, so a variation
+/// need not be invertible to be one and every shipped variation is
+/// offered. Most are not good lenses -- measured, 285 of 647 are
+/// smooth and in frame at their defaults -- but "good" here depends on
+/// parameters the user can edit, so the picker curates nothing and
+/// says so in its tooltip instead.
+///
+/// The parameters are rendered by `render_variation_params`, the same
+/// code the transforms panel uses, through a `ParamTarget` that reads
+/// the escape config's map instead of a transform. That is the whole
+/// reason the trait exists: a second parameter renderer here would
+/// have to reproduce the ParamType zoo, the undo coalescing and the
+/// "a quantising widget must not rewrite the value merely by being
+/// drawn" rule, and would drift from the original.
+fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+    use crate::ui::variation_params::{render_variation_params, LensTarget};
+
+    let registry = crate::variations::global_registry();
+    let current = config_manager.active_config().escape.lens.clone();
+    let amount = config_manager.active_config().escape.lens_amount;
+
+    let label = if current.is_empty() {
+        t!("escape_panel.lens_none").to_string()
+    } else {
+        registry
+            .get(&current)
+            .map(|i| i.display_name.clone())
+            .unwrap_or_else(|| current.clone())
+    };
+
+    egui::CollapsingHeader::new(t!("escape_panel.lens"))
+        .id_salt("escape_lens")
+        .default_open(!current.is_empty())
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(t!("escape_panel.lens_tip"))
+                    .small()
+                    .weak(),
+            );
+
+            let mut pick: Option<String> = None;
+            let filter_id = egui::Id::new("escape_lens_filter");
+            egui::ComboBox::from_id_salt("escape_lens_pick")
+                .selected_text(label)
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    // 647 entries is a scroll, not a list. The filter
+                    // lives in egui memory rather than the config: it
+                    // is a way of finding a lens, not part of one, and
+                    // putting it in the config would make typing here
+                    // an undo step.
+                    let mut filter =
+                        ui.data_mut(|d| d.get_temp::<String>(filter_id).unwrap_or_default());
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut filter)
+                                .hint_text(t!("escape_panel.lens_filter"))
+                                .desired_width(200.0),
+                        )
+                        .changed()
+                    {
+                        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+                    }
+                    let needle = filter.trim().to_lowercase();
+
+                    if ui
+                        .selectable_label(current.is_empty(), t!("escape_panel.lens_none"))
+                        .clicked()
+                    {
+                        pick = Some(String::new());
+                    }
+                    ui.separator();
+                    // The app's ordinary ordering: category, then
+                    // registration order, the same order the
+                    // variations browser uses -- so a lens is found
+                    // where a variation is found.
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for name in registry.names() {
+                            let Some(info) = registry.get(name) else { continue };
+                            if !needle.is_empty()
+                                && !name.to_lowercase().contains(&needle)
+                                && !info.display_name.to_lowercase().contains(&needle)
+                            {
+                                continue;
+                            }
+                            if ui
+                                .selectable_label(&current == name, &info.display_name)
+                                .clicked()
+                            {
+                                pick = Some(name.clone());
+                            }
+                        }
+                    });
+                });
+            if let Some(name) = pick {
+                let _ = config_manager
+                    .update_batch(lens_choice(&name), "history.param.escape_lens".to_string());
+            }
+
+            if current.is_empty() {
+                return;
+            }
+
+            let mut a = amount;
+            if ui
+                .add(
+                    egui::Slider::new(&mut a, 0.0..=1.0)
+                        .text(t!("escape_panel.lens_amount")),
+                )
+                .on_hover_text(t!("escape_panel.lens_amount_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeLensAmount, a.into());
+            }
+
+            if let Some(info) = registry.get(&current) {
+                if !info.parameters.is_empty() {
+                    render_variation_params(
+                        ui,
+                        config_manager,
+                        &LensTarget,
+                        &current,
+                        &info.parameters,
+                    );
+                }
+            }
+        });
+}
+
 /// `solid` picks WHICH criterion: a solid formula walks the 3D IFS,
 /// and qualifying in three dimensions is a different question from
 /// qualifying in two. Reported against the plane regardless, this
@@ -2279,6 +2441,24 @@ mod criterion_tests {
     /// reading of that variation at all. `pack_flame` had had the
     /// same mistake (plan 8.11 step 2) and was fixed there; this is
     /// the panel's half, and the two now answer alike.
+    /// Picking a lens seeds every parameter at its registry default,
+    /// in one undo step with the name.
+    #[test]
+    fn choosing_a_lens_seeds_its_parameters() {
+        use crate::config::{ConfigPath, ConfigValue};
+        let registry = crate::variations::global_registry();
+        let changes = super::lens_choice("curl");
+        assert_eq!(changes[0].0, ConfigPath::EscapeLens);
+        let info = registry.get("curl").expect("curl");
+        assert_eq!(changes.len(), 1 + info.parameters.len(), "not every parameter seeded");
+        for p in &info.parameters {
+            let want = ConfigPath::EscapeLensParam { param: p.name.clone() };
+            let got = changes.iter().find(|(path, _)| *path == want).expect("seeded");
+            assert_eq!(got.1, ConfigValue::Float(p.default_value), "{} seeded wrong", p.name);
+        }
+        // Clearing the lens carries no parameters.
+        assert_eq!(super::lens_choice("").len(), 1);
+    }
     #[test]
     fn a_solid_formula_reads_the_solid_criterion() {
         use crate::scene::transforms::{Flame, Transform};
