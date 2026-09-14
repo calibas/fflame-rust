@@ -2735,14 +2735,56 @@ plane's rejects it, and `pack_for` builds the solid the walk needs.
 smooth balls of revolution under every colouring but the trap, whose
 concentric shells are depth-converged and so the set's own. That is
 what the variation's docs say the vector slice of a scalar-dominant
-`c` is, and the direct iteration agrees. Bourke's lobes live in the
+`c` is, and the direct iteration agrees. Bourke's lobes were guessed to live in the
 slice that keeps the scalar IN the 3D point -- the variation's
-projection 1, which swaps `z` and `w` -- which this step excluded
-(`NotAffine::Mode`) and which is the obvious next one: a kernel
-variant whose lift and projection swap two coordinates, nothing
-else new. No preset ships from step 3; the standalone solid of step
-1 is the quaternion picture until then, and the IFS route is now
-exact where it can be checked.
+projection 1 -- which this step excluded (`NotAffine::Mode`) and
+which step 4 took up. **That guess was wrong; see step 4.** No
+preset ships from step 3; the standalone solid of step 1 is the
+quaternion picture, and the IFS route is now exact where it can be
+checked.
+
+**Step 4, 2026-09-13: projection 1 is supported, and it is not a
+slice.** The variation's projection 1 (Depth) disassembles the
+kernel's result as `(r.x, r.y, r.w)` for the 3D point and carries
+`r.z` — a permutation of ℝ⁴, hence an isometry, so every singular
+value and every bound built from one is untouched and the kernel
+costs one swapped assembly on each side. It round-trips on every
+branch, the permutation identity is asserted exactly (the depth
+map's 3D point IS the vector map's with the scalar and `k`
+exchanged), its singular values equal the vector map's, GPU agrees
+with the CPU march at **100.0%**, and the walk's membership ties to
+the direct iteration at **0 disagreements** for both projections.
+
+**And it does not draw a slice of the quaternion Julia set.** Step
+3's record said the lobes live there. They do not, and the
+variation's own doc said so in a sentence this plan read and
+discounted: *"The return both plots AND feeds forward, so each mode
+is effectively a different attractor."* The 3D point is what the
+next iteration is fed, so the swap is applied EVERY step: the map
+in ℝ⁴ is `poly ∘ P`, not `poly`. The error surfaced as a gate
+rather than as a picture — the membership comparison iterated the
+bare polynomial, agreed on the first step, and then reported the
+walk finding 0 interior points against the polynomial's 954; with
+the swap interleaved the two agree exactly, and the set is a
+different object.
+
+Measured over twelve constants: **every one with a negative scalar
+part -- the range where a quadratic Julia set has its structure --
+has an EMPTY set under `poly ∘ P`**; the interiors found are all at
+`c` near zero (`c = 0` gives 432 of 2744 grid points bounded,
+`c = 0.25` scalar gives 616). Rendered under all four colourings,
+those are balls with some banding. Nothing ships.
+
+**So the quaternion road ends where it started, and that is the
+finding.** To show the scalar coordinate an IFS-route render would
+have to carry a different one, and the flame's map decides which:
+the vector projection always hides the scalar, and projection 1
+changes the dynamics rather than the view. The standalone solid of
+step 1 owns its slice axis with the plain polynomial, and is the
+tool for lobed quaternion pictures. Steps 2 to 4 are the machinery
+-- 3D kernels, the carried scalar, both projections -- exact
+everywhere it is checkable, reaching no picture the standalone does
+not already draw better.
 
 ## 9. Where this comes from
 
@@ -2935,8 +2977,9 @@ as kernels on the flame's solid side, gated and shipping nothing;
 step 3, the quaternion IFS with the scalar carried, exact to 100%
 against the CPU and 99.6% against step 1, its pictures balls on the
 vector slice, and two latent f32 faults found -- `length()` past
-level nine and the early exit under a root; the projection-1 slice
-next).
+level nine and the early exit under a root; step 4, projection 1,
+supported and exact and NOT a slice of the Julia set -- the road
+ends at step 1's standalone solid for the pictures).
 
 Not on the list, and why: the planar walk has no early exit because it
 produces all four quantities in one pass for the record cache, and

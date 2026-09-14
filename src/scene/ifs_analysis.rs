@@ -673,7 +673,16 @@ pub enum Kernel3 {
     /// forward map is the root `(q − c)^{1/n}` with radius exponent
     /// `d/n`, on the quaternion `(xyz, w)` whose scalar `w` is the
     /// walk's `aux`; the walk's inverse is `qⁿ + c`.
-    Quaternion { n: i32, d: f64, c: [f64; 4] },
+    ///
+    /// `depth` is the variation's **projection 1**: the kernel's
+    /// result disassembles as `(r.x, r.y, r.w)` for the 3D point with
+    /// `r.z` carried, instead of `r.xyz` with `r.w` carried. That is a
+    /// permutation of ℝ⁴ and so an isometry — every singular value,
+    /// and every bound built from one, is untouched — but it decides
+    /// WHICH 3D slice of the 4D set is drawn: with it the scalar is in
+    /// the picture and `k` is hidden, which is the slice Bourke's
+    /// lobed solids live in (step 4).
+    Quaternion { n: i32, d: f64, c: [f64; 4], depth: bool },
 }
 
 /// The Hamilton product of `(x, y, z, w)` quaternions, scalar `w`.
@@ -746,10 +755,14 @@ impl Kernel3 {
         let r2d = z[0] * z[0] + z[1] * z[1];
         let a = (z[1].atan2(z[0]) + std::f64::consts::TAU * k as f64) / n;
         match *self {
-            Kernel3::Quaternion { d, c, .. } => {
+            Kernel3::Quaternion { d, c, depth, .. } => {
                 let q = [z[0] - c[0], z[1] - c[1], z[2] - c[2], aux - c[3]];
                 let r = qroot(q, n, k, d);
-                ([r[0], r[1], r[2]], r[3])
+                if depth {
+                    ([r[0], r[1], r[3]], r[2])
+                } else {
+                    ([r[0], r[1], r[2]], r[3])
+                }
             }
             Kernel3::Root3 { .. } => {
                 let zz = z[2] / n.abs();
@@ -778,10 +791,12 @@ impl Kernel3 {
         let rxy = v[0].hypot(v[1]);
         let theta = n * v[1].atan2(v[0]);
         match *self {
-            Kernel3::Quaternion { d, c, .. } => {
+            Kernel3::Quaternion { d, c, depth, .. } => {
                 // The polynomial: the root's radius exponent d/n undone
-                // by n/d on the magnitude, the angle by n.
-                let q = [v[0], v[1], v[2], aux];
+                // by n/d on the magnitude, the angle by n. The result
+                // is reassembled first, which for `depth` puts the
+                // carried coordinate back in the k slot.
+                let q = if depth { [v[0], v[1], aux, v[2]] } else { [v[0], v[1], v[2], aux] };
                 let mag = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
                 let p = qpow(q, n);
                 let scale = if mag > 1e-300 { mag.powf(n / d) / mag.powf(n) } else { 0.0 };
@@ -849,6 +864,8 @@ impl Kernel3 {
                 (1.0 / (n * n), 1.0)
             }
             Kernel3::RootZ3 { .. } => (1.0, 1.0),
+            // A permutation of the output changes no singular value,
+            // so `depth` does not appear here.
             Kernel3::Quaternion { n, d, .. } => {
                 let (n, d) = ((n as f64).abs(), d.abs());
                 (d.min(1.0) / n, d.max(1.0) / n)
@@ -1736,14 +1753,23 @@ pub fn transform_map_3d_ordered(
         "julia3Dz" => Kernel3::RootZ3 { n },
         "quaternion_julia" => {
             let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
-            if p("inverse") < 0.5 || p("projection").round() != 0.0 {
+            let projection = p("projection").round();
+            // Projection 2 (Perspective) divides by `1 − w`, which is
+            // not an isometry and has a singularity inside the ball;
+            // 0 (Vector) and 1 (Depth) are permutations.
+            if p("inverse") < 0.5 || !(projection == 0.0 || projection == 1.0) {
                 return Err(NotAffine::Mode(kind.to_string()));
             }
             let d = p("dist");
             if !(d != 0.0) || !d.is_finite() {
                 return Err(NotAffine::Degenerate(kind.to_string()));
             }
-            Kernel3::Quaternion { n, d, c: [p("cx"), p("cy"), p("cz"), p("cw")] }
+            Kernel3::Quaternion {
+                n,
+                d,
+                c: [p("cx"), p("cy"), p("cz"), p("cw")],
+                depth: projection == 1.0,
+            }
         }
         _ => unreachable!("collected above"),
     };
@@ -2872,7 +2898,8 @@ mod tests {
             let t = qjulia_xform(c, power, dist, w);
             let m = transform_map_3d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
             let base = m.nonlinear().copied().expect("nonlinear");
-            let Kernel3::Quaternion { n, d, c: kc } = base.kernel else { panic!("{:?}", base.kernel) };
+            let Kernel3::Quaternion { n, d, c: kc, depth } = base.kernel else { panic!("{:?}", base.kernel) };
+            assert!(!depth, "projection 0 is the vector one");
             assert_eq!(n, power as i32);
             assert!(close(d, dist as f64));
             for i in 0..4 {
@@ -2900,14 +2927,52 @@ mod tests {
                 }
             }
         }
-        // Forward mode is refused, and so is a non-vector projection.
+        // Projection 1 (Depth) is the same kernel with the output's
+        // last two coordinates swapped -- a permutation, so it must
+        // round-trip on every branch just as the vector one does, and
+        // its singular values must be unchanged.
+        for c in [[-1.0f32, 0.2, 0.0, 0.0], [0.3, 0.0, 0.0, -0.6]] {
+            let mut t = qjulia_xform(c, 2.0, 1.0, 1.0);
+            t.set_variation_param("quaternion_julia", "projection", 1.0);
+            let m = transform_map_3d_ordered(&t, r, &t.ordered_variation_names(r)).expect("a nonlinear map");
+            let base = m.nonlinear().copied().expect("nonlinear");
+            let Kernel3::Quaternion { depth, .. } = base.kernel else { panic!("{:?}", base.kernel) };
+            assert!(depth, "projection 1 is the depth one");
+            // The same constants with projection 0, for the singular
+            // values a permutation cannot move.
+            let flat = transform_map_3d_ordered(&qjulia_xform(c, 2.0, 1.0, 1.0), r, &["quaternion_julia".to_string()])
+                .expect("a nonlinear map");
+            let (a_lo, a_hi) = base.singular_values();
+            let (b_lo, b_hi) = flat.nonlinear().unwrap().singular_values();
+            assert!(close(a_lo, b_lo) && close(a_hi, b_hi), "a permutation moved a singular value");
+            for (p, aux) in [([0.3, 0.4, 0.2], 0.1), ([-1.2, 0.7, -0.5], -0.6), ([0.05, -0.02, 0.4], 0.0)] {
+                for k in 0..2 {
+                    let (q, qa) = base.apply_branch_aux(p, aux, k);
+                    let (back, ba) = base.apply_inverse_aux(q, qa);
+                    for i in 0..3 {
+                        assert!((back[i] - p[i]).abs() < 1e-6, "depth c {c:?} branch {k}: {p:?}/{aux} -> {q:?}/{qa} -> {back:?}/{ba}");
+                    }
+                    assert!((ba - aux).abs() < 1e-6, "depth c {c:?} branch {k}: aux {aux} came back {ba}");
+                }
+                // The depth map's 3D point IS the vector map's, with
+                // the scalar and k exchanged -- which is what "the
+                // slice Bourke's lobes live in" means, said as an
+                // identity rather than a claim.
+                let (q0, a0) = flat.nonlinear().unwrap().apply_branch_aux(p, aux, 0);
+                let (q1, a1) = base.apply_branch_aux(p, aux, 0);
+                assert!(close(q1[0], q0[0]) && close(q1[1], q0[1]));
+                assert!(close(q1[2], a0) && close(a1, q0[2]), "the swap is not the projection's");
+            }
+        }
+
+        // Forward mode is refused, and so is the perspective projection.
         let mut fwd = qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0);
         fwd.set_variation_param("quaternion_julia", "inverse", 0.0);
         let errs = analyse_3d(&flame_of(vec![fwd]), r).unwrap_err();
         assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Mode(v), .. } if v == "quaternion_julia")), "{errs:?}");
-        let mut depth = qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0);
-        depth.set_variation_param("quaternion_julia", "projection", 1.0);
-        let errs = analyse_3d(&flame_of(vec![depth]), r).unwrap_err();
+        let mut persp = qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0);
+        persp.set_variation_param("quaternion_julia", "projection", 2.0);
+        let errs = analyse_3d(&flame_of(vec![persp]), r).unwrap_err();
         assert!(errs.iter().any(|e| matches!(e, Disqualification::NotAffine { why: NotAffine::Mode(_), .. })), "{errs:?}");
         // And a single transform qualifies, with a 4D ball.
         let ifs3 = analyse_3d(&flame_of(vec![qjulia_xform([-1.0, 0.2, 0.0, 0.0], 2.0, 1.0, 1.0)]), r).expect("qualifies");
@@ -2963,51 +3028,83 @@ mod tests {
             println!("  c {cand:?}: {inside} of {total} grid points bounded on the w = 0 slice");
         }
         // -0.6 + 0.3i as a quaternion, scalar -0.6, i 0.3: 360 of 4096
-        // bounded above, an interior to agree on.
-        let c = [0.3f32, 0.0, 0.0, -0.6];
-        let ifs3 = analyse_3d(&flame_of(vec![qjulia_xform(c, 2.0, 1.0, 1.0)]), r).expect("qualifies");
-        let cf = [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64];
-        let radius = ifs3.ball.radius;
-        let centre = ifs3.ball.centre;
-        let (mut n, mut bad, mut walk_in, mut direct_in) = (0usize, 0usize, 0usize, 0usize);
-        const G: usize = 24;
-        for iz in 0..G {
-            for iy in 0..G {
-                for ix in 0..G {
-                    let f = |i: usize| 2.0 * (i as f64 + 0.5) / G as f64 - 1.0;
-                    let (u, v, w) = (f(ix), f(iy), f(iz));
-                    if (u * u + v * v + w * w).sqrt() > 0.8 {
-                        continue;
-                    }
-                    let p = [centre[0] + radius * u, centre[1] + radius * v, centre[2] + radius * w];
-                    let e = crate::scene::ifs_estimate::estimate_aux(&ifs3, p, 0.0, 24, 1);
-                    // Direct: q0 = (p, 0), iterate q^2 + c, escaped when the
-                    // 4D distance to the ball's centre passes its radius.
-                    let mut q = [p[0], p[1], p[2], 0.0];
-                    let mut escaped = false;
-                    for _ in 0..24 {
-                        let d4 = ((q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2) + (q[2] - centre[2]).powi(2) + (q[3] - ifs3.aux_centre).powi(2)).sqrt();
-                        if d4 > radius {
-                            escaped = true;
-                            break;
+        // bounded above, an interior to agree on. And Bourke's
+        // -1 + 0.2i, whose vector slice is a dust and whose DEPTH
+        // slice (the scalar in the picture, k hidden) is the classic
+        // lobed set -- which is the point of projection 1.
+        // Projection 1's constants are NOT the Julia ones: its step is
+        // the polynomial after a swap, a different dynamical system,
+        // and every constant with Julia structure has an empty set
+        // under it (measured; see the record). These two have an
+        // interior to agree on.
+        for (c, projection) in [
+            ([0.3f32, 0.0, 0.0, -0.6], 0.0f32),
+            ([0.0, 0.0, 0.0, 0.25], 1.0),
+            ([0.1, 0.0, 0.0, 0.0], 1.0),
+        ] {
+            let mut t = qjulia_xform(c, 2.0, 1.0, 1.0);
+            t.set_variation_param("quaternion_julia", "projection", projection);
+            let ifs3 = analyse_3d(&flame_of(vec![t]), r).expect("qualifies");
+            let cf = [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64];
+            let radius = ifs3.ball.radius;
+            let centre = ifs3.ball.centre;
+            let (mut n, mut bad, mut walk_in, mut direct_in) = (0usize, 0usize, 0usize, 0usize);
+            const G: usize = 24;
+            for iz in 0..G {
+                for iy in 0..G {
+                    for ix in 0..G {
+                        let f = |i: usize| 2.0 * (i as f64 + 0.5) / G as f64 - 1.0;
+                        let (u, v, w) = (f(ix), f(iy), f(iz));
+                        if (u * u + v * v + w * w).sqrt() > 0.8 {
+                            continue;
                         }
-                        let sq = qmul(q, q);
-                        q = [sq[0] + cf[0], sq[1] + cf[1], sq[2] + cf[2], sq[3] + cf[3]];
-                    }
-                    n += 1;
-                    walk_in += (!e.escaped) as usize;
-                    direct_in += (!escaped) as usize;
-                    if e.escaped == !escaped {
-                        // (both escaped, or both not) is agreement
-                    }
-                    if e.escaped != escaped {
-                        bad += 1;
+                        let p = [centre[0] + radius * u, centre[1] + radius * v, centre[2] + radius * w];
+                        let e = crate::scene::ifs_estimate::estimate_aux(&ifs3, p, 0.0, 24, 1);
+                        // Direct, in the walk's own terms: the state
+                        // is (3D point, carried scalar) as a 4-vector,
+                        // and one inverse step is the polynomial
+                        // AFTER the projection's reassembly -- which
+                        // for `depth` swaps the last two coordinates
+                        // EVERY step, not just the first. The
+                        // variation's comment says so in as many
+                        // words ("z and w swap roles each step"), and
+                        // the set is the attractor of poly∘P rather
+                        // than of poly: iterating the bare polynomial
+                        // agreed on the first step and then diverged,
+                        // which read as the walk finding no interior
+                        // at all.
+                        let assemble = |s: [f64; 4]| {
+                            if projection == 1.0 {
+                                [s[0], s[1], s[3], s[2]]
+                            } else {
+                                s
+                            }
+                        };
+                        let mut q = [p[0], p[1], p[2], 0.0];
+                        let mut escaped = false;
+                        for _ in 0..24 {
+                            let d4 = ((q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2) + (q[2] - centre[2]).powi(2) + (q[3] - ifs3.aux_centre).powi(2)).sqrt();
+                            if d4 > radius {
+                                escaped = true;
+                                break;
+                            }
+                            let r4 = assemble(q);
+                            let sq = qmul(r4, r4);
+                            q = [sq[0] + cf[0], sq[1] + cf[1], sq[2] + cf[2], sq[3] + cf[3]];
+                        }
+                        n += 1;
+                        walk_in += (!e.escaped) as usize;
+                        direct_in += (!escaped) as usize;
+                        if e.escaped != escaped {
+                            bad += 1;
+                        }
                     }
                 }
             }
+            println!("  c {c:?} projection {projection}: {n} points, walk interior {walk_in}, direct interior {direct_in}, membership disagreements {bad}");
+            assert_eq!(bad, 0, "c {c:?} projection {projection}: the walk and the direct iteration disagree on {bad} of {n}");
+            assert!(walk_in > 0, "c {c:?} projection {projection}: no interior to agree on");
         }
-        println!("  single quaternion: {n} points, walk interior {walk_in}, direct interior {direct_in}, membership disagreements {bad}");
-        assert_eq!(bad, 0, "the walk and the direct iteration disagree on {bad} of {n} points");
     }
 
     /// Sierpiński: three half-scale maps. Every singular value is 0.5,
