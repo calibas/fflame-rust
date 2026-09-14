@@ -2219,6 +2219,8 @@ escape_panel:
   ifs_frame: "Frame Attractor"
   ifs_frame_tip: "Move the view to the attractor's bounding ball."
   ifs_rejected: "This flame is not an affine IFS:"
+  ifs_rejected_solid: "This flame is not a solid IFS:"
+  ifs_rejected_solid_tip: "A solid walks the flame in THREE dimensions, which is a different question from the plane: every transform must contract in z as well, so an Apophysis-style transform (an XY affine with a z offset) never qualifies however good a planar map it is. Each must compose to an invertible contracting 3D affine, or to one julia3D / julia3Dz / quaternion_julia around affines, with no xaos."
   ifs_rejected_tip: "Every transform must compose to an invertible affine map that contracts in every direction, or to one julia / julian root around affines, with no xaos."
   coloring_use: "Use %{name}"
   toggle_on: "Switch to Escape mode"

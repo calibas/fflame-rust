@@ -2709,6 +2709,28 @@ julia3Dz pairs (up from 98.0 / 99.2 with the early exit gone);
 every colouring, depth-converged at 0.00%; eleven presets
 byte-identical.
 
+**The panel was reading the wrong criterion, reported from use.**
+A flame of one inverse-mode `quaternion_julia` transform rendered
+perfectly well under `ifs_flame_3d` while the panel said the
+variation "is not affine" -- the PLANE's verdict, and the plane has
+no reading of that variation at all. `show_ifs_criterion` ran
+`analyse_2d` whatever the formula was; it takes the def's `solid`
+now and asks the analysis the formula walks. The renderer had had
+the same mistake and was fixed in step 2, which is exactly why this
+survived: the two halves were fixed a step apart.
+
+The same call had a second half of it. The **Frame Attractor**
+button wrote `center_re`/`center_im` and a planar zoom -- quantities
+a solid camera does not read -- so over a solid it did nothing at
+all. It writes the camera's target and a zoom of zero there now,
+which is what frames a solid, the distance being
+`FRAME_DISTANCE · radius / 2^zoom` already.
+
+`a_solid_formula_reads_the_solid_criterion` gates both halves: the
+verdict is extracted from the panel so the CHOICE is testable, and
+the test asserts the solid criterion accepts the user's flame, the
+plane's rejects it, and `pack_for` builds the solid the walk needs.
+
 **The pictures are balls.** The quaternion pair and trio render as
 smooth balls of revolution under every colouring but the trap, whose
 concentric shells are depth-converged and so the set's own. That is
