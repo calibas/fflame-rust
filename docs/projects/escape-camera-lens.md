@@ -61,15 +61,19 @@ variation WGSL into a non-flame shader, and its
 647 do. This reuses that machinery rather than reimplementing the
 part of it that decides which helper library a variation needs.
 
-- `ShaderBuilder::build_layer_map(&flame)` emits the variation
-  functions, the helper libraries, the packed `get_param`, the buffer
-  declarations and a `flame_map(xform_id, u, seed) -> vec2<f32>`. It
-  rewrites `@group(0)` to `@group(1)`, so the host keeps group 0.
-- The escape templates gain a `//__LENS__` marker and call
-  `flame_map`.
+- `ShaderBuilder::build_layer_map_at(&flame, group)` emits the
+  variation functions, the helper libraries, the packed `get_param`,
+  the buffer declarations and a
+  `flame_map(xform_id, u, seed) -> vec2<f32>`, with `@group(0)`
+  rewritten to the group the caller names. It takes that argument
+  because mode D already owns group 1, so a lens lands at **2**.
+- The block is PREPENDED to each template rather than spliced at a
+  declaration marker: it shares no symbol with the host, so the top of
+  the module is always legal, and no template needs a marker placed in
+  exactly the right spot. Only the application sites are marked.
 - The renderer builds a one-transform flame from the config, packs it
   with `pack_gpu_transforms` / `pack_gpu_variation_params`, and binds
-  group 1 exactly as `SimRenderer::set_layer_transforms` does.
+  it the way `SimRenderer::set_layer_transforms` does.
 
 Because the layer map carries the whole variation system, no
 variation needs refusing on shader grounds — RNG, colour-writing and
@@ -123,13 +127,11 @@ units, not pixels. A lens shifts it by `log2(J)` — a smooth shading
 change, not a break. Making edge width uniform in *screen* space
 would need `J`, and that is a preference.
 
-Mode D is the one to check rather than assume: if its hit test
-compares a distance against a pixel footprint, a lens that magnifies
-changes what counts as a surface. **Step 4 below settles this by
-reading the code, before any claim about it.**
-
-`J` is two extra variation evaluations per pixel by central
-difference, which is nothing against the iteration count.
+Mode D was the one to check rather than assume. It compares its
+walk's distance against a world-space radius taken from the same rig
+the ray comes from, so a lens moves both together and nothing is
+mis-detected. **Settled in step 4: no Jacobian is needed.** See the
+record.
 
 ## 6. Which variations are worth offering
 
@@ -182,4 +184,69 @@ parameters, and a variation's parameters are editable.
 
 ## 8. Record
 
-*(Filled in as steps land.)*
+**Steps 1 to 4 are done.** The lens is stored, rendered on every
+path, and its variation parameters are edited by the panel.
+
+**The splice is a prelude, not a marker.** The first cut put a
+`//__LENS__` marker in the direct template and would have needed one
+placed correctly in each of the other four. The block declares its
+own structs, bindings and functions and shares none with the host, so
+the top of the module is always legal: `lens_prelude` prepends it and
+no template needs a declaration marker at all. Only the APPLICATION
+sites need markers, and there are four shapes of them because the
+offset arrives in three different units -- a world offset scaled by
+the span, a pixel offset on the perturbed path, and mode D's `uv`
+with the aspect applied later.
+
+**Three symbols had to give way**, and the compile gate found each:
+`palette_texture` and `palette_sampler`, which the escape shader
+declares too, and `ff_atan2`, which mode D's walk shares with the
+flame. They are renamed inside the lens block, where every caller of
+them also lives. `build_layer_map` already did the same for `params`.
+
+**The relight pass needed the lens, which was not obvious.** It
+rebuilds the ray rather than caching it, and it splices the same
+`IFS_RIG` as the walk -- as one BLOCK, so the line loop never saw the
+marker inside `ifs_ray`. Left alone the marker would have survived as
+a stray comment and the solid's rays would have missed the lens while
+its walk had it: correct geometry, lit as though the camera were
+somewhere else. `ifs_rig` substitutes into the block, and relight
+takes the same lens.
+
+**The identity gate paid for itself twice.** The lens transform was
+first built with `a = e = 1`, which in this engine's `apply_affine`
+(`x' = ax + by + e`) is a shear onto the line `y = 0`, not the
+identity -- so every lens ruined the picture identically, which reads
+as "lenses are broken" rather than naming the affine. `linear` and
+`curl` at zero are both asserted to be pixel-exact against an
+unlensed render, on every path that renders headlessly.
+
+**The perturbed path is gated at the shader, not the picture.** It
+acquires its reference orbit progressively, so a single headless
+render of a deep zoom is entirely unlit -- the first version of the
+gate was comparing two black images and passing nothing.
+`every_template_applies_the_lens` asserts instead that each template
+emits `esc_lens(` with a lens and none without, which is the surface
+the silent-stop bug actually lives on.
+
+**The Jacobian is not needed, and here is why rather than a guess.**
+`distance_estimate` returns `-log2(d) * scale` with `d` in WORLD
+units (`src/escape/colorings.rs`), not in pixels: a lens shifts it by
+`log2(J)`, a smooth shading change across the frame, and nothing is
+mis-detected. Mode D compares its walk's distance against a
+world-space radius from the same rig the ray comes from, so the lens
+moves both together. Making edge width uniform in SCREEN space would
+need `J` and is a preference, not a correction -- left out, and
+recorded as such rather than shipped half-done.
+
+**What a lens costs.** One variation evaluation per pixel, against an
+iteration count in the hundreds to millions. The pipeline key carries
+the lens NAME and its parameters, because an enum parameter can pick
+a different branch of a variation's formula; the AMOUNT rides in the
+transform's weight, so dragging that slider writes a buffer rather
+than compiling a shader.
+
+**Not done.** Presets that ship a lens, and the visual-regression
+entries for them. The picker has a filter but no preview, so choosing
+among 647 is still trial and error -- the survey sheets in
+`output/lens/` are the reference until something better exists.
