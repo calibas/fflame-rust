@@ -765,7 +765,13 @@ fn ifs_kernel_inverse3(i: u32, v: vec3<f32>, w: f32) -> vec4<f32> {
     let kind = ifs_maps[i].extra.z;
     let n = ifs_maps[i].extra.w;
     if (kind == 3.0) {
-        let q = vec4<f32>(v, w);
+        // Reassemble: projection 1 (Depth) carried the k component and
+        // put the scalar in the 3D point, so it goes back in the k
+        // slot. A permutation, so no singular value moves with it.
+        var q = vec4<f32>(v, w);
+        if (ifs_maps[i].extra2.w > 0.5) {
+            q = vec4<f32>(v.x, v.y, w, v.z);
+        }
         let mag = length(q);
         let d = ifs_maps[i].extra2.y;
         let p = ifs_qpow(q, n);
@@ -1894,14 +1900,18 @@ pub fn pack_maps3(ifs: &Ifs3, colors: &[f32]) -> Vec<IfsMap3Gpu> {
                         // kernel: one for a kernel that passes it through.
                         Kernel3::Root3 { .. } => (1.0, r.pre_inv, [0.0f32, 0.0, 1.0, 0.0]),
                         Kernel3::RootZ3 { .. } => (2.0, r.pre_inv, [0.0, 0.0, 1.0, 0.0]),
-                        Kernel3::Quaternion { d, c, .. } => {
+                        Kernel3::Quaternion { d, c, depth, .. } => {
                             let mut pre = r.pre_inv;
                             let shift = pre.apply([c[0], c[1], c[2]]);
                             let origin = pre.apply([0.0; 3]);
                             for i in 0..3 {
                                 pre.t[i] += shift[i] - origin[i];
                             }
-                            (3.0, pre, [c[3] as f32, d as f32, scale as f32, 0.0])
+                            // w: the projection, 1 for Depth -- which
+                            // coordinate the carried scalar reassembles
+                            // into (step 4).
+                            let proj = if depth { 1.0f32 } else { 0.0 };
+                            (3.0, pre, [c[3] as f32, d as f32, scale as f32, proj])
                         }
                     };
                     IfsMap3Gpu {
@@ -5912,6 +5922,7 @@ mod gpu_tests {
             ("julia3D", julia3d_pair_flame()),
             ("julia3Dz", julia3dz_pair_flame()),
             ("quaternion", quaternion_ifs_flame(&[[0.3, 0.0, 0.0, -0.6], [0.0, 0.0, 0.0, -0.5]])),
+            ("quaternion-depth", quaternion_ifs_flame_proj(&[[0.0, 0.0, 0.0, 0.25]], 1.0)),
         ] {
             let mut config = solid_config_for(flame, "ifs_distance");
             let levels: u32 = std::env::var("IFS_LEVELS").ok().and_then(|v| v.parse().ok()).unwrap_or(24);
@@ -6015,6 +6026,11 @@ mod gpu_tests {
             ("julia3dz-pair", julia3dz_pair_flame()),
             ("quaternion-pair", quaternion_ifs_flame(&[[0.3, 0.0, 0.0, -0.6], [0.0, 0.0, 0.0, -0.5]])),
             ("quaternion-trio", quaternion_ifs_flame(&[[0.3, 0.0, 0.0, -0.6], [0.0, 0.0, 0.0, -0.5], [0.2, 0.0, 0.0, -1.0]])),
+            // Projection 1, whose step is the polynomial after a swap
+            // and whose sets are its own rather than the Julia ones.
+            ("quaternion-depth-a", quaternion_ifs_flame_proj(&[[0.0, 0.0, 0.0, 0.25]], 1.0)),
+            ("quaternion-depth-b", quaternion_ifs_flame_proj(&[[0.1, 0.0, 0.0, 0.0]], 1.0)),
+            ("quaternion-depth-pair", quaternion_ifs_flame_proj(&[[0.0, 0.0, 0.0, 0.25], [0.1, 0.0, 0.0, 0.0]], 1.0)),
         ] {
             for coloring in ["ifs_distance", "ifs_level", "ifs_address", "ifs_trap"] {
                 let c = solid_config_for(flame.clone(), coloring);
@@ -6045,6 +6061,13 @@ mod gpu_tests {
     /// Inverse-mode quaternion_julia transforms at the given constants,
     /// identity affines, weight one.
     pub(super) fn quaternion_ifs_flame(cs: &[[f32; 4]]) -> Flame {
+        quaternion_ifs_flame_proj(cs, 0.0)
+    }
+
+    /// The same, at the variation's projection: 0 puts the vector part
+    /// in the picture and hides the scalar, 1 (Depth) puts the scalar
+    /// in and hides `k` -- the slice the lobed sets live in.
+    pub(super) fn quaternion_ifs_flame_proj(cs: &[[f32; 4]], projection: f32) -> Flame {
         let mut fl = Flame::default();
         fl.transforms.clear();
         fl.final_transforms.clear();
@@ -6060,7 +6083,7 @@ mod gpu_tests {
             t.color = (i as f32 + 0.5) / cs.len() as f32;
             t.variations = HashMap::from([("quaternion_julia".to_string(), 1.0)]);
             t.variation_order = vec!["quaternion_julia".to_string()];
-            for (k, v) in [("cx", c[0]), ("cy", c[1]), ("cz", c[2]), ("cw", c[3]), ("power", 2.0), ("inverse", 1.0)] {
+            for (k, v) in [("cx", c[0]), ("cy", c[1]), ("cz", c[2]), ("cw", c[3]), ("power", 2.0), ("inverse", 1.0), ("projection", projection)] {
                 t.set_variation_param("quaternion_julia", k, v);
             }
             fl.transforms.push(t);
