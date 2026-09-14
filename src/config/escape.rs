@@ -135,13 +135,20 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub lens_params: BTreeMap<String, f32>,
 
-    /// How much of the lens to apply: `n` at 0, `L(n)` at 1, the
-    /// straight blend between at anything else.
+    /// How much of the lens to apply: `n` at 0, `L(n)` at 1, and
+    /// `n + amount * (L(n) - n)` in general -- so past 1 it overshoots
+    /// and below 0 it runs backwards.
     ///
     /// Without it a lens is all-or-nothing, and most of them are far
     /// too strong at full strength to be a camera effect rather than
     /// a subject. The simulation's layer warp reached for the same
     /// control (`mix(q, mapped, rate)`) for the same reason.
+    ///
+    /// The negative half is not symmetry for its own sake. A lens
+    /// either magnifies the middle or shrinks it, and which one a
+    /// given variation does is a property of that variation; running
+    /// the displacement backwards turns any of them around, which is
+    /// the first-order inverse of the map.
     #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
     pub lens_amount: f32,
 
@@ -672,6 +679,14 @@ pub fn biomorph_from_str(s: &str) -> Option<BiomorphMode> {
         _ => None,
     }
 }
+
+/// How far [`EscapeConfig::lens_amount`] may be pushed either way.
+///
+/// Here rather than beside the lens engine because the config module
+/// is compiled whether or not `engine-escape` is, and the clamp on
+/// the write path lives in the config manager. `escape::lens`
+/// re-exports it.
+pub const LENS_AMOUNT_LIMIT: f32 = 5.0;
 
 /// A lens at full strength. One rather than zero so that choosing a
 /// lens shows it: a default of nothing would look like a broken

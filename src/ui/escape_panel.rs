@@ -1455,9 +1455,10 @@ fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
             }
 
             let mut a = amount;
+            let lim = crate::escape::lens::LENS_AMOUNT_LIMIT;
             if ui
                 .add(
-                    egui::Slider::new(&mut a, 0.0..=1.0)
+                    egui::Slider::new(&mut a, -lim..=lim)
                         .text(t!("escape_panel.lens_amount")),
                 )
                 .on_hover_text(t!("escape_panel.lens_amount_tip"))
