@@ -189,7 +189,7 @@ pub fn render_escape_content(
     // once, not make the user fix one to discover the next.
     if let Some(d) = ifs_def {
         if d.needs_flame {
-            show_ifs_criterion(ui, config_manager);
+            show_ifs_criterion(ui, config_manager, d.solid);
         }
         if d.solid {
             show_solid_camera(ui, config_manager, &esc);
@@ -1318,29 +1318,61 @@ fn show_solid_camera(
 /// not apply here, and two flames differing only in weights render
 /// identically. That is D6, and the panel is where it stops being a
 /// surprise.
-fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+/// `solid` picks WHICH criterion: a solid formula walks the 3D IFS,
+/// and qualifying in three dimensions is a different question from
+/// qualifying in two. Reported against the plane regardless, this
+/// said "`quaternion_julia` is not affine" over a flame the solid
+/// walk was rendering perfectly well -- the variation is a kernel in
+/// `Space::Solid` and has no planar reading at all. The renderer had
+/// its own version of the same mistake (`pack_flame` required the
+/// planar analysis to pass first, plan §8.11 step 2) and was fixed
+/// there; this is the panel's half.
+/// What the criterion says about a flame, in the dimension the
+/// formula walks it in. Extracted from the panel so the CHOICE of
+/// analysis is testable: reading the plane's verdict over a solid
+/// formula is the bug this exists to pin.
+pub(crate) enum Verdict {
+    Ok {
+        maps: usize,
+        roots: usize,
+        lo: f64,
+        hi: f64,
+        has_final: bool,
+        centre: [f64; 3],
+        radius: f64,
+    },
+    No(Vec<String>),
+}
+
+pub(crate) fn ifs_verdict(flame: &crate::scene::transforms::Flame, solid: bool) -> Verdict {
+    let registry = crate::variations::global_registry();
+    macro_rules! verdict {
+        ($ifs:expr, $centre:expr) => {{
+            match $ifs {
+                Ok(ifs) => Verdict::Ok {
+                    maps: ifs.maps.len(),
+                    roots: ifs.maps.iter().filter(|m| !m.forward.is_affine()).count(),
+                    lo: ifs.maps.iter().map(|m| m.sigma_min).fold(f64::INFINITY, f64::min),
+                    hi: ifs.maps.iter().map(|m| m.sigma_max).fold(0.0f64, f64::max),
+                    has_final: ifs.final_map.is_some(),
+                    centre: $centre(&ifs.ball.centre),
+                    radius: ifs.ball.radius,
+                },
+                Err(why) => Verdict::No(why.iter().map(|d| d.to_string()).collect()),
+            }
+        }};
+    }
+    if solid {
+        verdict!(crate::scene::ifs_analysis::analyse_3d(flame, &registry), |c: &[f64; 3]| *c)
+    } else {
+        verdict!(crate::scene::ifs_analysis::analyse_2d(flame, &registry), |c: &[f64; 2]| [c[0], c[1], 0.0])
+    }
+}
+
+fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager, solid: bool) {
     // Analyse first and drop the borrow, so the Frame button below can
     // write through the same manager.
-    enum Verdict {
-        Ok { maps: usize, roots: usize, lo: f64, hi: f64, has_final: bool, centre: [f64; 2], radius: f64 },
-        No(Vec<String>),
-    }
-    let verdict = {
-        let cfg = config_manager.active_config();
-        let registry = crate::variations::global_registry();
-        match crate::scene::ifs_analysis::analyse_2d(&cfg.flame, &registry) {
-            Ok(ifs) => Verdict::Ok {
-                maps: ifs.maps.len(),
-                roots: ifs.maps.iter().filter(|m| !m.forward.is_affine()).count(),
-                lo: ifs.maps.iter().map(|m| m.sigma_min).fold(f64::INFINITY, f64::min),
-                hi: ifs.maps.iter().map(|m| m.sigma_max).fold(0.0f64, f64::max),
-                has_final: ifs.final_map.is_some(),
-                centre: ifs.ball.centre,
-                radius: ifs.ball.radius,
-            },
-            Err(why) => Verdict::No(why.iter().map(|d| d.to_string()).collect()),
-        }
-    };
+    let verdict = ifs_verdict(&config_manager.active_config().flame, solid);
 
     match verdict {
         Verdict::Ok { maps, roots, lo, hi, has_final, centre, radius } => {
@@ -1383,10 +1415,25 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                     .on_hover_text(t!("escape_panel.ifs_frame_tip"))
                     .clicked()
             {
-                // The home view spans 4 units vertically, so a span of
-                // 2.4 radii leaves the attractor a comfortable margin.
-                let span = (radius * 2.4).max(1e-12);
-                let _ = config_manager.update_batch(
+                // A solid's view is a CAMERA -- a target it orbits and
+                // a zoom that sets the distance -- and the distance is
+                // already `FRAME_DISTANCE · radius / 2^zoom`, so
+                // framing it is the target and a zoom of nothing. The
+                // planar centre this used to write is a quantity the
+                // solid camera does not read, so the button did
+                // nothing at all over a solid.
+                let updates = if solid {
+                    vec![
+                        (ConfigPath::EscapeCamTargetX, ConfigValue::String(format!("{:?}", centre[0]))),
+                        (ConfigPath::EscapeCamTargetY, ConfigValue::String(format!("{:?}", centre[1]))),
+                        (ConfigPath::EscapeCamTargetZ, ConfigValue::String(format!("{:?}", centre[2]))),
+                        (ConfigPath::EscapeZoomLog2, 0.0f32.into()),
+                    ]
+                } else {
+                    // The home view spans 4 units vertically, so a span
+                    // of 2.4 radii leaves the attractor a comfortable
+                    // margin.
+                    let span = (radius * 2.4).max(1e-12);
                     vec![
                         (
                             ConfigPath::EscapeCenterRe,
@@ -1397,20 +1444,33 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                             ConfigValue::String(format!("{centre:?}", centre = centre[1])),
                         ),
                         (ConfigPath::EscapeZoomLog2, ((4.0f64 / span).log2() as f32).into()),
-                    ],
-                    "history.param.escape_center".to_string(),
-                );
+                    ]
+                };
+                let _ = config_manager
+                    .update_batch(updates, "history.param.escape_center".to_string());
             }
         }
         Verdict::No(reasons) => {
             ui.colored_label(
                 egui::Color32::from_rgb(220, 170, 90),
-                t!("escape_panel.ifs_rejected"),
+                if solid {
+                    t!("escape_panel.ifs_rejected_solid")
+                } else {
+                    t!("escape_panel.ifs_rejected")
+                },
             );
             for r in &reasons {
                 ui.label(egui::RichText::new(format!("  \u{2022} {r}")).small().weak());
             }
-            ui.label(egui::RichText::new(t!("escape_panel.ifs_rejected_tip")).small().weak());
+            ui.label(
+                egui::RichText::new(if solid {
+                    t!("escape_panel.ifs_rejected_solid_tip")
+                } else {
+                    t!("escape_panel.ifs_rejected_tip")
+                })
+                .small()
+                .weak(),
+            );
         }
     }
 }
@@ -2204,5 +2264,62 @@ mod zoom_display_tests {
             // ...and through the f32 path the panel actually writes.
             assert_eq!(back as f32, z2 as f32, "f32 config path moved zoom {z2}");
         }
+    }
+}
+
+#[cfg(test)]
+mod criterion_tests {
+    /// The criterion the panel reads must be the one the FORMULA
+    /// walks: a solid formula's is the 3D analysis.
+    ///
+    /// Reported from use: a flame of one inverse-mode
+    /// `quaternion_julia` transform rendered perfectly well under
+    /// `ifs_flame_3d` while the panel said the variation "is not
+    /// affine" -- which was the plane's verdict, and the plane has no
+    /// reading of that variation at all. `pack_flame` had had the
+    /// same mistake (plan 8.11 step 2) and was fixed there; this is
+    /// the panel's half, and the two now answer alike.
+    #[test]
+    fn a_solid_formula_reads_the_solid_criterion() {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut t = Transform::default();
+        t.a = 1.0;
+        t.d = 1.0;
+        t.variations = std::collections::HashMap::from([("quaternion_julia".to_string(), 1.0)]);
+        t.variation_order = vec!["quaternion_julia".to_string()];
+        for (k, v) in [("cx", 0.3f32), ("cy", 0.0), ("cz", 0.0), ("cw", -0.6), ("power", 2.0), ("inverse", 1.0)] {
+            t.set_variation_param("quaternion_julia", k, v);
+        }
+        let mut flame = Flame::default();
+        flame.transforms = vec![t];
+        flame.final_transforms.clear();
+        flame.xaos = None;
+
+        // The solid criterion accepts it, and says it is nonlinear.
+        match super::ifs_verdict(&flame, true) {
+            super::Verdict::Ok { maps, roots, radius, .. } => {
+                assert_eq!((maps, roots), (1, 1));
+                assert!(radius > 0.0 && radius.is_finite());
+            }
+            super::Verdict::No(why) => panic!("the solid criterion rejected it: {why:?}"),
+        }
+        // The plane's does not, which is correct and is what the panel
+        // used to say over a solid.
+        assert!(
+            matches!(super::ifs_verdict(&flame, false), super::Verdict::No(_)),
+            "the plane has no reading of quaternion_julia"
+        );
+
+        // And the panel agrees with the renderer: what `pack_for`
+        // builds for this formula has the solid the walk needs.
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.flame = flame;
+        cfg.escape.formula = "ifs_flame_3d".to_string();
+        let def = crate::escape::ifs::get_ifs(&cfg.escape.formula).expect("a mode-D def");
+        assert!(def.solid && def.needs_flame);
+        let registry = crate::variations::global_registry();
+        let packed = crate::escape::ifs::pack_for(def, &cfg, &registry).expect("packs");
+        let (ifs3, rows) = packed.solid.as_ref().expect("a solid reading");
+        assert_eq!((ifs3.maps.len(), rows.len()), (1, 1));
     }
 }
