@@ -91,11 +91,18 @@ fn lens_flame(batch: &Batch) -> Flame {
     for target in &batch.targets {
         let mut xf = Transform::new();
         // Identity: a lens is the variation on the screen offset.
+        //
+        // In this engine's convention that is a = d = 1 with e and f
+        // the translation (`apply_affine`, shaders/core/affine.wgsl),
+        // NOT a = e = 1. The probe block evaluates the variation
+        // without the affine, so the wrong value here changed no
+        // measurement -- `linear` still read as the identity to 6e-8 --
+        // but it is written correctly rather than harmlessly.
         xf.a = 1.0;
         xf.b = 0.0;
+        xf.e = 0.0;
         xf.c = 0.0;
-        xf.d = 0.0;
-        xf.e = 1.0;
+        xf.d = 1.0;
         xf.f = 0.0;
         xf.g = 0.0;
         xf.weight = 1.0;
@@ -294,7 +301,7 @@ mod tests {
         };
         let flame = lens_flame(&batch);
         let t = &flame.transforms[0];
-        assert_eq!([t.a, t.b, t.c, t.d, t.e, t.f], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        assert_eq!([t.a, t.b, t.c, t.d, t.e, t.f], [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     }
 
     /// The 256 grid overflowed `dispatch_workgroups` while fitting the

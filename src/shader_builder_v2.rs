@@ -1859,6 +1859,20 @@ impl ShaderBuilder {
     /// share a shader with the simulation's own prelude, which owns
     /// group 0 and the name `params`.
     pub fn build_layer_map(&self, flame: &crate::scene::transforms::Flame) -> String {
+        self.build_layer_map_at(flame, 1)
+    }
+
+    /// The same, at a chosen bind group.
+    ///
+    /// The simulation owns group 0 and takes the map at 1. The escape
+    /// engine's mode D already binds its IFS rows at group 1, so a
+    /// camera lens there has to land at 2 -- the group is the caller's
+    /// to pick, not this function's to assume.
+    pub fn build_layer_map_at(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        group: u32,
+    ) -> String {
         let constants = ShaderConstants {
             num_transforms: flame.transforms.len().max(1) as u32,
             color_mode: 0,
@@ -1905,8 +1919,9 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
     return v;\n\
 }}\n"
         ));
-        // Group 1, and the flame's `params` out of the simulation's way.
-        let src = src.replace("@group(0) @binding(", "@group(1) @binding(");
+        // The caller's group, and the flame's `params` out of the
+        // host's way.
+        let src = src.replace("@group(0) @binding(", &format!("@group({group}) @binding("));
         let re = regex_lite_replace_word(&src, "params", "flame_params");
         re
     }
