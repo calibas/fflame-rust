@@ -43,6 +43,9 @@ pub mod batch;
 pub mod classify;
 pub mod flame;
 pub mod inputs;
+// Desktop only, as `run` is: the survey drives a real device.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod lens;
 pub mod report;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod run;

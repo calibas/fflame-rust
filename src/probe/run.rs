@@ -41,7 +41,19 @@ pub struct Outcome {
 /// in-process. If the run dies, the last thing reported is the batch
 /// that was executing — which is the difference between "something
 /// hung" and "batch 4, 3D hung".
-pub async fn run(run_sweep: bool, mut on_batch: impl FnMut(&str)) -> Result<Outcome, String> {
+/// Open a device with the limits the probe dispatches need.
+///
+/// Shared with [`super::lens`], which runs the same harness over a
+/// screen grid: one set of limits, so a buffer that fits one fits the
+/// other.
+pub(crate) async fn open_device(label: &str) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    let (device, queue, _) = open_device_info(label).await?;
+    Ok((device, queue))
+}
+
+async fn open_device_info(
+    label: &str,
+) -> Result<(wgpu::Device, wgpu::Queue, wgpu::AdapterInfo), String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -69,7 +81,7 @@ pub async fn run(run_sweep: bool, mut on_batch: impl FnMut(&str)) -> Result<Outc
 
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            label: Some("variation probe"),
+            label: Some(label),
             required_features: features,
             required_limits: limits,
             memory_hints: wgpu::MemoryHints::Performance,
@@ -78,6 +90,12 @@ pub async fn run(run_sweep: bool, mut on_batch: impl FnMut(&str)) -> Result<Outc
         })
         .await
         .map_err(|e| format!("device creation failed: {e:?}"))?;
+
+    Ok((device, queue, info))
+}
+
+pub async fn run(run_sweep: bool, mut on_batch: impl FnMut(&str)) -> Result<Outcome, String> {
+    let (device, queue, info) = open_device_info("variation probe").await?;
 
     let version = crate::version::get_version_info();
     let points = probe_inputs();
