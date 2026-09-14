@@ -246,6 +246,36 @@ a different branch of a variation's formula; the AMOUNT rides in the
 transform's weight, so dragging that slider writes a buffer rather
 than compiling a shader.
 
+**The amount runs from -5 to 5, and the negative half is the point.**
+Reported from use: `eyefish` at a positive amount squeezes the middle
+toward the centre, which is the opposite of the barrel a camera lens
+suggests. `mix(n, L(n), t)` is `n + t(L(n) - n)`, so the sign of `t`
+is the sign of the displacement and nothing about `L` enters --
+running it backwards turns any lens around, and is the map's inverse
+to first order.
+
+For `eyefish`, whose measured profile is `L(r) = 2r/(1+r)`, the
+magnification at the centre is exactly `1/(1 + amount)`:
+
+| amount | centre | |
+|---|---|---|
+| +1 | 0.5x | the squeeze that was reported |
+| 0 | 1x | no lens |
+| -0.5 | 2x | a clean barrel |
+| -0.75 | 4x | a strong one |
+| -1 | unbounded | the linear term cancels |
+| < -1 | folds | the map reverses through the origin |
+
+Measured against renders: at -0.5 the central tenth of the frame
+matches a 2x zoom far more closely than it matches an unzoomed one
+(28% of pixels differing against 46%), and the agreement falls off
+outward, which is what a nonlinear lens should do and a uniform zoom
+would not.
+
+`bubble` and `hemisphere` bulge outward at POSITIVE amounts -- their
+measured profiles sit on the other side of the identity -- so they
+reach the same look without the fold that `eyefish` past -1 has.
+
 **Not done.** Presets that ship a lens, and the visual-regression
 entries for them. The picker has a filter but no preview, so choosing
 among 647 is still trial and error -- the survey sheets in

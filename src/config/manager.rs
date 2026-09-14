@@ -3328,7 +3328,8 @@ impl ConfigManager {
             }
             ConfigPath::EscapeLensAmount => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.lens_amount = v.clamp(0.0, 1.0);
+                let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
+                self.current.escape.lens_amount = v.clamp(-lim, lim);
             }
             ConfigPath::EscapeLensParam { param } => {
                 let v: f32 = value.try_into()?;

@@ -2226,7 +2226,7 @@ escape_panel:
   lens_tip: "A variation applied to the screen offset, so it bends the VIEW and leaves the fractal alone. Every variation is offered because a lens need not be invertible, but most are only worth looking at once their parameters are tuned; eyefish is the clean fisheye (fisheye itself carries Apophysis's x/y transposition and mirrors the picture across the diagonal)."
   lens_filter: "Search variations…"
   lens_amount: "Amount"
-  lens_amount_tip: "Blends between no lens at 0 and the full map at 1."
+  lens_amount_tip: "0 is no lens and 1 is the full map. Between them it blends; past 1 it overshoots; BELOW 0 it runs the lens backwards, which turns its bulge around — use that when a lens squeezes the middle in and you wanted it pushed out."
   ifs_rejected: "This flame is not an affine IFS:"
   ifs_rejected_solid: "This flame is not a solid IFS:"
   ifs_rejected_solid_tip: "A solid walks the flame in THREE dimensions, which is a different question from the plane: every transform must contract in z as well, so an Apophysis-style transform (an XY affine with a z offset) never qualifies however good a planar map it is. Each must compose to an invertible contracting 3D affine, or to one julia3D / julia3Dz / quaternion_julia around affines, with no xaos. A quaternion_julia must be in inverse mode with the Vector or Depth projection."

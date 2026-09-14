@@ -44,6 +44,19 @@ use crate::config::escape::EscapeConfig;
 use crate::scene::transforms::{Flame, Transform};
 use crate::variations::VariationRegistry;
 
+/// How far the amount may be pushed either way.
+///
+/// Past 1 the lens OVERSHOOTS: the displacement `L(n) - n` is scaled
+/// up rather than blended in. Below 0 it runs BACKWARDS, which is the
+/// useful half -- `mix(n, L(n), -1)` is `2n - L(n)`, the displacement
+/// reflected, which to first order is the lens's inverse. That is how
+/// a lens whose bulge goes the wrong way is turned around without
+/// needing a second variation that happens to be its inverse.
+///
+/// Defined in the config module, which is compiled without this
+/// engine, and re-exported here.
+pub use crate::config::escape::LENS_AMOUNT_LIMIT;
+
 /// The bind group the lens flame's buffers land on.
 ///
 /// Not 1: mode D already binds its IFS rows there.
@@ -53,9 +66,12 @@ pub const LENS_GROUP: u32 = 2;
 ///
 /// An amount of zero is not a lens: the blend is the identity, so the
 /// shader is better off without the machinery than with a no-op in it.
+/// A NEGATIVE amount is a lens -- see [`LENS_AMOUNT_LIMIT`].
 pub fn is_active(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
+    // Zero is the identity in either direction, so it is "no lens".
+    // Negative is a lens, and a useful one.
     !escape.lens.is_empty()
-        && escape.lens_amount > 0.0
+        && escape.lens_amount != 0.0
         && registry.get(&escape.lens).is_some()
 }
 
@@ -89,7 +105,7 @@ pub fn lens_flame(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
     t.d = 1.0;
     t.f = 0.0;
     t.g = 0.0;
-    t.weight = escape.lens_amount.clamp(0.0, 1.0);
+    t.weight = escape.lens_amount.clamp(-LENS_AMOUNT_LIMIT, LENS_AMOUNT_LIMIT);
     t.variations.clear();
     t.set_variation(&escape.lens, 1.0);
     for p in &info.parameters {
@@ -366,6 +382,56 @@ mod tests {
         assert!((got - 0.375).abs() < 1e-6, "{name}.{param} read back {got}");
     }
 
+    /// A negative amount reverses the displacement, which is what
+    /// turns a lens's bulge around.
+    ///
+    /// `mix(n, L(n), t)` is `n + t*(L(n) - n)`, so the sign of `t` is
+    /// the sign of the displacement and nothing about `L` enters.
+    /// That is the whole mechanism. A lens either samples FURTHER out
+    /// than the screen radius -- pulling the world inward, shrinking
+    /// the middle -- or CLOSER in, pushing it outward and bulging;
+    /// which one a variation does is a property of that variation,
+    /// and running the displacement backwards turns any of them
+    /// around.
+    ///
+    /// Reported from use: `eyefish` at a positive amount squeezes the
+    /// middle toward the centre. Measured, it takes screen radius
+    /// 0.25 to 0.40 (`variation_probe lens`), so at -1 it takes 0.25
+    /// to 2(0.25) - 0.40 = 0.10 and bulges instead.
+    #[test]
+    fn a_negative_amount_reverses_the_displacement() {
+        let r = crate::variations::global_registry();
+        let mut plus = EscapeConfig::default();
+        plus.lens = "eyefish".to_string();
+        plus.lens_amount = 1.0;
+        let mut minus = plus.clone();
+        minus.lens_amount = -1.0;
+
+        // Both are lenses; only the sign of the carried weight differs.
+        assert!(is_active(&plus, &r) && is_active(&minus, &r));
+        assert_eq!(lens_flame(&plus, &r).unwrap().transforms[0].weight, 1.0);
+        assert_eq!(
+            lens_flame(&minus, &r).unwrap().transforms[0].weight,
+            -1.0,
+            "a negative amount must survive to the weight"
+        );
+
+        // One pipeline serves both: the amount is not in the key, so
+        // flipping the sign must not recompile a shader.
+        assert_eq!(lens_key(&plus, &r), lens_key(&minus, &r));
+
+        // The range reaches its edge, and zero is still no lens.
+        let mut far = plus.clone();
+        far.lens_amount = -LENS_AMOUNT_LIMIT;
+        assert_eq!(
+            lens_flame(&far, &r).unwrap().transforms[0].weight,
+            -LENS_AMOUNT_LIMIT
+        );
+        let mut off = plus.clone();
+        off.lens_amount = 0.0;
+        assert!(!is_active(&off, &r), "zero is the identity either way");
+    }
+
     /// The key must move when a parameter does, or a lens edit would
     /// reuse the pipeline compiled for the previous shape.
     #[test]
@@ -531,6 +597,7 @@ mod gpu_tests {
             );
         }
     }
+
 
     /// A lens PARAMETER reaches the shader.
     ///
