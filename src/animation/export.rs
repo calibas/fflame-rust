@@ -784,6 +784,31 @@ fn apply_config_value(
             config.escape.supersample =
                 (*v).clamp(1, crate::config::escape::MAX_SUPERSAMPLE);
         }
+        // The solid camera. Angles are plain floats; the target is
+        // decimal strings, and the track hands one over already
+        // formatted (see `json_to_config_value`).
+        (ConfigPath::EscapeCamTargetX, ConfigValue::String(v)) => {
+            config.escape.cam_target_x = v.clone();
+        }
+        (ConfigPath::EscapeCamTargetY, ConfigValue::String(v)) => {
+            config.escape.cam_target_y = v.clone();
+        }
+        (ConfigPath::EscapeCamTargetZ, ConfigValue::String(v)) => {
+            config.escape.cam_target_z = v.clone();
+        }
+        (ConfigPath::EscapeCamPitch, ConfigValue::Float(v)) => config.escape.cam_pitch = *v,
+        (ConfigPath::EscapeCamYaw, ConfigValue::Float(v)) => config.escape.cam_yaw = *v,
+        (ConfigPath::EscapeCamBank, ConfigValue::Float(v)) => config.escape.cam_bank = *v,
+        (ConfigPath::EscapeCamFov, ConfigValue::Float(v)) => config.escape.cam_fov = *v,
+        // The camera lens. The amount is clamped as the manager
+        // clamps it, so an exported frame equals the in-app one.
+        (ConfigPath::EscapeLensAmount, ConfigValue::Float(v)) => {
+            let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
+            config.escape.lens_amount = if v.is_finite() { v.clamp(-lim, lim) } else { 0.0 };
+        }
+        (ConfigPath::EscapeLensParam { param }, ConfigValue::Float(v)) => {
+            config.escape.lens_params.insert(param.clone(), *v);
+        }
         (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
             config.escape.formula_params.insert(param.clone(), *v);
         }
@@ -2359,5 +2384,61 @@ mod tests {
             Some(0.5),
             "PoolFinal: param must be readable",
         );
+    }
+}
+
+#[cfg(test)]
+mod escape_export_tests {
+    use super::*;
+    use crate::config::{ConfigPath, FractalConfig};
+
+    fn solid() -> FractalConfig {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        c.escape.formula = "ifs_flame_3d".to_string();
+        c.escape.coloring = "ifs_distance".to_string();
+        c.escape.lens = "curl".to_string();
+        c
+    }
+
+    /// Every escape target the track editor offers must actually move
+    /// the config HERE, in the exporter.
+    ///
+    /// This is the third of three places that have to agree, and the
+    /// only one whose failure is invisible until a video comes back
+    /// wrong: a missing arm renders correctly in the app, because the
+    /// app applies tracks through `ConfigManager`, and then exports a
+    /// still. That is exactly how `Escape.JuliaIm` was reported, and
+    /// how the solid camera and the lens would have been reported
+    /// next. Enumerating the offered set rather than listing paths by
+    /// hand is the point: a target added to the picker cannot be
+    /// forgotten here.
+    #[test]
+    fn every_offered_escape_target_reaches_the_exporter() {
+        for base in [solid(), FractalConfig::default()] {
+            for item in crate::ui::target_selector::escape_items_for_test(&base) {
+                // Two probes, because a count target reads an integer.
+                let mut moved = false;
+                for probe in [serde_json::json!(0.375), serde_json::json!(3)] {
+                    let Some(value) = crate::config::delta::json_to_config_value(&probe, &item)
+                    else {
+                        continue;
+                    };
+                    let mut c = base.clone();
+                    apply_config_value(&mut c, EditingTarget::Main, &item, &value);
+                    if serde_json::to_string(&c.escape).unwrap()
+                        != serde_json::to_string(&base.escape).unwrap()
+                    {
+                        moved = true;
+                        break;
+                    }
+                }
+                assert!(
+                    moved,
+                    "`{}` is offered as a track target but the exporter ignores it",
+                    item.to_string_key()
+                );
+            }
+        }
     }
 }

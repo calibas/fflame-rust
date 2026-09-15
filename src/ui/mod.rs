@@ -33,6 +33,12 @@ pub mod response;
 mod settings;
 mod solid_panel;
 mod subflames;
+// `pub(crate)` for tests only: the animation exporter checks that it
+// applies every target this module offers, and that check has to
+// enumerate the real list rather than keep a second one in step.
+#[cfg(test)]
+pub(crate) mod target_selector;
+#[cfg(not(test))]
 mod target_selector;
 mod tone_mapping;
 pub mod track_editor;
