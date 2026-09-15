@@ -1393,10 +1393,32 @@ fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
 
             let mut pick: Option<String> = None;
             let filter_id = egui::Id::new("escape_lens_filter");
-            egui::ComboBox::from_id_salt("escape_lens_pick")
-                .selected_text(label)
-                .width(220.0)
-                .show_ui(ui, |ui| {
+            // A Popup, not a ComboBox. A combo closes on ANY click
+            // inside it, so clicking the search box or the Show-all
+            // tick shut the list instead of using it -- reported from
+            // use. The Add Variation picker in the transforms panel
+            // already had this problem and solved it the same way:
+            // a button, a memory-backed popup, and
+            // `CloseOnClickOutside` so only a real choice or a click
+            // away dismisses it.
+            let popup_id = egui::Id::new("escape_lens_popup");
+            let focus_id = popup_id.with("focus_search");
+            let btn = ui.add(
+                egui::Button::new(format!("{label}  \u{25be}")).min_size(egui::vec2(220.0, 0.0)),
+            );
+            if btn.clicked() {
+                egui::Popup::toggle_id(ui.ctx(), popup_id);
+                // Focus the filter when it opens, so typing narrows
+                // the list straight away (consumed once, below).
+                ui.data_mut(|d| d.insert_temp(focus_id, true));
+            }
+            egui::Popup::from_response(&btn)
+                .id(popup_id)
+                .open_memory(None)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    ui.set_min_width(250.0);
+                    ui.set_max_height(380.0);
                     // 647 entries is a scroll, not a list. The filter
                     // lives in egui memory rather than the config: it
                     // is a way of finding a lens, not part of one, and
@@ -1404,14 +1426,23 @@ fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                     // an undo step.
                     let mut filter =
                         ui.data_mut(|d| d.get_temp::<String>(filter_id).unwrap_or_default());
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut filter)
-                                .hint_text(t!("escape_panel.lens_filter"))
-                                .desired_width(200.0),
-                        )
-                        .changed()
-                    {
+                    let focus_search = ui.data_mut(|d| {
+                        let v = d.get_temp::<bool>(focus_id).unwrap_or(false);
+                        if v {
+                            d.remove::<bool>(focus_id);
+                        }
+                        v
+                    });
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut filter)
+                            .hint_text(t!("escape_panel.lens_filter"))
+                            .desired_width(230.0),
+                    );
+                    super::vkb_sync(ui, &edit, &filter);
+                    if focus_search {
+                        edit.request_focus();
+                    }
+                    if edit.changed() {
                         ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
                     }
                     let needle = filter.trim().to_lowercase();
@@ -1437,6 +1468,7 @@ fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                         .clicked()
                     {
                         pick = Some(String::new());
+                        egui::Popup::close_id(ui.ctx(), popup_id);
                     }
                     ui.separator();
 
@@ -1478,6 +1510,7 @@ fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                                 .clicked()
                             {
                                 pick = Some(name.clone());
+                                egui::Popup::close_id(ui.ctx(), popup_id);
                             }
                         }
                     });
@@ -2479,6 +2512,53 @@ mod criterion_tests {
     /// reading of that variation at all. `pack_flame` had had the
     /// same mistake (plan 8.11 step 2) and was fixed there; this is
     /// the panel's half, and the two now answer alike.
+    /// The lens picker must not be a `ComboBox`.
+    ///
+    /// A combo closes on ANY click inside it, so its search box and
+    /// its Show-all tick were unusable -- clicking either dismissed
+    /// the list instead of filtering it. Reported from use. The
+    /// transforms panel's Add Variation picker had already solved
+    /// this with a memory-backed `Popup` and `CloseOnClickOutside`,
+    /// and the lens picker now matches it.
+    ///
+    /// Source-scanning because the fault is a WIDGET CHOICE, and the
+    /// difference only shows up under a click that a headless UI test
+    /// does not deliver. The same technique guards the render-mode
+    /// writer (`src/ui/render_mode.rs`).
+    #[test]
+    fn the_lens_picker_stays_open_while_it_is_used() {
+        let src = include_str!("escape_panel.rs");
+        let start = src
+            .find("fn show_lens_section")
+            .expect("the lens section moved");
+        let end = src[start..]
+            .find("\nfn ")
+            .map(|i| start + i)
+            .unwrap_or(src.len());
+        // Code only: the comment above the popup explains what a
+        // ComboBox would do wrong, and must not trip the scan.
+        let body: String = src[start..end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("
+");
+
+        assert!(
+            !body.contains("ComboBox"),
+            "the lens picker is a ComboBox again: a click on its search box or \
+             its Show-all tick will close it instead of using it"
+        );
+        assert!(
+            body.contains("PopupCloseBehavior::CloseOnClickOutside"),
+            "the lens picker must close only on a click outside"
+        );
+        assert!(
+            body.contains("Popup::close_id"),
+            "choosing a lens must close the picker explicitly"
+        );
+    }
+
     /// Picking a lens seeds every parameter at its registry default,
     /// in one undo step with the name.
     #[test]
