@@ -4130,12 +4130,27 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeReferencePeriod
         | ConfigPath::EscapeBiomorph
         | ConfigPath::EscapeCenterRe
-        | ConfigPath::EscapeCenterIm
-        // The camera's target is decimal STRINGS, for the precision a
-        // deep zoom needs; a float track could not carry it.
-        | ConfigPath::EscapeCamTargetX
+        | ConfigPath::EscapeCenterIm => None,
+
+        // The camera's target is decimal STRINGS, like the planar
+        // centre, and for the same reason: a deep zoom needs more
+        // digits than a float holds. A track carries f64 anyway, so
+        // it is offered and the string is rebuilt from the number.
+        //
+        // The planar centre is NOT offered alongside it, and the
+        // difference is real rather than an oversight. A planar zoom
+        // runs past 2^100, where f64 has nothing like the digits the
+        // centre needs; a SOLID orbits an attractor of order one, so
+        // f64 is far more precision than the picture can show. The
+        // cost is a ceiling on how deep an animated solid camera can
+        // sit, and that ceiling is far beyond where a solid is
+        // legible at all.
+        ConfigPath::EscapeCamTargetX
         | ConfigPath::EscapeCamTargetY
-        | ConfigPath::EscapeCamTargetZ => None,
+        | ConfigPath::EscapeCamTargetZ => json
+            .as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| ConfigValue::String(format!("{f:?}"))),
 
         // The camera's angles are ordinary floats, and orbiting one is
         // exactly the sort of thing an animation track is for.
