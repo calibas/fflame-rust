@@ -2786,6 +2786,98 @@ tool for lobed quaternion pictures. Steps 2 to 4 are the machinery
 everywhere it is checkable, reaching no picture the standalone does
 not already draw better.
 
+## 8.12 The cut-outs on a grand julian, 2026-09-15
+
+**Reported from use.** A flame of three `julian`s at powers 2, 15 and
+8, every one with `dist = -1`, rendered with "layers that overlap
+unpredictably" and "cut-out shapes" over good structure, moving under
+a small rotation of one transform, at every beam width up to 8, under
+distance and level colourings alike. Two files, differing in one
+affine, are the fixture `grand_julian` in `ifs_estimate`'s tests.
+
+**A cut-out is an over-read.** Every address gives a valid lower
+bound on the distance to ITS piece and the answer is the minimum over
+addresses, so a walk can only be wrong by being too LARGE -- and too
+large reads as exterior. Two faults did that here, and they are
+separate.
+
+**First, the bound was poisoned by overflow.** A root with a negative
+distance is an inversion: its inverse is `|v|^{-n}` and its σ factor
+`|v|^{n+1}`. A candidate near a pole flies to a radius past what a
+float holds while its σ goes the other way, and the level's term
+`σ·(r − R)` is `tiny × ∞`: `∞` or `NaN` by which underflowed first.
+Folded into the running maximum, `∞` poisoned every descendant of a
+path that had held the answer -- at the failing point the winning
+address had bound 0.042 at level 2, verified against exhaustive
+search, and every survivor read `∞` by level 4. The CPU's finalisation
+turned a non-finite bound into **0** and the GPU's into
+**infinitely far**; the GPU's is the cut-out. On the GPU, in f32,
+`|v|^{-15}` overflows at `|v| < 0.003` rather than f64's `10^{-20}`,
+which is why the picture was worse than the reference. `fold_level`
+drops a term that is not a number -- the bound the path had is still
+valid for its piece, and deeper levels only refine that piece -- and
+the walk answers among finite bounds only. Ported to both GPU walks
+with the Metal-safe `abs(x) <= 1e37` test, which is false for `∞` and
+`NaN` alike.
+
+**Second, the beam pruned by the wrong key.** The beam ranked by
+position -- distance from the ball's centre, "which piece is the point
+in" -- which the record at §8.x measured right on the gasket and the
+dragon, where every map contracts alike. On an inversion the σ of
+siblings spans hundreds of orders of magnitude, and the distance a
+path stands for is `σ` times its position: ranking by position pruned
+exactly the paths whose tiny `σ` held the answer. Measured against
+exhaustive search at depth 8, beam 8, over-reads past a pixel at 512
+across the ball:
+
+| IFS | Position | σ·r (Weighted) | Mixed | **Auto** |
+|---|---|---|---|---|
+| gasket, dragon, hemisphere, disc | 0/576 | 0 | 0 | **0** |
+| bubble | 0 | 162 | 0 | **0** |
+| spherical (+ affine) | 0 | 357, ×476 | 178, ×459 | **0** |
+| blob | 211, ×5.8 | 225, ×171 | 51, ×2.9 | 211, ×5.8 |
+| julia pair, `dist = +1` | 0 | 202 | 0 | **0** |
+| grand julian 1 | 308, ×55.8 | 108, ×8.4 | 217 | **108, ×8.4** |
+| grand julian 2 | 300, **×46,444,611** | 119, ×8.6 | 222 | **119, ×8.6** |
+| **total, beam 8** | 819, ×4.6e7 | 1173, ×476 | 668, ×459 | **438, ×8.6** |
+
+No single cheap key is right everywhere, and the table says why: σ·r
+makes any pole-child look cheap, so wherever an inversion sits beside
+a plain map -- `spherical` beside an affine, a bubble beside one -- it
+starves the plain piece out of the beam, while on a flame that is ALL
+inversions nothing is starved. `RankKey::Auto` ranks by σ·r when
+every map is an inversion (`Kernel::is_inversion`: `spherical`, or a
+root with `d < 0`) and by position otherwise: the measured best of
+each class, no regression on any fixture, and the shipped julia class
+-- positive distance, not an inversion -- stays on position at 0/576.
+The GPU reads the choice from `fdata[3].w`, and the CPU's seeded walks
+and handover rank by the same key, or the beam handed over would not
+be the beam the walk keeps.
+
+**The picture:** 61% and 58% of pixels change on the two reported
+files. The slabs are gone, the structure is continuous, and the two
+rotations read as one fractal turned slightly rather than as two
+pictures. The eleven shipped presets are byte-identical: none is an
+inversion, and `fold_level` never bit them.
+
+**One wrong turn worth recording.** The GPU flag was first put in
+`fdata[2].x`, after a check of the next 400 characters of the solid
+packer. `fdata[2]` is the solid's camera eye, written later in the
+same function, so `ifs_weighted_key()` read `eye.x > 0.5` and every
+solid whose camera sat right of x = 0.5 ranked by the wrong key.
+`the_gpu_solid_agrees_with_a_cpu_march` caught it at 93.5% against
+its pinned 99.4%. The flag lives in the forward vector's pad now,
+which is zero in both layouts.
+
+**Open.** `blob` is loose at 211 of 576 under Auto where the mixed
+beam measured 51 -- an improvement waiting on a key that does not
+regress `spherical`. And the residual 108/576 on the reported flame is
+a beam of 8 at depth 8 on three inversions; it is loose, not
+catastrophic (×8.4 against ×4.6e7), and a wider beam or a tighter
+bound at an inversion's pole would close it. The measurement is
+`the_beam_key_is_scored_on_an_inversion`, and it prints the whole
+table.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a

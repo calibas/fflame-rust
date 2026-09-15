@@ -88,6 +88,12 @@ pub trait IfsSpace: Copy {
         let _ = q;
         None
     }
+
+    /// Whether this map's forward kernel is an inversion, for the
+    /// beam's choice of ranking key. Affine maps are not.
+    fn is_inversion(&self) -> bool {
+        false
+    }
 }
 
 impl IfsSpace for Affine2 {
@@ -124,6 +130,13 @@ impl IfsSpace for Map2 {
         match self {
             Map2::NonlinearInverse(r) => r.image_gap(q),
             _ => None,
+        }
+    }
+
+    fn is_inversion(&self) -> bool {
+        match self {
+            Map2::NonlinearInverse(r) => r.kernel.is_inversion(),
+            _ => false,
         }
     }
 }
@@ -207,20 +220,27 @@ struct Cand<P> {
     /// what makes this one number both the bound and the ranking key.
     bound: f64,
     /// Distance from the ball's centre at this candidate's current
-    /// position — **the ranking key**, and the whole of it.
+    /// position. The ranking key is `sigma * r` -- see [`RankKey`].
     ///
-    /// Ranking by `bound` instead is degenerate: it is a running
-    /// MAXIMUM, so once a path has grazed the ball's edge its bound
-    /// sits at ~0⁻ and every descendant inherits it unchanged — all
-    /// the children tie and the choice becomes whichever the sort
-    /// happened to leave first. Measured on the gasket, that is loose
-    /// at 568 of 576 grid points against 10 this way. Inside the ball
-    /// it is the distance to the centre that says which piece the
-    /// point is in.
+    /// Ranking by `bound` is degenerate: it is a running MAXIMUM, so
+    /// once a path has grazed the ball's edge its bound sits at ~0⁻
+    /// and every descendant inherits it unchanged — all the children
+    /// tie and the choice becomes whichever the sort happened to leave
+    /// first. Measured on the gasket, that is loose at 568 of 576 grid
+    /// points against 10 by position. Inside the ball it is the
+    /// distance to the centre that says which piece the point is in.
     ///
-    /// Adding `bound` as a tiebreak changes no measurement at all, so
-    /// it is not here: one f32 is what the shader has to shift around
-    /// its keep-list, and that is its inner loop.
+    /// Position ALONE was the key until a grand julian was reported
+    /// from use. Its maps are inversions, and their `sigma` spans
+    /// hundreds of orders of magnitude between siblings, so the
+    /// distance a path stands for is `sigma` times its position and
+    /// not its position: ranking by `r` pruned exactly the paths whose
+    /// tiny `sigma` held the answer. Measured against exhaustive
+    /// search at beam 8, position was loose at 300 of 576 points with
+    /// a worst ratio in the tens of millions; `sigma * r` is loose at
+    /// 119 with a worst of 8.6, and is identical to position on the
+    /// gasket and the dragon, where every path at a level has the same
+    /// `sigma` -- 0 of 576 loose either way.
     r: f64,
     address: Vec<u32>,
     escape: Option<(f64, Vec<u32>, P)>,
@@ -230,9 +250,117 @@ struct Cand<P> {
     aux: f64,
 }
 
+/// Which quantity the beam keeps by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RankKey {
+    /// Distance from the ball's centre: "which piece is the point in".
+    Position,
+    /// The same, weighted by the path's accumulated `sigma` -- the
+    /// production key.
+    ///
+    /// On an IFS whose maps all contract alike this IS `Position`,
+    /// since every path at a level has the same `sigma`. Where they do
+    /// not -- a root with a negative distance is an INVERSION, so a
+    /// candidate far from the centre has a tiny `sigma` and stands for
+    /// a tiny piece with a tiny distance -- `Position` prunes exactly
+    /// the paths that would have given the answer. `Position` is kept
+    /// so the measurement that decided this can be re-run.
+    Weighted,
+    /// Half the beam by `Position`, the other half by `Weighted` from
+    /// what is left. Neither pure key is right everywhere: `Weighted`
+    /// starves a plain affine map's child out of a beam of four on a
+    /// bubble IFS, where the bubble's tiny-σ children all rank ahead
+    /// of it, and `Position` prunes the answer on an inversion. A
+    /// split beam cannot starve either class.
+    Mixed,
+    /// `Weighted` when EVERY map is an inversion, `Position` otherwise
+    /// -- the measured best of each class, and the production key.
+    ///
+    /// Measured (`the_beam_key_is_scored_on_an_inversion`): on a flame
+    /// that is all inversions `Position` is catastrophic and `Weighted`
+    /// is not; wherever an inversion sits beside a plain map, or the
+    /// IFS has no inversions, `Weighted` starves the plain pieces and
+    /// `Position` is right. σ·r makes any pole-child look cheap, so it
+    /// is only fair when every child is one.
+    Auto,
+}
+
+/// Whether every map's forward kernel is an inversion: a root whose
+/// distance exponent is negative, or `spherical`.
+pub fn all_inversions<A: IfsSpace>(ifs: &Ifs<A, A::Point>) -> bool {
+    !ifs.maps.is_empty() && ifs.maps.iter().all(|m| m.inverse.is_inversion())
+}
+
+/// The key a walk over this IFS ranks by: `Auto` resolved.
+pub fn resolved_key<A: IfsSpace>(ifs: &Ifs<A, A::Point>, key: RankKey) -> RankKey {
+    match key {
+        RankKey::Auto => {
+            if all_inversions(ifs) {
+                RankKey::Weighted
+            } else {
+                RankKey::Position
+            }
+        }
+        k => k,
+    }
+}
+
+/// The comparator for a resolved pure key, for the seeded walks and
+/// the handover, which sort by index and cannot use `keep_by_key`.
+fn cmp_for<P>(key: RankKey) -> fn(&Cand<P>, &Cand<P>) -> std::cmp::Ordering {
+    match key {
+        RankKey::Weighted => by_weighted::<P>,
+        _ => by_rank::<P>,
+    }
+}
+
+/// Keep `beam` of `next` under `key`, in place.
+fn keep_by_key<P: Clone>(next: &mut Vec<Cand<P>>, beam: usize, key: RankKey) {
+    match key {
+        RankKey::Auto => unreachable!("Auto is resolved before the walk"),
+        RankKey::Position => {
+            next.sort_by(by_rank);
+            next.truncate(beam);
+        }
+        RankKey::Weighted => {
+            next.sort_by(by_weighted);
+            next.truncate(beam);
+        }
+        RankKey::Mixed => {
+            let first = beam.div_ceil(2);
+            next.sort_by(by_rank);
+            let mut kept: Vec<Cand<P>> = next.drain(..first.min(next.len())).collect();
+            next.sort_by(by_weighted);
+            let rest = beam.saturating_sub(kept.len());
+            kept.extend(next.drain(..rest.min(next.len())));
+            *next = kept;
+        }
+    }
+}
+
+/// A ranking key as a total order: a key that is not a number ranks
+/// LAST.
+///
+/// `σ·r` on a path that flew to infinity is `0·∞`, and `partial_cmp`
+/// answering `Equal` for it is not a total order -- the sort panics
+/// on that, correctly. A candidate whose key overflowed has already
+/// been marked done and holds whatever bound it had; it is the one
+/// to give up a beam slot first, so it sorts to the end.
+fn key_or_last(k: f64) -> f64 {
+    if k.is_nan() {
+        f64::INFINITY
+    } else {
+        k
+    }
+}
+
 /// Ascending by position: deepest inside the ball first.
 fn by_rank<P>(a: &Cand<P>, b: &Cand<P>) -> std::cmp::Ordering {
-    a.r.partial_cmp(&b.r).unwrap_or(std::cmp::Ordering::Equal)
+    key_or_last(a.r).total_cmp(&key_or_last(b.r))
+}
+
+fn by_weighted<P>(a: &Cand<P>, b: &Cand<P>) -> std::cmp::Ordering {
+    key_or_last(a.sigma * a.r).total_cmp(&key_or_last(b.sigma * b.r))
 }
 
 /// Walk the inverse maps from `p` and return the estimate.
@@ -281,6 +409,21 @@ pub fn estimate_aux<A>(
 where
     A: IfsSpace,
 {
+    estimate_aux_ranked(ifs, p, aux0, max_levels, beam, RankKey::Auto)
+}
+
+/// [`estimate_aux`] with the beam's ranking key chosen.
+pub fn estimate_aux_ranked<A>(
+    ifs: &Ifs<A, A::Point>,
+    p: A::Point,
+    aux0: f64,
+    max_levels: u32,
+    beam: u32,
+    key: RankKey,
+) -> Estimate<A::Point>
+where
+    A: IfsSpace,
+{
     let centre = ifs.ball.centre;
     let radius = ifs.ball.radius;
     let far = radius.max(1.0) * FAR;
@@ -295,6 +438,7 @@ where
     };
 
     let radius4 = |q: A::Point, aux: f64| A::distance(q, centre).hypot(aux - ifs.aux_centre);
+    let key = resolved_key(ifs, key);
     let mut live = vec![Cand {
         q: q0,
         sigma: sigma0,
@@ -323,7 +467,7 @@ where
             // largest. Stopping at the first escape is what draws the
             // bounding ball as though it were the set — see the module
             // docs.
-            c.bound = c.bound.max(c.sigma * (r - radius));
+            c.bound = fold_level(c.bound, c.sigma, r, radius);
 
             if r > radius && c.escape.is_none() {
                 // The last map applied sets the width of the annulus
@@ -379,7 +523,7 @@ where
                 child.q = q;
                 child.aux = aux;
                 child.sigma = sigma;
-                child.bound = c.bound.max(sigma * (r - radius));
+                child.bound = fold_level(c.bound, sigma, r, radius);
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
@@ -388,8 +532,7 @@ where
         if next.is_empty() {
             break;
         }
-        next.sort_by(by_rank);
-        next.truncate(beam);
+        keep_by_key(&mut next, beam as usize, key);
         live = next;
     }
 
@@ -406,10 +549,17 @@ where
         .iter()
         .map(|c| c.escape.as_ref().map_or(max_levels as f64, |(lvl, _, _)| *lvl))
         .fold(f64::NEG_INFINITY, f64::max);
+    // Among FINITE bounds. With `fold_level` a path's bound is finite
+    // from level 0 on, so this only differs from a plain minimum when
+    // the pixel itself was not a number -- but a non-finite bound must
+    // never be the one answered, and this says so rather than relying
+    // on it.
     let best = live
-        .into_iter()
+        .iter()
+        .filter(|c| c.bound.is_finite())
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
-        .expect("the beam is never empty");
+        .cloned()
+        .unwrap_or_else(|| live[0].clone());
 
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
     let distance = distance.min(dead_min.max(0.0));
@@ -434,6 +584,40 @@ where
 /// `σ`, so the two cancel — and continuing only risks overflowing the
 /// shader's f32.
 const FAR: f64 = 1e12;
+
+/// Fold one level's term into a path's running bound.
+///
+/// The term is `σ·(|q − c| − R)`: the distance of this level's point
+/// from the ball, carried back through the path's contraction. It is
+/// a valid lower bound on the distance to the path's piece, and the
+/// running MAXIMUM keeps the tightest one.
+///
+/// Except when it is not a number. An inversion -- a root with a
+/// negative distance -- sends a point near its pole to a radius past
+/// what a float holds, with a `σ` that has gone the other way, and
+/// `tiny × ∞` is `∞` or `NaN` depending on which underflowed first.
+/// Neither is a bound. Folding `∞` in poisons every descendant: the
+/// path that held the answer at level 2 (bound 0.042, verified
+/// against exhaustive search) reads `∞` by level 4, the finalisation
+/// turns a non-finite bound into 0 on the CPU and into "infinitely
+/// far" on the GPU, and the pixel is painted as exterior. That is the
+/// cut-out that was reported from use on a grand julian, moving
+/// under a small rotation because which paths overflow moves with
+/// it.
+///
+/// A level that cannot be scored says nothing about the piece, and
+/// the bound the path already had is still valid for it -- deeper
+/// levels only refine the same piece. So a non-finite term is
+/// dropped, and the caller marks the path done, since a point that
+/// has left the representable plane has nowhere further to go.
+fn fold_level(bound: f64, sigma: f64, r: f64, radius: f64) -> f64 {
+    let term = sigma * (r - radius);
+    if term.is_finite() {
+        bound.max(term)
+    } else {
+        bound
+    }
+}
 
 /// The fractional part of the escape level, rising toward the set.
 ///
@@ -723,7 +907,7 @@ pub fn seed_beam<P: SeedPoint>(
                 let mut child = c.clone();
                 child.q = q;
                 child.sigma = sigma;
-                child.bound = c.bound.max(sigma * (r - radius));
+                child.bound = fold_level(c.bound, sigma, r, radius);
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
@@ -734,7 +918,8 @@ pub fn seed_beam<P: SeedPoint>(
         // follow their candidates through the sort, or every delta
         // ends up attached to the wrong path.
         let mut order: Vec<usize> = (0..next.len()).collect();
-        order.sort_by(|&a, &b| by_rank(&next[a], &next[b]));
+        let cmp = cmp_for(resolved_key(ifs, RankKey::Auto));
+        order.sort_by(|&a, &b| cmp(&next[a], &next[b]));
 
         // The handover may prune a branch only if EVERY pixel in the
         // view would prune it too.
@@ -830,7 +1015,7 @@ pub fn estimate_seeded(
         })
         .collect();
     // Ranked by THIS pixel's position, as the walk ranks every level.
-    live.sort_by(by_rank);
+    live.sort_by(cmp_for(resolved_key(ifs, RankKey::Auto)));
     live.truncate(beam);
     let mut dead_min = f64::INFINITY;
 
@@ -850,7 +1035,7 @@ pub fn estimate_seeded(
             }
             let r = Affine2::distance(c.q, centre);
             c.r = r;
-            c.bound = c.bound.max(c.sigma * (r - radius));
+            c.bound = fold_level(c.bound, c.sigma, r, radius);
             if r > radius && c.escape.is_none() {
                 let level = (seeds.level + k) as f64
                     + escape_residual(r, radius, sigma_of(c));
@@ -883,7 +1068,7 @@ pub fn estimate_seeded(
                 let mut child = c.clone();
                 child.q = q;
                 child.sigma = sigma;
-                child.bound = c.bound.max(sigma * (r - radius));
+                child.bound = fold_level(c.bound, sigma, r, radius);
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
@@ -892,7 +1077,7 @@ pub fn estimate_seeded(
         if next.is_empty() {
             break;
         }
-        next.sort_by(by_rank);
+        next.sort_by(cmp_for(resolved_key(ifs, RankKey::Auto)));
         next.truncate(beam);
         live = next;
     }
@@ -905,10 +1090,17 @@ pub fn estimate_seeded(
                 .map_or((seeds.level + max_levels) as f64, |(lvl, _, _)| *lvl)
         })
         .fold(f64::NEG_INFINITY, f64::max);
+    // Among FINITE bounds. With `fold_level` a path's bound is finite
+    // from level 0 on, so this only differs from a plain minimum when
+    // the pixel itself was not a number -- but a non-finite bound must
+    // never be the one answered, and this says so rather than relying
+    // on it.
     let best = live
-        .into_iter()
+        .iter()
+        .filter(|c| c.bound.is_finite())
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
-        .expect("the beam is never empty");
+        .cloned()
+        .unwrap_or_else(|| live[0].clone());
     let _ = &mut best_escape;
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
     let distance = distance.min(dead_min.max(0.0));
@@ -1196,7 +1388,7 @@ pub fn seed_chain3<P: SeedPoint3>(
                 let mut child = c.clone();
                 child.q = q;
                 child.sigma = sigma;
-                child.bound = c.bound.max(sigma * (r - radius));
+                child.bound = fold_level(c.bound, sigma, r, radius);
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
@@ -1207,7 +1399,8 @@ pub fn seed_chain3<P: SeedPoint3>(
         // follow their candidates through the sort, or every delta
         // ends up attached to the wrong path.
         let mut order: Vec<usize> = (0..next.len()).collect();
-        order.sort_by(|&a, &b| by_rank(&next[a], &next[b]));
+        let cmp = cmp_for(resolved_key(ifs, RankKey::Auto));
+        order.sort_by(|&a, &b| cmp(&next[a], &next[b]));
 
         // The same rule as the plane's handover: a branch may be pruned
         // only if every SAMPLE that could use this link would prune it
@@ -1268,7 +1461,7 @@ pub fn estimate_seeded3(
         })
         .collect();
     // Ranked by THIS sample's position, as the walk ranks every level.
-    live.sort_by(by_rank);
+    live.sort_by(cmp_for(resolved_key(ifs, RankKey::Auto)));
     live.truncate(beam);
 
     let sigma_of = |c: &Cand<[f64; 3]>| {
@@ -1286,7 +1479,7 @@ pub fn estimate_seeded3(
             }
             let r = Affine3::distance(c.q, centre);
             c.r = r;
-            c.bound = c.bound.max(c.sigma * (r - radius));
+            c.bound = fold_level(c.bound, c.sigma, r, radius);
             if r > radius && c.escape.is_none() {
                 let level = (j as u32 + k) as f64 + escape_residual(r, radius, sigma_of(c));
                 c.escape = Some((level, c.address.clone(), c.q));
@@ -1314,13 +1507,13 @@ pub fn estimate_seeded3(
                 let mut child = c.clone();
                 child.q = q;
                 child.sigma = sigma;
-                child.bound = c.bound.max(sigma * (r - radius));
+                child.bound = fold_level(c.bound, sigma, r, radius);
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
             }
         }
-        next.sort_by(by_rank);
+        next.sort_by(cmp_for(resolved_key(ifs, RankKey::Auto)));
         next.truncate(beam);
         live = next;
     }
@@ -1330,10 +1523,17 @@ pub fn estimate_seeded3(
         .iter()
         .map(|c| c.escape.as_ref().map_or(total as f64, |(lvl, _, _)| *lvl))
         .fold(f64::NEG_INFINITY, f64::max);
+    // Among FINITE bounds. With `fold_level` a path's bound is finite
+    // from level 0 on, so this only differs from a plain minimum when
+    // the pixel itself was not a number -- but a non-finite bound must
+    // never be the one answered, and this says so rather than relying
+    // on it.
     let best = live
-        .into_iter()
+        .iter()
+        .filter(|c| c.bound.is_finite())
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
-        .expect("the beam is never empty");
+        .cloned()
+        .unwrap_or_else(|| live[0].clone());
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
     match best.escape {
         Some((level, address, point)) => {
@@ -1934,6 +2134,242 @@ mod tests {
         // makes exhaustive look UNSOUND by a hair, which is how it was
         // found.
         walk(ifs, p, 1.0, 0.0, depth).max(0.0)
+    }
+
+    /// The best value over EVERY address, for an IFS whose maps may be
+    /// nonlinear: `step` for the point and the local factor, and a
+    /// branch whose image the point is outside of scores its gap, as
+    /// the beam scores it into `dead_min`.
+    fn exhaustive_nl(ifs: &Ifs2, p: [f64; 2], depth: u32) -> f64 {
+        fn walk(ifs: &Ifs2, q: [f64; 2], sigma: f64, best_on_path: f64, left: u32) -> f64 {
+            let r = Affine2::distance(q, ifs.ball.centre);
+            // The same fold as the walk: a level that overflowed says
+            // nothing, and the path keeps the bound it had. Returning
+            // infinity there instead would DROP the path from the
+            // minimum -- the over-read this whole measurement exists
+            // to catch, reproduced in the reference.
+            let here = fold_level(best_on_path, sigma, r, ifs.ball.radius);
+            if left == 0 || !r.is_finite() || r > FAR {
+                return here;
+            }
+            let mut best = f64::INFINITY;
+            for m in &ifs.maps {
+                if let Some(gap) = m.inverse.image_gap(q) {
+                    best = best.min(here.max(sigma * gap));
+                    continue;
+                }
+                let (q2, _, s) = m.inverse.step(q, 0.0, m.sigma_min);
+                best = best.min(walk(ifs, q2, sigma * s, here, left - 1));
+            }
+            best
+        }
+        walk(ifs, p, 1.0, 0.0, depth).max(0.0)
+    }
+
+    /// The flame reported from use (`grand-julian-glitches1.fflame`):
+    /// three `julian`s at powers 2, 15 and 8, every one with
+    /// `dist = -1` -- so every map is an INVERSION -- each carrying a
+    /// `flatten` as the file does. `t2` is the third transform's
+    /// affine; the report's two files differ only there.
+    fn grand_julian(t2: [f32; 6]) -> Ifs2 {
+        let j = |aff: [f32; 6], w: f32, power: f32| {
+            let mut t = kernel_xform("julian", aff, w);
+            t.variations.insert("flatten".to_string(), 1.0);
+            t.variation_order.insert(0, "flatten".to_string());
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        analyse(vec![
+            j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
+            j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0], 0.2, 15.0),
+            j(t2, 0.3, 8.0),
+        ])
+    }
+
+    /// Where the beam's ranking key fails, measured.
+    ///
+    /// Reported from use as "layers that overlap unpredictably" and
+    /// "cut-out shapes" that move under a small rotation of one
+    /// transform, on a grand julian. A cut-out is an OVER-read: the
+    /// beam pruned the address that held the answer, the distance
+    /// came back too large, and the pixel read as exterior. The
+    /// ranking by position was measured right on the gasket, where
+    /// every map contracts alike; this measures it where they do not.
+    #[test]
+    fn the_beam_key_is_scored_on_an_inversion() {
+        const DEPTH: u32 = 8;
+        let ball = |ifs: Ifs2| {
+            let (c, r) = (ifs.ball.centre, ifs.ball.radius);
+            (ifs, c, r)
+        };
+        let kernel_cases: Vec<(&str, Vec<Transform>)> = vec![
+            (
+                "spherical",
+                vec![
+                    kernel_xform("spherical", [0.0, -1.0, 1.0, 0.0, 1.0, 0.0], 1.0),
+                    kernel_xform("spherical", [0.0, 1.0, -1.0, 0.0, 0.0, 0.0], 1.0),
+                    affine_xform(0.5, 0.0, 0.0, 0.5, 0.8, 0.0),
+                ],
+            ),
+            (
+                "bubble",
+                vec![
+                    kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
+                    kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
+                    affine_xform(0.5, 0.0, 0.0, 0.5, 1.0, 0.5),
+                ],
+            ),
+            (
+                "hemisphere",
+                vec![
+                    kernel_xform("hemisphere", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.5),
+                    kernel_xform("hemisphere", [0.7, 0.7, -0.7, 0.7, 0.4, 0.0], 1.2),
+                    affine_xform(0.5, 0.0, 0.0, 0.5, 0.8, 0.3),
+                ],
+            ),
+            (
+                "disc",
+                vec![
+                    kernel_xform("disc", [0.9, 0.4, -0.4, 0.9, 0.0, 0.0], 1.0),
+                    affine_xform(0.55, 0.0, 0.0, 0.55, 0.0, 0.0),
+                ],
+            ),
+            (
+                "blob",
+                vec![
+                    {
+                        let mut t = kernel_xform("blob", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.8);
+                        t.set_variation_param("blob", "high", 1.2);
+                        t.set_variation_param("blob", "low", 0.5);
+                        t.set_variation_param("blob", "waves", 5.0);
+                        t
+                    },
+                    affine_xform(0.6, 0.3, -0.3, 0.6, 0.5, 0.0),
+                    affine_xform(0.5, 0.0, 0.0, 0.5, -0.4, 0.3),
+                ],
+            ),
+        ];
+        let mut cases: Vec<(&str, Ifs2, [f64; 2], f64)> = vec![
+            ("sierpinski", sierpinski(), [0.5, 0.5], 0.9),
+            ("dragon", dragon(), [0.4, 0.4], 1.0),
+            {
+                let g = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+                let (c, r) = (g.ball.centre, g.ball.radius);
+                ("grand julian 1", g, c, r)
+            },
+            {
+                let g = grand_julian([0.509, 0.8607, -0.8607, 0.509, 0.0, 0.0]);
+                let (c, r) = (g.ball.centre, g.ball.radius);
+                ("grand julian 2", g, c, r)
+            },
+        ];
+        for (name, transforms) in kernel_cases {
+            let (ifs, c, r) = ball(analyse(transforms));
+            cases.push((name, ifs, c, r));
+        }
+        // The shipped julia class: roots with a POSITIVE distance, which
+        // are not inversions. `Auto` must leave these on Position.
+        {
+            let j = |aff: [f32; 6], power: f32| {
+                let mut t = kernel_xform("julian", aff, 1.0);
+                t.set_variation_param("julian", "power", power);
+                t.set_variation_param("julian", "dist", 1.0);
+                t
+            };
+            let (ifs, c, r) = ball(analyse(vec![
+                j([0.7, 0.0, 0.0, 0.7, 0.3, 0.0], 2.0),
+                j([0.0, -0.7, 0.7, 0.0, -0.2, 0.4], 3.0),
+            ]));
+            cases.push(("julia pair (+dist)", ifs, c, r));
+        }
+
+        let mut report = Vec::new();
+        for (name, ifs, centre, radius) in &cases {
+            let tol = 2.0 * radius / 512.0;
+            for beam in [4u32, 8] {
+                for key in [RankKey::Position, RankKey::Weighted, RankKey::Mixed, RankKey::Auto] {
+                    let (mut loose, mut total, mut worst, mut sum_over) = (0usize, 0usize, 1.0f64, 0.0f64);
+                    let n = 24;
+                    for iy in 0..n {
+                        for ix in 0..n {
+                            let (u, v) = (
+                                2.0 * (ix as f64 + 0.5) / n as f64 - 1.0,
+                                2.0 * (iy as f64 + 0.5) / n as f64 - 1.0,
+                            );
+                            let p = [centre[0] + radius * u, centre[1] + radius * v];
+                            let w = estimate_aux_ranked(ifs, p, 0.0, DEPTH, beam, key).distance;
+                            let e = exhaustive_nl(ifs, p, DEPTH - 1);
+                            assert!(
+                                e <= w + 1e-9,
+                                "{name} beam {beam} {key:?} at {p:?}: {w} is below exhaustive {e}"
+                            );
+                            total += 1;
+                            if w > e + tol {
+                                loose += 1;
+                                sum_over += (w - e) / radius;
+                                if e > 1e-9 {
+                                    worst = worst.max(w / e);
+                                }
+                            }
+                        }
+                    }
+                    report.push((name.to_string(), beam, key, loose, total, worst, sum_over));
+                }
+            }
+        }
+
+        println!("beam against exhaustive, depth {DEPTH}, over-reads past a pixel at 512 across the ball:");
+        for (name, beam, key, loose, total, worst, sum_over) in &report {
+            println!(
+                "  {name:16} beam {beam} {key:9?}: loose {loose:>3}/{total}  worst x{worst:6.2}  mean over-read {:.4} radii",
+                if *loose > 0 { sum_over / *loose as f64 } else { 0.0 }
+            );
+        }
+
+        for key in [RankKey::Position, RankKey::Weighted, RankKey::Mixed, RankKey::Auto] {
+            for beam in [4u32, 8] {
+                let rows: Vec<_> = report.iter().filter(|r| r.1 == beam && r.2 == key).collect();
+                let loose: usize = rows.iter().map(|r| r.3).sum();
+                let total: usize = rows.iter().map(|r| r.4).sum();
+                let worst = rows.iter().map(|r| r.5).fold(1.0f64, f64::max);
+                println!("  TOTAL beam {beam} {key:9?}: loose {loose:>4}/{total}  worst x{worst:.2}");
+            }
+        }
+
+        let at = |n: &str, b: u32, k: RankKey| {
+            report
+                .iter()
+                .find(|r| r.0 == n && r.1 == b && r.2 == k)
+                .map(|r| (r.3, r.4))
+                .expect("measured")
+        };
+        // Auto must be no looser than the better of the two pure keys
+        // on every fixture -- that is the whole claim.
+        for (name, ..) in &cases {
+            for b in [4, 8] {
+                let (lp, t) = at(name, b, RankKey::Position);
+                let (lw, _) = at(name, b, RankKey::Weighted);
+                let (la, _) = at(name, b, RankKey::Auto);
+                assert!(
+                    la <= lp.min(lw) + t / 100,
+                    "{name} beam {b}: Auto ({la}) is looser than the better key ({} of {t})",
+                    lp.min(lw)
+                );
+            }
+        }
+        // And the reported flame is a different picture under it.
+        for n in ["grand julian 1", "grand julian 2"] {
+            let (lp, _) = at(n, 8, RankKey::Position);
+            let (la, _) = at(n, 8, RankKey::Auto);
+            assert!(la * 2 < lp, "{n}: Auto did not halve the loose count ({la} vs {lp})");
+            let worst = report
+                .iter()
+                .find(|r| r.0 == n && r.1 == 8 && r.2 == RankKey::Auto)
+                .map(|r| r.5)
+                .unwrap();
+            assert!(worst < 20.0, "{n}: Auto worst ratio {worst:.1}");
+        }
     }
 
     /// Greedy is a heuristic, and the dragon is where it shows.

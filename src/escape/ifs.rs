@@ -429,7 +429,13 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         cand.color = e.z;
         var pos = live_count;
         for (var i = 0u; i < live_count; i = i + 1u) {
-            if (cand.r < live[i].r) {
+            var ck = cand.r;
+            var lk = live[i].r;
+            if (ifs_weighted_key()) {
+                ck = ck * cand.sigma;
+                lk = lk * live[i].sigma;
+            }
+            if (ck < lk) {
                 pos = i;
                 break;
             }
@@ -456,7 +462,15 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             }
             let r = ifs_radius2(live[ci].q, c);
             live[ci].r = r;
-            live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
+            // A level whose term is not a number says nothing about
+            // the piece; the bound the path had stands. Folding an
+            // overflowed term in is what painted a grand julian's
+            // cut-outs -- see `ifs_estimate::fold_level`. `<=` is the
+            // Metal-safe test: false for inf and for NaN alike.
+            let term = live[ci].sigma * (r - radius);
+            if (abs(term) <= 1e37) {
+                live[ci].bound = max(live[ci].bound, term);
+            }
 
             if (r > radius && (live[ci].flags & 1u) == 0u) {
                 live[ci].flags = live[ci].flags | 1u;
@@ -509,6 +523,14 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
                         continue;
                     }
                     cand_key = ifs_radius2(ifs_inv_point(bi, live[ci].q), c);
+                    if (ifs_weighted_key()) {
+                        cand_key = cand_key * live[ci].sigma * ifs_inv_sigma(bi, live[ci].q);
+                    }
+                    // Not a number ranks LAST: the path has already
+                    // left the representable plane.
+                    if (!(cand_key <= 1e37)) {
+                        cand_key = 1e38;
+                    }
                 }
                 var pos = next_count;
                 for (var j = 0u; j < next_count; j = j + 1u) {
@@ -545,11 +567,16 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
                 child.q = ifs_inv_point(bi, live[parent].q);
                 child.sigma = live[parent].sigma * ifs_inv_sigma(bi, live[parent].q);
                 child.last_sigma = ifs_maps[bi].sigma_min;
-                child.r = key[k2];
+                child.r = ifs_radius2(child.q, c);
                 // Score the child as it is made: one that inherited
                 // only its parent's bound would rank identically to
                 // all its siblings.
-                child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
+                let cterm = child.sigma * (child.r - radius);
+                if (abs(cterm) <= 1e37) {
+                    child.bound = max(live[parent].bound, cterm);
+                } else {
+                    child.bound = live[parent].bound;
+                }
                 if ((live[parent].flags & 1u) == 0u) {
                     child.addr = live[parent].addr + f32(bi) * addr_scale;
                     if (handover + k == 0u) {
@@ -573,9 +600,13 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
     // The beam is RANKED by position but ANSWERED by bound: pruning
     // asks "which piece is this point in", and the DISTANCE asks
     // "which surviving address gives the smallest".
+    // Among FINITE bounds: a candidate whose bound overflowed has
+    // nothing to say, and "infinitely far" is exactly the cut-out.
     var win = 0u;
     for (var ci = 1u; ci < live_count; ci = ci + 1u) {
-        if (live[ci].bound < live[win].bound) {
+        let b = live[ci].bound;
+        let wb = live[win].bound;
+        if (abs(b) <= 1e37 && (!(abs(wb) <= 1e37) || b < wb)) {
             win = ci;
         }
     }
@@ -1066,7 +1097,15 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
             }
             let r = ifs_radius4(live[ci].q, live[ci].w, c);
             live[ci].r = r;
-            live[ci].bound = max(live[ci].bound, live[ci].sigma * (r - radius));
+            // A level whose term is not a number says nothing about
+            // the piece; the bound the path had stands. Folding an
+            // overflowed term in is what painted a grand julian's
+            // cut-outs -- see `ifs_estimate::fold_level`. `<=` is the
+            // Metal-safe test: false for inf and for NaN alike.
+            let term = live[ci].sigma * (r - radius);
+            if (abs(term) <= 1e37) {
+                live[ci].bound = max(live[ci].bound, term);
+            }
             if (r > radius && (live[ci].flags & 1u) == 0u) {
                 live[ci].flags = live[ci].flags | 1u;
                 live[ci].level =
@@ -1101,6 +1140,12 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
                 if (bi < n) {
                     let s = ifs_inv_step3(bi, live[ci].q, live[ci].w);
                     cand_key = ifs_radius4(s.xyz, s.w, c);
+                    if (ifs_weighted_key()) {
+                        cand_key = cand_key * live[ci].sigma * ifs_inv_sigma3(bi, live[ci].q, live[ci].w);
+                    }
+                    if (!(cand_key <= 1e37)) {
+                        cand_key = 1e38;
+                    }
                 }
                 var pos = next_count;
                 for (var j = 0u; j < next_count; j = j + 1u) {
@@ -1135,8 +1180,13 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
                 child.w = s.w;
                 child.sigma = live[parent].sigma * ifs_inv_sigma3(bi, live[parent].q, live[parent].w);
                 child.last_sigma = ifs_maps[bi].extra.x;
-                child.r = key[k2];
-                child.bound = max(live[parent].bound, child.sigma * (child.r - radius));
+                child.r = ifs_radius4(child.q, child.w, c);
+                let cterm = child.sigma * (child.r - radius);
+                if (abs(cterm) <= 1e37) {
+                    child.bound = max(live[parent].bound, cterm);
+                } else {
+                    child.bound = live[parent].bound;
+                }
                 if ((live[parent].flags & 1u) == 0u) {
                     child.addr = live[parent].addr + f32(bi) * addr_scale;
                     // The colour belongs to the FIRST map applied, and
@@ -1157,9 +1207,13 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
         addr_scale = addr_scale / f32(n);
     }
 
+    // Among FINITE bounds: a candidate whose bound overflowed has
+    // nothing to say, and "infinitely far" is exactly the cut-out.
     var win = 0u;
     for (var ci = 1u; ci < live_count; ci = ci + 1u) {
-        if (live[ci].bound < live[win].bound) {
+        let b = live[ci].bound;
+        let wb = live[win].bound;
+        if (abs(b) <= 1e37 && (!(abs(wb) <= 1e37) || b < wb)) {
             win = ci;
         }
     }
@@ -1826,8 +1880,22 @@ pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
         ifs.maps.iter().map(|m| m.sigma_min).sum::<f64>() / ifs.maps.len() as f64
     };
     out[1] = [mean as f32, 0.0, 0.0, 0.0];
+    // x: the beam's ranking key -- 1 for sigma-weighted, which the
+    // CPU walk chooses when every map is an inversion. See
+    // `ifs_estimate::RankKey::Auto`; the GPU must rank the way the
+    // CPU that seeds it ranks, or the handover beam is not the beam
+    // the walk would have kept.
+    let weighted = crate::scene::ifs_estimate::resolved_key(
+        ifs,
+        crate::scene::ifs_estimate::RankKey::Auto,
+    ) == crate::scene::ifs_estimate::RankKey::Weighted;
     out[2] = [0.0; 4];
-    out[3] = [0.0; 4];
+    // fdata[3].w: zero-padded in both layouts (the solid's forward
+    // vector is a vec3 there), so it is free in both. fdata[2] was the
+    // first choice and is the solid's camera eye -- a flag read from
+    // `eye.x > 0.5` ranked every solid whose camera sat right of
+    // x = 0.5 by the wrong key, caught by the solid agreement gate.
+    out[3] = [0.0, 0.0, 0.0, if weighted { 1.0 } else { 0.0 }];
 }
 
 /// One 3D map, as the marcher reads it: the INVERSE affine, the
@@ -2501,7 +2569,13 @@ pub fn pack_globals3(
         cam.eye_rel[2] as f32,
         cam.fov,
     ];
-    out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
+    // w: the beam's ranking key, as the planar packer sets it -- the
+    // forward vector's pad, which nothing else reads.
+    let weighted = crate::scene::ifs_estimate::resolved_key(
+        ifs,
+        crate::scene::ifs_estimate::RankKey::Auto,
+    ) == crate::scene::ifs_estimate::RankKey::Weighted;
+    out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, if weighted { 1.0 } else { 0.0 }];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
     out[5] = [cam.up[0] as f32, cam.up[1] as f32, cam.up[2] as f32, 0.0];
     // The target's offset from the ball's centre, which is what turns
