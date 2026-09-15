@@ -4511,6 +4511,13 @@ fn ifs_has_nonlinear() -> bool {
     return params.fdata[1].w > 0.5;
 }
 
+// The beam's ranking key: sigma-weighted position when the CPU that
+// seeds this walk chose it, which it does when every map is an
+// inversion. See `ifs_estimate::RankKey::Auto` for the measurement.
+fn ifs_weighted_key() -> bool {
+    return params.fdata[3].w > 0.5;
+}
+
 // The beam's handover state, packed by `escape::ifs::pack_seeds`.
 fn ifs_handover_level() -> u32 {
     return u32(max(params.fdata[1].y, 0.0));
@@ -5304,6 +5311,13 @@ fn ifs_slice_w() -> f32 {
 // early exit off (an affine argument; see pack_globals3).
 fn ifs_has_nonlinear() -> bool {
     return params.fdata[1].w > 0.5;
+}
+
+// The beam's ranking key: sigma-weighted position when the CPU that
+// seeds this walk chose it, which it does when every map is an
+// inversion. See `ifs_estimate::RankKey::Auto` for the measurement.
+fn ifs_weighted_key() -> bool {
+    return params.fdata[3].w > 0.5;
 }
 
 fn ifs_count() -> u32 {

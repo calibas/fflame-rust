@@ -260,6 +260,21 @@ pub enum Kernel {
 }
 
 impl Kernel {
+    /// Whether the forward kernel is an inversion: unbounded at the
+    /// origin, with a `σ` that shrinks as the point moves away.
+    ///
+    /// `spherical` is `v/|v|²`; a root with a NEGATIVE distance is
+    /// `|z|^{d/n}` with `d/n < 0`. A root with a positive distance is
+    /// not, whatever its power. The beam's ranking key is chosen on
+    /// this (`ifs_estimate::RankKey::Auto`).
+    pub fn is_inversion(&self) -> bool {
+        match *self {
+            Kernel::Spherical => true,
+            Kernel::Root { d, .. } => d < 0.0,
+            _ => false,
+        }
+    }
+
     /// Blob's angular scale at `theta`.
     fn blob_scale(high: f64, low: f64, waves: f64, theta: f64) -> (f64, f64) {
         let s = low + (high - low) / 2.0 * ((waves * theta).sin() + 1.0);
