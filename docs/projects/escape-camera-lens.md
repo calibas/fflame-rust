@@ -94,8 +94,20 @@ lens_amount: f32,                    // 1.0 = full, blends to identity
 
 `lens_amount` is not decoration. A lens is all-or-nothing otherwise,
 and the sim's layer warp already found the same need
-(`mix(q, mapped, rate)`). It blends `L_t(n) = (1-t)·n + t·L(n)`, so
-dialling an effect in is one slider.
+(`mix(q, mapped, rate)`). It runs from `-5` to `5`: past 1 the lens
+overshoots rather than blends, and the sign chooses which way the
+middle goes.
+
+**Positive bulges the middle OUT, and the config's amount is negated
+on its way to the shader.** The slider is a camera control, so its
+sign is the one a photographer would expect; the raw blend's sign is
+the opposite for every radial lens in the recommended set. That was
+reported from use twice -- first for `eyefish`, then for `bubble` --
+before it was believed, because the direction is genuinely easy to
+reason backwards: the lens maps SCREEN to WORLD, so sampling further
+out shows more world and shrinks the subject. The flip is exactly a
+sign swap and nothing else: the render at the old `+1` is
+pixel-identical to the new `-1`.
 
 Paths: `EscapeLens`, `EscapeLensAmount`, and
 `EscapeLensParam { param: String }` keyed by name, matching
@@ -160,10 +172,24 @@ Apophysis quirk, verbatim in our port. As a lens that mirrors the
 picture across the diagonal, so **`eyefish` is the one to reach for**
 and the panel says so.
 
-The picker offers every variation in the app's ordinary ordering
-rather than a curated allowlist. Curation here would be a judgement
-the measurement does not support: "broken" describes the default
-parameters, and a variation's parameters are editable.
+**The picker offers the measured set, recommended first.** Shipping
+all 647 was the first cut and it was wrong from use: a list where
+most entries do nothing is worse than a short one. `LENS_USABLE` is
+the 396 that measured `clean` or `unbounded`; `LENS_RECOMMENDED` is
+26 of those hand-picked as reading like a CAMERA -- a bulge, a twist,
+an unwrap -- with `bubble`, `hemisphere` and `eyefish` at the front.
+
+A LIST rather than a rule, because no rule available at runtime
+agrees with the measurement. Filtering on shader shape instead -- no
+RNG, no accumulator, no per-thread state -- keeps 20 the measurement
+rejects and drops 74 it accepts. `blur_zoom` is the case that settles
+it: it draws from the RNG and is offered anyway, because its jitter
+measured small enough to stay a lens and a zoom blur is a camera
+effect. RNG is not the criterion; the measurement is.
+
+The classification describes a variation's DEFAULT parameters, and
+those are editable, so a **Show all** box reaches the rest rather
+than the measurement being a wall.
 
 ## 7. Steps
 
@@ -246,7 +272,8 @@ a different branch of a variation's formula; the AMOUNT rides in the
 transform's weight, so dragging that slider writes a buffer rather
 than compiling a shader.
 
-**The amount runs from -5 to 5, and the negative half is the point.**
+**The amount runs from -5 to 5, and its sign is the camera's, not
+the blend's.**
 Reported from use: `eyefish` at a positive amount squeezes the middle
 toward the centre, which is the opposite of the barrel a camera lens
 suggests. `mix(n, L(n), t)` is `n + t(L(n) - n)`, so the sign of `t`
@@ -259,12 +286,14 @@ magnification at the centre is exactly `1/(1 + amount)`:
 
 | amount | centre | |
 |---|---|---|
-| +1 | 0.5x | the squeeze that was reported |
+| -1 | 0.5x | pinched in |
 | 0 | 1x | no lens |
-| -0.5 | 2x | a clean barrel |
-| -0.75 | 4x | a strong one |
-| -1 | unbounded | the linear term cancels |
-| < -1 | folds | the map reverses through the origin |
+| +0.5 | 2x | a clean barrel |
+| +0.75 | 4x | a strong one |
+| +1 | unbounded | the linear term cancels |
+| > +1 | folds | the map reverses through the origin |
+
+(These are the USER-FACING amounts, after the negation.)
 
 Measured against renders: at -0.5 the central tenth of the frame
 matches a 2x zoom far more closely than it matches an unzoomed one
@@ -272,9 +301,12 @@ matches a 2x zoom far more closely than it matches an unzoomed one
 outward, which is what a nonlinear lens should do and a uniform zoom
 would not.
 
-`bubble` and `hemisphere` bulge outward at POSITIVE amounts -- their
-measured profiles sit on the other side of the identity -- so they
-reach the same look without the fold that `eyefish` past -1 has.
+`bubble` and `hemisphere` bulge outward across the whole positive
+range without the fold `eyefish` has past +1, because their profiles
+stay finite: `bubble` is the identity at the centre and pulls only
+the outer field, which is why its central twelfth is unchanged at
++1 while the picture around it opens out. They are the safer default
+and head the list for that reason.
 
 **Not done.** Presets that ship a lens, and the visual-regression
 entries for them. The picker has a filter but no preview, so choosing

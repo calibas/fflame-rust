@@ -1416,6 +1416,22 @@ fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                     }
                     let needle = filter.trim().to_lowercase();
 
+                    // The measured set by default, everything on
+                    // request. The classification describes a
+                    // variation's DEFAULT parameters and those are
+                    // editable, so it is a starting point rather than
+                    // a verdict -- but a picker whose entries mostly
+                    // do nothing is worse than a short one.
+                    let all_id = egui::Id::new("escape_lens_show_all");
+                    let mut show_all = ui.data_mut(|d| d.get_temp::<bool>(all_id).unwrap_or(false));
+                    if ui
+                        .checkbox(&mut show_all, t!("escape_panel.lens_show_all"))
+                        .on_hover_text(t!("escape_panel.lens_show_all_tip"))
+                        .changed()
+                    {
+                        ui.data_mut(|d| d.insert_temp(all_id, show_all));
+                    }
+
                     if ui
                         .selectable_label(current.is_empty(), t!("escape_panel.lens_none"))
                         .clicked()
@@ -1423,18 +1439,39 @@ fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                         pick = Some(String::new());
                     }
                     ui.separator();
-                    // The app's ordinary ordering: category, then
-                    // registration order, the same order the
-                    // variations browser uses -- so a lens is found
+
+                    // The recommended lenses first in their own
+                    // order, then everything else usable in the
+                    // registry's order -- the same order the
+                    // variations browser uses, so a lens is found
                     // where a variation is found.
+                    let menu: Vec<String> = if show_all {
+                        registry.names().to_vec()
+                    } else {
+                        crate::escape::lens::lens_menu(&registry)
+                    };
+                    let head = if show_all {
+                        0
+                    } else {
+                        crate::escape::lens::LENS_RECOMMENDED
+                            .iter()
+                            .filter(|n| registry.get(n).is_some())
+                            .count()
+                    };
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                        for name in registry.names() {
+                        for (i, name) in menu.iter().enumerate() {
                             let Some(info) = registry.get(name) else { continue };
                             if !needle.is_empty()
                                 && !name.to_lowercase().contains(&needle)
                                 && !info.display_name.to_lowercase().contains(&needle)
                             {
                                 continue;
+                            }
+                            // A rule under the recommended ones, so
+                            // the head reads as a shortlist rather
+                            // than as an arbitrary reordering.
+                            if i == head && head > 0 && needle.is_empty() {
+                                ui.separator();
                             }
                             if ui
                                 .selectable_label(&current == name, &info.display_name)

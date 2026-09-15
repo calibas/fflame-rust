@@ -682,6 +682,9 @@ pub fn biomorph_from_str(s: &str) -> Option<BiomorphMode> {
 
 /// How far [`EscapeConfig::lens_amount`] may be pushed either way.
 ///
+/// Positive bulges the middle out and negative pinches it in; past 1
+/// either way the lens overshoots rather than blends.
+///
 /// Here rather than beside the lens engine because the config module
 /// is compiled whether or not `engine-escape` is, and the clamp on
 /// the write path lives in the config manager. `escape::lens`
