@@ -57,6 +57,163 @@ use crate::variations::VariationRegistry;
 /// engine, and re-exported here.
 pub use crate::config::escape::LENS_AMOUNT_LIMIT;
 
+/// The lenses offered first, in this order.
+///
+/// Hand-picked from the survey sheets as the ones that read as a
+/// CAMERA rather than as an effect -- a bulge, a twist, an unwrap --
+/// with the three most asked for at the front. Everything else that
+/// measured usable follows in the app's ordinary order.
+pub const LENS_RECOMMENDED: &[&str] = &[
+    "bubble", "hemisphere", "eyefish", "fisheye",
+    "spherical", "cylinder", "bent", "horseshoe",
+    "swirl", "curl", "escher", "bipolar",
+    "elliptic", "polar", "polar2", "log",
+    "disc", "blur_zoom", "separation", "wedge",
+    "cardioid", "tangent", "rectangles", "waves",
+    "splits", "crop",
+];
+
+/// Every variation that measured usable as a lens.
+///
+/// From `variation_probe lens` (see `src/probe/lens.rs`): each
+/// variation evaluated over a screen grid and classified, with
+/// `clean` and `unbounded` kept and `degenerate` and `broken`
+/// dropped. That is 396 of 647 -- the rest are the RNG blur and
+/// noise families, which give a different answer per pixel, and the
+/// z-only variations, which return nothing in two dimensions.
+///
+/// A LIST rather than a rule, because no rule available at runtime
+/// agrees with the measurement: filtering instead on shader shape --
+/// no RNG, no accumulator, no per-thread state -- keeps 20 variations
+/// the measurement rejects and drops 74 it accepts. The picker's
+/// "show everything" box is the escape hatch, since a variation's
+/// parameters are editable and the classification describes its
+/// DEFAULTS.
+///
+/// Sorted, so `lens_is_usable` can binary-search it.
+pub const LENS_USABLE: &[&str] = &[
+    "CircleTrans1", "acoth", "affine3D", "anamorphcyl",
+    "apollonian_gasket", "apollony", "arch", "arcsech",
+    "arcsech2", "arcsinh", "arctanh", "arctruchet",
+    "atan", "atan2_spirals", "auger", "bCollide",
+    "bMod", "bSwirl", "bTransform", "barycentroid",
+    "bent", "bent2", "bi_linear", "bipolar",
+    "bipolar2", "blob", "blob3D", "blocky",
+    "blur_zoom", "bsplit", "bubble", "bubble2",
+    "bubbleT3D", "bubble_wf", "butterfly", "butterfly3D",
+    "bwraps", "bwraps7", "cardioid", "cell",
+    "checkerboard_wf", "chladni", "chladni_disc", "chrysanthemum",
+    "chunk", "circleLinear", "circleRand", "circlecrop",
+    "circlesplit", "circlize", "circlize2", "circus",
+    "clifford_js", "collideoscope", "complex", "conic",
+    "corners", "cos", "cos2_bs", "cosh",
+    "cosh2_bs", "coshq", "cosine", "cosq",
+    "cot", "cot2_bs", "coth", "coth2_bs",
+    "cothq", "cotq", "cpow2", "cpow3",
+    "crop", "crop3D", "cross", "csc",
+    "csc2_bs", "csc_squared", "csch", "csch2_bs",
+    "cschq", "cscq", "curl", "curl3D",
+    "curl_sp", "curve", "cylinder", "cylinder2",
+    "d_spherical", "dc_bubble", "dc_hexes_wf", "dc_linear",
+    "dc_ztransl", "deltaA", "devil_warp", "diamond",
+    "dinis_surface_wf", "disc", "disc2", "disc3",
+    "disc3d", "eCollide", "eMod", "eMotion",
+    "ePush", "eRotate", "eScale", "eclipse",
+    "edisc", "electron_orbital", "elliptic", "ennepers",
+    "ennepers2", "epispiral", "epispiral_wf", "erf",
+    "erf3D", "escher", "estiq", "ex",
+    "exp", "exp2", "exp2_bs", "exponential",
+    "eyefish", "falloff2", "fan", "fan2",
+    "fdisc", "fibonacci2", "fisheye", "flatten",
+    "flipcircle", "flipy", "flower_db", "flux",
+    "foci", "foci_3D", "fourth", "fract_dragon_wf",
+    "fract_julia_wf", "fract_mandelbrot_wf", "fract_meteors_wf", "fract_pearls_wf",
+    "fract_salamander_wf", "fuchsian_triangle", "funnel", "gamma",
+    "gridout", "gridout2", "gridout3D", "handkerchief",
+    "heart", "heart_wf", "hecke_group", "helicoid",
+    "helix", "hemisphere", "henon", "hexaplay3D",
+    "ho", "hofstadter", "hole2", "holesq",
+    "horseshoe", "hyperbolic", "hyperbolic_camera", "hyperbolicellipse",
+    "hypercrop", "hypershift", "hypertile", "hypertile3D",
+    "iconattractor_js", "idisc", "intersection", "invpolar",
+    "invsquircular", "invtree_js", "jac_asn", "jac_cn",
+    "jac_dn", "jac_sn", "jubiQ", "jubiq4d",
+    "kaleidoscope", "layered_spiral", "lazyTravis", "lazyjess",
+    "lazysensen", "lazysusan", "linear", "linear3D",
+    "linearT", "linearT3D", "log", "log_db",
+    "log_tile2", "loonie", "loonie2", "loonie3",
+    "loonie_3D", "loq", "lorentz_mobius", "lorenz_js",
+    "lozi", "mandelbrot", "mask", "matrix3D",
+    "mcarpet", "minkQM", "minkowski", "minkowski_camera",
+    "minkowskope", "mobiq", "mobiq4d", "mobius",
+    "mobiusN", "mobius_dragon_3D", "mobius_strip", "multi_kaleidoscope",
+    "murl", "murl2", "ngon", "npolar",
+    "octagon", "octapol", "onion", "onion2",
+    "ortho", "ovoid3d", "pRose3D", "pTransform",
+    "panorama1", "panorama2", "parplot2d_wf", "perspective",
+    "petal", "plane_wf", "plusrecip", "poincare3D",
+    "pointgrid3d_wf", "pointgrid_wf", "polar", "polar2",
+    "polyhedron", "popcorn2_3D", "post_bwraps", "post_bwraps2",
+    "post_circlecrop", "post_colorscale_wf", "post_crop", "post_curl",
+    "post_curl3D", "post_heat", "post_rotate_x", "post_rotate_y",
+    "post_spherical", "post_spin_z", "post_ztranslate_wf", "power",
+    "pre_bwraps", "pre_bwraps2", "pre_circlecrop", "pre_crop",
+    "pre_curl", "pre_dcztransl", "pre_disc", "pre_disc3d",
+    "pre_rotate_x", "pre_rotate_y", "pre_sinusoidal", "pre_sinusoidal3d",
+    "pre_spherical", "pre_spin_z", "pre_wave3D_wf", "pre_zscale",
+    "pre_ztranslate", "pressure_wave", "projective", "pulse",
+    "pyramid", "q_ode", "quasiconformal", "quaternion",
+    "quaternion_camera", "quaternion_julia", "quaternion_linear", "quaternion_rotation",
+    "rational3", "rays", "rays1", "rays2",
+    "rays3", "rectangles", "rhodonea", "rings",
+    "rings2", "ripple", "rippled", "rose_wf",
+    "roundspher", "roundspher3D", "scry", "scry2",
+    "scry_3D", "sec", "sec2_bs", "secant2",
+    "sech", "sech2_bs", "sechq", "secq",
+    "separation", "shift", "shredlin", "shredrad",
+    "sigmoid", "sin", "sin2_bs", "sinh",
+    "sinh2_bs", "sinhq", "sinq", "sintrange",
+    "sinusoidal", "sinusoidal3d", "sph3D", "sphere_nja",
+    "spherecrop", "spherical", "spherical3D", "spherical3D_wf",
+    "sphericalN", "spiral", "spiralwing", "spirograph",
+    "spligon", "split", "splits", "splits3D",
+    "spray_blur", "squarize", "squircular", "squirrel",
+    "stereogram", "stripes", "stripfit", "stwin",
+    "svensson_js", "svf", "swirl", "swirl3",
+    "swirl3D_wf", "sym_bg7", "sym_ng3", "sym_ng4",
+    "sym_ng5", "szubieta", "tan", "tan2_bs",
+    "tancos", "tangent", "tangent3D", "tanh",
+    "tanh2_bs", "tanhq", "tanq", "target",
+    "target_sp", "taurus", "tile_log", "tqmirror",
+    "trade", "truchet2", "twoface", "unpolar",
+    "vibration2", "vogel", "voron", "w",
+    "waves", "waves2", "waves2_3D", "waves2_radial",
+    "waves2_wf", "waves2b", "waves3_wf", "waves4_wf",
+    "wdisc", "wedge", "wedge_sph", "whitney_umbrella",
+    "xerf", "xheart", "yplot2d_wf", "z",
+];
+
+/// Whether a variation measured usable as a lens.
+pub fn lens_is_usable(name: &str) -> bool {
+    LENS_USABLE.binary_search(&name).is_ok()
+}
+
+/// The picker's order: the recommended head, then everything else
+/// usable in the registry's own order.
+pub fn lens_menu(registry: &VariationRegistry) -> Vec<String> {
+    let mut out: Vec<String> = LENS_RECOMMENDED
+        .iter()
+        .filter(|n| registry.get(n).is_some())
+        .map(|n| n.to_string())
+        .collect();
+    for name in registry.names() {
+        if lens_is_usable(name) && !LENS_RECOMMENDED.contains(&name.as_str()) {
+            out.push(name.clone());
+        }
+    }
+    out
+}
+
 /// The bind group the lens flame's buffers land on.
 ///
 /// Not 1: mode D already binds its IFS rows there.
@@ -66,7 +223,7 @@ pub const LENS_GROUP: u32 = 2;
 ///
 /// An amount of zero is not a lens: the blend is the identity, so the
 /// shader is better off without the machinery than with a no-op in it.
-/// A NEGATIVE amount is a lens -- see [`LENS_AMOUNT_LIMIT`].
+/// Either sign is a lens; they bulge opposite ways.
 pub fn is_active(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
     // Zero is the identity in either direction, so it is "no lens".
     // Negative is a lens, and a useful one.
@@ -105,7 +262,20 @@ pub fn lens_flame(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
     t.d = 1.0;
     t.f = 0.0;
     t.g = 0.0;
-    t.weight = escape.lens_amount.clamp(-LENS_AMOUNT_LIMIT, LENS_AMOUNT_LIMIT);
+    // NEGATED. The slider is a camera control, so positive means the
+    // middle BULGES OUT -- and for every radial lens in the
+    // recommended set that is the variation run backwards. Measured
+    // profiles say so rather than intuition: the magnification at
+    // radius r is r / L_t(r), and for `bubble`, `hemisphere` and
+    // `eyefish` alike it RISES with r at a positive raw blend (the
+    // rim stretched more than the middle, which reads as the centre
+    // being pushed in) and FALLS with r at a negative one, which is
+    // the bulge. Reported from use, twice, before it was believed.
+    //
+    // The config stores what the slider says; the shader gets the
+    // blend, and the blend is its negation.
+    let amount = escape.lens_amount.clamp(-LENS_AMOUNT_LIMIT, LENS_AMOUNT_LIMIT);
+    t.weight = -amount;
     t.variations.clear();
     t.set_variation(&escape.lens, 1.0);
     for p in &info.parameters {
@@ -356,7 +526,9 @@ mod tests {
         let t = &f.transforms[0];
         // a and D are the diagonal, e and f the translation.
         assert_eq!([t.a, t.b, t.c, t.d, t.e, t.f], [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-        assert!((t.weight - 0.6).abs() < 1e-6, "the amount rides in the weight");
+        // Negated: the slider is a camera control and the weight is
+        // the raw blend. See `lens_flame`.
+        assert!((t.weight + 0.6).abs() < 1e-6, "the amount rides in the weight");
         assert_eq!(t.variations.len(), 1);
         assert!(t.variations.contains_key("eyefish"));
     }
@@ -382,54 +554,106 @@ mod tests {
         assert!((got - 0.375).abs() < 1e-6, "{name}.{param} read back {got}");
     }
 
-    /// A negative amount reverses the displacement, which is what
-    /// turns a lens's bulge around.
+    /// The slider is a camera control: POSITIVE bulges the middle
+    /// out, and that is the variation run backwards.
     ///
-    /// `mix(n, L(n), t)` is `n + t*(L(n) - n)`, so the sign of `t` is
-    /// the sign of the displacement and nothing about `L` enters.
-    /// That is the whole mechanism. A lens either samples FURTHER out
-    /// than the screen radius -- pulling the world inward, shrinking
-    /// the middle -- or CLOSER in, pushing it outward and bulging;
-    /// which one a variation does is a property of that variation,
-    /// and running the displacement backwards turns any of them
-    /// around.
+    /// `mix(n, L(n), w)` is `n + w(L(n) - n)`, so the sign of the
+    /// blend is the sign of the displacement and nothing about `L`
+    /// enters. Which sign BULGES is a property of the variation, and
+    /// the measured profiles agree for every radial lens in the
+    /// recommended set: magnification at radius r is `r / L_w(r)`,
+    /// which rises with r at a positive raw blend -- the rim
+    /// stretched more than the middle, reading as the centre pushed
+    /// in -- and falls with r at a negative one.
     ///
-    /// Reported from use: `eyefish` at a positive amount squeezes the
-    /// middle toward the centre. Measured, it takes screen radius
-    /// 0.25 to 0.40 (`variation_probe lens`), so at -1 it takes 0.25
-    /// to 2(0.25) - 0.40 = 0.10 and bulges instead.
+    /// So the config's amount is negated on its way to the weight,
+    /// and this pins that. It was reported twice from use before it
+    /// was believed: first for `eyefish`, then for `bubble`.
     #[test]
-    fn a_negative_amount_reverses_the_displacement() {
+    fn a_positive_amount_bulges_and_reaches_the_weight_negated() {
         let r = crate::variations::global_registry();
-        let mut plus = EscapeConfig::default();
-        plus.lens = "eyefish".to_string();
-        plus.lens_amount = 1.0;
-        let mut minus = plus.clone();
-        minus.lens_amount = -1.0;
+        let mut out = EscapeConfig::default();
+        out.lens = "bubble".to_string();
+        out.lens_amount = 1.0;
+        let mut inward = out.clone();
+        inward.lens_amount = -1.0;
 
-        // Both are lenses; only the sign of the carried weight differs.
-        assert!(is_active(&plus, &r) && is_active(&minus, &r));
-        assert_eq!(lens_flame(&plus, &r).unwrap().transforms[0].weight, 1.0);
+        assert!(is_active(&out, &r) && is_active(&inward, &r));
         assert_eq!(
-            lens_flame(&minus, &r).unwrap().transforms[0].weight,
+            lens_flame(&out, &r).unwrap().transforms[0].weight,
             -1.0,
-            "a negative amount must survive to the weight"
+            "a positive amount must reach the shader negated"
         );
+        assert_eq!(lens_flame(&inward, &r).unwrap().transforms[0].weight, 1.0);
 
         // One pipeline serves both: the amount is not in the key, so
         // flipping the sign must not recompile a shader.
-        assert_eq!(lens_key(&plus, &r), lens_key(&minus, &r));
+        assert_eq!(lens_key(&out, &r), lens_key(&inward, &r));
 
         // The range reaches its edge, and zero is still no lens.
-        let mut far = plus.clone();
-        far.lens_amount = -LENS_AMOUNT_LIMIT;
+        let mut far = out.clone();
+        far.lens_amount = LENS_AMOUNT_LIMIT;
         assert_eq!(
             lens_flame(&far, &r).unwrap().transforms[0].weight,
             -LENS_AMOUNT_LIMIT
         );
-        let mut off = plus.clone();
+        let mut off = out.clone();
         off.lens_amount = 0.0;
         assert!(!is_active(&off, &r), "zero is the identity either way");
+    }
+
+    /// The picker's list: the recommended head in its own order, then
+    /// every other variation that measured usable, and nothing that
+    /// did not.
+    #[test]
+    fn the_menu_recommends_first_and_offers_only_what_works() {
+        let r = crate::variations::global_registry();
+        let menu = lens_menu(&r);
+
+        // Every name in either list is a real variation -- a rename
+        // in the registry would otherwise silently shrink the picker.
+        for n in LENS_RECOMMENDED {
+            assert!(r.get(n).is_some(), "recommended `{n}` is not a variation");
+            assert!(lens_is_usable(n), "recommended `{n}` did not measure usable");
+        }
+        for n in LENS_USABLE {
+            assert!(r.get(n).is_some(), "usable `{n}` is not a variation");
+        }
+
+        // The head is first, in order.
+        let head: Vec<&str> = LENS_RECOMMENDED.iter().copied().collect();
+        assert_eq!(&menu[..head.len()], &head[..], "the head is not first");
+        assert_eq!(&menu[0], "bubble");
+        assert_eq!(&menu[1], "hemisphere");
+        assert_eq!(&menu[2], "eyefish");
+
+        // Nothing unusable, and no duplicates.
+        for n in &menu {
+            assert!(lens_is_usable(n), "`{n}` is offered but did not measure usable");
+        }
+        let mut sorted = menu.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), menu.len(), "the menu repeats a lens");
+
+        // The measured-bad are really gone: `zcone` and `zscale`
+        // return nothing in two dimensions, and `blur`, `noise` and
+        // `gaussian_blur` scatter.
+        //
+        // Note which name is NOT here. `blur_zoom` draws from the RNG
+        // and is offered anyway, because it MEASURED clean -- its
+        // jitter is small enough to stay a lens, and a zoom blur is a
+        // camera effect. RNG is not the criterion; the measurement is.
+        for n in ["zcone", "zscale", "blur", "noise", "gaussian_blur"] {
+            if r.get(n).is_some() {
+                assert!(!menu.iter().any(|m| m == n), "`{n}` should not be offered");
+            }
+        }
+
+        // The list is sorted, because `lens_is_usable` binary-searches it.
+        let mut owned: Vec<&str> = LENS_USABLE.to_vec();
+        owned.sort();
+        assert_eq!(owned, LENS_USABLE.to_vec(), "LENS_USABLE is not sorted");
     }
 
     /// The key must move when a parameter does, or a lens edit would
