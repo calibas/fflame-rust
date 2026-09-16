@@ -3612,6 +3612,131 @@ mod tests {
         }
     }
 
+    /// How many bits of seed position a grand julian would need, per
+    /// level, for the handover to be worth taking.
+    ///
+    /// §11 of the plan says the lever for an inversion set is a wider
+    /// handover position, and guesses that a double-float would do
+    /// it. This checks the guess. The shader starts each pixel at
+    /// `position + basis·uv` and the reported distance inherits the
+    /// position's error divided by the pixel at the handover, so the
+    /// relative precision a level needs is
+    /// `px·(reach_k/reach_0) / |position|`, and the bits are its
+    /// negative log. f32 has 24, a double-float about 48.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_the_bits_an_inversion_would_need() {
+        let cases: Vec<(&str, Ifs2)> = vec![
+            ("grand julian", grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0])),
+            ("julia dust (for contrast)", julia([-0.4, 0.6])),
+        ];
+        for (name, ifs) in cases {
+            let smp = chaos_sample(&ifs, 20_000);
+            let target = smp[smp.len() - 1];
+            let zoom = 20.0f64;
+            let span = 4.0 / 2f64.powf(zoom);
+            let view_basis = [[span * 16.0 / 9.0, 0.0], [0.0, -span]];
+            let px = span / 1080.0;
+            let reach0 = basis_reach(view_basis);
+            println!("{name}: ball R {:.3}, zoom 2^{zoom}, px {px:.3e}", ifs.ball.radius);
+            println!(
+                "  {:>5} {:>4}  {:>11} {:>11} {:>10}  {:>6}",
+                "level", "n", "reach/reach0", "worst |pos|", "px at L", "bits"
+            );
+            // The frontier, all branches, no pruning: the widest and
+            // the narrowest of what a beam could be holding.
+            let mut front: Vec<([f64; 2], [[f64; 2]; 2])> = vec![(target, view_basis)];
+            for level in 0..=8usize {
+                let worst = front
+                    .iter()
+                    .map(|(q, b)| {
+                        let grown = basis_reach(*b) / reach0;
+                        let mag = q[0].hypot(q[1]).max(ifs.ball.radius);
+                        // relative precision this level needs for one
+                        // pixel of error
+                        let need = px * grown / mag;
+                        (need, grown, mag)
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .expect("a frontier");
+                println!(
+                    "  {level:>5} {:>4}  {:>11.3e} {:>11.3e} {:>10.3e}  {:>6.1}",
+                    front.len(),
+                    worst.1,
+                    worst.2,
+                    px * worst.1,
+                    -worst.0.log2()
+                );
+                if level == 8 {
+                    break;
+                }
+                let mut next = Vec::new();
+                for (q, b) in &front {
+                    for m in &ifs.maps {
+                        if m.inverse.image_gap(*q).is_some() {
+                            continue;
+                        }
+                        let (Some(j), Some(q2)) = (m.inverse.jacobian(*q), q.apply_map(&m.inverse))
+                        else {
+                            continue;
+                        };
+                        let nb = [
+                            [
+                                j[0][0] * b[0][0] + j[0][1] * b[1][0],
+                                j[0][0] * b[0][1] + j[0][1] * b[1][1],
+                            ],
+                            [
+                                j[1][0] * b[0][0] + j[1][1] * b[1][0],
+                                j[1][0] * b[0][1] + j[1][1] * b[1][1],
+                            ],
+                        ];
+                        next.push((q2, nb));
+                    }
+                }
+                if next.is_empty() {
+                    println!("  (no branch survives past level {level})");
+                    break;
+                }
+                // Keep it to the widest 12, so the count does not run away.
+                next.sort_by(|a, b| basis_reach(b.1).total_cmp(&basis_reach(a.1)));
+                next.truncate(12);
+                front = next;
+            }
+            println!("  f32 has 24 bits; a double-float about 48; f64 about 53.");
+            let seeds = seed_beam(&ifs, target, view_basis, px, 400, 4);
+            let f32_px = seeds
+                .cands
+                .iter()
+                .map(|c| {
+                    let grown = basis_reach(c.basis) / reach0;
+                    if !(grown > 0.0) {
+                        return f64::INFINITY;
+                    }
+                    let m = c.position[0].hypot(c.position[1]).max(ifs.ball.radius);
+                    m * 5.96e-8 / (px * grown)
+                })
+                .fold(0.0, f64::max);
+            let total = 80u32;
+            let after = total.saturating_sub(seeds.level).max(1);
+            let mut curv = 0.0f64;
+            for gy in 0..5 {
+                for gx in 0..5 {
+                    let uv = [gx as f64 / 4.0 - 0.5, gy as f64 / 4.0 - 0.5];
+                    let d = apply_basis(view_basis, uv);
+                    let q = [target[0] + d[0], target[1] + d[1]];
+                    let direct = estimate(&ifs, q, total, 4).distance / px;
+                    let sd = estimate_seeded(&ifs, &seeds, uv, after, 4).distance;
+                    curv = curv.max((sd - direct).abs());
+                }
+            }
+            println!(
+                "  seed_beam picks level {} ({} seeds): f32 {f32_px:.3} px, curvature {curv:.3} px",
+                seeds.level,
+                seeds.cands.len()
+            );
+        }
+    }
+
     /// Greedy is a heuristic, and the dragon is where it shows.
     ///
     /// Every address gives a valid bound on the distance to ITS piece;
