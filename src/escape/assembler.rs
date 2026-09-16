@@ -4531,6 +4531,17 @@ fn ifs_addr_scale() -> f32 {
     return params.fdata[1].w;
 }
 
+// The smallest bound among pieces the PREFIX could not enter, in the
+// same per-pixel units the seeds' bounds are in; 0 means "none", since
+// a carried gap is never negative. fdata[2] is the planar layout's one
+// free vec4 -- `pack_globals` zeroes it and nothing else reads it (the
+// solid's layout puts its camera there, and uses a different packer
+// and a different walk).
+fn ifs_seed_dead_min() -> f32 {
+    let v = params.fdata[2].x;
+    return select(1e30, v, v > 0.0);
+}
+
 // Word `w` of seed `j`. Four words each, from index 4.
 fn ifs_seed(j: u32, w: u32) -> vec4<f32> {
     return params.fdata[4u + 4u * j + w];

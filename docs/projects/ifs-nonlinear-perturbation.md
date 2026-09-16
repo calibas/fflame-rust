@@ -498,7 +498,39 @@ to 11,913 and 30% of pixels change; at 2^20, 5,504 to 10,793; at
 a broken interior, worse with AA than without.
 `output/aa/sheet.png`.
 
-## 10. Cost and risk
+## 10. The gap rides along, 2026-09-16
+
+Item 1 of §12, built. The prefix used to stop at the first branch
+the reference could not take: a gap belongs in the answer's minimum
+-- `estimate_aux_ranked` keeps those in `dead_min` -- and a seed had
+nowhere to put one, so dropping it would have been an over-read and
+stopping was the safe thing. On a set whose inverses have holes that
+is the first or second level, and it cost every level after it.
+
+`Seeds::dead_min_per_px` carries it instead, scored for the whole
+view rather than for the centre: the gap is 1-Lipschitz in `q` -- a
+distance scaled by `|w|·σ_min` of the post-affine against a frame
+that stretches by at most the reciprocal -- so subtracting the
+view's reach gives a value no pixel's own gap can fall below. Too
+small is the safe direction: the answer is a lower bound, and a
+smaller one widens a halo where a larger one erases a piece. It
+rides in `fdata[2].x`, the planar layout's one free vec4, and the
+shader's `dead_min` starts from it instead of from nothing.
+
+It is snapshotted with the level, so a prefix that hands over at
+level 2 having walked to level 6 carries the gaps of levels 0..2 and
+not the rest -- the continuation finds those itself, at the pixel's
+own position rather than this conservative one.
+
+Measured on the reported grand julian at zoom 2^20: the handover
+went from level 0 to level 2, and f32's error at it from 79 pixels
+to 19.9 at 1080p. Gate:
+`a_gap_in_the_prefix_is_carried_not_a_full_stop`, which checks the
+prefix gets past a gap, that one was actually met, and that the
+answer still matches each pixel's own walk to a quarter pixel. It
+fails with the old stop restored.
+
+## 11. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -517,7 +549,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 11. What is next
+## 12. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -548,41 +580,56 @@ rather than a bad one, and precision costs nothing to pass THROUGH:
 the walk crosses levels 1 and 4 in `BigFloat` for free, since only
 the level actually handed over at is ever stored in an f32.
 
-**And the walk already gets there.** Traced, it reaches level 6 and
-REJECTS it, choosing level 2 at an error of 19.9 pixels. Nor is it
-the gap rule or the view-agreement rule: relaxing each in turn
-changes nothing. The cause is the beam. The ranking key asks *which
-piece is this point nearest*, and the handover needs *which lineage
-has expanded the view* -- on a contractive set those are the same
-lineages, and on one whose inverses alternately expand and contract
-by ten orders they are not. The beam keeps the near ones; the
-objective is then only as good as the worst seed it was handed.
+**The walk already gets there, and the reason it declines is
+CURVATURE.** This section has now guessed twice and been wrong
+twice, so what follows is measured rather than reasoned.
 
-So the next step for grand julians is a **per-seed handover level**,
-not more bits: let each seed stop where it is individually best,
-instead of making every seed stop where the beam as a whole does.
-The shader continues each seed independently already, and `Seed` has
-room; what needs care is that `Seeds.level` currently means one
-level for all of them -- the escape colouring counts from it -- and
-that a frontier of mixed levels is not a level-k beam, so the
-view-agreement argument has to be re-made rather than assumed.
+Carrying the gap (§10, built) took the handover from level 0 to
+level 2 and f32's error from 79 pixels to 19.9 at 1080p. Tracing the
+beam per level at 96 pixels then gives the whole picture:
 
-Two smaller things fall out of the same measurement and are worth
-doing first, because both are contained:
+| level | reach / reach₀ | f32 | curvature (model) |
+|---|---|---|---|
+| 1 | 7.9e-16 | 8.6e15 px | 0.0001 px |
+| **2** | 3.94 | **1.72 px** | 0.001 px |
+| 3 | 0.75 | 8.98 px | 0.018 px |
+| 4 | 2.0e-9 | 3.4e9 px | 0.049 px |
+| 5 | 0.85 | 7.98 px | 0.246 px |
+| **6** | 1.5e4 | **0.000 px** | **3.75 px** |
 
-- **Carry `dead_min` through the handover.** The prefix stops at the
-  first branch the reference cannot take, because a gap belongs in
-  the answer's minimum and a seed has nowhere to put it. One number
-  per `Seeds`, scored conservatively over the view the way the bound
-  already is, removes a stopping rule outright.
-- **Widen the seed position anyway**, but knowing what it buys: not
-  the collapse at level 1, but the levels that miss by a few bits --
-  level 0 needs 30.3 against f32's 24, and level 2 needs 28.3. It
-  does NOT lift the no-handover cap, because the shader's walk is
-  f32 throughout and a delta far below the position's own ulp is
-  swamped by the first step whatever it was stored in.
+Level 6 is where the view has finally expanded -- f32 would be
+EXACT there -- and it is refused because the linearisation costs
+3.75 pixels. Forcing the handover to each level and measuring the
+seeded walk against each pixel's own confirms the model rather than
+the excuse: 0.31 pixels of real error at level 5, 3.19 at level 6,
+against 0.25 and 3.75 predicted. The reference orbit passes within
+4e-5 of a singularity at level 5, and across a view that has grown
+by four orders a Jacobian is simply no longer the map.
 
-## 12. Order of work
+So neither of this section's earlier answers was the obstacle. Not
+precision: f32 is exact at the level that matters. Not the beam: at
+96 pixels the handover holds ONE seed, so per-seed levels would
+change nothing, and the lineage that expands is the one the beam
+already keeps.
+
+**What a grand julian needs is the second-order term.** Carrying
+`½ δᵀ·H·δ` alongside the Jacobian takes the dropped term from
+`O(ρ/s)` relative to `O((ρ/s)²)`, which at level 6's `ρ/s ≈ 0.055`
+turns 3.19 pixels into about a fifth of one -- and level 6 then wins
+outright, since its f32 cost is nothing. That is a Hessian per
+kernel, a rank-3 tensor per map carried beside the basis, and the
+same G1-shaped gate against central differences. It is the real
+item, and §2's "the answer is a stopping rule, not a repair" was
+written before the sets that need it were measured.
+
+**Still worth doing, and cheap:** widen the seed position, knowing
+what it buys -- not the collapse at level 1, but levels that miss by
+a few bits, like level 2's 28.3 against f32's 24. It does NOT lift
+the no-handover cap, because the shader's walk is f32 throughout and
+a delta far below the position's own ulp is swamped by the first
+step whatever it was stored in.
+
+## 13. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
@@ -597,12 +644,15 @@ doing first, because both are contained:
 4. ~~GPU gate G5~~; the app; G6 -- the Douady Rabbit renders with a
    sharp, self-similar boundary at 2^4, 2^12, 2^20 and 2^28
    (`output/deepzoom/sheet.png`).
-5. Carry `dead_min` through the handover, so a gapped branch stops
-   costing the prefix its remaining levels (§11).
-6. A per-seed handover level, which is what a grand julian needs
-   (§11). The measurement is there; the soundness argument is not.
-7. Rung 2 (sqrt kernels: bubble, hemisphere), same gates.
-8. The 3D twin -- `seed_beam3`, and the `estimate_seeded3` staleness
-   §7 left alone.
-9. G3: the handover level against the zoom, and a fixture whose
-   reference orbit passes a pole.
+5. ~~Carry `dead_min` through the handover~~ -- done, §10.
+6. ~~A per-seed handover level~~ -- measured to be a non-issue: the
+   grand julian's handover holds one seed (§12).
+7. **The second-order term**, which is what a grand julian actually
+   needs (§12): a Hessian per kernel, carried beside the basis, with
+   a G1-shaped gate against central differences.
+8. Widen the seed position, for the levels that miss by a few bits.
+9. Rung 2 (sqrt kernels: bubble, hemisphere), same gates.
+10. The 3D twin -- `seed_beam3`, and the `estimate_seeded3` staleness
+    §7 left alone.
+11. G3: the handover level against the zoom, and a fixture whose
+    reference orbit passes a pole.

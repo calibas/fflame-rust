@@ -838,6 +838,26 @@ pub struct Seeds {
     /// own count plus this.
     pub level: u32,
     pub cands: Vec<Seed>,
+    /// The smallest bound among pieces the PREFIX could not enter, in
+    /// the same per-pixel units as [`Seed::bound_per_px`], or
+    /// infinite when it entered every branch it met.
+    ///
+    /// The walk answers the minimum over ALL pieces, reachable or not
+    /// (`estimate_aux_ranked`'s `dead_min`): a branch whose image the
+    /// point is outside of contributes its gap. The prefix meets
+    /// those too, and before this it had nowhere to put one, so it
+    /// STOPPED at the first -- which on a set whose inverses have
+    /// holes is usually the first or second level, and cost every
+    /// level after it. Carried here instead.
+    ///
+    /// Scored for the whole view, not for the centre: the gap is
+    /// 1-Lipschitz in `q` -- it is a distance scaled by `|w|·σ_min`
+    /// of the post-affine, against a frame that stretches by at most
+    /// the reciprocal -- so subtracting the view's reach gives a
+    /// value no pixel's own gap can fall below. Too small is the safe
+    /// direction: the answer is a lower bound, and a smaller one
+    /// widens a halo where a larger one would erase a piece.
+    pub dead_min_per_px: f64,
 }
 
 /// How large a delta may grow before the CPU stops and hands over.
@@ -996,8 +1016,15 @@ pub fn seed_beam<P: SeedPoint>(
     };
     // Level 0 is always a candidate: it is what a nonlinear IFS did
     // before this, and it is sometimes still the best.
+    // The gaps the prefix meets, in world units until the handover
+    // converts them. Snapshotted with the level, so a prefix that
+    // hands over at level 2 having walked to level 6 carries the
+    // gaps of levels 0..2 and not the rest -- the continuation finds
+    // those itself, at the pixel's own position rather than this
+    // conservative one.
+    let mut dead_min = f64::INFINITY;
     let mut best_error = if choose { f32_pixels(&bases, &live) } else { f64::INFINITY };
-    let mut best = if choose { Some((0u32, live.clone(), bases.clone())) } else { None };
+    let mut best = if choose { Some((0u32, live.clone(), bases.clone(), dead_min)) } else { None };
 
     let mean = mean_sigma_min(&ifs.maps);
     let far = radius.max(1.0) * FAR;
@@ -1084,14 +1111,14 @@ pub fn seed_beam<P: SeedPoint>(
             let qf = c.q.to_f64();
             for (i, m) in ifs.maps.iter().enumerate() {
                 // A branch the REFERENCE cannot take. Its gap belongs
-                // in the answer's minimum -- the walk scores it into
-                // `dead_min` -- and a seed has nowhere to carry that,
-                // so the prefix ends here rather than drop it, which
-                // would be an over-read. Costs depth only on a set
-                // whose reference orbit passes through a hole.
-                if m.inverse.image_gap(qf).is_some() {
-                    stop = true;
-                    break 'expand;
+                // in the answer's minimum, and `Seeds::dead_min_per_px`
+                // is where the handover carries it -- less the view's
+                // reach, so no pixel's own gap can fall below it.
+                if let Some(gap) =
+                    m.inverse.gap_bound(qf, ball, radius, m.sigma_min)
+                {
+                    dead_min = dead_min.min(c.bound.max(c.sigma * (gap - reach)));
+                    continue;
                 }
                 let (Some(jac), Some(q)) = (m.inverse.jacobian(qf), c.q.apply_map(&m.inverse))
                 else {
@@ -1179,7 +1206,7 @@ pub fn seed_beam<P: SeedPoint>(
             let err = curv + f32_pixels(&bases, &live);
             if err < best_error {
                 best_error = err;
-                best = Some((level, live.clone(), bases.clone()));
+                best = Some((level, live.clone(), bases.clone(), dead_min));
             }
             // Nothing deeper can win once the curvature term ALONE
             // has passed the best total: `spent` only grows, so every
@@ -1192,14 +1219,16 @@ pub fn seed_beam<P: SeedPoint>(
         }
     }
 
-    if let Some((l, c, b)) = best {
+    if let Some((l, c, b, d)) = best {
         level = l;
         live = c;
         bases = b;
+        dead_min = d;
     }
 
     Seeds {
         level,
+        dead_min_per_px: if dead_min.is_finite() { dead_min * scale } else { f64::INFINITY },
         cands: live
             .into_iter()
             .zip(bases)
@@ -1265,7 +1294,9 @@ pub fn estimate_seeded(
     // Ranked by THIS pixel's position, as the walk ranks every level.
     live.sort_by(cmp_for(resolved_key(ifs, RankKey::Auto)));
     live.truncate(beam);
-    let mut dead_min = f64::INFINITY;
+    // What the prefix already met and could not enter, which the walk
+    // would have in hand by now (`Seeds::dead_min_per_px`).
+    let mut dead_min = seeds.dead_min_per_px;
     // The same two the walk keeps, and this had lost: the best
     // FINISHED path, which leaves the beam and is remembered by its
     // bound, and the deepest level any finished path reached. Both
@@ -3734,6 +3765,148 @@ mod tests {
                 seeds.level,
                 seeds.cands.len()
             );
+        }
+    }
+
+    /// A branch the reference cannot take no longer ends the prefix.
+    ///
+    /// The walk answers the minimum over ALL pieces, reachable or not:
+    /// a branch whose image the point is outside of contributes its
+    /// gap, and `estimate_aux_ranked` keeps those in `dead_min`. The
+    /// prefix meets them too and had nowhere to put one, so it
+    /// stopped at the first -- which on a set whose inverses have
+    /// holes is the first or second level, and cost every level after
+    /// it. Measured on the reported grand julian at zoom 2^20: the
+    /// handover went from level 0 to level 2, and f32's error at it
+    /// from 79 pixels to 19.9.
+    ///
+    /// Two things have to hold. The gap must be CARRIED -- the
+    /// continuation starts from it rather than from nothing -- and
+    /// carrying it must not change the answer, which is what the
+    /// second half checks against each pixel's own walk. The carried
+    /// value is scored for the whole view rather than for the centre,
+    /// so it can only be smaller than a pixel's own, and smaller is
+    /// the safe direction: the answer is a lower bound, and a smaller
+    /// one widens a halo where a larger one erases a piece.
+    #[test]
+    fn a_gap_in_the_prefix_is_carried_not_a_full_stop() {
+        let ifs = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        let smp = chaos_sample(&ifs, 20_000);
+        let target = smp[smp.len() - 1];
+        let zoom = 20.0f64;
+        let span = 4.0 / 2f64.powf(zoom);
+        let view_basis = [[span, 0.0], [0.0, -span]];
+        let px = span / 96.0;
+
+        let seeds = seed_beam(&ifs, target, view_basis, px, 400, 8);
+        assert!(
+            seeds.level > 0,
+            "the prefix stopped at level 0 -- a gapped branch is ending it again"
+        );
+        assert!(
+            seeds.dead_min_per_px.is_finite(),
+            "no gap was met, so this fixture no longer exercises the carry"
+        );
+        assert!(
+            seeds.dead_min_per_px >= 0.0,
+            "a carried gap is a distance: {}",
+            seeds.dead_min_per_px
+        );
+
+        // And the answer is still each pixel's own.
+        let total = 80u32;
+        let after = total.saturating_sub(seeds.level).max(1);
+        for gy in 0..9 {
+            for gx in 0..9 {
+                let uv = [gx as f64 / 8.0 - 0.5, gy as f64 / 8.0 - 0.5];
+                let d = apply_basis(view_basis, uv);
+                let q = [target[0] + d[0], target[1] + d[1]];
+                let direct = estimate(&ifs, q, total, 8).distance / px;
+                let seeded = estimate_seeded(&ifs, &seeds, uv, after, 8).distance;
+                // Over-reading is the dangerous direction -- it erases
+                // a piece -- and the carry cannot cause it, so it is
+                // held to a quarter pixel either way.
+                assert!(
+                    (seeded - direct).abs() <= 0.25 + 1e-4 * direct.abs(),
+                    "at {uv:?}: seeded {seeded} px, direct {direct} px \
+                     (handover level {}, carried gap {})",
+                    seeds.level,
+                    seeds.dead_min_per_px
+                );
+            }
+        }
+    }
+
+    /// Which seed actually wins a pixel, against how badly f32 would
+    /// represent it.
+    ///
+    /// The handover's objective is the MAX over seeds, so one seed
+    /// whose lineage has collapsed the view decides where every seed
+    /// hands over. §11 proposes per-seed levels. This measures a
+    /// cheaper answer first: a seed too inaccurate to hand over could
+    /// be RETIRED into `Seeds::dead_min_per_px`, which keeps a valid
+    /// lower bound for its piece -- bounds only grow with depth, so a
+    /// frozen one is smaller, which is the safe direction -- at the
+    /// cost of never refining it. That trade is worth taking only if
+    /// the collapsed seed rarely wins.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_which_seed_wins() {
+        let cases: Vec<(&str, Ifs2)> = vec![
+            ("grand julian", grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0])),
+            ("julia dust", julia([-0.4, 0.6])),
+        ];
+        for (name, ifs) in cases {
+            let smp = chaos_sample(&ifs, 20_000);
+            let target = smp[smp.len() - 1];
+            let zoom = 20.0f64;
+            let span = 4.0 / 2f64.powf(zoom);
+            let view_basis = [[span, 0.0], [0.0, -span]];
+            let px = span / 96.0;
+            let reach0 = basis_reach(view_basis);
+            let seeds = seed_beam(&ifs, target, view_basis, px, 400, 8);
+            println!(
+                "{name}: handover level {}, {} seeds, carried gap {:.3}",
+                seeds.level,
+                seeds.cands.len(),
+                seeds.dead_min_per_px
+            );
+            // Per seed: how f32 would do, and how often it is the
+            // smallest bound over a grid of the view.
+            let mut wins = vec![0usize; seeds.cands.len()];
+            let n = 33;
+            for gy in 0..n {
+                for gx in 0..n {
+                    let uv = [gx as f64 / (n - 1) as f64 - 0.5, gy as f64 / (n - 1) as f64 - 0.5];
+                    // Each seed alone, continued, to see whose bound
+                    // is the answer.
+                    let mut best = (f64::INFINITY, 0usize);
+                    for (j, c) in seeds.cands.iter().enumerate() {
+                        let one = Seeds {
+                            level: seeds.level,
+                            cands: vec![c.clone()],
+                            dead_min_per_px: f64::INFINITY,
+                        };
+                        let d = estimate_seeded(&ifs, &one, uv, 48, 8).distance;
+                        if d < best.0 {
+                            best = (d, j);
+                        }
+                    }
+                    wins[best.1] += 1;
+                }
+            }
+            for (j, c) in seeds.cands.iter().enumerate() {
+                let grown = basis_reach(c.basis) / reach0;
+                let mag = c.position[0].hypot(c.position[1]).max(ifs.ball.radius);
+                let f32_px = if grown > 0.0 { mag * 5.96e-8 / (px * grown) } else { f64::INFINITY };
+                println!(
+                    "   seed {j}: reach/reach0 {grown:>10.3e}, f32 {f32_px:>10.3} px, \
+                     wins {:>4} of {}, address {:?}",
+                    wins[j],
+                    n * n,
+                    c.address
+                );
+            }
         }
     }
 
