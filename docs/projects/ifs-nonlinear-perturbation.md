@@ -250,14 +250,27 @@ pairs suffice because only the linear term reads them).
 - **G4** Byte identity: every affine mode-D preset renders
   byte-identical (`output/ifs/preset-*.png` against the current
   set); the affine path is not touched.
-- **G5** GPU: `the_seeded_walk_is_each_pixels_own` on a nonlinear
-  preset -- the shader from the CPU's seeds against the shader from
-  level 0, at a zoom under the cap.
-- **G6** The picture: a BOUNDED nonlinear set at zoom 2^28 rendered
-  from the app shows structure, not blocks, and the address
-  colouring is continuous across the frame. Not the grand julian:
-  §7 measured that it declines the handover, so its picture is not
-  this step's to fix.
+- **G5** GPU, **done**: `the_gpu_agrees_on_a_nonlinear_set_at_depth`
+  renders a bounded julia at zoom 2^20, where the handover reaches
+  level 5, and classifies every pixel by the same seeds and the same
+  continuation the shader ran: 99.9% agreement. A Sierpinski runs
+  beside it at the same depth, at 100%, which exercises the affine
+  path and pins the measurement -- see §8.
+- **G6** The picture, **done**: the shipped Douady Rabbit preset
+  centred on its own attractor, rendered by the CLI at 2^12, 2^20
+  and 2^28 by THIS build and by the one before the handover, the
+  same config file through both
+  (`output/deepzoom/before-after.png`):
+
+  | zoom | before | after |
+  |---|---|---|
+  | 2^12 | 672 distinct colours | 672 |
+  | 2^20 | 269, visibly blocky | 632 |
+  | 2^28 | **1** -- a flat field | 567 |
+
+  Below the cap the two are identical, which is the other half of
+  the claim. Not the grand julian: §7 measured that it declines the
+  handover, so its picture is not this step's to fix.
 
 ## 6. What step 1 found, 2026-09-16
 
@@ -387,7 +400,36 @@ says. The metric is conservative in the direction that declines a
 handover rather than takes a bad one, which is the right way round,
 but it is an estimate and not a measurement of the picture.
 
-## 8. Cost and risk
+## 8. What step 3 found, 2026-09-16
+
+**The nonlinear seeded path had no GPU test at all.** Every seeded
+GPU test uses a Sierpinski, whose maps are affine, so the nonlinear
+half of `seed_beam` and the whole of `big_kernel_inverse` were
+reached by none of the 57. A sign error in the arbitrary-precision
+root -- committed in step 2 -- passed a green run of all of them.
+
+What it was: `z/|z|²` reciprocates the MAGNITUDE and keeps the
+argument, while a complex reciprocal reflects the angle as well.
+Reading the first as the second makes the conjugation rule depend on
+`n` and `d` together instead of on `n` alone, which is wrong in
+exactly the `n > 0, d < 0` corner -- a root of negative distance and
+positive power, which is most of the sets §8.12-8.15 were about.
+`the_big_kernel_inverse_is_the_f64_one` checks every sign
+combination against the f64 formula it has to reproduce, and
+`the_gpu_agrees_on_a_nonlinear_set_at_depth` is the one that would
+have caught it from outside.
+
+**And a measurement caught by its own control.** The first run of
+that GPU gate read 90.7% on the nonlinear arm, which looks like a
+real disagreement. Running a Sierpinski beside it at the same depth
+read **59.6%** -- worse, on the path that had not changed -- which
+says the fault is in the test. It was: `view_basis` already carries
+the y flip, so negating `uv` a second time mirrored the picture
+against the render. Corrected, the two read 99.9% and 100%. The
+control is now part of the gate, because a number that looks
+plausible on its own is what a control is for.
+
+## 9. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -406,7 +448,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 9. What is next
+## 10. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -425,7 +467,7 @@ is a change to `Seed`, to `pack_seeds` and to the shader's seeded
 start, and it is the first thing §4's "nothing else changes" got
 wrong.
 
-## 10. Order of work
+## 11. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
@@ -433,8 +475,13 @@ wrong.
    `seed_beam` with the three rules; G2 at f64 precision.~~ Done
    2026-09-16; §7 records what it found, including that the three
    rules became two plus a choice.
-3. G2 at BigFloat precision past zoom 20; G3.
-4. GPU gate G5; the app; G6.
+3. ~~G2 at BigFloat precision past zoom 20~~ -- the GPU path seeds
+   from `[BigFloat; 2]` and G5 exercises it at 2^20; §8. G3 (the
+   handover level against the zoom, and a fixture whose orbit passes
+   a pole) is still open.
+4. ~~GPU gate G5~~; the app; G6 -- the Douady Rabbit renders with a
+   sharp, self-similar boundary at 2^4, 2^12, 2^20 and 2^28
+   (`output/deepzoom/sheet.png`).
 5. Rung 2 (sqrt kernels), same gates.
 6. The 3D twin.
 7. Record here what `τ` came out as and what the cap became.

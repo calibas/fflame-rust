@@ -2387,10 +2387,16 @@ impl crate::scene::ifs_estimate::SeedPoint3 for [super::bigfloat::BigFloat; 3] {
 ///
 /// - `spherical`, whose inverse is `v/|v|²`.
 /// - a root of integer distance, `|v|^{|n|/d}·e^{i·n·arg v}` with
-///   `|d| = 1`. Write `w = v^{|n|}`, which is repeated squaring.
-///   `d < 0` inverts it -- the same `z/|z|²` -- and the two signs
-///   disagreeing conjugates it, since `e^{i·n·φ}` is `w`'s angle
-///   reflected exactly when `n` and `d` pull opposite ways.
+///   `|d| = 1`. Write `w = v^{|n|}`, which is repeated squaring:
+///   `|v|^{|n|}·e^{i·|n|·φ}`. The exponent and the angle are then
+///   fixed separately, because the two operations available move
+///   one each. `z/|z|²` reciprocates the MAGNITUDE and keeps the
+///   argument, so `d < 0` applies it and nothing else does.
+///   Conjugation reflects the ANGLE and keeps the magnitude, so
+///   `n < 0` applies it and `d` has no say. Reading `z/|z|²` as a
+///   complex reciprocal instead -- which reflects the angle too --
+///   is a sign error in exactly the `n > 0, d < 0` corner, and is
+///   what `the_big_kernel_inverse_is_the_f64_one` caught.
 ///
 /// Everything else -- a fractional root, `disc`, `blob` (sin/cos),
 /// `bubble`, `hemisphere` (sqrt) -- returns `None`, and the handover
@@ -2434,7 +2440,7 @@ fn big_kernel_inverse(
             if d < 0.0 {
                 w = invert(&w)?;
             }
-            if (n as f64) * d < 0.0 {
+            if n < 0 {
                 w = BigComplex { re: w.re, im: w.im.neg() };
             }
             w
@@ -5722,6 +5728,141 @@ mod gpu_tests {
         fl
     }
 
+    /// A bounded julia set, as a flame: `julia` after a translation by
+    /// `-c`, so the forward map is the inverse iteration of `z² + c`
+    /// and the IFS is that set's two branches.
+    pub(super) fn julia_ifs_flame(c: [f64; 2]) -> Flame {
+        kernel_flame(vec![("julia", [1.0, 0.0, 0.0, 1.0, -c[0] as f32, -c[1] as f32], 1.0, 0.3)])
+    }
+
+    /// G5 of `ifs-nonlinear-perturbation.md`: the SHADER agrees with
+    /// the walk on a nonlinear set at a zoom deep enough that the
+    /// handover is doing the work.
+    ///
+    /// This is the gate the seeded GPU tests did not have. Every one
+    /// of them uses a Sierpinski, whose maps are affine, so the
+    /// nonlinear half of `seed_beam` -- and the whole of
+    /// `big_kernel_inverse`, which the shader's seeds come out of at
+    /// this zoom -- was reached by no GPU test at all. A sign error in
+    /// the arbitrary-precision root passed a green run of all 57 of
+    /// them; `the_big_kernel_inverse_is_the_f64_one` is the unit gate
+    /// for that, and this is the one that catches it from outside.
+    ///
+    /// Zoom 2^20 is past where f32 stops resolving the view from a
+    /// centre of magnitude O(1) -- measured at 3.3 pixels of error
+    /// there, and 835 at 2^28 -- so without a prefix the picture is
+    /// blocks and this could not agree with anything.
+    ///
+    /// The Sierpinski runs beside it at the same depth ON PURPOSE. It
+    /// exercises the affine path, which must be untouched, and it
+    /// pins the MEASUREMENT: with a uv convention wrong here it read
+    /// 59.6% on the affine arm and 90.7% on the nonlinear one, and
+    /// only having both made it obvious that the fault was in the
+    /// test and not in the thing under test.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_gpu_agrees_on_a_nonlinear_set_at_depth() {
+        const ZOOM: f64 = 20.0;
+        const DEEP_LEVELS: u32 = 60;
+        for (name, flame, nonlinear) in [
+            ("julia", julia_ifs_flame([-0.4, 0.6]), true),
+            ("sierpinski", sierpinski_flame(), false),
+        ] {
+            let guard = global_registry();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+            drop(guard);
+            assert_eq!(
+                nonlinear,
+                ifs.maps.iter().any(|m| !m.forward.is_affine()),
+                "{name} is not the arm it is labelled as"
+            );
+
+            // A point on the attractor to centre on, so the view keeps
+            // finding structure at depth.
+            let mut target = ifs.ball.centre;
+            for k in 0..60u32 {
+                target = ifs.maps[(k as usize) % ifs.maps.len()].forward.apply(target);
+            }
+
+            let mut config = config_for(flame);
+            config.escape.center_re = format!("{:?}", target[0]);
+            config.escape.center_im = format!("{:?}", target[1]);
+            config.escape.zoom_log2 = ZOOM;
+            config.escape.formula_params.insert("levels".to_string(), DEEP_LEVELS as f32);
+            config.escape.formula_params.insert("beam".to_string(), BEAM as f32);
+            let rgba = render(&config);
+
+            // The same seeds the renderer builds, and the same
+            // continuation the shader runs.
+            let span_y = 4.0 / 2f64.powf(ZOOM);
+            let span_x = span_y * W as f64 / H as f64;
+            let basis = view_basis(span_x, span_y, 0.0);
+            let px = span_y / H as f64;
+            let centre = centre_at_precision(&config.escape).expect("centre parses");
+            let seeds = crate::scene::ifs_estimate::seed_beam(
+                &ifs,
+                centre,
+                basis,
+                px,
+                ZOOM as u32 + 64,
+                BEAM,
+            );
+            assert!(
+                seeds.level > 0,
+                "{name}: the prefix did no work, so this is not testing the handover"
+            );
+
+            let after = DEEP_LEVELS.saturating_sub(seeds.level).max(1);
+            let (mut inside, mut outside) = (Vec::new(), Vec::new());
+            for y in 0..H {
+                for x in 0..W {
+                    // `view_basis` already carries the y flip, so uv
+                    // runs down the screen with the pixels.
+                    let uv = [
+                        (x as f64 + 0.5) / W as f64 - 0.5,
+                        (y as f64 + 0.5) / H as f64 - 0.5,
+                    ];
+                    // `estimate_seeded` reports in pixels already.
+                    let d = crate::scene::ifs_estimate::estimate_seeded(
+                        &ifs, &seeds, uv, after, BEAM,
+                    )
+                    .distance;
+                    if d <= 1.0 {
+                        inside.push(brightness(&rgba, x, y));
+                    } else {
+                        outside.push(brightness(&rgba, x, y));
+                    }
+                }
+            }
+            assert!(
+                inside.len() > 200 && outside.len() > 200,
+                "{name}: the view is not a mix of set and exterior: {} near, {} far",
+                inside.len(),
+                outside.len()
+            );
+            let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+            let (mi, mo) = (mean(&inside), mean(&outside));
+            let cut = (mi + mo) * 0.5;
+            let lit_in = inside.iter().filter(|&&b| b > cut).count();
+            let lit_out = outside.iter().filter(|&&b| b > cut).count();
+            let agree = (lit_in + (outside.len() - lit_out)) as f64
+                / (inside.len() + outside.len()) as f64;
+            println!(
+                "  {name} at 2^{ZOOM}, handover level {}: CPU near {} / far {}; \
+                 GPU lit near {lit_in}, lit far {lit_out}; agreement {:.1}%",
+                seeds.level,
+                inside.len(),
+                outside.len(),
+                agree * 100.0
+            );
+            assert!(
+                agree > 0.98,
+                "{name}: the shader and the walk agree on only {:.1}% of the view at 2^{ZOOM}",
+                agree * 100.0
+            );
+        }
+    }
+
     /// Gate 3 of plan 8.9: the GPU walk agrees with the CPU estimate
     /// on a spherical IFS and on a bubble IFS, by the gasket's test.
     /// The view is framed on each set's ball rather than the harness
@@ -6630,6 +6771,117 @@ mod gpu_tests {
         println!("  standalone hits {hits_a}, IFS hits {hits_b}, agreement {pct:.1}% of {}", N * N);
         assert!(hits_a > 500 && hits_b > 500, "too few hits to compare ({hits_a} / {hits_b})");
         assert!(pct > 95.0, "the two arithmetics disagree on {:.1}% of pixels", 100.0 - pct);
+    }
+
+    /// Rung 1 at arbitrary precision is the same map as the f64 one.
+    ///
+    /// `big_kernel_inverse` rebuilds `|v|^{|n|/d}·e^{i·n·arg v}` out of
+    /// integer powers, an inversion and a conjugation, because a
+    /// `BigFloat` has multiplication and a reciprocal and no `exp` or
+    /// `atan2` to take the direct route with. Which of the two it
+    /// applies depends on the signs of `n` and `d` separately -- both
+    /// negative is NEITHER, which is the case a sign slip gets wrong
+    /// -- so every combination is checked against the f64 formula it
+    /// has to reproduce.
+    #[test]
+    fn the_big_kernel_inverse_is_the_f64_one() {
+        use crate::scene::ifs_analysis::Kernel;
+        use crate::scene::ifs_estimate::SeedPoint;
+        let big = |v: f64| crate::escape::bigfloat::BigFloat::from_f64(v, 6);
+        let rung1 = [
+            Kernel::Spherical,
+            Kernel::Root { n: 2, d: 1.0 },
+            Kernel::Root { n: 3, d: 1.0 },
+            Kernel::Root { n: -3, d: 1.0 },
+            Kernel::Root { n: 1, d: -1.0 },
+            Kernel::Root { n: 5, d: -1.0 },
+            Kernel::Root { n: -5, d: -1.0 },
+            Kernel::Root { n: 15, d: -1.0 },
+        ];
+        let points = [
+            [0.7, 0.3],
+            [-1.4, 0.9],
+            [0.05, -0.02],
+            [-0.3, -0.8],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [-1.0, 0.0],
+            [0.0, -1.0],
+            [2.6, -3.1],
+        ];
+        for k in rung1 {
+            for v in points {
+                let want = k.inverse(v, 0);
+                let got = super::big_kernel_inverse(k, &[big(v[0]), big(v[1])])
+                    .unwrap_or_else(|| panic!("{k:?} at {v:?} should be on rung 1"));
+                let got = [got[0].to_f64(), got[1].to_f64()];
+                let scale = want[0].abs().max(want[1].abs()).max(1e-12);
+                assert!(
+                    (got[0] - want[0]).abs() / scale < 1e-12
+                        && (got[1] - want[1]).abs() / scale < 1e-12,
+                    "{k:?} at {v:?}: big {got:?}, f64 {want:?}"
+                );
+            }
+        }
+
+        // And everything else declines, so the handover stops rather
+        // than walking a map it cannot take.
+        let off_ladder = [
+            Kernel::Bubble,
+            Kernel::Hemisphere,
+            Kernel::Disc,
+            Kernel::Blob { high: 1.4, low: 0.3, waves: 3.0 },
+            // a fractional root: |v|^(2/3) needs an exp
+            Kernel::Root { n: 2, d: 3.0 },
+            Kernel::Root { n: 0, d: 1.0 },
+        ];
+        for k in off_ladder {
+            assert!(
+                super::big_kernel_inverse(k, &[big(0.4), big(0.2)]).is_none(),
+                "{k:?} is not on rung 1 and must decline"
+            );
+        }
+        // The origin has no preimage under an inversion.
+        assert!(
+            super::big_kernel_inverse(Kernel::Spherical, &[big(0.0), big(0.0)]).is_none()
+        );
+
+        // Whole maps, affines and weight included, against the f64
+        // walk's own step.
+        let guard = global_registry();
+        let r = &*guard;
+        let mut t = crate::scene::transforms::Transform::default();
+        t.a = 0.83;
+        t.b = -0.24;
+        t.c = 0.31;
+        t.d = 0.77;
+        t.e = 0.19;
+        t.f = -0.12;
+        t.variations.clear();
+        t.variation_order.clear();
+        t.variations.insert("julian".to_string(), 0.6);
+        t.variation_order.push("julian".to_string());
+        t.set_variation_param("julian", "power", 3.0);
+        t.set_variation_param("julian", "dist", -1.0);
+        let m = crate::scene::ifs_analysis::transform_map_2d_ordered(
+            &t,
+            r,
+            &t.ordered_variation_names(r),
+        )
+        .expect("a nonlinear map");
+        let inv = m.inverse().expect("invertible");
+        drop(guard);
+        for q in points {
+            let want = inv.apply(q);
+            let got = [big(q[0]), big(q[1])].apply_map(&inv).expect("rung 1");
+            let got = [got[0].to_f64(), got[1].to_f64()];
+            let scale = want[0].abs().max(want[1].abs()).max(1e-12);
+            assert!(
+                (got[0] - want[0]).abs() / scale < 1e-11
+                    && (got[1] - want[1]).abs() / scale < 1e-11,
+                "whole map at {q:?}: big {got:?}, f64 {want:?}"
+            );
+        }
     }
 
     /// A flame that fails the criterion must render EMPTY, not a
