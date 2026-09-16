@@ -125,21 +125,40 @@ the outer cap.
 ## 3. What each kernel has to supply
 
 Two closed forms per kernel, beside the inverse and the local σ it
-already has in [`ifs_analysis.rs`](../../src/scene/ifs_analysis.rs):
+already has in [`ifs_analysis.rs`](../../src/scene/ifs_analysis.rs).
+**Built 2026-09-16** as `Kernel::inverse_jacobian` and
+`Kernel::singular_distance`, with `NonlinearMap2` and `Map2` twins
+that carry them through the affines; §6 records what building them
+found.
 
 | kernel | inverse on `v` | `J` of the inverse | singular distance |
 |---|---|---|---|
-| Root `{n, d}` | `\|v\|^{\|n\|/d} e^{i·n·arg v}` | in the (radial, tangential) frame at `v`: radial `(\|n\|/d)·\|v\|^{\|n\|/d − 1}`, tangential `n·\|v\|^{\|n\|/d − 1}`, rotated by `(n − 1)·arg v` | `\|v\|` (the pole) |
+| Root `{n, d}` | `\|v\|^{m} e^{i·n·arg v}`, `m = \|n\|/d` | `R(n·arg v)·diag(m, n)·\|v\|^{m−1}·R(−arg v)`: the radial and tangential rates read out of the frame at `v` and into the one at `u` | `\|v\|` (the pole; an integer `n` has no cut) |
 | Spherical | `v / \|v\|²` | `(I − 2 v vᵀ/\|v\|²) / \|v\|²` | `\|v\|` |
-| Bubble (branch b) | `v · f_b(\|v\|²)/\|v\|²`, `f = 2 ∓ 2√(1 − \|v\|²)` | `f/\|v\|² · I + v vᵀ · d(f/\|v\|²)/d(\|v\|²) · 2` | `1 − \|v\|` (the disc's edge) and, for the outer branch, `\|v\|` |
+| Bubble (branch b) | `v·s`, `s` from `bubble_scale` | `s·I + 2 s'·v vᵀ` | `1 − \|v\|` (the disc's edge) and, for the outer branch, `\|v\|` |
 | Hemisphere | `v / √(1 − \|v\|²)` | `t·I + t³ v vᵀ`, `t = (1 − \|v\|²)^{−½}` | `1 − \|v\|` |
-| Disc (ring m) | polar → `(r sin θ, r cos θ)` with `r = φ/π + m`, `θ = ±π\|v\|` | chain rule through `(ρ, φ)` | `1 − \|v\|` and the ring's cut `φ = ±π` |
+| Disc (ring m) | polar → `(r sin θ, r cos θ)` with `r = φ/π + m`, `θ = ±π\|v\|` | chain rule through `(\|v\|, φ)` | the nearest of: the cut ray at `φ = π`, the ray `φ = −mπ` where the ring reaches zero, `1 − \|v\|`, and `\|v\|` |
 | Blob | `(v_y, v_x) / s(θ)` | `J = (1/s)·P − (s'/s²)·(swap v)·∇θᵀ`, `P` the swap | `\|v\|` (θ's pole) and where `s(θ) → 0` |
 
 `NonlinearMap2::inverse_jacobian(q)` is then
-`pre_inv.m · J_K(before_kernel(q)) · post_inv.m / w`, and the
-existing `local_sigma_factor` is its smallest singular value at the
-same point -- a consistency check for free (G1).
+`pre_inv.m · J_K(before_kernel(q)) · post_inv.m / w`.
+
+The tie to the existing `local_sigma_factor` is a consistency check
+for free, and it is worth stating precisely because stating it
+loosely is how it went unnoticed. The inverse's derivative is the
+inverse of the forward's, so their singular values are reciprocal
+**and swapped**:
+
+```
+σ_max(J_inverse) · σ_min(forward) = 1
+```
+
+At the kernel that is an equality and holds to machine precision. At
+the MAP it is an inequality -- `NonlinearMap2::singular_values`
+multiplies the parts' singular values, which bounds rather than
+computes the product's -- and the sound direction is
+`σ_min(reported) ≤ 1/σ_max(J)`: a σ_min above the truth is a bound
+above the truth, which is an over-read.
 
 **Precision, kernel by kernel.** The reference walk runs the centre
 in `BigFloat`, which has add, mul, recip, sqrt, ln and atan2 and no
@@ -177,10 +196,14 @@ pairs suffice because only the linear term reads them).
 
 ## 5. Gates
 
-- **G1** Jacobians: for every kernel and branch, at 1,000 random
-  points inside the image, `J` against central differences at 1e-6
-  relative; and its smallest singular value equals
-  `local_sigma_factor` to 1e-9.
+- **G1** Jacobians, **done**: for every kernel and branch, at
+  thousands of random points inside the image, `J` against central
+  differences (`the_kernels_jacobians_are_the_derivative`, worst
+  3.5e-5 relative), the σ tie above to machine precision, and the
+  clearance checked to be a real one -- half of it keeps the branch.
+  A map-level twin composes the affines and asserts the sound
+  direction of the inequality
+  (`a_nonlinear_maps_jacobian_composes_through_its_affines`).
 - **G2** The seeded walk is each pixel's own: `estimate_seeded`
   against `estimate` from the pixel's own f64 position, on the
   shipped nonlinear presets at zooms 0, 5, 10, 15, 20 (the last past
@@ -202,7 +225,74 @@ pairs suffice because only the linear term reads them).
   app shows structure, not blocks, and the address colouring is
   continuous across the frame.
 
-## 6. Cost and risk
+## 6. What step 1 found, 2026-09-16
+
+Building the Jacobians and checking them against the walk's own σ
+turned up two faults in shipped code and one deliberate omission.
+The gate is the reason: a derivative and a σ_min are the same fact
+twice, and until now only one of them was written down.
+
+**Bubble's σ_min was the tangential derivative alone, and that is
+unsound.** The forward `4p/(|p|² + 4)` FOLDS at `|p| = 2`: its
+radial derivative `4(4 − |p|²)/(|p|² + 4)²` passes through zero
+there while the tangential stays at ½, so the smaller singular value
+is the radial one everywhere between. `local_sigma_factor` returned
+`|v|²/f`, the tangential, which overstates σ_min without bound as
+the fold is approached -- **21× at `|v| = 0.9989`**, measured. An
+overstated σ_min makes `σ·(r − R)` too large, which is an over-read:
+the pixel reports a distance to bubble's piece larger than the truth
+and reads as exterior. The fold's image is the image disc's edge
+`|v| = 1`, which is where the walk spends its time on a bubble set.
+
+In closed form the two differ by exactly the root. With `x = |v|²`,
+`σ_min = x/max(f, |2f'x − f|)` and `|2f'x − f| = f/√(1 − x)` on
+**both** branches, so the correct factor is the tangential times
+`√(1 − |v|²)`. One term, CPU and shader. No shipped preset uses
+bubble, so no picture moved; the existing round-trip test had an
+explicit `if kernel != Kernel::Bubble` around its stretch assertion,
+which is now gone because bubble passes it.
+
+**Bubble's inverse could not be differentiated numerically at all
+near the origin.** The inner branch's `f = 2 − 2√(1 − x)` is
+`x + x²/4 + …` computed as a difference of two numbers either side
+of 2, so it keeps only the digits `x` is below 1 -- eight of f64's
+sixteen at `|v| = 1e-4`, three of f32's seven -- and the derivative
+`(f'x − f)/x²` then cancels what is left. Measured, the finite
+difference disagreed with the analytic Jacobian by **102%**. With
+`x = (1 − root)(1 + root)` the root divides out and every term is a
+sum of positives: `s = 2/(1 + root)`, `s' = 1/(root(1 + root)²)`
+inside; `s = 2(1 + root)/x`, `s' = −(1 + root)²/(x² root)` outside.
+`Kernel::bubble_scale` is the one place both live, and the shader
+has the twin. The outer branch's pole at the origin is real, not a
+cancellation: its preimage is at infinity.
+
+This one matters more for what comes next than for what ships. Rung
+2 puts bubble in `BigFloat`, and a subtraction that loses half its
+digits loses half its limbs.
+
+**Blob's σ_min loses digits where the map is conformal, and is left
+that way.** It reads the smaller root of a discriminant, `(a −
+disc)/2`, whose two roots MEET at `s' = 0` -- twice a period.
+Measured against the derivative: 1.5e-13 on a blob whose scale stays
+positive, **3.0e-5** on one whose scale crosses zero, against
+machine precision for every other kernel. `|det|/σ_max`, with
+`det = s²` exact and `(a + disc)/2` adding two positives, is the
+same number without the subtraction and is two lines. It is not
+taken: 3e-5 of a bound is 3e-5 of a pixel, and the change moves 3
+pixels of the Blob Flower preset -- a worse trade than the
+inaccuracy. The gate carries that one case at 1e-4 and says why, so
+the first measurement that needs those digits finds it.
+
+**And a note on measuring singular values at all.** `Affine2::
+singular_values` reads both out of `sqrt(‖M‖⁴ − 4 det²)`, which is
+exactly zero for a conformal map -- every kernel here, at some
+point -- so it keeps half of f64's digits there, including in
+σ_max. The gate computes σ_max its own way, as the larger eigenvalue
+of `MᵀM` where the square root is a sum of squares and is added.
+That took the check from 7.7e-9 to 4.4e-16 and is why the tie can be
+asserted at machine precision at all.
+
+## 7. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -221,9 +311,10 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 7. Order of work
+## 8. Order of work
 
-1. Jacobians and singular distances for the six kernels, with G1.
+1. ~~Jacobians and singular distances for the six kernels, with G1.~~
+   Done 2026-09-16; §6 records what it found.
 2. `SeedPoint::apply_map` for rung 1 in f64 and BigFloat; `seed_beam`
    with the three rules; G2 at f64 precision on the grand julian.
 3. G2 at BigFloat precision past zoom 20; G3.

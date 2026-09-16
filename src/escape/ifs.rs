@@ -161,10 +161,21 @@ pub static IFS_FLAME: IfsDef = IfsDef {
     wgsl: r#"
 // The kernel's inverse on v, along the row's branch (plan 8.8 J1,
 // 8.9 S2/S4): a root is |v|^(|n|/d) at angle n*arg(v); spherical is
-// v/|v|^2; bubble's inner (branch 0) or outer preimage is v scaled
-// by (2 -/+ 2*sqrt(1 - |v|^2))/|v|^2, and a v outside the unit disc
-// has none and lands at infinity, which the walk reads as that piece
-// having escaped.
+// v/|v|^2; bubble's inner (branch 0) or outer preimage is v scaled by
+// ifs_bubble_scale, and a v outside the unit disc has none and lands
+// at infinity, which the walk reads as that piece having escaped.
+// Bubble's radial scale, u = v * s, along the row's branch -- written
+// so nothing cancels. The inner branch's f = 2 - 2*sqrt(1 - x) is a
+// difference of two numbers either side of 2 and keeps only the digits
+// x is below 1: three of f32's seven at |v| = 1e-4. With
+// x = (1 - root)(1 + root) the root divides out (see
+// Kernel::bubble_scale).
+fn ifs_bubble_scale(r2: f32, branch: f32) -> f32 {
+    let root = sqrt(max(1.0 - r2, 0.0));
+    let up = 1.0 + root;
+    return select(2.0 * up / max(r2, 1e-30), 2.0 / up, branch == 0.0);
+}
+
 fn ifs_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
     let kind = ifs_maps[i].kind;
     let r2 = dot(v, v);
@@ -215,14 +226,15 @@ fn ifs_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
     if (r2 > 1.0) {
         return v * 1e30;
     }
-    let root = sqrt(max(1.0 - r2, 0.0));
-    let f = select(2.0 + 2.0 * root, 2.0 - 2.0 * root, ifs_maps[i].branch == 0.0);
-    return v * (f / max(r2, 1e-30));
+    return v * ifs_bubble_scale(r2, ifs_maps[i].branch);
 }
 
 // The factor on the row's constant sigma_min at v (J3, S2, S4): the
 // chain rule at the orbit point for a root, |f'| = |v|^2 for the
-// inversion, and bubble's tangential derivative |v|/|p|.
+// inversion, and for bubble the smaller of the tangential derivative
+// |v|/|p| and the radial one, which is the tangential times
+// sqrt(1 - |v|^2) -- the forward folds at |p| = 2 and its radial
+// derivative passes through zero there (see Kernel::local_sigma_factor).
 fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
     let kind = ifs_maps[i].kind;
     let r2 = max(dot(v, v), 1e-30);
@@ -258,9 +270,7 @@ fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
     if (r2 >= 1.0) {
         return 1.0;
     }
-    let root = sqrt(1.0 - r2);
-    let f = select(2.0 + 2.0 * root, 2.0 - 2.0 * root, ifs_maps[i].branch == 0.0);
-    return r2 / f;
+    return sqrt(1.0 - r2) / ifs_bubble_scale(r2, ifs_maps[i].branch);
 }
 
 // When p is outside map i's IMAGE, a lower bound on its distance to

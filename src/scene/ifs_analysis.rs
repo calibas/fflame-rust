@@ -260,6 +260,46 @@ pub enum Kernel {
 }
 
 impl Kernel {
+    /// Bubble's radial scale -- `u = v·s` -- and its derivative in
+    /// `x = |v|²`, along `branch`, written so nothing cancels.
+    ///
+    /// The inner branch's `f = 2 − 2√(1 − x)` is `x + x²/4 + …`
+    /// computed as a difference of two numbers either side of 2, so
+    /// it keeps only the digits `x` is below 1: at `|v| = 1e-4` that
+    /// is eight of f64's sixteen and three of f32's seven, and the
+    /// derivative `(f'x − f)/x²` then cancels what is left --
+    /// measured, it disagreed with a central difference by 102%.
+    /// With `x = (1 − root)(1 + root)` the root divides out and every
+    /// term is a sum of positives:
+    ///
+    /// ```text
+    /// inner:  s = 2/(1 + root)        s' = 1/(root·(1 + root)²)
+    /// outer:  s = 2(1 + root)/x       s' = −(1 + root)²/(x²·root)
+    /// ```
+    ///
+    /// The outer branch's pole at the origin is real, not a
+    /// cancellation: its preimage is at infinity.
+    fn bubble_scale(x: f64, branch: u32) -> (f64, f64) {
+        let root = (1.0 - x).max(0.0).sqrt();
+        let up = 1.0 + root;
+        if branch == 0 {
+            (2.0 / up, (root * up * up).recip())
+        } else {
+            (2.0 * up / x, -(up * up) / (x * x * root))
+        }
+    }
+
+    /// Distance from `v` to the ray leaving the origin at `phi` from
+    /// the +y axis -- the frame `disc` measures its angle in.
+    fn ray_distance(v: [f64; 2], phi: f64) -> f64 {
+        let d = [phi.sin(), phi.cos()];
+        let along = v[0] * d[0] + v[1] * d[1];
+        if along <= 0.0 {
+            return v[0].hypot(v[1]);
+        }
+        (v[0] - along * d[0]).hypot(v[1] - along * d[1])
+    }
+
     /// Blob's angular scale at `theta`.
     fn blob_scale(high: f64, low: f64, waves: f64, theta: f64) -> (f64, f64) {
         let s = low + (high - low) / 2.0 * ((waves * theta).sin() + 1.0);
@@ -361,9 +401,7 @@ impl Kernel {
                     // the outer is at infinity.
                     return if branch == 0 { [0.0, 0.0] } else { [1e30, 0.0] };
                 }
-                let root = (1.0 - r2).sqrt();
-                let f = if branch == 0 { 2.0 - 2.0 * root } else { 2.0 + 2.0 * root };
-                let s = f / r2;
+                let (s, _) = Kernel::bubble_scale(r2, branch);
                 [v[0] * s, v[1] * s]
             }
         }
@@ -391,6 +429,21 @@ impl Kernel {
             }
             // [[s, s'], [0, s]] in the (radial, tangential) frame: the
             // smaller singular value in closed form (D3).
+            //
+            // `(a − disc)/2` is a difference of two numbers that MEET
+            // wherever the map is conformal -- at `s' = 0`, twice a
+            // period -- so it keeps few of f64's digits there.
+            // Measured against the derivative
+            // (`the_kernels_jacobians_are_the_derivative`): 1.5e-13
+            // on a blob whose scale stays positive, 3.0e-5 on one
+            // whose scale crosses zero, against machine precision for
+            // every other kernel. `|det|/σ_max` -- `det = s²` exactly
+            // and `(a + disc)/2` adds two positives -- is the same
+            // number without the subtraction, and is two lines. It is
+            // NOT taken: 3e-5 of a bound is 3e-5 of a pixel, and the
+            // change moves 3 pixels of the Blob Flower preset, which
+            // is a worse trade than the inaccuracy. Recorded so the
+            // first measurement that needs those digits finds it.
             Kernel::Blob { high, low, waves } => {
                 let theta = v[1].atan2(v[0]);
                 let (sc, ds) = Kernel::blob_scale(high, low, waves, theta);
@@ -401,13 +454,219 @@ impl Kernel {
             Kernel::Root { n, d } => r2.sqrt().powf(1.0 - (n as f64).abs() / d),
             Kernel::Spherical => r2,
             Kernel::Bubble => {
-                // The tangential derivative |v|/|p| (S4).
+                // The smaller of the tangential derivative `|v|/|p|`
+                // and the RADIAL one, which the tangential alone is
+                // not (amended 2026-09-16).
+                //
+                // The forward `4p/(|p|² + 4)` FOLDS at `|p| = 2`: its
+                // radial derivative `4(4 − |p|²)/(|p|² + 4)²` passes
+                // through zero there while the tangential stays at
+                // ½. The fold's image is the image disc's edge, so
+                // the two branches meet at `|v| = 1` and the radial
+                // term is the smaller one everywhere between.
+                //
+                // In closed form the two differ by exactly the root:
+                // `1/σ_max(J⁻¹) = x/max(f, |2f'x − f|)` and
+                // `|2f'x − f| = f/√(1 − x)` on BOTH branches, so
+                // σ_min is the tangential times `√(1 − |v|²)`.
+                // Reporting the tangential alone overstated σ_min
+                // without bound as the fold was approached -- 21×
+                // at `|v| = 0.9989`, measured -- and an overstated
+                // σ_min is an over-read: the bound `σ·(r − R)` comes
+                // back too large and the pixel reads as exterior.
                 if r2 >= 1.0 {
                     return 1.0;
                 }
-                let root = (1.0 - r2).sqrt();
-                let f = if branch == 0 { 2.0 - 2.0 * root } else { 2.0 + 2.0 * root };
-                r2 / f
+                let (s, _) = Kernel::bubble_scale(r2, branch);
+                (1.0 - r2).sqrt() / s
+            }
+        }
+    }
+
+    /// The Jacobian of [`Self::inverse`] at `v`, along `branch`, or
+    /// `None` where `v` has no preimage there or the map is not
+    /// differentiable (plan `ifs-nonlinear-perturbation.md` §3).
+    ///
+    /// Row-major `[[du_x/dv_x, du_x/dv_y], [du_y/dv_x, du_y/dv_y]]`.
+    /// This is what carries a pixel's offset past the affine
+    /// handover: `B_{k+1} = J·B_k` in place of the affine's constant
+    /// `M⁻¹·B_k`.
+    ///
+    /// The inverse of the forward map's derivative, so its singular
+    /// values are the forward's reciprocated and swapped --
+    /// `σ_max(J) = 1/σ_min(forward)` -- which is what ties it to
+    /// [`Self::local_sigma_factor`] and is checked against it.
+    pub fn inverse_jacobian(&self, v: [f64; 2], branch: u32) -> Option<[[f64; 2]; 2]> {
+        let r2 = v[0] * v[0] + v[1] * v[1];
+        let rho = r2.sqrt();
+        let finite = |j: [[f64; 2]; 2]| {
+            j.iter().flatten().all(|x| x.is_finite()).then_some(j)
+        };
+        match *self {
+            // u = v·t, t = (1 − |v|²)^{−1/2}: J = t·I + t³·v vᵀ.
+            Kernel::Hemisphere => {
+                if !(r2 < 1.0) {
+                    return None;
+                }
+                let t = (1.0 - r2).sqrt().recip();
+                let t3 = t * t * t;
+                finite([
+                    [t + t3 * v[0] * v[0], t3 * v[0] * v[1]],
+                    [t3 * v[0] * v[1], t + t3 * v[1] * v[1]],
+                ])
+            }
+            // u = v/|v|²: J = (I − 2 v vᵀ/|v|²)/|v|².
+            Kernel::Spherical => {
+                if !(r2 > 0.0) {
+                    return None;
+                }
+                let s = r2.recip();
+                finite([
+                    [s * (1.0 - 2.0 * v[0] * v[0] * s), s * (-2.0 * v[0] * v[1] * s)],
+                    [s * (-2.0 * v[0] * v[1] * s), s * (1.0 - 2.0 * v[1] * v[1] * s)],
+                ])
+            }
+            // u = v·s(|v|²): J = s·I + 2 s'·v vᵀ, both from
+            // [`Kernel::bubble_scale`].
+            Kernel::Bubble => {
+                if !(r2 > 0.0) || !(r2 < 1.0) {
+                    return None;
+                }
+                let (s, ds) = Kernel::bubble_scale(r2, branch);
+                finite([
+                    [s + 2.0 * ds * v[0] * v[0], 2.0 * ds * v[0] * v[1]],
+                    [2.0 * ds * v[0] * v[1], s + 2.0 * ds * v[1] * v[1]],
+                ])
+            }
+            // u = |v|^m·e^{i·n·arg v}, m = |n|/d: in the radial and
+            // tangential frames the derivative is `diag(m, n)·|v|^{m−1}`,
+            // read out of the frame at `v` and into the one at `u`.
+            Kernel::Root { n, d } => {
+                if !(rho > 0.0) || !(d != 0.0) {
+                    return None;
+                }
+                let nf = n as f64;
+                let m = nf.abs() / d;
+                let scale = rho.powf(m - 1.0);
+                let phi = v[1].atan2(v[0]);
+                let psi = nf * phi;
+                // R(ψ)·diag(m, n)·R(−φ), times the common scale.
+                let (cp, sp) = (phi.cos(), phi.sin());
+                let (cs, ss) = (psi.cos(), psi.sin());
+                let (a, b) = (m * scale, nf * scale);
+                finite([
+                    [cs * a * cp + (-ss) * b * (-sp), cs * a * sp + (-ss) * b * cp],
+                    [ss * a * cp + cs * b * (-sp), ss * a * sp + cs * b * cp],
+                ])
+            }
+            // u = (r·sin θ, r·cos θ) with r = φ/π + branch and
+            // θ = ±π|v|, φ the angle of `v` from +y: the chain rule
+            // through (|v|, φ).
+            Kernel::Disc => {
+                if !(rho > 0.0) || rho > 1.0 {
+                    return None;
+                }
+                let phi = v[0].atan2(v[1]);
+                let r = phi / std::f64::consts::PI + branch as f64;
+                if r < 0.0 {
+                    return None;
+                }
+                let sign = if branch % 2 == 0 { 1.0 } else { -1.0 };
+                let theta = sign * std::f64::consts::PI * rho;
+                let (st, ct) = (theta.sin(), theta.cos());
+                // du/d|v| and du/dφ
+                let du_drho = [r * ct * sign * std::f64::consts::PI, -r * st * sign * std::f64::consts::PI];
+                let du_dphi = [st / std::f64::consts::PI, ct / std::f64::consts::PI];
+                // d|v|/dv and dφ/dv
+                let drho = [v[0] / rho, v[1] / rho];
+                let dphi = [v[1] / r2, -v[0] / r2];
+                finite([
+                    [du_drho[0] * drho[0] + du_dphi[0] * dphi[0], du_drho[0] * drho[1] + du_dphi[0] * dphi[1]],
+                    [du_drho[1] * drho[0] + du_dphi[1] * dphi[0], du_drho[1] * drho[1] + du_dphi[1] * dphi[1]],
+                ])
+            }
+            // u = P·v/s(θ) with P the swap and θ the angle of `v`:
+            // J = P/s + (P v)·∇(1/s), ∇(1/s) = −(s'/s²)·∇θ.
+            Kernel::Blob { high, low, waves } => {
+                if !(r2 > 0.0) {
+                    return None;
+                }
+                let theta = v[1].atan2(v[0]);
+                let (sc, ds) = Kernel::blob_scale(high, low, waves, theta);
+                if !(sc != 0.0) {
+                    return None;
+                }
+                let pv = [v[1], v[0]];
+                let g = -ds / (sc * sc);
+                // ∇θ = (−v_y, v_x)/|v|²
+                let grad = [g * (-v[1] / r2), g * (v[0] / r2)];
+                finite([
+                    [pv[0] * grad[0], 1.0 / sc + pv[0] * grad[1]],
+                    [1.0 / sc + pv[1] * grad[0], pv[1] * grad[1]],
+                ])
+            }
+        }
+    }
+
+    /// How far `v` may move before [`Self::inverse`] stops being
+    /// smooth along `branch` -- its pole, its image's edge, or the
+    /// cut a branch is taken along.
+    ///
+    /// The perturbation handover stops when a pixel's offset
+    /// approaches this: inside it the second-order term is a bounded
+    /// fraction `offset / distance` of the first, and past it there
+    /// is no linearisation to stop being good (plan
+    /// `ifs-nonlinear-perturbation.md` §2).
+    pub fn singular_distance(&self, v: [f64; 2], branch: u32) -> f64 {
+        let rho = v[0].hypot(v[1]);
+        match *self {
+            // The pole at the origin, and nothing else: `|v|^m` is
+            // smooth away from it, and `e^{i·n·arg v}` has no cut for
+            // an integer `n` -- arg jumps by 2π and `n·2π` is a whole
+            // turn.
+            Kernel::Root { .. } | Kernel::Spherical => rho,
+            // The image's edge, where the square root branches.
+            Kernel::Hemisphere => (1.0 - rho).max(0.0),
+            // The edge both branches share, and for the outer branch
+            // the origin as well, where `f/|v|²` blows up. The inner
+            // branch is smooth there: `f/|v|² → 1`.
+            Kernel::Bubble => {
+                let edge = (1.0 - rho).max(0.0);
+                if branch == 0 {
+                    edge
+                } else {
+                    edge.min(rho)
+                }
+            }
+            // Four ways out, and the nearest wins: `atan2(x, y)` cuts
+            // along the negative y axis; the ring `r = φ/π + branch`
+            // reaches zero along the ray at `φ = −branch·π`, past
+            // which this branch has no preimage; the image's edge,
+            // across which none of them does; and the origin, where
+            // the angle is undefined.
+            Kernel::Disc => {
+                // The cut, as a ray from the origin at `φ = π` from
+                // +y -- the negative y axis.
+                let mut d = Kernel::ray_distance(v, std::f64::consts::PI).min(rho);
+                let zero = -(branch as f64) * std::f64::consts::PI;
+                if zero.abs() <= std::f64::consts::PI {
+                    d = d.min(Kernel::ray_distance(v, zero));
+                }
+                d.min((1.0 - rho).max(0.0))
+            }
+            // The angle's pole, and the angles where the radial scale
+            // vanishes -- a first-order estimate of the distance to
+            // one, in arc length.
+            Kernel::Blob { high, low, waves } => {
+                let theta = v[1].atan2(v[0]);
+                let (sc, ds) = Kernel::blob_scale(high, low, waves, theta);
+                if low > 0.0 && high > 0.0 {
+                    return rho;
+                }
+                if ds == 0.0 {
+                    return if sc == 0.0 { 0.0 } else { rho };
+                }
+                rho.min(rho * (sc / ds).abs())
             }
         }
     }
@@ -532,6 +791,56 @@ impl NonlinearMap2 {
         self.pre_inv.apply(u)
     }
 
+    /// The Jacobian of [`Self::apply_inverse`] at `q`, or `None`
+    /// where there is no preimage.
+    ///
+    /// `pre⁻¹ · J_K(before_kernel(q)) · post⁻¹ / w`: the affines
+    /// contribute their matrices and the weight its reciprocal, since
+    /// each is applied to the kernel's argument or its result.
+    pub fn inverse_jacobian(&self, q: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        let jk = self.kernel.inverse_jacobian(self.before_kernel(q), self.branch)?;
+        // (J_K / w) · post_inv.m, then pre_inv.m on the left.
+        let a = &self.post_inv.m;
+        let iw = 1.0 / self.w;
+        let mid = [
+            [
+                (jk[0][0] * a[0][0] + jk[0][1] * a[1][0]) * iw,
+                (jk[0][0] * a[0][1] + jk[0][1] * a[1][1]) * iw,
+            ],
+            [
+                (jk[1][0] * a[0][0] + jk[1][1] * a[1][0]) * iw,
+                (jk[1][0] * a[0][1] + jk[1][1] * a[1][1]) * iw,
+            ],
+        ];
+        let b = &self.pre_inv.m;
+        let out = [
+            [
+                b[0][0] * mid[0][0] + b[0][1] * mid[1][0],
+                b[0][0] * mid[0][1] + b[0][1] * mid[1][1],
+            ],
+            [
+                b[1][0] * mid[0][0] + b[1][1] * mid[1][0],
+                b[1][0] * mid[0][1] + b[1][1] * mid[1][1],
+            ],
+        ];
+        out.iter().flatten().all(|x| x.is_finite()).then_some(out)
+    }
+
+    /// [`Kernel::singular_distance`] carried back to `q`'s own frame.
+    ///
+    /// A step `δ` in `q` reaches at most `σ_max(post⁻¹)·|δ|/|w|` in
+    /// the kernel's frame, so a kernel-frame clearance of `s` is at
+    /// least `|w|·s/σ_max(post⁻¹)` here -- the conservative direction,
+    /// which is the one a stopping rule wants.
+    pub fn singular_distance(&self, q: [f64; 2]) -> f64 {
+        let s = self.kernel.singular_distance(self.before_kernel(q), self.branch);
+        let (_, post_hi) = self.post_inv.singular_values();
+        if !(post_hi > 0.0) {
+            return f64::INFINITY;
+        }
+        s * self.w.abs() / post_hi
+    }
+
     /// The local factor on the forward map's σ_min at the point whose
     /// image is `q`.
     pub fn local_sigma_factor(&self, q: [f64; 2]) -> f64 {
@@ -628,6 +937,30 @@ impl Map2 {
             Map2::Affine(a) => a.inverse().map(Map2::Affine),
             Map2::Nonlinear(r) => Some(Map2::NonlinearInverse(*r)),
             Map2::NonlinearInverse(r) => Some(Map2::Nonlinear(*r)),
+        }
+    }
+
+    /// The Jacobian of [`Self::apply`] at `q`, where the walk has one.
+    ///
+    /// `None` for a forward nonlinear map: the walk only ever
+    /// inverts (the forward is not even uploaded to the shader), so
+    /// the forward kernels' derivatives are not derived.
+    pub fn jacobian(&self, q: [f64; 2]) -> Option<[[f64; 2]; 2]> {
+        match self {
+            Map2::Affine(a) => Some(a.m),
+            Map2::NonlinearInverse(r) => r.inverse_jacobian(q),
+            Map2::Nonlinear(_) => None,
+        }
+    }
+
+    /// How far `q` may move before [`Self::jacobian`] stops
+    /// describing this map: infinite for an affine, the kernel's
+    /// clearance for an inverted nonlinear one.
+    pub fn singular_distance(&self, q: [f64; 2]) -> f64 {
+        match self {
+            Map2::Affine(_) => f64::INFINITY,
+            Map2::NonlinearInverse(r) => r.singular_distance(q),
+            Map2::Nonlinear(_) => 0.0,
         }
     }
 
@@ -2717,6 +3050,228 @@ mod tests {
     /// Gate 2 of plan 8.9: every kernel's inverse undoes each of its
     /// branches, and a bubble transform is two maps that share its
     /// colour and differ in the branch.
+    /// G1 of `ifs-nonlinear-perturbation.md`: every kernel's
+    /// [`Kernel::inverse_jacobian`] IS the derivative of its
+    /// [`Kernel::inverse`], and ties to
+    /// [`Kernel::local_sigma_factor`] exactly.
+    ///
+    /// Two things at once, and the second is the one that found a
+    /// bug. A Jacobian is checked against central differences, which
+    /// says it is the right derivative. Its largest singular value is
+    /// then checked against the forward map's smallest -- they are
+    /// reciprocal, since the inverse's derivative is the inverse of
+    /// the forward's -- which says the σ the WALK scales its bounds
+    /// by is the σ this derivative implies. Bubble's was not: it
+    /// reported the tangential derivative alone, which overstates
+    /// σ_min without bound as the fold at `|p| = 2` is approached
+    /// (21× at `|v| = 0.9989`, measured), and an overstated σ_min is
+    /// an over-read.
+    ///
+    /// The finite differences also found that bubble's inner branch
+    /// could not be differentiated numerically at all near the origin
+    /// -- 102% disagreement -- because `2 − 2√(1 − x)` cancels.
+    /// [`Kernel::bubble_scale`] is what both fixes live in.
+    #[test]
+    fn the_kernels_jacobians_are_the_derivative() {
+        let cases: Vec<(&str, Kernel, u32)> = vec![
+            ("root n2 d1", Kernel::Root { n: 2, d: 1.0 }, 0),
+            ("root n3 d-1", Kernel::Root { n: 3, d: -1.0 }, 0),
+            ("root n-5 d2", Kernel::Root { n: -5, d: 2.0 }, 0),
+            ("root n8 d-1", Kernel::Root { n: 8, d: -1.0 }, 0),
+            ("spherical", Kernel::Spherical, 0),
+            ("bubble in", Kernel::Bubble, 0),
+            ("bubble out", Kernel::Bubble, 1),
+            ("hemisphere", Kernel::Hemisphere, 0),
+            ("disc m0", Kernel::Disc, 0),
+            ("disc m1", Kernel::Disc, 1),
+            ("disc m2", Kernel::Disc, 2),
+            ("blob", Kernel::Blob { high: 1.4, low: 0.3, waves: 3.0 }, 0),
+            ("blob neg low", Kernel::Blob { high: 1.2, low: -0.4, waves: 2.0 }, 0),
+        ];
+        // The largest singular value, stably: the larger eigenvalue of
+        // `MᵀM` is `(p + r)/2 + sqrt(((p − r)/2)² + q²)`, where the
+        // square root is a sum of squares and is ADDED, so nothing
+        // cancels. `Affine2::singular_values` reads both values out of
+        // `sqrt(||M||⁴ − 4 det²)` instead, which is exactly zero for a
+        // conformal map and so keeps half of f64's digits there.
+        let sv = |j: [[f64; 2]; 2]| {
+            let p = j[0][0] * j[0][0] + j[1][0] * j[1][0];
+            let r = j[0][1] * j[0][1] + j[1][1] * j[1][1];
+            let q = j[0][0] * j[0][1] + j[1][0] * j[1][1];
+            let half = (p - r) * 0.5;
+            let mid = (p + r) * 0.5;
+            (0.0, (mid + (half * half + q * q).sqrt()).max(0.0).sqrt())
+        };
+
+        let mut st: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, k, branch) in cases {
+            let mut checked = 0usize;
+            for _ in 0..4000 {
+                let rad = if k.image_is_unit_disc() { next() * 0.999 } else { next() * 3.0 };
+                let ang = next() * std::f64::consts::TAU;
+                let v = [rad * ang.cos(), rad * ang.sin()];
+                let Some(j) = k.inverse_jacobian(v, branch) else { continue };
+                // Away from the edges, where a central difference of
+                // a function with a square-root branch point is not a
+                // derivative of anything.
+                let clear = k.singular_distance(v, branch);
+                if !(clear > 1e-3) {
+                    continue;
+                }
+                let h = (1e-6f64).min(clear * 1e-3);
+                for axis in 0..2 {
+                    let mut a = v;
+                    let mut b = v;
+                    a[axis] += h;
+                    b[axis] -= h;
+                    let ua = k.inverse(a, branch);
+                    let ub = k.inverse(b, branch);
+                    for row in 0..2 {
+                        let fd = (ua[row] - ub[row]) / (2.0 * h);
+                        let an = j[row][axis];
+                        let scale = an.abs().max(fd.abs()).max(1e-12);
+                        assert!(
+                            (fd - an).abs() / scale < 1e-3,
+                            "{name} at {v:?}: d u[{row}]/d v[{axis}] is {an}, a central difference says {fd}"
+                        );
+                    }
+                }
+                // The inverse of the forward's derivative, so the
+                // largest singular value here is the reciprocal of
+                // the smallest there.
+                let (_, hi) = sv(j);
+                let (klo, _) = k.sigma_const();
+                let ratio = hi * klo * k.local_sigma_factor(v, branch);
+                // Machine precision everywhere but one case: 1.5e-13
+                // is the worst of the other twelve. The exception is
+                // a blob whose angular scale CROSSES ZERO, where the
+                // shipped σ_min reads the smaller root of a
+                // discriminant whose two roots meet -- 3.0e-5,
+                // deliberately left there rather than move a preset
+                // (see `local_sigma_factor`). The error this gate
+                // exists to catch is a factor of 21.
+                let tol = if name == "blob neg low" { 1e-4 } else { 1e-12 };
+                assert!(
+                    (ratio - 1.0).abs() < tol,
+                    "{name} at {v:?}: sigma_max(J) * sigma_min(forward) is {ratio}, not 1"
+                );
+                // The clearance is a real one: half of it keeps the
+                // branch.
+                let step = [v[0] + clear * 0.5 * ang.cos(), v[1] + clear * 0.5 * ang.sin()];
+                assert!(
+                    k.inverse_jacobian(step, branch).is_some(),
+                    "{name}: half of the clearance {clear} at {v:?} left the branch"
+                );
+                checked += 1;
+            }
+            assert!(checked > 400, "{name}: only {checked} points were checkable");
+        }
+    }
+
+    /// The map level of G1: the affines and the weight compose onto
+    /// the kernel's Jacobian, and the σ_min the walk reports is never
+    /// ABOVE the derivative's -- the direction that decides whether a
+    /// bound is a lower bound.
+    #[test]
+    fn a_nonlinear_maps_jacobian_composes_through_its_affines() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, set: &dyn Fn(&mut Transform)| -> NonlinearMap2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            set(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name} should be a nonlinear map: {e:?}"));
+            m.nonlinear().copied().expect("nonlinear")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, NonlinearMap2, u32)> = vec![
+            ("spherical", build("spherical", 0.7, &noop), 0),
+            ("bubble in", build("bubble", 1.3, &noop), 0),
+            ("bubble out", build("bubble", 1.3, &noop), 1),
+            ("hemisphere", build("hemisphere", 0.9, &noop), 0),
+            ("disc", build("disc", 0.6, &noop), 1),
+            ("blob", build("blob", 1.1, &|t: &mut Transform| {
+                t.set_variation_param("blob", "high", 1.4);
+                t.set_variation_param("blob", "low", 0.3);
+                t.set_variation_param("blob", "waves", 3.0);
+            }), 0),
+            ("julian 3 dist -1", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", -1.0);
+            }), 0),
+        ];
+        let mut st: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, base, branch) in cases {
+            let mut m = base;
+            m.branch = branch;
+            let (c_lo, _) = m.singular_values();
+            let mut checked = 0usize;
+            for _ in 0..3000 {
+                // Sample in the map's own image, by pushing a point
+                // through the forward map.
+                let p = [(next() - 0.5) * 6.0, (next() - 0.5) * 6.0];
+                let q = m.apply_branch(p, 0);
+                if !(q[0].is_finite() && q[1].is_finite()) {
+                    continue;
+                }
+                let Some(j) = m.inverse_jacobian(q) else { continue };
+                let clear = m.singular_distance(q);
+                if !(clear > 1e-4) {
+                    continue;
+                }
+                let h = (1e-6f64).min(clear * 1e-3);
+                let mut ok = true;
+                for axis in 0..2 {
+                    let mut a = q;
+                    let mut b = q;
+                    a[axis] += h;
+                    b[axis] -= h;
+                    let ua = m.apply_inverse(a);
+                    let ub = m.apply_inverse(b);
+                    if !(ua[0].is_finite() && ub[0].is_finite()) {
+                        ok = false;
+                        break;
+                    }
+                    for row in 0..2 {
+                        let fd = (ua[row] - ub[row]) / (2.0 * h);
+                        let an = j[row][axis];
+                        let scale = an.abs().max(fd.abs()).max(1e-9);
+                        assert!(
+                            (fd - an).abs() / scale < 1e-3,
+                            "{name} at {q:?}: d u[{row}]/d q[{axis}] is {an}, a central difference says {fd}"
+                        );
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                // Soundness: the walk's sigma is at most the true
+                // one. The constants multiply as a bound rather than
+                // exactly, so this is an inequality where the
+                // kernel's own was an equality.
+                let (_, hi) = Affine2 { m: j, t: [0.0, 0.0] }.singular_values();
+                let reported = c_lo * m.local_sigma_factor(q);
+                assert!(
+                    reported <= 1.0 / hi * (1.0 + 1e-6),
+                    "{name} at {q:?}: the walk scales by {reported}, above the derivative's {}",
+                    1.0 / hi
+                );
+                checked += 1;
+            }
+            assert!(checked > 200, "{name}: only {checked} points were checkable");
+        }
+    }
     #[test]
     fn every_kernel_inverse_undoes_each_of_its_branches() {
         let guard = global_registry();
@@ -2768,11 +3323,11 @@ mod tests {
                 let d2 = base.apply_branch([p[0], p[1] + h], 0);
                 let g1 = ((d1[0] - q[0]).hypot(d1[1] - q[1])) / h;
                 let g2 = ((d2[0] - q[0]).hypot(d2[1] - q[1])) / h;
-                if kernel != Kernel::Bubble {
-                    // Conformal times affine: the product of parts is a
-                    // lower bound on the stretch in any direction.
-                    assert!(s <= g1.min(g2) * (1.0 + 1e-4) + 1e-9, "{kernel:?} at {p:?}: sigma {s} exceeds stretch {g1}/{g2}");
-                }
+                // The product of parts is a lower bound on the stretch
+                // in any direction. Bubble was excepted here until its
+                // sigma_min gained the radial term it was missing --
+                // see `the_kernels_jacobians_are_the_derivative`.
+                assert!(s <= g1.min(g2) * (1.0 + 1e-4) + 1e-9, "{kernel:?} at {p:?}: sigma {s} exceeds stretch {g1}/{g2}");
             }
         }
 
