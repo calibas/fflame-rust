@@ -2221,6 +2221,7 @@ escape_panel:
   ifs_set_not_measure: "This draws the SET, not the measure — transform weights, colour speed and density do not apply."
   ifs_frame: "Frame Attractor"
   ifs_frame_tip: "Move the view to the attractor's bounding ball."
+  ifs_extent: "Measured extent %{radius}: the radius the set is cut at while Extent is 0. Set Extent to it to hold the far field through an animation."
   lens: "Camera Lens"
   lens_none: "None"
   lens_tip: "A variation applied to the screen offset, so it bends the VIEW and leaves the fractal alone. The list is the variations measured to work as lenses, the most camera-like first; tick Show all to reach the rest. Eyefish is the clean fisheye — fisheye itself carries Apophysis's x/y transposition and mirrors the picture across the diagonal."
