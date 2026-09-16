@@ -94,6 +94,28 @@ pub trait IfsSpace: Copy {
     fn is_inversion(&self) -> bool {
         false
     }
+
+    /// The bound the walk scores a gapped branch by: the larger of the
+    /// geometric gap and what one step of the expansion would have
+    /// bounded, when that step is representable.
+    ///
+    /// Both are valid lower bounds on the distance to the piece, and
+    /// they do not agree at the gap's edge: the geometric gap goes to
+    /// zero there while the expansion, whose hole radius comes from a
+    /// generous superset of the pre-frame ball, lands a little outside
+    /// the ball and reads a positive distance. Taking one inside and
+    /// the other outside made the field a cliff at every inversion's
+    /// hole edge -- a ring reading "on the set" -- and, since the hole
+    /// follows the ball, a cliff that moved under animation: measured
+    /// as one point jumping 90 pixels for a 0.075-degree turn. The
+    /// maximum of two continuous bounds is continuous.
+    fn gap_bound(&self, q: Self::Point, centre: Self::Point, radius: f64, sigma_min: f64) -> Option<f64> {
+        let geo = self.image_gap(q)?;
+        let (q2, _, s) = self.step(q, 0.0, sigma_min);
+        let r2 = Self::distance(q2, centre);
+        let term = s * (r2 - radius);
+        Some(if term.is_finite() { geo.max(term) } else { geo })
+    }
 }
 
 impl IfsSpace for Affine2 {
@@ -554,7 +576,7 @@ where
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                if let Some(gap) = m.inverse.image_gap(c.q) {
+                if let Some(gap) = m.inverse.gap_bound(c.q, ifs.ball.centre, ifs.ball.radius, m.sigma_min) {
                     dead_min = dead_min.min(c.bound.max(c.sigma * gap));
                     continue;
                 }
@@ -1123,7 +1145,7 @@ pub fn estimate_seeded(
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
-                if let Some(gap) = m.inverse.image_gap(c.q) {
+                if let Some(gap) = m.inverse.gap_bound(c.q, ifs.ball.centre, ifs.ball.radius, m.sigma_min) {
                     dead_min = dead_min.min(c.bound.max(c.sigma * gap));
                     continue;
                 }
@@ -2220,7 +2242,7 @@ mod tests {
             }
             let mut best = f64::INFINITY;
             for m in &ifs.maps {
-                if let Some(gap) = m.inverse.image_gap(q) {
+                if let Some(gap) = m.inverse.gap_bound(q, ifs.ball.centre, ifs.ball.radius, m.sigma_min) {
                     best = best.min(here.max(sigma * gap));
                     continue;
                 }
@@ -2238,6 +2260,12 @@ mod tests {
     /// `flatten` as the file does. `t2` is the third transform's
     /// affine; the report's two files differ only there.
     fn grand_julian(t2: [f32; 6]) -> Ifs2 {
+        grand_julian_t1(t2, [0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0])
+    }
+
+    /// The same flame with the second transform's affine settable too:
+    /// the two files of the jitter report differ only there.
+    fn grand_julian_t1(t2: [f32; 6], t1: [f32; 6]) -> Ifs2 {
         let j = |aff: [f32; 6], w: f32, power: f32| {
             let mut t = kernel_xform("julian", aff, w);
             t.variations.insert("flatten".to_string(), 1.0);
@@ -2248,7 +2276,7 @@ mod tests {
         };
         analyse(vec![
             j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
-            j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0], 0.2, 15.0),
+            j(t1, 0.2, 15.0),
             j(t2, 0.3, 8.0),
         ])
     }
@@ -2599,6 +2627,164 @@ mod tests {
             println!("beam {beam}: deepest level histogram  {}", hist(&deepest));
             println!("beam {beam}: winner  level histogram  {}", hist(&winner));
         }
+    }
+
+    /// The jitter report (`grand-julian-glitches4/5.fflame`): the same
+    /// view, the second transform turned by 0.6 degrees, and a band
+    /// that moves "in very noticeable amounts". At this view the beam
+    /// of 5 is exact against 512 in both files, so the field's move is
+    /// intrinsic to the bound. Whether it is the SET moving or the
+    /// bound's slack is what this measures, two ways.
+    ///
+    /// First, the rotation is swept in nine steps and the distance
+    /// and the winning address are watched at every point: geometry
+    /// moves smoothly and monotonically, an argmin switching between
+    /// two pieces with different slack snaps.
+    ///
+    /// Second, ground truth: a dense chaos-game sample of each end,
+    /// every sample carrying the address of the last maps applied,
+    /// gives each grid point its TRUE nearest piece. How many grid
+    /// points change their true nearest piece between the two files,
+    /// against how many change the walk's winner.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn the_jitter_between_two_rotations() {
+        let t2 = [-0.9701f32, -0.2427, 0.2427, -0.9701, 0.0, 0.0];
+        let a0 = (-0.5299f64).atan2(-0.848);
+        let a1 = (-0.5387f64).atan2(-0.8425);
+        let t1_at = |a: f64| -> [f32; 6] {
+            let (c, s) = (a.cos() as f32, a.sin() as f32);
+            [c, s, -s, c, 0.0, 0.0]
+        };
+        let centre = [-0.4318341396154855, 0.09837190993102786];
+        let (zoom, rot) = (5.818763f64, 0.7853982f64);
+        let span = 4.0 / 2f64.powf(zoom);
+        let (cs, sn) = (rot.cos(), rot.sin());
+        let n = 32;
+        let px = span / 640.0;
+        const LEVELS: u32 = 35;
+        let mut pts = Vec::new();
+        for iy in 0..n {
+            for ix in 0..n {
+                let u = ((ix as f64 + 0.5) / n as f64 - 0.5) * span;
+                let v = -((iy as f64 + 0.5) / n as f64 - 0.5) * span;
+                pts.push([centre[0] + u * cs - v * sn, centre[1] + u * sn + v * cs]);
+            }
+        }
+
+        // ---- the sweep
+        let steps = 9;
+        let mut prev: Option<(Vec<f64>, Vec<u32>)> = None;
+        let mut sign_flips = vec![0usize; pts.len()];
+        let mut last_delta = vec![0.0f64; pts.len()];
+        println!("sweep of the second transform's angle, {steps} steps, {}x{} points, pixels ({px:.2e}):", n, n);
+        for k in 0..steps {
+            let a = a0 + (a1 - a0) * k as f64 / (steps - 1) as f64;
+            let g = grand_julian_t1(t2, t1_at(a));
+            let dist: Vec<f64> = pts.iter().map(|&p| estimate(&g, p, LEVELS, 5).distance).collect();
+            let first: Vec<u32> = pts
+                .iter()
+                .map(|&p| estimate(&g, p, LEVELS, 5).address.first().copied().unwrap_or(99))
+                .collect();
+            if let Some((pd, pf)) = &prev {
+                let mut moved10 = 0;
+                let mut flipped = 0;
+                let mut worst = 0.0f64;
+                for i in 0..pts.len() {
+                    let d = (dist[i] - pd[i]) / px;
+                    if d.abs() > 10.0 {
+                        moved10 += 1;
+                    }
+                    worst = worst.max(d.abs());
+                    if last_delta[i] * d < 0.0 && d.abs() > 1.0 && last_delta[i].abs() > 1.0 {
+                        sign_flips[i] += 1;
+                    }
+                    last_delta[i] = d;
+                    if first[i] != pf[i] {
+                        flipped += 1;
+                    }
+                }
+                println!(
+                    "  step {k}: distance moved >10px at {moved10:>4}, worst {worst:6.1}px; first branch changed at {flipped:>4}"
+                );
+                assert!(worst < 4.0, "step {k}: the distance field jumped {worst:.1}px for a 0.075-degree turn");
+            }
+            prev = Some((dist, first));
+        }
+        let reversers = sign_flips.iter().filter(|&&f| f > 0).count();
+        println!("  points whose distance reversed direction during the sweep: {reversers}/{}", pts.len());
+
+        // ---- ground truth: nearest sample's address, both ends
+        let sample_with_address = |ifs: &Ifs2, count: usize| -> Vec<([f64; 2], u32)> {
+            let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+            let mut next = || {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state
+            };
+            let maps: Vec<&Map2> = ifs.maps.iter().map(|m| &m.forward).collect();
+            let mut p = ifs.ball.centre;
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count + 200 {
+                let k = (next() % maps.len() as u64) as usize;
+                p = maps[k].apply(p);
+                if !(p[0].is_finite() && p[1].is_finite()) {
+                    p = ifs.ball.centre;
+                    continue;
+                }
+                if i >= 200 {
+                    out.push((p, k as u32));
+                }
+            }
+            out
+        };
+        let nearest_first = |sample: &[([f64; 2], u32)], q: [f64; 2]| -> (f64, u32) {
+            let mut best = (f64::INFINITY, 99u32);
+            for &(a, k) in sample {
+                let d = Affine2::distance(q, a);
+                if d < best.0 {
+                    best = (d, k);
+                }
+            }
+            best
+        };
+        let g4 = grand_julian_t1(t2, t1_at(a0));
+        let g5 = grand_julian_t1(t2, t1_at(a1));
+        let s4 = sample_with_address(&g4, 400_000);
+        let s5 = sample_with_address(&g5, 400_000);
+        let (mut true_changed, mut walk_changed, mut true_moved10) = (0usize, 0usize, 0usize);
+        for &p in &pts {
+            let (d4, k4) = nearest_first(&s4, p);
+            let (d5, k5) = nearest_first(&s5, p);
+            if k4 != k5 {
+                true_changed += 1;
+            }
+            if ((d4 - d5) / px).abs() > 10.0 {
+                true_moved10 += 1;
+            }
+            let w4 = estimate(&g4, p, LEVELS, 5).address.first().copied().unwrap_or(99);
+            let w5 = estimate(&g5, p, LEVELS, 5).address.first().copied().unwrap_or(99);
+            if w4 != w5 {
+                walk_changed += 1;
+            }
+        }
+        println!(
+            "ground truth between the two files: true nearest piece changes at {true_changed}/{} points, \
+             true distance moves >10px at {true_moved10}; the walk's winner changes at {walk_changed}",
+            pts.len()
+        );
+        // What this gates: the walk's picture moves no more than the
+        // set does. Before the continuous ball, 44 winners and 504
+        // distances past ten pixels moved in a single sweep step
+        // against a set that moved at none; after, 0 and 0 with a
+        // worst step of half a pixel.
+        assert_eq!(true_changed, 0, "the set itself moved; the fixture is not what it was");
+        assert!(
+            walk_changed <= 4,
+            "the walk's nearest piece changed at {walk_changed} points for a set that moved at none"
+        );
+        assert_eq!(reversers, 0, "the distance reversed direction under a monotone rotation");
     }
 
     /// Greedy is a heuristic, and the dragon is where it shows.

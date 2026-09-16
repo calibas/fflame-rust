@@ -2039,14 +2039,63 @@ fn ball_2d_numeric(maps: &[IfsMap<Map2>]) -> Option<Ball<[f64; 2]>> {
     // A set built from a kernel that sends the pre-origin to infinity
     // -- an inversion, a root of a negative distance -- is unbounded
     // through it, and no ball is invariant. Its ball is the BULK of
-    // the sample -- the 99.5th percentile radius with a 30% margin --
-    // and not a proof (S3): the sparse tail beyond it is drawn as
-    // exterior.
+    // a sample, with a 30% margin, and not a proof (S3): the sparse
+    // tail beyond it is drawn as exterior.
+    //
+    // The bulk has to be a CONTINUOUS function of the flame, because
+    // every bound the walk forms is `σ·(r − R)` and a jump in R moves
+    // the whole distance field at once. Reported from use as bands
+    // that "snap back and forth" under a small rotation: measured, a
+    // 0.6-degree turn of one transform moved the true set at 0 of
+    // 1024 points and this radius by 1.3%, which was 65 pixels of
+    // field. The 99.5th percentile of one long chaos-game orbit is not
+    // continuous in the parameters twice over -- an order statistic
+    // rests on twenty points, and the orbit restarts whenever a point
+    // flies through a pole, a discrete event after which the whole
+    // sample is a different draw. So the bulk is measured from many
+    // SHORT chains, each on its own seed so one chain blowing up
+    // cannot shift the others, and as the mean of the top few percent
+    // of radii rather than one of them. Each chain's points are
+    // compositions of continuous maps of a fixed start, and a mean
+    // over hundreds of them moves by a hair when one crosses a
+    // branch cut.
     if maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.unbounded_at_origin())) {
-        let mut radii: Vec<f64> = sample.iter().map(|&p| dist(p)).collect();
-        radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let bulk = radii[(radii.len() as f64 * 0.995) as usize].max(1e-9);
-        return Some(Ball { centre, radius: bulk * 1.3 });
+        let mut pts: Vec<[f64; 2]> = Vec::with_capacity(4000 * 10);
+        for chain in 0..4000u64 {
+            let mut st: u64 = 0x9E37_79B9_7F4A_7C15 ^ chain.wrapping_mul(0xD1B5_4A32_D192_ED03);
+            let mut draw = || {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (st >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let mut q = [0.1234, 0.0567];
+            for step in 0..14 {
+                let m = &maps[(draw() * maps.len() as f64).floor() as usize % maps.len()];
+                q = branch(&m.forward, q, draw());
+                if !(q[0].is_finite() && q[1].is_finite()) {
+                    break;
+                }
+                if step >= 4 {
+                    pts.push(q);
+                }
+            }
+        }
+        if pts.len() < 1000 {
+            return None;
+        }
+        let n = pts.len() as f64;
+        let c = [pts.iter().map(|p| p[0]).sum::<f64>() / n, pts.iter().map(|p| p[1]).sum::<f64>() / n];
+        let mut radii: Vec<f64> = pts
+            .iter()
+            .map(|p| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt())
+            .collect();
+        radii.sort_by(|a, b| a.total_cmp(b));
+        let tail = radii.len() / 20; // the top 5%
+        let bulk = radii[radii.len() - tail.max(1)..].iter().sum::<f64>() / tail.max(1) as f64;
+        // 1.5 rather than the percentile's 1.3: a mean of the top 5% sits
+        // below the 99.5th percentile, and this keeps the ball's edge
+        // where it was -- just outside the sample's 99.5% -- so the
+        // pictures do not change coverage along with continuity.
+        return Some(Ball { centre: c, radius: bulk.max(1e-9) * 1.5 });
     }
 
     let mut radius = sample.iter().map(|&p| dist(p)).fold(0.0f64, f64::max).max(1e-9);
