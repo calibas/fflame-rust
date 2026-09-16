@@ -2380,7 +2380,90 @@ impl crate::scene::ifs_estimate::SeedPoint3 for [super::bigfloat::BigFloat; 3] {
 /// engine. Only the POSITION is big: the map coefficients stay f64,
 /// and so does the distance the walk compares against the ball, which
 /// is O(1) however precise the point is.
+/// Rung 1 of `ifs-nonlinear-perturbation.md` §3, at arbitrary
+/// precision: the kernels whose inverse is RATIONAL, so that a
+/// `BigFloat` can take the step with multiplication and one
+/// reciprocal and nothing else.
+///
+/// - `spherical`, whose inverse is `v/|v|²`.
+/// - a root of integer distance, `|v|^{|n|/d}·e^{i·n·arg v}` with
+///   `|d| = 1`. Write `w = v^{|n|}`, which is repeated squaring.
+///   `d < 0` inverts it -- the same `z/|z|²` -- and the two signs
+///   disagreeing conjugates it, since `e^{i·n·φ}` is `w`'s angle
+///   reflected exactly when `n` and `d` pull opposite ways.
+///
+/// Everything else -- a fractional root, `disc`, `blob` (sin/cos),
+/// `bubble`, `hemisphere` (sqrt) -- returns `None`, and the handover
+/// stops where it stopped before. `BigFloat` has no `exp`, `sin` or
+/// `sqrt` to build them from yet.
+fn big_kernel_inverse(
+    kernel: crate::scene::ifs_analysis::Kernel,
+    v: &[super::bigfloat::BigFloat; 2],
+) -> Option<[super::bigfloat::BigFloat; 2]> {
+    use crate::scene::ifs_analysis::Kernel;
+    use super::bigfloat::BigComplex;
+    let z = BigComplex { re: v[0].clone(), im: v[1].clone() };
+    if z.is_zero() {
+        return None;
+    }
+    let invert = |c: &BigComplex| -> Option<BigComplex> {
+        let n2 = c.norm_sqr();
+        if n2.is_zero() {
+            return None;
+        }
+        let inv = n2.recip();
+        Some(BigComplex { re: c.re.mul(&inv), im: c.im.mul(&inv) })
+    };
+    let out = match kernel {
+        Kernel::Spherical => invert(&z)?,
+        Kernel::Root { n, d } if d.abs() == 1.0 && n != 0 => {
+            let mut acc: Option<BigComplex> = None;
+            let mut base = z.clone();
+            let mut e = n.unsigned_abs();
+            while e > 0 {
+                if e & 1 == 1 {
+                    acc = Some(match acc {
+                        Some(a) => a.mul(&base),
+                        None => base.clone(),
+                    });
+                }
+                base = base.mul(&base);
+                e >>= 1;
+            }
+            let mut w = acc?;
+            if d < 0.0 {
+                w = invert(&w)?;
+            }
+            if (n as f64) * d < 0.0 {
+                w = BigComplex { re: w.re, im: w.im.neg() };
+            }
+            w
+        }
+        _ => return None,
+    };
+    let out = [out.re, out.im];
+    out[0].to_f64().is_finite().then_some(())?;
+    out[1].to_f64().is_finite().then_some(())?;
+    Some(out)
+}
+
 impl crate::scene::ifs_estimate::SeedPoint for [super::bigfloat::BigFloat; 2] {
+    fn apply_map(&self, m: &crate::scene::ifs_analysis::Map2) -> Option<Self> {
+        use crate::scene::ifs_analysis::Map2;
+        use crate::scene::ifs_estimate::SeedPoint;
+        match m {
+            Map2::Affine(a) => Some(self.apply_affine(a)),
+            Map2::NonlinearInverse(r) => {
+                let (kernel, _branch, pre_inv, post) = r.parts();
+                let v = self.apply_affine(&post);
+                let u = big_kernel_inverse(kernel, &v)?;
+                Some(u.apply_affine(pre_inv))
+            }
+            // The walk only ever inverts.
+            Map2::Nonlinear(_) => None,
+        }
+    }
+
     fn apply_affine(&self, a: &Affine2) -> Self {
         let n = self[0].n_limbs().max(self[1].n_limbs());
         let big = |v: f64| super::bigfloat::BigFloat::from_f64(v, n);

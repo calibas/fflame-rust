@@ -826,19 +826,49 @@ impl NonlinearMap2 {
         out.iter().flatten().all(|x| x.is_finite()).then_some(out)
     }
 
-    /// [`Kernel::singular_distance`] carried back to `q`'s own frame.
+    /// [`Kernel::singular_distance`] carried back to `q`'s own frame,
+    /// with this map's HOLE among the edges.
     ///
     /// A step `δ` in `q` reaches at most `σ_max(post⁻¹)·|δ|/|w|` in
     /// the kernel's frame, so a kernel-frame clearance of `s` is at
     /// least `|w|·s/σ_max(post⁻¹)` here -- the conservative direction,
     /// which is the one a stopping rule wants.
+    ///
+    /// The hole belongs here rather than in the kernel because it is
+    /// the BALL's reach in the pre-frame, not a property of the
+    /// kernel: inside it a point has no preimage and is scored as a
+    /// gap, outside it the branch is taken, and a view straddling
+    /// that circle does not agree on which.
     pub fn singular_distance(&self, q: [f64; 2]) -> f64 {
-        let s = self.kernel.singular_distance(self.before_kernel(q), self.branch);
+        let v = self.before_kernel(q);
+        let mut s = self.kernel.singular_distance(v, self.branch);
+        if self.hole > 0.0 {
+            s = s.min((v[0].hypot(v[1]) - self.hole).abs());
+        }
         let (_, post_hi) = self.post_inv.singular_values();
         if !(post_hi > 0.0) {
             return f64::INFINITY;
         }
         s * self.w.abs() / post_hi
+    }
+
+    /// This map's kernel, branch and affines, for a caller that has to
+    /// take the inverse itself at a precision f64 cannot hold.
+    ///
+    /// The post-inverse comes back with `1/w` folded in, so it is the
+    /// whole of [`Self::before_kernel`] as one affine: the weight
+    /// scales the kernel's OUTPUT going forward, so undoing it is a
+    /// scale on the way in, and a scale composes with an affine.
+    pub fn parts(&self) -> (Kernel, u32, &Affine2, Affine2) {
+        let iw = 1.0 / self.w;
+        let post = Affine2 {
+            m: [
+                [self.post_inv.m[0][0] * iw, self.post_inv.m[0][1] * iw],
+                [self.post_inv.m[1][0] * iw, self.post_inv.m[1][1] * iw],
+            ],
+            t: [self.post_inv.t[0] * iw, self.post_inv.t[1] * iw],
+        };
+        (self.kernel, self.branch, &self.pre_inv, post)
     }
 
     /// The local factor on the forward map's σ_min at the point whose
@@ -950,6 +980,19 @@ impl Map2 {
             Map2::Affine(a) => Some(a.m),
             Map2::NonlinearInverse(r) => r.inverse_jacobian(q),
             Map2::Nonlinear(_) => None,
+        }
+    }
+
+    /// The σ_min this map contributes at `q`: its constant part
+    /// times the kernel's local factor.
+    ///
+    /// [`crate::scene::ifs_estimate::IfsSpace::step`] computes the
+    /// same thing alongside the point; this is for a walk whose point
+    /// is not an `[f64; 2]` and which therefore takes the two apart.
+    pub fn local_sigma(&self, q: [f64; 2], sigma_min: f64) -> f64 {
+        match self {
+            Map2::NonlinearInverse(r) => sigma_min * r.local_sigma_factor(q),
+            _ => sigma_min,
         }
     }
 
