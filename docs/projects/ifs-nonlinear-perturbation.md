@@ -113,11 +113,13 @@ of them.
 
 *The hard rules*, which say how far the walk may go at all:
 
-1. *Linearisation budget*: the accumulated `Σ ρ_k/s_k`, times the
-   view's half-diagonal in pixels, may not exceed
-   `HANDOVER_PIXEL_BUDGET` (a tenth of a pixel). An affine map has
-   an infinite clearance and pays nothing, so every affine handover
-   is exactly where it was.
+1. ~~*Linearisation budget*~~ -- there is none. It was a tenth of a
+   pixel and it was wrong; §9 records why. The curvature error is
+   now one TERM of the objective below rather than a gate, and what
+   bounds the walk instead is exact: once the curvature term alone
+   passes the best total found, no deeper level can win, because
+   `spent` only grows. An affine map has an infinite clearance and
+   pays nothing, so every affine handover is exactly where it was.
 2. *A branch the reference cannot take*: if any map is GAPPED at the
    reference, the prefix ends. Its gap belongs in the answer's
    minimum -- the walk scores it into `dead_min` -- and a seed has
@@ -128,8 +130,9 @@ of them.
 3. *View agreement*, and the cap `basis_reach ≥ radius ·
    HANDOVER_FRACTION`, both unchanged.
 
-*And then the choice.* The shader stores each seed's position as an
-f32, so every pixel starts from a point wrong by `|position|·2⁻²⁴`.
+*And then the choice*, which is the whole rule. The shader stores
+each seed's position as an f32, so every pixel starts from a point
+wrong by `|position|·2⁻²⁴`.
 Divided by the pixel size at the handover that is a number of pixels,
 and it SHRINKS with depth, because the pixel grows with the view
 while the position's magnitude does not. The linearisation's error
@@ -138,8 +141,13 @@ their sum, and for an affine walk -- which pays nothing for
 curvature -- that is always the last one, which is what it already
 did.
 
-For a nonlinear walk it can be any level, **including the first**,
-and that is not a degenerate case:
+Both terms are a length divided by the pixel, so both scale as
+`1/px` and the ARGMIN does not depend on the resolution at all --
+which is the property `the_handover_does_not_depend_on_the_resolution`
+pins, and the property the old cap did not have.
+
+For a nonlinear walk the best level can be any of them, **including
+the first**, and that is not a degenerate case:
 
 ## 3. What each kernel has to supply
 
@@ -239,10 +247,10 @@ pairs suffice because only the linear term reads them).
   against a measured worst of 0.004, first branch identical, and the
   handover required to reach level 5 or deeper where f32 alone would
   not resolve the view
-  (`a_nonlinear_handover_answers_what_each_pixel_answers`). It is
-  what set the budget: a tenth of its value stops one to two levels
-  shallower for no gain and ten times it changes nothing, because
-  past that depth f32 and not the curvature decides.
+  (`a_nonlinear_handover_answers_what_each_pixel_answers`).
+  It ran at 96 pixels and so could not see §9's fault;
+  `the_handover_does_not_depend_on_the_resolution` is the gate that
+  can, and it is the one to extend when this part changes again.
 - **G3** The handover level tracks the zoom on a nonlinear set, as
   `the_handover_level_tracks_the_zoom` shows for affine ones, and
   stops early on a view whose centre orbit passes a pole (a fixture
@@ -342,8 +350,9 @@ asserted at machine precision at all.
 ## 7. What step 2 found, 2026-09-16
 
 **The measurement first, because it decides the design.** A julia
-dust, maps `|v|^{1/2}` of positive distance, at the budget that
-ships:
+dust, maps `|v|^{1/2}` of positive distance, at 96 pixels -- the
+resolution these were taken at, which §9 later showed was the one
+resolution where the cap did not bite:
 
 | zoom | handover | curvature error | f32, handed over | f32, level 0 |
 |---|---|---|---|---|
@@ -429,7 +438,67 @@ against the render. Corrected, the two read 99.9% and 100%. The
 control is now part of the gate, because a number that looks
 plausible on its own is what a control is for.
 
-## 9. Cost and risk
+## 9. The cap was the bug, 2026-09-16
+
+**Reported from use**, on a Douady Rabbit: the quality "degrades at
+certain zoom levels, like when it hits the previous floating point
+cap, but then gets better again when I zoom in a little more", and
+anti-aliasing "sometimes reduces the quality" -- both starting where
+the handover starts.
+
+**All three symptoms are one mistake.** The curvature budget was a
+hard cap, spent in units of `Σ ρ_k/s_k` that become pixels by
+MULTIPLYING by the view's half-diagonal; f32's error is a length
+that the same half-diagonal DIVIDES. So the room between the level a
+cap allows and the level f32 needs falls as the SQUARE of the
+resolution. Measured on the reported set, f32's error at the chosen
+handover:
+
+| zoom | 1080p, capped | now | +2× AA, capped | now |
+|---|---|---|---|---|
+| 2^17 | 1.42 px | 0.27 px | 2.84 px | 0.54 px |
+| 2^19 | 1.09 px | 0.29 px | 11.37 px | 0.59 px |
+| 2^20 | 2.17 px | 0.28 px | 4.35 px | 0.56 px |
+| 2^24 | 2.63 px | 0.40 px | 8.97 px | 0.80 px |
+
+The capped column oscillates with the zoom because the level is an
+INTEGER: the shortfall lands one level short, then catches up, then
+falls short again. That is "degrades, then gets better when I zoom in
+a little more" from the outside. Anti-aliasing is a resolution
+increase as far as `ensure_ifs_seeds` is concerned -- it measures
+`px` off the supersampled height -- so it squeezed the room by
+another factor of four, which is why turning it on made things
+worse.
+
+**And the gates could not see any of it, which is the lesson.**
+Every handover gate ran at 96 pixels, where there is room to spare:
+capped and uncapped choose the same level at every zoom tested, so
+all of G2, G5 and G6 were green on the broken build. The fix carries
+its own gate at three resolutions including a supersampled one, and
+that gate fails on the capped build -- checked, at zoom 2^16 on the
+anti-aliased arm.
+
+**The fix.** Delete the cap. The objective already contains the
+curvature term, so capping it as well was both redundant and, in the
+regime that matters, harmful: a level costing half a pixel of
+curvature to save fifty of f32 is obviously worth taking, and the
+cap forbade it. What bounds the walk now is exact rather than
+arbitrary: once the curvature term alone exceeds the best total
+found, no deeper level can win, since `spent` only grows.
+
+Both terms scale as `1/px`, so the level chosen is now independent
+of the resolution, and anti-aliasing cannot move it. In display
+pixels -- what the downsample leaves -- the error is then identical
+with AA and without.
+
+Rendered at 1920×1080, this build against the capped one, same
+config: at 2^19 with 2× AA the distinct-colour count goes from 5,308
+to 11,913 and 30% of pixels change; at 2^20, 5,504 to 10,793; at
+2^24, 4,659 to 10,212. The capped renders show a ragged boundary and
+a broken interior, worse with AA than without.
+`output/aa/sheet.png`.
+
+## 10. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -448,7 +517,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 10. What is next
+## 11. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -467,7 +536,7 @@ is a change to `Seed`, to `pack_seeds` and to the shader's seeded
 start, and it is the first thing §4's "nothing else changes" got
 wrong.
 
-## 11. Order of work
+## 12. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
