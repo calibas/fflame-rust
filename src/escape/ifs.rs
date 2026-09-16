@@ -555,8 +555,20 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             for (var bi = first; bi < last; bi = bi + 1u) {
                 var cand_key = live[ci].r;
                 if (bi < n) {
-                    let gap = ifs_image_gap(bi, live[ci].q);
+                    var gap = ifs_image_gap(bi, live[ci].q);
                     if (gap >= 0.0) {
+                        // The larger of the geometric gap and what one
+                        // step of the expansion would bound, when that
+                        // step is representable -- so the field is
+                        // continuous at the gap's edge (see the CPU
+                        // walk's `gap_bound`). Below f32's reach the
+                        // step is not a number and the geometric gap,
+                        // which dominates there anyway, stands alone.
+                        let gq = ifs_inv_point(bi, live[ci].q);
+                        let gt = ifs_inv_sigma(bi, live[ci].q) * (ifs_radius2(gq, c) - radius);
+                        if (abs(gt) <= 1e37) {
+                            gap = max(gap, gt);
+                        }
                         dead_min = min(dead_min, max(live[ci].bound, live[ci].sigma * gap));
                         continue;
                     }

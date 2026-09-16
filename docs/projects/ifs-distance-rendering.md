@@ -2983,6 +2983,96 @@ gaps, but the code is not uniform. The solid kernels' inversions
 (`quaternion_julia` with `d < 0`, negative powers) have no hole gap
 yet.
 
+## 8.14 Bands that snap under animation, 2026-09-16
+
+**Reported from use, after 8.13.** Animating a 0.6-degree turn of the
+second transform, "the colored bands snap back and forth, sometimes
+in very noticeable amounts" -- two files, `grand-julian-glitches4/5`,
+differing only in that affine. The pre-affine of a power-15 julian
+turns its piece by 0.04 degrees, so the set should barely move.
+
+**Measured, and the walk was exact.** At that view the beam of 5
+matched a beam of 512 at every point in both files, so this was not
+pruning. The distance field nonetheless moved by up to 76 pixels at
+793 of 1600 points. Sweeping the angle in nine steps put ALL of it in
+one step and none in the other seven; and ground truth -- a dense
+chaos-game sample carrying each point's address -- said the true
+nearest piece changed at **0 of 1024** points and the true distance
+at 0. A discontinuity in the analysis, then, not the geometry.
+
+**It was the ball.** Every bound is `σ·(r − R)`, so a jump in `R`
+moves the whole field by `σ·ΔR` -- hundreds of pixels for the
+strongest map at that zoom, 65 to 76 after the minimum over
+addresses. And `R` jumped 1.3% between two angles 0.075 degrees
+apart, because an inversion's ball is the bulk of a sample, and the
+bulk was the 99.5th percentile of one 4,000-step chaos-game orbit:
+an order statistic resting on twenty points, from an orbit that
+restarts whenever a point flies through a pole -- a discrete event
+whose timing depends on the parameters, after which the whole sample
+is a different draw.
+
+**A ball that is continuous in the flame.** Four thousand short
+chains of fourteen steps, each on its own seed so one chain blowing
+up cannot shift the others, and the mean of the top 5% of radii
+rather than any one of them. Each chain point is a composition of
+continuous maps of a fixed start, and a mean over two thousand of
+them moves by a hair when one crosses a branch cut. Measured across
+the same sweep: `R` moves by 0.015% at two of eight steps and not at
+all at the rest; the distance field's worst move per step is 0.5 px
+(from 65); the walk's nearest piece changes at 0 points between the
+two files (from 44); the two files' renders differ at 0.26% of
+pixels under the address colouring and 0.39% under distance, from
+12.5% and 43.2%. Only the inversion branch of `ball_2d_numeric`
+changed: no shipped preset is an inversion, and all eleven are
+byte-identical. `the_jitter_between_two_rotations` gates it.
+
+**And a cliff of my own at every hole's edge, which the new gate
+found at once.** With the ball continuous, one point in 1,024 still
+jumped 90 pixels between two angles 0.075 degrees apart. Probed: at
+one angle it sat a hair inside the first map's hole, where the
+geometric gap `(hole − |v|)·scale` is ~0; at the other a hair
+outside, where the map expands, lands at r = 4.71 against a ball of
+4.50, and reads 90 pixels. Both are valid lower bounds, but they do
+not agree at the edge, because the hole's radius comes from a
+generous superset of the pre-frame ball. So the field had a cliff at
+every inversion's hole edge -- a ring reading "on the set" -- and,
+the hole following the ball, a cliff that moved under animation.
+The maximum of two valid lower bounds is a valid lower bound, and
+the maximum of two continuous functions is continuous: a gapped
+branch is now scored by the larger of the geometric gap and what one
+step of its expansion would bound, when that step is representable
+(`IfsSpace::gap_bound`, and the same at the GPU's call site). The
+distance renders of the two files went from differing at 1.38% of
+pixels to 0.39%; the exhaustive reference scores gaps the same way,
+so it remains a reference.
+
+**The residual, and what would remove it.** A root has no branch
+continuous around its pole, so some sample point crosses a cut on
+every small parameter change and any finite-sample statistic moves
+a little. The 0.015% left is invisible at this zoom and scales with
+the pixel density: at zoom 12 it would be tens of pixels on rare
+frames. Since the inversion ball is a modelling choice rather than a
+proof, the principled next step is to HOLD it across small edits --
+the renderer keeps the last ball and re-snaps only when the new bulk
+differs by more than a few percent -- which makes an animation
+exactly stable and costs a prior threaded through `pack_for`. Not
+built: nothing reported needs it yet, and it is recorded so the
+first report that does finds it here.
+
+**Perturbation, since it was asked.** The affine handover IS
+perturbation: the CPU walks the view centre in f64 and each pixel
+continues as a delta, exact while the view agrees on the branch. For
+a nonlinear IFS it hands over at level 0 because the delta of a
+nonlinear map is not a delta of its parameters. The nonlinear version
+would carry each pixel's offset through the Jacobian of the inverse
+map at the centre's point (`Δ_{k+1} = J(q_k)·Δ_k`), which the kernels
+have in closed form, with the view-agreement test done on the local
+`σ_max` instead of the affine's constant. It is the same shape as
+Mandelbrot perturbation and would buy deep zoom past f32 on these
+sets; near a pole the linearisation fails and the handover would
+stop there, exactly as the affine one stops where the view disagrees.
+A real project, not a patch.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a
