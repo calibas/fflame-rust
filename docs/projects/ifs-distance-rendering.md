@@ -2878,6 +2878,111 @@ bound at an inversion's pole would close it. The measurement is
 `the_beam_key_is_scored_on_an_inversion`, and it prints the whole
 table.
 
+## 8.13 The wedges that remained, 2026-09-15
+
+**Reported from use, after 8.12.** The same grand julian at zoom 7.8,
+35 levels, beam 5 (`grand-julian-glitches3.fflame`): straight-edged
+wedges over good structure, gone at the earlier zoom and back at
+this one. "10x better, but I want to see if we can get rid of the
+glitches altogether."
+
+**Not the handover.** A nonlinear IFS hands over at level 0 -- the
+reference/delta split is an affine property (J6) -- so at this zoom
+the GPU walks all 35 levels from the pixel's own position. The
+wedges were the walk's own. Three faults, found in order, each by
+measurement against exhaustive search or a validated reference:
+
+**1. The beam was pruning its own answer.** Replaying a failing
+point level by level: at level 5, beam 8 HELD the winning address
+at rank 1 with the right bound (5.9e-5), and answered 2.05e-2
+anyway. Its lineage finished two levels later -- the grandchild
+overflowed -- and a finished path's key is no longer a number, so
+`key_or_last` ranked it LAST and the beam pruned it in favour of
+live paths that led nowhere. That is also why a wider beam was
+WORSE (beam 5: 0 points over 100 px; beam 16: 269): every extra slot
+admitted another live impostor to displace it. A finished path
+never expands, so its bound is final; it now leaves the beam and is
+remembered as `best_done`, on the CPU and both GPU walks. That
+alone took the grand julian fixtures from 108 and 119 loose to 0.
+
+**2. Inversions were expanded at their pole.** A candidate near an
+inversion's pole is exactly the one whose next point overflows --
+`|v|^{-15}` past f64 at `|v| < 1e-20`, past f32 at `|v| < 0.003`,
+so the GPU froze paths some 10^17 times more often than the
+reference. But the piece cannot be there: an inversion maps the
+whole ball to the OUTSIDE of a circle (`|v| >= 1/R` for spherical,
+`R^{d/|n|}` for a root with `d < 0`), so a point inside that hole is
+a known positive distance from the piece. `Kernel::hole_radius`
+gives it, `image_gap` scores it as a gap instead of expanding, and
+`ifs_image_gap` does the same on the GPU with the hole and its scale
+packed into the row's spare `params.z/.w`. The GPU-vs-CPU gate at
+the reported view went from **74.9% to 99.7%** on this change alone,
+and the CPU walk on that view went to **0 over-reads at every beam
+width** against a reference that is the pointwise minimum over
+every run -- itself first checked against itself.
+
+**3. A pre-existing bug the gaps made common.** A candidate whose
+EVERY branch was a gap produced no children; the expansion came back
+empty, the loop broke, and the finalisation read the candidate's own
+stale bound instead of the gaps' -- 8.7e-3 for a true 0.118. Fixed
+at that one break on both sides: a path with nothing left to follow
+has no bound of its own, and the answer is `dead_min`. The solid
+walk cannot reach that state, having no gaps, and is unchanged.
+
+**The level colouring, and what it now shows.** Finished paths no
+longer hold beam slots, so every path that leaves contributes its
+escape level to a running maximum (a path that froze inside
+contributes nothing, as it says nothing). With that in place the
+level render of the reported view is one flat value over 93% of it
+-- and that is the TRUE value, not a defect: measured at beam 5 and
+beam 512 alike, the deepest level is 35 (the maximum asked) at 957
+of 1024 points, and so is the WINNER's escape level. On a flame of
+three inversions nearly every address stays inside the ball for as
+many levels as are asked, so escape-time has nothing to say at this
+depth. The banding the earlier renders showed was the pruning bug:
+finished paths clogging the beam, live ones pruned, only shallow
+escapes left to report. Fewer levels give the colouring something to
+draw again, which is the knob the panel already has.
+
+**One rule, stated once.** A path that freezes INSIDE the ball --
+next point not a number while the bound still said "could be zero"
+-- says nothing about its piece, since a point on the set never
+freezes. It carries no bound from the moment it is marked done, on
+both CPU and GPU, so `best_done` and the live minimum drop it by the
+same test. Without that, `best_done` let such paths win with zero
+and every wide beam read "on the set" at 1023 of 1024 points.
+
+**Measured.** Against the pointwise-minimum reference at the
+reported view, 32×32 points, 35 levels, before and after:
+
+| | >1 px | >10 px | >100 px | worst |
+|---|---|---|---|---|
+| Weighted, beam 5, before | 316 | 20 | 0 | 81 px |
+| Weighted, beam 8, before | 264 | 135 | 67 | 914 px |
+| Weighted, beam 16, before | 447 | 344 | 269 | 3636 px |
+| **any key, any beam, after** | **0** | **0** | **0** | **0** |
+
+Over all ten fixtures at beam 8 under `Auto`: 211 loose of 5760,
+all of them `blob` (unchanged), against 819 with a worst of 4.6e7
+at the start of 8.12 and 438 at its end. The eleven shipped presets
+are byte-identical through every step; the solid gates hold at
+99.4 / 99.3 / 100 / 100.
+
+**Ranking keys measured and discarded** on the way: the running
+bound with position as tiebreak (returns 0 everywhere -- the
+documented degeneracy, confirmed), the current level's term
+(catastrophic), a per-parent lineage cap, a per-map reservation, and
+σ·r with the bound to break near-ties (none better than σ·r). Only
+`Position`, `Weighted`, `Mixed` and `Auto` remain, and `Mixed` only
+because the fixtures test prints it.
+
+**Open.** `blob` at 211 of 576 where a mixed beam measured 51. The
+seeded (affine) walks do not carry `best_done` or the empty-
+expansion rule; they cannot need either, having neither overflow nor
+gaps, but the code is not uniform. The solid kernels' inversions
+(`quaternion_julia` with `d < 0`, negative powers) have no hole gap
+yet.
+
 ## 9. Where this comes from
 
 Written after the fact, because the first version of §2.2 cited a

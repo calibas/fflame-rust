@@ -249,7 +249,12 @@ fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
 // hemisphere and disc (kinds 3, 4, 5).
 fn ifs_image_gap(i: u32, p: vec2<f32>) -> f32 {
     let kind = ifs_maps[i].kind;
-    if (kind != 3.0 && kind != 4.0 && kind != 5.0) {
+    let hole = ifs_maps[i].params.w;
+    // An inversion's image has a hole about the pole; a point inside
+    // it is a known distance from the piece, and is exactly the point
+    // whose inverse would overflow f32. Scored, not expanded.
+    let inversion = (kind == 1.0 || kind == 2.0) && hole > 0.0;
+    if (!inversion && kind != 3.0 && kind != 4.0 && kind != 5.0) {
         return -1.0;
     }
     let m = ifs_maps[i].inv_m;
@@ -259,6 +264,12 @@ fn ifs_image_gap(i: u32, p: vec2<f32>) -> f32 {
         m.z * p.x + m.w * p.y + t.y,
     );
     let r = length(v);
+    if (inversion) {
+        if (r < hole) {
+            return (hole - r) * ifs_maps[i].params.z;
+        }
+        return -1.0;
+    }
     if (r > 1.0) {
         return (r - 1.0) * ifs_maps[i].params.z;
     }
@@ -454,6 +465,12 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         }
     }
 
+    // The best path that has finished: its bound is final and it need
+    // not hold a beam slot.
+    var best_done: IfsCand;
+    var has_done = false;
+    // The deepest level any finished path reached (see the CPU walk).
+    var deepest_done = -1.0;
     for (var k = 0u; k < max_levels; k = k + 1u) {
         var all_done = true;
         for (var ci = 0u; ci < live_count; ci = ci + 1u) {
@@ -481,6 +498,10 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
 
             if (!(r < far)) {
                 live[ci].flags = live[ci].flags | 2u;
+                // Frozen inside the ball: no information (CPU rule).
+                if (!(abs(r) <= 1e37) && !(live[ci].bound > 0.0)) {
+                    live[ci].bound = 1e38;
+                }
             } else {
                 all_done = false;
             }
@@ -511,8 +532,25 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             var first = 0u;
             var last = n;
             if ((live[ci].flags & 2u) != 0u) {
-                first = n;
-                last = n + 1u;
+                // Its level, if it escaped. A path that finished without
+                // escaping froze inside the ball and says nothing about
+                // depth either -- counting it as "unescaped", the
+                // deepest possible, flattened the level colouring.
+                if ((live[ci].flags & 1u) != 0u) {
+                    deepest_done = max(deepest_done, live[ci].level);
+                }
+                // A done path never expands, so its bound is final. It
+                // leaves the beam and is remembered by that bound --
+                // kept, it would compete for a slot by a key that is
+                // no longer a number, rank last, and be pruned in
+                // favour of live paths that lead nowhere. See the CPU
+                // walk for the measurement.
+                let b = live[ci].bound;
+                if (abs(b) <= 1e37 && (!has_done || b < best_done.bound)) {
+                    best_done = live[ci];
+                    has_done = true;
+                }
+                continue;
             }
             for (var bi = first; bi < last; bi = bi + 1u) {
                 var cand_key = live[ci].r;
@@ -557,6 +595,12 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         }
 
         if (next_count == 0u) {
+            // Every live path was fully gapped: its own bound is not
+            // an answer (see the CPU walk). A done path would have
+            // re-entered `next`, so none of these is done.
+            for (var ci = 0u; ci < live_count; ci = ci + 1u) {
+                live[ci].bound = 1e38;
+            }
             break;
         }
         for (var k2 = 0u; k2 < next_count; k2 = k2 + 1u) {
@@ -610,6 +654,10 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
             win = ci;
         }
     }
+    // A finished path that beats every live one is the answer.
+    if (has_done && (!(abs(live[win].bound) <= 1e37) || best_done.bound < live[win].bound)) {
+        live[win] = best_done;
+    }
     let best = live[win];
 
     // The LEVEL is a different question and takes a different answer:
@@ -628,8 +676,17 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
         }
         deepest = max(deepest, lvl);
     }
+    deepest = max(deepest, deepest_done);
 
-    res.distance = max(min(best.bound, dead_min), 0.0);
+    // No finite winner: the gaps are the answer; no gaps either:
+    // nothing is known and zero is the sound reading.
+    if (abs(best.bound) <= 1e37) {
+        res.distance = max(min(best.bound, dead_min), 0.0);
+    } else if (dead_min < 1e37) {
+        res.distance = max(dead_min, 0.0);
+    } else {
+        res.distance = 0.0;
+    }
     res.address = best.addr;
     res.color = best.color;
     res.level = deepest;
@@ -1089,6 +1146,12 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
     var addr_scale = pow(1.0 / f32(n), base_level + 1.0);
     var deepest = -1.0;
 
+    // The best path that has finished: its bound is final and it need
+    // not hold a beam slot.
+    var best_done: IfsCand3;
+    var has_done = false;
+    // The deepest level any finished path reached (see the CPU walk).
+    var deepest_done = -1.0;
     for (var k = 0u; k < max_levels; k = k + 1u) {
         var all_done = true;
         for (var ci = 0u; ci < live_count; ci = ci + 1u) {
@@ -1116,6 +1179,10 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
             // move the answer by what the caller asked for.
             if (!(r < far) || live[ci].sigma * radius < eps) {
                 live[ci].flags = live[ci].flags | 2u;
+                // Frozen inside the ball: no information (CPU rule).
+                if (!(abs(r) <= 1e37) && !(live[ci].bound > 0.0)) {
+                    live[ci].bound = 1e38;
+                }
             } else {
                 all_done = false;
             }
@@ -1132,8 +1199,25 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
             var first = 0u;
             var last = n;
             if ((live[ci].flags & 2u) != 0u) {
-                first = n;
-                last = n + 1u;
+                // Its level, if it escaped. A path that finished without
+                // escaping froze inside the ball and says nothing about
+                // depth either -- counting it as "unescaped", the
+                // deepest possible, flattened the level colouring.
+                if ((live[ci].flags & 1u) != 0u) {
+                    deepest_done = max(deepest_done, live[ci].level);
+                }
+                // A done path never expands, so its bound is final. It
+                // leaves the beam and is remembered by that bound --
+                // kept, it would compete for a slot by a key that is
+                // no longer a number, rank last, and be pruned in
+                // favour of live paths that lead nowhere. See the CPU
+                // walk for the measurement.
+                let b = live[ci].bound;
+                if (abs(b) <= 1e37 && (!has_done || b < best_done.bound)) {
+                    best_done = live[ci];
+                    has_done = true;
+                }
+                continue;
             }
             for (var bi = first; bi < last; bi = bi + 1u) {
                 var cand_key = live[ci].r;
@@ -1217,6 +1301,10 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
             win = ci;
         }
     }
+    // A finished path that beats every live one is the answer.
+    if (has_done && (!(abs(live[win].bound) <= 1e37) || best_done.bound < live[win].bound)) {
+        live[win] = best_done;
+    }
     let unescaped = base_level + f32(max_levels);
     for (var ci = 0u; ci < live_count; ci = ci + 1u) {
         var lvl = unescaped;
@@ -1225,6 +1313,7 @@ fn ifs_walk3(delta: vec3<f32>, eps_asked: f32) -> IfsResult {
         }
         deepest = max(deepest, lvl);
     }
+    deepest = max(deepest, deepest_done);
     let best = live[win];
 
     res.distance = max(best.bound, 0.0);
@@ -2863,8 +2952,10 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
                     let (post_lo, _) = r.post.singular_values();
                     let gap = (r.w.abs() * post_lo) as f32;
                     let (kind, params) = match r.kernel {
-                        Kernel::Root { n, d } => (1.0, [n as f32, d as f32, 0.0, 0.0]),
-                        Kernel::Spherical => (2.0, [0.0; 4]),
+                        // z: the gap scale; w: the hole radius, 0 for
+                        // none (a root with a positive distance).
+                        Kernel::Root { n, d } => (1.0, [n as f32, d as f32, gap, r.hole as f32]),
+                        Kernel::Spherical => (2.0, [0.0, 0.0, gap, r.hole as f32]),
                         Kernel::Bubble => (3.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Hemisphere => (4.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Disc => (5.0, [0.0, 0.0, gap, 0.0]),
@@ -5426,6 +5517,102 @@ mod gpu_tests {
     /// on a spherical IFS and on a bubble IFS, by the gasket's test.
     /// The view is framed on each set's ball rather than the harness
     /// default, which was chosen for the gasket.
+    /// The reported view (`grand-julian-glitches3.fflame`), GPU
+    /// against CPU, pixel by pixel.
+    ///
+    /// The planar agreement gate above walks whole balls at shallow
+    /// depth. This walks the view a user reported wedges in: three
+    /// inversions at zoom 7.8, 35 levels, beam 5 -- where f32
+    /// overflows `|v|^-15` at |v| < 0.003 and f64 holds to 1e-20, so
+    /// the GPU freezes paths about 10^17 times more often than the
+    /// CPU reference does. How far the two pictures are apart here is
+    /// the number that says whether the residual is the walk's
+    /// algorithm or the GPU's arithmetic.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_gpu_agrees_with_the_cpu_on_the_reported_view() {
+        use crate::scene::transforms::Transform;
+        let j = |aff: [f32; 6], w: f32, power: f32| {
+            let mut t = Transform::default();
+            t.a = aff[0];
+            t.b = aff[1];
+            t.c = aff[2];
+            t.d = aff[3];
+            t.e = aff[4];
+            t.f = aff[5];
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", w);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        let mut flame = crate::scene::transforms::Flame::default();
+        flame.transforms = vec![
+            j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
+            j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0], 0.2, 15.0),
+            j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0], 0.3, 8.0),
+        ];
+        let registry = crate::variations::global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &registry).expect("qualifies");
+
+        const LEVELS: u32 = 35;
+        const BEAM: u32 = 5;
+        let zoom = 7.798816f64;
+        let rot = 0.7853982f64;
+        let centre = [-0.05554435526432207f64, -0.19381778925226906];
+
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.flame = flame;
+        config.escape.formula = "ifs_flame".to_string();
+        config.escape.coloring = "ifs_distance".to_string();
+        config.escape.center_re = format!("{}", centre[0]);
+        config.escape.center_im = format!("{}", centre[1]);
+        config.escape.zoom_log2 = zoom;
+        config.escape.rotation = rot as f32;
+        config.escape.formula_params.insert("levels".into(), LEVELS as f32);
+        config.escape.formula_params.insert("beam".into(), BEAM as f32);
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+        config.gamma = crate::config::defaults::DEFAULT_GAMMA;
+        let rgba = render(&config);
+
+        let span = 4.0 / 2f64.powf(zoom);
+        let (cs, sn) = (rot.cos(), rot.sin());
+        let plane = |x: u32, y: u32| {
+            let u = ((x as f64 + 0.5) / W as f64 - 0.5) * span * W as f64 / H as f64;
+            let v = -((y as f64 + 0.5) / H as f64 - 0.5) * span;
+            [centre[0] + u * cs - v * sn, centre[1] + u * sn + v * cs]
+        };
+        // The CPU says which pixels are near the set: within one pixel.
+        let px = span / H as f64;
+        let (mut inside, mut outside) = (Vec::new(), Vec::new());
+        for y in 0..H {
+            for x in 0..W {
+                let d = estimate(&ifs, plane(x, y), LEVELS, BEAM).distance;
+                if d <= px {
+                    inside.push(brightness(&rgba, x, y));
+                } else {
+                    outside.push(brightness(&rgba, x, y));
+                }
+            }
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+        let (mi, mo) = (mean(&inside), mean(&outside));
+        let cut = (mi + mo) * 0.5;
+        let lit_in = inside.iter().filter(|&&b| b > cut).count();
+        let lit_out = outside.iter().filter(|&&b| b > cut).count();
+        let agree = (lit_in + (outside.len() - lit_out)) as f64 / (inside.len() + outside.len()) as f64;
+        println!(
+            "  reported view: CPU near {} / far {} of {}; GPU lit near {lit_in}, lit far {lit_out}; agreement {:.1}%",
+            inside.len(),
+            outside.len(),
+            W * H,
+            agree * 100.0
+        );
+    }
     #[test]
     #[ignore = "needs a GPU"]
     fn the_gpu_walk_agrees_with_the_cpu_reference_on_spherical_and_bubble() {
