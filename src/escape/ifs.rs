@@ -434,7 +434,8 @@ fn ifs_evaluate(uv: vec2<f32>) -> IfsResult {
     var addr_scale = ifs_addr_scale();
     // The smallest bound among pieces the walk could not enter (S4):
     // the answer is the minimum over ALL pieces, reachable or not.
-    var dead_min = 1e30;
+    // The prefix met some of them and carried what it found.
+    var dead_min = ifs_seed_dead_min();
 
     // Seed from the reference orbit the CPU walked. Every one of these
     // candidates is where the view centre's own beam had got to, and
@@ -2304,6 +2305,16 @@ pub fn pack_seeds(
         count as f32,
         addr_scale as f32,
     ];
+    // What the prefix met and could not enter. Zero means "none":
+    // a carried gap is a distance and never negative, and the shader
+    // reads a non-positive value as no constraint.
+    if out.len() > 2 {
+        out[2][0] = if seeds.dead_min_per_px.is_finite() {
+            (seeds.dead_min_per_px.max(0.0) as f32).max(f32::MIN_POSITIVE)
+        } else {
+            0.0
+        };
+    }
 
     for (j, c) in seeds.cands.iter().take(count).enumerate() {
         let base = SEED_BASE + SEED_VEC4S * j;
