@@ -587,7 +587,45 @@ against the pixel's own -- and the way to get one is probably to
 measure the reported distance at the corners, continuing each of them
 a few levels, rather than to measure their positions.
 
-## 12. Cost and risk
+## 12. The solid twin, measured before it was touched, 2026-09-16
+
+§7 found `estimate_seeded` -- the reference for what the shader does
+after the handover -- to be a copy of the walk from before the
+cut-outs were fixed, and left its 3D twin alone on the grounds that
+the marcher deserved its own measurement rather than a change made
+in passing. This is that measurement.
+
+`estimate_seeded3` had the same two gaps: no `best_done`, so a
+finished path's final bound was pruned out of the beam and lost, and
+no frozen-inside rule. It has no third gap, because the solid walk
+has no image gaps to carry.
+
+**They are latent, and that is the finding.** Neither rule can change
+an answer unless paths FINISH and the chain runs deeper than one
+link, and no shipped solid does both:
+
+- an affine solid -- the Sierpiński tetrahedron, the Menger sponge --
+  never finishes a path, because every map contracts and nothing
+  reaches `FAR`;
+- a `quaternion_julia` finishes them constantly, its inverse `qⁿ + c`
+  running to infinity, but its two preimages TIE, so `seed_chain3`
+  ends at once by its own view-agreement rule and the continuation IS
+  the direct walk. Measured: one link, at beam 1 and beam 4 both.
+
+Measured against the direct walk at 3,000 offsets spanning six
+decades, on a unit cube, a tetrahedron and a quaternion julia, before
+the fix and after it: identical to 1.1e-12, which is f64 arriving by
+two routes.
+
+Fixed anyway. The divergence is real even where it is unreachable,
+the template was proven in 2D, and the first solid that both
+finishes paths and keeps a deep chain would find an over-read here --
+which in a marcher does not fatten a halo, it puts a ray through a
+surface. Gate: `the_solid_continuation_is_the_walk`, which also
+pins the measurement above so the latency is a fact rather than an
+assumption.
+
+## 13. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -606,7 +644,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 13. What is next
+## 14. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -686,7 +724,7 @@ the no-handover cap, because the shader's walk is f32 throughout and
 a delta far below the position's own ulp is swamped by the first
 step whatever it was stored in.
 
-## 14. Order of work
+## 15. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
@@ -708,9 +746,16 @@ step whatever it was stored in.
    measured (§11). The Hessian and its gate are in; the objective
    cannot use them until there is a trustworthy predictor of the
    seeded walk's error, which the corner probe is not.
-8. Widen the seed position, for the levels that miss by a few bits.
+8. ~~Widen the seed position~~ -- dropped, with the reason. It
+   cannot help while the shader's continuation is f32 THROUGHOUT: a
+   handover position stored to 48 bits is rounded to 24 by the first
+   arithmetic the walk does, so two pixels closer together than f32's
+   ulp at `|q|` stay indistinguishable however the seed was written.
+   What would help is a continuation that works in delta form
+   internally, which is a different and larger piece.
 9. Rung 2 (sqrt kernels: bubble, hemisphere), same gates.
-10. The 3D twin -- `seed_beam3`, and the `estimate_seeded3` staleness
-    §7 left alone.
+10. ~~The `estimate_seeded3` staleness §7 left alone~~ -- done and
+    measured latent, §12. `seed_beam3` carrying a Jacobian is still
+    open, and waits on §11's predictor like its planar twin.
 11. G3: the handover level against the zoom, and a fixture whose
     reference orbit passes a pole.
