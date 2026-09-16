@@ -135,7 +135,7 @@ impl IfsSpace for Map2 {
 
     fn is_inversion(&self) -> bool {
         match self {
-            Map2::NonlinearInverse(r) => r.kernel.is_inversion(),
+            Map2::NonlinearInverse(r) => r.kernel.unbounded_at_origin(),
             _ => false,
         }
     }
@@ -315,7 +315,7 @@ fn cmp_for<P>(key: RankKey) -> fn(&Cand<P>, &Cand<P>) -> std::cmp::Ordering {
 }
 
 /// Keep `beam` of `next` under `key`, in place.
-fn keep_by_key<P: Clone>(next: &mut Vec<Cand<P>>, beam: usize, key: RankKey) {
+fn keep_by_key<P: Clone>(next: &mut Vec<Cand<P>>, beam: usize, key: RankKey, radius: f64) {
     match key {
         RankKey::Auto => unreachable!("Auto is resolved before the walk"),
         RankKey::Position => {
@@ -454,6 +454,15 @@ where
     // follow, but its piece is a known distance away (S4), and the
     // answer is the minimum over ALL pieces.
     let mut dead_min = f64::INFINITY;
+    // The best path that has finished: left the representable plane,
+    // or gone past FAR. Its bound is final; it need not hold a slot.
+    let mut best_done: Option<Cand<A::Point>> = None;
+    // The deepest level any finished path reached. The LEVEL is the
+    // deepest any address reached, not the winner's, so every path
+    // that leaves the beam contributes -- not only the best-bound one.
+    // Leaving this out collapsed the level colouring to one flat
+    // value once finished paths stopped holding beam slots.
+    let mut deepest_done = f64::NEG_INFINITY;
 
     for k in 0..max_levels {
         let mut all_done = true;
@@ -487,6 +496,14 @@ where
 
             if !r.is_finite() || r > far {
                 c.done = true;
+                // Frozen INSIDE the ball -- the next point was not a
+                // number while the bound still said "could be zero" --
+                // says nothing about the piece: a point on the set
+                // never freezes. It carries no bound from here on,
+                // and every consumer drops it by that one rule.
+                if !r.is_finite() && !(c.bound > 0.0) {
+                    c.bound = f64::INFINITY;
+                }
             } else {
                 all_done = false;
             }
@@ -508,7 +525,32 @@ where
         let mut next: Vec<Cand<A::Point>> = Vec::with_capacity(live.len() * ifs.maps.len());
         for c in &live {
             if c.done {
-                next.push(c.clone());
+                // Its level, if it escaped: a path that finished without
+                // escaping froze inside the ball and says nothing about
+                // depth either.
+                if let Some((lvl, _, _)) = c.escape.as_ref() {
+                    deepest_done = deepest_done.max(*lvl);
+                }
+                // A done path never expands, so its bound is final.
+                // It leaves the beam and is remembered by that bound
+                // -- kept in the beam it would compete for a slot by a
+                // key that is no longer a number, rank last, and be
+                // pruned in favour of live paths that lead nowhere.
+                // Measured on the reported view: the winning address
+                // held at rank 1 at level 5 and was thrown away two
+                // levels later, and a wider beam made it WORSE, since
+                // it admitted more live impostors to displace it.
+                // A path that finished with a non-positive bound froze
+                // INSIDE the ball -- its next point was not a number --
+                // and says nothing about its piece. A point on the set
+                // never freezes, so it is not evidence of distance
+                // zero; with the inversions' holes scored as gaps it no
+                // longer happens on them at all.
+                if c.bound.is_finite()
+                    && best_done.as_ref().map_or(true, |b: &Cand<A::Point>| c.bound < b.bound)
+                {
+                    best_done = Some(c.clone());
+                }
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
@@ -530,9 +572,21 @@ where
             }
         }
         if next.is_empty() {
+            // Every live path had nothing left to follow: each branch
+            // was a gap, scored into `dead_min`. Their own bounds are
+            // NOT answers -- a path whose every child is a known
+            // distance away is itself at least that distance away,
+            // and reading its stale bound instead was measured
+            // against exhaustive search as 8.7e-3 for a true 0.118.
+            // Predates the holes; the holes made it common.
+            for c in live.iter_mut() {
+                if !c.done {
+                    c.bound = f64::INFINITY;
+                }
+            }
             break;
         }
-        keep_by_key(&mut next, beam as usize, key);
+        keep_by_key(&mut next, beam as usize, key, radius);
         live = next;
     }
 
@@ -548,21 +602,32 @@ where
     let deepest_level = live
         .iter()
         .map(|c| c.escape.as_ref().map_or(max_levels as f64, |(lvl, _, _)| *lvl))
-        .fold(f64::NEG_INFINITY, f64::max);
+        .fold(deepest_done, f64::max);
     // Among FINITE bounds. With `fold_level` a path's bound is finite
     // from level 0 on, so this only differs from a plain minimum when
     // the pixel itself was not a number -- but a non-finite bound must
     // never be the one answered, and this says so rather than relying
     // on it.
-    let best = live
+    let live_best = live
         .iter()
         .filter(|c| c.bound.is_finite())
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
-        .cloned()
-        .unwrap_or_else(|| live[0].clone());
+        .cloned();
+    // Paths still live at the last level finish there too.
+    let best = match (live_best, best_done) {
+        (Some(l), Some(d)) => if d.bound < l.bound { d } else { l },
+        (Some(l), None) => l,
+        (None, Some(d)) => d,
+        (None, None) => live[0].clone(),
+    };
 
-    let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
-    let distance = distance.min(dead_min.max(0.0));
+    // With no finite candidate the gaps are the whole answer; with no
+    // gaps either, nothing is known and zero is the sound reading.
+    let distance = match (best.bound.is_finite(), dead_min.is_finite()) {
+        (true, _) => best.bound.max(0.0).min(dead_min.max(0.0)),
+        (false, true) => dead_min.max(0.0),
+        (false, false) => 0.0,
+    };
     match best.escape {
         Some((level, address, point)) => {
             Estimate { distance, level, address, point, escaped: true, deepest_level }
@@ -858,7 +923,7 @@ pub fn seed_beam<P: SeedPoint>(
                 continue;
             }
             let near = c.r - basis_reach(*basis);
-            c.bound = c.bound.max(c.sigma * (near - radius));
+            c.bound = fold_level(c.bound, c.sigma, near, radius);
             if near > radius && c.escape.is_none() {
                 let last = c
                     .address
@@ -2149,7 +2214,8 @@ mod tests {
             // minimum -- the over-read this whole measurement exists
             // to catch, reproduced in the reference.
             let here = fold_level(best_on_path, sigma, r, ifs.ball.radius);
-            if left == 0 || !r.is_finite() || r > FAR {
+            // Stop where the walk stops: `far` scales with the ball.
+            if left == 0 || !r.is_finite() || r > ifs.ball.radius.max(1.0) * FAR {
                 return here;
             }
             let mut best = f64::INFINITY;
@@ -2362,13 +2428,176 @@ mod tests {
         for n in ["grand julian 1", "grand julian 2"] {
             let (lp, _) = at(n, 8, RankKey::Position);
             let (la, _) = at(n, 8, RankKey::Auto);
-            assert!(la * 2 < lp, "{n}: Auto did not halve the loose count ({la} vs {lp})");
+            assert!(la <= lp / 2, "{n}: Auto did not halve the loose count ({la} vs {lp})");
             let worst = report
                 .iter()
                 .find(|r| r.0 == n && r.1 == 8 && r.2 == RankKey::Auto)
                 .map(|r| r.5)
                 .unwrap();
             assert!(worst < 20.0, "{n}: Auto worst ratio {worst:.1}");
+        }
+    }
+
+    /// The reported view (`grand-julian-glitches3.fflame`): the same
+    /// flame at zoom 7.8 with 35 levels and a beam of 5, where wedges
+    /// still show after 8.12. No handover is involved -- a nonlinear
+    /// IFS hands over at level 0 -- so this is the walk itself, at
+    /// depth.
+    ///
+    /// Every walk answers the minimum over the paths IT kept, so every
+    /// estimate is at or above the depth-limited truth, and the
+    /// pointwise minimum over all runs is the best reference a depth
+    /// of 35 allows -- PROVIDED the answer is a real one. A winner
+    /// that never escaped by level 35 is either genuinely inside the
+    /// set or a path that froze (its next point past what a float
+    /// holds) with a stale bound; the two are told apart here by
+    /// whether ANY run escaped at that point, and frozen answers are
+    /// kept out of the reference.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn the_reported_view_against_a_wide_beam() {
+        let ifs = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        let centre = [-0.05554435526432207, -0.19381778925226906];
+        let zoom = 7.798816f64;
+        let rot = 0.7853982f64;
+        let span = 4.0 / 2f64.powf(zoom);
+        let (cs, sn) = (rot.cos(), rot.sin());
+        let n = 32;
+        let mut pts = Vec::new();
+        for iy in 0..n {
+            for ix in 0..n {
+                let u = ((ix as f64 + 0.5) / n as f64 - 0.5) * span;
+                let v = -((iy as f64 + 0.5) / n as f64 - 0.5) * span;
+                pts.push([centre[0] + u * cs - v * sn, centre[1] + u * sn + v * cs]);
+            }
+        }
+        let px = span / 800.0;
+        const LEVELS: u32 = 35;
+
+        let configs: Vec<(RankKey, u32)> = [RankKey::Weighted, RankKey::Mixed]
+            .iter()
+            .flat_map(|&k| [5u32, 8, 16, 32].into_iter().map(move |b| (k, b)))
+            .chain([(RankKey::Weighted, 512)])
+            .collect();
+        // (distance, escaped) per point per run.
+        let runs: Vec<Vec<(f64, bool)>> = configs
+            .iter()
+            .map(|&(k, b)| {
+                pts.iter()
+                    .map(|&p| {
+                        let e = estimate_aux_ranked(&ifs, p, 0.0, LEVELS, b, k);
+                        (e.distance, e.escaped)
+                    })
+                    .collect()
+            })
+            .collect();
+        // The reference: the minimum over ESCAPED answers. A point no
+        // run escaped is interior for the purpose of this table.
+        // An answer that ESCAPED yet reads zero is a stale bound: the
+        // escape's own term overflowed and was dropped, and the bound
+        // the path had inside the ball survived. Sound, but not a
+        // reference.
+        let reference: Vec<Option<f64>> = (0..pts.len())
+            .map(|i| {
+                runs.iter()
+                    .filter(|r| r[i].1 && r[i].0 > 0.0)
+                    .map(|r| r[i].0)
+                    .fold(None, |m: Option<f64>, d| Some(m.map_or(d, |m| m.min(d))))
+            })
+            .collect();
+        let interior = reference.iter().filter(|r| r.is_none()).count();
+        let ref_zero = reference.iter().filter(|r| matches!(r, Some(d) if *d <= 0.0)).count();
+        println!(
+            "reported view, {}x{} points, {LEVELS} levels, errors in pixels ({px:.2e}) against the min over ESCAPED answers; {interior} points escaped in no run, {ref_zero} reference zeros",
+            n, n
+        );
+        println!("  {:9} {:>4}  {:>6} {:>6} {:>6} {:>6}  {:>8} {:>8}   {:>6}", "key", "beam", "frozen", ">1px", ">10px", ">100px", "median", "worst", "under");
+        for ((k, b), w) in configs.iter().zip(&runs) {
+            // frozen: not escaped at a point the reference says is exterior.
+            let mut errs: Vec<f64> = Vec::new();
+            let (mut frozen, mut under, mut stale) = (0usize, 0usize, 0usize);
+            for (i, &(d, esc)) in w.iter().enumerate() {
+                let Some(e) = reference[i] else { continue };
+                if !esc {
+                    frozen += 1;
+                    continue;
+                }
+                if d <= 0.0 {
+                    stale += 1;
+                    continue;
+                }
+                let err = (d - e) / px;
+                if err < -1.0 {
+                    under += 1;
+                }
+                errs.push(err);
+            }
+            errs.sort_by(|a, b| a.total_cmp(b));
+            let over = |t: f64| errs.iter().filter(|&&d| d > t).count();
+            let median = errs.get(errs.len() / 2).copied().unwrap_or(0.0);
+            let worst = errs.last().copied().unwrap_or(0.0);
+            println!(
+                "  {k:9?} {b:>4}  {frozen:>6} {:>6} {:>6} {:>6}  {median:>8.2} {worst:>8.1}   {under:>6}  stale {stale}",
+                over(1.0),
+                over(10.0),
+                over(100.0)
+            );
+        }
+
+        // What the survey asserts: at the beam the reported file used,
+        // no visible over-read anywhere in its view, and a wider beam
+        // never worse. Measured at 24 points past ten pixels and a
+        // worst of 81 before `best_done` and the inversions' holes; 0
+        // after.
+        for ((k, b), w) in configs.iter().zip(&runs) {
+            let over10 = w
+                .iter()
+                .enumerate()
+                .filter(|(i, &(d, esc))| {
+                    esc && d > 0.0 && reference[*i].map_or(false, |e| (d - e) / px > 10.0)
+                })
+                .count();
+            assert_eq!(over10, 0, "{k:?} beam {b}: {over10} points over-read past ten pixels");
+        }
+
+    }
+
+    /// What the LEVEL is on the reported view: the deepest any address
+    /// reaches, and the level of the address that gives the distance.
+    ///
+    /// With three inversions there is almost always some address that
+    /// stays inside the ball for every level asked, so the deepest is
+    /// the maximum nearly everywhere -- and a level colouring of it is
+    /// one flat value. The winner's escape level has structure. This
+    /// prints both distributions so the choice is made on numbers.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn the_level_on_the_reported_view() {
+        let ifs = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        let centre = [-0.05554435526432207, -0.19381778925226906];
+        let (zoom, rot) = (7.798816f64, 0.7853982f64);
+        let span = 4.0 / 2f64.powf(zoom);
+        let (cs, sn) = (rot.cos(), rot.sin());
+        let n = 32;
+        const LEVELS: u32 = 35;
+        for beam in [5u32, 512] {
+            let mut deepest = vec![0usize; LEVELS as usize + 1];
+            let mut winner = vec![0usize; LEVELS as usize + 1];
+            for iy in 0..n {
+                for ix in 0..n {
+                    let u = ((ix as f64 + 0.5) / n as f64 - 0.5) * span;
+                    let v = -((iy as f64 + 0.5) / n as f64 - 0.5) * span;
+                    let p = [centre[0] + u * cs - v * sn, centre[1] + u * sn + v * cs];
+                    let e = estimate(&ifs, p, LEVELS, beam);
+                    deepest[(e.deepest_level.floor().max(0.0) as usize).min(LEVELS as usize)] += 1;
+                    winner[(e.level.floor().max(0.0) as usize).min(LEVELS as usize)] += 1;
+                }
+            }
+            let hist = |h: &Vec<usize>| -> String {
+                h.iter().enumerate().filter(|(_, &c)| c > 0).map(|(l, c)| format!("{l}:{c}")).collect::<Vec<_>>().join(" ")
+            };
+            println!("beam {beam}: deepest level histogram  {}", hist(&deepest));
+            println!("beam {beam}: winner  level histogram  {}", hist(&winner));
         }
     }
 

@@ -260,21 +260,6 @@ pub enum Kernel {
 }
 
 impl Kernel {
-    /// Whether the forward kernel is an inversion: unbounded at the
-    /// origin, with a `σ` that shrinks as the point moves away.
-    ///
-    /// `spherical` is `v/|v|²`; a root with a NEGATIVE distance is
-    /// `|z|^{d/n}` with `d/n < 0`. A root with a positive distance is
-    /// not, whatever its power. The beam's ranking key is chosen on
-    /// this (`ifs_estimate::RankKey::Auto`).
-    pub fn is_inversion(&self) -> bool {
-        match *self {
-            Kernel::Spherical => true,
-            Kernel::Root { d, .. } => d < 0.0,
-            _ => false,
-        }
-    }
-
     /// Blob's angular scale at `theta`.
     fn blob_scale(high: f64, low: f64, waves: f64, theta: f64) -> (f64, f64) {
         let s = low + (high - low) / 2.0 * ((waves * theta).sin() + 1.0);
@@ -455,6 +440,32 @@ impl Kernel {
         }
     }
 
+    /// The radius of the HOLE in this kernel's image of a disc of
+    /// radius `r_pre` about the origin, or 0 for a kernel whose image
+    /// has none.
+    ///
+    /// An inversion turns the disc inside out: `spherical` sends
+    /// `|z| <= R` to `|v| >= 1/R`, and a root with a negative distance
+    /// sends it to `|v| >= R^{d/|n|}`. Nothing of the piece can lie
+    /// inside that circle, so a point there is a known distance from
+    /// the piece -- and, more to the point, is the point whose inverse
+    /// flies toward infinity. Scoring it as a gap instead of expanding
+    /// it is what keeps the walk out of the region where its
+    /// arithmetic overflows: in f64 that is `|v| < 1e-20` on a
+    /// power-15 root, in f32 it is `|v| < 0.003`, and the GPU was
+    /// freezing paths there some 10^17 times more often than the CPU
+    /// reference.
+    pub fn hole_radius(&self, r_pre: f64) -> f64 {
+        if !(r_pre > 0.0) {
+            return 0.0;
+        }
+        match *self {
+            Kernel::Spherical => 1.0 / r_pre,
+            Kernel::Root { n, d } if d < 0.0 => r_pre.powf(d / (n as f64).abs()),
+            _ => 0.0,
+        }
+    }
+
     /// Whether the kernel's image is the unit disc of `v`, so that a
     /// `v` outside it is an image gap away from the piece (S4).
     pub fn image_is_unit_disc(&self) -> bool {
@@ -490,6 +501,10 @@ pub struct NonlinearMap2 {
     pub post: Affine2,
     pub pre_inv: Affine2,
     pub post_inv: Affine2,
+    /// The hole in the image, in the frame `before_kernel` measures
+    /// in, or 0. Set by `analyse_2d` once the ball is known, since it
+    /// depends on the ball's reach in the pre-frame.
+    pub hole: f64,
     /// The variation's weight; the kernel's output is scaled by it.
     pub w: f64,
 }
@@ -534,6 +549,19 @@ impl NonlinearMap2 {
     /// "no preimage" as infinitely far was wrong by exactly this: the
     /// piece is not far, it is just not reachable by inversion.
     pub fn image_gap(&self, q: [f64; 2]) -> Option<f64> {
+        if self.hole > 0.0 {
+            // Inside the hole of an inversion's image: the piece is at
+            // least the hole's remaining radius away, scaled by the
+            // post-affine's smallest stretch, exactly as the unit-disc
+            // gap is.
+            let v = self.before_kernel(q);
+            let r = v[0].hypot(v[1]);
+            if r < self.hole {
+                let (post_lo, _) = self.post.singular_values();
+                return Some((self.hole - r) * self.w.abs() * post_lo);
+            }
+            return None;
+        }
         if !self.kernel.image_is_unit_disc() {
             return None;
         }
@@ -1417,7 +1445,7 @@ pub fn transform_map_2d_ordered(
     let (Some(pre_inv), Some(post_inv)) = (pre.inverse(), post.inverse()) else {
         return Ok(Map2::Affine(Affine2 { m: [[0.0; 2]; 2], t: [0.0; 2] }));
     };
-    Ok(Map2::Nonlinear(NonlinearMap2 { kernel, branch: 0, pre, post, pre_inv, post_inv, w }))
+    Ok(Map2::Nonlinear(NonlinearMap2 { kernel, branch: 0, pre, post, pre_inv, post_inv, hole: 0.0, w }))
 }
 
 /// The 2D affine a transform composes to, or why it does not, with
@@ -1719,6 +1747,18 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
             })
         })
         .collect();
+    // Each inversion's hole, now that the ball's reach in its
+    // pre-frame is known: the disc about the pre-frame origin that
+    // holds the whole attractor.
+    let mut maps = maps;
+    for m in maps.iter_mut() {
+        if let Map2::Nonlinear(r) | Map2::NonlinearInverse(r) = &mut m.inverse {
+            let c = r.pre.apply(ball.centre);
+            let (_, pre_hi) = r.pre.singular_values();
+            let r_pre = c[0].hypot(c[1]) + pre_hi * ball.radius;
+            r.hole = r.kernel.hole_radius(r_pre);
+        }
+    }
     Ok(Ifs { maps, final_map, ball, aux_centre })
 }
 
