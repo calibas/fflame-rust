@@ -996,6 +996,62 @@ impl Map2 {
         }
     }
 
+    /// The SECOND derivative of [`Self::apply`] at `q`:
+    /// `H[i][j][k] = ∂²u_i/∂q_j∂q_k`, symmetric in the last two.
+    ///
+    /// Taken by central-differencing [`Self::jacobian`], which is
+    /// exact and gated
+    /// (`the_kernels_jacobians_are_the_derivative`), rather than
+    /// derived per kernel. Six closed forms would be six chances to
+    /// slip a sign, and this only has to be good enough to CORRECT a
+    /// second-order term: an error `ε` in `H` moves the correction by
+    /// `ε·ρ²`, where the term it replaces was `ρ²·|H|` -- so a
+    /// relative accuracy of 1e-6 leaves a residual a millionth of
+    /// what carrying nothing leaves. A central difference of an exact
+    /// derivative reaches about 1e-10.
+    ///
+    /// The step is a fraction of the clearance, so it never straddles
+    /// the pole or the image edge that [`Self::singular_distance`]
+    /// measures to.
+    ///
+    /// Zero for an affine -- exactly, not nearly -- so the affine
+    /// delta stays the exact thing it has always been.
+    pub fn hessian(&self, q: [f64; 2]) -> Option<[[[f64; 2]; 2]; 2]> {
+        match self {
+            Map2::Affine(_) => Some([[[0.0; 2]; 2]; 2]),
+            Map2::Nonlinear(_) => None,
+            Map2::NonlinearInverse(_) => {
+                let clear = self.singular_distance(q);
+                if !(clear > 0.0) {
+                    return None;
+                }
+                let h = (clear * 1e-4).clamp(1e-12, 1e-3);
+                let mut out = [[[0.0f64; 2]; 2]; 2];
+                for k in 0..2 {
+                    let (mut a, mut b) = (q, q);
+                    a[k] += h;
+                    b[k] -= h;
+                    let ja = self.jacobian(a)?;
+                    let jb = self.jacobian(b)?;
+                    for i in 0..2 {
+                        for j in 0..2 {
+                            out[i][j][k] = (ja[i][j] - jb[i][j]) / (2.0 * h);
+                        }
+                    }
+                }
+                // Symmetric in its last two indices by Clairaut; the
+                // differences are only nearly so, and the carry reads
+                // both halves.
+                for i in 0..2 {
+                    let m = (out[i][0][1] + out[i][1][0]) * 0.5;
+                    out[i][0][1] = m;
+                    out[i][1][0] = m;
+                }
+                out.iter().flatten().flatten().all(|x| x.is_finite()).then_some(out)
+            }
+        }
+    }
+
     /// How far `q` may move before [`Self::jacobian`] stops
     /// describing this map: infinite for an affine, the kernel's
     /// clearance for an inverted nonlinear one.
@@ -3093,6 +3149,120 @@ mod tests {
     /// Gate 2 of plan 8.9: every kernel's inverse undoes each of its
     /// branches, and a bubble transform is two maps that share its
     /// colour and differ in the branch.
+    /// [`Map2::hessian`] is the second derivative, checked the long
+    /// way round.
+    ///
+    /// It is taken by central-differencing the analytic Jacobian, so
+    /// differencing the MAP twice is an independent route to the same
+    /// tensor -- it never touches `jacobian` at all. Both are
+    /// approximations, so this is a loose agreement by design; what
+    /// it catches is a transposed index, a missing half, or a
+    /// symmetrisation that averaged the wrong pair.
+    #[test]
+    fn a_maps_hessian_is_its_second_derivative() {
+        let guard = global_registry();
+        let r = &*guard;
+        let build = |name: &str, w: f32, set: &dyn Fn(&mut Transform)| -> Map2 {
+            let mut t = affine_xform(0.83, -0.24, 0.31, 0.77, 0.19, -0.12);
+            t.variations.clear();
+            t.variation_order.clear();
+            let mut t = with(t, name, w);
+            set(&mut t);
+            let m = transform_map_2d_ordered(&t, r, &t.ordered_variation_names(r))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            m.inverse().expect("invertible")
+        };
+        let noop = |_: &mut Transform| {};
+        let cases: Vec<(&str, Map2)> = vec![
+            ("spherical", build("spherical", 0.7, &noop)),
+            ("bubble", build("bubble", 1.3, &noop)),
+            ("hemisphere", build("hemisphere", 0.9, &noop)),
+            ("disc", build("disc", 0.6, &noop)),
+            ("blob", build("blob", 1.1, &|t: &mut Transform| {
+                t.set_variation_param("blob", "high", 1.4);
+                t.set_variation_param("blob", "low", 0.3);
+                t.set_variation_param("blob", "waves", 3.0);
+            })),
+            ("julian 3 dist -1", build("julian", 0.5, &|t: &mut Transform| {
+                t.set_variation_param("julian", "power", 3.0);
+                t.set_variation_param("julian", "dist", -1.0);
+            })),
+        ];
+        // An affine's is exactly zero, which is what keeps the affine
+        // delta exact.
+        let aff = Map2::Affine(Affine2 { m: [[0.7, -0.2], [0.3, 0.9]], t: [0.1, -0.2] });
+        let z = aff.hessian([0.3, 0.4]).expect("an affine has one");
+        assert!(z.iter().flatten().flatten().all(|&x| x == 0.0), "an affine's second derivative is zero");
+
+        let mut st: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for (name, m) in cases {
+            let mut checked = 0usize;
+            for _ in 0..2000 {
+                let q = [(next() - 0.5) * 4.0, (next() - 0.5) * 4.0];
+                let Some(h) = m.hessian(q) else { continue };
+                let clear = m.singular_distance(q);
+                // Well clear of the edges, and a step big enough that a
+                // second difference is not all rounding.
+                if !(clear > 0.05) {
+                    continue;
+                }
+                let step = (clear * 0.02).min(1e-3);
+                let at = |a: f64, b: f64| -> Option<[f64; 2]> {
+                    let p = [q[0] + a, q[1] + b];
+                    let u = m.apply(p);
+                    (u[0].is_finite() && u[1].is_finite()).then_some(u)
+                };
+                let mut ok = true;
+                for j in 0..2 {
+                    for k in 0..2 {
+                        let (mut pp, mut pm, mut mp, mut mm) = ([0.0; 2], [0.0; 2], [0.0; 2], [0.0; 2]);
+                        pp[j] += step;
+                        pp[k] += step;
+                        pm[j] += step;
+                        pm[k] -= step;
+                        mp[j] -= step;
+                        mp[k] += step;
+                        mm[j] -= step;
+                        mm[k] -= step;
+                        let (Some(a), Some(b), Some(c), Some(d)) = (
+                            at(pp[0], pp[1]),
+                            at(pm[0], pm[1]),
+                            at(mp[0], mp[1]),
+                            at(mm[0], mm[1]),
+                        ) else {
+                            ok = false;
+                            break;
+                        };
+                        for i in 0..2 {
+                            let fd = (a[i] - b[i] - c[i] + d[i]) / (4.0 * step * step);
+                            let an = h[i][j][k];
+                            let scale = an.abs().max(fd.abs()).max(1e-6);
+                            assert!(
+                                (fd - an).abs() / scale < 5e-2,
+                                "{name} at {q:?}: H[{i}][{j}][{k}] is {an}, a second difference says {fd}"
+                            );
+                        }
+                    }
+                    if !ok {
+                        break;
+                    }
+                }
+                if ok {
+                    checked += 1;
+                }
+            }
+            // Twenty-five, not a hundred: `disc`'s branch is one ring
+            // of the plane and `blob`'s scale has to stay clear of
+            // zero, so most of a square of random points is not in a
+            // place where a second difference means anything.
+            assert!(checked > 25, "{name}: only {checked} points were checkable");
+        }
+    }
+
     /// G1 of `ifs-nonlinear-perturbation.md`: every kernel's
     /// [`Kernel::inverse_jacobian`] IS the derivative of its
     /// [`Kernel::inverse`], and ties to
