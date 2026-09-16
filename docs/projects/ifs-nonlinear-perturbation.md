@@ -530,7 +530,64 @@ prefix gets past a gap, that one was actually met, and that the
 answer still matches each pixel's own walk to a quarter pixel. It
 fails with the old stop restored.
 
-## 11. Cost and risk
+## 11. The second-order term, tried and parked, 2026-09-16
+
+Item 7, attempted. `Map2::hessian` is built and gated and the carry
+works; what does NOT work is the objective's ability to use it, and
+the reason is worth recording so the next attempt starts past it.
+
+**The carry itself is right.** `Map2::hessian` takes the second
+derivative by central-differencing the exact Jacobian, which is
+enough by a wide margin -- an error `ε` in `H` moves a correction
+that is itself second order, so a relative accuracy of 1e-6 leaves a
+residual a millionth of what carrying nothing leaves, and a central
+difference of an exact derivative reaches about 1e-10.
+`a_maps_hessian_is_its_second_derivative` checks it the long way
+round, by differencing the MAP twice, on all six kernels. That gate
+and the method are kept; nothing else of the attempt is.
+
+Carrying `Q(uv) = C_uu·u² + C_uv·u·v + C_vv·v²` beside the basis, with
+`Q_{k+1} = J·Q_k + ½H[A_k, A_k]`, measurably improved the delta: on
+the reported grand julian the level where the view has finally
+expanded went from 3.19 pixels of error to 0.56, and level 5 went
+from 0.31 to under the gate's quarter-pixel bar.
+
+**What defeated it was the objective.** The handover picks a level by
+minimising `curvature + f32`, and the curvature term has to be
+predicted, not measured, because measuring it needs a direct walk per
+pixel. Three models were tried:
+
+- `Σ ρ_k/s_k`, the first-order one. Well calibrated for the LINEAR
+  carry: it predicted 3.75 pixels where the truth was 3.19. Useless
+  for the quadratic carry, which it massively overstates.
+- `Σ (ρ_k/s_k)²`, the natural second-order version. Measured against
+  the truth at ratios from **0.08 to 166** across three sets and
+  three zooms -- not a calibration, a coincidence. With it the
+  bounded rabbit REGRESSED from 0.15 pixels to 2.03, because the
+  model let the walk go too deep.
+- The corner probe, which drops modelling entirely: carry the view's
+  four corners exactly beside the reference and measure how far the
+  basis and the quadratic miss them. That is exact and cheap, and it
+  is still the wrong quantity. At level 12 of a julia dust the
+  corners miss by 0.0097 pixels while the real seeded-against-direct
+  error is 3.715 -- a factor of 380. The positional miss at the
+  handover is not the error in the REPORTED DISTANCE, and the
+  conversion between them is not the `σ ≈ 1/grown` the derivation
+  assumes.
+
+That last gap is the thing to understand before trying again. Until
+it is understood, any objective is steering on a number that is not
+the one that matters, and the measured consequence of getting it
+wrong is a regression on the sets that currently work.
+
+**Parked deliberately, not abandoned.** The Hessian is in the tree,
+gated, and costs nothing while unused. What the next attempt needs
+first is a cheap and TRUSTWORTHY predictor of the seeded walk's error
+against the pixel's own -- and the way to get one is probably to
+measure the reported distance at the corners, continuing each of them
+a few levels, rather than to measure their positions.
+
+## 12. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -549,7 +606,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 12. What is next
+## 13. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -629,7 +686,7 @@ the no-handover cap, because the shader's walk is f32 throughout and
 a delta far below the position's own ulp is swamped by the first
 step whatever it was stored in.
 
-## 13. Order of work
+## 14. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
@@ -647,9 +704,10 @@ step whatever it was stored in.
 5. ~~Carry `dead_min` through the handover~~ -- done, §10.
 6. ~~A per-seed handover level~~ -- measured to be a non-issue: the
    grand julian's handover holds one seed (§12).
-7. **The second-order term**, which is what a grand julian actually
-   needs (§12): a Hessian per kernel, carried beside the basis, with
-   a G1-shaped gate against central differences.
+7. ~~The second-order term~~ -- tried, and parked with the reason
+   measured (§11). The Hessian and its gate are in; the objective
+   cannot use them until there is a trustworthy predictor of the
+   seeded walk's error, which the corner probe is not.
 8. Widen the seed position, for the levels that miss by a few bits.
 9. Rung 2 (sqrt kernels: bubble, hemisphere), same gates.
 10. The 3D twin -- `seed_beam3`, and the `estimate_seeded3` staleness
