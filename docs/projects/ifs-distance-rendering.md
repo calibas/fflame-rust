@@ -3071,7 +3071,138 @@ have in closed form, with the view-agreement test done on the local
 Mandelbrot perturbation and would buy deep zoom past f32 on these
 sets; near a pole the linearisation fails and the handover would
 stop there, exactly as the affine one stops where the view disagrees.
-A real project, not a patch.
+A real project, not a patch: the plan is
+[ifs-nonlinear-perturbation.md](ifs-nonlinear-perturbation.md).
+
+**A caveat on this section's ground truth, found the next day.** The
+"true nearest piece" samples above were drawn with every root's
+branches (`sample_with_address` draws a branch at random per step),
+so the counts stand. A later probe of the T0 report sampled with
+`Map2::apply`, which on a root is branch 0 alone -- a sub-attractor
+-- and concluded for a while that the set was half its size and the
+ball twice too large. §8.15 records the correction; any measurement
+of a root IFS has to draw its branches.
+
+## 8.15 The far field slides with the cut, 2026-09-16
+
+**Reported.** `grand-julian-glitches6/7.fflame`: the same flame with
+the first transform turned six degrees, at zoom 7.5 on the address
+colouring. "Notice the movement of the orange band on the bottom."
+The lower half of the view is a smooth orange-to-brown gradient with
+a straight upper edge; between the two files the gradient and its
+edge slide, while the ringed structure above moves differently.
+
+**A wrong measurement first, so it is on record.** The first ground
+truth for this report sampled the set with `Map2::apply`, which on a
+root map takes branch 0 only. That is a sub-attractor: it said the
+set was 2.0 wide, the view 11,800 pixels from it and the ball more
+than twice its extent, and on that basis the ball's sampler was
+re-tuned to a smaller radius (26-step chains keeping from step 20,
+margin 1.3, radius 3.87 for this flame). Against a sample that draws
+every branch (`chaos_sample`: a root's branch at random per step,
+as the flame's chaos game does) the set's radii from the ball's
+centre are: median 0.34, 95% 2.22, 99% 3.46, 99.5% 3.89, 99.9% 4.82,
+max 12.2 of 200,000 -- a heavy tail through the poles -- and the
+smaller ball read above the set at 291 of 1,024 view points. The
+re-tune was reverted before anything shipped. The shipped radius
+here is 4.46, which holds 99.8% of the sample.
+
+**Where to cut, measured properly.** The ball of an inversion IFS is
+a CUT through an unbounded set (§8.14), and its holes follow it
+(`analyse_2d`'s post-pass; a first sweep scaled the radius without
+the holes and was worthless -- the holes are what the cut is made
+of). With the holes following, at the reported view, 32×32 points,
+35 levels, beam 5, against the nearest of 200,000 samples:
+
+| R | holds | walk above the truth | within 41 px | slack, median | jumps > 10 px over the 6° in 8 steps | worst |
+|---|---|---|---|---|---|---|
+| 3.57 | 99.21% | 445 | 231 | 4.7 px | 20 | 112 px |
+| 4.02 | 99.59% | 260 | 292 | 41 | 38 | 98 |
+| **4.46** | 99.77% | 142 | 449 | 71 | 110 | 60 |
+| 5.13 | 99.94% | 39 | 682 | 124 | 535 | 56 |
+| 6.69 | 99.99% | 0 | 1,023 | 144 | 253 | 41 |
+| 13.4 | 100% | 0 | 1,024 | 144 | 11 | 25 |
+
+The two costs move against each other exactly as §8.14 said: a
+smaller cut is a tighter bound (the slack falls) and more of the set
+is beyond it (the walk reads above the truth beside the tail's
+images -- a soundness probe at 20,000 chaos-game points found the
+walk reading over a pixel at 1.17% of them, the worst being points
+sitting OUTSIDE the ball, r = 6.8 against R = 4.46, whose level-0
+term `r − R` is the whole reading); a larger cut is sound and reads
+the whole view as halo. No radius is both.
+
+**The band is not the beam and not a discontinuity.** The same sweep
+with beam 8, with 10 levels, and with the exhaustive reference at
+depth 10 gives the identical field at every point and step (110
+jumps, worst 60.3 px, all five). And at sixteen steps of 0.047° the
+field moves 0.02-0.5 px per step at the median with no point moving
+10: it is continuous. What moves, moves smoothly -- and by 60 px over
+0.75°, where the set itself moves 30-40.
+
+**What the band is.** The exterior of the view (575 points reading
+over 41 px) has its winner at "level 1, gap" at 108 of 144 sampled:
+the pixel is inside the THIRD map's hole. That map is `julian` power
+8, `dist = −1`, weight 0.3, with no translation, so its hole is a
+disc about the origin of radius `w · r_pre^{−1/8}` = 0.249, and the
+view sits at |q| = 0.249: the hole's edge is the straight line, and
+the gradient is the gap `0.249 − |q|`. The radius depends on the
+flame only through the ball's radius. Between the files the sampled
+radius grows 1.8% (4.4616 → 4.5418; the top-5% mean is a tail
+statistic and the tail turns with the pole), the hole shrinks by
+`(1/8)·r_pre^{−9/8}·ΔR·w` = 5.6e-4 world = **15.8 px**, and every
+exterior point moves by exactly that: median 15.8, 90th 15.8, max
+15.8. With the second file's ball HELD at the first's radius the
+exterior moves **0.1 px**. The set itself moves 94 px there at the
+median (truth, nearest sample), so the band's motion was never the
+set's: it is the cut's image sliding as the cut's measurement
+drifts. The halo region behaves the same way in kind: 1.9 px median
+motion free, 0.1 held.
+
+**The other statistics, for the decision on the default.** Drift of
+the radius across the three reports, and the share of a 400,000
+sample each holds:
+
+| statistic | g1/g2 (T2) | g4/g5 (T1) | g6/g7 (T0) | holds |
+|---|---|---|---|---|
+| top-5% mean × 1.5 (shipped) | −0.28% | −0.01% | **+1.54%** | 99.8% |
+| 99.5th pct × 1.3 | −0.43% | 0.00% | −0.39% | 99.9% |
+| 99th pct × 1.4 | −0.18% | −0.01% | −0.78% | 99.9% |
+| 95th pct × 2 | −0.09% | −0.01% | −0.46% | 99.75% |
+| 90th pct × 2.5 | +0.04% | −0.01% | +0.06% | 99.65% |
+| rms × 4 | −0.72% | 0.00% | +1.74% | 99.6% |
+
+A lower percentile drifts less because the tail is what turns. The
+default is left as it is: changing it re-cuts every inversion set
+that ships, and what fraction of the tail to draw is a choice about
+the pictures, not a measurement.
+
+**What changed.** The cut is a parameter now: **Extent** on both
+flame-attractor formulas, 0 (the default) being the measured ball
+and any positive value the radius the set is cut at, holes following
+(`Ifs2::with_extent`, `Ifs3::with_extent`, read in `pack_for`); the
+criterion line shows the measured radius so there is a number to
+set it to. It is a formula parameter, so it is an animation target
+like the others. On a solid the camera frames the MEASURED ball
+(`Ifs::frame_radius`, which the cut leaves alone), so Extent moves
+the walk's cut and not the camera --
+`the_extent_does_not_dolly_the_solid_camera`. Rendered: g6 against g7 differ at 31.3% of pixels;
+g6 against g7 with Extent held at g6's measured 4.4616, 12.7%, and
+the band's edge is a one-pixel line in the diff -- what remains is
+the set's own motion above it. Gate:
+`the_far_field_holds_when_the_cut_does` (the exterior slides over 10
+px free and under 1 px held). Surveys kept, ignored:
+`probe_where_to_cut`, `probe_the_bound_at_the_set`,
+`probe_the_fine_sweep`, `probe_the_wedge`,
+`probe_the_radius_statistics`.
+
+**What is still true about the picture.** At this view 449 of 1,024
+points read within 41 px of the set and the set is 97 px away at
+their median: the "halo" is the bound's slack, not the set's
+nearness, and no cut fixes that (the table). A tighter bound for a
+gapped branch -- the piece's actual extent in the map's pre-frame
+rather than the ball's image -- is the lever, and it is the same
+sampled-statistic question as the cut.
 
 ## 9. Where this comes from
 

@@ -2723,12 +2723,21 @@ mod tests {
                 state ^= state << 17;
                 state
             };
-            let maps: Vec<&Map2> = ifs.maps.iter().map(|m| &m.forward).collect();
             let mut p = ifs.ball.centre;
             let mut out = Vec::with_capacity(count);
             for i in 0..count + 200 {
-                let k = (next() % maps.len() as u64) as usize;
-                p = maps[k].apply(p);
+                let k = (next() % ifs.maps.len() as u64) as usize;
+                // Every branch of a root, as the flame's chaos game
+                // takes them: `Map2::apply` alone is branch 0, a
+                // sub-attractor.
+                let br = match ifs.maps[k].forward.nonlinear().map(|r| r.kernel) {
+                    Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => (next() % n.unsigned_abs() as u64) as u32,
+                    _ => 0,
+                };
+                p = match &ifs.maps[k].forward {
+                    Map2::Nonlinear(r) => r.apply_branch(p, br),
+                    other => other.apply(p),
+                };
                 if !(p[0].is_finite() && p[1].is_finite()) {
                     p = ifs.ball.centre;
                     continue;
@@ -2785,6 +2794,406 @@ mod tests {
             "the walk's nearest piece changed at {walk_changed} points for a set that moved at none"
         );
         assert_eq!(reversers, 0, "the distance reversed direction under a monotone rotation");
+    }
+
+    /// Is the bound sound AT THE SET? A point the chaos game visits is
+    /// on the attractor (or a transient of it), and the walk should
+    /// read ~0 there. Where it does not, replaying the inverse along
+    /// the address the chaos game took to that point shows the level
+    /// whose term went wrongly positive -- or shows the point left the
+    /// ball on its way, which is the cut and not a bug.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_the_bound_at_the_set() {
+        let t1 = [-0.84805f32, -0.52986, 0.52986, -0.84805, 0.0, 0.0];
+        let t2 = [-0.97008f32, -0.2427, 0.24271, -0.97008, 0.0, 0.0];
+        let a0 = (-0.33506f64).atan2(0.94218);
+        let (c0, s0) = (a0.cos() as f32, a0.sin() as f32);
+        let j = |aff: [f32; 6], w: f32, power: f32| {
+            let mut t = kernel_xform("julian", aff, w);
+            t.variations.insert("flatten".to_string(), 1.0);
+            t.variation_order.insert(0, "flatten".to_string());
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        let g = analyse(vec![j([c0, s0, -s0, c0, 0.0, -0.3], 1.0, 2.0), j(t1, 0.2, 15.0), j(t2, 0.3, 8.0)]);
+        let zoom = 7.4688044f64;
+        let px = 4.0 / 2f64.powf(zoom) / 640.0;
+        let radius = g.ball.radius;
+        let centre = g.ball.centre;
+        // the chaos game, with each kept point's last twelve maps and
+        // whether its orbit was inside the ball at each of them
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut p = centre;
+        let mut hist: Vec<(usize, f64)> = Vec::new(); // (map, r before the map)
+        let mut kept: Vec<([f64; 2], Vec<(usize, f64)>)> = Vec::new();
+        for i in 0..20_500 {
+            let mi = (next() * g.maps.len() as f64).floor() as usize % g.maps.len();
+            let m = &g.maps[mi];
+            let k = match m.forward.nonlinear().map(|n| n.kernel) {
+                Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => (next() * n.unsigned_abs() as f64).floor() as u32,
+                _ => 0,
+            };
+            let r_before = Affine2::distance(p, centre);
+            p = match &m.forward {
+                Map2::Nonlinear(n) => n.apply_branch(p, k),
+                other => other.apply(p),
+            };
+            hist.push((mi, r_before));
+            if hist.len() > 12 { hist.remove(0); }
+            if i >= 500 && p[0].is_finite() && p[1].is_finite() {
+                kept.push((p, hist.clone()));
+            }
+        }
+        let mut bad = 0usize;
+        let mut bad_in_ball = 0usize; // a bad point whose last 12 pre-images all sat inside the ball
+        let mut worst: Vec<(f64, usize)> = Vec::new();
+        for (idx, (q, h)) in kept.iter().enumerate() {
+            let d = estimate(&g, *q, 35, 5).distance;
+            if d > px {
+                bad += 1;
+                let inside = h.iter().all(|(_, r)| *r <= radius);
+                if inside { bad_in_ball += 1; }
+                worst.push((d, idx));
+            }
+        }
+        worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+        println!(
+            "ball R {radius:.4}; chaos points {}; walk reads > 1px at {bad} ({:.2}%), of which {bad_in_ball} came through the ball only (last 12 maps)",
+            kept.len(), 100.0 * bad as f64 / kept.len() as f64
+        );
+        // Replay the inverse along the recorded address for the worst
+        // few whose orbit stayed inside the ball.
+        let mut shown = 0;
+        for (d, idx) in &worst {
+            let (q, h) = &kept[*idx];
+            if !h.iter().all(|(_, r)| *r <= radius) { continue; }
+            if shown >= 4 { break; }
+            shown += 1;
+            let ex = exhaustive_nl(&g, *q, 9);
+            println!("  point {idx}: walk {:.1} px, exhaustive(10) {:.1} px; r {:.3}; replaying its address (newest map first):", d / px, ex / px, Affine2::distance(*q, centre));
+            let mut cur = *q;
+            let mut sigma = 1.0;
+            let mut bound = f64::NEG_INFINITY;
+            for (mi, r_before) in h.iter().rev() {
+                let m = &g.maps[*mi];
+                let gap = m.inverse.gap_bound(cur, centre, radius, m.sigma_min);
+                let (q2, _, s_one) = m.inverse.step(cur, 0.0, m.sigma_min);
+                let s2 = sigma * s_one;
+                let r2 = Affine2::distance(q2, centre);
+                let term = s2 * (r2 - radius);
+                bound = fold_level(bound, s2, r2, radius);
+                println!(
+                    "    map {mi}: gap {:?}; step -> r {:.4} (forward orbit had r {:.4}), sigma {:.3e}, term {:+.3e} ({:+.1} px), bound so far {:+.1} px",
+                    gap.map(|x| format!("{:.3e} ({:.1} px)", x, sigma * x / px)), r2, r_before, s2, term, term / px, bound / px
+                );
+                if gap.is_some() || !(q2[0].is_finite() && q2[1].is_finite()) { break; }
+                cur = q2;
+                sigma = s2;
+            }
+        }
+    }
+
+    /// The reference walk with PROVENANCE: the value, and the level,
+    /// kind and address it came from.
+    fn exhaustive_prov(ifs: &Ifs2, p: [f64; 2], depth: u32) -> (f64, u32, &'static str, Vec<u32>) {
+        fn walk(ifs: &Ifs2, q: [f64; 2], sigma: f64, best_on_path: f64, left: u32, level: u32, addr: &mut Vec<u32>) -> (f64, u32, &'static str, Vec<u32>) {
+            let r = Affine2::distance(q, ifs.ball.centre);
+            let here = fold_level(best_on_path, sigma, r, ifs.ball.radius);
+            if left == 0 || !r.is_finite() || r > ifs.ball.radius.max(1.0) * FAR {
+                return (here, level, if left == 0 { "leaf" } else { "far" }, addr.clone());
+            }
+            let mut best = (f64::INFINITY, level, "none", addr.clone());
+            for (i, m) in ifs.maps.iter().enumerate() {
+                addr.push(i as u32);
+                if let Some(gap) = m.inverse.gap_bound(q, ifs.ball.centre, ifs.ball.radius, m.sigma_min) {
+                    let v = here.max(sigma * gap);
+                    if v < best.0 {
+                        best = (v, level + 1, if sigma * gap > here { "gap" } else { "gap<here" }, addr.clone());
+                    }
+                } else {
+                    let (q2, _, sg) = m.inverse.step(q, 0.0, m.sigma_min);
+                    let sub = walk(ifs, q2, sigma * sg, here, left - 1, level + 1, addr);
+                    if sub.0 < best.0 {
+                        best = sub;
+                    }
+                }
+                addr.pop();
+            }
+            best
+        }
+        let mut addr = Vec::new();
+        walk(ifs, p, 1.0, 0.0, depth, 0, &mut addr)
+    }
+
+    /// The grand julian of the g6 report at a first-transform angle.
+    fn g6_at(a: f64) -> Ifs2 {
+        let t1 = [-0.84805f32, -0.52986, 0.52986, -0.84805, 0.0, 0.0];
+        let t2 = [-0.97008f32, -0.2427, 0.24271, -0.97008, 0.0, 0.0];
+        let (c, sn) = (a.cos() as f32, a.sin() as f32);
+        let j = |aff: [f32; 6], w: f32, power: f32| {
+            let mut t = kernel_xform("julian", aff, w);
+            t.variations.insert("flatten".to_string(), 1.0);
+            t.variation_order.insert(0, "flatten".to_string());
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        analyse(vec![j([c, sn, -sn, c, 0.0, -0.3], 1.0, 2.0), j(t1, 0.2, 15.0), j(t2, 0.3, 8.0)])
+    }
+
+    /// The g6 view as a grid of world points, and its pixel width.
+    fn g6_view(n: usize) -> (Vec<[f64; 2]>, f64) {
+        let centre = [-0.21665968763745389, 0.12254946871633931];
+        let (zoom, rot) = (7.4688044f64, 0.7853982f64);
+        let span = 4.0 / 2f64.powf(zoom);
+        let (cs, sn) = (rot.cos(), rot.sin());
+        let mut pts = Vec::new();
+        for iy in 0..n {
+            for ix in 0..n {
+                let u = ((ix as f64 + 0.5) / n as f64 - 0.5) * span;
+                let v = -((iy as f64 + 0.5) / n as f64 - 0.5) * span;
+                pts.push([centre[0] + u * cs - v * sn, centre[1] + u * sn + v * cs]);
+            }
+        }
+        (pts, span / 640.0)
+    }
+
+    /// A sweep fine enough that a continuous field cannot move ten
+    /// pixels in a step: a jump then IS a discontinuity, and the
+    /// reference walk with provenance says what flipped.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_the_fine_sweep() {
+        let a0 = (-0.33506f64).atan2(0.94218);
+        let step = 0.75f64.to_radians() / 16.0;
+        let (pts, px) = g6_view(32);
+        let mut prev: Option<Vec<f64>> = None;
+        let mut prev_g: Option<Ifs2> = None;
+        let mut total = 0usize;
+        println!("step {:.4} degrees, {} points, px {px:.3e}", step.to_degrees(), pts.len());
+        for k in 0..17 {
+            let g = g6_at(a0 + step * k as f64);
+            let walk: Vec<f64> = pts.iter().map(|&p| estimate(&g, p, 35, 5).distance).collect();
+            if let (Some(pw), Some(pg)) = (&prev, &prev_g) {
+                let mut jumps: Vec<(f64, usize)> = walk.iter().zip(pw).enumerate()
+                    .map(|(i, (a, b))| (((a - b) / px).abs(), i)).filter(|(d, _)| *d > 10.0).collect();
+                jumps.sort_by(|a, b| b.0.total_cmp(&a.0));
+                total += jumps.len();
+                let med = { let mut m: Vec<f64> = walk.iter().zip(pw).map(|(a, b)| ((a - b) / px).abs()).collect(); m.sort_by(|a, b| a.total_cmp(b)); m[m.len() / 2] };
+                println!("  step {k:>2}: R {:.5} (moved {:+.2e}); jumps>10px {:>3}, worst {:.1} px, median move {:.2} px", g.ball.radius, g.ball.radius - pg.ball.radius, jumps.len(), jumps.first().map_or(0.0, |j| j.0), med);
+                for (d, i) in jumps.iter().take(2) {
+                    let before = exhaustive_prov(pg, pts[*i], 10);
+                    let after = exhaustive_prov(&g, pts[*i], 10);
+                    println!("     pt {i}: {:.1} -> {:.1} px ({d:.1});  ref before: {:.1} px L{} {} {:?};  after: {:.1} px L{} {} {:?}",
+                        pw[*i] / px, walk[*i] / px, before.0 / px, before.1, before.2, before.3, after.0 / px, after.1, after.2, after.3);
+                }
+            }
+            prev = Some(walk);
+            prev_g = Some(g);
+        }
+        println!("total jumps over 16 fine steps: {total}");
+    }
+
+    /// Where to cut an unbounded set. An inversion IFS has a tail to
+    /// infinity through its poles, so the ball is a CUT through it and
+    /// the walk draws the bulk inside. Two costs move against each
+    /// other as the cut moves out: pieces beyond it are invisible and
+    /// the walk over-reads beside their images; while every bound is
+    /// `σ·(r − R)` or a hole's edge, so a larger R is a looser bound
+    /// everywhere and a fatter halo. This sweeps R, holes following,
+    /// and prints both costs at the reported view and across its
+    /// rotation. Measured 2026-09-16: over-reads 142 at the shipped
+    /// radius, 0 from 1.5x; the halo 449 of 1,024 at the shipped
+    /// radius, all 1,024 from 1.5x.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_where_to_cut() {
+        let a0 = (-0.33506f64).atan2(0.94218);
+        let a1 = (-0.23518f64).atan2(0.97194);
+        let (pts, px) = g6_view(32);
+        let base = g6_at(a0);
+        let smp = chaos_sample(&base, 200_000);
+        let truth: Vec<f64> = pts.iter().map(|&p| smp.iter().map(|&a| Affine2::distance(p, a)).fold(f64::INFINITY, f64::min)).collect();
+        let mut radii: Vec<f64> = smp.iter().map(|p| Affine2::distance(*p, base.ball.centre)).collect();
+        radii.sort_by(|a, b| a.total_cmp(b));
+        println!("  {:>6} {:>7}  {:>8} {:>8} {:>9}   {:>9} {:>9}", "R", "covers", "unsound", "halo41", "slack med", "sweep>10", "sweepmax");
+        for scale in [0.8f64, 0.9, 1.0, 1.15, 1.3, 1.5, 2.0, 3.0] {
+            let g0 = base.clone().with_extent(base.ball.radius * scale);
+            let r = g0.ball.radius;
+            let walk: Vec<f64> = pts.iter().map(|&p| estimate(&g0, p, 35, 5).distance).collect();
+            let unsound = walk.iter().zip(&truth).filter(|(w, t)| **w > **t + px).count();
+            let halo = walk.iter().filter(|&&w| w / px < 41.0).count();
+            let mut sl: Vec<f64> = walk.iter().zip(&truth).map(|(w, t)| (t - w) / px).collect();
+            sl.sort_by(|a, b| a.total_cmp(b));
+            let covers = 100.0 * radii.iter().filter(|&&x| x <= r).count() as f64 / radii.len() as f64;
+            let (mut jumps, mut worst) = (0usize, 0.0f64);
+            let mut prev: Option<Vec<f64>> = None;
+            for k in 0..9 {
+                let g = { let g = g6_at(a0 + (a1 - a0) * k as f64 / 8.0); let r = g.ball.radius * scale; g.with_extent(r) };
+                let w: Vec<f64> = pts.iter().map(|&p| estimate(&g, p, 35, 5).distance).collect();
+                if let Some(pw) = &prev {
+                    for (x, y) in w.iter().zip(pw) {
+                        let d = ((x - y) / px).abs();
+                        if d > 10.0 { jumps += 1; }
+                        worst = worst.max(d);
+                    }
+                }
+                prev = Some(w);
+            }
+            println!("  {r:>6.2} {covers:>6.2}%  {unsound:>8} {halo:>8} {:>9.1}   {jumps:>9} {worst:>9.1}", sl[sl.len() / 2]);
+        }
+    }
+
+    /// The bottom of the g6 view reads as exterior with a smooth
+    /// gradient -- a bound of the form `σ·(r − R)` at a shallow level,
+    /// where a change in R is a change of the reading in proportion.
+    /// Between the two files the ball grows 1.6%; this measures what
+    /// the exterior does between them, against the truth, and with
+    /// the ball HELD at the first file's radius.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_the_wedge() {
+        let a0 = (-0.33506f64).atan2(0.94218);
+        let a1 = (-0.23518f64).atan2(0.97194);
+        let (pts, px) = g6_view(32);
+        let g0 = g6_at(a0);
+        let g1 = g6_at(a1);
+        let held = g1.clone().with_extent(g0.ball.radius);
+        let s0 = chaos_sample(&g0, 200_000);
+        let s1 = chaos_sample(&g1, 200_000);
+        let pc = |g: &Ifs2, smp: &[[f64; 2]]| {
+            let mut r: Vec<f64> = smp.iter().map(|p| Affine2::distance(*p, g.ball.centre)).collect();
+            r.sort_by(|a, b| a.total_cmp(b));
+            let q = |f: f64| r[((r.len() as f64 * f) as usize).min(r.len() - 1)];
+            format!("R {:.4} centre ({:.4}, {:.4}); sample 95% {:.3} 99% {:.3} 99.5% {:.3} 99.9% {:.3}", g.ball.radius, g.ball.centre[0], g.ball.centre[1], q(0.95), q(0.99), q(0.995), q(0.999))
+        };
+        println!("a0: {}", pc(&g0, &s0));
+        println!("a1: {}", pc(&g1, &s1));
+        let truth = |smp: &[[f64; 2]], p: [f64; 2]| smp.iter().map(|&a| Affine2::distance(p, a)).fold(f64::INFINITY, f64::min);
+        let t0: Vec<f64> = pts.iter().map(|&p| truth(&s0, p)).collect();
+        let t1: Vec<f64> = pts.iter().map(|&p| truth(&s1, p)).collect();
+        let w0: Vec<Estimate<[f64; 2]>> = pts.iter().map(|&p| estimate(&g0, p, 35, 5)).collect();
+        let w1: Vec<f64> = pts.iter().map(|&p| estimate(&g1, p, 35, 5).distance).collect();
+        let wh: Vec<f64> = pts.iter().map(|&p| estimate(&held, p, 35, 5).distance).collect();
+        let stats = |v: &mut Vec<f64>| {
+            v.sort_by(|a, b| a.total_cmp(b));
+            format!("median {:.1} px, 90% {:.1} px, max {:.1} px", v[v.len() / 2], v[v.len() * 9 / 10], v[v.len() - 1])
+        };
+        for (name, sel) in [("exterior (walk > 41 px at a0)", true), ("halo (walk <= 41 px at a0)", false)] {
+            let idx: Vec<usize> = (0..pts.len()).filter(|&i| (w0[i].distance / px > 41.0) == sel).collect();
+            let mut dt: Vec<f64> = idx.iter().map(|&i| ((t1[i] - t0[i]) / px).abs()).collect();
+            let mut dw: Vec<f64> = idx.iter().map(|&i| ((w1[i] - w0[i].distance) / px).abs()).collect();
+            let mut dh: Vec<f64> = idx.iter().map(|&i| ((wh[i] - w0[i].distance) / px).abs()).collect();
+            let mut dwh: Vec<f64> = idx.iter().map(|&i| ((w1[i] - wh[i]) / px).abs()).collect();
+            let mut lvl: Vec<f64> = idx.iter().map(|&i| w0[i].level).collect();
+            let mut wv: Vec<f64> = idx.iter().map(|&i| w0[i].distance / px).collect();
+            let mut tv: Vec<f64> = idx.iter().map(|&i| t0[i] / px).collect();
+            println!("{name}: {} points", idx.len());
+            println!("   walk value at a0:        {}", stats(&mut wv));
+            println!("   truth at a0:             {}", stats(&mut tv));
+            println!("   winner level at a0:      {}", stats(&mut lvl));
+            println!("   truth moved a0->a1:      {}", stats(&mut dt));
+            println!("   walk moved a0->a1:       {}", stats(&mut dw));
+            println!("   walk moved, ball held:   {}", stats(&mut dh));
+            println!("   the ball's own share:    {}", stats(&mut dwh));
+        }
+        // the exterior's winners, by kind, at a0
+        let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
+        for i in (0..pts.len()).filter(|&i| w0[i].distance / px > 41.0).step_by(4) {
+            let (_, l, k, _) = exhaustive_prov(&g0, pts[i], 10);
+            *kinds.entry(format!("L{l} {k}")).or_default() += 1;
+        }
+        println!("exterior winners (every 4th point), by level and kind: {kinds:?}");
+    }
+
+    /// How much each candidate radius statistic drifts across the
+    /// three reported rotations, and what fraction of the set each
+    /// leaves outside. The drift is what moves the cut's image in an
+    /// animation; the coverage is what the picture loses.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_the_radius_statistics() {
+        let t1_at = |a: f64| -> [f32; 6] {
+            let (c, s) = (a.cos() as f32, a.sin() as f32);
+            [c, s, -s, c, 0.0, 0.0]
+        };
+        let cases: Vec<(&str, Ifs2, Ifs2)> = vec![
+            ("g1/g2 (T2 turn)", grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]), grand_julian([0.509, 0.8607, -0.8607, 0.509, 0.0, 0.0])),
+            ("g4/g5 (T1 turn)",
+                grand_julian_t1([-0.9701, -0.2427, 0.2427, -0.9701, 0.0, 0.0], t1_at((-0.5299f64).atan2(-0.848))),
+                grand_julian_t1([-0.9701, -0.2427, 0.2427, -0.9701, 0.0, 0.0], t1_at((-0.5387f64).atan2(-0.8425)))),
+            ("g6/g7 (T0 turn)", g6_at((-0.33506f64).atan2(0.94218)), g6_at((-0.23518f64).atan2(0.97194))),
+        ];
+        // the statistics: (name, radius from a sorted radius list)
+        let stats: Vec<(&str, Box<dyn Fn(&[f64]) -> f64>)> = vec![
+            ("top-5% mean x1.5 (shipped)", Box::new(|r: &[f64]| { let t = r.len() / 20; r[r.len() - t..].iter().sum::<f64>() / t as f64 * 1.5 })),
+            ("99.5th pct x1.3", Box::new(|r: &[f64]| r[(r.len() as f64 * 0.995) as usize] * 1.3)),
+            ("99th pct x1.4", Box::new(|r: &[f64]| r[(r.len() as f64 * 0.99) as usize] * 1.4)),
+            ("95th pct x2", Box::new(|r: &[f64]| r[(r.len() as f64 * 0.95) as usize] * 2.0)),
+            ("90th pct x2.5", Box::new(|r: &[f64]| r[(r.len() as f64 * 0.90) as usize] * 2.5)),
+            ("top-20% mean x2", Box::new(|r: &[f64]| { let t = r.len() / 5; r[r.len() - t..].iter().sum::<f64>() / t as f64 * 2.0 })),
+            ("rms x4", Box::new(|r: &[f64]| (r.iter().map(|x| x * x).sum::<f64>() / r.len() as f64).sqrt() * 4.0)),
+        ];
+        for (name, a, b) in &cases {
+            let sa = chaos_sample(a, 400_000);
+            let sb = chaos_sample(b, 400_000);
+            let mut ra: Vec<f64> = sa.iter().map(|p| Affine2::distance(*p, a.ball.centre)).collect();
+            let mut rb: Vec<f64> = sb.iter().map(|p| Affine2::distance(*p, b.ball.centre)).collect();
+            ra.sort_by(|x, y| x.total_cmp(y));
+            rb.sort_by(|x, y| x.total_cmp(y));
+            println!("{name}: shipped ball R {:.4} -> {:.4} ({:+.2}%)", a.ball.radius, b.ball.radius, 100.0 * (b.ball.radius / a.ball.radius - 1.0));
+            for (sname, f) in &stats {
+                let (x, y) = (f(&ra), f(&rb));
+                let cov = |r: &[f64], v: f64| 100.0 * r.iter().filter(|&&q| q <= v).count() as f64 / r.len() as f64;
+                println!("   {sname:>28}: {x:.4} -> {y:.4} ({:+.2}%), covers {:.2}% / {:.2}%", 100.0 * (y / x - 1.0), cov(&ra, x), cov(&rb, y));
+            }
+        }
+    }
+
+    /// The far field holds when the cut does (plan §8.15). The report
+    /// of `grand-julian-glitches6/7.fflame`: a six-degree turn of the
+    /// first transform, at a view whose lower half reads as exterior
+    /// -- inside the third map's hole, a disc about the origin whose
+    /// radius is `w·r_pre^{−1/8}` and depends on the flame only
+    /// through the ball's radius. The sampled radius grows 1.8% over
+    /// the turn and the whole exterior slides 15.8 pixels, uniformly;
+    /// with the second file's ball held at the first's, it moves a
+    /// tenth of a pixel. The set itself moves 94 pixels there at the
+    /// median, so the slide is not the set's.
+    #[test]
+    fn the_far_field_holds_when_the_cut_does() {
+        let g0 = g6_at((-0.33506f64).atan2(0.94218));
+        let g1 = g6_at((-0.23518f64).atan2(0.97194));
+        let held = g1.clone().with_extent(g0.ball.radius);
+        // the holes followed
+        for (a, b) in g1.maps.iter().zip(&held.maps) {
+            if let (Map2::NonlinearInverse(x), Map2::NonlinearInverse(y)) = (&a.inverse, &b.inverse) {
+                assert!(x.hole > 0.0 && y.hole > x.hole, "a smaller ball is a larger hole: {} vs {}", x.hole, y.hole);
+            }
+        }
+        let (pts, px) = g6_view(16);
+        let (mut free, mut with) = (0.0f64, 0.0f64);
+        let mut exterior = 0;
+        for &p in &pts {
+            let d0 = estimate(&g0, p, 35, 5).distance;
+            if d0 / px <= 41.0 {
+                continue;
+            }
+            exterior += 1;
+            let d1 = estimate(&g1, p, 35, 5).distance;
+            let dh = estimate(&held, p, 35, 5).distance;
+            free = free.max((d1 - d0).abs() / px);
+            with = with.max((dh - d0).abs() / px);
+        }
+        assert!(exterior > 50, "the view's lower half is exterior: {exterior}");
+        assert!(free > 10.0, "the slide the report is about: {free:.1} px");
+        assert!(with < 1.0, "held, the exterior stays put: {with:.2} px");
     }
 
     /// Greedy is a heuristic, and the dragon is where it shows.

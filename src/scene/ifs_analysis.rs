@@ -1685,6 +1685,11 @@ pub struct Ifs<A, P> {
     pub maps: Vec<IfsMap<A>>,
     pub final_map: Option<IfsMap<A>>,
     pub ball: Ball<P>,
+    /// The MEASURED ball's radius, which is what a solid's camera
+    /// frames. Equal to `ball.radius` unless [`Ifs2::with_extent`] /
+    /// [`Ifs3::with_extent`] moved the cut: the cut is the walk's
+    /// business and must not dolly the camera.
+    pub frame_radius: f64,
     /// The ball centre's scalar coordinate, for a solid whose kernels
     /// carry a fourth one (plan §8.11 step 3); zero otherwise.
     pub aux_centre: f64,
@@ -1747,10 +1752,16 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
             })
         })
         .collect();
-    // Each inversion's hole, now that the ball's reach in its
-    // pre-frame is known: the disc about the pre-frame origin that
-    // holds the whole attractor.
     let mut maps = maps;
+    set_holes(&mut maps, &ball);
+    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre })
+}
+
+/// Each inversion's hole, once the ball's reach in its pre-frame is
+/// known: the disc about the pre-frame origin that holds the whole
+/// attractor. The holes FOLLOW the ball, so whatever sets the ball's
+/// radius sets them.
+fn set_holes(maps: &mut [IfsMap<Map2>], ball: &Ball<[f64; 2]>) {
     for m in maps.iter_mut() {
         if let Map2::Nonlinear(r) | Map2::NonlinearInverse(r) = &mut m.inverse {
             let c = r.pre.apply(ball.centre);
@@ -1759,7 +1770,34 @@ pub fn analyse_2d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs2, V
             r.hole = r.kernel.hole_radius(r_pre);
         }
     }
-    Ok(Ifs { maps, final_map, ball, aux_centre })
+}
+
+impl Ifs2 {
+    /// The same set cut at `radius` about the measured centre, every
+    /// hole following -- the user's Extent (plan §8.15).
+    ///
+    /// For a set with inversions the ball is a cut through an
+    /// unbounded set and its radius is a sampled statistic, which
+    /// drifts as the flame animates; every far-field reading is
+    /// `σ·(r − R)` or a hole's edge, so the drift moves the exterior
+    /// of the picture bodily -- 16 pixels for a six-degree turn of one
+    /// transform, measured, while the set there moved 94. Holding the
+    /// radius holds the exterior to within a tenth of a pixel.
+    pub fn with_extent(mut self, radius: f64) -> Self {
+        self.ball.radius = radius.max(1e-9);
+        set_holes(&mut self.maps, &self.ball);
+        self
+    }
+}
+
+impl Ifs3 {
+    /// The solid's twin of [`Ifs2::with_extent`]. The solid's kernels
+    /// carry no hole, so only the walk's radius moves; `frame_radius`
+    /// stays, so the camera does not.
+    pub fn with_extent(mut self, radius: f64) -> Self {
+        self.ball.radius = radius.max(1e-9);
+        self
+    }
 }
 
 /// The 3D criterion, for a flame run with `preserve_z` on. A flame
@@ -1780,7 +1818,7 @@ pub fn analyse_3d(flame: &Flame, registry: &VariationRegistry) -> Result<Ifs3, V
         errs.push(Disqualification::NoBall);
         return Err(errs);
     };
-    Ok(Ifs { maps, final_map, ball, aux_centre })
+    Ok(Ifs { maps, final_map, frame_radius: ball.radius, ball, aux_centre })
 }
 
 /// The 3D map a transform composes to -- affine, or a nonlinear map

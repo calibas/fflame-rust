@@ -1636,6 +1636,15 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sol
             ui.label(
                 egui::RichText::new(t!("escape_panel.ifs_set_not_measure")).small().weak(),
             );
+            if radius > 0.0 {
+                // The measured ball, so the Extent parameter has a
+                // number to be set to (plan §8.15).
+                ui.label(
+                    egui::RichText::new(t!("escape_panel.ifs_extent", radius = format!("{radius:.4}")))
+                        .small()
+                        .weak(),
+                );
+            }
             if roots > 0 {
                 // Plan 8.8 J2: a root map's set is the FILLED one, and
                 // the flame draws its boundary. Said here, where the

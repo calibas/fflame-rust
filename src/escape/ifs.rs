@@ -137,6 +137,26 @@ pub static IFS_FLAME: IfsDef = IfsDef {
                       change.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "extent",
+            display_name: "Extent",
+            default: 0.0,
+            min: 0.0,
+            max: 100.0,
+            tooltip: "The radius of the ball the set is cut at, about its measured \
+                      centre; 0 measures it from the flame. For an affine set the \
+                      measurement is exact and this changes nothing worth having. \
+                      For a set with inversions (a julia of negative distance, \
+                      spherical) the set is unbounded, the ball is a cut through \
+                      it at the bulk of a sample, and every far-field reading -- \
+                      the smooth gradient beside a piece, the edge of every hole \
+                      -- is scaled by the radius. The sample drifts as the flame \
+                      animates, and the exterior slides with it: 16 pixels for a \
+                      six-degree turn of one transform, measured, while the set \
+                      there moved 94. The criterion above shows the measured \
+                      value; set it here to hold it through an animation.",
+            choices: &[],
+        },
     ],
     wgsl: r#"
 // The kernel's inverse on v, along the row's branch (plan 8.8 J1,
@@ -812,6 +832,26 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
             min: -2.0,
             max: 2.0,
             tooltip: "For a solid of quaternion maps (plan 8.11 step 3): the scalar                       coordinate the 3D picture is a slice of. Sweep it to walk                       through the 4D set. Nothing else reads it.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "extent",
+            display_name: "Extent",
+            default: 0.0,
+            min: 0.0,
+            max: 100.0,
+            tooltip: "The radius of the ball the set is cut at, about its measured \
+                      centre; 0 measures it from the flame. For an affine set the \
+                      measurement is exact and this changes nothing worth having. \
+                      For a set with inversions (a julia of negative distance, \
+                      spherical) the set is unbounded, the ball is a cut through \
+                      it at the bulk of a sample, and every far-field reading -- \
+                      the smooth falloff beside a piece -- is scaled by the \
+                      radius. The sample drifts as the flame animates, and the \
+                      exterior slides with it: 16 pixels for a \
+                      six-degree turn of one transform, measured, while the set \
+                      there moved 94. The criterion above shows the measured \
+                      value; set it here to hold it through an animation.",
             choices: &[],
         },
     ],
@@ -1866,8 +1906,8 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
         .max(1e-3);
     let ball2 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0], radius };
     let ball3 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0, 0.0], radius };
-    let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball2, aux_centre: 0.0 };
-    let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, ball: ball3, aux_centre: 0.0 };
+    let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball2.radius, ball: ball2, aux_centre: 0.0 };
+    let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball3.radius, ball: ball3, aux_centre: 0.0 };
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
     PackedIfs { globals, rows: Vec::new(), ifs, colors: Vec::new(), solid: Some((ifs3, Vec::new())) }
@@ -1881,7 +1921,16 @@ pub fn pack_for(
     registry: &crate::variations::VariationRegistry,
 ) -> Option<PackedIfs> {
     if def.needs_flame {
-        pack_flame(&config.flame, registry).ok()
+        // The user's Extent, when set: the radius the set is cut at.
+        // 0 (the default) is the measured ball.
+        let extent = config
+            .escape
+            .formula_params
+            .get("extent")
+            .copied()
+            .filter(|e| e.is_finite() && *e > 0.0)
+            .map(|e| e as f64);
+        pack_flame(&config.flame, registry, extent).ok()
     } else {
         Some(pack_standalone(def, &config.escape))
     }
@@ -2156,6 +2205,7 @@ pub fn packed_bytes_eq(a: Option<&PackedIfs>, b: Option<&PackedIfs>) -> bool {
 pub fn pack_flame(
     flame: &crate::scene::transforms::Flame,
     registry: &crate::variations::VariationRegistry,
+    extent: Option<f64>,
 ) -> Result<PackedIfs, Vec<crate::scene::ifs_analysis::Disqualification>> {
     let colors: Vec<f32> = flame.transforms.iter().map(|t| t.color).collect();
     // Either analysis may fail on its own: a flame that is a planar
@@ -2163,10 +2213,18 @@ pub fn pack_flame(
     // of 3D roots is a solid one and not a planar one. Both failing
     // is what "does not qualify" means; the planar reasons are the
     // ones reported, as the panel's criterion is the planar one.
-    let planar = crate::scene::ifs_analysis::analyse_2d(flame, registry);
+    let planar = crate::scene::ifs_analysis::analyse_2d(flame, registry)
+        .map(|ifs| match extent {
+            Some(r) => ifs.with_extent(r),
+            None => ifs,
+        });
     let solid = crate::scene::ifs_analysis::analyse_3d(flame, registry)
         .ok()
         .map(|ifs3| {
+            let ifs3 = match extent {
+                Some(r) => ifs3.with_extent(r),
+                None => ifs3,
+            };
             let rows3 = pack_maps3(&ifs3, &colors);
             (ifs3, rows3)
         });
@@ -2184,6 +2242,7 @@ pub fn pack_flame(
                 centre: [ifs3.ball.centre[0], ifs3.ball.centre[1]],
                 radius: ifs3.ball.radius,
             },
+            frame_radius: ifs3.frame_radius,
             aux_centre: 0.0,
         },
     };
@@ -2471,7 +2530,8 @@ pub fn solid_camera(
         axis(&escape.cam_target_z, ifs.ball.centre[2]),
     ];
 
-    let r = ifs.ball.radius.max(1e-12);
+    // The measured radius: Extent moves the cut, not the camera.
+    let r = ifs.frame_radius.max(1e-12);
     let distance = FRAME_DISTANCE * r / 2f64.powf(escape.zoom_log2);
 
     let (right, up, forward) = solid_frame(
@@ -2602,7 +2662,8 @@ pub fn solid_pixel_step(
     ifs: &Ifs3,
     height_px: f64,
 ) -> (f64, i64) {
-    let r = ifs.ball.radius.max(1e-12);
+    // The measured radius: Extent moves the cut, not the camera.
+    let r = ifs.frame_radius.max(1e-12);
     let tan_half = (escape.cam_fov.clamp(0.05, 3.0) as f64 * 0.5).tan();
     let x = (2.0 * tan_half * FRAME_DISTANCE * r).log2() - escape.zoom_log2 - height_px.max(1.0).log2();
     let e = x.floor();
@@ -2992,6 +3053,49 @@ pub fn pack_maps(ifs: &Ifs2, colors: &[f32]) -> Vec<IfsMapGpu> {
 
 #[cfg(test)]
 mod tests {
+    /// The user's Extent reaches the packed ball, and 0 leaves the
+    /// measured one alone.
+    #[test]
+    fn the_extent_is_the_users_when_set() {
+        let registry = crate::variations::global_registry();
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.flame = super::gpu_tests::sierpinski_flame();
+        cfg.escape.formula = "ifs_flame".to_string();
+        let def = super::get_ifs("ifs_flame").expect("mode D");
+        let measured = super::pack_for(def, &cfg, &registry).expect("packs");
+        cfg.escape.formula_params.insert("extent".to_string(), 0.0);
+        let zero = super::pack_for(def, &cfg, &registry).expect("packs");
+        assert!(super::packed_bytes_eq(Some(&measured), Some(&zero)), "0 is the measured ball");
+        cfg.escape.formula_params.insert("extent".to_string(), 7.5);
+        let held = super::pack_for(def, &cfg, &registry).expect("packs");
+        assert_eq!(held.globals[0][2], 7.5, "the packed radius is the user's");
+        assert_eq!(held.ifs.ball.centre, measured.ifs.ball.centre, "the centre is still measured");
+        assert_eq!(held.ifs.frame_radius, measured.ifs.ball.radius, "the framing radius is still measured");
+        assert!(!super::packed_bytes_eq(Some(&measured), Some(&held)));
+    }
+
+    /// On a solid the Extent moves the walk's cut and not the camera:
+    /// the camera frames the measured ball.
+    #[test]
+    fn the_extent_does_not_dolly_the_solid_camera() {
+        let registry = crate::variations::global_registry();
+        let cfg0 = solid_presets().into_iter().next().expect("a solid preset");
+        let mut cfg = cfg0.clone();
+        let def = super::get_ifs(&cfg.escape.formula).expect("mode D");
+        assert!(def.solid);
+        let measured = super::pack_for(def, &cfg, &registry).expect("packs");
+        cfg.escape.formula_params.insert("extent".to_string(), 9.0);
+        let held = super::pack_for(def, &cfg, &registry).expect("packs");
+        let (m3, _) = measured.solid.as_ref().expect("a solid reading");
+        let (h3, _) = held.solid.as_ref().expect("a solid reading");
+        assert_eq!(h3.ball.radius, 9.0);
+        assert_eq!(h3.frame_radius, m3.ball.radius);
+        let a = super::solid_camera(&cfg.escape, m3);
+        let b = super::solid_camera(&cfg.escape, h3);
+        assert_eq!(a.distance, b.distance, "the camera did not move");
+        assert_eq!(super::solid_pixel_step(&cfg.escape, m3, 512.0), super::solid_pixel_step(&cfg.escape, h3, 512.0));
+    }
+
     use super::*;
     use crate::scene::ifs_analysis::analyse_2d;
     use crate::scene::transforms::{Flame, Transform};
@@ -6443,7 +6547,7 @@ mod gpu_tests {
     fn a_flame_that_does_not_qualify_renders_nothing() {
         let guard = global_registry();
         assert!(
-            pack_flame(&folded_flame(), &guard).is_err(),
+            pack_flame(&folded_flame(), &guard, None).is_err(),
             "the fixture must actually fail the criterion"
         );
         drop(guard);
