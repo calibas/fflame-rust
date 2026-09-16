@@ -1788,6 +1788,25 @@ pub fn estimate_seeded3(
             .map(|&i| ifs.maps[i as usize].sigma_min)
             .unwrap_or_else(|| mean_sigma_min(&ifs.maps))
     };
+    // The two the walk keeps, which this had lost in the same way its
+    // planar twin had: the best FINISHED path, remembered by its bound
+    // rather than left to compete for a beam slot with a key that is
+    // no longer a number, and the deepest level any finished path
+    // reached. See `estimate_aux_ranked`.
+    //
+    // Latent rather than live when it was fixed, and measured so:
+    // neither rule can change an answer unless paths FINISH and the
+    // chain is deeper than one link, and no shipped solid does both.
+    // An affine solid never finishes a path; a `quaternion_julia`
+    // finishes them constantly but its two preimages tie, so the
+    // chain ends at once and the continuation IS the direct walk.
+    // Measured at zero difference on a cube, a tetrahedron and a
+    // quaternion julia, before and after. Fixed anyway, because the
+    // first solid that does both would find an over-read here, and in
+    // a marcher an over-read does not fatten a halo -- it puts a ray
+    // through a surface.
+    let mut best_done: Option<Cand<[f64; 3]>> = None;
+    let mut deepest_done = f64::NEG_INFINITY;
 
     for k in 0..max_levels {
         let mut all_done = true;
@@ -1804,6 +1823,11 @@ pub fn estimate_seeded3(
             }
             if !r.is_finite() || r > far {
                 c.done = true;
+                // Frozen INSIDE the ball says nothing about the piece
+                // (the walk's rule, and the shader's).
+                if !r.is_finite() && !(c.bound > 0.0) {
+                    c.bound = f64::INFINITY;
+                }
             } else {
                 all_done = false;
             }
@@ -1815,7 +1839,14 @@ pub fn estimate_seeded3(
         let mut next: Vec<Cand<[f64; 3]>> = Vec::with_capacity(live.len() * ifs.maps.len());
         for c in &live {
             if c.done {
-                next.push(c.clone());
+                if let Some((lvl, _, _)) = c.escape.as_ref() {
+                    deepest_done = deepest_done.max(*lvl);
+                }
+                if c.bound.is_finite()
+                    && best_done.as_ref().map_or(true, |b: &Cand<[f64; 3]>| c.bound < b.bound)
+                {
+                    best_done = Some(c.clone());
+                }
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
@@ -1840,18 +1871,23 @@ pub fn estimate_seeded3(
     let deepest_level = live
         .iter()
         .map(|c| c.escape.as_ref().map_or(total as f64, |(lvl, _, _)| *lvl))
-        .fold(f64::NEG_INFINITY, f64::max);
+        .fold(deepest_done, f64::max);
     // Among FINITE bounds. With `fold_level` a path's bound is finite
     // from level 0 on, so this only differs from a plain minimum when
     // the pixel itself was not a number -- but a non-finite bound must
     // never be the one answered, and this says so rather than relying
     // on it.
-    let best = live
+    let live_best = live
         .iter()
         .filter(|c| c.bound.is_finite())
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
-        .cloned()
-        .unwrap_or_else(|| live[0].clone());
+        .cloned();
+    let best = match (live_best, best_done) {
+        (Some(l), Some(d)) => if d.bound < l.bound { d } else { l },
+        (Some(l), None) => l,
+        (None, Some(d)) => d,
+        (None, None) => live[0].clone(),
+    };
     let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
     match best.escape {
         Some((level, address, point)) => {
@@ -3910,6 +3946,71 @@ mod tests {
         }
     }
 
+    /// The SOLID continuation answers what the walk answers.
+    ///
+    /// `estimate_seeded` was found to be a copy of the walk from
+    /// before the cut-outs were fixed -- no `best_done`, no
+    /// frozen-inside rule -- and read 11 to 41 pixels away from it on
+    /// an inversion set. `estimate_seeded3` had the same two gaps.
+    ///
+    /// They were LATENT there, and measuring that is why the fix was
+    /// worth making rather than worrying about. Neither rule can
+    /// change an answer unless paths FINISH and the chain is deeper
+    /// than one link, and no shipped solid does both: an affine solid
+    /// never finishes a path, and a `quaternion_julia` finishes them
+    /// constantly but its two preimages tie, so the chain ends at
+    /// once and the continuation IS the direct walk. The numbers
+    /// below were identical before the fix and after it.
+    ///
+    /// The gate stands for the solid that does both one day, where an
+    /// over-read does not fatten a halo -- it puts a ray through a
+    /// surface.
+    #[test]
+    fn the_solid_continuation_is_the_walk() {
+        let cases: Vec<(&str, Ifs3)> = vec![
+            ("unit cube", unit_cube()),
+            ("tetrahedron", tetrahedron()),
+            ("quaternion julia", qjulia3([0.0, 0.0, 0.0, -0.5], 2.0)),
+        ];
+        for (name, ifs) in cases {
+            // A target on the attractor, so the chain has somewhere to
+            // go.
+            let mut target = ifs.ball.centre;
+            for k in 0..40usize {
+                target = ifs.maps[k % ifs.maps.len()].forward.apply(target);
+            }
+            for &beam in &[1u32, 4] {
+                let chain = seed_chain3(&ifs, target, 1e-9, 200, beam);
+                let mut st: u64 = 0x2545_F491_4F6C_DD1D;
+                let mut next = move || {
+                    st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    (st >> 11) as f64 / (1u64 << 53) as f64
+                };
+                for _ in 0..2000 {
+                    let scale = 10f64.powf(-1.0 - next() * 6.0);
+                    let d = [
+                        (next() - 0.5) * scale,
+                        (next() - 0.5) * scale,
+                        (next() - 0.5) * scale,
+                    ];
+                    let q = [target[0] + d[0], target[1] + d[1], target[2] + d[2]];
+                    let direct = estimate(&ifs, q, 40, beam).distance;
+                    let seeded = estimate_seeded3(&ifs, &chain, d, 40, beam).distance;
+                    // Absolute, because both are distances in world
+                    // units and the ones that matter are near zero;
+                    // measured worst is 1.1e-12, which is f64 arriving
+                    // by two routes.
+                    assert!(
+                        (seeded - direct).abs() < 1e-9,
+                        "{name} beam {beam} at {d:?}: seeded {seeded}, direct {direct} \
+                         (chain {} links)",
+                        chain.levels.len()
+                    );
+                }
+            }
+        }
+    }
+
     /// Greedy is a heuristic, and the dragon is where it shows.
     ///
     /// Every address gives a valid bound on the distance to ITS piece;
@@ -4458,6 +4559,26 @@ mod tests {
         t.variations = HashMap::from([("linear3D".to_string(), 0.5)]);
         t.variation_order = vec!["linear3D".to_string()];
         t
+    }
+
+    /// A `quaternion_julia` solid: the one shipped kind whose inverse
+    /// sends points to infinity, so its walk actually FINISHES paths
+    /// -- which is the only condition under which `best_done` and the
+    /// frozen-inside rule change an answer.
+    fn qjulia3(c: [f32; 4], power: f32) -> Ifs3 {
+        let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        t.variations.clear();
+        t.variation_order.clear();
+        t.variations.insert("quaternion_julia".to_string(), 1.0);
+        t.variation_order.push("quaternion_julia".to_string());
+        t.set_variation_param("quaternion_julia", "cx", c[0]);
+        t.set_variation_param("quaternion_julia", "cy", c[1]);
+        t.set_variation_param("quaternion_julia", "cz", c[2]);
+        t.set_variation_param("quaternion_julia", "cw", c[3]);
+        t.set_variation_param("quaternion_julia", "power", power);
+        t.set_variation_param("quaternion_julia", "dist", 1.0);
+        t.set_variation_param("quaternion_julia", "inverse", 1.0);
+        analyse3(vec![t])
     }
 
     fn flame3(transforms: Vec<Transform>) -> Flame {
