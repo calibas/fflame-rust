@@ -105,22 +105,41 @@ terms. The rule: stop at the first level where `E` would exceed
 pixel -- `τ = 2⁻¹²` at the affine's cap of a quarter of the radius
 is far below that, and the constant is measured, not chosen (G2).
 
-**Three stopping rules, then, in the order tested per level.**
+**Built 2026-09-16, and the shape changed once it was measured.**
+The rule is not "stop when the budget runs out" but **walk under the
+hard rules and hand over at the best level**, because a second error
+pulls the other way and the plan as first written had only seen one
+of them.
 
-1. *Linearisation budget*: `E + ρ_k / s_k > τ` for any live
-   candidate. Near a pole `s_k` is small and the handover stops early
-   -- the view continues in f32 from there, which is what it does
-   today from level 0, so the failure mode is "no deeper than now",
-   never "wrong".
-2. *A gap edge within reach*: a candidate whose pre-frame position
-   is within `ρ_k` of a hole's or the unit disc's edge, since pixels
-   on the two sides take different branches (one gapped, one not).
-   Same shape as the view-agreement rule.
-3. *View agreement* as now, with each branch's reach widened by its
-   curvature allowance `ρ_k · (1 + ρ_k / s_k)`.
+*The hard rules*, which say how far the walk may go at all:
 
-The affine rule `basis_reach ≥ radius · HANDOVER_FRACTION` stays as
-the outer cap.
+1. *Linearisation budget*: the accumulated `Σ ρ_k/s_k`, times the
+   view's half-diagonal in pixels, may not exceed
+   `HANDOVER_PIXEL_BUDGET` (a tenth of a pixel). An affine map has
+   an infinite clearance and pays nothing, so every affine handover
+   is exactly where it was.
+2. *A branch the reference cannot take*: if any map is GAPPED at the
+   reference, the prefix ends. Its gap belongs in the answer's
+   minimum -- the walk scores it into `dead_min` -- and a seed has
+   nowhere to carry that, so dropping it would be an over-read.
+   A hole's edge is also a branch edge, so `NonlinearMap2::
+   singular_distance` folds `| |v| − hole |` in and rule 1 stops the
+   walk well before the view could straddle one.
+3. *View agreement*, and the cap `basis_reach ≥ radius ·
+   HANDOVER_FRACTION`, both unchanged.
+
+*And then the choice.* The shader stores each seed's position as an
+f32, so every pixel starts from a point wrong by `|position|·2⁻²⁴`.
+Divided by the pixel size at the handover that is a number of pixels,
+and it SHRINKS with depth, because the pixel grows with the view
+while the position's magnitude does not. The linearisation's error
+grows with depth. So the level to hand over at is the one minimising
+their sum, and for an affine walk -- which pays nothing for
+curvature -- that is always the last one, which is what it already
+did.
+
+For a nonlinear walk it can be any level, **including the first**,
+and that is not a degenerate case:
 
 ## 3. What each kernel has to supply
 
@@ -180,19 +199,28 @@ pairs suffice because only the linear term reads them).
 
 ## 4. What changes, and what does not
 
-- `SeedPoint` gains `apply_map(&self, m: &Map2) -> Self`, implemented
-  for `[f64; 2]` by `apply_inverse` and for `[BigFloat; 2]` by the
-  rung-1 rational forms (rung 2 with `sqrt`). A map outside the
-  implemented rungs makes `seed_beam` stop at level 0, as now.
-- `seed_beam`: the `!affine` break becomes the three rules of §2; the
-  child step uses `apply_map` and `inverse_jacobian`; `sigma` is the
-  product of local factors, which `Map2::step` already returns.
-- `Seed`, `Seeds`, `pack_seeds`, `MAX_SEEDS`, the `fdata` layout, the
-  shader's seeded start, `estimate_seeded`: **unchanged**. The
-  nonlinear handover produces the same fifteen numbers per seed.
+- `SeedPoint` gains `apply_map(&self, m: &Map2) -> Option<Self>`,
+  implemented for `[f64; 2]` by `apply_inverse` and for
+  `[BigFloat; 2]` by the rung-1 rational forms (rung 2 with `sqrt`).
+  A map outside the implemented rungs returns `None` and `seed_beam`
+  stops there, which is level 0 for those sets, as now. **Done.**
+- `seed_beam`: the `!affine` break becomes §2's rules; the child step
+  uses `apply_map` and `inverse_jacobian`; `sigma` multiplies
+  `Map2::local_sigma`, which is what `IfsSpace::step` computes
+  alongside the point for a walk whose point IS an `[f64; 2]`.
+  **Done.**
+- `Seed`, `Seeds`, `pack_seeds`, `MAX_SEEDS`, the `fdata` layout and
+  the shader's seeded start: unchanged **for a bounded nonlinear
+  set**, which is the claim §7 checked and the part that worked.
+  They are NOT enough for an inversion set: f32's mantissa at the
+  handover is what declines those, and widening it is a change to
+  all five. See §9.
+- `estimate_seeded` needed a fix of its own, though not for this
+  reason: it was a copy of the walk from before §8.12 and §8.13 of
+  [ifs-distance-rendering.md](ifs-distance-rendering.md). §7.
 - The 3D twin: `seed_beam3` / `compose3` take a 3×3 Jacobian the
   same way; Quaternion's inverse `qⁿ + c` is a polynomial (rung 1),
-  Root3/RootZ3 are rung 1 when `n` is an integer power.
+  Root3/RootZ3 are rung 1 when `n` is an integer power. Not built.
 
 ## 5. Gates
 
@@ -204,13 +232,17 @@ pairs suffice because only the linear term reads them).
   A map-level twin composes the affines and asserts the sound
   direction of the inequality
   (`a_nonlinear_maps_jacobian_composes_through_its_affines`).
-- **G2** The seeded walk is each pixel's own: `estimate_seeded`
-  against `estimate` from the pixel's own f64 position, on the
-  shipped nonlinear presets at zooms 0, 5, 10, 15, 20 (the last past
-  today's cap), beams 1 and 4: distance within 1e-3 px, address
-  identical. This is `a_seeded_walk_answers_what_a_direct_one_does`
-  widened to nonlinear sets, and it is what sets `τ`: the largest
-  `τ` at which it passes with margin.
+- **G2** The seeded walk is each pixel's own, **done**:
+  `estimate_seeded` against `estimate` from the pixel's own f64
+  position, on a julia dust, a grand julian and a Sierpinski at
+  zooms 2^12 through 2^28 -- distance within a quarter of a pixel
+  against a measured worst of 0.004, first branch identical, and the
+  handover required to reach level 5 or deeper where f32 alone would
+  not resolve the view
+  (`a_nonlinear_handover_answers_what_each_pixel_answers`). It is
+  what set the budget: a tenth of its value stops one to two levels
+  shallower for no gain and ten times it changes nothing, because
+  past that depth f32 and not the curvature decides.
 - **G3** The handover level tracks the zoom on a nonlinear set, as
   `the_handover_level_tracks_the_zoom` shows for affine ones, and
   stops early on a view whose centre orbit passes a pole (a fixture
@@ -221,9 +253,11 @@ pairs suffice because only the linear term reads them).
 - **G5** GPU: `the_seeded_walk_is_each_pixels_own` on a nonlinear
   preset -- the shader from the CPU's seeds against the shader from
   level 0, at a zoom under the cap.
-- **G6** The picture: a grand julian at zoom 40 rendered from the
-  app shows structure, not blocks, and the address colouring is
-  continuous across the frame.
+- **G6** The picture: a BOUNDED nonlinear set at zoom 2^28 rendered
+  from the app shows structure, not blocks, and the address
+  colouring is continuous across the frame. Not the grand julian:
+  §7 measured that it declines the handover, so its picture is not
+  this step's to fix.
 
 ## 6. What step 1 found, 2026-09-16
 
@@ -292,7 +326,68 @@ of `MᵀM` where the square root is a sum of squares and is added.
 That took the check from 7.7e-9 to 4.4e-16 and is why the tie can be
 asserted at machine precision at all.
 
-## 7. Cost and risk
+## 7. What step 2 found, 2026-09-16
+
+**The measurement first, because it decides the design.** A julia
+dust, maps `|v|^{1/2}` of positive distance, at the budget that
+ships:
+
+| zoom | handover | curvature error | f32, handed over | f32, level 0 |
+|---|---|---|---|---|
+| 2^12 | level 0 | 0 | 0.013 px | 0.013 px |
+| 2^20 | level 7 | 0.003 px | 0.031 px | 3.3 px |
+| 2^24 | level 11 | 0.004 px | 0.033 px | 52 px |
+| 2^28 | level 14 | 0.001 px | 0.038 px | 835 px |
+
+The last column is the cap this exists to lift: the shader forming
+`centre + basis·uv` in f32 at a centre of magnitude O(1). At zoom
+2^28 it is 835 pixels wrong and the picture is blocks; with the
+prefix it is four hundredths of a pixel. The curvature error -- the
+second-order term the Jacobian drops, measured with no f32 in it by
+running the continuation in f64 -- never reaches a hundredth of a
+pixel at any of these depths.
+
+**An inversion set gets none of it, and the rule says so.** A julian
+of negative distance and power 15 inverts to `|v|^{-15}`, which
+CONTRACTS the view wherever `|v| > 1`. One level collapses a seed's
+reach, and f32 at the handover would then be 1e15 pixels wrong -- it
+could not tell two pixels of the view apart. Level 0 is genuinely
+the best available and the walk picks it, at every zoom tested. So
+the grand julian of §8.12-8.15 keeps the cap it has. The fix for
+those is not a budget: it is a handover position carrying more than
+f32's mantissa, which is the next thing to build and is written up
+in §9.
+
+**The measurement was blocked by a stale copy of the walk.** Before
+any of the above could be read, `estimate_seeded` -- documented as
+"the reference for what the shader does after the handover" -- was
+found to disagree with the direct walk by **11 to 41 pixels on an
+inversion set with no handover taken at all**, which is the one case
+where the two must be identical by construction. It was a copy of
+the walk as it stood before §8.12 and §8.13: no `best_done`, so a
+finished path's final bound was pruned out of the beam and lost; no
+frozen-inside rule; no fully-gapped rule. The shader has all three,
+and so does `estimate_aux_ranked`; only the CPU reference had been
+left behind, and it passed its tests because they only exercise
+AFFINE sets, where those three rules almost never fire. Ported
+across, and budget 0 now reads 0.000 px, which is what made the rest
+of the table trustworthy.
+
+Its 3D twin, `estimate_seeded3`, has the same two of the three
+(there are no gaps in the solid walk). Not touched here: it feeds
+the marcher, where an over-read punches a ray through a surface, and
+it deserves its own measurement rather than a change made in
+passing.
+
+**And a caveat on the f32 number.** It is the worst over the seeds,
+and a seed whose reach has collapsed is one whose whole branch maps
+into a tiny region -- where the bound it contributes barely varies
+across the view, so the visible error is smaller than the metric
+says. The metric is conservative in the direction that declines a
+handover rather than takes a bad one, which is the right way round,
+but it is an estimate and not a measurement of the picture.
+
+## 8. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -311,12 +406,33 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 8. Order of work
+## 9. What is next
+
+For a bounded nonlinear set, nothing: the cap is lifted and §7's
+table is the evidence. The remaining work is the shader half -- the
+seeded start already reads `position + basis·uv` and needs no change
+in shape, so what is left is the GPU gate (G5) and a picture (G6).
+
+For an INVERSION set the handover declines, and the reason is f32's
+mantissa at the handover, not the linearisation: the curvature error
+at level 1 is a thousandth of a pixel while f32's is 1e15. So the
+lever is the seed's position, and the escape engine already has the
+two pieces -- `Cfe64`, a mantissa pair with a shared exponent, and
+the shader's floatexp. A seed position in a double-float would take
+f32's 2⁻²⁴ to about 2⁻⁴⁸ and move the collapse by twenty-four
+binary orders, which the same measurement would then re-read. That
+is a change to `Seed`, to `pack_seeds` and to the shader's seeded
+start, and it is the first thing §4's "nothing else changes" got
+wrong.
+
+## 10. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
-2. `SeedPoint::apply_map` for rung 1 in f64 and BigFloat; `seed_beam`
-   with the three rules; G2 at f64 precision on the grand julian.
+2. ~~`SeedPoint::apply_map` for rung 1 in f64 and BigFloat;
+   `seed_beam` with the three rules; G2 at f64 precision.~~ Done
+   2026-09-16; §7 records what it found, including that the three
+   rules became two plus a choice.
 3. G2 at BigFloat precision past zoom 20; G3.
 4. GPU gate G5; the app; G6.
 5. Rung 2 (sqrt kernels), same gates.

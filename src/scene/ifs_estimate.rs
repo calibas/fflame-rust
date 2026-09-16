@@ -757,9 +757,15 @@ fn mean_sigma_min<A>(maps: &[IfsMap<A>]) -> f64 {
 /// the reason is cancellation: after k levels the walk has computed
 /// `A_k·C + b_k` where `A_k ~ 2ᵏ` and the answer is O(1), so k bits of
 /// C are consumed to get there. At the handover k is about the zoom.
-pub trait SeedPoint: Clone {
+pub trait SeedPoint: Clone + Sized {
     /// Apply an affine map whose coefficients are f64.
     fn apply_affine(&self, a: &Affine2) -> Self;
+    /// Apply an INVERTED map of the IFS, of whatever kind, or `None`
+    /// when this representation cannot take that step -- a kernel
+    /// off the ladder of `ifs-nonlinear-perturbation.md` §3, or a
+    /// point with no preimage. The handover stops there, which is
+    /// where it stopped for every nonlinear map before.
+    fn apply_map(&self, m: &Map2) -> Option<Self>;
     /// Distance to an f64 point. The answer is O(1), so f64 holds it
     /// however precise `self` is.
     fn distance_to(&self, p: [f64; 2]) -> f64;
@@ -771,6 +777,11 @@ pub trait SeedPoint: Clone {
 impl SeedPoint for [f64; 2] {
     fn apply_affine(&self, a: &Affine2) -> Self {
         a.apply(*self)
+    }
+
+    fn apply_map(&self, m: &Map2) -> Option<Self> {
+        let q = m.apply(*self);
+        (q[0].is_finite() && q[1].is_finite()).then_some(q)
     }
 
     fn distance_to(&self, p: [f64; 2]) -> f64 {
@@ -837,6 +848,45 @@ pub struct Seeds {
 /// that, and close enough to O(1) for f32 to take over.
 pub const HANDOVER_FRACTION: f64 = 0.25;
 
+/// How much of a pixel the linearised handover may be wrong by, at
+/// the level it hands over.
+///
+/// A nonlinear inverse carries a pixel's offset through its JACOBIAN
+/// at the reference, which drops a second-order term. The dropped
+/// term is a fraction `ρ/s` of the one kept, with `ρ` the view's
+/// reach and `s` the distance to where the map stops being smooth
+/// (`Map2::singular_distance`), and it is carried forward by every
+/// later Jacobian exactly as the delta is -- so the RELATIVE error
+/// accumulates additively and the absolute error at the handover is
+/// `ρ_H · Σ ρ_k/s_k`.
+///
+/// Divide by the pixel size at the handover and the `ρ_H` cancels:
+/// `ρ/px` is the same number at every level, the view's half-diagonal
+/// in pixels, because both are the image of the view under the same
+/// linear map. So the error IN PIXELS is `Σ ρ_k/s_k` times that, and
+/// the budget below is what that product may reach.
+///
+/// An affine map has an infinite clearance and pays nothing, so this
+/// leaves every affine handover exactly where it was.
+///
+/// A tenth of a pixel, measured. On a julia dust at zooms 2^20, 2^24
+/// and 2^28 it reaches levels 7, 11 and 14 with a curvature error of
+/// 0.003, 0.004 and 0.001 pixels; a tenth of that budget stops one to
+/// two levels shallower for no gain, and ten times it changes
+/// nothing, because past this depth it is f32 and not the curvature
+/// that decides where to hand over.
+pub const HANDOVER_PIXEL_BUDGET: f64 = 0.1;
+
+/// One unit in the last place of an f32 mantissa.
+///
+/// The shader stores each seed's position as an f32 and every pixel
+/// starts from it, so the point it walks from is wrong by about
+/// `|position|·F32_ULP` -- a length, which becomes a number of PIXELS
+/// once divided by the pixel size at the handover. Handing over
+/// deeper makes it smaller, because the pixel grows with the view.
+/// See [`seed_beam_with`].
+const F32_ULP: f64 = 5.96e-8;
+
 /// Walk the beam from the view centre and stop while the whole view
 /// still behaves as one point.
 ///
@@ -872,6 +922,9 @@ pub const HANDOVER_FRACTION: f64 = 0.25;
 /// pixel or two, which is the artefact being fixed. Replaying the
 /// selection per level would be exact and about eight times the cost
 /// at depth.
+///
+/// **A nonlinear map is carried by its Jacobian**, and stops on
+/// [`HANDOVER_PIXEL_BUDGET`] rather than on being nonlinear at all.
 pub fn seed_beam<P: SeedPoint>(
     ifs: &Ifs2,
     centre: P,
@@ -879,6 +932,20 @@ pub fn seed_beam<P: SeedPoint>(
     px: f64,
     max_levels: u32,
     beam: u32,
+) -> Seeds {
+    seed_beam_with(ifs, centre, view_basis, px, max_levels, beam, HANDOVER_PIXEL_BUDGET)
+}
+
+/// [`seed_beam`] with the linearisation budget spelled out, so a
+/// measurement can sweep it.
+pub fn seed_beam_with<P: SeedPoint>(
+    ifs: &Ifs2,
+    centre: P,
+    view_basis: [[f64; 2]; 2],
+    px: f64,
+    max_levels: u32,
+    beam: u32,
+    pixel_budget: f64,
 ) -> Seeds {
     let ball = ifs.ball.centre;
     let radius = ifs.ball.radius;
@@ -893,10 +960,13 @@ pub fn seed_beam<P: SeedPoint>(
         }
         None => (centre, 1.0, view_basis),
     };
-    // The reference/delta split is an affine property (plan §8.5): a
-    // nonlinear IFS hands over at level 0, and the shader walks from
-    // the pixel's own f32 position (J6).
-    let affine = ifs.maps.iter().all(|m| m.inverse.is_affine());
+    // What the linearisation may spend, and what it has spent. The
+    // view's half-diagonal in pixels is the conversion between a
+    // relative error and a pixel, and it is the same at every level.
+    let reach_px = if px > 0.0 { basis_reach(view_basis) / px } else { 0.0 };
+    let budget =
+        if reach_px > 0.0 { pixel_budget / reach_px } else { f64::INFINITY };
+    let mut spent = 0.0f64;
 
     let r0 = q0.distance_to(ball);
     let mut live = vec![Cand {
@@ -911,6 +981,47 @@ pub fn seed_beam<P: SeedPoint>(
     }];
     let mut bases = vec![basis0];
     let mut level = 0u32;
+
+    // WHERE to hand over, as opposed to how far to walk.
+    //
+    // Two errors pull opposite ways. The linearisation's grows with
+    // depth: the view's reach grows and the dropped second-order term
+    // grows with it. f32's SHRINKS with depth: the pixel grows while
+    // `|position|·F32_ULP` does not. An affine map pays nothing for
+    // the first, so deeper is always better and the last level wins --
+    // which is what this did before and still does, by `all_affine`.
+    //
+    // A nonlinear map pays both, and the level that minimises their
+    // sum can be any of them, including the first. Measured on a
+    // grand julian: every level past 0 collapses one seed's reach --
+    // the inverse of a power-15 root contracts hugely where `|v| < 1`
+    // -- and f32 would add 1e15 pixels there, so no handover at all
+    // is genuinely the best available and the walk has to be able to
+    // say so. On a julia dust at zoom 2^20 the same rule takes level
+    // 9, where the two errors are 0.010 and 0.009 pixels.
+    let all_affine = ifs.maps.iter().all(|m| m.inverse.is_affine());
+    let choose = !all_affine && reach_px > 0.0;
+    let reach0 = basis_reach(view_basis);
+    let f32_pixels = |bs: &[[[f64; 2]; 2]], cs: &[Cand<P>]| -> f64 {
+        bs.iter()
+            .zip(cs)
+            .map(|(b, c)| {
+                let grown = basis_reach(*b) / reach0;
+                if !(grown > 0.0) {
+                    return f64::INFINITY;
+                }
+                // At the scale the continuation actually works at:
+                // its points are O(R) even where this one is not.
+                let p = c.q.to_f64();
+                let mag = p[0].hypot(p[1]).max(radius);
+                mag * F32_ULP / (px * grown)
+            })
+            .fold(0.0, f64::max)
+    };
+    // Level 0 is always a candidate: it is what a nonlinear IFS did
+    // before this, and it is sometimes still the best.
+    let mut best_error = if choose { f32_pixels(&bases, &live) } else { f64::INFINITY };
+    let mut best = if choose { Some((0u32, live.clone(), bases.clone())) } else { None };
 
     let mean = mean_sigma_min(&ifs.maps);
     let far = radius.max(1.0) * FAR;
@@ -974,22 +1085,45 @@ pub fn seed_beam<P: SeedPoint>(
         // carried; stopping on it ends the prefix at level 1, because
         // a beam wider than the branching factor prunes nothing and so
         // keeps every escapee from the first level onward.
-        if !affine || bases.iter().any(|b| basis_reach(*b) >= cap) {
+        if bases.iter().any(|b| basis_reach(*b) >= cap) {
             break;
         }
 
         let mut next: Vec<Cand<P>> = Vec::with_capacity(live.len() * ifs.maps.len());
         let mut next_bases: Vec<[[f64; 2]; 2]> = Vec::with_capacity(next.capacity());
-        for (c, basis) in live.iter().zip(&bases) {
+        // What each child's step costs the linearisation: the view's
+        // reach as a fraction of the clearance at the point the map
+        // was taken from. Zero for an affine, whose clearance is
+        // infinite and whose delta is exact.
+        let mut next_cost: Vec<f64> = Vec::with_capacity(next.capacity());
+        let mut stop = false;
+        'expand: for (c, basis) in live.iter().zip(&bases) {
             if c.done {
                 next.push(c.clone());
                 next_bases.push(*basis);
+                next_cost.push(0.0);
                 continue;
             }
+            let reach = basis_reach(*basis);
+            let qf = c.q.to_f64();
             for (i, m) in ifs.maps.iter().enumerate() {
-                let inv = m.inverse.as_affine().expect("checked affine above");
-                let q = c.q.apply_affine(&inv);
-                let sigma = c.sigma * m.sigma_min;
+                // A branch the REFERENCE cannot take. Its gap belongs
+                // in the answer's minimum -- the walk scores it into
+                // `dead_min` -- and a seed has nowhere to carry that,
+                // so the prefix ends here rather than drop it, which
+                // would be an over-read. Costs depth only on a set
+                // whose reference orbit passes through a hole.
+                if m.inverse.image_gap(qf).is_some() {
+                    stop = true;
+                    break 'expand;
+                }
+                let (Some(jac), Some(q)) = (m.inverse.jacobian(qf), c.q.apply_map(&m.inverse))
+                else {
+                    stop = true;
+                    break 'expand;
+                };
+                let s = m.inverse.singular_distance(qf);
+                let sigma = c.sigma * m.inverse.local_sigma(qf, m.sigma_min);
                 let r = q.distance_to(ball);
                 let mut child = c.clone();
                 child.q = q;
@@ -998,8 +1132,12 @@ pub fn seed_beam<P: SeedPoint>(
                 child.r = r;
                 child.address.push(i as u32);
                 next.push(child);
-                next_bases.push(compose_basis(&inv, *basis));
+                next_bases.push(compose_matrix(jac, *basis));
+                next_cost.push(if s > 0.0 { reach / s } else { f64::INFINITY });
             }
+        }
+        if stop {
+            break;
         }
         // The same ranking the walk uses — and the bases have to
         // follow their candidates through the sort, or every delta
@@ -1031,10 +1169,34 @@ pub fn seed_beam<P: SeedPoint>(
         if !view_agrees(&order, |i| next[i].r, |i| basis_reach(next_bases[i]), beam) {
             break;
         }
+        // And the linearisation's price for the level, paid only by
+        // the branches the beam keeps -- a branch about to be pruned
+        // does not have to be accurate.
+        let cost = order[..beam.min(order.len())]
+            .iter()
+            .fold(0.0f64, |acc, &i| acc.max(next_cost[i]));
+        if spent + cost > budget {
+            break;
+        }
+        spent += cost;
         order.truncate(beam);
         live = order.iter().map(|&i| next[i].clone()).collect();
         bases = order.iter().map(|&i| next_bases[i]).collect();
         level += 1;
+
+        if choose {
+            let err = spent * reach_px + f32_pixels(&bases, &live);
+            if err < best_error {
+                best_error = err;
+                best = Some((level, live.clone(), bases.clone()));
+            }
+        }
+    }
+
+    if let Some((l, c, b)) = best {
+        level = l;
+        live = c;
+        bases = b;
     }
 
     Seeds {
@@ -1105,8 +1267,18 @@ pub fn estimate_seeded(
     live.sort_by(cmp_for(resolved_key(ifs, RankKey::Auto)));
     live.truncate(beam);
     let mut dead_min = f64::INFINITY;
-
-    let mut best_escape: Option<(f64, Vec<u32>, [f64; 2])> = None;
+    // The same two the walk keeps, and this had lost: the best
+    // FINISHED path, which leaves the beam and is remembered by its
+    // bound, and the deepest level any finished path reached. Both
+    // are explained in `estimate_aux_ranked`. Without them this is a
+    // copy of the walk as it stood BEFORE the cut-outs were fixed,
+    // and on an inversion set it read 11 to 41 pixels away from the
+    // walk it is supposed to mirror -- measured on a grand julian at
+    // four zooms, with no handover taken at all, so the difference
+    // was the continuation's alone.
+    let mut best_done: Option<Cand<[f64; 2]>> = None;
+    let mut deepest_done = f64::NEG_INFINITY;
+    let key = resolved_key(ifs, RankKey::Auto);
     let sigma_of = |c: &Cand<[f64; 2]>| {
         c.address
             .last()
@@ -1130,6 +1302,11 @@ pub fn estimate_seeded(
             }
             if !r.is_finite() || r > far {
                 c.done = true;
+                // Frozen INSIDE the ball says nothing about the piece
+                // (the walk's rule, and the shader's).
+                if !r.is_finite() && !(c.bound > 0.0) {
+                    c.bound = f64::INFINITY;
+                }
             } else {
                 all_done = false;
             }
@@ -1141,7 +1318,18 @@ pub fn estimate_seeded(
         let mut next: Vec<Cand<[f64; 2]>> = Vec::with_capacity(live.len() * ifs.maps.len());
         for c in &live {
             if c.done {
-                next.push(c.clone());
+                // A done path never expands, so its bound is final: it
+                // leaves the beam and is remembered by that bound,
+                // rather than competing for a slot with a key that is
+                // no longer a number.
+                if let Some((lvl, _, _)) = c.escape.as_ref() {
+                    deepest_done = deepest_done.max(*lvl);
+                }
+                if c.bound.is_finite()
+                    && best_done.as_ref().map_or(true, |b: &Cand<[f64; 2]>| c.bound < b.bound)
+                {
+                    best_done = Some(c.clone());
+                }
                 continue;
             }
             for (i, m) in ifs.maps.iter().enumerate() {
@@ -1162,10 +1350,16 @@ pub fn estimate_seeded(
             }
         }
         if next.is_empty() {
+            // Every live path's branches were gaps: their own bounds
+            // are stale and the gaps are the answer (the walk's rule).
+            for c in live.iter_mut() {
+                if !c.done {
+                    c.bound = f64::INFINITY;
+                }
+            }
             break;
         }
-        next.sort_by(cmp_for(resolved_key(ifs, RankKey::Auto)));
-        next.truncate(beam);
+        keep_by_key(&mut next, beam, key, radius);
         live = next;
     }
 
@@ -1176,21 +1370,28 @@ pub fn estimate_seeded(
                 .as_ref()
                 .map_or((seeds.level + max_levels) as f64, |(lvl, _, _)| *lvl)
         })
-        .fold(f64::NEG_INFINITY, f64::max);
+        .fold(deepest_done, f64::max);
     // Among FINITE bounds. With `fold_level` a path's bound is finite
     // from level 0 on, so this only differs from a plain minimum when
     // the pixel itself was not a number -- but a non-finite bound must
     // never be the one answered, and this says so rather than relying
     // on it.
-    let best = live
+    let live_best = live
         .iter()
         .filter(|c| c.bound.is_finite())
         .min_by(|a, b| a.bound.partial_cmp(&b.bound).unwrap_or(std::cmp::Ordering::Equal))
-        .cloned()
-        .unwrap_or_else(|| live[0].clone());
-    let _ = &mut best_escape;
-    let distance = if best.bound.is_finite() { best.bound.max(0.0) } else { 0.0 };
-    let distance = distance.min(dead_min.max(0.0));
+        .cloned();
+    let best = match (live_best, best_done) {
+        (Some(l), Some(d)) => if d.bound < l.bound { d } else { l },
+        (Some(l), None) => l,
+        (None, Some(d)) => d,
+        (None, None) => live[0].clone(),
+    };
+    let distance = match (best.bound.is_finite(), dead_min.is_finite()) {
+        (true, _) => best.bound.max(0.0).min(dead_min.max(0.0)),
+        (false, true) => dead_min.max(0.0),
+        (false, false) => 0.0,
+    };
     match best.escape {
         Some((level, address, point)) => {
             Estimate { distance, level, address, point, escaped: true, deepest_level }
@@ -1711,14 +1912,20 @@ fn apply_basis(b: [[f64; 2]; 2], uv: [f64; 2]) -> [f64; 2] {
 /// translation is carried entirely by the reference, which is what
 /// makes the split exact for affine maps.
 fn compose_basis(inv: &Affine2, b: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
+    compose_matrix(inv.m, b)
+}
+
+/// The same, for a matrix that is a Jacobian rather than an affine's
+/// linear part -- the nonlinear step's delta, exact to first order.
+fn compose_matrix(m: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
     [
         [
-            inv.m[0][0] * b[0][0] + inv.m[0][1] * b[1][0],
-            inv.m[0][0] * b[0][1] + inv.m[0][1] * b[1][1],
+            m[0][0] * b[0][0] + m[0][1] * b[1][0],
+            m[0][0] * b[0][1] + m[0][1] * b[1][1],
         ],
         [
-            inv.m[1][0] * b[0][0] + inv.m[1][1] * b[1][0],
-            inv.m[1][0] * b[0][1] + inv.m[1][1] * b[1][1],
+            m[1][0] * b[0][0] + m[1][1] * b[1][0],
+            m[1][0] * b[0][1] + m[1][1] * b[1][1],
         ],
     ]
 }
@@ -3194,6 +3401,97 @@ mod tests {
         assert!(exterior > 50, "the view's lower half is exterior: {exterior}");
         assert!(free > 10.0, "the slide the report is about: {free:.1} px");
         assert!(with < 1.0, "held, the exterior stays put: {with:.2} px");
+    }
+
+    /// G2 of `ifs-nonlinear-perturbation.md`: a NONLINEAR handover
+    /// answers what each pixel's own walk answers, and gets deep
+    /// enough to be worth taking.
+    ///
+    /// The seeded walk runs in f64 here, so what this measures is the
+    /// LINEARISATION -- the second-order term the Jacobian drops --
+    /// with no f32 in it. The f32 half is what the handover level is
+    /// chosen to minimise, and it is measured beside it.
+    ///
+    /// Measured at the budget that ships, on a julia dust whose maps
+    /// are roots of positive distance:
+    ///
+    /// | zoom | handover | curvature | f32, handed over | f32, not |
+    /// |---|---|---|---|---|
+    /// | 2^20 | level 7 | 0.003 px | 0.031 px | 3.3 px |
+    /// | 2^24 | level 11 | 0.004 px | 0.033 px | 52 px |
+    /// | 2^28 | level 14 | 0.001 px | 0.038 px | 835 px |
+    ///
+    /// The last column is what a nonlinear set had before this: the
+    /// shader forming `centre + basis·uv` in f32 at a centre of
+    /// magnitude O(1), which stops resolving pixels somewhere past
+    /// zoom 2^17 and is why the picture went to blocks.
+    ///
+    /// **An inversion set gets none of this, and the rule says so
+    /// rather than pretending.** A julian of negative distance and
+    /// power 15 inverts to `|v|^{-15}`, which CONTRACTS the view
+    /// wherever `|v| > 1`; one step collapses a seed's reach and f32
+    /// could not tell two pixels apart there. Level 0 -- no handover
+    /// -- is then genuinely the best available, and the walk picks
+    /// it. The cap on those sets is unchanged and the fix is not a
+    /// budget: it is a handover position with more than f32's
+    /// mantissa, which is §7.
+    #[test]
+    fn a_nonlinear_handover_answers_what_each_pixel_answers() {
+        let cases: Vec<(&str, Ifs2, bool)> = vec![
+            ("julia dust", julia([-0.4, 0.6]), true),
+            ("grand julian", grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]), false),
+            ("sierpinski", sierpinski(), true),
+        ];
+        for (name, ifs, deepens) in cases {
+            let smp = chaos_sample(&ifs, 20_000);
+            let target = smp[smp.len() - 1];
+            for &zoom in &[12.0f64, 20.0, 24.0, 28.0] {
+                let span = 4.0 / 2f64.powf(zoom);
+                let view_basis = [[span, 0.0], [0.0, -span]];
+                let px = span / 96.0;
+                let seeds = seed_beam(&ifs, target, view_basis, px, 200, 8);
+                let total = 60u32;
+                let after = total.saturating_sub(seeds.level).max(1);
+                for gy in 0..7 {
+                    for gx in 0..7 {
+                        let uv = [gx as f64 / 6.0 - 0.5, gy as f64 / 6.0 - 0.5];
+                        let d = apply_basis(view_basis, uv);
+                        let p = [target[0] + d[0], target[1] + d[1]];
+                        let direct = estimate(&ifs, p, total, 8);
+                        let seeded = estimate_seeded(&ifs, &seeds, uv, after, 8);
+                        let direct_px = direct.distance / px;
+                        // A quarter of a pixel against a measured
+                        // worst of 0.004: what this catches is a
+                        // basis composed wrongly or attached to the
+                        // wrong candidate, which is off by O(1).
+                        assert!(
+                            (seeded.distance - direct_px).abs() <= 0.25 + 1e-4 * direct_px.abs(),
+                            "{name} zoom 2^{zoom} at {uv:?}: seeded {} px, direct {direct_px} px \
+                             (handover at level {})",
+                            seeded.distance,
+                            seeds.level
+                        );
+                        assert_eq!(
+                            seeded.address.first(),
+                            direct.address.first(),
+                            "{name} zoom 2^{zoom} at {uv:?}: the handover changed the first branch \
+                             (handover at level {})",
+                            seeds.level
+                        );
+                    }
+                }
+                // And it is worth taking: past the zoom where f32
+                // stops resolving the view, the prefix has to be
+                // doing the work.
+                if deepens && zoom >= 20.0 {
+                    assert!(
+                        seeds.level >= 5,
+                        "{name} zoom 2^{zoom}: handed over at level {}, which leaves the view to f32",
+                        seeds.level
+                    );
+                }
+            }
+        }
     }
 
     /// Greedy is a heuristic, and the dragon is where it shows.
