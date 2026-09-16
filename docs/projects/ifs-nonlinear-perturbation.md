@@ -524,17 +524,63 @@ table is the evidence. The remaining work is the shader half -- the
 seeded start already reads `position + basis·uv` and needs no change
 in shape, so what is left is the GPU gate (G5) and a picture (G6).
 
-For an INVERSION set the handover declines, and the reason is f32's
-mantissa at the handover, not the linearisation: the curvature error
-at level 1 is a thousandth of a pixel while f32's is 1e15. So the
-lever is the seed's position, and the escape engine already has the
-two pieces -- `Cfe64`, a mantissa pair with a shared exponent, and
-the shader's floatexp. A seed position in a double-float would take
-f32's 2⁻²⁴ to about 2⁻⁴⁸ and move the collapse by twenty-four
-binary orders, which the same measurement would then re-read. That
-is a change to `Seed`, to `pack_seeds` and to the shader's seeded
-start, and it is the first thing §4's "nothing else changes" got
-wrong.
+**For an INVERSION set -- a grand julian -- the handover declines,
+and the reason is not what this section first said.** It said the
+lever was a wider seed position, a double-float in place of the f32,
+on the grounds that f32's error at level 1 is 1e15 pixels. That
+guess does not survive its own arithmetic: twenty-four more bits buy
+a factor of 1.7e7, and 1e15 needs fifty.
+
+Measured instead (`probe_the_bits_an_inversion_would_need`), the
+precision a level needs -- `px·(reach_k/reach_0)/|position|`, whose
+negative log is the bits -- on the reported grand julian at zoom
+2^20:
+
+| level | 0 | 1 | 2 | 3 | 4 | 5 | **6** | **7** | 8 |
+|---|---|---|---|---|---|---|---|---|---|
+| bits | 30.3 | 80.5 | 28.3 | 30.7 | 59.2 | 30.5 | **16.5** | **18.6** | 50.6 |
+
+f32 has 24. So the set is not short of precision in principle --
+levels 6 and 7 sit comfortably inside it -- and no FIXED width fixes
+anything, because the requirement swings sixty bits between adjacent
+levels. What is needed is the ability to hand over at a good level
+rather than a bad one, and precision costs nothing to pass THROUGH:
+the walk crosses levels 1 and 4 in `BigFloat` for free, since only
+the level actually handed over at is ever stored in an f32.
+
+**And the walk already gets there.** Traced, it reaches level 6 and
+REJECTS it, choosing level 2 at an error of 19.9 pixels. Nor is it
+the gap rule or the view-agreement rule: relaxing each in turn
+changes nothing. The cause is the beam. The ranking key asks *which
+piece is this point nearest*, and the handover needs *which lineage
+has expanded the view* -- on a contractive set those are the same
+lineages, and on one whose inverses alternately expand and contract
+by ten orders they are not. The beam keeps the near ones; the
+objective is then only as good as the worst seed it was handed.
+
+So the next step for grand julians is a **per-seed handover level**,
+not more bits: let each seed stop where it is individually best,
+instead of making every seed stop where the beam as a whole does.
+The shader continues each seed independently already, and `Seed` has
+room; what needs care is that `Seeds.level` currently means one
+level for all of them -- the escape colouring counts from it -- and
+that a frontier of mixed levels is not a level-k beam, so the
+view-agreement argument has to be re-made rather than assumed.
+
+Two smaller things fall out of the same measurement and are worth
+doing first, because both are contained:
+
+- **Carry `dead_min` through the handover.** The prefix stops at the
+  first branch the reference cannot take, because a gap belongs in
+  the answer's minimum and a seed has nowhere to put it. One number
+  per `Seeds`, scored conservatively over the view the way the bound
+  already is, removes a stopping rule outright.
+- **Widen the seed position anyway**, but knowing what it buys: not
+  the collapse at level 1, but the levels that miss by a few bits --
+  level 0 needs 30.3 against f32's 24, and level 2 needs 28.3. It
+  does NOT lift the no-handover cap, because the shader's walk is
+  f32 throughout and a delta far below the position's own ulp is
+  swamped by the first step whatever it was stored in.
 
 ## 12. Order of work
 
@@ -551,6 +597,12 @@ wrong.
 4. ~~GPU gate G5~~; the app; G6 -- the Douady Rabbit renders with a
    sharp, self-similar boundary at 2^4, 2^12, 2^20 and 2^28
    (`output/deepzoom/sheet.png`).
-5. Rung 2 (sqrt kernels), same gates.
-6. The 3D twin.
-7. Record here what `τ` came out as and what the cap became.
+5. Carry `dead_min` through the handover, so a gapped branch stops
+   costing the prefix its remaining levels (§11).
+6. A per-seed handover level, which is what a grand julian needs
+   (§11). The measurement is there; the soundness argument is not.
+7. Rung 2 (sqrt kernels: bubble, hemisphere), same gates.
+8. The 3D twin -- `seed_beam3`, and the `estimate_seeded3` staleness
+   §7 left alone.
+9. G3: the handover level against the zoom, and a fixture whose
+   reference orbit passes a pole.
