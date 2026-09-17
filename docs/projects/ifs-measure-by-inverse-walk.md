@@ -236,7 +236,11 @@ ball's centre the distance walk ranks by (D3).
    enough. What remains of this item is the SHADER half: probability,
    determinant, stop rule and sum in WGSL, against the CPU
    enumeration as its reference.
-3. **Colour and units.** D4 and D5; G2 and G4.
+3. ~~**Colour**~~ -- measured 2026-09-17, §5f: the address fold is
+   four to twenty-six times better than a coarse lookup and its
+   error falls toward zero with the zoom, inside one palette entry
+   on the affine sets and three on the grand julian. **Units (D4)
+   are still open** and are the remaining half of this item.
 4. **Monte Carlo** (D3), if G1 shows the beam sum's bias on the
    overlap fixtures.
 5. **Depth.** Nothing to build: the walk is the seeded walk, and
@@ -529,6 +533,69 @@ Not covered: `disc`, whose twelve branches are the same shape of
 correction as bubble's two and which is the one kernel where
 `branch_count` depends on the ball.
 
+## 5f. Colour comes out of the address, 2026-09-17
+
+§2's colour claim, measured. The flam3 rule
+`c' = c(1+s)/2 + col_i(1-s)/2` folded along the address in FORWARD
+order -- the walk applies `S_{a_1}⁻¹` first, so the forward sequence
+runs `a_k` first and `a_1` LAST, and the shallowest branch dominates
+with weight a half -- from a `c_0` read out of a second coarse
+channel (D5's mean palette coordinate). Each fixture's transforms
+were given distinct colours spread over the palette and
+`color_speed` zero, so a right answer is not right by everything
+being equal. The reference is the direct chaos game's own mean
+palette coordinate per pixel.
+
+**The control has to be chosen carefully or it says nothing.** The
+first run put the coarse grid at 512 across the ball, where a cell
+spans two to eight view pixels -- and a plain coarse lookup AT THE
+PIXEL was as good as the address rule, because at that scale it is
+just reading the answer out of a coarse render of the same thing. At
+64 across the ball, where a cell spans sixteen to sixty-four view
+pixels and a coarse lookup has to average over all of them, the
+comparison means something:
+
+| set, zoom | address rule | coarse lookup |
+|---|---|---|
+| gasket equal, 2^2 | 0.0010 | 0.0034 |
+| gasket equal, 2^4 | 0.0003 | 0.0039 |
+| gasket equal, 2^6 | **0.0000** | 0.0023 |
+| dragon, 2^2 | 0.0010 | 0.0122 |
+| dragon, 2^4 | 0.0001 | 0.0052 |
+| fat gasket, 2^4 | 0.0002 | 0.0032 |
+| grand julian, 2^4 | 0.0134 | 0.0409 |
+| grand julian, 2^6 | 0.0128 | 0.0440 |
+| bubble pair, 2^4 | 0.0032 | 0.0228 |
+
+Median absolute error in the palette coordinate, which runs 0 to 1;
+one entry of a 256-colour palette is 0.0039. **The address rule is
+four to twenty-six times better than the lookup, and its error falls
+toward zero as the zoom deepens** -- 0.0010, 0.0003, 0.0000 on the
+gasket -- which is the `2⁻ᵏ` damping of `c_0` doing exactly what §2
+said it would. On the affine sets it is well inside one palette
+entry; the grand julian's 0.013 is three entries and the largest
+seen.
+
+The `julia` dust reads 0.0000 both ways and is no evidence: it has
+ONE transform, so every address carries the same colour.
+
+**And a coarse-resolution floor, found by accident.** The 64-across
+grid that made the colour control honest broke the DENSITY on the
+bubble pair -- median 0.518 at a four-cell stop against 0.984 at 512
+across, and 0.036 at sixty-four cells. §5a's sweep of 128, 512 and
+2048 found the formula resolution-stable, and 64 is simply below the
+useful range: the attractor occupies a fraction of 4096 cells and ρ
+is not resolved. D1's 2048 stands; the floor is somewhere between 64
+and 128 and is set by how much of the grid the attractor covers,
+which is a per-flame quantity worth reporting beside the Extent.
+
+The colour numbers above are therefore measured in a regime where
+the density weights are approximate on two of the fixtures. The
+comparison survives it -- both variants share the weights, so the
+ratio between them is unaffected -- but the absolute colour error on
+the bubble pair and the grand julian would be worth re-reading at
+2048 once D1 is built.
+
 ## 6. Gates
 
 - **G1. The measure is the chaos game's.** At 2^2 to 2^6 on the
@@ -569,6 +636,7 @@ correction as bubble's two and which is the one kernel where
 | the footprint is a first-order parallelogram and a curved map outgrows it (§5d) | the grand julian's spread doubles between a four-cell and a sixty-four-cell stop | D2 stops at the depth the linearisation still covers; the quadratic the distance walk carries would lift it |
 | a root's probability must be split between its forward branches (§5d) | the julia dust reads 4.3x at depth 2 and 32.9x at depth 6 without it | measured, corrected, and the affine control pins it: the dragon does not move |
 | a bubble's INVERSE branches must NOT be (§5e) | normalising over maps rather than transforms reads 0.035 against 0.983 | measured, corrected; the two kernels need opposite treatment and the fixture set now contains both |
+| the coarse grid can be too coarse for the density (§5f) | a 64-across grid reads 0.52 on the bubble pair where 512 reads 0.98 | D1's 2048 stands; the floor is between 64 and 128 and depends on how much of the grid the attractor covers |
 | the determinant along a contracting lineage underflows f32 | a lineage weighted zero that should count | the same scaled-float care the delta walk takes with σ; carry `log det` |
 
 ## 8. Deliberately not here
