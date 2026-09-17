@@ -7796,30 +7796,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             t.set_variation_param("julian", "dist", -1.0);
             t
         };
-        // The third field is whether this fixture's beam keys
-        // DISCRIMINATE. Where every map is alike up to a translation
-        // -- a dragon, an equal-weight gasket -- every lineage carries
-        // the same probability and the same determinant, so the beam
-        // is choosing between ties and which members of a tied set
-        // survive is arbitrary. The shader and the reference keep
-        // different ones, and no ordering rule fixed it: sorting the
-        // survivors by key changed nothing, while giving the gasket
-        // unequal weights took its colour from 0.145 to 0.014. Those
-        // fixtures are reported, not asserted.
-        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>, bool)> = vec![
+        // Every fixture is asserted. An earlier version reported two
+        // of them instead, on the theory that sets whose maps are
+        // alike have tied beam keys and so an arbitrary answer. That
+        // theory was wrong -- both were the forced level not reaching
+        // the walk -- and the cost of believing it was that the gate
+        // stopped looking at exactly the two fixtures that had
+        // something to say.
+        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>)> = vec![
             ("dragon", vec![
                 aff(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
                 aff(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
-            ], false),
+            ]),
             ("gasket", vec![
                 { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.0, 0.0); t.weight = 1.0; t },
                 { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.5, 0.0); t.weight = 1.37; t },
                 { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.25, 0.5); t.weight = 0.61; t },
-            ], false),
-            // Powers 2 and 3: unequal probabilities and unequal
-            // determinants, so the keys separate every lineage and
-            // there is no tie to break.
-            ("julia dust", vec![jul(2.0), jul(3.0)], true),
+            ]),
+            ("julia dust", vec![jul(2.0), jul(3.0)]),
         ];
 
         let (device, queue) = device();
@@ -7829,7 +7823,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             &base.flame, base.palette_size,
         );
 
-        for (name, mut transforms, strict) in cases {
+        for (name, mut transforms) in cases {
             let n = transforms.len().max(2) - 1;
             for (i, t) in transforms.iter_mut().enumerate() {
                 t.color = i as f32 / n as f32;
@@ -7993,16 +7987,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let dm = derr[derr.len() / 2].exp();
             let cm = cerr[cerr.len() / 2];
             println!(
-                "  {name:<12} {:>4} px | density ratio median {dm:.4} | colour |err| {cm:.5}{}",
-                derr.len(),
-                if strict { "" } else { "  (tied keys: reported, not asserted)" }
+                "  {name:<12} {:>4} px | density ratio median {dm:.4} | colour |err| {cm:.5}",
+                derr.len()
             );
             assert!(
-                !strict || (0.97..=1.03).contains(&dm),
+                (0.96..=1.04).contains(&dm),
                 "{name}: the shader's measure reads {dm:.4} of the f64 walk's"
             );
             assert!(
-                !strict || cm < 0.01,
+                cm < 0.01,
                 "{name}: the shader's palette is {cm:.5} off the f64 walk's"
             );
         }
