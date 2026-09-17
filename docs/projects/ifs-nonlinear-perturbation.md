@@ -748,7 +748,66 @@ this set. The new gate goes to 2^200 and asserts what can still be
 asserted without a reference: that the prefix kept a beam and that
 the answers are finite and non-negative.
 
-## 16. Cost and risk
+## 16. Where a grand julian caps, and why it depends where, 2026-09-16
+
+**Reported from use:** "I can zoom to about 1e10 in certain regions of
+the grand julian now." That is about 2^33, against roughly 2^14
+before the handover carried nonlinear maps at all. The second half of
+the sentence is the part worth measuring: the prefix follows the view
+centre's REFERENCE ORBIT, so how deep it gets is a property of where
+you are, and two points on the same set cap at different zooms.
+
+Measured at six targets on the reported flame, at zooms from 2^20 to
+2^46 (`probe_where_a_grand_julian_caps`), the totals do not fall off a
+cliff -- they OSCILLATE. One target reads 1.05, 0.79, 2.11, 1.64,
+3.04, 0.60, 3.12 pixels as the zoom climbs. A zoom that looks clean
+and one that does not can be three binary orders apart on the same
+flame, which is exactly "certain regions".
+
+**Why.** The f32 cost of a level is set by how far the view has
+EXPANDED by then, and on a set whose inverses alternately expand and
+contract it swings enormously from level to level. Traced at one
+target: the f32 cost of adjacent levels ran 2.4e17, 2026, 3.7e12,
+125, 1.9e9, 2.9e6, 1.3e13, 7599, 6.7e16, 4.7 pixels. Only a handful
+of levels are usable at all, and whether a usable one also has low
+curvature depends on the zoom. The objective picks the best of what
+exists; at some zooms nothing good exists.
+
+**The worst-seed problem is real.** The handover's f32 cost is the
+WORST seed's, and the beam holds collapsed and expanded lineages at
+once: at one level the seeds' expansion spanned 1.35e-5 to 1.12e4,
+nine orders, so the collapsed seed priced the level at 5.6e6 pixels
+while its neighbour would have been exact.
+
+**Retiring the collapsed seed does not work, and the measurement says
+why.** Folding its bound into `dead_min` and dropping it from the
+beam -- the same machinery the gaps ride in, and sound, since a
+frozen bound is smaller than a refined one -- was tried and made
+things markedly WORSE: one target went from 9.3 pixels to 460 at
+2^33, another from 10.9 to 76 at 2^20. A collapsed lineage's piece
+still matters to the answer, and freezing its bound loses far more
+than the f32 it saves. The guess that "its bound barely varies across
+the view, so freezing costs little" was wrong, and it was wrong by two
+orders.
+
+**What that leaves.** A true per-seed handover LEVEL, which is not
+the same thing as retirement: each seed stops where it is
+individually best and its continuation still refines from there,
+where a retired seed refines no further. That keeps the accuracy
+retirement threw away and removes the worst-seed pricing. It is a
+change to `Seed`, to `pack_seeds` -- there is room in the words the
+quadratic left spare -- and to the shader's escape-level arithmetic,
+which counts from one handover level for all seeds today.
+
+**And one rule removed on the way.** The objective used to stop
+walking once the curvature passed the best total found, on the
+argument that the curvature only grows. That was true of the MODEL
+and is false of the measurement: it swings by two orders between
+adjacent levels. Removed. Measured to change nothing on the sets
+tested -- it is out because its justification is gone, not because it
+cost anything.
+
+## 17. Cost and risk
 
 The CPU pays `beam × maps` inverse evaluations per level, as now, in
 `BigFloat` where today they are f64 affines; a rung-1 root costs a
@@ -767,7 +826,7 @@ the centre and can leave the ball at any level; that is state the
 seed carries already (`escape`, `done`), and the same rule applies:
 the cut is the cut.
 
-## 17. What is next
+## 18. What is next
 
 For a bounded nonlinear set, nothing: the cap is lifted and §7's
 table is the evidence. The remaining work is the shader half -- the
@@ -847,7 +906,7 @@ the no-handover cap, because the shader's walk is f32 throughout and
 a delta far below the position's own ulp is swamped by the first
 step whatever it was stored in.
 
-## 18. Order of work
+## 19. Order of work
 
 1. ~~Jacobians and singular distances for the six kernels, with G1.~~
    Done 2026-09-16; §6 records what it found.
@@ -863,8 +922,11 @@ step whatever it was stored in.
    sharp, self-similar boundary at 2^4, 2^12, 2^20 and 2^28
    (`output/deepzoom/sheet.png`).
 5. ~~Carry `dead_min` through the handover~~ -- done, §10.
-6. ~~A per-seed handover level~~ -- measured to be a non-issue: the
-   grand julian's handover holds one seed (§12).
+6. **A per-seed handover level** -- reopened. §12 measured it a
+   non-issue on a one-seed handover; §16 measured the beam holding
+   three seeds whose view-expansion spans nine orders, where the
+   worst one prices every level. Retirement is NOT the cheap version
+   of it and was measured two orders worse (§16).
 7. ~~The second-order term~~ -- done (§13). The objective stopped
    predicting and started measuring against level 0, and with a
    trustworthy number the quadratic pays: the grand julian's total
