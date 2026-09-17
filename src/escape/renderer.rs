@@ -682,6 +682,17 @@ pub struct EscapeRenderer {
     /// record means "no surface", and that is what lets the relight
     /// run over rows the walk has not reached yet.
     ifs_geom_buffer: Buffer,
+    /// The coarse pass the MEASURE walk reads: an ordinary render of
+    /// the whole attractor, packed by `ifs::pack_coarse` as a header
+    /// and one `vec2<f32>` of (density, palette) per cell.
+    ///
+    /// View-independent -- it covers the ball and is rebuilt only when
+    /// the flame changes -- so it is uploaded beside the maps rather
+    /// than with the per-view seeds. Bound at one dummy element for
+    /// every other walk, which reads it never, for the same reason the
+    /// seed chain is bound for the planar walk: one layout for one
+    /// shader family.
+    ifs_coarse_buffer: Buffer,
     ifs_geom_px: u32,
     /// Interaction preview (mode D): render one pixel in each 2×2
     /// block while the user is still moving something, every pixel
@@ -1502,6 +1513,20 @@ impl EscapeRenderer {
                     },
                     count: None,
                 },
+                // The coarse pass for the measure walk. Bound at a
+                // dummy element for every other walk; a layout entry
+                // the shader does not read is allowed and costs
+                // nothing.
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let ifs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1518,6 +1543,12 @@ impl EscapeRenderer {
         });
         let ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape IFS Geometry"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ifs_coarse_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape IFS Coarse Measure"),
             size: 16,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -1548,6 +1579,7 @@ impl EscapeRenderer {
             ifs_chain_buffer,
             ifs_chain_capacity: 0,
             ifs_geom_buffer,
+            ifs_coarse_buffer,
             ifs_geom_px: 0,
             preview: false,
             ifs: None,
@@ -3752,6 +3784,43 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         true
     }
 
+    /// Upload the coarse pass the measure walk reads.
+    ///
+    /// Packed by [`super::ifs::pack_coarse`]: a two-element header of
+    /// `(res, radius)` and the grid's centre, then one `vec2<f32>` of
+    /// (density per unit area, mean palette coordinate) per cell. The
+    /// shader's reader is `super::ifs::read_coarse` transcribed, and
+    /// `the_packed_coarse_grid_is_the_measure_it_came_from` is what
+    /// keeps the two from drifting.
+    ///
+    /// Keyed on nothing: the caller rebuilds this only when the flame
+    /// changes, since it covers the ball and no view moves it.
+    /// Returns whether anything was written.
+    pub fn set_coarse(&mut self, device: &Device, queue: &Queue, packed: &[[f32; 2]]) -> bool {
+        if packed.len() < super::ifs::COARSE_HEADER {
+            return false;
+        }
+        let bytes = bytemuck::cast_slice::<[f32; 2], u8>(packed);
+        let want = bytes.len() as u64;
+        if self.ifs_coarse_buffer.size() < want {
+            let old = std::mem::replace(
+                &mut self.ifs_coarse_buffer,
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Escape IFS Coarse Measure"),
+                    size: want,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            );
+            old.destroy();
+            // A new buffer is a new binding, so every cached bind
+            // group that names the old one is stale.
+            self.ifs_token = self.ifs_token.wrapping_add(1) | 1;
+        }
+        queue.write_buffer(&self.ifs_coarse_buffer, 0, bytes);
+        true
+    }
+
     /// The stride this render uses: 2 in preview for a mode-D formula,
     /// 1 otherwise. Mode A and mode B are untouched.
     fn stride(&self, escape: &EscapeConfig) -> u32 {
@@ -3882,6 +3951,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 BindGroupEntry {
                     binding: 2,
                     resource: self.ifs_geom_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: self.ifs_coarse_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -7096,6 +7169,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     BindGroupEntry {
                         binding: 2,
                         resource: self.ifs_geom_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: self.ifs_coarse_buffer.as_entire_binding(),
                     },
                 ],
             }))

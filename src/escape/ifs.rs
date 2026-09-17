@@ -2273,6 +2273,72 @@ pub fn pack_flame(
 /// How many `vec4`s of the params' `fdata` block one seed occupies.
 pub const SEED_VEC4S: usize = 6;
 /// Where the seeds start in `fdata`; the whole-IFS constants are below.
+/// How many `vec2<f32>` of header sit in front of the coarse grid.
+///
+/// `[0]` is `(res, radius)` and `[1]` is the grid's centre, so a
+/// shader can map a world point to a cell without another uniform.
+pub const COARSE_HEADER: usize = 2;
+
+/// Pack a [`CoarseMeasure`] for the shader: a header, then one
+/// `vec2<f32>` per cell holding the measure per unit AREA and the mean
+/// palette coordinate.
+///
+/// Density rather than a hit count, because the count means nothing
+/// without the sample total and the cell size, and the shader would
+/// have to be told both. Divided here once instead.
+///
+/// The mean palette coordinate falls back to mid-grey in an empty
+/// cell. That value is never reached through a footprint read, whose
+/// samples are weighted by the density beside them, and an empty cell
+/// weighs nothing -- which is the point of reading both from one
+/// footprint (measure plan §5g).
+pub fn pack_coarse(c: &crate::scene::ifs_estimate::CoarseMeasure) -> Vec<[f32; 2]> {
+    let cell = c.cell();
+    let norm = 1.0 / (c.samples.max(1) as f64 * cell * cell);
+    let mut out = Vec::with_capacity(COARSE_HEADER + c.hits.len());
+    out.push([c.res as f32, c.radius as f32]);
+    out.push([c.centre[0] as f32, c.centre[1] as f32]);
+    for i in 0..c.hits.len() {
+        let h = c.hits[i];
+        out.push([
+            (h as f64 * norm) as f32,
+            if h > 0 { (c.palette_sum[i] / h as f64) as f32 } else { 0.5 },
+        ]);
+    }
+    out
+}
+
+/// Read the packed grid the way the shader will, so the two cannot
+/// drift apart without a test saying so.
+///
+/// This is the `SEED_VEC4S` lesson: the packer went from four words to
+/// six and the shader's stride stayed a literal four, which was
+/// invisible on a one-seed walk and 11% wrong on eight
+/// (`the_shaders_seed_stride_matches_the_packer`). A packing with no
+/// reader beside it is a stride waiting to disagree.
+pub fn read_coarse(packed: &[[f32; 2]], q: [f32; 2]) -> (f32, f32) {
+    if packed.len() < COARSE_HEADER {
+        return (0.0, 0.5);
+    }
+    let res = packed[0][0];
+    let radius = packed[0][1];
+    let centre = packed[1];
+    if !(res >= 1.0) || !(radius > 0.0) {
+        return (0.0, 0.5);
+    }
+    let cell = 2.0 * radius / res;
+    let fx = (q[0] - (centre[0] - radius)) / cell;
+    let fy = (q[1] - (centre[1] - radius)) / cell;
+    if !(fx >= 0.0) || !(fy >= 0.0) || fx >= res || fy >= res {
+        return (0.0, 0.5);
+    }
+    let i = COARSE_HEADER + (fy as usize) * (res as usize) + (fx as usize);
+    match packed.get(i) {
+        Some(v) => (v[0], v[1]),
+        None => (0.0, 0.5),
+    }
+}
+
 pub const SEED_BASE: usize = 4;
 /// The widest beam a seeded walk can hand over, bounded by `fdata`.
 pub const MAX_SEEDS: usize = (64 - SEED_BASE) / SEED_VEC4S;
@@ -5218,6 +5284,80 @@ mod tests {
     /// two halves of the same shape and a vec4 of kernel parameters,
     /// with the scalars trailing a vec2 rather than straddling a
     /// 16-byte boundary.
+    /// The packed coarse grid reads back as the measure it came from.
+    ///
+    /// `pack_coarse` flattens a [`CoarseMeasure`] for the shader and
+    /// `read_coarse` is the reader the shader will mirror. A packer
+    /// with no reader beside it is a stride waiting to disagree --
+    /// `SEED_VEC4S` went four to six with the shader's stride left a
+    /// literal four, invisible on one seed and 11% wrong on eight.
+    #[test]
+    fn the_packed_coarse_grid_is_the_measure_it_came_from() {
+        use crate::scene::ifs_estimate::CoarseMeasure;
+        let res = 32usize;
+        let mut c = CoarseMeasure {
+            res,
+            centre: [0.25, -0.5],
+            radius: 1.75,
+            hits: vec![0; res * res],
+            palette_sum: vec![0.0; res * res],
+            samples: 1_000_000,
+        };
+        // A pattern with holes in it, so the empty-cell path is
+        // exercised and not just the populated one.
+        for i in 0..res * res {
+            if i % 7 != 0 {
+                c.hits[i] = (i % 97) as u32;
+                c.palette_sum[i] = c.hits[i] as f64 * ((i % 13) as f64 / 13.0);
+            }
+        }
+        let packed = pack_coarse(&c);
+        assert_eq!(packed.len(), COARSE_HEADER + res * res);
+
+        let cell = c.cell();
+        let mut checked = 0;
+        let mut empty = 0;
+        for iy in 0..res {
+            for ix in 0..res {
+                // The cell's middle, and a point near its corner, so a
+                // rounding difference in the index would show.
+                for (ox, oy) in [(0.5, 0.5), (0.02, 0.98)] {
+                    let q = [
+                        c.centre[0] - c.radius + (ix as f64 + ox) * cell,
+                        c.centre[1] - c.radius + (iy as f64 + oy) * cell,
+                    ];
+                    let (d, pal) = read_coarse(&packed, [q[0] as f32, q[1] as f32]);
+                    let want_d = c.density(q);
+                    let want_p = c.palette(q);
+                    assert!(
+                        (d as f64 - want_d).abs() <= want_d.abs() * 1e-5 + 1e-9,
+                        "cell ({ix},{iy}): packed density {d} against {want_d}"
+                    );
+                    assert!(
+                        (pal as f64 - want_p).abs() < 1e-5,
+                        "cell ({ix},{iy}): packed palette {pal} against {want_p}"
+                    );
+                    if c.hits[iy * res + ix] == 0 {
+                        empty += 1;
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, res * res * 2);
+        assert!(empty > 0, "the fixture has no empty cells, so that path is untested");
+
+        // Outside the grid reads as no measure, which is what makes an
+        // escaped lineage contribute nothing.
+        for q in [
+            [c.centre[0] - c.radius * 1.5, c.centre[1]],
+            [c.centre[0], c.centre[1] + c.radius * 1.5],
+        ] {
+            let (d, _) = read_coarse(&packed, [q[0] as f32, q[1] as f32]);
+            assert_eq!(d, 0.0, "outside the ball must read no measure");
+        }
+    }
+
     #[test]
     fn the_gpu_row_is_the_layout_the_shader_declares() {
         assert_eq!(std::mem::size_of::<IfsMapGpu>(), 80);

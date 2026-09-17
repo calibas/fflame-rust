@@ -741,6 +741,65 @@ frame. Both now centre on **the attractor sample whose coarse cell
 holds the most measure**, which is on the set and where the
 reference has the statistics to be one.
 
+## 5i. The shader's half, begun: the coarse pass reaches the GPU, 2026-09-17
+
+The estimator is settled on the CPU, so the remaining work is the
+shader. Built and verified so far, as the plumbing that carries the
+coarse pass across:
+
+- `pack_coarse` flattens a [`CoarseMeasure`] to a header of
+  `(res, radius)` and the grid's centre, then one `vec2<f32>` of
+  (density per unit AREA, mean palette coordinate) per cell. Density
+  rather than a hit count, because a count means nothing without the
+  sample total and the cell size and the shader would have to be told
+  both.
+- `read_coarse` is the reader the WGSL will mirror, and
+  `the_packed_coarse_grid_is_the_measure_it_came_from` checks a
+  round-trip at every cell's middle and near its corner, over a
+  fixture with holes in it so the empty-cell path is exercised, and
+  that outside the ball reads no measure. **A packing with no reader
+  beside it is a stride waiting to disagree** -- `SEED_VEC4S` went
+  from four words to six with the shader's stride left a literal
+  four, invisible on a one-seed walk and 11% wrong on eight.
+- Group 1 gains binding 3, a read-only storage buffer, created at one
+  dummy element and bound for every mode-D walk. A layout entry the
+  shader does not read is allowed and costs nothing, which is the
+  same reasoning that binds the seed chain for the planar walk.
+  `EscapeRenderer::set_coarse` grows and writes it, and bumps
+  `ifs_token` on a resize because a new buffer is a new binding and
+  every cached bind group naming the old one is stale.
+
+**Verified inert.** All 1214 unit tests pass and the eleven shipped
+mode-D presets are byte-identical to `output/ifs-before3/` with the
+binding added, which is what says the layout change cost nothing.
+
+**What is left, and it is specified rather than guessed.** The
+template must select the WALK, not just the colouring -- a mode-D
+colouring receives an `IfsResult` and cannot run a different walk
+(D6). So:
+
+1. A `MEASURE` template flag in the mode-D assembler, beside the
+   existing `SOLID` one, so the WGSL is byte-identical when off.
+2. `ifs_measure(uv) -> vec2<f32>` in WGSL, transcribed from
+   `estimate_measure`: a frontier of (point, probability, composed
+   Jacobian, address), the determinant as the stop test against
+   `cells·(cpx/px)²`, the 4×4 footprint reading density and palette
+   together, the beam kept by largest contribution, and the flam3
+   fold over the address in reverse. The address needs only its last
+   few entries for the colour, since `2⁻ᵏ` damps the rest -- a fixed
+   small array will do, and that bound should be measured before it
+   is chosen.
+3. Per-map probability and colour speed. `IfsMapGpu` has no spare
+   word, so this is either a second small storage buffer or two more
+   floats on the row; the row is 80 bytes and already has `color`,
+   so extending it is the smaller change but touches the layout gate.
+4. The gate: render at 2^5 and 2^6 on the five fixtures, read the
+   density back out of the recolor cache as
+   `probe_what_the_f32_term_costs_on_the_gpu` does, and compare
+   against `estimate_measure` in f64 -- not against the chaos game,
+   which is the CPU reference's job. A shallow control where the
+   walk takes no step separates the arithmetic from the walk.
+
 ## 6. Gates
 
 - **G1. The measure is the chaos game's.** At 2^2 to 2^6 on the
