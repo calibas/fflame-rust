@@ -924,18 +924,8 @@ gasket unequal weights took its colour from 0.145 to 0.014. So the
 diagnosis holds and the remedy is not an ordering rule. Those
 fixtures are reported by the gate and not asserted.
 
-*The gasket's density, which is NOT understood.* With its ties broken
-the gasket's colour comes right and its density is still 2.4x to 3.4x
-the reference's. Since the colour agrees the addresses agree, and
-since the addresses agree the probability and determinant agree, so
-the difference is in `ρ` -- the footprint average. The suspicion,
-untested, is f32: on a measure of dimension 1.585 most of a footprint
-lands in empty cells, two or three samples of sixteen carry
-everything, and a position difference too small to see moves one
-across a cell boundary. That would make it a precision sensitivity
-rather than a transcription error, and it would explain why the
-dragon (dimension 2, smooth `ρ`) and the julia dust do not show it.
-Testing it means evaluating the CPU reference in f32.
+*The gasket's density, run to ground in §5n.* It is not `ρ` and not
+f32; the shader walks two levels short of where it should.
 
 **And the walk is correct only at handover level 0**, which the gate
 forces. The seeds carry a position and a basis but not the
@@ -1004,6 +994,48 @@ kind that could have caught the black frame.
 rather than a value: 2157 of 9216 pixels lit, 185 distinct
 brightnesses, and of the 867 pixels the DISTANCE colouring calls
 exterior, **none** are lit. The measure sits on the set.
+
+## 5n. The gasket's gap is a stop two levels short, 2026-09-17
+
+§5l guessed f32 for the shader's 2.4x to 3.4x density gap on a
+gasket. **That guess was wrong, and the measurement that killed it is
+worth keeping**: at the points the lookup actually happens the median
+`|q|` is 0.85, one f32 ulp there is **0.0000 of a coarse cell**, and
+rounding every footprint sample to f32 moves `ρ` by a factor of
+**1.000** on all three sets (`probe_whether_the_measure_gap_is_f32`).
+The walk does not expand to huge magnitudes the way the guess
+assumed. The lookup is not precision-sensitive at all.
+
+What it is: **the shader stops two levels short.** Reporting the stop
+depth from both sides --
+
+| set | shader depth | reference depth |
+|---|---|---|
+| dragon | 8 | 12 |
+| gasket | 4 | 6 |
+
+-- and the two differ by exactly 16x in AREA every time, since a
+dragon's inverse doubles area per level and a gasket's quadruples.
+
+Localised further. The stop compares a region's area against
+`cells·cpx²`, and `cpx` agrees between the two to every digit. The
+difference is the PIXEL's own area, from which every region's grows:
+the shader's is 16x the reference's, so the seeds' basis is 4x per
+axis wider than the view the same `EscapeConfig` implies. It is not
+the gate's arithmetic -- rewriting the reference to derive its span
+the way `ensure_ifs_seeds` does, from `4/zoom_factor` and
+`view_basis`, changed nothing.
+
+**This is a real defect, not a gate artefact**: the shader walks two
+levels shallower than intended on every set, and §5c measured a
+too-shallow stop reading 0.24 to 0.89 of the truth. The dragon hides
+it because a dimension-two measure has a scale-invariant density and
+cannot tell the depths apart; the gasket, at dimension 1.585, can.
+The julia dust reads exact, which says the rest of the walk is right.
+
+What is left is to find what makes the seeds' basis four times the
+span between the config and `ensure_ifs_seeds`. Everything either
+side of that is measured.
 
 ## 6. Gates
 
