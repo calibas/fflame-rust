@@ -130,12 +130,15 @@ ball's centre the distance walk ranks by (D3).
   Its output binds to the mode-D pass as a texture in group 1
   beside `ifs_maps`, both channels: the hit count and the mean
   colour.
-- **D2. The stop is per lineage, at SIXTEEN coarse cells** (§5c,
-  measured; it was one cell and one cell is wrong). A lineage walks
-  until `|det J_{S_a⁻¹}| · px²` reaches sixteen times the coarse
-  pixel's area, or it escapes, or it reads zero. At one cell neither
-  lookup integrates anything and the estimator reads 0.24 to 0.89 of
-  the truth; at sixteen it is within 2.6% on every fixture. Lineages expand at
+- **D2. The stop is per lineage, at the largest region the
+  linearisation still describes** -- sixteen coarse cells on an
+  affine set (§5c; it was one cell and one cell is wrong), one to
+  four on an inversion set (§5d), because the footprint is a
+  first-order parallelogram and a curved map outgrows it. At one
+  cell neither lookup integrates anything and the estimator reads
+  0.24 to 0.89 of the truth; at the right depth it is within 3% on
+  every fixture, affine and nonlinear. Carrying the quadratic the
+  distance walk already computes would remove the distinction. Lineages expand at
   different rates; on an inversion set some contract and never get
   there -- those read the coarse pixel containing their endpoint,
   which averages the density over a region larger than their true
@@ -422,9 +425,70 @@ cells, quadrature matched to the region (a mip in the shader), beam
 wide enough for the set. The point lookup of §5a and §5b is
 withdrawn as the baseline.
 
-**What this still does not say.** Nothing about colour, units, or a
-nonlinear or inversion set -- every fixture is affine. Those are §5
-items 3 and after.
+## 5d. It works on the sets the project is for, 2026-09-17
+
+Every fixture through §5c is affine, which is not what any of this
+exists for. Two nonlinear ones added: a `julia` dust, and the grand
+julian of every report this month -- three inversions at powers 2,
+15 and 8.
+
+**A root's probability splits between its branches, and that is
+load-bearing.** A `julia` is the square root with a random sign: its
+FORWARD map is two-valued and the chaos game draws the branch
+uniformly, while its inverse -- the square -- is single-valued. For
+any point exactly one forward branch has it in its image, and that
+is the one the single inverse undoes. So a step of the inverse walk
+carries `p_i / n_i`, not `p_i`, where `n_i` is the forward map's
+branch count (`|n|` for a root, one otherwise).
+
+Getting this wrong is the branch-0 error of
+[ifs-distance-rendering.md](ifs-distance-rendering.md) §8.15 in a
+different hat. Measured by removing it: the julia dust goes from
+0.983 to **4.295** at a four-cell stop and from 1.028 to **32.890**
+at sixty-four cells -- the factor compounding per level, as a factor
+of two per branch should -- while the affine dragon does not move at
+all (0.995 either way), because it has one branch and nothing to
+divide. That control is what says the correction is the right one
+rather than a fitted constant.
+
+**With it, the nonlinear sets read true.** Footprint lookup, median
+ratio to the direct chaos game:
+
+| set, zoom | 1 cell | 4 cells | 16 cells | 64 cells |
+|---|---|---|---|---|
+| julia dust, 2^4 | 0.992 | 0.983 | **1.015** | 1.028 |
+| julia dust, 2^6 | 0.868 | 0.948 | **1.016** | 0.964 |
+| grand julian, 2^4 | **0.994** | **0.996** | 1.028 | 1.027 |
+| grand julian, 2^6 | **1.012** | **1.018** | 1.024 | 1.082 |
+
+The point lookup is hopeless on all of them -- spreads of 8x to 42x
+against the footprint's 1.3x to 1.5x -- which is §5c's conclusion
+holding on a harder set.
+
+**But the stop rule's best depth is not the same as on an affine
+set, and the reason matters.** The affine fixtures want sixteen
+cells (§5c); the grand julian is best at one to four and its spread
+GROWS past that -- 1.33x, 1.33x, 1.87x, 2.22x at 2^4. The footprint
+is a FIRST-ORDER description of the preimage region: the composed
+Jacobian maps the pixel square to a parallelogram, which is exact
+for an affine map at any size and wrong for a curved one once the
+region is large. So the deeper the stop, the worse the parallelogram
+fits, and an inversion curves hard.
+
+That is the same second-order term
+[ifs-perturbation-delta.md](ifs-perturbation-delta.md) already
+carries as `Q` for the distance walk, and it would straighten this
+too -- the region is a parallelogram plus the quadratic, and the
+walk computes the quadratic anyway. Until then D2's sixteen cells is
+an affine number, and the honest rule is **the largest stop whose
+region the linearisation still describes**, which is a per-set
+quantity the walk can measure from `Q`'s size against the basis's.
+
+**What this still does not say.** Nothing about colour or units --
+§5 items 3 and after -- and nothing about `bubble` or `hemisphere`,
+whose INVERSE is the two-valued one, so the sum over branches falls
+on the walk rather than on the probability. That is a different
+shape of correction and it is untested.
 
 ## 6. Gates
 
@@ -463,6 +527,8 @@ items 3 and after.
 | the coarse pass at 2048² is too coarse for a set with fine density structure | intra-pixel bias in the lookup, blur at depth | G7 measures agreement against resolution; a resolution parameter beside Extent |
 | ~~the single-cell lookup on a fractal measure~~ | ~~medians off by tens of per cent~~ | **Solved, §5c**: footprint lookup with the stop at sixteen cells reads within 2.6% on every fixture. The residue is the quadrature's cost, which a mip chain answers |
 | a deeper stop needs a wider beam where many addresses carry weight (§5c) | the overlapping band reads 0.30 at 2^6 with beam 16 | D3's Monte Carlo, wanted exactly where D2 wants depth; every other fixture is unaffected |
+| the footprint is a first-order parallelogram and a curved map outgrows it (§5d) | the grand julian's spread doubles between a four-cell and a sixty-four-cell stop | D2 stops at the depth the linearisation still covers; the quadratic the distance walk carries would lift it |
+| a root's probability must be split between its forward branches (§5d) | the julia dust reads 4.3x at depth 2 and 32.9x at depth 6 without it | measured, corrected, and the affine control pins it: the dragon does not move |
 | the determinant along a contracting lineage underflows f32 | a lineage weighted zero that should count | the same scaled-float care the delta walk takes with σ; carry `log det` |
 
 ## 8. Deliberately not here

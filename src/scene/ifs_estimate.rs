@@ -2913,6 +2913,38 @@ mod tests {
                 affine_xform(0.7, 0.0, 0.0, 0.7, 0.0, 0.0),
                 affine_xform(0.7, 0.0, 0.0, 0.7, 0.3, 0.3),
             ]),
+            // NONLINEAR, which is what the project is for. A `julia`
+            // is the square root with a random sign: its FORWARD map
+            // is two-valued and its inverse is the single-valued
+            // square. See `branches` below for what that does to the
+            // probability.
+            ("julia dust", {
+                let mut t = affine_xform(1.0, 0.0, 0.0, 1.0, 0.4, -0.6);
+                t.variations = HashMap::from([("julia".to_string(), 1.0)]);
+                t.variation_order = vec!["julia".to_string()];
+                vec![t]
+            }),
+            // The reported grand julian: three inversions, powers 2,
+            // 15 and 8, so three transforms and twenty-five forward
+            // branches between them.
+            ("grand julian", {
+                let j = |aff: [f32; 6], w: f32, power: f32| {
+                    let mut t = affine_xform(aff[0], aff[1], aff[2], aff[3], aff[4], aff[5]);
+                    t.variations.clear();
+                    t.variation_order.clear();
+                    t.set_variation("flatten", 1.0);
+                    t.set_variation("julian", w);
+                    t.set_variation_param("julian", "power", power);
+                    t.set_variation_param("julian", "dist", -1.0);
+                    t
+                };
+                let sq = [0.7071f32, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
+                vec![
+                    j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
+                    j(sq, 0.2, 15.0),
+                    j(sq, 0.3, 8.0),
+                ]
+            }),
         ];
 
         for (name, transforms) in cases {
@@ -2926,7 +2958,31 @@ mod tests {
             let w: Vec<f64> =
                 ifs.maps.iter().map(|m| flame.transforms[m.transform_index].weight as f64).collect();
             let total: f64 = w.iter().sum();
+            // The probability of a TRANSFORM.
             let p: Vec<f64> = w.iter().map(|x| x / total).collect();
+            // How many values its forward map takes. A root's forward
+            // is `|z|^(d/|n|) e^(i(arg z + 2πk)/n)` and the chaos game
+            // draws `k` uniformly, so the transform's probability is
+            // split `|n|` ways -- and for any point exactly one of
+            // those branches has it in its image, the one the single
+            // inverse undoes. So a step of the inverse walk carries
+            // `p_i / n_i`, not `p_i`.
+            //
+            // Getting this wrong is the branch-0 error of
+            // `ifs-distance-rendering.md` §8.15 wearing a different
+            // hat, and on a power-15 root it would be wrong by
+            // fifteen.
+            let branches: Vec<f64> = ifs
+                .maps
+                .iter()
+                .map(|m| match m.forward.nonlinear().map(|n| n.kernel) {
+                    Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => {
+                        n.unsigned_abs() as f64
+                    }
+                    _ => 1.0,
+                })
+                .collect();
+            let pb: Vec<f64> = p.iter().zip(&branches).map(|(a, b)| a / b).collect();
 
             // A deterministic weighted chaos game, shared by the
             // coarse pass and the direct reference so the comparison
@@ -2935,6 +2991,20 @@ mod tests {
             let mut rnd = move || {
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 (state >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let step = |q: [f64; 2], m: usize, u: f64, ifs: &Ifs2| -> [f64; 2] {
+                match &ifs.maps[m].forward {
+                    Map2::Nonlinear(n) => {
+                        let k = match n.kernel {
+                            crate::scene::ifs_analysis::Kernel::Root { n: e, .. } => {
+                                (u * e.unsigned_abs() as f64).floor() as u32
+                            }
+                            _ => 0,
+                        };
+                        n.apply_branch(q, k)
+                    }
+                    other => other.apply(q),
+                }
             };
             let pick = |u: f64, p: &[f64]| -> usize {
                 let mut acc = 0.0;
@@ -2954,7 +3024,7 @@ mod tests {
             let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
             let mut centre = bc;
             for k in 0..40 {
-                centre = ifs.maps[k % ifs.maps.len()].forward.apply(centre);
+                centre = step(centre, k % ifs.maps.len(), 0.31 * k as f64 % 1.0, &ifs);
             }
             let mut direct: Vec<(f64, Vec<u32>)> = Vec::new();
             for &zoom in &[2.0f64, 4.0, 6.0] {
@@ -2965,7 +3035,7 @@ mod tests {
                 let mut q = bc;
                 for i in 0..DIRECT_N + 1000 {
                     let m = pick(rnd(), &p);
-                    q = ifs.maps[m].forward.apply(q);
+                    q = step(q, m, rnd(), &ifs);
                     if i < 1000 {
                         continue;
                     }
@@ -3000,7 +3070,7 @@ mod tests {
             let mut q = bc;
             for i in 0..COARSE_N + 1000 {
                 let m = pick(rnd(), &p);
-                q = ifs.maps[m].forward.apply(q);
+                q = step(q, m, rnd(), &ifs);
                 if i >= 1000 {
                     if let Some(c) = cell(q) {
                         grid[c] += 1;
@@ -3102,7 +3172,7 @@ mod tests {
                                 if !(d2 > 0.0) || !d2.is_finite() {
                                     continue;
                                 }
-                                next.push((qi, pa * p[i], m2));
+                                next.push((qi, pa * pb[i], m2));
                             }
                         }
                         if beam > 0 && next.len() > beam {
