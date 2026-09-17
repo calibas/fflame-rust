@@ -1,0 +1,301 @@
+# Generalised IFS support: the math lives with the variation (plan, 2026-09-17)
+
+The second of three plans written together; the first is
+[ifs-perturbation-delta.md](ifs-perturbation-delta.md), whose §9
+orders the work of all three, and the third is
+[ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md).
+
+**What is being asked for.** "A generalised system for constructing
+any IFS fractal, re-using flame transforms and variations." A flame
+already IS an IFS definition -- transforms, each a weighted sum of
+variations around a pre- and post-affine, with xaos as the graph and
+finals as a plot-time map -- and the chaos game renders every one of
+them. What is not general is the ANALYSIS that turns a flame into
+the maps the inverse walks need: today it accepts affine transforms
+and six hand-coded kernels alone in their transform, and refuses the
+rest by name. This plan makes the analysis reach the catalogue,
+moves what each map has to supply into the variation that owns it,
+and says precisely where the reach stops and why.
+
+**What it buys.** Every flame the chaos game renders is either an
+IFS the walks accept or a flame whose panel says which transform
+blocks it and what would unblock it. The census
+([variation-reachability-census.md](variation-reachability-census.md)
+and [ifs-distance-rendering.md](ifs-distance-rendering.md) §5) is a
+progress meter rather than a verdict.
+
+**What it does not buy.** Not the folds and the blurs: a map with no
+preimage or no point to invert has no place in an inverse walk, and
+[ifs-distance-rendering.md](ifs-distance-rendering.md) §8.2 sorts
+those out for good. Not a new editor: the flame editor is the
+builder, and this plan adds no UI beyond the panel's reasons.
+
+---
+
+## 1. What is there
+
+In [ifs_analysis.rs](../../src/scene/ifs_analysis.rs):
+
+- `Kernel`, a closed enum of six planar kernels (`Root{n,d}`,
+  `Spherical`, `Bubble`, `Hemisphere`, `Disc`, `Blob`) and
+  `Kernel3` of three, each with a hand-derived inverse, Jacobian,
+  local σ, singular distance, gap and hole rules, and for Bubble a
+  cancellation-free radial scale written after the first form
+  measured 102% wrong.
+- `transform_map_2d_ordered`, a central `match` from variation NAME
+  to kernel, reading the variation's parameters by name.
+- `AFFINE_VARIATIONS` and the per-space role function of §8.7: the
+  list of variations that are affine in the plane or in space.
+- `Map2::hessian`, central differences of the Jacobian with a step
+  clamped to `[1e-12, 1e-3]`, least accurate near the singularities
+  where it matters most.
+- The rules a flame fails by, in `Disqualification`: `NotAffine`
+  (which includes `MixedSum`: a kernel summed with anything, plan
+  §8.4's rule J4), `Singular`, `NotContractive` (σ_max ≥ 1),
+  `Xaos`, `FinalNotAffine`, `MultipleFinals`, `NoBall`.
+- The variation's own definition, `VariationDef`, carries forward
+  WGSL, parameters and features, and nothing about an inverse.
+
+Three of this month's bugs were in hand derivations: Bubble's σ_min
+was 21× too large (a tangential derivative alone), Bubble's inverse
+cancelled to 102% error, and `big_kernel_inverse` conjugated on
+`n·d < 0` where the rule is `n < 0`. All three were in code that
+exists three times -- f64, `BigFloat`, WGSL -- and the third was
+found by a gate that compared two of the copies.
+
+## 2. The idea
+
+**One implementation per variation, generic over the number.** A
+variation that supports the walks supplies its forward map, its
+inverse (per branch), and later its difference form
+([ifs-perturbation-delta.md](ifs-perturbation-delta.md) §3),
+written ONCE over a scalar trait:
+
+```rust
+pub trait Real: Clone {
+    fn from_f64(v: f64) -> Self;
+    fn to_f64(&self) -> f64;
+    fn add(&self, o: &Self) -> Self;  fn sub(..);  fn mul(..);  fn div(..);
+    fn sqrt(&self) -> Self;
+    fn hypot2(&self, o: &Self) -> Self;   // |(x, y)|², the form every kernel wants
+}
+pub trait Transcendental: Real { fn exp(..); fn ln(..); fn sin(..); fn cos(..); fn atan2(..); }
+```
+
+implemented by `f64`, by `BigFloat` (which has `sqrt`, `ln`,
+`atan2` and lacks `exp`, `sin`, `cos` -- the rung-3 item of the
+delta plan), and by a dual number `Dual<T>` carrying a value and a
+two-component gradient, and `Dual<Dual<T>>` for second derivatives.
+Then:
+
+- the f64 inverse, the `BigFloat` inverse and the Jacobian are the
+  same function called at three types, and the Hessian is exact
+  rather than a finite difference;
+- `local_sigma`, `singular_distance` and the gap rule become
+  properties the variation states (the singular set as a closed form
+  or a list of points and curves), with the Jacobian's singular
+  values computed rather than bounded where a bound was all a hand
+  derivation could give;
+- the WGSL inverse is the only copy still written by hand, and it is
+  gated against the generic one at thousands of points as the GPU
+  gates do today.
+
+**The registry holds it.** `VariationDef` gains an optional
+`inverse: Option<&'static InverseDef>`, absent by default so the
+other 640 definitions do not move and the append-only registration
+order is untouched. The analysis asks the registry, and the central
+`match` goes. The six kernels become the first six `InverseDef`s,
+living in `defs/julia.rs`, `defs/spherical.rs` and so on; the
+`Kernel` enum survives only as the GPU's kind code, which is what
+`IfsMapGpu.kind` already is.
+
+**What an `InverseDef` says:**
+
+| field | meaning |
+|---|---|
+| `kind` | affine / conformal / radial / general -- §8.3's ladder, which decides how σ is computed |
+| `branches` | how many preimages, and the rule that enumerates them (`Root`'s `n`, `Bubble`'s inner/outer, `Disc`'s rings) |
+| `forward`, `inverse` | the generic functions, over `Real` or `Transcendental` |
+| `difference` | the exact difference form, if the kernel has one (the delta plan's rung) |
+| `singular` | the singular set: where the inverse's derivative fails, as a distance function `q ↦ s` |
+| `support` | the image of the plane under the forward map -- the disc for Bubble and Hemisphere, the plane less a hole for an inverted root -- which is the gap rule |
+| `wgsl_inverse`, `wgsl_difference` | the shader bodies, name-prefixed as forward bodies are |
+| `precision` | which rung the `BigFloat` walk can take: rational, algebraic, transcendental |
+
+## 3. Decisions
+
+- **D1. The math moves into the definitions.** The six kernels
+  become `InverseDef`s on their variations; `transform_map_2d_ordered`
+  consults the registry; `AFFINE_VARIATIONS` becomes an `InverseDef`
+  of kind affine on each of the dozen variations that carry it,
+  with the per-space role folded in. The gate that decides whether
+  a kernel is correct runs over EVERY registered `InverseDef`
+  automatically (G1), so the seventh kernel gets the six's gates for
+  free.
+- **D2. Derivatives by dual numbers, never by hand and never by
+  finite differences.** The generic implementation is the only
+  source of `J` and `H`. `Map2::hessian`'s central difference goes.
+  The `BigFloat` implementations of `Real` and `Transcendental` are
+  the same code path the delta plan needs for its rungs. Cost: the
+  `Real` trait, three impls, and re-expressing the six kernels'
+  inverses in it -- the inverses are short; the derivations they
+  replace were the long part.
+- **D3. Sums by Newton, with the limits said.** A transform whose
+  normal phase sums several variations, or one kernel with an
+  affine (`linear 0.5 + spherical 0.5` is among the commonest
+  transforms in the census), has no closed-form inverse. It has a
+  Jacobian -- from D2 on the CPU, and from the forward WGSL by
+  central differences in f32 on the GPU, which Newton tolerates
+  because its accuracy comes from the residual and not from `J`.
+  So:
+  - the inverse of `w·Σ v_j(A p)` at `q` is Newton from a seed,
+    with the seed from the transform's dominant term's own inverse
+    (the kernel's branch, or the affine's inverse when the affine
+    dominates), three to six iterations, converged when the
+    residual is under `1e-6·|q|` in f32 and to the type's precision
+    in the generic form;
+  - the branch count is the dominant term's, and each of its
+    branches seeds one Newton solve; a sum whose dominant term has
+    no `InverseDef` is refused as today, with the reason naming it;
+  - **a Newton that fails is not a gap.** A gap is a proof that no
+    preimage exists; a failed solve proves nothing. The lineage
+    ends with the bound it had, which is a valid lower bound on the
+    distance and so sound, and loose. The measure plan reads the
+    same lineage as "unknown", which it treats as the coarse
+    density's own value at the parent (§D5 there);
+  - on the GPU this needs the flame's forward variation bodies
+    spliced into the mode-D shader through the per-flame local
+    index map, exactly as `shader_builder_v2` splices them into the
+    chaos game. That is the one piece of real plumbing in this
+    plan, and it is what §8.6 of the design doc reserved the room
+    for.
+- **D4. Xaos is a graph-directed IFS, and the walk takes the
+  graph.** A child at level k+1 by map `j` is admissible after a
+  parent by map `i` only if `xaos[i][j] > 0`; the beam expands
+  admissible children only; the address is the same address. The
+  invariant ball becomes one ball per node in principle, and stays
+  one ball for all in practice until a flame shows the difference.
+  The measure plan needs the row-normalised transition
+  probabilities beside the admissibility, and `xaos.rs` has them.
+  Gate: a flame with an all-ones xaos matrix renders pixel-identical
+  to the same flame without one.
+- **D5. Finals, nonlinear and several.** A final is applied once at
+  plot time and is not part of the dynamics, so its inverse is
+  applied once at level 0: the pixel through `F⁻¹` before the walk,
+  and in the delta walk the centre through `F⁻¹` in `BigFloat` with
+  the delta through `J_{F⁻¹}` -- a level with a different map, and
+  no more. Several finals: the chaos game picks one per plot, so
+  the picture is the union of the attractor's images under each,
+  and the distance is the minimum over finals of one walk each.
+  `FinalNotAffine` and `MultipleFinals` go; a final with no
+  `InverseDef` stays a reason.
+- **D6. The ball is a bound, not an invariant.** `NotContractive`
+  refuses any transform with σ_max ≥ 1, and `NoBall` refuses a set
+  with no ball every map sends into itself. Neither is what the walk
+  needs. The escape test needs only `B ⊇ A`: if `S_a⁻¹(x) ∉ B` then
+  `x ∉ S_a(B) ⊇ S_a(A)`, whatever `S_a` does to `B`. The bound
+  `σ·(r − R)` needs only `σ_min > 0` along the address, which
+  invertibility gives. A flame that contracts on average -- which is
+  what the chaos game's own convergence requires and what most
+  artistic flames do, with one transform an isometry or an
+  expansion -- has a bounded attractor and a bounding ball, and the
+  sampled extent with a margin (the `Extent` machinery of §8.15)
+  is a certificate for it where the invariant construction fails.
+  So: the invariant ball where it exists, the sampled one with a
+  stated margin where it does not, and `NotContractive` becomes a
+  WARNING about the beam's ranking (an expanding map's inverse
+  contracts, so its children rank near the ball's centre whether
+  they are on the set or not), measured before it is trusted (G4).
+- **D7. The census is the meter.** After each rung lands, the count
+  of the 159 census flames and the shipped presets that qualify, by
+  reason for those that do not, in the census doc's table. No rung
+  is done until its row is measured.
+- **D8. 3D is the same trait at `[T; 3]`.** `Kernel3`'s three
+  kernels become `InverseDef`s with a solid body; `Space` picks
+  which body a variation supplies, as the per-space role does now.
+
+## 4. What changes, and what does not
+
+| piece | today | here |
+|---|---|---|
+| `VariationDef` | forward WGSL, params, features | plus `inverse: Option<&InverseDef>` |
+| `Kernel` / `Kernel3` | the taxonomy | the GPU kind code only; the math in the defs |
+| `transform_map_2d_ordered` | a match on names | a registry lookup; a sum becomes `Map2::Sum` with Newton |
+| `Map2` | `Affine`, `Nonlinear`, `NonlinearInverse` | plus `Sum { terms, dominant, pre, post }` |
+| `Map2::hessian` | finite differences | dual numbers |
+| `big_kernel_inverse` | a `BigFloat` transcription per kernel | the generic inverse at `BigFloat` |
+| `Disqualification` | seven reasons | `Xaos`, `FinalNotAffine`, `MultipleFinals`, `NotContractive` go; `NoInverse { variation }`, `NewtonSeed { variation }` arrive |
+| mode-D shader | six kernel kinds in `IFS_TEMPLATE` | plus a spliced Newton step over the flame's own forward bodies, for `Sum` rows |
+| the census | a verdict | a table with a row per rung |
+
+The walk, the handover, the colourings and the presets do not
+change; G0 of the delta plan (every shipped mode-D preset
+pixel-identical) applies to every step here.
+
+## 5. Gates
+
+- **G1. Every `InverseDef` passes the kernel gates.** A registry
+  test iterating all definitions with an inverse: forward∘inverse is
+  the identity on every branch at thousands of points in the
+  support; the dual-number Jacobian against central differences of
+  the generic forward; the σ tie `σ_max(J_inverse)·σ_min(forward)
+  = 1` at the kernel; the singular distance is real (half of it
+  keeps the branch); the WGSL inverse against the f64 one on the
+  GPU. These are the six kernels' gates today, run over the
+  registry instead of a list.
+- **G2. The moved kernels are the old kernels.** Every existing
+  gate in `ifs_analysis.rs` and `ifs_estimate.rs` unchanged and
+  green through D1 and D2, and the presets pixel-identical. The
+  finite-difference Hessian against the dual one at the points the
+  old gate used: agreement to the old gate's tolerance, and better
+  near the singularities, measured.
+- **G3. Newton is an inverse where it converges, and honest where
+  it does not.** On `linear + spherical` at ten mixes, and on three
+  census transforms chosen for being common: convergence rate and
+  iteration count at random points of the support; the residual on
+  convergence; and a walk on a two-transform set built from them
+  against a chaos sample at 2^4: no pixel on the set reads as
+  exterior. On the GPU, the same at 1e-5 relative.
+- **G4. The bounding ball is sound where the invariant one does not
+  exist.** A flame with one isometric transform: a chaos sample of
+  200,000 points against the walk's distance at 2^4; every sampled
+  point within a pixel of zero. And the beam's ranking measured on
+  it at beams 1, 4, 8, 16 for the pruning artefacts D6 warns of.
+- **G5. Xaos.** All-ones is identity (D4). A block-diagonal xaos on
+  a four-transform set: the walk's address colouring shows only
+  admissible addresses, checked against a chaos sample.
+- **G6. Finals.** A flame with a spherical final against the same
+  flame with the final folded into a chaos sample; two finals
+  against the union of two samples.
+- **G7. The census row.** D7, after every rung, as a number in the
+  census doc.
+
+## 6. Cost and risk
+
+| risk | consequence | what bounds it |
+|---|---|---|
+| Newton finds a preimage on the wrong branch, or one seed finds the same preimage twice | a piece counted twice or missed; the distance too small or too large | dedupe by result within `1e-6·\|q\|`; the seed rule per dominant term; G3's chaos-sample check is the arbiter |
+| a common transform's dominant term has no clean seed (two kernels of equal weight) | refused, with the reason | D3 says so; the census row says how often |
+| the spliced Newton step makes the mode-D shader compile per flame instead of per kind | compile time on every flame change | the chaos game already pays this; the sticky-shader machinery applies |
+| D6's sampled ball is smaller than the set | pixels on the set past the ball read as exterior | the margin is stated and the Extent label shows the radius; G4 measures a sample against it |
+| the `Real` trait costs the f64 path speed | a slower prefix | measured against today's before D2 lands; the prefix is 3 ms at depth and has room |
+
+## 7. Deliberately not here
+
+- **A builder UI.** The flame editor with the panel's reasons is the
+  builder; anything more is a UI project after the reach is
+  measured.
+- **Non-invertible variations.** Folds, blurs, `NeedsAccum` and
+  per-thread-state variations: §8.2 of the design doc, unchanged.
+- **Non-affine 3D finals and 3D xaos.** After the planar ones
+  measure.
+- **A per-node ball for xaos** (D4): after a flame shows the single
+  ball too loose.
+
+## 8. Order of work
+
+Item numbers are the delta plan's §9, which orders all three plans:
+D1 and D2 are item 3 there, D4 is item 4, D3 is item 6, D5 to D8
+fall between as the census rows say which unlocks most. D6 is cheap
+and should be measured (G4) early, since it decides how many census
+flames the other decisions can reach at all.

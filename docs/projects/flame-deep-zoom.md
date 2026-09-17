@@ -167,6 +167,15 @@ polynomially (starvation).
   recentering; the realistic ceiling stays ~10⁵–10⁶× set by f32.
   Stated as a limit, not solved. (No reference-orbit analogue
   exists; perturbation theory does not apply to chaotic orbits.)
+  **Corrected 2026-09-17:** that is true of the unforced game and
+  false of a forced prefix. A forced prefix is deterministic, its
+  image of the ball's centre is a reference orbit, and the
+  difference forms of
+  [ifs-perturbation-delta.md](ifs-perturbation-delta.md) §3 carry a
+  sample's offset through it in the forward direction. Whether a
+  forward pass is needed at all is decided by
+  [ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
+  D8, which reads the measure through the inverse walk without one.
 
 ### Stage 4 — resampling (contingency only)
 

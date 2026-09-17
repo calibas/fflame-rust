@@ -7,6 +7,13 @@ affine handover of §2.5 there -- through nonlinear inverse maps, so
 a julia, spherical or bubble set zooms past f32 the way an affine
 set already does.
 
+**Superseded in design, 2026-09-17.** §17a records what a review of
+this plan found, and [ifs-perturbation-delta.md](ifs-perturbation-delta.md)
+is the design that follows from it: the reference/delta split
+carried through every level rather than handed over once. The
+repairs in its §2 apply to the code this plan built; everything
+below stays as the record of how it got there.
+
 **What it buys.** Deep zoom on nonlinear sets. Today a nonlinear IFS
 hands over at level 0 and the shader walks from the pixel's own f32
 position, `centre + basis·uv` in f32: at a view centre of magnitude
