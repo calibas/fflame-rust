@@ -1226,6 +1226,24 @@ fn seed_beam_inner<P: SeedPoint>(
         if stop {
             break;
         }
+        // Every branch of every candidate was a gap, so there is no
+        // level below this one to hand over at. Keep the beam that got
+        // here rather than committing an empty one.
+        //
+        // This is the crash reported on 2026-09-16 -- a grand julian
+        // zoomed past 2^30 died with STATUS_STACK_BUFFER_OVERRUN,
+        // which is what a panic in a release GUI build looks like from
+        // outside. Carrying the gap instead of stopping at it (§10)
+        // turned a gapped branch from "end the prefix" into "skip this
+        // branch", and when EVERY branch is gapped that skipped them
+        // all: `live` became empty, the handover shipped zero seeds,
+        // and the continuation indexed `live[0]`. The walk itself has
+        // had this case handled since the fully-gapped rule of §8.13;
+        // the prefix had not, because before the gap carry it could
+        // not reach it.
+        if next.is_empty() {
+            break;
+        }
         // The same ranking the walk uses — and the bases have to
         // follow their candidates through the sort, or every delta
         // ends up attached to the wrong path.
@@ -1432,6 +1450,26 @@ pub fn estimate_seeded(
     let far = radius.max(1.0) * FAR;
     let beam = beam.max(1) as usize;
 
+    // A handover with no candidates says nothing about this pixel.
+    // `seed_beam` does not produce one, and the assertion that it does
+    // not is `a_fully_gapped_prefix_keeps_its_beam`; this is the
+    // belt, because the alternative to an answer here is a panic in a
+    // render.
+    if seeds.cands.is_empty() {
+        let d = if seeds.dead_min_per_px.is_finite() {
+            seeds.dead_min_per_px.max(0.0)
+        } else {
+            0.0
+        };
+        return Estimate {
+            distance: d,
+            level: (seeds.level + max_levels) as f64,
+            address: Vec::new(),
+            point: ifs.ball.centre,
+            escaped: false,
+            deepest_level: (seeds.level + max_levels) as f64,
+        };
+    }
     let mut live: Vec<Cand<[f64; 2]>> = seeds
         .cands
         .iter()
@@ -4459,6 +4497,62 @@ mod tests {
                  reached when the measurement was taken"
             );
         }
+    }
+
+    /// Reported from use, 2026-09-16: zooming an escape-time grand
+    /// julian killed the app with `STATUS_STACK_BUFFER_OVERRUN`, which
+    /// is what a panic in a release GUI build looks like from outside.
+    ///
+    /// It was a prefix that handed over an EMPTY beam. Carrying the
+    /// gap rather than stopping at it turned a gapped branch from "end
+    /// the prefix" into "skip this branch", and when every branch of
+    /// every candidate is gapped -- which a grand julian's holes make
+    /// ordinary once the reference orbit is deep enough -- that
+    /// skipped them all. `live` became empty, the handover shipped
+    /// zero seeds, and the continuation indexed `live[0]`.
+    ///
+    /// Reproduced by CLI export at 2^40 and fixed; the sweep that
+    /// found it now runs clean to 2^200. This is the unit-sized
+    /// version: walk deep enough for the fully-gapped level to
+    /// arrive, and require that the prefix kept a beam and that the
+    /// answer is still each pixel's own.
+    #[test]
+    fn a_fully_gapped_prefix_keeps_its_beam() {
+        let ifs = grand_julian([0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0]);
+        let smp = chaos_sample(&ifs, 20_000);
+        let target = smp[smp.len() - 1];
+        // The zooms the report covered, and past where it died.
+        for &zoom in &[24.0f64, 30.0, 40.0, 70.0, 120.0, 200.0] {
+            let span = 4.0 / 2f64.powf(zoom);
+            let view_basis = [[span * 16.0 / 9.0, 0.0], [0.0, -span]];
+            let px = span / 1080.0;
+            let seeds = seed_beam(&ifs, target, view_basis, px, zoom as u32 + 64, 5);
+            assert!(
+                !seeds.cands.is_empty(),
+                "2^{zoom}: the prefix handed over an empty beam at level {}",
+                seeds.level
+            );
+            // And it still answers, rather than panicking or reading
+            // the whole view as set.
+            let after = 40u32;
+            for gy in 0..3 {
+                for gx in 0..3 {
+                    let uv = [gx as f64 / 2.0 - 0.5, gy as f64 / 2.0 - 0.5];
+                    let d = estimate_seeded(&ifs, &seeds, uv, after, 5).distance;
+                    assert!(
+                        d.is_finite() && d >= 0.0,
+                        "2^{zoom} at {uv:?}: distance {d}"
+                    );
+                }
+            }
+        }
+
+        // And the belt: a handover with no candidates is answerable
+        // rather than fatal, whatever produced it.
+        let empty = Seeds { level: 3, cands: Vec::new(), dead_min_per_px: 12.5 };
+        let e = estimate_seeded(&ifs, &empty, [0.25, -0.25], 20, 4);
+        assert_eq!(e.distance, 12.5);
+        assert!(!e.escaped && e.address.is_empty());
     }
 
     /// Greedy is a heuristic, and the dragon is where it shows.
