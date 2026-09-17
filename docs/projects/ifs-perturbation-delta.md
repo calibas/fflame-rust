@@ -23,7 +23,9 @@ without the others and the cheap parts of all three come first.
 
 **What it buys.** The grand julian's cap, measured at 2^30 to 2^36
 depending where on the set you are, comes from two things the first
-design cannot fix by choosing better: a lineage whose view has
+design cannot fix by choosing better -- and §2a adds a third, that
+its choice of level is itself one too deep half the time, for a
+reason no per-seed model has been able to repair: a lineage whose view has
 COLLAPSED pays f32's whole ulp at any handover, and a lineage whose
 view has EXPANDED pays the linearisation's curvature at any handover
 deep enough for f32 to be cheap. In delta form neither is paid. A
@@ -180,14 +182,69 @@ and not the arithmetic after it; against the GPU the model is
 pessimistic by a factor of a few, never optimistic beyond a flip, and
 it is a usable proxy. It stays.
 
-**What R1 did not do.** The plan asked for FORCED levels, so that the
-model's RANKING of levels -- the only thing an argmin uses -- could
-be checked against the GPU's. The renderer builds its own seeds and
-has no hook to force one, so this measured the chosen level only.
-Whether the model orders levels correctly at a given zoom is still
-unmeasured; a test-only field on `EscapeRenderer` that routes
-`ensure_ifs_seeds` through `seed_beam_at` is the twenty lines it
-needs, and it is open.
+**The forced-level half, done the same day.**
+`EscapeRenderer::ifs_force_level` is the test-only field that routes
+`ensure_ifs_seeds` through `seed_beam_at`, and
+`probe_what_the_f32_term_ranks_on_the_gpu` renders EVERY level the
+walk can reach at a target and zoom, comparing the rendered distance
+against the exact level-0 continuation at the same absolute depth.
+That is the first time the objective's ORDERING -- the only thing an
+argmin uses -- has been measured against a rendered picture, and it
+is worse than the per-level agreement suggested.
+
+| target, zoom | best level | its error | chosen | chosen's error |
+|---|---|---|---|---|
+| 0, 2^26 | 4 | 0.367 px | 4 | 0.367 px |
+| 0, 2^33 | 8 | 0.482 px | 9 | 2.457 px |
+| 1, 2^26 | 7 | 0.161 px | 8 | 1.812 px |
+| 1, 2^33 | 10 | 0.156 px | 11 | 0.300 px |
+| 2, 2^26 | 3 | 0.322 px | 3 | 0.322 px |
+| 2, 2^33 | 7 | 0.181 px | 7 | 0.181 px |
+
+Right in three, and in all three misses **one level too deep**,
+costing 1.9x to 11.2x in rendered error.
+
+**Why, and it is the same non-separability a fourth time.** The level
+tables show the f32 model rejecting the best level by twenty orders
+of magnitude: at target 1, 2^26 it prices level 7 at 4.6e11 pixels
+and the render is 0.161 out, the best of any level. The per-seed
+detail (`probe_which_seed_prices_the_level`) says why. At that level
+the beam holds three seeds whose view expansion runs 3.99e3, 1.26e-1
+and 1.07e-8, and whose f32 costs therefore run 1.2, 3.9e4 and 4.6e11
+pixels. The model takes the MAXIMUM. The answer is a MINIMUM.
+
+Two structural facts came out of the same detail, and both are worth
+keeping:
+
+- `σ_per_px · grown` is constant across the beam to three digits
+  (2.47e10, 2.38e10, 2.44e10). So a seed's f32 cost is proportional
+  to its own σ, and its bound is `σ·(r−R)` -- the error is RELATIVE
+  to the scale that seed answers on. A seed sitting 1e18 pixels away
+  has a huge absolute error that cannot corrupt an answer of 0.16.
+- The carried bounds at a handover are **negative and equal** across
+  the beam (−1.36e7 pixels at that level), inherited from a common
+  ancestor. So no test on the carried bound can tell which seed will
+  win: the bound has not bitten yet, and the answer comes from the
+  continuation.
+
+**Four candidate repairs, all measured, none shipped.**
+
+| f32 term | cost against the best level, six cases |
+|---|---|
+| max over seeds (shipped) | 1.00, 5.10, 11.22, 1.92, 1.00, 1.00 |
+| min over seeds | 1.65, 2.07, 4.48, 1.92, 1.00, 1.00 |
+| restricted to probe winners | measured worse at the chosen level, above |
+| gap-weighted by the bound | identical to the max: the bounds are equal |
+
+The minimum halves the worst case and regresses the best one, and it
+has no soundness argument -- it assumes the smallest-σ seed wins,
+which is typical and not guaranteed. Six points across three targets
+and two zooms is too thin to move production behaviour on, and the
+asymmetry still favours the maximum: over-pricing costs a suboptimal
+level, under-pricing costs a scrambled picture at pixels nobody
+sampled. **Recorded, not shipped**, and §3 is why -- the delta form
+has no level to choose, so a heuristic adopted now would be carried
+through the transition and then deleted.
 
 **The two rows where it is 100x pessimistic are the same lesson
 again.** Target 3 at 2^26 and 2^30 model 2.69 and 43.1 pixels where
@@ -495,13 +552,13 @@ The risks, ranked:
 
 The cheap and the decisive first. Each item names its plan.
 
-1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a, with R1's forced-level
-   half still open (the ranking of levels is unmeasured; the chosen
-   level is). R1 did not move the cap: the model it was auditing is
-   pessimistic by a factor of a few against the GPU and never
-   optimistic beyond a branch flip, and the refinement it suggested
-   measured worse. The ceiling, both keys, the dead code and the
-   widened gate all landed and changed no chosen level.
+1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a, forced levels included.
+   The model is pessimistic by a factor of a few at the level it
+   picks, and its ORDERING is right in three of six cases and one
+   level too deep in the other three, costing up to 11x in rendered
+   error. Four candidate repairs measured, none shipped, because §3
+   deletes the question. The ceiling, both keys, the dead code and
+   the widened gate all landed and changed no chosen level.
 2. **The measure at shallow zoom**
    ([ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
    §5 items 1 to 3): the coarse pass, the lookup colouring, the
