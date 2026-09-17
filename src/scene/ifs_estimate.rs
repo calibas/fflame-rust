@@ -3253,6 +3253,120 @@ mod tests {
         out
     }
 
+    /// D4 of the measure plan: what brightness does at depth, and how
+    /// many stops a user loses to it.
+    ///
+    /// The estimator answers in the same units as
+    /// [`CoarseMeasure::density`] -- measure per unit area -- which is
+    /// why a ratio against an ordinary render of the same view is one
+    /// and why `the_measure_agrees_with_the_chaos_game` can assert
+    /// that at all. So the units are settled and what is left is the
+    /// POLICY: the flam3 tonemap normalises by
+    /// `total_iters / pixel_count`, which is iteration-invariant and
+    /// not zoom-invariant, and the measure inside a deep view is
+    /// tiny.
+    ///
+    /// Two numbers per zoom: the measure the view holds (which is what
+    /// a chaos game would have to find, and what starves), and the
+    /// median density per unit area over the lit pixels (which is what
+    /// the estimator reports and what a zoom-invariant normalisation
+    /// would divide by).
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_what_brightness_does_at_depth() {
+        const COARSE: usize = 6_000_000;
+        const RES: usize = 256;
+        const VP: usize = 16;
+        let j = |aff: [f32; 6], w: f32, power: f32| {
+            let mut t = affine_xform(aff[0], aff[1], aff[2], aff[3], aff[4], aff[5]);
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", w);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        let sq = [0.7071f32, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
+        let cases: Vec<(&str, Vec<Transform>)> = vec![
+            ("gasket", vec![half(0.0, 0.0), half(0.5, 0.0), half(0.25, 0.5)]),
+            ("dragon", vec![
+                affine_xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
+                affine_xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
+            ]),
+            ("grand julian", vec![
+                j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
+                j(sq, 0.2, 15.0),
+                j(sq, 0.3, 8.0),
+            ]),
+        ];
+        for (name, transforms) in cases {
+            let flame = flame_of(transforms);
+            let ifs = {
+                let guard = global_registry();
+                analyse_2d(&flame, &guard).expect("qualifies")
+            };
+            let maps = MeasureMaps::of(&ifs, &flame);
+            let coarse = chaos_measure(&ifs, &flame, COARSE, RES, 0x9E3779B97F4A7C15);
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            // A point ON the attractor, not the centre of the
+            // densest CELL: at 2^12 the view is far smaller than a
+            // cell, and a cell that is dense on average can still have
+            // the set nowhere near its geometric centre. That is what
+            // made this probe read zero on the grand julian past 2^8.
+            // The sample whose coarse cell holds the most measure:
+            // ON the set, and where the reference has the statistics
+            // to be a reference. A random attractor point is not
+            // enough -- on the 6:1:1 gasket it left eight comparable
+            // pixels in the frame.
+            let smp = chaos_sample(&ifs, 50_000);
+            let centre = *smp
+                .iter()
+                .max_by_key(|p| coarse.index_for_test(**p).map_or(0, |i| coarse.hits[i]))
+                .expect("the sample is not empty");
+            let _ = (bc, br);
+            println!("{name}: centred on an attractor point {centre:?}");
+            println!(
+                "  {:>6} | {:>12} {:>9} | {:>12} {:>9}",
+                "zoom", "view measure", "stops", "median rho", "stops"
+            );
+            let (mut m0, mut d0) = (0.0f64, 0.0f64);
+            for &zoom in &[5.0f64, 8.0, 12.0, 16.0, 20.0] {
+                let span = 2.0 * br / 2f64.powf(zoom);
+                let px = span / VP as f64;
+                let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
+                let mut total = 0.0f64;
+                let mut lit: Vec<f64> = Vec::new();
+                for iy in 0..VP {
+                    for ix in 0..VP {
+                        let x = [
+                            origin[0] + (ix as f64 + 0.5) * px,
+                            origin[1] + (iy as f64 + 0.5) * px,
+                        ];
+                        let e =
+                            estimate_measure(&ifs, &maps, &coarse, x, px, 16, MEASURE_CELLS, 400);
+                        if e.density > 0.0 {
+                            total += e.density * px * px;
+                            lit.push(e.density);
+                        }
+                    }
+                }
+                lit.sort_by(f64::total_cmp);
+                let med = if lit.is_empty() { 0.0 } else { lit[lit.len() / 2] };
+                if zoom == 5.0 {
+                    m0 = total;
+                    d0 = med;
+                }
+                let st = |a: f64, b: f64| if a > 0.0 && b > 0.0 { (b / a).log2() } else { f64::NAN };
+                println!(
+                    "  2^{zoom:<4.0} | {total:>12.3e} {:>9.1} | {med:>12.3e} {:>9.1}",
+                    st(m0, total),
+                    st(d0, med)
+                );
+            }
+        }
+    }
+
     /// G1 of [`ifs-measure-by-inverse-walk.md`]: the measure read
     /// through the inverse walk IS the chaos game's measure.
     ///
@@ -3299,11 +3413,21 @@ mod tests {
             t
         };
         let sq = [0.7071f32, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
-        let cases: Vec<(&str, Vec<Transform>)> = vec![
+        // The third field is the stop depth in coarse cells, and it
+        // is NOT one number for every set. An AFFINE map's preimage
+        // of a pixel is exactly the parallelogram the composed
+        // Jacobian describes, at any size, so it can stop deep and
+        // integrate over many cells. A CURVED one outgrows that
+        // parallelogram and has to stop shallow. Measured here: the
+        // 6:1:1 gasket reads 1.234 at four cells and 1.032 at
+        // sixteen, while the bubble pair reads 0.957 at four and
+        // 0.894 at sixteen. Averaging the two into one constant would
+        // hide the finding, so each fixture gates at its own.
+        let cases: Vec<(&str, Vec<Transform>, f64)> = vec![
             ("dragon", vec![
                 affine_xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
                 affine_xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
-            ]),
+            ], 16.0),
             ("gasket 6:1:1", vec![
                 {
                     let mut t = half(0.0, 0.0);
@@ -3312,16 +3436,16 @@ mod tests {
                 },
                 half(0.5, 0.0),
                 half(0.25, 0.5),
-            ]),
+            ], 16.0),
             ("grand julian", vec![
                 j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
                 j(sq, 0.2, 15.0),
                 j(sq, 0.3, 8.0),
-            ]),
+            ], MEASURE_CELLS),
             ("bubble pair", vec![
                 kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
                 kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
-            ]),
+            ], MEASURE_CELLS),
             // `disc` is NOT here, and the reason is worth keeping:
             // the obvious fixture -- the one the kernel's other gates
             // use -- has a single POINT for an attractor. Six million
@@ -3333,7 +3457,7 @@ mod tests {
             // caught it.
         ];
 
-        for (name, mut transforms) in cases {
+        for (name, mut transforms, cells) in cases {
             let n = transforms.len().max(2) - 1;
             for (i, t) in transforms.iter_mut().enumerate() {
                 t.color = i as f32 / n as f32;
@@ -3357,20 +3481,30 @@ mod tests {
                 RES * RES
             );
             let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
-            // The DENSEST coarse cell, so the view has measure in it
-            // whatever the set's shape. Iterating the forward maps
-            // from the ball's centre does not: on a `disc` it landed
-            // somewhere with one comparable pixel in the frame.
-            let centre = {
-                let best = (0..coarse.hits.len())
-                    .max_by_key(|&i| coarse.hits[i])
-                    .unwrap_or(0);
-                let c = coarse.cell();
-                [
-                    bc[0] - br + (best % RES) as f64 * c + c * 0.5,
-                    bc[1] - br + (best / RES) as f64 * c + c * 0.5,
-                ]
-            };
+            // A point ON the attractor, so the view has measure in it
+            // whatever the set's shape.
+            //
+            // Two weaker rules were tried and both fail. Iterating the
+            // forward maps from the ball's centre lands wherever that
+            // orbit happens to go -- on a `disc` fixture it left one
+            // comparable pixel in the frame. The densest coarse CELL's
+            // centre is better but still not on the set: a cell that
+            // is dense on average can have the set nowhere near its
+            // geometric middle, and once the view is smaller than a
+            // cell it misses entirely -- which read a flat zero on the
+            // grand julian past 2^12 in
+            // `probe_what_brightness_does_at_depth`.
+            // The sample whose coarse cell holds the most measure:
+            // ON the set, and where the reference has the statistics
+            // to be a reference. A random attractor point is not
+            // enough -- on the 6:1:1 gasket it left eight comparable
+            // pixels in the frame.
+            let smp = chaos_sample(&ifs, 50_000);
+            let centre = *smp
+                .iter()
+                .max_by_key(|p| coarse.index_for_test(**p).map_or(0, |i| coarse.hits[i]))
+                .expect("the sample is not empty");
+            let _ = (bc, br);
             for &zoom in &[5.0f64, 6.0] {
                 let span = 2.0 * br / 2f64.powf(zoom);
                 let px = span / VP as f64;
@@ -3452,9 +3586,8 @@ mod tests {
                             origin[0] + (ix as f64 + 0.5) * px,
                             origin[1] + (iy as f64 + 0.5) * px,
                         ];
-                        let e = estimate_measure(
-                            &ifs, &maps, &coarse, x, px, 16, MEASURE_CELLS, 40,
-                        );
+                        let e =
+                            estimate_measure(&ifs, &maps, &coarse, x, px, 16, cells, 60);
                         if e.density > 0.0 {
                             ratios.push(e.density / truth);
                             cerr.push((e.palette - view.1[iy * VP + ix] / h as f64).abs());
@@ -3472,8 +3605,8 @@ mod tests {
                 let median = ratios[ratios.len() / 2];
                 let cmed = cerr[cerr.len() / 2];
                 println!(
-                    "  {name:<14} 2^{zoom:<3.0} | {:>4} px | density median {median:.3} | \
-                     colour |err| median {cmed:.4}",
+                    "  {name:<14} 2^{zoom:<3.0} {cells:>3.0} cells | {:>4} px | \
+                     density median {median:.3} | colour |err| median {cmed:.4}",
                     ratios.len()
                 );
                 assert!(
