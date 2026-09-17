@@ -2945,6 +2945,10 @@ mod tests {
                     j(sq, 0.3, 8.0),
                 ]
             }),
+            ("bubble pair", vec![
+                kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
+                kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
+            ]),
         ];
 
         for (name, transforms) in cases {
@@ -2954,12 +2958,29 @@ mod tests {
                 analyse_2d(&flame, &guard).expect("qualifies")
             };
             // Selection probabilities, normalised as the chaos game
-            // normalises them.
-            let w: Vec<f64> =
-                ifs.maps.iter().map(|m| flame.transforms[m.transform_index].weight as f64).collect();
-            let total: f64 = w.iter().sum();
-            // The probability of a TRANSFORM.
-            let p: Vec<f64> = w.iter().map(|x| x / total).collect();
+            // normalises them -- over TRANSFORMS, which is not the
+            // same as over maps.
+            //
+            // `analyse_2d` makes one map per (transform, branch) where
+            // the INVERSE is many-valued: a bubble is two maps and a
+            // disc up to twelve. Those are alternative PREIMAGES of
+            // one forward map, so the preimage of a set is their
+            // union and each carries the whole of its transform's
+            // probability. Normalising over maps would have split it
+            // and halved a bubble.
+            let ntr = flame.transforms.len();
+            let used: std::collections::BTreeSet<usize> =
+                ifs.maps.iter().map(|m| m.transform_index).collect();
+            let total: f64 = used
+                .iter()
+                .map(|&i| flame.transforms[i].weight as f64)
+                .sum();
+            let _ = ntr;
+            let p: Vec<f64> = ifs
+                .maps
+                .iter()
+                .map(|m| flame.transforms[m.transform_index].weight as f64 / total)
+                .collect();
             // How many values its forward map takes. A root's forward
             // is `|z|^(d/|n|) e^(i(arg z + 2πk)/n)` and the chaos game
             // draws `k` uniformly, so the transform's probability is
@@ -3006,15 +3027,23 @@ mod tests {
                     other => other.apply(q),
                 }
             };
-            let pick = |u: f64, p: &[f64]| -> usize {
+            // The chaos game picks a TRANSFORM. Returns the first
+            // map of it, whose forward is the transform's forward --
+            // the branch only distinguishes inverses.
+            let pick_transform = |u: f64, ifs: &Ifs2, flame: &Flame, total: f64| -> usize {
                 let mut acc = 0.0;
-                for (i, pi) in p.iter().enumerate() {
-                    acc += pi;
+                let mut seen: Option<usize> = None;
+                for (i, m) in ifs.maps.iter().enumerate() {
+                    if seen == Some(m.transform_index) {
+                        continue;
+                    }
+                    seen = Some(m.transform_index);
+                    acc += flame.transforms[m.transform_index].weight as f64 / total;
                     if u <= acc {
                         return i;
                     }
                 }
-                p.len() - 1
+                ifs.maps.len() - 1
             };
 
             // THE DIRECT REFERENCE, once per view: a chaos game at
@@ -3034,7 +3063,7 @@ mod tests {
                 let mut hits = vec![0u32; VP * VP];
                 let mut q = bc;
                 for i in 0..DIRECT_N + 1000 {
-                    let m = pick(rnd(), &p);
+                    let m = pick_transform(rnd(), &ifs, &flame, total);
                     q = step(q, m, rnd(), &ifs);
                     if i < 1000 {
                         continue;
@@ -3069,7 +3098,7 @@ mod tests {
             };
             let mut q = bc;
             for i in 0..COARSE_N + 1000 {
-                let m = pick(rnd(), &p);
+                let m = pick_transform(rnd(), &ifs, &flame, total);
                 q = step(q, m, rnd(), &ifs);
                 if i >= 1000 {
                     if let Some(c) = cell(q) {
