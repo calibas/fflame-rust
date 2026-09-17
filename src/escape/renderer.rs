@@ -638,6 +638,17 @@ pub struct EscapeRenderer {
     /// the row-band pass instead of striping the picture (see
     /// [`Self::band_key`]). Hashed once on `set_ifs`, not per frame.
     ifs_token: u64,
+    /// Test-only: hand over at THIS level rather than the one the
+    /// objective picks.
+    ///
+    /// The objective minimises a measured curvature plus a modelled
+    /// f32 cost, and an argmin is only as good as its ORDERING of the
+    /// levels. Measuring that needs the render at a level the walk
+    /// would not have chosen, which is what `seed_beam_at` is for on
+    /// the CPU and what this is for on the GPU.
+    /// `probe_what_the_f32_term_ranks_on_the_gpu` is the caller.
+    #[cfg(test)]
+    pub(crate) ifs_force_level: Option<u32>,
     /// The beam's handover state for the current view, packed for
     /// `fdata` (see `escape::ifs::pack_seeds`). Recomputed when the
     /// VIEW changes, not just the flame — it is a function of the
@@ -1527,6 +1538,8 @@ impl EscapeRenderer {
             ifs_capacity: 0,
             ifs_uploaded_solid: None,
             ifs_token: 0,
+            #[cfg(test)]
+            ifs_force_level: None,
             ifs_seeds: None,
             ifs_seed_key: String::new(),
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
@@ -3936,8 +3949,12 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             })
         };
         let beam = param("beam", 8.0).clamp(1.0, 8.0) as u32;
+        #[cfg(test)]
+        let forced = self.ifs_force_level;
+        #[cfg(not(test))]
+        let forced: Option<u32> = None;
         let key = format!(
-            "{}|{}|{}|{}|{}x{}|{beam}|{}",
+            "{}|{}|{}|{}|{}x{}|{beam}|{}|{forced:?}",
             escape.center_re,
             escape.center_im,
             escape.zoom_log2,
@@ -3963,6 +3980,16 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Falling back to f64 when the strings will not parse keeps a
         // malformed config rendering something rather than nothing.
         let seeds = match super::ifs::centre_at_precision(escape) {
+            #[cfg(test)]
+            Some(centre) if forced.is_some() => crate::scene::ifs_estimate::seed_beam_at(
+                &packed.ifs,
+                centre,
+                basis,
+                px,
+                budget,
+                beam,
+                forced.expect("guarded"),
+            ),
             Some(centre) => crate::scene::ifs_estimate::seed_beam(
                 &packed.ifs,
                 centre,
