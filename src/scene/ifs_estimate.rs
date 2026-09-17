@@ -2854,6 +2854,253 @@ mod tests {
         ])
     }
 
+    /// Item 2 of [`ifs-measure-by-inverse-walk.md`], proved on the CPU
+    /// before any plumbing exists.
+    ///
+    /// The claim is that the flame's invariant measure factorises
+    /// through the inverse walk. Unrolling `mu = sum_i p_i (S_i)_* mu`
+    /// k times gives `mu(B) = sum_a p_a mu(S_a^-1 B)`, and for a pixel
+    /// `B` of area `px^2` at `x`, `S_a^-1 B` is a region around
+    /// `q_a = S_a^-1(x)` of area `px^2 |det D(S_a^-1)(x)|`. Stop each
+    /// address once that area reaches one COARSE pixel, where an
+    /// ordinary render of the whole attractor already knows the
+    /// density, and
+    ///
+    /// ```text
+    /// density(x) = sum_a  p_a . rho(q_a) . |det D(S_a^-1)(x)|
+    /// ```
+    ///
+    /// Three factors, all of which the walk has or can carry: the
+    /// address's probability, a lookup at its endpoint, and the
+    /// determinant along it. No forward sample is drawn at the zoom.
+    ///
+    /// This enumerates every address rather than beaming, so what it
+    /// tests is the FORMULA and not the truncation -- those are
+    /// separate questions and the beam is the second one. The
+    /// reference is a direct chaos game at the same view, so the
+    /// comparison is against the thing mode A actually draws.
+    #[test]
+    #[ignore = "a survey; run with --ignored --nocapture"]
+    fn probe_the_measure_through_the_inverse_walk() {
+        // An IFS with its selection probabilities, which the analysis
+        // does not carry -- `transform_index` is the way back to them.
+        let cases: Vec<(&str, Vec<Transform>)> = vec![
+            ("gasket, equal", vec![half(0.0, 0.0), half(0.5, 0.0), half(0.25, 0.5)]),
+            (
+                "gasket, 6:1:1",
+                vec![
+                    {
+                        let mut t = half(0.0, 0.0);
+                        t.weight = 6.0;
+                        t
+                    },
+                    half(0.5, 0.0),
+                    half(0.25, 0.5),
+                ],
+            ),
+            ("dragon", vec![
+                affine_xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
+                affine_xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
+            ]),
+        ];
+
+        for (name, transforms) in cases {
+            let flame = flame_of(transforms);
+            let ifs = {
+                let guard = global_registry();
+                analyse_2d(&flame, &guard).expect("qualifies")
+            };
+            // Selection probabilities, normalised as the chaos game
+            // normalises them.
+            let w: Vec<f64> =
+                ifs.maps.iter().map(|m| flame.transforms[m.transform_index].weight as f64).collect();
+            let total: f64 = w.iter().sum();
+            let p: Vec<f64> = w.iter().map(|x| x / total).collect();
+
+            // A deterministic weighted chaos game, shared by the
+            // coarse pass and the direct reference so the comparison
+            // is of one measure with itself.
+            let mut state: u64 = 0x9E3779B97F4A7C15;
+            let mut rnd = move || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let pick = |u: f64, p: &[f64]| -> usize {
+                let mut acc = 0.0;
+                for (i, pi) in p.iter().enumerate() {
+                    acc += pi;
+                    if u <= acc {
+                        return i;
+                    }
+                }
+                p.len() - 1
+            };
+
+            // THE DIRECT REFERENCE, once per view: a chaos game at
+            // the zoom, which is what mode A draws and what starves.
+            const VP: usize = 64;
+            const DIRECT_N: usize = 20_000_000;
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            let mut centre = bc;
+            for k in 0..40 {
+                centre = ifs.maps[k % ifs.maps.len()].forward.apply(centre);
+            }
+            let mut direct: Vec<(f64, Vec<u32>)> = Vec::new();
+            for &zoom in &[2.0f64, 4.0, 6.0] {
+                let span = 2.0 * br / 2f64.powf(zoom);
+                let px = span / VP as f64;
+                let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
+                let mut hits = vec![0u32; VP * VP];
+                let mut q = bc;
+                for i in 0..DIRECT_N + 1000 {
+                    let m = pick(rnd(), &p);
+                    q = ifs.maps[m].forward.apply(q);
+                    if i < 1000 {
+                        continue;
+                    }
+                    let fx = (q[0] - origin[0]) / px;
+                    let fy = (q[1] - origin[1]) / px;
+                    if fx >= 0.0 && fy >= 0.0 {
+                        let (ix, iy) = (fx as usize, fy as usize);
+                        if ix < VP && iy < VP {
+                            hits[iy * VP + ix] += 1;
+                        }
+                    }
+                }
+                direct.push((zoom, hits));
+            }
+
+            // THE COARSE PASS, at each resolution: the density per
+            // unit area over the ball, as an ordinary render knows it.
+            // Sweeping it answers G7 -- whether the spread is the
+            // lookup averaging over a cell (which more resolution
+            // fixes) or a bias in the formula (which it does not).
+            const COARSE_N: usize = 20_000_000;
+            for &res in &[128usize, 512, 2048] {
+                let cpx = 2.0 * br / res as f64;
+                let mut grid = vec![0u32; res * res];
+                let cell = |q: [f64; 2]| -> Option<usize> {
+                    let fx = (q[0] - (bc[0] - br)) / cpx;
+                    let fy = (q[1] - (bc[1] - br)) / cpx;
+                    if fx < 0.0 || fy < 0.0 {
+                        return None;
+                    }
+                    let (ix, iy) = (fx as usize, fy as usize);
+                    (ix < res && iy < res).then(|| iy * res + ix)
+                };
+                let mut q = bc;
+                for i in 0..COARSE_N + 1000 {
+                    let m = pick(rnd(), &p);
+                    q = ifs.maps[m].forward.apply(q);
+                    if i >= 1000 {
+                        if let Some(c) = cell(q) {
+                            grid[c] += 1;
+                        }
+                    }
+                }
+                let rho = |q: [f64; 2]| -> f64 {
+                    cell(q).map_or(0.0, |c| {
+                        grid[c] as f64 / (COARSE_N as f64 * cpx * cpx)
+                    })
+                };
+
+                for (zoom, hits) in &direct {
+                    let span = 2.0 * br / 2f64.powf(*zoom);
+                    let px = span / VP as f64;
+                    let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
+                    let want = (cpx / px) * (cpx / px);
+                    // Every address, to the depth at which its
+                    // preimage of a pixel reaches one coarse cell.
+                    let estimate = |x: [f64; 2]| -> f64 {
+                        let mut acc = 0.0f64;
+                        let mut stack: Vec<([f64; 2], f64, f64, u32)> = vec![(x, 1.0, 1.0, 0)];
+                        while let Some((q, pa, det, depth)) = stack.pop() {
+                            if det >= want || depth >= 24 {
+                                acc += pa * rho(q) * det;
+                                continue;
+                            }
+                            for (i, m) in ifs.maps.iter().enumerate() {
+                                // The preimage of a set is the union
+                                // over BRANCHES, each with the same p_i.
+                                let Some(j) = m.inverse.jacobian(q) else { continue };
+                                let qi = m.inverse.apply(q);
+                                if !qi[0].is_finite() || !qi[1].is_finite() {
+                                    continue;
+                                }
+                                // Outside the ball is outside the
+                                // attractor, and stays outside under
+                                // every further inverse.
+                                if Affine2::distance(qi, bc) > br * 1.000001 {
+                                    continue;
+                                }
+                                let dj = (j[0][0] * j[1][1] - j[0][1] * j[1][0]).abs();
+                                if !(dj > 0.0) || !dj.is_finite() {
+                                    continue;
+                                }
+                                stack.push((qi, pa * p[i], det * dj, depth + 1));
+                            }
+                        }
+                        acc
+                    };
+
+                    let mut ratios: Vec<f64> = Vec::new();
+                    let mut lit = 0usize;
+                    for iy in 0..VP {
+                        for ix in 0..VP {
+                            let h = hits[iy * VP + ix];
+                            if h > 0 {
+                                lit += 1;
+                            }
+                            if h < 40 {
+                                continue;
+                            }
+                            let d = h as f64 / (DIRECT_N as f64 * px * px);
+                            let x = [
+                                origin[0] + (ix as f64 + 0.5) * px,
+                                origin[1] + (iy as f64 + 0.5) * px,
+                            ];
+                            let est = estimate(x);
+                            if est > 0.0 && d > 0.0 {
+                                ratios.push(est / d);
+                            }
+                        }
+                    }
+                    ratios.sort_by(f64::total_cmp);
+                    let qt = |f: f64| -> f64 {
+                        if ratios.is_empty() {
+                            f64::NAN
+                        } else {
+                            ratios[((ratios.len() - 1) as f64 * f).round() as usize]
+                        }
+                    };
+                    // `cpx/px` under one is the estimator OUTSIDE its
+                    // domain: the coarse grid is finer than the view
+                    // pixel, `want` is below one, the walk takes no
+                    // step at all, and what comes back is the coarse
+                    // density at a scale finer than the thing it is
+                    // compared against. On a measure of dimension
+                    // below two that density DIVERGES as the cell
+                    // shrinks, which is the whole of the drift with
+                    // resolution. It cannot happen at a real zoom --
+                    // the coarse pass covers the ball and the view is
+                    // inside it -- but it happens here, and a row it
+                    // happened in says nothing about the formula.
+                    let _ = lit;
+                    println!(
+                        "  {name:<16} 2^{zoom:<3.0} coarse {res:>4} | cpx/px {:>6.2}{} | \
+                         cmp {:>4} | p10 {:.3}  median {:.3}  p90 {:.3}",
+                        cpx / px,
+                        if cpx / px < 1.5 { " DEGENERATE" } else { "           " },
+                        ratios.len(),
+                        qt(0.1),
+                        qt(0.5),
+                        qt(0.9)
+                    );
+                }
+            }
+        }
+    }
+
     /// Where the beam's ranking key fails, measured.
     ///
     /// Reported from use as "layers that overlap unpredictably" and

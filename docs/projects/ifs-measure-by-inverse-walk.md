@@ -214,14 +214,21 @@ ball's centre the distance walk ranks by (D3).
 
 ## 5. Order of work
 
+0. ~~**The factorisation itself**~~ -- done 2026-09-17, §5a, on the
+   CPU with no plumbing at all. Exact on the dragon, approximate on
+   the gasket, with the single-cell lookup named as the reason and
+   the domain condition `cpx > px` found.
 1. **The coarse pass and the lookup.** The headless render into a
    texture over the ball; bound to the mode-D pass; a probe
    colouring that paints the coarse density at the walk's ESCAPE
    endpoint, as a check that the binding, the extent and the
-   coordinates agree. No estimator yet.
+   coordinates agree. No estimator yet. **The lookup's filtering is
+   now part of this item, not a refinement of it** (§5a).
 2. **The beam sum at shallow zoom.** The measure walk on the CPU
    (`estimate_measure`, the reference), then in the shader:
-   probability, determinant, stop rule, sum. G1 at 2^2 to 2^6.
+   probability, determinant, stop rule, sum. G1 at 2^2 to 2^6. The
+   beam's truncation is measured against §5a's enumeration, which
+   separates it from the formula.
 3. **Colour and units.** D4 and D5; G2 and G4.
 4. **Monte Carlo** (D3), if G1 shows the beam sum's bias on the
    overlap fixtures.
@@ -230,6 +237,73 @@ ball's centre the distance walk ranks by (D3).
 
 Items 1 to 3 are item 2 of the delta plan's §9, and they run on
 today's walk unchanged.
+
+## 5a. The factorisation holds, 2026-09-17
+
+Proved on the CPU before any plumbing:
+`probe_the_measure_through_the_inverse_walk`. A CPU chaos game builds
+the coarse density over the ball; the estimator enumerates EVERY
+address (no beam -- the formula and the truncation are separate
+questions and this is the first one) to the depth at which its
+preimage of a pixel reaches one coarse cell, summing
+`p_a · ρ(q_a) · |det D(S_a⁻¹)(x)|`; and the reference is a direct
+chaos game at the same view, twenty million samples, which is what
+mode A actually draws.
+
+**On a measure of dimension two it is exact.** The Heighway dragon,
+whose two pieces just touch and whose attractor tiles the plane:
+
+| coarse | zoom | median ratio | p10 | p90 |
+|---|---|---|---|---|
+| 128 | 2^2 | 0.999 | 0.672 | 1.318 |
+| 128 | 2^4 | 0.999 | 0.722 | 1.244 |
+| 512 | 2^2 | 1.004 | 0.772 | 1.183 |
+| 512 | 2^4 | 0.996 | 0.801 | 1.184 |
+| 2048 | 2^2 | 1.017 | 0.757 | 1.362 |
+| 2048 | 2^4 | 0.989 | 0.722 | 1.290 |
+
+Six resolution-and-zoom combinations, median within 1.7% of one
+every time, and the spread is the reference's own Poisson noise --
+it narrows as the coarse resolution rises and the comparison
+threshold is only forty samples a pixel. **The three factors are the
+right three.** No forward sample was drawn at the zoom.
+
+**On a fractal measure it is approximate, and the size of the
+approximation is the open question.** The Sierpinski gasket has
+dimension log3/log2 ≈ 1.585, so there is no density per unit area to
+look up: `ρ = h/(N·cpx²)` diverges as `cpx^(D−2)`. Medians run 1.05
+to 1.35 at equal weights and 0.82 to 1.24 at weights 6:1:1, with one
+row at 0.243 whose p10 and p90 are 0.008 and 11.3. The cause is
+**the single-cell lookup**: the estimator asks for the density in a
+grid square and the truth is the measure of one particular
+same-sized region, and on a fractal two same-area regions differ
+without bound. It does not improve with resolution, because the
+mismatch is scale-free.
+
+The repairs, none tried: integrate `ρ` over the preimage region by
+sampling several points rather than one; or filter `ρ` (a mip chain
+over the coarse pass) and read it at the region's scale; or carry
+the region's shape from the composed Jacobian and read an
+anisotropic footprint, which is what texture hardware does for
+exactly this reason. D1's resolution question (G7) is downstream of
+whichever is chosen.
+
+**And a domain condition that was not in the plan.** The stop rule
+`det·px² ≥ cpx²` needs `cpx > px`: the coarse cell must be COARSER
+than the view pixel. Below that `want < 1`, the walk takes no step,
+and the estimator degenerates to a plain coarse lookup at a scale
+finer than the thing it is compared against -- which on a fractal
+measure reports `cpx^(D−2)` too much. Every drifting row in the
+sweep is one of these, and the dragon is immune to them because
+`D = 2` makes that factor one. It cannot arise at a real zoom, since
+the coarse pass covers the whole ball and the view is inside it, but
+it invalidated a third of this probe's own rows and it is marked in
+the output now.
+
+**What this does not yet say.** Nothing about the beam (the
+estimator enumerated), nothing about colour, nothing about units,
+nothing about a nonlinear or inversion set -- the three fixtures are
+affine. Those are §5 items 2 to 4 and they are next.
 
 ## 6. Gates
 
@@ -266,6 +340,7 @@ today's walk unchanged.
 | the beam sum's bias on overlapping flames is large | dark where the flame is bright | G1 measures it per beam; D3's Monte Carlo is the answer if so |
 | brightness at depth reads wrong to a user calibrated on the chaos game | "it doesn't look like my flame" at depth | D4 says which normalisation is on and offers the other; the shallow case is pinned by G4 |
 | the coarse pass at 2048² is too coarse for a set with fine density structure | intra-pixel bias in the lookup, blur at depth | G7 measures agreement against resolution; a resolution parameter beside Extent |
+| **the single-cell lookup on a fractal measure** (§5a, measured) | medians off by tens of per cent on the gasket, individual pixels by orders | not resolution: the mismatch is scale-free. Filtering or footprint integration, chosen in item 1 |
 | the determinant along a contracting lineage underflows f32 | a lineage weighted zero that should count | the same scaled-float care the delta walk takes with σ; carry `log det` |
 
 ## 8. Deliberately not here
