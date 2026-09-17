@@ -1817,7 +1817,10 @@ what makes a per-view handover possible at all.
   of it.
 - **The measure.** No attempt to bring density into the distance
   render. A hybrid — the distance field as a mask or trap inside the
-  chaos game — is a bridge for later.
+  chaos game — is a bridge for later. *Planned 2026-09-17:*
+  [ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
+  reads the invariant measure through the walk itself, and
+  [ifs-general.md](ifs-general.md) is the plan for §8's ladder.
 
 ## 8. Growing the set: what a reversible variation has to supply
 
