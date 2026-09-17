@@ -1471,6 +1471,316 @@ fn seeds_of<P: SeedPoint>(
         .collect()
 }
 
+/// An ordinary render of the whole attractor, as the measure the
+/// inverse walk reads: the hit count per cell and the palette
+/// coordinate summed over the same hits.
+///
+/// This is the "coarse pass" of
+/// [`ifs-measure-by-inverse-walk.md`](../../docs/projects/ifs-measure-by-inverse-walk.md)
+/// D1 -- view-independent, made once per flame, and covering the
+/// ball. A grid too coarse for the attractor stops being a measure:
+/// 64 across the ball reads 0.52 of the truth on a bubble pair where
+/// 512 reads 0.98 (§5f), so the useful floor is somewhere between 64
+/// and 128 and D1's 2048 is the number to build.
+#[derive(Debug, Clone)]
+pub struct CoarseMeasure {
+    pub res: usize,
+    pub centre: [f64; 2],
+    pub radius: f64,
+    /// Samples that landed in each cell.
+    pub hits: Vec<u32>,
+    /// The palette coordinate summed over those samples.
+    pub palette_sum: Vec<f64>,
+    /// How many samples the pass drew in total.
+    pub samples: u64,
+}
+
+impl CoarseMeasure {
+    /// The world width of one cell.
+    pub fn cell(&self) -> f64 {
+        2.0 * self.radius / self.res as f64
+    }
+
+    /// The cell `q` falls in, for a builder outside this module.
+    #[cfg(test)]
+    pub(crate) fn index_for_test(&self, q: [f64; 2]) -> Option<usize> {
+        self.index(q)
+    }
+
+    fn index(&self, q: [f64; 2]) -> Option<usize> {
+        let c = self.cell();
+        let fx = (q[0] - (self.centre[0] - self.radius)) / c;
+        let fy = (q[1] - (self.centre[1] - self.radius)) / c;
+        if !(fx >= 0.0) || !(fy >= 0.0) {
+            return None;
+        }
+        let (ix, iy) = (fx as usize, fy as usize);
+        (ix < self.res && iy < self.res).then(|| iy * self.res + ix)
+    }
+
+    /// The measure per unit AREA at `q`, zero outside the grid.
+    ///
+    /// On a set of dimension below two this diverges as the cell
+    /// shrinks -- there is no density to look up in the limit -- which
+    /// is why the walk integrates it over a region rather than
+    /// sampling it at a point (§5c).
+    pub fn density(&self, q: [f64; 2]) -> f64 {
+        let c = self.cell();
+        self.index(q)
+            .map_or(0.0, |i| self.hits[i] as f64 / (self.samples as f64 * c * c))
+    }
+
+    /// The mean palette coordinate at `q`, or a mid-palette fallback
+    /// where nothing landed. It is `c_0` of the colour fold, damped by
+    /// `2⁻ᵏ`, so it only has to be roughly right (§5f).
+    pub fn palette(&self, q: [f64; 2]) -> f64 {
+        self.index(q).map_or(0.5, |i| {
+            if self.hits[i] > 0 {
+                self.palette_sum[i] / self.hits[i] as f64
+            } else {
+                0.5
+            }
+        })
+    }
+}
+
+/// What the measure walk needs of a flame beyond its [`Ifs2`]: the
+/// probability a step carries, and the colour it folds.
+///
+/// **The probability is a TRANSFORM's, and the branches go two
+/// different ways.** Both corrections are measured, each with a
+/// control that does not move:
+///
+/// - A ROOT's forward map is many-valued (`julia` is the square root
+///   with a random sign) and the chaos game draws the branch
+///   uniformly, while its inverse is the single-valued power. For any
+///   point exactly one forward branch has it in its image, so a step
+///   carries `p / |n|`. Without the division a julia dust reads 4.3x
+///   the truth at depth two and 32.9x at depth six (§5d).
+/// - A BUBBLE's forward map is single-valued and its INVERSE is
+///   two-valued, and `analyse_2d` expands that into two maps sharing
+///   a `transform_index`. Those are alternative PREIMAGES, so the
+///   preimage of a set is their union and each carries the WHOLE
+///   probability. Normalising over maps instead of transforms reads
+///   0.035 against 0.983 (§5e).
+///
+/// The affine fixtures do not move under either, which is what makes
+/// them corrections rather than fitted constants.
+#[derive(Debug, Clone)]
+pub struct MeasureMaps {
+    /// Per map, the probability one step of the inverse walk carries.
+    pub prob: Vec<f64>,
+    /// Per map, its transform's palette colour and colour speed.
+    pub colour: Vec<(f64, f64)>,
+}
+
+impl MeasureMaps {
+    pub fn of(ifs: &Ifs2, flame: &crate::scene::transforms::Flame) -> Self {
+        let weight = |i: usize| flame.transforms.get(i).map_or(0.0, |t| t.weight as f64);
+        // Over TRANSFORMS: a transform that expanded into several maps
+        // contributes its weight once.
+        let used: std::collections::BTreeSet<usize> =
+            ifs.maps.iter().map(|m| m.transform_index).collect();
+        let total: f64 = used.iter().map(|&i| weight(i)).sum();
+        let total = if total > 0.0 { total } else { 1.0 };
+        let prob = ifs
+            .maps
+            .iter()
+            .map(|m| {
+                let p = weight(m.transform_index) / total;
+                let branches = match m.forward.nonlinear().map(|n| n.kernel) {
+                    Some(crate::scene::ifs_analysis::Kernel::Root { n, .. }) => {
+                        n.unsigned_abs().max(1) as f64
+                    }
+                    _ => 1.0,
+                };
+                p / branches
+            })
+            .collect();
+        let colour = ifs
+            .maps
+            .iter()
+            .map(|m| {
+                flame
+                    .transforms
+                    .get(m.transform_index)
+                    .map_or((0.5, 0.0), |t| (t.color as f64, t.color_speed as f64))
+            })
+            .collect();
+        Self { prob, colour }
+    }
+}
+
+/// What the measure walk answers for one pixel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeasureEstimate {
+    /// The measure per unit area, in the same units as
+    /// [`CoarseMeasure::density`], so a ratio against an ordinary
+    /// render of the same view is one.
+    pub density: f64,
+    /// The palette coordinate, as the density-weighted mean over the
+    /// addresses that reached the pixel.
+    pub palette: f64,
+    /// How many addresses contributed.
+    pub addresses: u32,
+}
+
+/// How large the preimage region may grow, in coarse cells, before the
+/// walk stops and reads the measure.
+///
+/// **One cell is wrong** and was the first version: at one cell
+/// neither a point sample nor a footprint average integrates
+/// anything, and the estimator reads 0.24 to 0.89 of the truth
+/// (§5c). Sixteen is right on an affine set; a strongly curved one
+/// wants four, because the footprint is a first-order parallelogram
+/// and an inversion outgrows it (§5d). Four is the compromise that
+/// is within 3% on every fixture of both kinds.
+pub const MEASURE_CELLS: f64 = 4.0;
+
+/// The invariant measure at one pixel, read through the inverse walk.
+///
+/// Unrolling `μ = Σ p_i (S_i)_* μ` gives `μ(B) = Σ_a p_a μ(S_a⁻¹ B)`,
+/// and for a pixel `B` of area `px²` at `x` the region `S_a⁻¹ B` sits
+/// around `S_a⁻¹(x)` with area `px²·|det D(S_a⁻¹)(x)|`. Walk each
+/// address until that area reaches `cells` coarse cells, where an
+/// ordinary render already knows the measure, and
+///
+/// ```text
+/// density(x) = Σ_a  p_a · ρ(S_a⁻¹ x) · |det D(S_a⁻¹)(x)|
+/// ```
+///
+/// Three factors, all of them things the walk carries. **No forward
+/// sample is drawn at the zoom**, which is why this does not starve.
+///
+/// `ρ` is read over the whole region rather than at its centre: the
+/// composed Jacobian maps the pixel square to the region, so the
+/// footprint is free, and point-sampling it costs a factor of three
+/// on a fractal measure and up to 7.5x at a deep stop (§5b, §5c).
+///
+/// The colour is the flam3 rule folded along the address in FORWARD
+/// order -- `a_k` first and `a_1` last, so the shallowest branch
+/// dominates -- from the coarse pass's palette coordinate at the
+/// endpoint (§5f).
+///
+/// `beam` truncates the sum, keeping the largest contributions. It is
+/// free on every set measured except one whose pixels are covered by
+/// many addresses at once, where eight loses 12% and two loses 70%
+/// (§5b).
+pub fn estimate_measure(
+    ifs: &Ifs2,
+    maps: &MeasureMaps,
+    coarse: &CoarseMeasure,
+    x: [f64; 2],
+    px: f64,
+    beam: usize,
+    cells: f64,
+    max_levels: u32,
+) -> MeasureEstimate {
+    let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+    let cpx = coarse.cell();
+    if !(px > 0.0) || !(cpx > 0.0) {
+        return MeasureEstimate { density: 0.0, palette: 0.5, addresses: 0 };
+    }
+    // The area the region must reach, as a determinant.
+    let want = (cpx / px) * (cpx / px) * cells.max(1.0);
+    let beam = beam.max(1);
+
+    // `ρ` averaged over the region the composed Jacobian describes.
+    const K: i32 = 4;
+    let look = |q: [f64; 2], m: [[f64; 2]; 2]| -> f64 {
+        let mut acc = 0.0;
+        for sy in 0..K {
+            for sx in 0..K {
+                let u = ((sx as f64 + 0.5) / K as f64 - 0.5) * px;
+                let v = ((sy as f64 + 0.5) / K as f64 - 0.5) * px;
+                acc += coarse.density([
+                    q[0] + m[0][0] * u + m[0][1] * v,
+                    q[1] + m[1][0] * u + m[1][1] * v,
+                ]);
+            }
+        }
+        acc / (K * K) as f64
+    };
+
+    struct Live {
+        q: [f64; 2],
+        p: f64,
+        m: [[f64; 2]; 2],
+        addr: Vec<u32>,
+    }
+    let mut live = vec![Live { q: x, p: 1.0, m: [[1.0, 0.0], [0.0, 1.0]], addr: Vec::new() }];
+    let mut acc = 0.0f64;
+    let mut acc_col = 0.0f64;
+    let mut addresses = 0u32;
+
+    for _ in 0..max_levels {
+        if live.is_empty() {
+            break;
+        }
+        let mut next: Vec<Live> = Vec::with_capacity(live.len() * ifs.maps.len());
+        for c in live.drain(..) {
+            let det = (c.m[0][0] * c.m[1][1] - c.m[0][1] * c.m[1][0]).abs();
+            if det >= want {
+                let w = c.p * look(c.q, c.m) * det;
+                if w > 0.0 {
+                    // `a_k` first, `a_1` last: the flam3 rule as
+                    // `main_template.wgsl` applies it.
+                    let mut col = coarse.palette(c.q);
+                    for &i in c.addr.iter().rev() {
+                        let (cl, sp) = maps.colour[i as usize];
+                        col = col * (1.0 + sp) * 0.5 + cl * (1.0 - sp) * 0.5;
+                    }
+                    acc += w;
+                    acc_col += w * col;
+                    addresses += 1;
+                }
+                continue;
+            }
+            for (i, mp) in ifs.maps.iter().enumerate() {
+                // The preimage of a set is the union over the
+                // inverse's branches, which `analyse_2d` has already
+                // made separate maps of.
+                let Some(j) = mp.inverse.jacobian(c.q) else { continue };
+                let qi = mp.inverse.apply(c.q);
+                if !qi[0].is_finite() || !qi[1].is_finite() {
+                    continue;
+                }
+                // Outside the ball is outside the attractor, and stays
+                // outside under every further inverse -- so this is an
+                // exact prune, not a heuristic.
+                if Affine2::distance(qi, bc) > br * (1.0 + 1e-6) {
+                    continue;
+                }
+                let m2 = compose_matrix(j, c.m);
+                let d2 = (m2[0][0] * m2[1][1] - m2[0][1] * m2[1][0]).abs();
+                if !(d2 > 0.0) || !d2.is_finite() {
+                    continue;
+                }
+                let mut addr = c.addr.clone();
+                addr.push(i as u32);
+                next.push(Live { q: qi, p: c.p * maps.prob[i], m: m2, addr });
+            }
+        }
+        if next.len() > beam {
+            // The answer is a SUM, so a pruned address is lost from
+            // it: keep the largest contributions.
+            let key = |c: &Live| {
+                let d = (c.m[0][0] * c.m[1][1] - c.m[0][1] * c.m[1][0]).abs();
+                c.p * d * coarse.density(c.q)
+            };
+            next.sort_by(|a, b| key(b).total_cmp(&key(a)));
+            next.truncate(beam);
+        }
+        live = next;
+    }
+
+    MeasureEstimate {
+        density: acc,
+        palette: if acc > 0.0 { acc_col / acc } else { 0.5 },
+        addresses,
+    }
+}
+
 /// Continue a seeded walk for one pixel — the reference for what the
 /// shader does after the handover.
 ///
@@ -2852,6 +3162,284 @@ mod tests {
             j(t1, 0.2, 15.0),
             j(t2, 0.3, 8.0),
         ])
+    }
+
+    /// A weighted chaos game, and the coarse pass built from it.
+    ///
+    /// The forward step picks a TRANSFORM and then, for a root whose
+    /// forward map is many-valued, a branch -- which is what the
+    /// chaos game does and what [`MeasureMaps`] undoes.
+    fn chaos_measure(
+        ifs: &Ifs2,
+        flame: &Flame,
+        samples: usize,
+        res: usize,
+        seed: u64,
+    ) -> CoarseMeasure {
+        let mut st = seed;
+        let mut rnd = move || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let used: std::collections::BTreeSet<usize> =
+            ifs.maps.iter().map(|m| m.transform_index).collect();
+        let total: f64 = used.iter().map(|&i| flame.transforms[i].weight as f64).sum();
+        let mut out = CoarseMeasure {
+            res,
+            centre: ifs.ball.centre,
+            radius: ifs.ball.radius,
+            hits: vec![0; res * res],
+            palette_sum: vec![0.0; res * res],
+            samples: samples as u64,
+        };
+        let mut q = ifs.ball.centre;
+        let mut col = 0.5f64;
+        for i in 0..samples + 1000 {
+            // One transform, then one of its forward branches.
+            let u = rnd();
+            let mut acc = 0.0;
+            let mut m = ifs.maps.len() - 1;
+            let mut seen: Option<usize> = None;
+            for (k, mp) in ifs.maps.iter().enumerate() {
+                if seen == Some(mp.transform_index) {
+                    continue;
+                }
+                seen = Some(mp.transform_index);
+                acc += flame.transforms[mp.transform_index].weight as f64 / total;
+                if u <= acc {
+                    m = k;
+                    break;
+                }
+            }
+            q = match &ifs.maps[m].forward {
+                Map2::Nonlinear(n) => {
+                    let b = match n.kernel {
+                        crate::scene::ifs_analysis::Kernel::Root { n: e, .. } => {
+                            (rnd() * e.unsigned_abs() as f64).floor() as u32
+                        }
+                        _ => 0,
+                    };
+                    n.apply_branch(q, b)
+                }
+                other => other.apply(q),
+            };
+            let t = &flame.transforms[ifs.maps[m].transform_index];
+            let sp = t.color_speed as f64;
+            col = col * (1.0 + sp) * 0.5 + t.color as f64 * (1.0 - sp) * 0.5;
+            if i < 1000 || !q[0].is_finite() || !q[1].is_finite() {
+                continue;
+            }
+            if let Some(c) = out.index_for_test(q) {
+                out.hits[c] += 1;
+                out.palette_sum[c] += col;
+            }
+        }
+        out
+    }
+
+    /// G1 of [`ifs-measure-by-inverse-walk.md`]: the measure read
+    /// through the inverse walk IS the chaos game's measure.
+    ///
+    /// The flame's picture is its invariant measure, and this is the
+    /// claim that the measure factorises through the walk -- so a
+    /// pixel's density and colour can be had from an address's
+    /// probability, a lookup in an ordinary render at its endpoint,
+    /// and the determinant along it, with **no forward sample drawn
+    /// at the zoom**. That is what does not starve.
+    ///
+    /// Held to a median ratio rather than a per-pixel one because the
+    /// reference is a chaos game and therefore noisy: the tolerance
+    /// here is its own variance at this sample count, not the
+    /// estimator's accuracy, which §5c to §5f measured at 20M samples
+    /// as within 3% on every fixture.
+    ///
+    /// The four fixtures are the four shapes of correction: affine
+    /// (dragon), a root whose FORWARD map is many-valued (grand
+    /// julian), a bubble whose INVERSE is (bubble pair), and a
+    /// non-uniform weighting (the 6:1:1 gasket). Each was measured to
+    /// break differently, and all four are needed to pin
+    /// [`MeasureMaps`].
+    #[test]
+    fn the_measure_agrees_with_the_chaos_game() {
+        const COARSE: usize = 6_000_000;
+        const DIRECT: usize = 6_000_000;
+        const RES: usize = 256;
+        const VP: usize = 40;
+
+        let j = |aff: [f32; 6], w: f32, power: f32| {
+            let mut t = affine_xform(aff[0], aff[1], aff[2], aff[3], aff[4], aff[5]);
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("flatten", 1.0);
+            t.set_variation("julian", w);
+            t.set_variation_param("julian", "power", power);
+            t.set_variation_param("julian", "dist", -1.0);
+            t
+        };
+        let sq = [0.7071f32, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
+        let cases: Vec<(&str, Vec<Transform>)> = vec![
+            ("dragon", vec![
+                affine_xform(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
+                affine_xform(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
+            ]),
+            ("gasket 6:1:1", vec![
+                {
+                    let mut t = half(0.0, 0.0);
+                    t.weight = 6.0;
+                    t
+                },
+                half(0.5, 0.0),
+                half(0.25, 0.5),
+            ]),
+            ("grand julian", vec![
+                j([0.7071, 0.7071, -0.7071, 0.7071, 0.0, -0.3], 1.0, 2.0),
+                j(sq, 0.2, 15.0),
+                j(sq, 0.3, 8.0),
+            ]),
+            ("bubble pair", vec![
+                kernel_xform("bubble", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.6),
+                kernel_xform("bubble", [0.7, 0.7, -0.7, 0.7, 0.0, -0.3], 1.2),
+            ]),
+        ];
+
+        for (name, mut transforms) in cases {
+            let n = transforms.len().max(2) - 1;
+            for (i, t) in transforms.iter_mut().enumerate() {
+                t.color = i as f32 / n as f32;
+                t.color_speed = 0.0;
+            }
+            let flame = flame_of(transforms);
+            let ifs = {
+                let guard = global_registry();
+                analyse_2d(&flame, &guard).expect("qualifies")
+            };
+            let maps = MeasureMaps::of(&ifs, &flame);
+            let coarse = chaos_measure(&ifs, &flame, COARSE, RES, 0x9E3779B97F4A7C15);
+            let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
+            let mut centre = bc;
+            for k in 0..40 {
+                centre = match &ifs.maps[k % ifs.maps.len()].forward {
+                    Map2::Nonlinear(nl) => nl.apply_branch(centre, 0),
+                    other => other.apply(centre),
+                };
+            }
+            for &zoom in &[2.0f64, 4.0] {
+                let span = 2.0 * br / 2f64.powf(zoom);
+                let px = span / VP as f64;
+                let origin = [centre[0] - span * 0.5, centre[1] - span * 0.5];
+                // The reference: a chaos game binned into THIS view.
+                let view = {
+                    let mut hits = vec![0u32; VP * VP];
+                    let mut pal = vec![0.0f64; VP * VP];
+                    let mut st = 0x2545F4914F6CDD1Du64;
+                    let mut rnd = move || {
+                        st = st
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        (st >> 11) as f64 / (1u64 << 53) as f64
+                    };
+                    let used: std::collections::BTreeSet<usize> =
+                        ifs.maps.iter().map(|m| m.transform_index).collect();
+                    let total: f64 =
+                        used.iter().map(|&i| flame.transforms[i].weight as f64).sum();
+                    let mut q = bc;
+                    let mut col = 0.5f64;
+                    for i in 0..DIRECT + 1000 {
+                        let u = rnd();
+                        let mut acc = 0.0;
+                        let mut m = ifs.maps.len() - 1;
+                        let mut seen: Option<usize> = None;
+                        for (k, mp) in ifs.maps.iter().enumerate() {
+                            if seen == Some(mp.transform_index) {
+                                continue;
+                            }
+                            seen = Some(mp.transform_index);
+                            acc += flame.transforms[mp.transform_index].weight as f64 / total;
+                            if u <= acc {
+                                m = k;
+                                break;
+                            }
+                        }
+                        q = match &ifs.maps[m].forward {
+                            Map2::Nonlinear(nl) => {
+                                let b = match nl.kernel {
+                                    crate::scene::ifs_analysis::Kernel::Root { n: e, .. } => {
+                                        (rnd() * e.unsigned_abs() as f64).floor() as u32
+                                    }
+                                    _ => 0,
+                                };
+                                nl.apply_branch(q, b)
+                            }
+                            other => other.apply(q),
+                        };
+                        let t = &flame.transforms[ifs.maps[m].transform_index];
+                        let sp = t.color_speed as f64;
+                        col = col * (1.0 + sp) * 0.5 + t.color as f64 * (1.0 - sp) * 0.5;
+                        if i < 1000 || !q[0].is_finite() || !q[1].is_finite() {
+                            continue;
+                        }
+                        let fx = (q[0] - origin[0]) / px;
+                        let fy = (q[1] - origin[1]) / px;
+                        if fx >= 0.0 && fy >= 0.0 {
+                            let (ix, iy) = (fx as usize, fy as usize);
+                            if ix < VP && iy < VP {
+                                hits[iy * VP + ix] += 1;
+                                pal[iy * VP + ix] += col;
+                            }
+                        }
+                    }
+                    (hits, pal)
+                };
+
+                let mut ratios: Vec<f64> = Vec::new();
+                let mut cerr: Vec<f64> = Vec::new();
+                for iy in 0..VP {
+                    for ix in 0..VP {
+                        let h = view.0[iy * VP + ix];
+                        if h < 40 {
+                            continue;
+                        }
+                        let truth = h as f64 / (DIRECT as f64 * px * px);
+                        let x = [
+                            origin[0] + (ix as f64 + 0.5) * px,
+                            origin[1] + (iy as f64 + 0.5) * px,
+                        ];
+                        let e = estimate_measure(
+                            &ifs, &maps, &coarse, x, px, 16, MEASURE_CELLS, 40,
+                        );
+                        if e.density > 0.0 {
+                            ratios.push(e.density / truth);
+                            cerr.push((e.palette - view.1[iy * VP + ix] / h as f64).abs());
+                        }
+                    }
+                }
+                assert!(
+                    ratios.len() >= 20,
+                    "{name} 2^{zoom}: only {} pixels to compare, so this gate is not \
+                     measuring anything",
+                    ratios.len()
+                );
+                ratios.sort_by(f64::total_cmp);
+                cerr.sort_by(f64::total_cmp);
+                let median = ratios[ratios.len() / 2];
+                let cmed = cerr[cerr.len() / 2];
+                println!(
+                    "  {name:<14} 2^{zoom:<3.0} | {:>4} px | density median {median:.3} | \
+                     colour |err| median {cmed:.4}",
+                    ratios.len()
+                );
+                assert!(
+                    (0.78..=1.28).contains(&median),
+                    "{name} 2^{zoom}: the measure walk reads {median:.3} of the chaos \
+                     game's density"
+                );
+                assert!(
+                    cmed < 0.04,
+                    "{name} 2^{zoom}: the colour is {cmed:.4} off the chaos game's, in \
+                     palette coordinates"
+                );
+            }
+        }
     }
 
     /// Item 2 of [`ifs-measure-by-inverse-walk.md`], proved on the CPU

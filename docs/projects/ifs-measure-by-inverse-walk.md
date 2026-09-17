@@ -596,6 +596,54 @@ ratio between them is unaffected -- but the absolute colour error on
 the bubble pair and the grand julian would be worth re-reading at
 2048 once D1 is built.
 
+## 5g. The estimator is an API and a gate, 2026-09-17
+
+Everything in §5a to §5f lived inside one probe, which means it was
+a measurement and not a capability. Promoted:
+
+- `CoarseMeasure` -- an ordinary render of the whole attractor as the
+  hit count and the summed palette coordinate per cell, with
+  `density` and `palette` readers. D1's coarse pass, as a type.
+- `MeasureMaps::of(ifs, flame)` -- the per-map probability and
+  colour, and the **one place both branch corrections live**: a
+  root's probability divided by its forward branch count (§5d), and
+  the normalisation over transforms rather than maps that a bubble
+  needs (§5e). Each is commented with what it measured and with the
+  control that did not move.
+- `estimate_measure(...) -> MeasureEstimate` -- the density, the
+  palette coordinate and the address count, with the footprint
+  lookup, the `MEASURE_CELLS` stop rule and the beam.
+- `MEASURE_CELLS = 4.0`, documented as the compromise: sixteen is
+  right on an affine set, four on a curved one, and four is within
+  3% on both.
+
+And `the_measure_agrees_with_the_chaos_game` is a GATE, not a probe
+-- it runs in the ordinary suite in four seconds. Four fixtures,
+chosen because each breaks differently and all four are needed to
+pin `MeasureMaps`: the dragon (affine), the 6:1:1 gasket
+(non-uniform weights), the grand julian (a root's forward branches),
+and the bubble pair (an inverse's branches). Six million samples
+each side, at 2^2 and 2^4:
+
+| fixture | 2^2 | 2^4 |
+|---|---|---|
+| dragon | 0.998 | 1.002 |
+| gasket 6:1:1 | 0.864 | 1.137 |
+| grand julian | 1.002 | 1.000 |
+| bubble pair | 1.002 | 0.973 |
+
+Held to `0.78..=1.28` on the median density and 0.04 on the median
+palette error. The tolerance is the REFERENCE's noise at this sample
+count, not the estimator's accuracy: §5c to §5f measured that at 20M
+samples as within 3% everywhere. The 6:1:1 gasket is the loosest and
+has the fewest comparable pixels, and it tightened from 0.812/1.300
+to 0.864/1.137 when the samples went from 2M to 6M, which is what
+says the residue is the reference.
+
+**Checked that it can fail.** With the root's branch division
+removed the gate reports 5.276 on the grand julian and fails. A gate
+that cannot fail is not a gate, and this one has now been seen to.
+
 ## 6. Gates
 
 - **G1. The measure is the chaos game's.** At 2^2 to 2^6 on the
