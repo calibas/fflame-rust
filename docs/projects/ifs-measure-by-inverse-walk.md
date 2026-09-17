@@ -896,36 +896,32 @@ the density and `color` the palette coordinate. That is the one place
 mode D reuses those names, and it is why the colouring only makes
 sense with this walk.
 
-**On a set whose beam keys discriminate it is exact.** The julia
-dust, two roots of powers 2 and 3, so unequal probabilities and
-unequal determinants:
+**It is exact on every fixture** -- though it took §5n to get there,
+and two of the three read wrong until then for a reason that was
+never the shader's:
 
 | | density ratio | colour error |
 |---|---|---|
+| dragon | **1.0000** | **0.00000** |
+| gasket | **1.0146** | **0.00000** |
 | julia dust | **1.0000** | **0.00000** |
 
-Five decimals, against `estimate_measure` in f64 from the same coarse
-pass. That one number exercises the whole machine: the packing, the
-coarse binding and lookup, the six Jacobians, the composition, the
-stop rule, the beam, the probability, the footprint and the colour
-fold.
+Against `estimate_measure` in f64 from the same coarse pass. That
+exercises the whole machine: the packing, the coarse binding and
+lookup, the six Jacobians, the composition, the stop rule, the beam,
+the probability, the footprint and the colour fold.
 
-**Two fixtures disagree and only one cause is understood.**
+**Two fixtures disagreed, and this section's explanation of them was
+WRONG.** It blamed the beam choosing between equally-keyed lineages
+on sets whose maps are alike up to a translation, and had the gate
+report those two rather than assert on them. Both were in fact the
+forced level not reaching the walk, in two separate places (§5n).
 
-*Tied keys.* Where every map is alike up to a translation -- a
-dragon, an equal-weight gasket -- every lineage carries the same
-probability and determinant, so the beam chooses between ties and
-which members of a tied set survive is arbitrary. The dragon's
-density still matches to 1.0000 because its measure is locally
-uniform and cannot tell addresses apart, while its colour, which is
-nothing BUT the address, is 0.72 out. Sorting the shader's survivors
-by key to match the reference's sort changed nothing; giving the
-gasket unequal weights took its colour from 0.145 to 0.014. So the
-diagnosis holds and the remedy is not an ordering rule. Those
-fixtures are reported by the gate and not asserted.
-
-*The gasket's density, run to ground in §5n.* It is not `ρ` and not
-f32; the shader walks two levels short of where it should.
+The ties are real -- giving the gasket unequal weights took its
+colour from 0.145 to 0.014 -- but they were not what either fixture
+was showing, and believing they were let the gate stop asserting on
+exactly the two cases that had something to say. Every fixture is
+asserted again.
 
 **And the walk is correct only at handover level 0**, which the gate
 forces. The seeds carry a position and a basis but not the
@@ -1033,9 +1029,35 @@ it because a dimension-two measure has a scale-invariant density and
 cannot tell the depths apart; the gasket, at dimension 1.585, can.
 The julia dust reads exact, which says the rest of the walk is right.
 
-What is left is to find what makes the seeds' basis four times the
-span between the config and `ensure_ifs_seeds`. Everything either
-side of that is measured.
+**Found, and it was the test hook rather than the shader -- twice.**
+
+`seed_beam_at` did not force a level on an AFFINE set. The
+level-choosing machinery is skipped for affine maps -- one pays no
+curvature, so the deepest handover always wins and there is nothing
+to choose -- and the forced level rode inside it. `force` is not the
+objective; it is a test asking for a particular level, and it now
+applies either way.
+
+And `ensure_ifs_seeds` builds the centre two ways -- at the zoom's
+precision through `centre_at_precision`, and from f64 when those
+strings will not parse -- and only the first carried the force.
+`from_decimal` takes plain decimals, and a small coordinate written
+by `{:?}` comes out in scientific notation, so the gasket's centre
+fell to the f64 path and the force was dropped there. That is why
+fixing the first place left the gasket unchanged, and why the dragon
+moved and it did not.
+
+With both fixed every fixture is exact: dragon 1.0000, gasket
+1.0146, julia dust 1.0000, and all three colours 0.00000. The grand
+julian's cap measurement is unchanged to every digit and the eleven
+presets stay byte-identical, so nothing the objective chooses moved.
+
+**What this cost.** Three explanations were offered before the right
+one: f32 precision, tied beam keys, a transcription error. The first
+two were written into this document as findings and are struck
+through above. The measurement that settled it -- reporting the stop
+DEPTH from both sides -- took a single run, and every guess before it
+was made without that number in hand.
 
 ## 6. Gates
 
