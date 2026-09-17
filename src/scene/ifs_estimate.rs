@@ -1585,7 +1585,7 @@ impl CoarseMeasure {
 ///
 /// The affine fixtures do not move under either, which is what makes
 /// them corrections rather than fitted constants.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MeasureMaps {
     /// Per map, the probability one step of the inverse walk carries.
     pub prob: Vec<f64>,
