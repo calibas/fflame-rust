@@ -1471,6 +1471,12 @@ fn seeds_of<P: SeedPoint>(
         .collect()
 }
 
+/// A chaos-game sample of an IFS, for a test outside this module.
+#[cfg(test)]
+pub(crate) fn chaos_sample_for_test(ifs: &Ifs2, count: usize) -> Vec<[f64; 2]> {
+    tests::chaos_sample(ifs, count)
+}
+
 /// An ordinary render of the whole attractor, as the measure the
 /// inverse walk reads: the hit count per cell and the palette
 /// coordinate summed over the same hits.
@@ -2829,7 +2835,7 @@ mod tests {
     /// A dense chaos-game sample of an IFS with nonlinear maps, as an
     /// upper bound on the distance to its set: the distance to the
     /// nearest sample point is at least the distance to the set.
-    fn chaos_sample(ifs: &Ifs2, count: usize) -> Vec<[f64; 2]> {
+    pub(super) fn chaos_sample(ifs: &Ifs2, count: usize) -> Vec<[f64; 2]> {
         let mut state: u64 = 0x2545_F491_4F6C_DD1D;
         let mut next = || {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);

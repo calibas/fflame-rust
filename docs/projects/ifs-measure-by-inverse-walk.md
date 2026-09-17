@@ -879,6 +879,72 @@ found a kernel fixture that could not carry a test.
 The const is not spliced into the walk yet, because nothing reads it
 until `ifs_measure` exists. That is the next piece.
 
+## 5l. The measure walk runs on the GPU, 2026-09-17
+
+Built: `IFS_MEASURE` (the coarse binding, its reader, the footprint,
+and the walk), the `ifs_measure` colouring, and the splice. **The
+walk is selected by the COLOURING at assembly time**, because a
+mode-D colouring receives an `IfsResult` and never the pixel, so it
+cannot run a walk of its own (D6). `assemble_ifs` swaps the
+`let res = ifs_evaluate(uv);` line for a measure block and splices
+`IFS_JACOBIAN` and `IFS_MEASURE` beside the formula -- so every other
+mode-D shader is byte-identical, which the eleven pixel-identical
+presets confirm.
+
+The answer rides in two of `IfsResult`'s fields: `distance` carries
+the density and `color` the palette coordinate. That is the one place
+mode D reuses those names, and it is why the colouring only makes
+sense with this walk.
+
+**On a set whose beam keys discriminate it is exact.** The julia
+dust, two roots of powers 2 and 3, so unequal probabilities and
+unequal determinants:
+
+| | density ratio | colour error |
+|---|---|---|
+| julia dust | **1.0000** | **0.00000** |
+
+Five decimals, against `estimate_measure` in f64 from the same coarse
+pass. That one number exercises the whole machine: the packing, the
+coarse binding and lookup, the six Jacobians, the composition, the
+stop rule, the beam, the probability, the footprint and the colour
+fold.
+
+**Two fixtures disagree and only one cause is understood.**
+
+*Tied keys.* Where every map is alike up to a translation -- a
+dragon, an equal-weight gasket -- every lineage carries the same
+probability and determinant, so the beam chooses between ties and
+which members of a tied set survive is arbitrary. The dragon's
+density still matches to 1.0000 because its measure is locally
+uniform and cannot tell addresses apart, while its colour, which is
+nothing BUT the address, is 0.72 out. Sorting the shader's survivors
+by key to match the reference's sort changed nothing; giving the
+gasket unequal weights took its colour from 0.145 to 0.014. So the
+diagnosis holds and the remedy is not an ordering rule. Those
+fixtures are reported by the gate and not asserted.
+
+*The gasket's density, which is NOT understood.* With its ties broken
+the gasket's colour comes right and its density is still 2.4x to 3.4x
+the reference's. Since the colour agrees the addresses agree, and
+since the addresses agree the probability and determinant agree, so
+the difference is in `ρ` -- the footprint average. The suspicion,
+untested, is f32: on a measure of dimension 1.585 most of a footprint
+lands in empty cells, two or three samples of sixteen carry
+everything, and a position difference too small to see moves one
+across a cell boundary. That would make it a precision sensitivity
+rather than a transcription error, and it would explain why the
+dragon (dimension 2, smooth `ρ`) and the julia dust do not show it.
+Testing it means evaluating the CPU reference in f32.
+
+**And the walk is correct only at handover level 0**, which the gate
+forces. The seeds carry a position and a basis but not the
+probability or the two colour accumulators of the prefix that reached
+them, so a deeper handover silently drops three numbers. Carrying
+them is three more floats on `Seed` and is the deep-zoom follow-on --
+without it this paints the measure only as far as a pixel's own f32
+position reaches, about 2^17.
+
 ## 6. Gates
 
 - **G1. The measure is the chaos game's.** At 2^2 to 2^6 on the
