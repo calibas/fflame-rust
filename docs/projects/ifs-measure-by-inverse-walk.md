@@ -485,10 +485,49 @@ region the linearisation still describes**, which is a per-set
 quantity the walk can measure from `Q`'s size against the basis's.
 
 **What this still does not say.** Nothing about colour or units --
-§5 items 3 and after -- and nothing about `bubble` or `hemisphere`,
-whose INVERSE is the two-valued one, so the sum over branches falls
-on the walk rather than on the probability. That is a different
-shape of correction and it is untested.
+§5 items 3 and after. `bubble` is §5e; `hemisphere` needs nothing,
+since `branch_count` reads one for it -- it is 1-to-1.
+
+## 5e. A bubble's branches go the other way, 2026-09-17
+
+§5d's correction divides a root's probability by its forward branch
+count. `bubble` is the mirror image and needs the opposite
+treatment, which makes it the case that tells the two apart.
+
+A bubble's FORWARD map `4p/(|p|²+4)` is single-valued and 2-to-1, so
+its INVERSE has two branches -- and `analyse_2d` already expands that
+into two MAPS sharing a `transform_index` (one map per
+(transform, branch); `branch_count` reads 2 for Bubble and up to 12
+for Disc). Those two maps are alternative PREIMAGES of one forward
+map, so the preimage of a set is their union and each carries the
+WHOLE of its transform's probability. A root's branches divide the
+probability; a bubble's do not.
+
+Which means the probability must be normalised over TRANSFORMS and
+not over maps -- and the probe was normalising over maps, which was
+invisible on every fixture until this one because no other
+transform expands.
+
+| | dragon | grand julian | bubble pair |
+|---|---|---|---|
+| over transforms (right) | 0.987 | 0.994 | **0.983** |
+| over maps (wrong) | 0.987 | 0.994 | **0.035** |
+
+A factor of twenty-eight on the bubble and nothing at all on the
+other two, because their transforms are one map each. The size is
+the walk's depth: halving each step's probability costs `2^-k`, and
+`2^-5` is 0.031 against the 0.035 measured. Controls that do not
+move are what make a correction a correction.
+
+With it the bubble pair reads 0.983 and 0.984 at one- and four-cell
+stops, spread 1.23x and 1.25x -- the same quality as every other
+fixture. Its deeper stops degrade like the grand julian's (0.920 at
+sixteen cells, 0.619 at sixty-four) and for the same §5d reason, the
+first-order footprint outgrowing a curved map.
+
+Not covered: `disc`, whose twelve branches are the same shape of
+correction as bubble's two and which is the one kernel where
+`branch_count` depends on the ball.
 
 ## 6. Gates
 
@@ -529,6 +568,7 @@ shape of correction and it is untested.
 | a deeper stop needs a wider beam where many addresses carry weight (§5c) | the overlapping band reads 0.30 at 2^6 with beam 16 | D3's Monte Carlo, wanted exactly where D2 wants depth; every other fixture is unaffected |
 | the footprint is a first-order parallelogram and a curved map outgrows it (§5d) | the grand julian's spread doubles between a four-cell and a sixty-four-cell stop | D2 stops at the depth the linearisation still covers; the quadratic the distance walk carries would lift it |
 | a root's probability must be split between its forward branches (§5d) | the julia dust reads 4.3x at depth 2 and 32.9x at depth 6 without it | measured, corrected, and the affine control pins it: the dragon does not move |
+| a bubble's INVERSE branches must NOT be (§5e) | normalising over maps rather than transforms reads 0.035 against 0.983 | measured, corrected; the two kernels need opposite treatment and the fixture set now contains both |
 | the determinant along a contracting lineage underflows f32 | a lineage weighted zero that should count | the same scaled-float care the delta walk takes with σ; carry `log det` |
 
 ## 8. Deliberately not here
