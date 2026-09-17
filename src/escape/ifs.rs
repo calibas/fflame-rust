@@ -6424,10 +6424,10 @@ mod gpu_tests {
 
                 println!("target {t}, 2^{zoom:.0} (the objective chose level {chosen}):");
                 println!(
-                    "  {:>5} | {:>11} {:>11} {:>10} {:>11} {:>11} | {:>10}",
-                    "L", "f32 max", "f32 min", "crv", "total max", "total min", "true p90"
+                    "  {:>5} | {:>11} {:>11} {:>10} {:>11} {:>11} | {:>10} {:>9} {:>5}",
+                    "L", "f32 max", "f32 min", "crv", "total max", "total min", "true p90", "near p90", "n"
                 );
-                let mut rows: Vec<(u32, f64, f64, f64)> = Vec::new();
+                let mut rows: Vec<(u32, f64, f64, f64, f64)> = Vec::new();
                 for level in 0..=24u32 {
                     let seeds = crate::scene::ifs_estimate::seed_beam_at(
                         &ifs, centre.clone(), basis, px, budget, BEAM, level,
@@ -6550,68 +6550,95 @@ mod gpu_tests {
                     // The RENDERED answer against the exact one, at the
                     // same absolute depth: curvature and f32 together,
                     // which is what the objective is trying to predict.
+                    // Two populations. The whole grid, whose absolute
+                    // errors are dominated by the FAR field -- a pixel
+                    // 500 out read as 499 is the same colour -- and the
+                    // pixels within eight of the set, which is where
+                    // the picture is. A denser grid for the near set,
+                    // since it is a small fraction of the frame.
                     let mut err: Vec<f64> = Vec::new();
-                    for gy in 0..14u32 {
-                        for gx in 0..24u32 {
-                            let x = gx * (RW / 24) + RW / 48;
-                            let y = gy * (RH / 14) + RH / 28;
+                    let mut near: Vec<f64> = Vec::new();
+                    for gy in 0..54u32 {
+                        for gx in 0..96u32 {
+                            let x = gx * (RW / 96) + RW / 192;
+                            let y = gy * (RH / 54) + RH / 108;
+                            let coarse = gx % 4 == 0 && gy % 4 == 0;
                             let uv = [
                                 (x as f64 + 0.5) / RW as f64 - 0.5,
                                 (y as f64 + 0.5) / RH as f64 - 0.5,
                             ];
+                            let g = recs[(y * RW + x) as usize].z[0] as f64;
+                            // The GPU's own answer says whether this
+                            // pixel is worth the f64 continuation.
+                            if !coarse && !(g <= 16.0) {
+                                continue;
+                            }
                             let truth = crate::scene::ifs_estimate::estimate_seeded(
                                 &ifs, &exact, uv, LEVELS + level, BEAM,
                             )
                             .distance;
-                            let g = recs[(y * RW + x) as usize].z[0] as f64;
                             if truth.is_finite() && g.is_finite() {
-                                err.push((truth - g).abs());
+                                if coarse {
+                                    err.push((truth - g).abs());
+                                }
+                                if truth <= 8.0 {
+                                    near.push((truth - g).abs());
+                                }
                             }
                         }
                     }
                     err.sort_by(f64::total_cmp);
-                    let p90 = if err.is_empty() {
-                        f64::NAN
-                    } else {
-                        err[((err.len() - 1) as f64 * 0.9).round() as usize]
+                    near.sort_by(f64::total_cmp);
+                    let q90 = |v: &[f64]| -> f64 {
+                        if v.len() < 5 {
+                            f64::NAN
+                        } else {
+                            v[((v.len() - 1) as f64 * 0.9).round() as usize]
+                        }
                     };
+                    let p90 = q90(&err);
+                    let near_p90 = q90(&near);
+                    let near_n = near.len();
                     let total = model_f32 + model_crv;
                     let total_sigma = model_sigma + model_crv;
                     println!(
                         "  {level:>5} | {model_f32:>11.3e} {model_sigma:>11.3e} \
                          {model_crv:>10.3} {total:>11.3e} {total_sigma:>11.3e} | \
-                         {p90:>10.3}{}",
+                         {p90:>10.3} {near_p90:>9.3} {near_n:>5}{}",
                         if level == chosen { "  <- chosen" } else { "" }
                     );
-                    rows.push((level, total, p90, total_sigma));
+                    rows.push((level, total, p90, total_sigma, near_p90));
                 }
-                let pick = |key: fn(&(u32, f64, f64, f64)) -> f64| {
+                type Row = (u32, f64, f64, f64, f64);
+                let pick = |key: fn(&Row) -> f64| {
                     rows.iter()
+                        .filter(|r| key(r).is_finite())
                         .min_by(|a, b| key(a).total_cmp(&key(b)))
                         .cloned()
-                        .unwrap_or((0, 0.0, 0.0, 0.0))
+                        .unwrap_or((0, 0.0, 0.0, 0.0, 0.0))
                 };
-                let by_basis = pick(|r| r.1);
-                let by_sigma = pick(|r| r.3);
-                let best_true = pick(|r| r.2);
-                let cost = |m: &(u32, f64, f64, f64)| {
-                    if best_true.2 > 0.0 {
-                        m.2 / best_true.2
-                    } else {
-                        1.0
-                    }
-                };
+                let by_max = pick(|r| r.1);
+                let by_min = pick(|r| r.3);
+                let best_all = pick(|r| r.2);
+                let best_near = pick(|r| r.4);
+                let ratio = |a: f64, b: f64| if b > 0.0 { a / b } else { 1.0 };
                 println!(
-                    "  => best true L{} at {:.3}; basis model picks L{} (true {:.3}, \
-                     {:.2}x); sigma model picks L{} (true {:.3}, {:.2}x)",
-                    best_true.0,
-                    best_true.2,
-                    by_basis.0,
-                    by_basis.2,
-                    cost(&by_basis),
-                    by_sigma.0,
-                    by_sigma.2,
-                    cost(&by_sigma)
+                    "  => whole frame: best L{} at {:.3}; max model L{} ({:.2}x), min model L{} ({:.2}x)",
+                    best_all.0,
+                    best_all.2,
+                    by_max.0,
+                    ratio(by_max.2, best_all.2),
+                    by_min.0,
+                    ratio(by_min.2, best_all.2)
+                );
+                println!(
+                    "  => near the set: best L{} at {:.3}; max model L{} ({:.2}x), min model L{} ({:.2}x)",
+                    best_near.0,
+                    best_near.4,
+                    by_max.0,
+                    ratio(by_max.4, best_near.4),
+                    by_min.0,
+                    ratio(by_min.4, best_near.4)
                 );
             }
         }

@@ -24,8 +24,9 @@ without the others and the cheap parts of all three come first.
 **What it buys.** The grand julian's cap, measured at 2^30 to 2^36
 depending where on the set you are, comes from two things the first
 design cannot fix by choosing better -- and §2a adds a third, that
-its choice of level is itself one too deep half the time, for a
-reason no per-seed model has been able to repair: a lineage whose view has
+its choice of level stops a level or three short half the time,
+because a collapsed seed that cannot win prices the deeper levels
+out, and no per-seed model has been able to say which seed wins: a lineage whose view has
 COLLAPSED pays f32's whole ulp at any handover, and a lineage whose
 view has EXPANDED pays the linearisation's curvature at any handover
 deep enough for f32 to be cheap. In delta form neither is paid. A
@@ -204,6 +205,64 @@ is worse than the per-level agreement suggested.
 Right in three, and in all three misses **one level too deep**,
 costing 1.9x to 11.2x in rendered error.
 
+**Reviewed again the same day, and that table is an artefact of its
+metric.** Its error is the 90th percentile of the ABSOLUTE distance
+error over a uniform grid of the frame, and most of a frame is far
+from the set, where a pixel 500 out read as 499 is the same colour.
+Measured again with a second population -- every pixel whose true
+distance is under eight, two thousand and more of them per row, the
+pixels that ARE the picture -- the ranking is different:
+
+| target, zoom | chosen | near error | best near | its error |
+|---|---|---|---|---|
+| 0, 2^26 | 4 | 0.283 px | 7 | 0.025 px |
+| 0, 2^33 | 9 | 0.035 px | 9 | 0.035 px |
+| 1, 2^26 | 8 | 0.021 px | 8 | 0.021 px |
+| 1, 2^33 | 11 | 0.033 px | 11 | 0.033 px |
+| 2, 2^26 | 3 | 0.192 px | 6 | 0.025 px |
+| 2, 2^33 | 7 | 0.116 px | 8 | 0.017 px |
+
+Near the set the objective is right in three and too SHALLOW in
+three, by one to three levels -- the opposite direction from the
+whole-frame verdict -- and every chosen level is within a third of a
+pixel of the truth on the pixels that matter. The two cases the
+whole-frame metric called "one level too deep" (targets 0 and 1 at
+2^33 and 2^26) are the objective picking the best level there is.
+The min-over-seeds model, which the whole-frame metric favoured, is
+worse near the set by 24x and 25x in two cases. Withdrawn as a
+candidate.
+
+What does survive, and it is the finding from the first review in a
+form that finally holds: the f32 model overstates the levels it
+rejects. At target 0, 2^26 it prices levels 5 to 8 at 26 to 3e10
+pixels, and near the set they render at 0.05, 0.027, 0.025 and 0.059
+-- every one better than the chosen level's 0.283. That is why the
+objective stops shallow, and it is the max over a collapsed seed that
+cannot win, as §2a's per-seed detail showed.
+
+**The objective's own curvature term has the same flaw as the
+whole-frame metric.** It is the absolute distance error at five fixed
+probes -- the centre and the corners -- wherever the set happens to
+be relative to them. A corner 300 pixels from the set contributes an
+absolute error that is invisible; a centre one pixel from it
+contributes one that is the picture. So the level choice is made on a
+far-field-contaminated number, and the near-set weighting that made
+this table honest is the obvious repair to try on it: measure the
+curvature only at probes whose answer is small, or weight each by
+one over its distance. Not tried yet, and it is the one candidate
+here with a reason behind it rather than a fit.
+
+**Why R1 kept moving, said plainly.** Four commits measured four
+different quantities and each called itself R1: the rounding alone;
+the GPU against f64 from the same seeds, which is f32 alone, at the
+chosen level, which is a selection-biased sample since the objective
+chose the level where its own model was smallest; the GPU against
+the level-0 truth over the whole frame, which is dominated by the far
+field; and now the same near the set. Only the last is the quantity
+the picture cares about. The others were not wrong as numbers; they
+were wrong as answers to the question, and each was recorded as if
+it were the answer.
+
 **Why, and it is the same non-separability a fourth time.** The level
 tables show the f32 model rejecting the best level by twenty orders
 of magnitude: at target 1, 2^26 it prices level 7 at 4.6e11 pixels
@@ -229,22 +288,19 @@ keeping:
 
 **Four candidate repairs, all measured, none shipped.**
 
-| f32 term | cost against the best level, six cases |
-|---|---|
-| max over seeds (shipped) | 1.00, 5.10, 11.22, 1.92, 1.00, 1.00 |
-| min over seeds | 1.65, 2.07, 4.48, 1.92, 1.00, 1.00 |
-| restricted to probe winners | measured worse at the chosen level, above |
-| gap-weighted by the bound | identical to the max: the bounds are equal |
+| f32 term | cost against the best level, whole frame | near the set |
+|---|---|---|
+| max over seeds (shipped) | 1.00, 5.10, 11.22, 1.92, 1.00, 1.00 | 11.5, 1.00, 1.00, 1.00, 7.6, 6.8 |
+| min over seeds | 1.65, 2.07, 4.48, 1.92, 1.00, 1.00 | 2.0, 24.0, 25.3, 1.00, 7.6, 6.8 |
+| restricted to probe winners | measured worse at the chosen level, above | |
+| gap-weighted by the bound | identical to the max: the bounds are equal | |
 
-The minimum halves the worst case and regresses the best one, and it
-has no soundness argument -- it assumes the smallest-σ seed wins,
-which is typical and not guaranteed. Six points across three targets
-and two zooms is too thin to move production behaviour on, and the
-asymmetry still favours the maximum: over-pricing costs a suboptimal
-level, under-pricing costs a scrambled picture at pixels nobody
-sampled. **Recorded, not shipped**, and §3 is why -- the delta form
-has no level to choose, so a heuristic adopted now would be carried
-through the transition and then deleted.
+The whole-frame column is the artefact explained above; the near
+column is the one that counts. Nothing here beats the shipped
+maximum near the set, and nothing is shipped. The candidate with a
+reason behind it -- near-weighting the objective's own curvature
+probes -- is untried. §3 is still the answer: the delta form has no
+level to choose.
 
 **The two rows where it is 100x pessimistic are the same lesson
 again.** Target 3 at 2^26 and 2^30 model 2.69 and 43.1 pixels where
@@ -552,13 +608,15 @@ The risks, ranked:
 
 The cheap and the decisive first. Each item names its plan.
 
-1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a, forced levels included.
-   The model is pessimistic by a factor of a few at the level it
-   picks, and its ORDERING is right in three of six cases and one
-   level too deep in the other three, costing up to 11x in rendered
-   error. Four candidate repairs measured, none shipped, because §3
-   deletes the question. The ceiling, both keys, the dead code and
-   the widened gate all landed and changed no chosen level.
+1. ~~**R1 to R5**~~ -- done 2026-09-17, §2a, forced levels included
+   and reviewed twice. Near the set the objective is within a third
+   of a pixel everywhere tested, right in three of six cases and one
+   to three levels too SHALLOW in the rest, because the f32 model
+   overstates the levels it rejects. Four candidate repairs
+   measured, none better near the set, none shipped. One untried
+   with a reason: near-weighting the objective's curvature probes.
+   The ceiling, both keys, the dead code and the widened gate all
+   landed and changed no chosen level.
 2. **The measure at shallow zoom**
    ([ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
    §5 items 1 to 3): the coarse pass, the lookup colouring, the
