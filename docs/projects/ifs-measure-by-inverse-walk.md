@@ -923,8 +923,8 @@ was showing, and believing they were let the gate stop asserting on
 exactly the two cases that had something to say. Every fixture is
 asserted again.
 
-**And the walk is correct only at handover level 0**, which the gate
-forces. The seeds carry a position and a basis but not the
+**And the walk was correct only at handover level 0** until §5o.
+That limit is now lifted; what follows is why it existed. The seeds carry a position and a basis but not the
 probability or the two colour accumulators of the prefix that reached
 them, so a deeper handover silently drops three numbers. Carrying
 them is three more floats on `Seed` and is the deep-zoom follow-on --
@@ -1058,6 +1058,61 @@ two were written into this document as findings and are struck
 through above. The measurement that settled it -- reporting the stop
 DEPTH from both sides -- took a single run, and every guess before it
 was made without that number in hand.
+
+## 5o. The measure walk takes the handover, 2026-09-17
+
+§5l's limit: the walk was correct only at handover level 0, because
+the seeds carry where a lineage IS but not what it has ACCUMULATED.
+Three numbers were missing -- the product of the branch probabilities
+that reached it, and the two running terms of the colour fold -- and
+a deeper handover dropped them silently.
+
+**Packed into the three slots the layout already had free**, at word
+3's last and word 5's last two. No stride change, so `MAX_SEEDS`
+stays at ten where the beam allows eight. Folded in `pack_seeds`
+from `Seed::address`, which is an exact list of branches -- the
+packed address is a base-N fraction and loses its tail, so this is
+the one place the fold can happen. `PackedIfs` carries the
+`MeasureMaps` for it, which `pack_flame` was already building for the
+rows.
+
+The shader then starts its frontier from EVERY seed rather than from
+seed 0, each with its own position, basis, quadratic and prefix.
+
+**Two bugs on the way, and the second is the interesting one.**
+
+The probability reached the shader correctly -- seed 0 read 0.5 with
+a count of 2 on a two-map set -- and the density still came out at
+exactly **2.0000**. The fault was `pixel_area`, which I took from a
+seed's basis. A seed's basis is the view composed with the prefix's
+Jacobians, so at a deep handover it has already been expanded by the
+walk; dividing by it cancels the prefix back out of every
+determinant. `params.span` is the view and nothing else.
+
+With that fixed the affine fixtures are exact at every handover level
+tested:
+
+| | L0 | L1 | L2 | L4 |
+|---|---|---|---|---|
+| dragon | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| gasket | 1.0146 | 1.0146 | 1.0146 | 1.0146 |
+| julia dust | **1.0000** | 1.2959 | 1.2959 | 1.2959 |
+
+**The julia dust's 1.296 is not a bug and not accumulating.** A
+handover hands over a LINEARISATION: the seed's basis is the Jacobian
+at the reference and every pixel continues from it. For an affine map
+that is exact at any depth, which is why the two affine rows do not
+move. For a curved one it is not, and the figure is identical at L1,
+L2 and L4 because that walk reaches level 1 and no further -- one
+nonlinear step, one fixed offset. It is §5d's finding arriving at the
+handover, and it is what the delta plan's quadratic carry would
+straighten. The gate holds the affine sets at every level and the
+curved one at level 0.
+
+**So the measure now zooms as far as the distance walk does**, which
+was the point of the exercise: the coarse pass is view-independent,
+the handover carries the prefix, and no forward sample is drawn at
+the zoom.
 
 ## 6. Gates
 

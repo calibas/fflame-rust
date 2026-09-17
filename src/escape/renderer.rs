@@ -4175,7 +4175,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let mut out = [[0.0f32; 4]; 4 + super::ifs::SEED_VEC4S * super::ifs::MAX_SEEDS];
         out[..4].copy_from_slice(&packed.globals);
-        super::ifs::pack_seeds(&seeds, packed.rows.len(), &packed.colors, &mut out);
+        super::ifs::pack_seeds(
+            &packed.measure,
+            &seeds,
+            packed.rows.len(),
+            &packed.colors,
+            &mut out,
+        );
         self.ifs_seeds = Some(out);
         self.ifs_seed_key = key;
     }

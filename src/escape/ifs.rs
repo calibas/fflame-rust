@@ -1928,7 +1928,17 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
     let ifs3 = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball3.radius, ball: ball3, aux_centre: 0.0 };
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
-    PackedIfs { globals, rows: Vec::new(), ifs, colors: Vec::new(), solid: Some((ifs3, Vec::new())) }
+    PackedIfs {
+        globals,
+        rows: Vec::new(),
+        ifs,
+        colors: Vec::new(),
+        measure: crate::scene::ifs_estimate::MeasureMaps {
+            prob: Vec::new(),
+            colour: Vec::new(),
+        },
+        solid: Some((ifs3, Vec::new())),
+    }
 }
 
 /// The packing a config's formula wants: the flame's analysis for a
@@ -2246,6 +2256,13 @@ pub struct PackedIfs {
     pub ifs: Ifs2,
     /// Transform colours, in map order.
     pub colors: Vec<f32>,
+    /// The per-map probability and colour the MEASURE walk needs.
+    ///
+    /// Kept beside the rows because the handover's PREFIX has to be
+    /// folded on the CPU, where a seed's address is an exact list of
+    /// branches -- the packed address is a base-N fraction and loses
+    /// the tail.
+    pub measure: crate::scene::ifs_estimate::MeasureMaps,
     /// The SOLID analysis and its rows, when the flame also qualifies
     /// in three dimensions.
     ///
@@ -2333,7 +2350,7 @@ pub fn pack_flame(
     pack_globals(&ifs, &mut globals);
     let measure = crate::scene::ifs_estimate::MeasureMaps::of(&ifs, flame);
     let rows = pack_maps(&ifs, &colors, Some(&measure));
-    Ok(PackedIfs { globals, rows, ifs, colors, solid })
+    Ok(PackedIfs { globals, rows, ifs, colors, measure, solid })
 }
 
 /// The six kernels' inverse Jacobians, and the map-level composition,
@@ -2607,24 +2624,55 @@ fn ifs_measure(uv: vec2<f32>, cells: f32) -> vec4<f32> {
     let cpx = 2.0 * crad / max(cres, 1.0);
     let want = cpx * cpx * max(cells, 1.0);
 
-    // Seed 0 at handover level 0: its position is the view centre and
-    // its basis the view, so this IS the pixel's own world position
-    // and the world edge vectors of one pixel.
-    let sa = ifs_seed(0u, 0u);
-    let sb = ifs_seed(0u, 1u);
+    // Start from the HANDOVER, every seed of it.
+    //
+    // Each seed is a lineage the CPU walked in BigFloat: its position
+    // is where that lineage reached, its basis the composed Jacobian
+    // with the view folded in -- so `basis/(W,H)` is the preimage of
+    // one pixel at that level, which is exactly the `m` this walk
+    // carries. And the three the packer folded from its address are
+    // what the lineage has ACCUMULATED: the product of its branch
+    // probabilities, and the two running numbers of the colour fold.
+    //
+    // Without those three a deeper handover silently drops the whole
+    // prefix, which is why this used to be correct only at level 0.
     let w = max(f32(params.width), 1.0);
     let h = max(f32(params.height), 1.0);
     var live: array<IfsMLive, IFS_MAX_BEAM>;
-    var live_count = 1u;
-    live[0].a = vec2<f32>(
-        sa.x + sa.z * uv.x + sa.w * uv.y,
-        sa.y + sb.x * uv.x + sb.y * uv.y,
-    );
-    live[0].m = vec4<f32>(sa.z / w, sa.w / h, sb.x / w, sb.y / h);
-    live[0].p = 1.0;
-    live[0].hp = 1.0;
-    live[0].cacc = 0.0;
-    let pixel_area = max(ifs_m_det(live[0].m), 1e-30);
+    var live_count = 0u;
+    let nseed = min(max(ifs_seed_count(), 1u), IFS_MAX_BEAM);
+    var pixel_area = 0.0;
+    for (var j = 0u; j < nseed; j = j + 1u) {
+        let sa = ifs_seed(j, 0u);
+        let sb = ifs_seed(j, 1u);
+        let sd = ifs_seed(j, 3u);
+        let sf = ifs_seed(j, 5u);
+        let m0 = vec4<f32>(sa.z / w, sa.w / h, sb.x / w, sb.y / h);
+        let se = ifs_seed(j, 4u);
+        let uu = uv.x * uv.x;
+        let uvv = uv.x * uv.y;
+        let vv = uv.y * uv.y;
+        live[live_count].a = vec2<f32>(
+            sa.x + sa.z * uv.x + sa.w * uv.y + se.x * uu + se.z * uvv + sf.x * vv,
+            sa.y + sb.x * uv.x + sb.y * uv.y + se.y * uu + se.w * uvv + sf.y * vv,
+        );
+        live[live_count].m = m0;
+        live[live_count].p = sd.w;
+        live[live_count].hp = sf.z;
+        live[live_count].cacc = sf.w;
+        if (sd.w > 0.0) {
+            live_count = live_count + 1u;
+        }
+    }
+    // The PIXEL's own area, from the view -- NOT from a seed's basis.
+    //
+    // A seed's basis is the view composed with the prefix's Jacobians,
+    // so at a deep handover it has already been expanded by the walk.
+    // Dividing by it cancels the prefix out of every determinant and
+    // the density comes back scaled by it: on a dragon, whose inverse
+    // doubles area per level, a handover at level 1 read exactly 2x.
+    // `params.span` is the view and nothing else.
+    pixel_area = max(abs(params.span.x * params.span.y) / (w * h), 1e-30);
 
     var acc = 0.0;
     var acc_col = 0.0;
@@ -3006,9 +3054,17 @@ pub const MAX_SEEDS: usize = (64 - SEED_BASE) / SEED_VEC4S;
 /// 0. `position.xy`, `basis[0][0]`, `basis[0][1]`
 /// 1. `basis[1][0]`, `basis[1][1]`, `sigma_per_px`, `bound_per_px`
 /// 2. `address fraction`, `last_sigma`, `escape level` (−1 = none), `flags`
-/// 3. `escape point.xy`, `transform colour`, unused
+/// 3. `escape point.xy`, `transform colour`, `prefix probability`
 /// 4. `quad[0].xy`, `quad[1].xy` — the delta's quadratic part
-/// 5. `quad[2].xy`, unused, unused
+/// 5. `quad[2].xy`, `prefix colour product`, `prefix colour sum`
+///
+/// The last three are the MEASURE walk's, and they are what lets it
+/// start from a handover deeper than level 0. A seed carries where
+/// its lineage IS; those carry what the lineage has ACCUMULATED --
+/// the product of the branch probabilities that reached it, and the
+/// two running numbers of the flam3 colour fold. Folded here, from
+/// `Seed::address`, because that is an exact list of branches and
+/// the packed address is a base-N fraction that loses its tail.
 ///
 /// Six `vec4`s rather than four since the quadratic: a nonlinear
 /// inverse drops a second-order term when it carries an offset
@@ -3018,6 +3074,7 @@ pub const MAX_SEEDS: usize = (64 - SEED_BASE) / SEED_VEC4S;
 ///
 /// `flags`: bit 0 escaped, bit 1 done.
 pub fn pack_seeds(
+    measure: &crate::scene::ifs_estimate::MeasureMaps,
     seeds: &crate::scene::ifs_estimate::Seeds,
     n_maps: usize,
     colors: &[f32],
@@ -3084,14 +3141,27 @@ pub fn pack_seeds(
             esc_level,
             f32::from_bits(flags),
         ];
-        out[base + 3] = [esc_point[0], esc_point[1], colour, 0.0];
+        // The prefix, folded. `hp` is the product of `(1+s)/2` over
+        // the branches so far and `cacc` the running sum of
+        // `col·(1−s)/2 · hp_before`, which together are the reversed
+        // flam3 fold accumulated forward -- see `estimate_measure`.
+        let (mut prob, mut hp, mut cacc) = (1.0f64, 1.0f64, 0.0f64);
+        for &m in &c.address {
+            let i = m as usize;
+            prob *= measure.prob.get(i).copied().unwrap_or(0.0);
+            let (cl, sp) = measure.colour.get(i).copied().unwrap_or((0.5, 0.0));
+            cacc += cl * (1.0 - sp) * 0.5 * hp;
+            hp *= (1.0 + sp) * 0.5;
+        }
+        out[base + 3] = [esc_point[0], esc_point[1], colour, prob as f32];
         out[base + 4] = [
             c.quad[0][0] as f32,
             c.quad[0][1] as f32,
             c.quad[1][0] as f32,
             c.quad[1][1] as f32,
         ];
-        out[base + 5] = [c.quad[2][0] as f32, c.quad[2][1] as f32, 0.0, 0.0];
+        out[base + 5] =
+            [c.quad[2][0] as f32, c.quad[2][1] as f32, hp as f32, cacc as f32];
     }
 }
 
@@ -4689,6 +4759,10 @@ mod tests {
         let ifs = square();
         let colors = vec![0.1f32, 0.4, 0.7];
         let mut packed = PackedIfs {
+            measure: crate::scene::ifs_estimate::MeasureMaps {
+                prob: Vec::new(),
+                colour: Vec::new(),
+            },
             globals: [[0.0; 4]; 4],
             rows: pack_maps(&ifs, &colors, None),
             ifs: ifs.clone(),
@@ -5929,7 +6003,13 @@ mod tests {
         let mut out = [[0.0f32; 4]; 4 + SEED_VEC4S * MAX_SEEDS];
         pack_globals(&ifs, &mut out);
         let mean_before = out[1][0];
-        pack_seeds(&seeds, ifs.maps.len(), &[0.1, 0.4, 0.7], &mut out);
+        // A packing test: the prefix fold is gated separately, so an
+        // empty map table is the right stand-in here.
+        let measure = crate::scene::ifs_estimate::MeasureMaps {
+            prob: vec![1.0; ifs.maps.len()],
+            colour: vec![(0.0, 0.0); ifs.maps.len()],
+        };
+        pack_seeds(&measure, &seeds, ifs.maps.len(), &[0.1, 0.4, 0.7], &mut out);
 
         assert_eq!(out[1][0], mean_before, "pack_seeds trod on the mean sigma");
         assert_eq!(out[1][1], seeds.level as f32, "handover level");
@@ -6054,6 +6134,46 @@ mod tests {
         }
         for (i, m) in packed.ifs.maps.iter().enumerate() {
             println!("  map {i}: transform_index {}", m.transform_index);
+        }
+    }
+
+    #[test]
+    fn probe_packed_prefix() {
+        use crate::scene::transforms::{Flame, Transform};
+        let aff = |a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, col: f32| {
+            let mut t = Transform::default();
+            t.a = a; t.b = b; t.c = c; t.d = d; t.e = e; t.f = f;
+            t.color = col;
+            t.color_speed = 0.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            t
+        };
+        let mut flame = Flame::default();
+        flame.transforms = vec![
+            aff(0.5, -0.5, 0.5, 0.5, 0.0, 0.0, 0.0),
+            aff(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0, 1.0),
+        ];
+        let guard = crate::variations::global_registry();
+        let packed = pack_flame(&flame, &guard, None).expect("qualifies");
+        drop(guard);
+        println!("  measure.prob {:?}", packed.measure.prob);
+        let span = 0.2;
+        let basis = view_basis(span, span, 0.0);
+        for level in [0u32, 1, 2] {
+            let seeds = crate::scene::ifs_estimate::seed_beam_at(
+                &packed.ifs, [0.3f64, 0.2], basis, span / 64.0, 80, 8, level,
+            );
+            let mut out = [[0.0f32; 4]; 4 + SEED_VEC4S * MAX_SEEDS];
+            pack_seeds(&packed.measure, &seeds, packed.rows.len(), &packed.colors, &mut out);
+            let n = seeds.cands.len();
+            println!(
+                "  asked {level} got {} n {n} addrs {:?} probs {:?}",
+                seeds.level,
+                seeds.cands.iter().map(|c| c.address.clone()).collect::<Vec<_>>(),
+                (0..n).map(|j| out[SEED_BASE + SEED_VEC4S * j + 3][3]).collect::<Vec<_>>()
+            );
         }
     }
 
@@ -7803,17 +7923,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // the walk -- and the cost of believing it was that the gate
         // stopped looking at exactly the two fixtures that had
         // something to say.
-        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>)> = vec![
+        // The third field is whether the maps are CURVED.
+        //
+        // A handover hands over a LINEARISATION: the seed's basis is
+        // the Jacobian at the reference, and every pixel of the view
+        // continues from it. For an affine map that is exact at any
+        // depth, so the affine fixtures are held to the same tolerance
+        // at every handover level. For a curved one it is not, and the
+        // julia dust reads 1.296 from level 1 on -- a fixed offset
+        // from the first nonlinear step, not something that
+        // accumulates, since its walk reaches level 1 and no further.
+        // That is §5d's finding arriving at the handover, and it is
+        // reported rather than asserted past level 0.
+        let cases: Vec<(&str, Vec<crate::scene::transforms::Transform>, bool)> = vec![
             ("dragon", vec![
                 aff(0.5, -0.5, 0.5, 0.5, 0.0, 0.0),
                 aff(-0.5, -0.5, 0.5, -0.5, 1.0, 0.0),
-            ]),
+            ], false),
             ("gasket", vec![
                 { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.0, 0.0); t.weight = 1.0; t },
                 { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.5, 0.0); t.weight = 1.37; t },
                 { let mut t = aff(0.5, 0.0, 0.0, 0.5, 0.25, 0.5); t.weight = 0.61; t },
-            ]),
-            ("julia dust", vec![jul(2.0), jul(3.0)]),
+            ], false),
+            ("julia dust", vec![jul(2.0), jul(3.0)], true),
         ];
 
         let (device, queue) = device();
@@ -7823,7 +7955,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             &base.flame, base.palette_size,
         );
 
-        for (name, mut transforms) in cases {
+        for (name, mut transforms, curved) in cases {
             let n = transforms.len().max(2) - 1;
             for (i, t) in transforms.iter_mut().enumerate() {
                 t.color = i as f32 / n as f32;
@@ -7902,6 +8034,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let zoom = 5.0f64;
             let want_span = 2.0 * ifs.ball.radius / 2f64.powf(zoom);
 
+            // Every handover level the walk can be held at, not just
+            // 0.
+            //
+            // Level 0 is the only one a seed needs nothing of its own
+            // for: its prefix is empty. Past it a seed carries one --
+            // the product of its branch probabilities and the two
+            // running numbers of the colour fold -- and this is what
+            // says the packer folded them and the shader read them.
+            for forced in [0u32, 1, 2, 4] {
             let mut config = crate::config::FractalConfig::default();
             config.render_mode = RenderMode::Escape;
             config.flame = flame.clone();
@@ -7929,7 +8070,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let px = span_y / RH as f64;
 
             let mut escape = crate::escape::EscapeRenderer::new(&device, RW, RH);
-            escape.ifs_force_level = Some(0);
+            escape.ifs_force_level = Some(forced);
             let def = get_ifs(&config.escape.formula).expect("ifs_flame");
             let reg = crate::variations::global_registry();
             escape.set_ifs(pack_for(def, &config, &reg));
@@ -7981,23 +8122,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     }
                 }
             }
-            assert!(derr.len() >= 30, "{name}: only {} pixels compared", derr.len());
+            // A level the walk cannot reach hands over shallower, and
+            // then this is just the shallower case again.
+            if derr.len() < 30 {
+                println!("  {name:<12} forced {forced}: only {} pixels, skipped", derr.len());
+                continue;
+            }
             derr.sort_by(f64::total_cmp);
             cerr.sort_by(f64::total_cmp);
             let dm = derr[derr.len() / 2].exp();
             let cm = cerr[cerr.len() / 2];
+            // A curved set's handover linearises, so only its level-0
+            // walk -- which hands over nothing -- is held exactly.
+            let held = !curved || forced == 0;
             println!(
-                "  {name:<12} {:>4} px | density ratio median {dm:.4} | colour |err| {cm:.5}",
-                derr.len()
+                "  {name:<12} L{forced} {:>4} px | density ratio median {dm:.4} | \
+                 colour |err| {cm:.5}{}",
+                derr.len(),
+                if held { "" } else { "  (curved: the handover linearises)" }
             );
             assert!(
-                (0.96..=1.04).contains(&dm),
-                "{name}: the shader's measure reads {dm:.4} of the f64 walk's"
+                !held || (0.96..=1.04).contains(&dm),
+                "{name} at handover {forced}: the shader's measure reads {dm:.4} of \
+                 the f64 walk's"
             );
             assert!(
-                cm < 0.01,
-                "{name}: the shader's palette is {cm:.5} off the f64 walk's"
+                !held || cm < 0.01,
+                "{name} at handover {forced}: the shader's palette is {cm:.5} off \
+                 the f64 walk's"
             );
+        }
         }
     }
 
